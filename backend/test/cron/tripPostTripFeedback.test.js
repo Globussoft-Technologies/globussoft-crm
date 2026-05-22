@@ -26,17 +26,22 @@ import { runPostTripFeedbackForTenant } from '../../cron/tripPostTripFeedback.js
 beforeAll(() => {
   prisma.tmcTrip = { findMany: vi.fn() };
   prisma.survey = { findFirst: vi.fn(), create: vi.fn() };
+  // subBrandConfig resolver pull — Q9 cut-over plumbing reads tenant
+  // .subBrandConfigJson once per pass for the per-survey wabaId log.
+  prisma.tenant = { findUnique: vi.fn() };
 });
 
 beforeEach(() => {
   prisma.tmcTrip.findMany.mockReset();
   prisma.survey.findFirst.mockReset();
   prisma.survey.create.mockReset();
+  prisma.tenant.findUnique.mockReset();
 
   // Sensible defaults — each test overrides as needed.
   prisma.tmcTrip.findMany.mockResolvedValue([]);
   prisma.survey.findFirst.mockResolvedValue(null);
   prisma.survey.create.mockResolvedValue({ id: 1 });
+  prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
 });
 
 describe('cron/tripPostTripFeedback — runPostTripFeedbackForTenant', () => {

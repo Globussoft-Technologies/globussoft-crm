@@ -25,6 +25,7 @@
 
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const DEFAULT_REMINDER_DAYS = 7;
 const OVERDUE_LOOKBACK_DAYS = 30;
@@ -62,6 +63,16 @@ async function runPaymentRemindersForTenant(tenantId) {
   });
 
   if (instalments.length === 0) return { dueSoon: 0, overdue: 0 };
+
+  // One tenant row read per pass for the Q9 cut-over plumbing — the
+  // wabaId is logged at notification-create time so operators can see
+  // which WABA the dispatch WOULD route through once Wati creds land.
+  // Instalments here belong to TmcTrips → subBrand=tmc by construction.
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { subBrandConfigJson: true },
+  });
+  const tmcCfg = resolveForSubBrand(tenant, "tmc");
 
   // Batch-fetch parent plans so we can look up reminderDays per instalment.
   const tripIds = [...new Set(instalments.map((i) => i.tripId))];
@@ -130,7 +141,8 @@ async function runPaymentRemindersForTenant(tenantId) {
       });
       const link = `${PORTAL_BASE}/travel/trips/${inst.tripId}`;
       console.log(
-        `[TripPaymentReminders] tenant ${tenantId} inst ${inst.id} (${phaseType}) → notification created; admin link: ${link}`,
+        `[TripPaymentReminders] tenant ${tenantId} inst ${inst.id} (${phaseType}) → notification created; ` +
+          `admin link: ${link} — would-route subBrand=tmc wabaId=${tmcCfg.wabaId || "(no-config)"}`,
       );
       if (isOverdue) overdue++;
       else dueSoon++;

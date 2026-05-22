@@ -31,16 +31,23 @@ import {
 beforeAll(() => {
   prisma.contact = { findMany: vi.fn() };
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
+  // subBrandConfig resolver pull — Q9 cut-over plumbing reads
+  // tenant.subBrandConfigJson once per pass to compute the would-route
+  // wabaId logged at notification create. Mock default returns null
+  // config so the resolver yields {} downstream.
+  prisma.tenant = { findUnique: vi.fn() };
 });
 
 beforeEach(() => {
   prisma.contact.findMany.mockReset();
   prisma.notification.findFirst.mockReset();
   prisma.notification.create.mockReset();
+  prisma.tenant.findUnique.mockReset();
 
   prisma.contact.findMany.mockResolvedValue([]);
   prisma.notification.findFirst.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
+  prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
 });
 
 describe('cron/contactGreetingsEngine — isTodayMonthDay (pure)', () => {

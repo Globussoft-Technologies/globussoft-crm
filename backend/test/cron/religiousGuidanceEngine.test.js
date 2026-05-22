@@ -39,6 +39,10 @@ beforeAll(() => {
   prisma.religiousGuidancePacket = { findMany: vi.fn() };
   prisma.itinerary = { findMany: vi.fn() };
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
+  // subBrandConfig resolver pull — Q9 cut-over plumbing reads tenant
+  // .subBrandConfigJson once per pass. Default mock returns null
+  // config; resolver yields {} downstream.
+  prisma.tenant = { findUnique: vi.fn() };
 });
 
 beforeEach(() => {
@@ -46,11 +50,13 @@ beforeEach(() => {
   prisma.itinerary.findMany.mockReset();
   prisma.notification.findFirst.mockReset();
   prisma.notification.create.mockReset();
+  prisma.tenant.findUnique.mockReset();
 
   prisma.religiousGuidancePacket.findMany.mockResolvedValue([]);
   prisma.itinerary.findMany.mockResolvedValue([]);
   prisma.notification.findFirst.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
+  prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
 });
 
 describe("cron/religiousGuidanceEngine — daysToDeparture (pure)", () => {

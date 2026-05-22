@@ -20,6 +20,7 @@
 
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const STALL_WINDOW_MIN = 30;
 const STALL_LOOKBACK_HOURS = 24; // don't escalate diagnostics older than 24h — the alert is
@@ -53,6 +54,14 @@ async function runDiagnosticAlertsForTenant(tenantId) {
   });
 
   if (diagnostics.length === 0) return { alerted: 0, skipped: 0 };
+
+  // One tenant row read per pass for the Q9 cut-over plumbing — the
+  // wabaId is logged at escalation time so operators can see which
+  // WABA the advisor outreach WOULD route through once Wati creds land.
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { subBrandConfigJson: true },
+  });
 
   let alerted = 0;
   let skipped = 0;
@@ -123,9 +132,11 @@ async function runDiagnosticAlertsForTenant(tenantId) {
           entityId: diag.id,
         },
       });
+      const cfg = resolveForSubBrand(tenant, diag.subBrand);
       console.log(
         `[TravelDiagnosticAlerts] tenant ${tenantId} diag ${diag.id} (${diag.subBrand}, ` +
-          `${elapsedMin}m elapsed) escalated to advisor queue`,
+          `${elapsedMin}m elapsed) escalated to advisor queue — would-route ` +
+          `wabaId=${cfg.wabaId || "(no-config)"}`,
       );
       alerted++;
     } catch (e) {

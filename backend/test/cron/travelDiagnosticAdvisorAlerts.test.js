@@ -26,6 +26,10 @@ beforeAll(() => {
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
   prisma.activity = { findFirst: vi.fn() };
   prisma.task = { findFirst: vi.fn() };
+  // subBrandConfig resolver pull — Q9 cut-over plumbing reads tenant
+  // .subBrandConfigJson once per pass to compute the would-route wabaId
+  // logged at escalation time.
+  prisma.tenant = { findUnique: vi.fn() };
 });
 
 beforeEach(() => {
@@ -34,12 +38,14 @@ beforeEach(() => {
   prisma.notification.create.mockReset();
   prisma.activity.findFirst.mockReset();
   prisma.task.findFirst.mockReset();
+  prisma.tenant.findUnique.mockReset();
 
   prisma.travelDiagnostic.findMany.mockResolvedValue([]);
   prisma.notification.findFirst.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
   prisma.activity.findFirst.mockResolvedValue(null);
   prisma.task.findFirst.mockResolvedValue(null);
+  prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
 });
 
 describe('cron/travelDiagnosticAdvisorAlerts — runDiagnosticAlertsForTenant', () => {

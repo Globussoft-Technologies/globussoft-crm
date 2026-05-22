@@ -42,6 +42,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const VALID_STATUSES = Object.freeze([
   "pending",
@@ -402,9 +403,29 @@ router.post(
         });
         passengerPhone = contact?.phone || null;
       } catch (_e) { /* tolerate missing contact */ }
+      // Q9 cut-over plumbing — resolve the per-sub-brand wabaId so the
+      // log line shows which Wati account this WOULD route through. The
+      // sub-brand is carried by the parent itinerary (WebCheckin has no
+      // subBrand of its own); null itineraryId → "(none)".
+      let subBrand = null;
+      if (existing.itineraryId) {
+        try {
+          const itin = await prisma.itinerary.findUnique({
+            where: { id: existing.itineraryId },
+            select: { subBrand: true },
+          });
+          subBrand = itin?.subBrand || null;
+        } catch (_e) { /* tolerate missing itinerary */ }
+      }
+      const tenantCfgRow = await prisma.tenant.findUnique({
+        where: { id: req.travelTenant.id },
+        select: { subBrandConfigJson: true },
+      });
+      const cfg = subBrand ? resolveForSubBrand(tenantCfgRow, subBrand) : {};
       console.log(
         `[wati-stub] would have sent boarding pass for PNR ${existing.pnr} ` +
-          `to ${passengerPhone || "<unknown phone>"} via WhatsApp (pending Q9 creds)`,
+          `to ${passengerPhone || "<unknown phone>"} via WhatsApp (pending Q9 creds) — ` +
+          `would-route subBrand=${subBrand || "(none)"} wabaId=${cfg.wabaId || "(no-config)"}`,
       );
 
       const updated = await prisma.webCheckin.update({

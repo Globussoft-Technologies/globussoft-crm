@@ -42,6 +42,7 @@ const {
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 const llmRouter = require("../lib/llmRouter");
 
 const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
@@ -898,6 +899,21 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
 
     const portalBase = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
     const shareUrl = `${portalBase}/p/itinerary/${token}`;
+    // Q9 cut-over plumbing — resolve the per-sub-brand wabaId so when
+    // Wati creds land, swapping the stub log for a real WhatsApp blast
+    // is a 1-line change here. Today the dispatch is "advisor pastes
+    // the URL into a chat manually"; tomorrow the resolved wabaId
+    // routes the automated blast. requireTravelTenant doesn't include
+    // subBrandConfigJson in its select, so we fetch it separately.
+    const tenantCfgRow = await prisma.tenant.findUnique({
+      where: { id: req.travelTenant.id },
+      select: { subBrandConfigJson: true },
+    });
+    const cfg = resolveForSubBrand(tenantCfgRow, itin.subBrand);
+    console.log(
+      `[travel-itin] share token minted for itin ${full.id} (sub-brand=${itin.subBrand}) — ` +
+        `would WhatsApp-blast via wabaId=${cfg.wabaId || "(no-config)"} pending Wati creds`,
+    );
     res.json({ shareToken: token, shareUrl });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

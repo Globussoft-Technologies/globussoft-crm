@@ -33,6 +33,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const { JWT_SECRET } = require("../config/secrets");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 // OTP constants for the public microsite PII reveal flow (PRD §4.5).
 // 4-digit code per the PRD spec, 10-minute validity, 30-minute access
@@ -48,9 +49,16 @@ const VALID_OTP_PURPOSES = ["registration", "payment-plan", "document-checklist"
 // console.log with a prisma.whatsAppMessage.create call. The function
 // signature is intentionally minimal so the cutover is a one-line
 // substitution.
-async function sendOtpStub(phone, code, purpose) {
+//
+// wabaId is the resolved per-sub-brand WABA id (see lib/subBrandConfig)
+// — included for observability so operators can confirm which Wati
+// account the OTP WOULD route through once creds land. Microsites are
+// always TMC sub-brand per the route's domain ownership.
+async function sendOtpStub(phone, code, purpose, wabaId) {
   console.log(
-    `[travel-microsite] OTP dispatch stub — phone=${phone} purpose=${purpose} code=${code} (will route through Wati once creds land)`,
+    `[travel-microsite] OTP dispatch stub — phone=${phone} purpose=${purpose} code=${code} ` +
+      `(will route through Wati once creds land — would-route subBrand=tmc ` +
+      `wabaId=${wabaId || "(no-config)"})`,
   );
 }
 
@@ -410,10 +418,12 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
       });
     }
     // Look up the microsite (+ expiry check) before generating an OTP —
-    // no point hashing a code for an expired/missing microsite.
+    // no point hashing a code for an expired/missing microsite. tenantId
+    // pulled along so we can resolve the per-sub-brand wabaId for the
+    // dispatch stub log line (Q9 cut-over plumbing).
     const ms = await prisma.tripMicrosite.findUnique({
       where: { publicUuid: uuid },
-      select: { id: true, expiresAt: true },
+      select: { id: true, expiresAt: true, tenantId: true },
     });
     if (!ms) return res.status(404).json({ error: "Microsite not found", code: "NOT_FOUND" });
     if (ms.expiresAt && new Date(ms.expiresAt) < new Date()) {
@@ -446,7 +456,15 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
         expiresAt,
       },
     });
-    await sendOtpStub(phone, code, purpose);
+    // Resolve the TMC sub-brand WABA id for observability — microsites
+    // are domain-locked to TMC per Q21. Q9 cred-drop swaps the stub for
+    // a real Wati dispatch using this resolved wabaId.
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: ms.tenantId },
+      select: { subBrandConfigJson: true },
+    });
+    const tmcCfg = resolveForSubBrand(tenant, "tmc");
+    await sendOtpStub(phone, code, purpose, tmcCfg.wabaId);
     res.status(201).json({
       sent: true,
       expiresAt: expiresAt.toISOString(),

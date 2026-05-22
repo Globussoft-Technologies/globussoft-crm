@@ -28,6 +28,11 @@ import { runWebCheckinSchedulerForTenant } from '../../cron/webCheckinScheduler.
 beforeAll(() => {
   prisma.webCheckin = { findMany: vi.fn(), update: vi.fn() };
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
+  // subBrandConfig resolver pull — Q9 cut-over plumbing reads tenant
+  // .subBrandConfigJson once per pass + itinerary.findMany to map the
+  // checkin → parent itinerary's subBrand for the per-checkin wabaId log.
+  prisma.tenant = { findUnique: vi.fn() };
+  prisma.itinerary = { findMany: vi.fn() };
 });
 
 beforeEach(() => {
@@ -35,11 +40,15 @@ beforeEach(() => {
   prisma.webCheckin.update.mockReset();
   prisma.notification.findFirst.mockReset();
   prisma.notification.create.mockReset();
+  prisma.tenant.findUnique.mockReset();
+  prisma.itinerary.findMany.mockReset();
 
   prisma.webCheckin.findMany.mockResolvedValue([]);
   prisma.webCheckin.update.mockResolvedValue({ id: 1 });
   prisma.notification.findFirst.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
+  prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
+  prisma.itinerary.findMany.mockResolvedValue([]);
 });
 
 describe('cron/webCheckinScheduler — runWebCheckinSchedulerForTenant', () => {

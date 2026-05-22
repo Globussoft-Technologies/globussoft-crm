@@ -21,6 +21,7 @@
 
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
 
@@ -47,6 +48,11 @@ async function runContactGreetingsForTenant(tenantId) {
   // For Phase 2 Travel Stall volumes (low thousands), the fetch +
   // JS month/day filter is cheaper than a Prisma raw query with
   // DAYOFMONTH() / MONTH() helpers.
+  //
+  // subBrand selected so the Q9 / Q14 / Q21 cut-over has the per-row
+  // sub-brand available to resolve against tenant.subBrandConfigJson.
+  // Today the wabaId is just logged (observability); when Wati creds
+  // land, this is the one piece needed to route the dispatch.
   const contacts = await prisma.contact.findMany({
     where: {
       tenantId,
@@ -60,11 +66,20 @@ async function runContactGreetingsForTenant(tenantId) {
       phone: true,
       birthDate: true,
       anniversary: true,
+      subBrand: true,
     },
     take: 2000,
   });
 
   if (contacts.length === 0) return { birthdays: 0, anniversaries: 0 };
+
+  // One tenant row read per pass — resolved per-contact below. Cheap
+  // even at full Phase 2 volumes; the JSON parse is what subBrandConfig
+  // caches via its return-value shape, not via a module-level cache.
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { subBrandConfigJson: true },
+  });
 
   const currentYear = new Date().getFullYear();
   let birthdays = 0;
@@ -102,9 +117,11 @@ async function runContactGreetingsForTenant(tenantId) {
               entityId: c.id,
             },
           });
+          const cfg = c.subBrand ? resolveForSubBrand(tenant, c.subBrand) : {};
           console.log(
             `[ContactGreetings] tenant ${tenantId} contact ${c.id} → birthday notification ` +
-              `(WhatsApp dispatch pending Wati creds)`,
+              `(WhatsApp dispatch pending Wati creds — would-route ` +
+              `subBrand=${c.subBrand || "(none)"} wabaId=${cfg.wabaId || "(no-config)"})`,
           );
           birthdays++;
         } catch (e) {
@@ -143,9 +160,11 @@ async function runContactGreetingsForTenant(tenantId) {
               entityId: c.id,
             },
           });
+          const cfg = c.subBrand ? resolveForSubBrand(tenant, c.subBrand) : {};
           console.log(
             `[ContactGreetings] tenant ${tenantId} contact ${c.id} → anniversary notification ` +
-              `(WhatsApp dispatch pending Wati creds)`,
+              `(WhatsApp dispatch pending Wati creds — would-route ` +
+              `subBrand=${c.subBrand || "(none)"} wabaId=${cfg.wabaId || "(no-config)"})`,
           );
           anniversaries++;
         } catch (e) {

@@ -21,6 +21,7 @@
 
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const WINDOW_FLOOR_DAYS = 7;
 const WINDOW_CEILING_HOURS = 24;
@@ -57,6 +58,16 @@ async function runPostTripFeedbackForTenant(tenantId) {
     take: 200,
   });
 
+  // One tenant row read per pass for the Q9 cut-over plumbing — the
+  // wabaId is logged at survey-create time so operators can see which
+  // WABA the post-trip outreach WOULD route through once Wati creds
+  // land. TmcTrip rows are subBrand=tmc by construction.
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { subBrandConfigJson: true },
+  });
+  const tmcCfg = resolveForSubBrand(tenant, "tmc");
+
   let created = 0;
   let skipped = 0;
   for (const trip of trips) {
@@ -81,7 +92,8 @@ async function runPostTripFeedbackForTenant(tenantId) {
       const link = `${PORTAL_BASE}/survey/${survey.id}?c=${trip.schoolContactId}&tripId=${trip.id}`;
       console.log(
         `[TripPostTripFeedback] tenant ${tenantId} trip ${trip.tripCode} → ` +
-          `survey ${survey.id} created; dispatch link: ${link}`,
+          `survey ${survey.id} created; dispatch link: ${link} — would-route ` +
+          `subBrand=tmc wabaId=${tmcCfg.wabaId || "(no-config)"}`,
       );
       created++;
     } catch (e) {

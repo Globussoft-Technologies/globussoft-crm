@@ -28,6 +28,7 @@
 
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const FALLBACK_STALL_MIN = 30;
 const FUTURE_LOOK_AHEAD_DAYS = 7;
@@ -62,9 +63,28 @@ async function runWebCheckinSchedulerForTenant(tenantId) {
       windowOpenAt: true,
       status: true,
       updatedAt: true,
+      itineraryId: true,
     },
     take: 500,
   });
+
+  // One tenant row read per pass for the Q9 cut-over plumbing. WebCheckin
+  // has no subBrand of its own — it inherits from the parent itinerary.
+  // Pre-fetch the itinerary.subBrand map in a single query so the inner
+  // loop doesn't N+1.
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { subBrandConfigJson: true },
+  });
+  const itinIds = [...new Set(rows.map((r) => r.itineraryId).filter(Boolean))];
+  let subBrandByItin = {};
+  if (itinIds.length > 0) {
+    const itins = await prisma.itinerary.findMany({
+      where: { id: { in: itinIds }, tenantId },
+      select: { id: true, subBrand: true },
+    });
+    subBrandByItin = Object.fromEntries(itins.map((i) => [i.id, i.subBrand]));
+  }
 
   let reminded = 0;
   let fallback = 0;
@@ -100,10 +120,13 @@ async function runWebCheckinSchedulerForTenant(tenantId) {
             },
           });
         }
+        const subBrand = subBrandByItin[row.itineraryId] || null;
+        const cfg = subBrand ? resolveForSubBrand(tenant, subBrand) : {};
         console.log(
           `[WebCheckinScheduler] tenant ${tenantId} checkin ${row.id} ` +
             `(${row.airlineCode} ${row.flightNumber}/${row.pnr}) → reminded ` +
-            `(WhatsApp + email dispatch pending Wati creds)`,
+            `(WhatsApp + email dispatch pending Wati creds — would-route ` +
+            `subBrand=${subBrand || "(none)"} wabaId=${cfg.wabaId || "(no-config)"})`,
         );
         reminded++;
       } catch (e) {

@@ -28,6 +28,7 @@
 
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
 
@@ -86,6 +87,16 @@ async function runJourneyRemindersForTenant(tenantId) {
     take: 500,
   });
 
+  // One tenant row read per pass for the Q9 cut-over plumbing — the
+  // wabaId is logged at milestone-fire time so operators can see which
+  // WABA the reminder WOULD route through once Wati creds land.
+  // Itineraries here are all subBrand=rfu (the where-clause above).
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { subBrandConfigJson: true },
+  });
+  const rfuCfg = resolveForSubBrand(tenant, "rfu");
+
   let fired = 0;
   let skipped = 0;
 
@@ -125,7 +136,8 @@ async function runJourneyRemindersForTenant(tenantId) {
         });
         console.log(
           `[TravelJourneyReminders] tenant ${tenantId} itin ${itin.id} milestone ${m.tag} fired ` +
-            `(WhatsApp/email dispatch pending Wati creds)`,
+            `(WhatsApp/email dispatch pending Wati creds — would-route subBrand=rfu ` +
+            `wabaId=${rfuCfg.wabaId || "(no-config)"})`,
         );
         fired++;
       } catch (e) {

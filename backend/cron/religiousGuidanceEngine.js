@@ -27,6 +27,7 @@
 
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
 
@@ -65,6 +66,15 @@ async function runReligiousGuidanceForTenant(tenantId) {
     select: { id: true, dayOffset: true, title: true, contentHtml: true, channels: true },
   });
   if (packets.length === 0) return { fired: 0, skipped: 0 };
+
+  // One tenant row read per pass for the Q9 cut-over plumbing — the
+  // wabaId is logged at dispatch-stub time so operators can see which
+  // WABA the message WOULD route through once Wati creds land.
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { subBrandConfigJson: true },
+  });
+  const rfuCfg = resolveForSubBrand(tenant, "rfu");
 
   // Fetch eligible RFU itineraries with startDate set.
   const itineraries = await prisma.itinerary.findMany({
@@ -149,7 +159,8 @@ async function runReligiousGuidanceForTenant(tenantId) {
             console.log(
               `[wati-stub] would send religious-guidance packet ${packet.id} ` +
                 `to itin ${itin.id} contact ${itin.contactId} (T-${dtd}d, ${packet.title}) ` +
-                `— pending Wati creds (Q9)`,
+                `— pending Wati creds (Q9) — would-route subBrand=rfu ` +
+                `wabaId=${rfuCfg.wabaId || "(no-config)"}`,
             );
           } else if (ch === "email") {
             console.log(

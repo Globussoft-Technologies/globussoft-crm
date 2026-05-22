@@ -27,6 +27,9 @@ beforeAll(() => {
   prisma.tripInstalmentPayment = { findMany: vi.fn() };
   prisma.tripPaymentPlan = { findMany: vi.fn() };
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
+  // subBrandConfig resolver pull — Q9 cut-over plumbing reads tenant
+  // .subBrandConfigJson once per pass for the per-instalment wabaId log.
+  prisma.tenant = { findUnique: vi.fn() };
 });
 
 beforeEach(() => {
@@ -34,11 +37,13 @@ beforeEach(() => {
   prisma.tripPaymentPlan.findMany.mockReset();
   prisma.notification.findFirst.mockReset();
   prisma.notification.create.mockReset();
+  prisma.tenant.findUnique.mockReset();
 
   prisma.tripInstalmentPayment.findMany.mockResolvedValue([]);
   prisma.tripPaymentPlan.findMany.mockResolvedValue([]);
   prisma.notification.findFirst.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
+  prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
 });
 
 describe('cron/tripPaymentReminders — runPaymentRemindersForTenant', () => {

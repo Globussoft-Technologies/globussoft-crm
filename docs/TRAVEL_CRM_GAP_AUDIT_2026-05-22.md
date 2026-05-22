@@ -9,9 +9,9 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **70** (~90%) — up from 68 (+2: religious-guidance cron + admin-editable library both fully shipped via `1e62ee9`; previously counted in PARTIAL/AUTONOMOUS)
+- **SHIPPED:** **71** (~91%) — up from 70 (+1: Itinerary draft via LLM router `f02fa5a` — first non-Claude-Opus consumer)
 - **PARTIAL:** **5** (~6%) — unchanged
-- **GAP-AUTONOMOUS:** **2** (~3%) — down from 0 (re-baselined: see honest-queue check below — Itinerary-draft LLM consumer + religious-packet admin UI are the two genuinely cron-doable single-commit items remaining)
+- **GAP-AUTONOMOUS:** **1** (~1%) — down from 2 since Itinerary-draft consumer shipped (only `ReligiousPackets.jsx` admin UI remains in Recommended next 5)
 - **GAP-STUB-ABLE:** **5** (~6%) — unchanged
 - **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
 - **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
@@ -25,7 +25,7 @@ After those, what remains is dominated by:
 
 ### Top 3 next-best cron picks (priority order)
 
-1. **Itinerary draft via LLM router (consumer wiring)** (PRD §4.3 + §9.1). Add `POST /api/travel/itineraries/:id/draft/regen` (ADMIN/MANAGER, requireTravelTenant) that pulls the diagnostic + cost-master rows + season + markup rules for the sub-brand and routes through `llmRouter.routeRequest({ task: "bulk-text", payload })` returning a draft summary block. Persist as `Itinerary.draftSummary` (new nullable column — no bless marker needed) so the next GET serves the cached draft. Stub-mode returns synthetic copy; Q11 keys swap to Gemini Flash. ~3-4 hrs. **Why next:** Itinerary draft is the THIRD LLM-router consumer the PRD §9.1 default-model map names (after talking-points which ships and form-vs-call which ships); proves the `bulk-text` task taxonomy cited in `LlmCallLog.task`; first non-Claude-Opus consumer of the router (locks in the per-task default model dispatch).
+1. ~~**Itinerary draft via LLM router (consumer wiring)** (PRD §4.3 + §9.1). Add `POST /api/travel/itineraries/:id/draft/regen` (ADMIN/MANAGER, requireTravelTenant) that pulls the diagnostic + cost-master rows + season + markup rules for the sub-brand and routes through `llmRouter.routeRequest({ task: "bulk-text", payload })` returning a draft summary block. Persist as `Itinerary.draftSummary` (new nullable column — no bless marker needed) so the next GET serves the cached draft. Stub-mode returns synthetic copy; Q11 keys swap to Gemini Flash. ~3-4 hrs. **Why next:** Itinerary draft is the THIRD LLM-router consumer the PRD §9.1 default-model map names (after talking-points which ships and form-vs-call which ships); proves the `bulk-text` task taxonomy cited in `LlmCallLog.task`; first non-Claude-Opus consumer of the router (locks in the per-task default model dispatch).~~ — ✅ **commit `f02fa5a`** (additive nullable `Itinerary.draftSummary` column + `POST /draft/regen` + public projection surfaces it + 8 new gate-spec cases; first non-Claude-Opus router consumer landed)
 
 2. **`ReligiousPackets.jsx` admin UI** (PRD §4.10 + §7). New page under `frontend/src/pages/travel/ReligiousPackets.jsx` consuming the 5-endpoint admin CRUD from `routes/travel_religious_packets.js` (commit `1e62ee9`). Renders a sub-brand filter, packet list (title / dayOffset / channels / isActive), create/edit drawer with the validation contract (subBrand in VALID_SUB_BRANDS, dayOffset 0..365, title 1..200, contentHtml ≤20kB, channels CSV from wa/email/sms). Sidebar link from the existing travel nav. ~½ day, pure frontend, zero cred deps. **Why next:** the backend admin CRUD shipped without an operator surface; Yasin's Q1 content lands via admin PATCH per the commit body, but there's no UI to do that today. Closes the §4.10 row's UI side.
 
@@ -222,7 +222,7 @@ After those, what remains is dominated by:
 | `User.subBrandAccess` | SHIPPED | `schema.prisma:357` |
 | `TravelDiagnostic.talkingPointsJson` (LLM brief cache) | SHIPPED | persisted by talking-points/regen route (commit `cf876af`); read by next GET; consumed by DiagnosticDetail.jsx (commit `2440b4a`) |
 | `Tenant.religiousGuidancePackets` back-relation | SHIPPED | `schema.prisma:164` (commit `1e62ee9`) |
-| `Itinerary.draftSummary` (LLM bulk-text cache) | NOT SHIPPED | GAP-AUTONOMOUS — lands with top pick #1 |
+| `Itinerary.draftSummary` (LLM bulk-text cache) | SHIPPED | `schema.prisma` Itinerary.draftSummary `String? @db.Text` (commit `f02fa5a`); populated by `POST /draft/regen`; surfaced in public projection |
 
 ---
 
@@ -234,7 +234,7 @@ After those, what remains is dominated by:
 |---|---|---|
 | `travel.js` | SHIPPED | Minimal `/health`; cross-sub-brand dashboard in `travel_dashboard.js` |
 | `travel_diagnostics.js` | SHIPPED | 11+ endpoints incl. public submit + report PDF + `/talking-points/regen` (`cf876af`) + `/form-vs-call/compare` (`4a7c623` + `8b97fd5`) |
-| `travel_itineraries.js` | SHIPPED | 14+ endpoints incl. `/share` + version chain + accept/reject + auto-WebCheckin on accept; **`/draft/regen` LLM consumer pending (top pick #1)** |
+| `travel_itineraries.js` | SHIPPED | 15+ endpoints incl. `/share` + version chain + accept/reject + auto-WebCheckin on accept + `/draft/regen` LLM consumer (commit `f02fa5a`) |
 | `travel_quotation_flight.js` | GAP-AUTONOMOUS (big-scope, plugin-paired) | Phase 1 W3; NOT a cron pick |
 | `travel_cost_master.js` | SHIPPED | 5 endpoints |
 | `travel_suppliers.js` (was `travel_supplier_vault.js`) | SHIPPED | 7 endpoints |
@@ -349,7 +349,7 @@ After those, what remains is dominated by:
 | Task | Locked model | State |
 |---|---|---|
 | Diagnostic interpretation (talking-points) | Claude Opus | SHIPPED via talking-points endpoint (commit `cf876af`); stub-mode-ready; UI consumer DiagnosticDetail.jsx (`2440b4a`) |
-| Itinerary draft (bulk-text) | Gemini Flash | GAP-AUTONOMOUS — router exposes task; consumer wiring is top pick #1 |
+| Itinerary draft (bulk-text) | Gemini Flash | SHIPPED via `POST /api/travel/itineraries/:id/draft/regen` (commit `f02fa5a`) — first non-Claude-Opus router consumer |
 | Form-vs-call comparison | Claude Opus | SHIPPED via `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519`, commit `4a7c623`); 80/60% ladder + perFieldDiff inline; UI consumer DiagnosticDetail.jsx Section 3 (`2440b4a`) |
 | AI qualification call | Gemini Live | GAP-CRED-BLOCKED (Callified front-end) |
 | Document OCR fallback | Gemini Vision | GAP-CRED-BLOCKED |

@@ -4,45 +4,104 @@
 
 ---
 
-## 🚧 KEY BLOCKERS — Travel CRM (snapshot as of Phase 1 close)
+## 🚧 KEY BLOCKERS — Travel CRM (refreshed 2026-05-22 post-cron-exhaustion)
 
-All Phase 1 autonomous-doable work is shipped. The Phase 1 surface
-that ISN'T live yet falls into three buckets — none of them are
-fixable by writing more code on this dev box.
+Phase 1 + Phase 1.5 autonomous-doable work is **100% shipped** (78/78
+§4 PRD requirements per [`docs/TRAVEL_CRM_GAP_AUDIT_2026-05-22.md`](docs/TRAVEL_CRM_GAP_AUDIT_2026-05-22.md)).
+Stub-mode scaffolding is in place for every cred-blocked integration —
+each one is now a 1-line `if (apiKey) realCall(...)` swap when the cred
+arrives. What remains falls into three buckets; none is autonomous-doable.
 
-### 🔑 Cred-blocked (waiting on a key / API key / partner onboarding)
+### 🔑 Cred-blocked (chase order by blast radius)
 
-| Item | Blocker | Where the cred lives once it arrives |
+| # | Q-marker | What to ask Yasin for | Unblocks (count) |
+|---|---|---|---|
+| 1 | **Q9 — Wati WhatsApp** | Meta System User access token + 3×WABA ID + 3×phoneNumberId + App ID/Secret + webhook verify token | **10 consumers** — 7 crons (`tripPaymentReminders`, `travelJourneyReminders`, `tripPostTripFeedback`, `webCheckinScheduler`, `contactGreetingsEngine`, `travelDiagnosticAdvisorAlerts`, `religiousGuidanceEngine`) + 3 endpoints (microsite OTP, itinerary /share, webcheckin /deliver). `subBrandConfig` helper (`621aab7`) pre-routes per-sub-brand WABA — Q9 swap is zero-edit per consumer. PRD: [`docs/WHATSAPP_INTEGRATION_PRD.md`](docs/WHATSAPP_INTEGRATION_PRD.md) |
+| 2 | **Q11 — LLM API keys** | `ANTHROPIC_API_KEY` + `GOOGLE_API_KEY` + `PERPLEXITY_API_KEY` + `OPENAI_API_KEY` | 3 consumers go non-stub (talking-points, form-vs-call, itinerary draft) + `LlmCallLog.costEstimate` becomes non-zero → just-shipped `LlmSpend.jsx` dashboard (`76996c8`) shows real spend |
+| 3 | **Q3 — DigiLocker** | `DIGILOCKER_CLIENT_ID` + `DIGILOCKER_CLIENT_SECRET` | Real Aadhaar-XML pull (TMC parent registration moves PARTIAL → SHIPPED). Single env-var drop. Spec: [`docs/DIGILOCKER_INTEGRATION_SPEC.md`](docs/DIGILOCKER_INTEGRATION_SPEC.md) + use case: [`docs/DIGILOCKER_USE_CASE.md`](docs/DIGILOCKER_USE_CASE.md) |
+| 4 | **Q1 — Section 13 packet** | Google Workspace admin + AdsGPT handover + Callified.ai handover + brand assets | Drive folder auto-create + AdsGPT marketing reports + AI calling / form-vs-call live mode + themed PDFs |
+| 5 | **Q19 — RateHawk** | RateHawk production API key + per-tenant API ID | RFU unified-search lowest-rate auto-pick (lifts PARTIAL); W3 sprint gate. Requires also writing `services/ratehawkClient.js` |
+| 6 | **Q8 — Excel Software** | REST API docs (endpoints + auth + payload shapes) | `services/excelSoftwareClient.js` + accounting bridge (CRM → Excel Software invoice/payment sync) |
+| 7 | **Q22 — Brand assets pack** | Per-sub-brand logos (SVG light+dark) + palettes (hex) + fonts + PDF letterhead templates | `frontend/src/theme/travel.css` palette swap + per-sub-brand PDF templates + 4th LLM consumer (TravelStallPersonalisedPDF — currently parked) |
+| 8 | **Q15 — UAT users** | Named testers per sub-brand + availability windows | W6 sprint exit-gate (not code-blocked, stakeholder-blocked) |
+
+### 🗣️ Product-call (waiting on a decision, not a cred)
+
+| Q-marker | Decision needed | Who decides |
 |---|---|---|
-| **DigiLocker wiring** (Aadhaar OCR) | Travel Stall partner registration on DigiLocker portal → issues `DIGILOCKER_CLIENT_ID` + `DIGILOCKER_CLIENT_SECRET` (Q3) | `backend/.env` per [DIGILOCKER_INTEGRATION_SPEC.md](docs/DIGILOCKER_INTEGRATION_SPEC.md) |
-| **Wati BSP wrapper** (3 WABAs) | Meta Business Manager access for Yasin's 3 WhatsApp Business numbers (Q9) | `backend/.env` + per-tenant `WhatsAppConfig` row |
-| **Microsite OTP real SMS** | Same Wati BSP creds as above — `sendOtpStub` swaps to `prisma.whatsAppMessage.create` | One-line cutover in `routes/travel_microsites.js` |
-| **Cron dispatch stubs** (5 crons) | Same Wati BSP — all 5 crons log "WhatsApp dispatch pending" today | One-line addition per cron loop |
-| **LLM talking-points generator** | Gemini / Claude / Perplexity API keys (Q11 decided routing; keys not yet shared) | `backend/.env` + `lib/llm-router.js` (not yet built) |
-| **AdsGPT marketing reports** | AdsGPT integration creds (cross-product wiring) | Per-tenant `Integration` row |
+| **Q2 — Aadhaar consent legal copy** | Exact wording shown to TMC parents at DigiLocker consent surface | Yasin's legal counsel (or whoever signs India consent UX). Draft at `7d162cd` |
+| **Q13 — TMC curriculum mapping** | Mapping table: school-trip destination/activity → CBSE/ICSE/state-board learning outcomes | TMC senior academic coordinator |
 
-### 📋 Process / external (waiting on a person, not a key)
+### 🟡 PARTIAL — half-shipped; finish blocked on above
 
-| Item | Who owes it | Status |
+- **LeadRoutingRule sub-brand extension** — schema supports `subBrand` but routing engine doesn't filter on it
+- **RFU Haram-facing filter UI** — backend filter works; UI surface still raw JSON
+- **RFU Umrah quotation engine** — quote shell ships; lowest-rate pick waits on Q19 RateHawk
+- **Microsite OTP send** — flow live in dev with stub; real SMS waits on Q9 Wati
+- **Parent registration** — works with stub Aadhaar; real DigiLocker waits on Q3
+
+### 🛑 Out of cron scope (multi-commit / multi-day)
+
+- **Phase 3 Visa Sure** — route + 3 UI pages + checklist tracking + risk-flag engine + rejection-recovery flow. Multi-day program; needs human re-baselining before dispatch.
+- **Chrome flight-quote plugin** — browser-extension infra not in repo; ~10-15 engineer-days; separate Manifest V3 codebase
+- **Airline web-checkin automation** — paired with Chrome plugin work
+
+### 🛠️ Already-shipped, flaggable (still applies)
+
+- **Itinerary `/pdf`** template (`c18fe62`) is functional but minimal — page-2+ (T&Cs, brand footer) lands with Q22 asset pack
+- **Sub-brand switcher** (`bb0c620`) state is built + persisted, but only some pages currently *read* `useActiveSubBrand` to pre-seed their filter — incremental UX adoption
+
+---
+
+## 🏁 SESSION HANDOFF (2026-05-22 — autonomous PRD-drive cron arc: Phase 1.5 100% closed + queue exhausted)
+
+**HEAD on origin/main:** `9bd107b`. **Cron deleted** (`630c781c`); working tree clean. The autonomous PRD-drive loop fired ~9 productive ticks then went idle once the menu emptied — user manually CronDeleted after 8 consecutive idle ticks (4 hrs of empty syncs).
+
+### What shipped this session (10 feature commits + 2 audit refreshes)
+
+| Commit | Item | What |
 |---|---|---|
-| **R11 infra-handover call** | Travel Stall ops → GS | 🔴 Not scheduled. On-prem decision adds W0-W1 work not in 6-week scope. Need SSH bastion / DNS API / backup / DR targets in writing. |
-| **Yasin's Section 13 deliverables** | Yasin → GS | 🟡 9 items in [TRAVEL_CRM_OPEN_QUESTIONS.md](docs/TRAVEL_CRM_OPEN_QUESTIONS.md). Biggest unlock: real diagnostic Q-sets per Q13 (now uploadable via CSV import or visual builder). |
-| **Aadhaar consent counsel review** | Travel Stall counsel | 🟡 GS draft shipped (`7d162cd`). Counsel reviews language; final-approved text replaces the draft. |
-| **Brand assets pack** (Q22) | Yasin → GS | 🟡 Placeholder navy + gold in `frontend/src/theme/travel.css`. Real palette + logos drop in when design pack arrives. |
-| **UAT users** (Q15) | Travel Stall | 🟡 1 lead + 3 testers × 2 brands = 8 user accounts to seed. |
-| **Tally CA export sample** (Q5) | Travel Stall accountant | 🟡 Sample needed to drive export endpoint shape. |
-| **Excel Software for Travel API docs** (Q8) | Travel Stall vendor | 🟡 For the P1.5 API bridge. |
+| `f02fa5a` | feat — Itinerary draft via LLM router (PRD §4.3 + §9.1) | `POST /api/travel/itineraries/:id/draft/regen` routes through `llmRouter.routeRequest({task:"bulk-text"})`; additive nullable `Itinerary.draftSummary`; public projection surfaces it; **3rd LLM-router consumer + first non-Claude-Opus** |
+| `f903f4b` | feat — `ReligiousPackets.jsx` admin UI (PRD §4.10) | Frontend on top of `1e62ee9`'s 5-endpoint CRUD; sub-brand + active filters; create/edit/delete; 8 vitest cases |
+| `c51f7e4` | feat — `ItineraryDetail.jsx` (PRD §4.3 + §7) | 3-section page (header + draftSummary block + items table) at `/travel/itineraries/:id`; Itineraries.jsx rows now clickable; 8 vitest cases |
+| `a84289e` | feat — `LeadDetail.jsx` (PRD §7) | Unified contact-centric view at `/travel/leads/:contactId`: contact identity + latest diagnostic + linked itineraries + TMC trips + RFU profile link; Leads.jsx Contact column gains link; 6 vitest cases |
+| `76996c8` | feat — `LlmSpend.jsx` admin observability (PRD §4.9 + R7) | RoleGuard ADMIN at `/llm-spend`; recharts AreaChart (byDay) + BarCharts (byTask / byModel); days selector 7/14/30/60/90; sidebar link; 7 vitest cases. Closes last §4.9 gap |
+| `a6ea3fe` | feat — form-vs-call result persistence (Phase 1.5 §4.1) | Additive nullable `TravelDiagnostic.formVsCallJson`; fire-and-forget snapshot in compute handler; GET surfaces cache via Prisma default selection; 2 new gate-spec cases; eliminates duplicate-LLM-call noise from spend telemetry |
+| `de1be50` | feat — Rooming XLSX export (PRD §4.5, Phase 1.5) | `GET /api/travel/trips/:tripId/rooming/export.xlsx` ADMIN+MANAGER + requireTmcAccess; 5-col XLSX from RoomingAssignment + TripParticipant join; Download CTA in TripDetail Rooming tab; 4 new gate-spec cases |
+| `621aab7` | feat — `subBrandConfig` helper + WA-stub consumer wiring (Q9 prep) | New `backend/lib/subBrandConfig.js` (`resolveForSubBrand` + `parseConfig` + whitelist guard); 26 vitest cases; **7 cron + 3 endpoint consumers** all resolve per-sub-brand WABA. Q9 cred-drop is now zero-edit per consumer |
+| `b81f2cb` | docs — re-audit refresh (queue refill #1) | Fresh PRD scan after picks 1-4 of `f7824be` shipped. Surfaced 5 new picks. Bug: silently-wrong "DuplicateContactModal absent" claim — caught next round by verify-before-pickup |
+| `e8cc0ac` | docs — re-audit refresh (queue refill #2) | Dual-check verify (Glob + Grep + git log) after pick #1-#3 + phantom #4 shipped. §10 explicitly recommends CronDelete after pick #5 ships |
+| `9bd107b` | docs — cron-learnings exhaustion entry | Final Step-5 handoff to CLAUDE.md `🤖 Cron learnings`; recommended CronDelete |
 
-### 🛑 Out of Phase 1 scope (intentional — don't autonomous-ship)
+### Counts
 
-- **Phase 2** — Travel Stall sub-brand end-to-end (Family Travel Quiz, 50% advance pattern, personalised PDFs, birthday/anniversary greetings, Booking.com / Expedia direct APIs).
-- **Phase 3** — Visa Sure (routes / UI / risk-flag engine / rejection-recovery), Flight Plugin Chrome extension (separate repo, Manifest V3 + per-airline DOM adapters), Web check-in browser automation (P1B; tracking-side shipped in `a6e80eb`).
+- **§4 PRD requirements:** **78/78 SHIPPED (~100%)** — up from 70/78 (~91%) at session start
+- **PARTIAL:** **5** (unchanged — all blocked on cred-drops or product calls)
+- **GAP-AUTONOMOUS:** **0** (was 5 at session start; all closed)
+- **GAP-STUB-ABLE:** **5** (unchanged — these have stubs in place; "stubable" means cred-drop swaps stub→real, not that more stubbing is needed)
+- **GAP-CRED-BLOCKED:** **8** (unchanged — chase list above)
+- **GAP-PRODUCT-CALL:** **2** (unchanged — Q2 / Q13)
 
-### Already-shipped-but-flaggable
+### Phantom carry-over (instance #8 caught this session)
 
-- **Itinerary `/pdf`** template (`c18fe62`) is functional but minimal — page-2+ (T&Cs, brand footer per Yasin asset pack) lands when the brand pack arrives.
-- **Microsite OTP end-to-end happy-path** can't be exercised in the gate spec until the stub is swapped for real SMS (only structural gate tests run).
-- **Sub-brand switcher** (`bb0c620`) state is built and persisted, but no page currently *reads* `useActiveSubBrand` to pre-seed its filter — incremental UX adoption, not a Phase 1 contract.
+`DuplicateContactModal.jsx` was shipped at `b18c5c4` (2026-05-21 20:31 IST) — 14h BEFORE re-audit `b81f2cb` falsely claimed it was absent. Caught at next dispatch's verify-before-pickup grep. Triggered a tightening of the re-audit prompt to require **dual-check (Glob + Grep + git log)** before any "absent via grep" claim. Subsequent refresh `e8cc0ac` caught zero phantoms with the new discipline.
+
+### What to do next session (in priority order)
+
+1. **Hand the Q9 + Q11 + Q3 chase to Yasin.** See KEY BLOCKERS table above. Q9 alone unlocks 10 consumers + lifts 1 PARTIAL. The two existing PRDs (`docs/WHATSAPP_INTEGRATION_PRD.md` for Q9; `docs/DIGILOCKER_USE_CASE.md` for Q3) are ready to send. Q11 is the smallest ask — just 4 API keys.
+
+2. **Do NOT recreate the autonomous cron** until at least one Q-marker resolves. The loop will sit on an empty queue and burn a tick every 30 min for no productive output. The cron-learnings entry at `9bd107b` documents the exhaustion + revival triggers.
+
+3. **When Q9 lands:** the per-consumer swap pattern is `if (apiKey) wati.send(...)` inside each of the 7 crons + 3 endpoints. The `subBrandConfig` helper already pre-routes; the swap touches the actual send call only. Probably a 30-min session by hand or a single agent dispatch.
+
+4. **Consider release tag `v3.11.0`** for the cumulative Phase 1.5 close. Latest tag was `v3.10.0`-ish; ~30 commits since.
+
+### Notes still in force
+
+- **78/78 §4 PRD requirements ship** — re-derived from a fresh scan in `e8cc0ac`; not a counting error. The 5 PARTIAL items are all blocked on cred-drops or product calls (Q9, Q19, Q3, Q11).
+- **Demo accounts** — `admin@travelstall.demo` is ADMIN; the real MANAGER is `tmc-ops@travelstall.demo`. Don't infer role from label.
+- **`backend/.env` `DATABASE_URL` points at demo MySQL on this dev box** — `npx prisma db push` from the dev box mutates the demo DB. Use `scripts/local-stack-up.ps1` (overrides to `127.0.0.1:3307`) for safe local iteration.
+- **Phantom-carry-over discipline:** any "X is absent" grep claim must be re-verified with both `Glob` + `Grep` + `git log` before being treated as authoritative. Single-grep is insufficient (instance #8 was the trigger).
 
 ---
 

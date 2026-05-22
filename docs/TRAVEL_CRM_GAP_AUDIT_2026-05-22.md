@@ -9,9 +9,9 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **65** (~83%) — up from 62 (+3: LlmCallLog/admin spend, form-vs-call compare endpoint, WebCheckin seed row)
-- **PARTIAL:** **5** (~6%) — unchanged (rebalanced — WA-dispatch crons still partial; offsetting shifts)
-- **GAP-AUTONOMOUS:** **3** (~4%) — was 2; new entry: `LeadDetail.jsx` + `ItineraryDetail.jsx` are now the residual single-commit frontend items the cron can pick
+- **SHIPPED:** **66** (~85%) — up from 65 (+1: DiagnosticDetail.jsx UI `2440b4a`)
+- **PARTIAL:** **5** (~6%) — unchanged
+- **GAP-AUTONOMOUS:** **2** (~3%) — down from 3 since DiagnosticDetail.jsx shipped (religious-guidance cron + Itinerary draft consumer remain as Priority A #2/#3)
 - **GAP-STUB-ABLE:** **5** (~6%) — was 6; one consumer (LLM router for talking-points + form-vs-call) cleared
 - **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
 - **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
@@ -22,7 +22,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 
 ### Top 3 next-best cron picks (priority order)
 
-1. **`DiagnosticDetail.jsx` UI that renders BOTH talking-points brief AND the form-vs-call comparison panel** (PRD §4.1 + §4.2 + §7). New page under `frontend/src/pages/travel/DiagnosticDetail.jsx`; fetches `GET /api/travel/diagnostics/:id` for the bank + answers + persisted `talkingPointsJson`; renders the brief block + "Regenerate" button calling `POST /api/travel/diagnostics/:id/talking-points/regen`; renders a "Compare with call" section that POSTs to `/api/travel/diagnostics/:id/form-vs-call/compare` with a textarea for `callTranscript` and shows the `{ classification, scorePercent, perFieldDiff }` response. Mount at `/travel/diagnostics/:id` in `App.jsx`. ~½ day, pure frontend, zero cred deps. **Why next:** both backend endpoints ship (`cf876af` + `4a7c623`); advisor has no surface to consume either; closes the diagnostic interpretation loop for W2 exit gate.
+1. ~~**`DiagnosticDetail.jsx` UI that renders BOTH talking-points brief AND the form-vs-call comparison panel** (PRD §4.1 + §4.2 + §7). New page under `frontend/src/pages/travel/DiagnosticDetail.jsx`; fetches `GET /api/travel/diagnostics/:id` for the bank + answers + persisted `talkingPointsJson`; renders the brief block + "Regenerate" button calling `POST /api/travel/diagnostics/:id/talking-points/regen`; renders a "Compare with call" section that POSTs to `/api/travel/diagnostics/:id/form-vs-call/compare` with a textarea for `callTranscript` and shows the `{ classification, scorePercent, perFieldDiff }` response. Mount at `/travel/diagnostics/:id` in `App.jsx`. ~½ day, pure frontend, zero cred deps. **Why next:** both backend endpoints ship (`cf876af` + `4a7c623`); advisor has no surface to consume either; closes the diagnostic interpretation loop for W2 exit gate.~~ — ✅ **commit `2440b4a`** (3-section page + STUB pill + role-gated regenerate button + color-coded form-vs-call badge + perFieldDiff ✓/✗ table; 10 vitest cases; Diagnostics.jsx list rows link through)
 
 2. **Religious-guidance content delivery cron + admin-editable content library** (PRD §4.8 + §4.10). Mirror `cron/contactGreetingsEngine.js` shape: schedule daily, scan upcoming Umrah-bound `Itinerary` rows (RFU sub-brand) within T-14d window, fan out content packets (Hajj/Umrah ritual guidance, dua copy, dress-code reminder) per upcoming pilgrim. New model `ReligiousGuidancePacket { id, subBrand, dayOffset, title, contentHtml, channel }` + 3 seed packets. WA dispatch stays Q9-stub; SMS + email work today. ~½ day. **Why next:** §4.8 row reads "GAP-AUTONOMOUS" since 2026-05-20; mirrors a shipped cron pattern; library is Yasin packet (Q1 cred-blocked) but the engine + admin CRUD ship now.
 
@@ -48,7 +48,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | 8 lost-reason taxonomy | SHIPPED | Same helper, `seed-travel.js:1095-1119` | Price · No response · Chose competitor · Wrong requirement · Timing issue · Budget issue · Trust issue · Duplicate enquiry |
 | Diagnostic-first guard on quotation routes | SHIPPED | `middleware/travelGuards.js`; refused on POST/PUT Itinerary | |
 | AI qualification call (Eng/Hin/Urdu) | GAP-CRED-BLOCKED | Sandbox mock `scripts/sandbox/callified-mock.js` only | Q1 — Callified.ai handover |
-| Form-vs-call answer comparison (80/60% threshold) | SHIPPED | `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519-639`, commits `4a7c623` + `8b97fd5`) — routes through `llmRouter.routeRequest({ task: "form-vs-call" })`, parses `\d+%` from LLM text, applies PRD 80/60 ladder → `{ classification: match|review|mismatch|unknown, scorePercent, perFieldDiff[], summary }`. Read/compute-only; persistence is P1.5. | UI consumer missing → see DiagnosticDetail.jsx pick |
+| Form-vs-call answer comparison (80/60% threshold) | SHIPPED | `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519-639`, commits `4a7c623` + `8b97fd5`) — routes through `llmRouter.routeRequest({ task: "form-vs-call" })`, parses `\d+%` from LLM text, applies PRD 80/60 ladder → `{ classification: match|review|mismatch|unknown, scorePercent, perFieldDiff[], summary }`. UI consumer at `DiagnosticDetail.jsx` Section 3 (commit `2440b4a`). Read/compute-only; persistence is P1.5 | |
 | AI-to-advisor handover (B2C) | PARTIAL | `cron/travelDiagnosticAdvisorAlerts.js` (diagnostic side only) | Callified side cred-blocked |
 | Manager view (pending/delayed/staff-wise) | SHIPPED (reuse) | `routes/staff.js` + existing dashboards | |
 | Lead source attribution + UTM tracking | SHIPPED (reuse) | `Contact.firstTouchSource` + Touchpoint already wired | |
@@ -266,7 +266,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | `DiagnosticBuilder.jsx` | SHIPPED | |
 | `DiagnosticPreview.jsx` | NOT SHIPPED | |
 | `DiagnosticPublic.jsx` (`/p/diagnostic/:subBrand/:bankId`) | SHIPPED-equivalent | `TravelStallQuiz.jsx` at `/travel-stall/quiz` |
-| `DiagnosticDetail.jsx` (renders talking-points brief + form-vs-call panel) | **NOT SHIPPED — GAP-AUTONOMOUS** | New since 2026-05-22 morning — TWO backend endpoints (talking-points + form-vs-call/compare) ship but no UI consumer |
+| `DiagnosticDetail.jsx` (renders talking-points brief + form-vs-call panel) | SHIPPED | `frontend/src/pages/travel/DiagnosticDetail.jsx` (commit `2440b4a`); route `/travel/diagnostics/:id`; consumes `cf876af` talking-points + `4a7c623` form-vs-call endpoints + GET /diagnostics/:id; STUB pill for stub-mode LLM output; role-gated Regenerate button |
 | `ItineraryBuilder.jsx` | PARTIAL | List ships (`Itineraries.jsx`); explicit `/new` builder route absent |
 | `ItineraryDetail.jsx` | NOT SHIPPED — GAP-AUTONOMOUS | Pairs with ItineraryBuilder pick when itinerary-draft LLM consumer wires |
 | `CostMaster.jsx` | SHIPPED | |
@@ -356,7 +356,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | Week | Exit gate | State |
 |---|---|---|
 | W1 | SSO live; inbound WA enquiries; templates submitted | PARTIAL — SSO reuse; WA cred-blocked (Q9) |
-| W2 | Both diagnostics live; AI call summary attached | PARTIAL — Diagnostics ✅ + talking-points ✅ + form-vs-call compute ✅ (commit `4a7c623`); AI calling 🔴 (Callified GAP); UI render 🔴 (DiagnosticDetail.jsx) |
+| W2 | Both diagnostics live; AI call summary attached | PARTIAL — Diagnostics ✅ + talking-points ✅ + form-vs-call compute ✅ (commit `4a7c623`) + UI render ✅ (commit `2440b4a`); AI calling 🔴 (Callified Q1 cred-blocked) |
 | W3 | Flight plugin 4-option in 60s; RFU lowest-rate | RED — Plugin not started; RateHawk GAP |
 | W4 | Web check-in live top-4; TMC microsite pilot | PARTIAL — Microsite ✅ + cron ✅ + route ✅ + operator UI ✅ + seed ✅; airline automation GAP |
 | W5 | Dashboards meet KPI list; CA export validated | SHIPPED — Reports + Dashboard + Tally export + TMC ops-dashboard rollup (`9eda0b6`) + LLM spend daily (`f5c9518`) |

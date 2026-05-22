@@ -1,24 +1,38 @@
 # Travel CRM — Portal-wise Feature Matrix
 
-**Source documents:** 19 files in `travel-crm/` (last reviewed 2026-05-23). Authoritative per-portal feature lists pulled from the 4 "CRM development" PDFs (`TMC - CRM development.pdf`, `RFU - CRM development.pdf`, `Travelstall - CRM development.pdf`, `Visa Sure - CRM development.pdf`) plus the cross-cutting `Req Doc After Meeting.pdf` (Yasin's Section 12 matrix of 53 rows) and `GlobusSoft_Response_15May2026.pdf` (GS's 6-week Phase-1 plan with weekly milestones).
+## Last refreshed: 2026-05-22T21:42:51Z; HEAD at refresh: aacaa762e7dc04aab6dc8cca70fd61bc26f224d2; refresh tick from cron 5a0ad5d3 tick #7
 
-**Implementation state:** cross-checked against the PRD-gap audit at [docs/TRAVEL_CRM_GAP_AUDIT_2026-05-22.md](TRAVEL_CRM_GAP_AUDIT_2026-05-22.md) (78/78 §4 PRD requirements SHIPPED; 5 PARTIAL; 8 cred-blocked; 2 product-call-blocked) and the manual-coding backlog at [docs/MANUAL_CODING_BACKLOG.md](MANUAL_CODING_BACKLOG.md) (clusters A-F: design-call / multi-day-feature / cred-dependent / wellness-session / product-call). Path-grep verified at HEAD against `backend/routes/travel_*.js`, `backend/cron/*`, `backend/lib/*`, `backend/services/*`, `frontend/src/pages/travel/*`, `frontend/src/pages/public/Travel*` and `backend/prisma/schema.prisma`.
+**Source documents:** 19 files in `travel-crm/` (last reviewed 2026-05-23). Authoritative per-portal feature lists pulled from the 4 "CRM development" PDFs (`TMC - CRM development.pdf`, `RFU - CRM development.pdf`, `Travelstall - CRM development.pdf`, `Visa Sure - CRM development.pdf`) plus the cross-cutting `Req Doc After Meeting.pdf` (Yasin's Section 12 matrix of 53 rows) and `GlobusSoft_Response_15May2026.pdf` (GS's 6-week Phase-1 plan with weekly milestones). Plus the 11 PRDs at `docs/PRD_*.md` (passport OCR / flight plugin / TMC curriculum / web check-in / RateHawk / AI calling / Booking-Expedia / AdsGPT / Excel Software / Visa Sure Phase 3 / AI-era rebuild) — 10 of which landed since matrix baseline `08bc240`.
+
+**Implementation state:** cross-checked against the PRD-gap audit at [docs/TRAVEL_CRM_GAP_AUDIT_2026-05-22.md](TRAVEL_CRM_GAP_AUDIT_2026-05-22.md) (78/78 §4 PRD requirements SHIPPED; 5 PARTIAL; 8 cred-blocked; 2 product-call-blocked) and the manual-coding backlog at [docs/MANUAL_CODING_BACKLOG.md](MANUAL_CODING_BACKLOG.md) (clusters A-G — design-call / multi-day-feature / cred-dependent / wellness-session / product-call / RFU-newly-surfaced (G added at `a864db5`)). Path-grep verified at HEAD against `backend/routes/travel_*.js`, `backend/cron/*`, `backend/lib/*`, `backend/services/*`, `frontend/src/pages/travel/*`, `frontend/src/pages/public/Travel*` and `backend/prisma/schema.prisma`.
 
 **Maintenance:** update on every PRD doc revision OR when a portal-level feature ships/is cut. Auto-shipped items get refreshed by the autonomous cron via the gap-audit refresh cycle; high-level scope changes (new sub-brand, deprecated feature) need manual editor review.
 
 ---
 
+## Executive Summary — refreshed counts (134 rows total)
+
+- ✅ SHIPPED: **80** (was 77 at last refresh `aacaa76`; +3 from V19 + TS18 + TS21 landing)
+- 🟡 PARTIAL: **36** (was 32; +4 from V7 + V8 + V9 + V10 graduating from NOT-STARTED to SHELL)
+- 🔴 NOT-STARTED: **4** (was 11; -7 — V7 / V8 / V9 / V10 → 🟡; V19 / TS18 / TS21 → ✅; remaining 4 = T22 microsite-preview + V16 / V17 / V18 visa analytics)
+- ⏸️ BLOCKED: **12** (unchanged; PRDs landed for 7 of these but creds / vendor docs / product calls still gate)
+- 🏗️ MULTI-DAY: **2** (unchanged; O22 flight-plugin + O24 webcheckin-automation — both now have PRDs `d58c5a5` + `d79a7f7`)
+
+Total: 134 (T:27 + R:32 + TS:21 + V:19 + O:35).
+
+---
+
 ## Overview — 4 portals + the operator CRM
 
-The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenant.vertical = "travel"`, `subBrandAccess[]` on User per Q25) plus the GlobusSoft operator CRM that internal staff use to service all four. Each sub-brand has its own go-to-market positioning (diagnostic-first for TMC / RFU / Visa Sure; conventional B2C funnel for Travel Stall), shared infrastructure (auth, billing, integrations) and its own product ladder of entry / primary / premium offerings. Phase-1 launches TMC and RFU as the two committed brands (per the GS response's W1–W6 plan); Travel Stall is Phase 2 (already partly shipped — see §Travel Stall below); Visa Sure is Phase 3 (schema-only today).
+The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenant.vertical = "travel"`, `subBrandAccess[]` on User per Q25) plus the GlobusSoft operator CRM that internal staff use to service all four. Each sub-brand has its own go-to-market positioning (diagnostic-first for TMC / RFU / Visa Sure; conventional B2C funnel for Travel Stall), shared infrastructure (auth, billing, integrations) and its own product ladder of entry / primary / premium offerings. Phase-1 launches TMC and RFU as the two committed brands (per the GS response's W1–W6 plan); Travel Stall is Phase 2 (now nearly complete with TS18 personalised-PDF + TS21 operator landing both shipping in this refresh window); Visa Sure is Phase 3 (scaffolding + 15Q diagnostic seed + risk-flag cron SHELL + AdvisorDashboard SHELL now live; real implementation gated on PRD `28fbcf4` §5 product calls).
 
 | Portal | Target user | Source doc | Phase 1 launch state |
 |---|---|---|---|
 | TMC (The Modern Classroom) | School trips — schools / principals / coordinators / activity heads / teachers / parents / students | `TMC - CRM development.pdf` + `TMC_Business_Blueprint_For_Tech_Team.md.pdf` | **~95% SHIPPED** — diagnostic, sales workflow, trip mgmt, microsite, ops dashboard, accounting, analytics all live. Pending: DigiLocker Q3 cred drop, Wati Q9 cred drop, parent-facing registration UI route |
-| RFU (Ready for Umrah) | Umrah pilgrims (4 readiness levels: Confident & Prepared / Guided for Peace of Mind / Assisted for Comfort & Correctness / Supported Journey Recommended) | `RFU - CRM development.pdf` + `Ready_for_Umrah_Business_Blueprint.md.pdf` | **~90% SHIPPED** — diagnostic, scoring, classification, product ladder, quotation engine (manual cost master + LLM draft), payment, journey reminders all live. Pending: RateHawk Q19 (lowest-rate auto-select), Wati Q9 (real WA dispatch on reminders + religious-guidance) |
-| Travel Stall (B2C holidays + ticketing) | Family-holiday customers | `Travelstall - CRM development.pdf` + `Travel_Stall_Business_Blueprint_For_Tech_Team.md.pdf` | **~70% SHIPPED** — Family Travel Quiz, 50%-advance public booking, source-tracking, duplicate detection, GST capture, analytics schema all live. Pending: dedicated `/travel-stall` operator UI, Booking.com/Expedia direct (Phase 1.5), TS-specific personalised 3-5 destination PDF (LLM-driven) |
-| Visa Sure (Visa correctness + assurance) | Visa applicants (4 readiness levels + rejection-recovery tier) | `Visa Sure - CRM development.pdf` + `Visa_Sure_Business_Blueprint (1).pdf` | **~15% SHIPPED (Phase 3)** — schema models exist (`VisaApplication` + `VisaDocumentChecklistItem`) and are seeded; no routes, no UI, no risk-flag engine. All work scoped to Phase 3 per Q18 |
-| Operator CRM | GS staff servicing all 4 sub-brands (admin / manager / staff / advisor roles, sub-brand access scoped via `User.subBrandAccess[]`) | Cross-cutting via `Req Doc After Meeting.pdf` §3-5, §11-12 + the 6-week plan | **~85% SHIPPED** — multi-brand auth/SSO, RBAC, 8-status pipeline, 8 lost-reason taxonomy, marketing reports, manager view, accounting, login vault, ops dashboard all live. Pending: SSO real-mode (Q7 stub), Excel-Software bridge (Q8), AdsGPT live (Q1), Callified.ai live (Q1), Chrome flight plugin (multi-day B4) |
+| RFU (Ready for Umrah) | Umrah pilgrims (4 readiness levels: Confident & Prepared / Guided for Peace of Mind / Assisted for Comfort & Correctness / Supported Journey Recommended) | `RFU - CRM development.pdf` + `Ready_for_Umrah_Business_Blueprint.md.pdf` | **~90% SHIPPED** — diagnostic, scoring, classification, product ladder, quotation engine (manual cost master + LLM draft), payment, journey reminders all live. Pending: RateHawk Q19 (lowest-rate auto-select; PRD `f514028` landed), Wati Q9 (real WA dispatch on reminders + religious-guidance) |
+| Travel Stall (B2C holidays + ticketing) | Family-holiday customers | `Travelstall - CRM development.pdf` + `Travel_Stall_Business_Blueprint_For_Tech_Team.md.pdf` | **~85% SHIPPED** (was ~70%) — Family Travel Quiz, 50%-advance public booking, source-tracking, duplicate detection, GST capture, analytics schema, **personalised 3-5 destination PDF endpoint (TS18, `46c61d8`)**, and **`/travel-stall` operator landing page (TS21, `5511594`)** all live. Pending: Booking.com/Expedia direct (PRD `a445cff` landed; cred-blocked) |
+| Visa Sure (Visa correctness + assurance) | Visa applicants (4 readiness levels + rejection-recovery tier) | `Visa Sure - CRM development.pdf` + `Visa_Sure_Business_Blueprint (1).pdf` | **~40% SHIPPED** (was ~15%) — **Phase 3 scaffolding live**: schema models (`VisaApplication` + `VisaDocumentChecklistItem`), 15Q diagnostic seed (`46c315d`), landing route + 3 shell pages (`875c082`), risk-flag cron SHELL (`9e8c28f`), AdvisorDashboard SHELL (`90b58fa`), PRD `28fbcf4`. Real implementation gated on PRD §5 product calls (~2 weeks) |
+| Operator CRM | GS staff servicing all 4 sub-brands (admin / manager / staff / advisor roles, sub-brand access scoped via `User.subBrandAccess[]`) | Cross-cutting via `Req Doc After Meeting.pdf` §3-5, §11-12 + the 6-week plan | **~85% SHIPPED** — multi-brand auth/SSO, RBAC, 8-status pipeline, 8 lost-reason taxonomy, marketing reports, manager view, accounting, login vault, ops dashboard all live. Pending: SSO real-mode (Q7 stub), Excel-Software bridge (PRD `bb8e5bb`), AdsGPT live (PRD `96cc585`), Callified.ai live (PRD `3c5d468`), Chrome flight plugin (PRD `d58c5a5`, multi-day B4) |
 
 ---
 
@@ -31,7 +45,7 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 | # | Feature | Phase per PRD | State | Evidence | Notes |
 |---|---|---|---|---|---|
 | T1 | School diagnostic engine — editable Q-bank | P1 (W2) | ✅ SHIPPED | `backend/routes/travel_diagnostics.js:139` POST `/diagnostic-banks` admin endpoint; `frontend/src/pages/travel/DiagnosticBuilder.jsx` | Phase 1 view-only per Q16; admin edit Phase 1.5 |
-| T2 | Curriculum mapping logic (CBSE / IB / ICSE / Cambridge → destinations) | P1 (W2) | ⏸️ BLOCKED (product-call Q13) | No code surface | Curriculum→destination map needs Yasin's content drop; PRD §4.2 row `curriculum_recommendations` |
+| T2 | Curriculum mapping logic (CBSE / IB / ICSE / Cambridge → destinations) | P1 (W2) | ⏸️ BLOCKED (product-call Q13) | No code surface; **PRD `af7b3bd` `docs/PRD_TMC_CURRICULUM_MAPPING.md` landed** | Curriculum→destination map needs Yasin's content drop; PRD §4.2 row `curriculum_recommendations` |
 | T3 | PDF recommendation report (branded per sub-brand) | P1 (W2) | ✅ SHIPPED | `backend/routes/travel_diagnostics.js:43-78` GET `/diagnostics/:id/report.pdf`; pdfkit-based | Per-sub-brand templates placeholder until Q22 brand assets |
 | T4 | Sales workflow — call booking (Google Meet) | P1 (W3) | ✅ SHIPPED | `backend/routes/calendar_google.js` (reused from main CRM) | Meet API integration; booking link sent on advisor trigger |
 | T5 | Sales workflow — CRM task creation + stage tracking | P1 (W1) | ✅ SHIPPED | `backend/routes/tasks.js` + 8-status pipeline (`backend/prisma/seed-travel.js:518, 1046` `seedPipelineTaxonomies()`); gate spec `e2e/tests/travel-seed-taxonomy-api.spec.js` | Statuses: New · Diagnostic Complete · Qualifying · Quoted · Negotiating · Won · Lost · Dormant |
@@ -39,7 +53,7 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 | T7 | Trip management — auto-generate trip microsite | P1 (W4) | ✅ SHIPPED | `backend/routes/travel_microsites.js` admin + public; `TripMicrosite` model `schema.prisma:4614` | Subdomain pattern `trip-<code>.tmc.travelstall.in` per Q21; pending DNS |
 | T8 | Parent registration portal (Aadhaar OCR) | P1 (W4) | 🟡 PARTIAL | `backend/routes/travel_trips.js:510,546` DigiLocker initiate/callback (commit `1babe1b`); `backend/services/digilockerClient.js` stub mode | Backend complete; parent-facing public registration UI route missing (cluster F in MANUAL_CODING_BACKLOG); Q3 cred-drop swaps stub → real |
 | T9 | Student data capture | P1 (W4) | ✅ SHIPPED | `TripParticipant` model `schema.prisma:4320` + `backend/routes/travel_trips.js` participant endpoints | |
-| T10 | Passport upload with OCR extraction + manual verification | P1 (W4) | ⏸️ BLOCKED (cred-dependent C-cluster) | `TripParticipant.passportNumber/Expiry/DocId` columns exist; storage encrypted via `backend/lib/fieldEncryption.js` | Google Document AI / Azure FR creds pending |
+| T10 | Passport upload with OCR extraction + manual verification | P1 (W4) | ⏸️ BLOCKED (cred-dependent C-cluster) | `TripParticipant.passportNumber/Expiry/DocId` columns exist; storage encrypted via `backend/lib/fieldEncryption.js`; **PRD `d34d514` `docs/PRD_PASSPORT_OCR.md` landed** (Google Document AI vs Azure FR vendor decision pending) | Google Document AI / Azure FR creds pending |
 | T11 | Payment plan tracking (TMC) | P1 (W5) | 🟡 PARTIAL | `TripPaymentPlan` + `TripInstalmentPayment` + `backend/routes/travel_trip_billing.js` + `backend/cron/tripPaymentReminders.js` | WA dispatch stub (Q9); `/instalments/from-plan` materialiser Phase 1.5 |
 | T12 | Rooming allocation interface | P1 (W4) | ✅ SHIPPED | `backend/routes/travel_trip_billing.js:65-200` CRUD + `RoomingAssignment` model + `TripDetail.jsx` RoomingTab UI | |
 | T13 | Downloadable rooming list (XLSX) | P1 (W4) | ✅ SHIPPED | `backend/routes/travel_trip_billing.js:233` XLSX export endpoint (commit `de1be50`); Download CTA in `TripDetail.jsx`; 4 gate-spec cases | ADMIN+MANAGER gated; 5 columns (Room # / Type / Capacity / Occupancy / Participants) |
@@ -76,16 +90,16 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 | R8 | Follow-up reminders auto-scheduled | P1 (W2) | ✅ SHIPPED | `backend/cron/travelJourneyReminders.js` | WA dispatch stub (Q9) |
 | R9 | RFU product-tier tagging on lead (Readiness / Correctness / Elder Care) | P1 (W2) | ✅ SHIPPED | `Itinerary.productTier` (commit `2612a7e`); auto-set from diagnostic `recommendedTier` | |
 | R10 | Quotation engine — base cost from cost master + rule-based markup | P1 (W3) | ✅ SHIPPED | `backend/routes/travel_itineraries.js` (15+ endpoints) + `backend/routes/travel_cost_master.js` (5 endpoints) + `backend/lib/travelPricing.js` + `TravelMarkupRule` + `TravelSeasonCalendar` | Rule-based; Phase 1 manual contracted-rate entry |
-| R11 | Quotation engine — unified search (flight + hotel + transport) | P1 (W3) | 🟡 PARTIAL | `backend/routes/travel_itineraries.js` ships full CRUD + items + version chain + share + PDF + accept/reject + LLM draft | "Unified-search lowest-rate auto-select" requires RateHawk (Q19 cred-blocked) |
-| R12 | Hotel rate comparator (Booking.com / Expedia / direct) | P1 (W3) | ⏸️ BLOCKED (cred-dependent Q19) | `Glob backend/services/ratehawk*` returns 0; cluster C4 in MANUAL_CODING_BACKLOG (~3-5d post-cred) | Phase 1 uses RateHawk per GS response B.3; Booking/Expedia Phase 1.5 |
+| R11 | Quotation engine — unified search (flight + hotel + transport) | P1 (W3) | 🟡 PARTIAL | `backend/routes/travel_itineraries.js` ships full CRUD + items + version chain + share + PDF + accept/reject + LLM draft | "Unified-search lowest-rate auto-select" requires RateHawk (Q19 cred-blocked; PRD `f514028` landed) |
+| R12 | Hotel rate comparator (Booking.com / Expedia / direct) | P1 (W3) | ⏸️ BLOCKED (cred-dependent Q19) | `Glob backend/services/ratehawk*` returns 0; **PRD `f514028` `docs/PRD_RATEHAWK_INTEGRATION.md` landed**; cluster C4 in MANUAL_CODING_BACKLOG (~3-5d post-cred) | Phase 1 uses RateHawk per GS response B.3; Booking/Expedia Phase 1.5 (PRD `a445cff`) |
 | R13 | Preference filters (Haram-facing / Kaaba-facing / room category / floor level) | P1 (W3) | 🟡 PARTIAL | `TravelCostMaster.attributesJson` (`schema.prisma:4196`) supports them; `Grep haram\|Haram` in `pages/travel/CostMaster.jsx` returns 0 hits | Filter UI gap; data model ready |
 | R14 | Rule-based transport pricing with seasonal logic (peak vs lean) | P1 (W4) | ✅ SHIPPED | `TravelSeasonCalendar` + `TravelMarkupRule` + `backend/routes/travel_pricing.js` + `backend/lib/travelPricing.js` | |
 | R15 | Markup / GST / discount logic by rule (no AI) | P1 (W3) | ✅ SHIPPED | `backend/lib/travelPricing.js` (vitest covered) | Per-tenant + per-sub-brand rule layering |
 | R16 | Auto-generated branded itinerary PDF | P1 (W3) | ✅ SHIPPED | `backend/routes/travel_itineraries.js:706` GET `/itineraries/:id/pdf` | |
 | R17 | Itinerary version history (draft / sent / revised / accepted / rejected) | P1 (W4) | ✅ SHIPPED | `Itinerary.parentItineraryId` + `Itinerary.status` enum at `schema.prisma:4163+` | |
 | R18 | Shareable WhatsApp rate-card (under 5 min) | P1 (W3) | 🟡 PARTIAL | `backend/routes/travel_itineraries.js:761` `/share` returns share URL; WA send pending Q9 | One-line swap on cred drop (subBrandConfig helper pre-wired) |
-| R19 | LLM-switchable layer (Perplexity / Gemini / Claude / GPT) | P1 (W2) | ✅ SHIPPED | `backend/lib/llmRouter.js` (commit `583c06b`); 3 consumers live (talking-points `cf876af` + form-vs-call `4a7c623` + itinerary-draft `f02fa5a`) | Stub-mode; real-mode on Q11 keys |
-| R20 | Document management — passport uploads + checklist + status tracking | P1 (W4) | 🟡 PARTIAL | `TripParticipant.passportNumber/Expiry/DocId` columns; encrypted via `lib/fieldEncryption.js` | Passport OCR cred-blocked |
+| R19 | LLM-switchable layer (Perplexity / Gemini / Claude / GPT) | P1 (W2) | ✅ SHIPPED | `backend/lib/llmRouter.js` (commit `583c06b`); **4 consumers live** (talking-points `cf876af` + form-vs-call `4a7c623` + itinerary-draft `f02fa5a` + **TS personalised PDF `46c61d8`**) | Stub-mode; real-mode on Q11 keys |
+| R20 | Document management — passport uploads + checklist + status tracking | P1 (W4) | 🟡 PARTIAL | `TripParticipant.passportNumber/Expiry/DocId` columns; encrypted via `lib/fieldEncryption.js` | Passport OCR cred-blocked (PRD `d34d514`) |
 | R21 | Payment tracking linked to correct legal entity (Labbaik Tours & Travels) | P1 (W5) | ✅ SHIPPED | `Invoice.legalEntityCode` (`schema.prisma:814`) | IATA-accredited Labbaik entity |
 | R22 | Payment tracking — exportable financial reports | P1 (W5) | ✅ SHIPPED | `backend/routes/billing.js:130` Tally export + `:181` CA-summary CSV | |
 | R23 | Analytics — conversion rate by readiness level | P1 (W5) | ✅ SHIPPED | `backend/routes/travel_reports.js:193` `/reports/rfu` | |
@@ -124,38 +138,38 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 | TS15 | Email-first acquisition (newsletter / nurture) | P2 | ✅ SHIPPED (reuse) | Email engine + Sequence engine | |
 | TS16 | Birthday / anniversary greetings | P2 | ✅ SHIPPED | `backend/cron/contactGreetingsEngine.js` (shared with RFU R28) | |
 | TS17 | Customer-duplicate detection | P2 | ✅ SHIPPED | `findDuplicateContactFull` + `frontend/src/components/DuplicateContactModal.jsx` | Same helper as RFU R27 |
-| TS18 | Personalised 3-5 destination PDF (LLM-driven) | P2 | 🔴 NOT-STARTED | LLM-router scaffold + 3 consumers ship; PDF-specific consumer absent | Would be 4th LLM consumer; pairs with §4.3 bulk-text pattern; cluster B in MANUAL_CODING_BACKLOG |
-| TS19 | Booking.com / Expedia direct API for hotel + flight inventory | P1.5 / P2 | ⏸️ BLOCKED (cred-dependent) | No code surface | Cluster B6 / C in MANUAL_CODING_BACKLOG (~7-10d per provider post-cred); RateHawk covers P1 |
+| TS18 | Personalised 3-5 destination PDF (LLM-driven) | P2 | ✅ SHIPPED | `backend/routes/travel_travelstall.js` POST `/personalised-pdf/regen` (commit `46c61d8`); `backend/services/pdfRenderer.js renderTravelStallPersonalisedPdf()`; 12-case gate spec at `e2e/tests/travel-travelstall-personalised-pdf-api.spec.js` (wired into deploy.yml + coverage.yml) | 4th LLM-router consumer; stub-mode bulk-text + placeholder branding swap on Q11 + Q22 |
+| TS19 | Booking.com / Expedia direct API for hotel + flight inventory | P1.5 / P2 | ⏸️ BLOCKED (cred-dependent) | No code surface; **PRD `a445cff` `docs/PRD_BOOKING_EXPEDIA_DIRECT.md` landed** | Cluster B6 / C in MANUAL_CODING_BACKLOG (~7-10d per provider post-cred); RateHawk covers P1 |
 | TS20 | Travel Stall WABA-isolated WhatsApp number | P1 (W1) | ⏸️ BLOCKED (Q9) | `Tenant.subBrandConfigJson` resolves `wabaId` per sub-brand (`backend/lib/subBrandConfig.js`, commit `621aab7`); 7 crons + 3 endpoints stub-dispatching with correct WABA selection | Wati Q9 cred-drop swap |
-| TS21 | Dedicated `/travel-stall` operator UI surface | P2 | 🔴 NOT-STARTED | Reports route + LeadDetail viewable but no `/travel-stall` landing operator page | Low priority per Q17 |
+| TS21 | Dedicated `/travel-stall` operator UI surface | P2 | ✅ SHIPPED | `frontend/src/pages/travel/TravelStallDashboard.jsx` (commit `5511594`, ~150 lines, 4 quick-action card grid mirroring `pages/travel/Dashboard.jsx`); `App.jsx:966` `/travel-stall` route under `TravelOnly`; Sidebar.jsx renderTravelNav Travel Stall group at `:1052` | Phase 2 host surface; voyagr CMS lead-capture integration target per cluster F |
 
 ---
 
 ### Portal 4: Visa Sure (Visa correctness + assurance)
 
-**Positioning per PRD:** diagnoses readiness before any commercial transaction. 3-tier product ladder: Visa Readiness & Correctness Check (entry) / Correctness Assured Visa Program (primary) / Rejection Recovery & Re-application Program (premium). 15-question diagnostic classifies into 4 readiness levels (same labels as RFU). **Per Q18: deferred to Phase 3.** Schema models exist + seeded; no routes, no UI, no risk-flag engine.
+**Positioning per PRD:** diagnoses readiness before any commercial transaction. 3-tier product ladder: Visa Readiness & Correctness Check (entry) / Correctness Assured Visa Program (primary) / Rejection Recovery & Re-application Program (premium). 15-question diagnostic classifies into 4 readiness levels (same labels as RFU). **Per Q18: Phase 3.** Phase 3 scaffolding is now live (schema models + seed bank + 3 shell pages + landing route + advisor-dashboard SHELL + risk-flag cron SHELL); real implementation gated on PRD `28fbcf4` §5 product calls (~2 weeks engineering).
 
 | # | Feature | Phase per PRD | State | Evidence | Notes |
 |---|---|---|---|---|---|
-| V1 | Diagnostic engine — 15-question assessment | P3 | ✅ SHIPPED | `backend/prisma/seed-travel.js:300-505` (commit `46c315d`) — 15-question Visa Sure seed bank live; reuses shared `TravelDiagnosticQuestionBank` model + scoring engine | Phantom caught 2026-05-23 tick #6 — matrix evidence was stale; flipped to SHIPPED |
+| V1 | Diagnostic engine — 15-question assessment | P3 | ✅ SHIPPED | `backend/prisma/seed-travel.js:300-505` (commit `46c315d`) — 15-question Visa Sure seed bank live; reuses shared `TravelDiagnosticQuestionBank` model + scoring engine | Drift-flipped 2026-05-23 tick #6 (was: 🔴 NOT-STARTED → is: ✅ SHIPPED 7+ commits ago) |
 | V2 | Classification into 4 readiness levels | P3 | ✅ SHIPPED | Same as V1 — 4 levels seeded (Visa Ready / Standard Support / High Touch / Premium-or-Rejection-Recovery) at commit `46c315d` | |
 | V3 | Editable scoring logic | P3 | ✅ SHIPPED | Shared diagnostic plumbing supports per-bank scoringRulesJson edits via admin upload UI; works generically per sub-brand | |
 | V4 | Auto-generated PDF report | P3 | ✅ SHIPPED | Same PDF infra as RFU R4 (`services/pdfRenderer.js`); reads bank classification labels generically | |
-| V5 | Risk flagging — complex case flags | P3 | 🟡 PARTIAL (schema only) | `VisaApplication.advisorRiskFlag` (`schema.prisma:4507`) | No engine emits transitions; needs B3 risk-flag engine |
-| V6 | Risk flagging — rejection history tagging | P3 | 🟡 PARTIAL (schema only) | `VisaApplication.priorRejectionCount` + `priorRejectionReasons` (`schema.prisma:4503-4505`) | Schema only |
-| V7 | Risk flagging — advisor priority alerts | P3 | 🔴 NOT-STARTED | No `visaRiskFlagEngine.js` cron | Cluster B3 |
-| V8 | Advisor dashboard — diagnostic answers visible | P3 | 🔴 NOT-STARTED | `Glob frontend/src/pages/travel/Visa*` returns 0 | Cluster B3 (~2 weeks total) |
-| V9 | Advisor dashboard — AI summary notes (optional) | P3 | 🔴 NOT-STARTED | LLM router available; consumer not wired | |
-| V10 | Advisor dashboard — risk indicators clearly shown | P3 | 🔴 NOT-STARTED | Same dashboard scope as V8 | |
+| V5 | Risk flagging — complex case flags | P3 | 🟡 PARTIAL (SHELL) | `VisaApplication.advisorRiskFlag` (`schema.prisma:4507`); **risk-flag engine SHELL `backend/cron/visaRiskFlagEngine.js` (commit `9e8c28f`)** evaluates `applicationType ∈ {work, student, business, hajj}`; 12 vitest cases | Real rule-set gated on PRD §5 PC-1..PC-5 product calls |
+| V6 | Risk flagging — rejection history tagging | P3 | 🟡 PARTIAL (SHELL) | `VisaApplication.priorRejectionCount` + `priorRejectionReasons` (`schema.prisma:4503-4505`); engine `9e8c28f` reads `rejectionHistoryJson` (defensive parse) and flags non-empty rows | |
+| V7 | Risk flagging — advisor priority alerts | P3 | 🟡 PARTIAL (SHELL) | Engine `9e8c28f` writes high-priority Notification rows for flagged applications; dedupe by `(entityType='VisaApplication', entityId, type='warning')`; 6-hourly cadence (PRD-targeted 15-min p95) | Was: 🔴 NOT-STARTED → is: 🟡 PARTIAL (SHELL cron landed) |
+| V8 | Advisor dashboard — diagnostic answers visible | P3 | 🟡 PARTIAL (SHELL) | `frontend/src/pages/travel/visa/AdvisorDashboard.jsx` (commit `90b58fa`, ~294 lines); App.jsx route `:/travel/visa/applications/:applicationId`; STUB fetch pending backend `/api/travel/visa/applications/:id` (cluster B3) | Was: 🔴 → is: 🟡 (SHELL — 3 SHELL sections: diagnostic answers / AI summary / risk indicators) |
+| V9 | Advisor dashboard — AI summary notes (optional) | P3 | 🟡 PARTIAL (SHELL) | Section 2 of `AdvisorDashboard.jsx` (`90b58fa`); LLM-router consumer placeholder pending Q11 | |
+| V10 | Advisor dashboard — risk indicators clearly shown | P3 | 🟡 PARTIAL (SHELL) | Section 3 of `AdvisorDashboard.jsx` (`90b58fa`) — 3 pills mapped to FR-3.1/3.2/3.3 from `visaRiskFlagEngine` (`9e8c28f`) | |
 | V11 | Quotation — manual or structured per case | P3 | 🟡 PARTIAL (schema only) | `VisaApplication` model has pricing fields | Reuses Itinerary infra |
 | V12 | Quotation — stored in CRM | P3 | 🟡 PARTIAL (schema only) | Same | |
-| V13 | Document upload — structured checklist | P3 | 🟡 PARTIAL (schema only) | `VisaDocumentChecklistItem` model (`schema.prisma:4530`) + 4 seeded items (commit `78884e3`) | No routes / UI; cluster B3 |
+| V13 | Document upload — structured checklist | P3 | 🟡 PARTIAL (schema + UI shell) | `VisaDocumentChecklistItem` model (`schema.prisma:4530`) + 4 seeded items (commit `78884e3`); UI shell page `frontend/src/pages/travel/visa/Checklists.jsx` (commit `875c082`) | Backend routes pending; cluster B3 |
 | V14 | Document upload — status tracking | P3 | 🟡 PARTIAL (schema only) | `VisaDocumentChecklistItem.status` enum exists | |
 | V15 | Rejection-recovery program workflow | P3 | 🟡 PARTIAL (schema only) | `VisaApplication.recoveryProgramId` placeholder | Cluster B3 |
 | V16 | Analytics — rejection recovery success rate | P3 | 🔴 NOT-STARTED | No `/reports/visa` route | |
 | V17 | Analytics — conversion by readiness level | P3 | 🔴 NOT-STARTED | Same | |
 | V18 | Analytics — lead source to application rate | P3 | 🔴 NOT-STARTED | Same | |
-| V19 | Visa Sure landing route + sidebar nav | P3 | 🔴 NOT-STARTED | `Sidebar.jsx renderTravelNav()` has no VS group; no `/travel/visa/*` mounted in `App.jsx` | |
+| V19 | Visa Sure landing route + sidebar nav | P3 | ✅ SHIPPED | `Sidebar.jsx:1041-1043` "Visa Sure" group under renderTravelNav (admin-only); 3 lazy imports + 3 routes under TravelOnly in `App.jsx` (`/travel/visa`, `/travel/visa/applications`, `/travel/visa/checklists`) — commit `875c082`; Dashboard.jsx + Applications.jsx + Checklists.jsx Coming-Soon shells | Plus AdvisorDashboard.jsx route added at `90b58fa` (`/travel/visa/applications/:applicationId`); PRD `28fbcf4` covers real implementation |
 
 ---
 
@@ -178,28 +192,28 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 | O11 | 8 lost-reason taxonomy | P1 (W1) | ✅ SHIPPED | Same helper, `prisma/seed-travel.js:1095-1119` | Price · No response · Chose competitor · Wrong requirement · Timing issue · Budget issue · Trust issue · Duplicate enquiry |
 | O12 | Task management + overdue reminders (WA + email) | P1 (W2) | 🟡 PARTIAL | `backend/routes/tasks.js` + email engine; WA stub (Q9) | |
 | O13 | Manager view (pending / delayed / staff-wise workload) | P1 (W1) | ✅ SHIPPED (reuse) | `backend/routes/staff.js` + existing dashboards | |
-| O14 | Marketing campaign tracking + AdsGPT integration | P1 (W2) | ⏸️ BLOCKED (Q1) | No AdsGPT route in travel namespace | Cluster C7 in MANUAL_CODING_BACKLOG; ~2-3d post-handover |
-| O15 | Meta / Google / LinkedIn / YouTube ad-platform API integrations | P1 (W1) | ⏸️ BLOCKED (Q1) | No surface yet | Q1 — Section 13 packet |
-| O16 | Platform-wise marketing performance reports | P1 (W2) | ⏸️ BLOCKED (Q1) | Schema ready; consumer pending creds | |
-| O17 | AI qualification calling (English / Hindi / Urdu, mid-call switch) | P1 (W2) | ⏸️ BLOCKED (Q1) | Sandbox mock `scripts/sandbox/callified-mock.js` only | Cluster C6 — Callified.ai handover |
-| O18 | Call recording / transcription / summary, attached to lead | P1 (W2) | ⏸️ BLOCKED (Q1) | Same | |
+| O14 | Marketing campaign tracking + AdsGPT integration | P1 (W2) | ⏸️ BLOCKED (Q1) | No AdsGPT route in travel namespace; **PRD `96cc585` `docs/PRD_ADSGPT_MARKETING_REPORTS.md` landed** | Cluster C7 in MANUAL_CODING_BACKLOG; ~2-3d post-handover |
+| O15 | Meta / Google / LinkedIn / YouTube ad-platform API integrations | P1 (W1) | ⏸️ BLOCKED (Q1) | No surface yet; **PRD `96cc585` covers AdsGPT side** | Q1 — Section 13 packet |
+| O16 | Platform-wise marketing performance reports | P1 (W2) | ⏸️ BLOCKED (Q1) | Schema ready; consumer pending creds; **PRD `96cc585`** | |
+| O17 | AI qualification calling (English / Hindi / Urdu, mid-call switch) | P1 (W2) | ⏸️ BLOCKED (Q1) | Sandbox mock `scripts/sandbox/callified-mock.js` only; **PRD `3c5d468` `docs/PRD_AI_CALLING_CALLIFIED.md` landed** | Cluster C6 — Callified.ai handover |
+| O18 | Call recording / transcription / summary, attached to lead | P1 (W2) | ⏸️ BLOCKED (Q1) | Same; **PRD `3c5d468`** | |
 | O19 | Form-vs-call answer comparison + mismatch flagging | P1 (W2) | ✅ SHIPPED | `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519-641`, commits `4a7c623` + `8b97fd5`); persists via `TravelDiagnostic.formVsCallJson` (commit `a6ea3fe`); UI consumer `DiagnosticDetail.jsx` Section 3 (commit `2440b4a`) | 80% MATCH / 60% REVIEW / <60% MISMATCH thresholds per GS B.11 |
 | O20 | Zoom or Google Meet consultation booking | P1 (W3) | ✅ SHIPPED | `backend/routes/calendar_google.js` (reused) | Per Part-C decision: Google Meet recommended |
-| O21 | AI-to-advisor handover for B2C | P1 (W2) | 🟡 PARTIAL | `backend/cron/travelDiagnosticAdvisorAlerts.js` (diagnostic side only) | Callified side cred-blocked |
-| O22 | Flight Quotation Chrome plugin (Google Flights extraction, markup engine, multi-flight) | P1 (W3) | 🏗️ MULTI-DAY (cluster B4) | `Glob flight-plugin/**` returns 0; lives in separate repo | ~10-15 engineer-days; Manifest V3 + per-airline DOM adapters |
+| O21 | AI-to-advisor handover for B2C | P1 (W2) | 🟡 PARTIAL | `backend/cron/travelDiagnosticAdvisorAlerts.js` (diagnostic side only) | Callified side cred-blocked (PRD `3c5d468`) |
+| O22 | Flight Quotation Chrome plugin (Google Flights extraction, markup engine, multi-flight) | P1 (W3) | 🏗️ MULTI-DAY (cluster B4) | `Glob flight-plugin/**` returns 0; lives in separate repo; **PRD `d58c5a5` `docs/PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md` landed** | ~10-15 engineer-days; Manifest V3 + per-airline DOM adapters |
 | O23 | Web check-in tracking (T-48h / T-24h auto-schedule, reminder, agent task, manual upload, dashboard) | P1 (W4) | 🟡 PARTIAL | `WebCheckin` model + `backend/cron/webCheckinScheduler.js` + `backend/routes/travel_webcheckin.js` (7 endpoints, commit `9898e87`) + `backend/lib/webCheckinWindow.js` + `frontend/src/pages/travel/WebCheckinQueue.jsx` operator UI (commit `bfe956c`) | Real WA reminder + delivery pending Q9 |
-| O24 | Web check-in full automation (top-4 airlines: IndiGo / Air India / Vistara / Emirates) | P1 (W4) | 🏗️ MULTI-DAY (cluster B5) | No `webCheckinAutomation.js` engine | ~5-7d MVP + ongoing per-airline DOM maintenance; paired with B4 plugin |
+| O24 | Web check-in full automation (top-4 airlines: IndiGo / Air India / Vistara / Emirates) | P1 (W4) | 🏗️ MULTI-DAY (cluster B5) | No `webCheckinAutomation.js` engine; **PRD `d79a7f7` `docs/PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md` landed** (Playwright-based per-airline adapter engine) | ~5-7d MVP + ongoing per-airline DOM maintenance; paired with B4 plugin |
 | O25 | Web check-in fallback (2 failed retries → agent task; portal-down >2h → all-passengers) | P1 (W4) | 🟡 PARTIAL | `WebCheckin.status` enum includes `fallback-agent` + `failed` (`schema.prisma:4449`) | Schema only; no code emits transitions |
 | O26 | Boarding-pass auto-delivery (WA + email) | P1 (W4) | 🟡 PARTIAL (stub-able) | `POST /webcheckins/:id/deliver` (`routes/travel_webcheckin.js:372`) emits Wati-stub log; `boardingPassUrl` + `deliveredAt` columns ready | One-line swap on Q9 |
 | O27 | Light accounting — invoice / receipt / GST capture / refund / CA export | P1 (W5) | ✅ SHIPPED | `backend/routes/billing.js` + Invoice model + `Invoice.legalEntityCode` + Tally export `:130` + CA-summary CSV `:181` | Per-entity routing live |
-| O28 | Excel Software for Travel accounting bridge | P1.5 (Q8) | ⏸️ BLOCKED (cred + docs) | `Glob backend/services/excelSoftware*` returns 0 | Cluster C5 (~3-5d post-docs) |
+| O28 | Excel Software for Travel accounting bridge | P1.5 (Q8) | ⏸️ BLOCKED (cred + docs) | `Glob backend/services/excelSoftware*` returns 0; **PRD `bb8e5bb` `docs/PRD_EXCEL_SOFTWARE_ACCOUNTING.md` landed** | Cluster C5 (~3-5d post-docs) |
 | O29 | Management dashboard KPIs (cross-brand) | P1 (W5) | ✅ SHIPPED | `backend/routes/travel_dashboard.js:57` + `frontend/src/pages/travel/Dashboard.jsx` | Per-sub-brand filters |
 | O30 | LLM cost observability (daily summary + admin UI) | Bonus (R7) | ✅ SHIPPED | `LlmCallLog` model (`schema.prisma:1207`, commit `f5c9518`) + `GET /api/admin/llm-spend` + `frontend/src/pages/LlmSpend.jsx` (commit `76996c8`) + recharts AreaChart + BarCharts | R7 risk closed end-to-end |
 | O31 | LeadDetail.jsx (unified contact-centric lead view) | P1 (W2) | ✅ SHIPPED | `frontend/src/pages/travel/LeadDetail.jsx` (commit `a84289e`); aggregates contact + latest diagnostic + itineraries + TMC trips + RFU profile link | |
-| O32 | LLM-switchable layer (Perplexity / Gemini / Claude / GPT) | P1 (W3) | ✅ SHIPPED | `backend/lib/llmRouter.js` (commit `583c06b`) | 3 consumers live; real-mode on Q11 |
+| O32 | LLM-switchable layer (Perplexity / Gemini / Claude / GPT) | P1 (W3) | ✅ SHIPPED | `backend/lib/llmRouter.js` (commit `583c06b`) | 4 consumers live (talking-points + form-vs-call + itinerary-draft + TS personalised PDF `46c61d8`); real-mode on Q11 |
 | O33 | Tenant.subBrandConfigJson consumer wiring (per-brand WA / WABA / legal entity / GSTIN / Drive root) | P1 (W1) | ✅ SHIPPED | `backend/lib/subBrandConfig.js` (commit `621aab7`); 7 crons + 3 endpoints resolve per-sub-brand config; 26 vitest cases | Pre-wired for Q9 cred drop |
-| O34 | Vertical config — sidebar / theme / landing route | P1 (W1) | ✅ SHIPPED | `frontend/src/components/Sidebar.jsx:967, 625` renderTravelNav() + sub-brand switcher `:986-1019`; `frontend/src/theme/travel.css` (placeholder palette per Q22); `App.jsx:888` `/travel` landing | Brand palette swap pending Q22 brand assets |
-| O35 | Seed `seed-travel.js` (tenant + users + 4 diagnostic banks + cost master + seasons + 8-status pipeline + 3 TmcTrips + Itinerary + microsite + RoomingAssignment + TripPaymentPlan + TripInstalmentPayment + SupplierCredential + VisaApplication + 4 checklist items + 1 WebCheckin + 3 ReligiousGuidancePacket) | P1 (W1) | ✅ SHIPPED | `backend/prisma/seed-travel.js` | End-to-end demo data complete |
+| O34 | Vertical config — sidebar / theme / landing route | P1 (W1) | ✅ SHIPPED | `frontend/src/components/Sidebar.jsx:972, 630` renderTravelNav() + sub-brand switcher with Visa Sure group at `:1041-1043` + Travel Stall group at `:1052`; `frontend/src/theme/travel.css` (placeholder palette per Q22); `App.jsx:888` `/travel` landing | Brand palette swap pending Q22 brand assets |
+| O35 | Seed `seed-travel.js` (tenant + users + 4 diagnostic banks + cost master + seasons + 8-status pipeline + 3 TmcTrips + Itinerary + microsite + RoomingAssignment + TripPaymentPlan + TripInstalmentPayment + SupplierCredential + VisaApplication + 4 checklist items + 1 WebCheckin + 3 ReligiousGuidancePacket + Visa Sure 15Q diagnostic seed `46c315d`) | P1 (W1) | ✅ SHIPPED | `backend/prisma/seed-travel.js` | End-to-end demo data complete |
 
 ---
 
@@ -214,7 +228,7 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 - Per-legal-entity invoice routing (`Invoice.legalEntityCode`) — ✅ SHIPPED for 4 entities: TMC Nexus Pvt Ltd / Labbaik Tours & Travels INTL / Travel Stall / Visa Sure
 - GST capture (CGST / SGST / IGST) — ✅ SHIPPED via reused `backend/routes/billing.js`
 - Tally XML export + CA-summary CSV — ✅ SHIPPED via `backend/lib/tallyXmlExport.js` + `routes/billing.js:130,181`
-- Excel Software for Travel bridge — ⏸️ BLOCKED (cluster C5)
+- Excel Software for Travel bridge — ⏸️ BLOCKED (cluster C5; PRD `bb8e5bb` landed)
 - Razorpay payment gateway — ✅ SHIPPED (reuse) per Q4
 
 ### Integrations
@@ -223,13 +237,14 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 - SMS (Twilio / MSG91) — ✅ SHIPPED (reuse)
 - Calendar / Meet (Google Workspace) — ✅ SHIPPED (reuse) per `routes/calendar_google.js`
 - DigiLocker (Aadhaar OCR) — 🟡 PARTIAL stub via `services/digilockerClient.js` (commit `1babe1b`); cluster C3 swap on Q3
-- Passport OCR (Google Document AI / Azure FR) — ⏸️ BLOCKED (cred-dependent)
-- Callified.ai (AI calling) — ⏸️ BLOCKED (Q1 cluster C6)
-- AdsGPT (marketing reports) — ⏸️ BLOCKED (Q1 cluster C7)
-- RateHawk (hotel comparator) — ⏸️ BLOCKED (Q19 cluster C4 ~3-5d post-cred)
-- Booking.com / Expedia direct — ⏸️ BLOCKED (Phase 1.5 cluster B6)
-- LLM providers (Anthropic / Google / Perplexity / OpenAI) — ✅ SHIPPED stub-mode via `lib/llmRouter.js`; real-mode swap pending Q11 keys (cluster C2)
+- Passport OCR (Google Document AI / Azure FR) — ⏸️ BLOCKED (cred-dependent); PRD `d34d514` landed (vendor decision pending)
+- Callified.ai (AI calling) — ⏸️ BLOCKED (Q1 cluster C6); PRD `3c5d468` landed
+- AdsGPT (marketing reports) — ⏸️ BLOCKED (Q1 cluster C7); PRD `96cc585` landed
+- RateHawk (hotel comparator) — ⏸️ BLOCKED (Q19 cluster C4 ~3-5d post-cred); PRD `f514028` landed
+- Booking.com / Expedia direct — ⏸️ BLOCKED (Phase 1.5 cluster B6); PRD `a445cff` landed
+- LLM providers (Anthropic / Google / Perplexity / OpenAI) — ✅ SHIPPED stub-mode via `lib/llmRouter.js` (4 consumers); real-mode swap pending Q11 keys (cluster C2)
 - Meta / Google / LinkedIn / YouTube Ads APIs — ⏸️ BLOCKED (Q1)
+- Zikr Cabs / 5-portal hotel scraper / Haramain HSR (RFU newly-surfaced) — ⏸️ BLOCKED (cluster G in MANUAL_CODING_BACKLOG, commit `a864db5`; GH issues #926 / #927 / #928 filed)
 
 ### Reports + dashboards
 - Cross-brand management dashboard — ✅ SHIPPED (O29)
@@ -238,7 +253,7 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 - Travel Stall analytics — 🟡 PARTIAL (TS10-TS12)
 - Visa Sure analytics — 🔴 NOT-STARTED (V16-V18, Phase 3)
 - TMC ops dashboard per confirmed trip — ✅ SHIPPED (T15, commit `9eda0b6`)
-- Platform-wise marketing reports (AdsGPT) — ⏸️ BLOCKED (O16, Q1)
+- Platform-wise marketing reports (AdsGPT) — ⏸️ BLOCKED (O16, Q1; PRD `96cc585`)
 - LLM cost observability — ✅ SHIPPED (O30)
 
 ### GDPR + audit
@@ -251,7 +266,7 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 
 ### Demo seed quality
 - 4-sub-brand tenant + sample users (TMC / RFU / TS / VS) — ✅ SHIPPED via `seed-travel.js`
-- 4 diagnostic question banks (TMC 7Q / RFU 15Q / TS 5Q / VS 15Q) — ✅ SHIPPED
+- 4 diagnostic question banks (TMC 7Q / RFU 15Q / TS 5Q / **VS 15Q** at commit `46c315d`) — ✅ SHIPPED
 - Cost master + seasonal calendar — ✅ SHIPPED
 - 3 sample TMC trips + participants + rooming + payment plan + 4 instalments — ✅ SHIPPED
 - Sample Itinerary + microsite — ✅ SHIPPED
@@ -266,23 +281,76 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 
 The following items appear in the PDFs but don't map cleanly to ANY existing code AND aren't in the `MANUAL_CODING_BACKLOG` or PRD-gap audit. These need triage into the backlog in a follow-on commit.
 
-1. **RFU "Zikr Cabs API" integration** — `Ready_for_Umrah_Business_Blueprint.md.pdf` §5.1 names Zikr Cabs as a ground-transportation supplier API. No code surface, no Q-marker, not in `MANUAL_CODING_BACKLOG`. Likely Phase 1.5 / Phase 2 supplier integration; needs cred-chase to confirm scope. *(One-line description: ground-transport supplier API for Makkah/Madinah cab pricing; would replace manual transport rate-card entry in RFU R14.)*
+1. **RFU "Zikr Cabs API" integration** — `Ready_for_Umrah_Business_Blueprint.md.pdf` §5.1 names Zikr Cabs as a ground-transportation supplier API. **TRIAGED:** filed as GH issue #926 + cluster G1 in MANUAL_CODING_BACKLOG (`a864db5`). Cred-dependent ~3-5d post-onboarding. *(Ground-transport supplier API for Makkah/Madinah cab pricing; would replace manual transport rate-card entry in RFU R14.)*
 
-2. **RFU "5 internal login IDs for hotel scraping" infrastructure** — same blueprint §5.1 names 5 internal supplier-portal login IDs for hotel rate scraping. No code surface; the `SupplierCredential` vault can store the creds, but the scraping orchestrator isn't implemented. *(One-line: orchestrator that round-robins through 5 supplier-portal logins to scrape hotel rates; pre-RateHawk fallback path; Phase 1.5 candidate.)*
+2. **RFU "5 internal login IDs for hotel scraping" infrastructure** — same blueprint §5.1 names 5 internal supplier-portal login IDs for hotel rate scraping. **TRIAGED:** filed as GH issue #927 + cluster G2 in MANUAL_CODING_BACKLOG. ~10-15d (sister pattern to cluster B4 Chrome plugin). *(Orchestrator that round-robins through 5 supplier-portal logins to scrape hotel rates; pre-RateHawk fallback path; Phase 1.5 candidate.)*
 
-3. **RFU train pricing + availability API** — same blueprint §5.1 names a dedicated train-pricing API. No code surface. *(One-line: Indian Railways API integration for Madinah↔Makkah train segments where applicable; minor scope item; Phase 2.)*
+3. **RFU train pricing + availability API** — same blueprint §5.1 names a dedicated train-pricing API. **TRIAGED** as Haramain High-Speed Rail: filed as GH issue #928 + cluster G3 in MANUAL_CODING_BACKLOG. ~3-5d. *(Indian Railways → Haramain HSR pricing API integration for Madinah↔Makkah segments where applicable; Phase 2.)*
 
-4. **TMC "Branofy benchmark access" + "AdsGPT template"** — `Req Doc After Meeting.pdf` §13 names both as inputs from Travel Stall. Branofy is the AI-calling workflow benchmark (referenced in `Req Doc` §7 but explicitly "no protected IP to be copied"); AdsGPT template is a content generation system. Neither has a code surface; both await Yasin's Section 13 packet. *(One-line: Q1 packet items; AdsGPT template likely seeds the cred-blocked AdsGPT integration; Branofy stays a workflow reference only.)*
+4. **TMC "Branofy benchmark access" + "AdsGPT template"** — `Req Doc After Meeting.pdf` §13 names both as inputs from Travel Stall. Branofy is the AI-calling workflow benchmark (referenced in `Req Doc` §7 but explicitly "no protected IP to be copied"); AdsGPT template is a content generation system. Neither has a code surface; both await Yasin's Section 13 packet. **AdsGPT side now has PRD `96cc585`** but template-content is still cred-blocked. *(Q1 packet items; AdsGPT template likely seeds the cred-blocked AdsGPT integration; Branofy stays a workflow reference only.)*
 
-5. **TMC "Tier 3 Mandeep model" content-led growth — 7 Content Buckets framework** — `TMC_Business_Blueprint_For_Tech_Team.md.pdf` §6.2 details a 7-bucket content framework (Uncomfortable Truths 30% / Diagnostic Process 20% / Success Stories 20% / Curriculum Alignment 15% / Behind the Scenes 10% / Personal Stories 3% / Industry Insights 2%). This is operational marketing-team scope (Aishwarya + Jihad in the blueprint), not CRM scope. Out-of-scope for the GS implementation, but worth flagging because the blueprint specifies it as part of the TMC tech build. *(One-line: marketing content framework, operator-driven, not a code surface; out-of-scope for CRM build.)*
+5. **TMC "Tier 3 Mandeep model" content-led growth — 7 Content Buckets framework** — `TMC_Business_Blueprint_For_Tech_Team.md.pdf` §6.2 details a 7-bucket content framework. This is operational marketing-team scope (Aishwarya + Jihad in the blueprint), not CRM scope. Out-of-scope for the GS implementation. *(Marketing content framework, operator-driven, not a code surface; out-of-scope for CRM build.)*
 
-6. **TMC website restructure ("remove Browse Tours + remove ALL pricing")** — `TMC_Business_Blueprint_For_Tech_Team.md.pdf` §7.1 and §11 mandate removing destination-first nav + all pricing from `www.themodernclassroom.in`. This is a website-side change, not a CRM change; the CRM ships the diagnostic-questionnaire backend that the new website calls. *(One-line: TMC website / Webflow scope, not CRM scope; the CRM provides the `/api/travel/diagnostics/public/submit` endpoint that the website's diagnostic page calls — that surface ships.)*
+6. **TMC website restructure ("remove Browse Tours + remove ALL pricing")** — `TMC_Business_Blueprint_For_Tech_Team.md.pdf` §7.1 and §11. Website-side change, not CRM change. *(TMC website / Webflow scope, not CRM scope; the CRM provides the `/api/travel/diagnostics/public/submit` endpoint that the website's diagnostic page calls — that surface ships.)*
 
-7. **TMC "Sales Funnel" + "Diagnostic Landing Page" + "Digital Marketing Phase 1/2 Plan"** — three further TMC-specific PDFs (`TMC SALES FUNNEL.pdf`, `TMC_Diagnostic_Landing_Page.pdf`, `TMC_Digital_Marketing_Phase_1_and_2_Plan_2026.pdf`) skimmed. Same shape as #6 — operator-side marketing-plan documents, not CRM build scope.
+7. **TMC "Sales Funnel" + "Diagnostic Landing Page" + "Digital Marketing Phase 1/2 Plan"** — three further TMC-specific PDFs skimmed. Operator-side marketing-plan documents, not CRM build scope.
 
-8. **"Traffic Ecosystem" + "4-Tier Business Model Understanding"** — two cross-cutting strategy PDFs (`TRAFFIC ECOSYSTEM.pdf`, `The_4_Tier_Business_Model_Understanding_Market_Positioning_1.pdf`) skimmed. Pure positioning content (the Mandeep / Mukesh / Mahesh tier analogy from the TMC blueprint); no CRM build implications.
+8. **"Traffic Ecosystem" + "4-Tier Business Model Understanding"** — two cross-cutting strategy PDFs skimmed. Pure positioning content (the Mandeep / Mukesh / Mahesh tier analogy from the TMC blueprint); no CRM build implications.
 
-**Triage recommendation for items 1-3:** open 3 GitHub issues tagged `cred-dependent` + `travel` + `phase-2` for the RFU supplier integrations (Zikr Cabs API / 5-portal scraper / train API). Items 4 stays under Q1 cred-chase. Items 5-8 are out-of-scope for CRM; no action.
+---
+
+## Newly-surfaced gaps — Portal-matrix drift caught in cron tick #6 + #7
+
+Items that the matrix was carrying as STALE between `08bc240` (matrix baseline) and `aacaa76` (tick #6 partial correction) → `<this commit>` (tick #7 full sweep). All resolved here; left as a paper-trail for the next reviewer.
+
+**Drift items found and resolved:**
+
+1. **V1-V4 Visa diagnostic seed: was 🔴 NOT-STARTED → is ✅ SHIPPED** — seed bank live at `backend/prisma/seed-travel.js:300-505` (commit `46c315d`, landed Friday 2026-05-22, 7+ commits before matrix baseline `08bc240`). Resolved in tick #6 partial (`aacaa76`); re-cited here.
+
+2. **V5-V7 Visa risk-flag engine: was 🔴 NOT-STARTED / schema-only → is 🟡 PARTIAL (SHELL)** — `backend/cron/visaRiskFlagEngine.js` (commit `9e8c28f`, 12 vitest cases, 6-hourly cadence). Real rule-set gated on PRD `28fbcf4` §5 PC-1..PC-5 product calls. Flipped here.
+
+3. **V8-V10 Visa AdvisorDashboard: was 🔴 NOT-STARTED → is 🟡 PARTIAL (SHELL)** — `frontend/src/pages/travel/visa/AdvisorDashboard.jsx` (commit `90b58fa`, ~294 lines, 3 SHELL sections); routed under TravelOnly at `/travel/visa/applications/:applicationId`. Flipped here.
+
+4. **V19 Visa Sure landing route + sidebar nav: was 🔴 NOT-STARTED → is ✅ SHIPPED** — commit `875c082` adds 3 shell pages + Sidebar group + App.jsx routes under TravelOnly. Flipped here.
+
+5. **V13 Visa document checklist: was 🟡 PARTIAL (schema only) → is 🟡 PARTIAL (schema + UI shell)** — UI shell page `Checklists.jsx` shipped at `875c082`; backend routes still pending (cluster B3). Evidence column refreshed here.
+
+6. **TS18 Travel Stall personalised PDF: was 🔴 NOT-STARTED → is ✅ SHIPPED** — `backend/routes/travel_travelstall.js` (commit `46c61d8`); 4th LLM-router consumer; 12-case gate spec wired into deploy.yml + coverage.yml. Flipped here.
+
+7. **TS21 Travel Stall operator UI: was 🔴 NOT-STARTED → is ✅ SHIPPED** — `frontend/src/pages/travel/TravelStallDashboard.jsx` (commit `5511594`, ~150 lines); Sidebar group + App.jsx route added in same commit. Flipped here.
+
+8. **R19 / O32 LLM-switchable layer consumer count: was "3 consumers live" → is "4 consumers live"** — TS personalised PDF (`46c61d8`) added as 4th consumer (talking-points + form-vs-call + itinerary-draft + TS personalised PDF). Counter refreshed here.
+
+9. **O35 seed `seed-travel.js` row description: was missing Visa Sure 15Q diagnostic seed → now includes it** — `46c315d` added 15-question Visa Sure bank to seed-travel.js; matrix's row description was stale. Description refreshed here.
+
+10. **#867 Diagnostics dark-mode fix-path: was framed as CSS-only token swap → is per-page refactor wave** — `TIER_COLORS` literal at `frontend/src/pages/travel/Diagnostics.jsx:31` (inline JSX hex `bg:` / `color:` map) is NOT a CSS-variable resolution; a CSS-only `:root[data-theme="dark"]` token override will not reach the inline literals. Fix-path needs per-page refactor (Diagnostics.jsx + sibling status-pill maps) BEFORE any global token swap. **Surfaced 2026-05-23 tick #6 Agent 3 finding (rejected); not a matrix row but the dark-mode work was being assumed simple in cluster-A backlog framing — needs explicit "per-page refactor wave first" note in cluster-A description before next dispatch.** Captured here as a reviewer cue.
+
+**Cross-cutting commits since `08bc240` that touched matrix rows** (full delta scanned via `git log --oneline 08bc240..HEAD`):
+
+- `46c61d8` Travel Stall personalised PDF endpoint (TS18) — flipped to ✅
+- `28fbcf4` PRD Visa Sure Phase 3 — referenced under V*
+- `875c082` Visa Sure scaffolding (V19 + Dashboard/Applications/Checklists shells) — flipped V19 ✅; V13 evidence refreshed
+- `d42cb77` cron tick #1 audit — meta, not portal-row
+- `d34d514` PRD Passport OCR — referenced under T10 + R20 + Integrations
+- `d58c5a5` PRD Flight Plugin Chrome Extension — referenced under O22
+- `af7b3bd` PRD TMC Curriculum Mapping — referenced under T2
+- `79bcd5a` cron tick #2 audit — meta
+- `d79a7f7` PRD Airline Web check-in Automation — referenced under O24
+- `f514028` PRD RateHawk Integration — referenced under R11 + R12 + Integrations
+- `3c5d468` PRD AI Calling Callified — referenced under O17 + O18 + O21 + Integrations
+- `c324c06` cron tick #3 audit — meta
+- `a445cff` PRD Booking/Expedia Direct — referenced under TS19
+- `96cc585` PRD AdsGPT Marketing Reports — referenced under O14 + O15 + O16
+- `bb8e5bb` PRD Excel Software Accounting — referenced under O28 + Billing
+- `716e101` cron tick #4 audit — meta
+- `9e8c28f` Visa risk-flag engine SHELL (V5-V7) — V7 flipped 🔴→🟡; V5+V6 evidence refreshed
+- `5511594` TravelStallDashboard.jsx (TS21) — flipped ✅
+- `a864db5` cluster G in MANUAL_CODING_BACKLOG — referenced under Integrations
+- `57808ad` cron tick #5 audit — meta
+- `90b58fa` Visa AdvisorDashboard.jsx (V8-V10) — flipped 🔴×3 → 🟡×3
+- `aacaa76` cron tick #6 audit — partial portal-matrix correction (V1-V4 flipped) — superseded by this commit
+
+**Triage recommendation:** the matrix is now back in lockstep with HEAD. The next refresh trigger should be: (a) any visa backend route lands (flips V5-V15 evidence); (b) PRD-blocked work unblocks via cred drop (flips ⏸️ → 🟡 / ✅); (c) #867 cluster-A refactor wave ships (flips theme-related notes); (d) a new feature lands without updating this matrix in the same commit (catch-up refresh).
 
 ---
 

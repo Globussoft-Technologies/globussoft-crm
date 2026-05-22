@@ -558,3 +558,204 @@ html[data-theme="dark"][data-vertical="travel"],
   background: #374151;
   color: #D1D5DB;
 }
+
+/* #878 — Audit Log page (AuditLog.jsx hit via /audit-log). Phase 1 of the
+ * dark-mode cluster refactor, mirror of #873 Reports (commit 3d82e34), #872
+ * Sequences (commit 706514c), #871 Inbox (commit 68b09db), and #867
+ * Diagnostics (commit f67b4fc). Pre-refactor AuditLog.jsx had:
+ *   - ActionBadge inline `${color}1f` bg + `${color}55` border per CREATE
+ *     (#10b981) / UPDATE (#3b82f6) / DELETE (#ef4444) → ~9% tinted pills,
+ *     near-invisible on travel dark navy (#0F1729) body.
+ *   - Three integrity chips (OK green / needs-backfill yellow / broken red)
+ *     with inline `rgba(*, 0.12)` bg + `rgba(*, 0.4)` border + bare hex fg
+ *     (#10b981 / #eab308 / #ef4444). Chip fg ratios on dark body all under
+ *     2:1 → fail AA.
+ *   - Backfill banner inline `rgba(234,179,8,0.06)` amber bg +
+ *     `rgba(234,179,8,0.4)` border + bare `#eab308` title/icon/button fg.
+ *     Title #eab308 on near-cream body: ~3.8:1 → fail AA for body text.
+ *   - Table header row `rgba(255,255,255,0.03)` near-transparent white over
+ *     navy body — header is invisible from non-header rows in dark mode.
+ *   - Expanded-row hover `rgba(59,130,246,0.06)` blue tint + drawer
+ *     `rgba(15,23,42,0.4)` slate tint. Drawer slate on navy reads ~1.1:1
+ *     vs surrounding rows → the drawer "extension" is invisible until
+ *     content fills it.
+ *
+ * Out of scope for this commit: the StatCard hex left-border + display-value
+ * text continues to use the ACTION_COLOR map (#10b981 / #3b82f6 / #ef4444)
+ * directly. 4px borders + 1.85rem display text clear AA on both light cream
+ * and dark navy bodies (large-text AA threshold is ~3:1; ~13:1 vs cream,
+ * ~7:1 vs navy at these saturations). No refactor needed.
+ *
+ * Base rules are theme-agnostic — they preserve current appearance via the
+ * existing rgba/hex pairs. Travel dark-mode overrides force opaque high-
+ * contrast pairs ≥4.5:1 (WCAG AA). */
+.audit-action-pill {
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  display: inline-block;
+}
+.audit-action-pill--create {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.33);
+}
+.audit-action-pill--update {
+  background: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.33);
+}
+.audit-action-pill--delete {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.33);
+}
+.audit-action-pill--other {
+  background: rgba(107, 114, 128, 0.12);
+  color: #6b7280;
+  border: 1px solid rgba(107, 114, 128, 0.33);
+}
+.audit-integrity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.audit-integrity-chip--ok {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+.audit-integrity-chip--warn {
+  background: rgba(234, 179, 8, 0.12);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+.audit-integrity-chip--danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+.audit-backfill-banner {
+  background: rgba(234, 179, 8, 0.06);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+.audit-backfill-title {
+  color: #eab308;
+}
+.audit-backfill-icon {
+  color: #eab308;
+}
+.audit-backfill-button {
+  background: #eab308;
+  border-color: #eab308;
+}
+.audit-table-header-row {
+  background: rgba(255, 255, 255, 0.03);
+}
+.audit-row--expanded {
+  background: rgba(59, 130, 246, 0.06);
+}
+.audit-row-drawer {
+  background: rgba(15, 23, 42, 0.4);
+}
+
+/* #878 — Dark-mode token overrides for AuditLog widgets. Contrast verified
+ * ≥4.5:1 (WCAG AA) against dark surfaces:
+ *   action create:    #064E3B bg, #6EE7B7 fg → ~9.8:1
+ *   action update:    #1E3A8A bg, #93C5FD fg → ~5.8:1
+ *   action delete:    #7F1D1D bg, #FCA5A5 fg → ~5.1:1
+ *   action other:     #374151 bg, #D1D5DB fg → ~7.4:1
+ *   integrity ok:     #064E3B bg, #6EE7B7 fg → ~9.8:1
+ *   integrity warn:   #78350F bg, #FCD34D fg → ~7.2:1
+ *   integrity danger: #7F1D1D bg, #FCA5A5 fg → ~5.1:1
+ *   backfill banner:  rgba(120,53,15,0.4) bg + rgba(252,211,77,0.5)
+ *                     border — visible amber-tinted glass on dark navy
+ *   backfill title:   #FCD34D on navy → ~7.2:1
+ *   backfill icon:    #FCD34D (matches title)
+ *   backfill button:  #78350F bg, #FCD34D fg → ~7.2:1 (hover preserved via
+ *                     btn-primary's inherited :hover transition)
+ *   table header:     rgba(244,239,223,0.05) — same tint as existing
+ *                     th rule (line 146-147), visible band over navy
+ *   row expanded:     rgba(96,165,250,0.12) — light-blue selected glow
+ *   row drawer:       rgba(15,23,41,0.6) — opaque enough to read as a
+ *                     pulled-down extension of the row above
+ * Scoped to travel vertical so generic + wellness keep their existing
+ * light-only fixed-hex palette. */
+[data-theme="dark"][data-vertical="travel"] .audit-action-pill--create,
+[data-theme="dark"] [data-vertical="travel"] .audit-action-pill--create {
+  background: #064E3B;
+  color: #6EE7B7;
+  border-color: rgba(110, 231, 183, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-action-pill--update,
+[data-theme="dark"] [data-vertical="travel"] .audit-action-pill--update {
+  background: #1E3A8A;
+  color: #93C5FD;
+  border-color: rgba(147, 197, 253, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-action-pill--delete,
+[data-theme="dark"] [data-vertical="travel"] .audit-action-pill--delete {
+  background: #7F1D1D;
+  color: #FCA5A5;
+  border-color: rgba(252, 165, 165, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-action-pill--other,
+[data-theme="dark"] [data-vertical="travel"] .audit-action-pill--other {
+  background: #374151;
+  color: #D1D5DB;
+  border-color: rgba(209, 213, 219, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-integrity-chip--ok,
+[data-theme="dark"] [data-vertical="travel"] .audit-integrity-chip--ok {
+  background: #064E3B;
+  color: #6EE7B7;
+  border-color: rgba(110, 231, 183, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-integrity-chip--warn,
+[data-theme="dark"] [data-vertical="travel"] .audit-integrity-chip--warn {
+  background: #78350F;
+  color: #FCD34D;
+  border-color: rgba(252, 211, 77, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-integrity-chip--danger,
+[data-theme="dark"] [data-vertical="travel"] .audit-integrity-chip--danger {
+  background: #7F1D1D;
+  color: #FCA5A5;
+  border-color: rgba(252, 165, 165, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-backfill-banner,
+[data-theme="dark"] [data-vertical="travel"] .audit-backfill-banner {
+  background: rgba(120, 53, 15, 0.4);
+  border-color: rgba(252, 211, 77, 0.5);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-backfill-title,
+[data-theme="dark"] [data-vertical="travel"] .audit-backfill-title {
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .audit-backfill-icon,
+[data-theme="dark"] [data-vertical="travel"] .audit-backfill-icon {
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .audit-backfill-button,
+[data-theme="dark"] [data-vertical="travel"] .audit-backfill-button {
+  background: #78350F;
+  border-color: #FCD34D;
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .audit-table-header-row,
+[data-theme="dark"] [data-vertical="travel"] .audit-table-header-row {
+  background: rgba(244, 239, 223, 0.05);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-row--expanded,
+[data-theme="dark"] [data-vertical="travel"] .audit-row--expanded {
+  background: rgba(96, 165, 250, 0.12);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-row-drawer,
+[data-theme="dark"] [data-vertical="travel"] .audit-row-drawer {
+  background: rgba(15, 23, 41, 0.6);
+}

@@ -9,7 +9,7 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator; same baseline used since refresh #1)
-- **SHIPPED:** **75** (~96%) — up from 74 (+1: `LlmSpend.jsx` admin observability dashboard `76996c8` — surfaces `f5c9518`'s `/api/admin/llm-spend` endpoint as a recharts dashboard, closes the last §4.9 Reports/Dashboards gap, cleanly closes R7's observability loop)
+- **SHIPPED:** **76** (~97%) — up from 75 (+1: form-vs-call result persistence `a6ea3fe` — additive `TravelDiagnostic.formVsCallJson` column + fire-and-forget snapshot on compute + cache surfaces on GET, mirrors talkingPointsJson pattern, eliminates duplicate-LLM-call noise from spend telemetry)
 - **PARTIAL:** **5** (~6%) — unchanged (LeadRoutingRule sub-brand extension, RFU Haram-facing filter UI, RFU Umrah quotation engine pending RateHawk, microsite OTP pending Wati, parent registration pending DigiLocker)
 - **GAP-AUTONOMOUS:** **0** (0%) **in §4 PRD requirements** — exhausted at the PRD-requirement layer; `LlmSpend.jsx` admin surface (was the only §7 page-row pick pairing with R7) shipped at `76996c8`. Remaining §7-row work is the ItineraryBuilder explicit `/new` route; Phase 1.5 picks (form-vs-call persistence, customer-duplicate modal, rooming XLSX export) are the next autonomous-doable batch
 - **GAP-STUB-ABLE:** **5** (~6%) — unchanged (boarding-pass auto-delivery, microsite OTP WA send, itinerary share WA blast, religious-guidance WA dispatch, payment-reminder WA dispatch)
@@ -53,7 +53,7 @@
 | 8 lost-reason taxonomy | SHIPPED | Same helper, `seed-travel.js:1095-1119` | Price · No response · Chose competitor · Wrong requirement · Timing issue · Budget issue · Trust issue · Duplicate enquiry |
 | Diagnostic-first guard on quotation routes | SHIPPED | `middleware/travelGuards.js`; refused on POST/PUT Itinerary | |
 | AI qualification call (Eng/Hin/Urdu) | GAP-CRED-BLOCKED | Sandbox mock `scripts/sandbox/callified-mock.js` only | Q1 — Callified.ai handover |
-| Form-vs-call answer comparison (80/60% threshold) | SHIPPED | `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519-639`, commits `4a7c623` + `8b97fd5`); UI consumer at `DiagnosticDetail.jsx` Section 3 (commit `2440b4a`) | Compute-only; result NOT persisted — every page reload re-fires Claude Opus. Pick #2 below adds `TravelDiagnostic.formVsCallJson` cache column |
+| Form-vs-call answer comparison (80/60% threshold) | SHIPPED | `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519-641`, commits `4a7c623` + `8b97fd5`); persists result via additive `TravelDiagnostic.formVsCallJson` column (commit `a6ea3fe`); UI consumer at `DiagnosticDetail.jsx` Section 3 (commit `2440b4a`) | Compute response + cached envelope match on `{classification, scorePercent, summary, model, stub, perFieldDiff, generatedAt}`. Frontend cached-panel render (skip re-compute on page reload) is a follow-on Phase 1.5 commit |
 | AI-to-advisor handover (B2C) | PARTIAL | `cron/travelDiagnosticAdvisorAlerts.js` (diagnostic side only) | Callified side cred-blocked |
 | Manager view (pending/delayed/staff-wise) | SHIPPED (reuse) | `routes/staff.js` + existing dashboards | |
 | Lead source attribution + UTM tracking | SHIPPED (reuse) | `Contact.firstTouchSource` + Touchpoint already wired | |
@@ -223,7 +223,7 @@
 | `Invoice.legalEntityCode` | SHIPPED | `schema.prisma:814` |
 | `User.subBrandAccess` | SHIPPED | `schema.prisma:357` |
 | `TravelDiagnostic.talkingPointsJson` (LLM brief cache) | SHIPPED | persisted by talking-points/regen route (commit `cf876af`); read by next GET; consumed by DiagnosticDetail.jsx (commit `2440b4a`) |
-| `TravelDiagnostic.formVsCallJson` (LLM form-vs-call cache) | NOT SHIPPED — GAP-AUTONOMOUS | Compute endpoint exists (commit `4a7c623`); persistence column missing — **pick #2 below** |
+| `TravelDiagnostic.formVsCallJson` (LLM form-vs-call cache) | SHIPPED | commit `a6ea3fe` — additive nullable `String? @db.Text` column; fire-and-forget snapshot from compute handler; GET surfaces it via Prisma default selection; 2 new gate spec cases pinning persist + overwrite contracts |
 | `Tenant.religiousGuidancePackets` back-relation | SHIPPED | `schema.prisma:164` (commit `1e62ee9`) |
 | `Itinerary.draftSummary` (LLM bulk-text cache) | SHIPPED | `schema.prisma:4207` `Itinerary.draftSummary String? @db.Text` (commit `f02fa5a`); populated by `POST /draft/regen`; surfaced in public projection + ItineraryDetail.jsx |
 
@@ -385,7 +385,7 @@
 | Booking.com + Expedia direct APIs | GAP-CRED-BLOCKED (Q19) |
 | Long-tail airline automation | GAP (downstream) |
 | Seasons + markup rules admin UI | SHIPPED (`PricingRules.jsx`) |
-| Form-vs-call persistence / cached panel | GAP-AUTONOMOUS — extend the compute endpoint to snapshot result onto `TravelDiagnostic.formVsCallJson` — **pick #2 below** |
+| Form-vs-call persistence / cached panel | SHIPPED (backend) — commit `a6ea3fe`; frontend cached-panel render (skip re-compute on page reload) is a follow-on |
 | Customer-duplicate UI modal | GAP-AUTONOMOUS — backend ships; frontend modal pending — **pick #3 below** |
 | Rooming XLSX export | GAP-AUTONOMOUS — `routes/travel_trip_billing.js` + `xlsx` lib both available; single-commit add |
 
@@ -475,7 +475,7 @@ The autonomous queue at the §4 PRD-requirement layer is **exhausted**. The auto
 
 1. ~~**`LlmSpendDashboard.jsx` admin observability page** (PRD §4.9 row + R7). New page consuming `GET /api/admin/llm-spend?days=N` (commit `f5c9518`). Renders the `{ totals, byDay, byTask, byModel }` envelope as widgets.~~ — ✅ **commit `76996c8`** (shipped as `pages/LlmSpend.jsx` mounted at `/llm-spend`, RoleGuard ADMIN, recharts AreaChart + 2 BarCharts, days selector, sidebar link, 7 vitest cases)
 
-2. **Form-vs-call result persistence + cached panel** (Phase 1.5 §4.1 row). Add additive nullable column `TravelDiagnostic.formVsCallJson String? @db.Text` (no bless marker — additive). Extend `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519-639`, commit `4a7c623`) to snapshot the compute result onto the new column. Extend `GET /api/travel/diagnostics/:id` to surface the cached result so `DiagnosticDetail.jsx` Section 3 doesn't re-fire Claude Opus on every page reload. ~3-4 hrs. **Why next:** the compute endpoint exists today but is wasteful per-load; caching closes the only autonomous Phase 1.5 follow-on row. Pairs with pick #1 — eliminates duplicate-call noise from the spend dashboard.
+2. ~~**Form-vs-call result persistence + cached panel** (Phase 1.5 §4.1 row). Add additive nullable column `TravelDiagnostic.formVsCallJson` + snapshot on compute + surface on GET.~~ — ✅ **commit `a6ea3fe`** (additive column landed; fire-and-forget persist mirrors talkingPointsJson pattern; GET surfaces via Prisma default selection; 2 new gate-spec cases pin persist + overwrite contracts). Frontend cached-panel render — skip re-compute on page reload — is a separate follow-on commit, not autonomous-blocking.
 
 3. **`DuplicateContactModal.jsx` front-end intercept** (§4.5 row). New component at `frontend/src/components/DuplicateContactModal.jsx` that intercepts the 409 DUPLICATE_CONTACT response from any contact-create call (`routes/contacts.js:263-278`'s envelope already ships fully — `{ existingContactId, matchedBy, contact: {id,name,email,phone,company,status,subBrand} }`), renders the merge-or-keep-both choice modal, and routes the user to either: (a) navigate to existing contact, (b) re-POST with `?force=true` to bypass, or (c) cancel. Wire into the 2-3 known create-contact entry points (Contacts.jsx new-contact form, RFU profile new-contact, Travel Stall quiz lead-capture). ~½ day, pure frontend + 1 new component file. **Why next:** lifts §4.5 customer-duplicate-detection from PARTIAL → SHIPPED; backend helper has been ready for many waves without an operator surface.
 

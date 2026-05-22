@@ -20,6 +20,12 @@
  *     - readinessLevel=4 → flag
  *     - advisorRiskFlag=priority → flag
  *     - applicationType=tourist + everything else null → no flag
+ *     - R6 docs-incomplete: required + status≠verified + status∈{docs-pending|collected} → flag
+ *     - R6 docs-incomplete: all required verified → no flag from this signal
+ *     - R6 docs-incomplete: required-unverified BUT status=intake → no flag (status gate)
+ *     - R7 stale-application: updatedAt > 14d ago + status=docs-collected → flag
+ *     - R7 stale-application: recent updatedAt → no flag from this signal
+ *     - R7 stale-application: old updatedAt BUT status=intake → no flag (status gate)
  */
 
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
@@ -236,6 +242,125 @@ describe('cron/visaRiskFlagEngine — evaluateRiskShell pure-function', () => {
       rejectionHistoryJson: null,
       advisorRiskFlag: null,
     });
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  // ── R6 docs-incomplete ─────────────────────────────────────────────
+
+  test('R6 docs-incomplete: required + status≠verified + status=docs-pending → flag', () => {
+    const { flag, reasons } = evaluateRiskShell({
+      applicationType: 'tourist',
+      status: 'docs-pending',
+      readinessLevel: 1,
+      complexCase: false,
+      rejectionHistoryJson: null,
+      advisorRiskFlag: null,
+      documentChecklist: [
+        { id: 1, required: true, status: 'pending' },
+        { id: 2, required: true, status: 'uploaded' },
+        { id: 3, required: true, status: 'verified' },
+        { id: 4, required: false, status: 'pending' }, // optional → ignored
+      ],
+    });
+    expect(flag).toBe(true);
+    // 2 required-unverified (pending + uploaded); optional + verified ignored
+    expect(reasons).toContain('docs-incomplete:2');
+  });
+
+  test('R6 docs-incomplete: all required verified → no flag from this signal', () => {
+    const { flag, reasons } = evaluateRiskShell({
+      applicationType: 'tourist',
+      status: 'docs-collected',
+      readinessLevel: 1,
+      complexCase: false,
+      rejectionHistoryJson: null,
+      advisorRiskFlag: null,
+      documentChecklist: [
+        { id: 1, required: true, status: 'verified' },
+        { id: 2, required: true, status: 'verified' },
+        { id: 3, required: false, status: 'pending' },
+      ],
+    });
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  test('R6 docs-incomplete: required-unverified BUT status=intake → no flag (status gate)', () => {
+    // Intake status is too early to surface docs-incomplete — the
+    // checklist isn't expected to be complete yet at intake.
+    const { flag, reasons } = evaluateRiskShell({
+      applicationType: 'tourist',
+      status: 'intake',
+      readinessLevel: 1,
+      complexCase: false,
+      rejectionHistoryJson: null,
+      advisorRiskFlag: null,
+      documentChecklist: [
+        { id: 1, required: true, status: 'pending' },
+      ],
+    });
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  // ── R7 stale-application ───────────────────────────────────────────
+
+  test('R7 stale-application: updatedAt > 14d ago + status=docs-collected → flag', () => {
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const OLD = new Date('2026-05-01T00:00:00Z'); // ~22 days before NOW
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'docs-collected',
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        updatedAt: OLD,
+      },
+      NOW,
+    );
+    expect(flag).toBe(true);
+    expect(reasons).toContain('stale-application:14d');
+  });
+
+  test('R7 stale-application: recent updatedAt → no flag from this signal', () => {
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const RECENT = new Date('2026-05-20T00:00:00Z'); // 3 days before NOW
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'docs-collected',
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        updatedAt: RECENT,
+      },
+      NOW,
+    );
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  test('R7 stale-application: old updatedAt BUT status=intake → no flag (status gate)', () => {
+    // Stale-dwell only fires in docs-pending / docs-collected; intake
+    // pre-dates the checklist gate so dwell-time isn't meaningful yet.
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const OLD = new Date('2026-04-01T00:00:00Z'); // 52d before NOW
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'intake',
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        updatedAt: OLD,
+      },
+      NOW,
+    );
     expect(flag).toBe(false);
     expect(reasons).toEqual([]);
   });

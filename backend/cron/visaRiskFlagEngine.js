@@ -27,10 +27,13 @@
 //
 // SHELL stub rules below evaluate the SUBSET of the above signals that
 // can be derived from VisaApplication's existing columns (applicationType,
-// readinessLevel, complexCase, rejectionHistoryJson, advisorRiskFlag).
-// The real rule-set — including the high-rejection-rate-embassy catalogue,
-// the family/dependents detection, and the LLM-augmented narrative summary —
-// lands once PC-1..PC-5 are resolved (see docs/PRD_VISA_SURE_PHASE_3.md §5).
+// readinessLevel, complexCase, rejectionHistoryJson, advisorRiskFlag)
+// plus two operator-facing dwell signals (R6 docs-incomplete via the
+// VisaDocumentChecklistItem relation; R7 stale-application via the
+// row's updatedAt + status). The real rule-set — including the
+// high-rejection-rate-embassy catalogue (PC-3), the family/dependents
+// detection, and the LLM-augmented narrative summary — lands once
+// PC-1..PC-5 are resolved (see docs/PRD_VISA_SURE_PHASE_3.md §5).
 //
 // Cadence: every 6 hours per the parallel-wave dispatch contract. PRD
 // §4 latency target is "< 15 min p95" which the production cron will hit
@@ -51,10 +54,21 @@ const prisma = require("../lib/prisma");
 
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
 
+// R7 threshold — applications updated more than this many days ago AND
+// still in a pre-filed status are flagged as stale. 14d is a holding
+// value pending PRD §5 PC-4 sign-off on SLA targets; the cron's real
+// dwell-time threshold will be parameterised per-sub-brand by then.
+const STALE_DWELL_DAYS = 14;
+const STALE_DWELL_MS = STALE_DWELL_DAYS * 24 * 60 * 60 * 1000;
+const STALE_STATUSES = new Set(["docs-collected", "docs-pending"]);
+
 // SHELL evaluation — returns { flag, reasons[] } for a VisaApplication
 // row. Real engine replaces this with a rule-engine + LLM narrative once
 // PC-1..PC-5 resolve.
-function evaluateRiskShell(app) {
+//
+// `now` is injectable for deterministic dwell-time tests; defaults to
+// Date.now() in production.
+function evaluateRiskShell(app, now = Date.now()) {
   const reasons = [];
 
   // FR-3.1(a) — complex applicationType class
@@ -90,6 +104,38 @@ function evaluateRiskShell(app) {
     reasons.push(`flag:${app.advisorRiskFlag}`);
   }
 
+  // R6 (FR-3.1 + FR-6) — required documents still pending close to
+  // submission. We count required checklist items whose status is NOT
+  // verified (i.e. still pending | uploaded | rejected). When the
+  // application is already past intake (docs-pending / docs-collected)
+  // and ≥1 required item is unverified, flag as docs-incomplete. The
+  // FR-6 auto-status-advance only moves status forward when 100% of
+  // required items are verified, so this rule surfaces applications
+  // that have stalled in document collection.
+  if (Array.isArray(app.documentChecklist) && app.documentChecklist.length > 0) {
+    const requiredUnverified = app.documentChecklist.filter(
+      (d) => d.required === true && d.status !== "verified",
+    ).length;
+    if (
+      requiredUnverified > 0 &&
+      (app.status === "docs-pending" || app.status === "docs-collected")
+    ) {
+      reasons.push(`docs-incomplete:${requiredUnverified}`);
+    }
+  }
+
+  // R7 (FR-3.3 + PRD §4 latency) — stale application: row hasn't moved
+  // forward in STALE_DWELL_DAYS days AND is still in a pre-filed
+  // bucket. Catches the "advisor forgot about it" failure mode that
+  // FR-3.3's transition-based alerts miss (no transition = no alert).
+  if (
+    app.updatedAt &&
+    STALE_STATUSES.has(app.status) &&
+    now - new Date(app.updatedAt).getTime() > STALE_DWELL_MS
+  ) {
+    reasons.push(`stale-application:${STALE_DWELL_DAYS}d`);
+  }
+
   return { flag: reasons.length > 0, reasons };
 }
 
@@ -113,6 +159,10 @@ async function runRiskFlaggingForTenant(tenantId) {
       rejectionHistoryJson: true,
       advisorRiskFlag: true,
       contactId: true,
+      updatedAt: true,
+      documentChecklist: {
+        select: { id: true, required: true, status: true },
+      },
     },
     take: 500,
   });

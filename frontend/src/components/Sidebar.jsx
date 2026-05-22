@@ -83,6 +83,9 @@ import {
   Map as MapIcon,
   Luggage,
   Key,
+  // Phase 3 Visa Sure scaffolding (cluster B3) — admin-only sidebar group
+  Stamp,
+  BadgeCheck,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -1029,6 +1032,17 @@ function renderTravelNav({
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />
       {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Suppliers" />}
       {isAdmin && <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" />}
+
+      {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells, admin-only.
+          Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}
+      {isAdmin && (
+        <>
+          <div style={labelStyle}>Visa Sure</div>
+          <Link to="/travel/visa" icon={Stamp} label="Dashboard" />
+          <Link to="/travel/visa/applications" icon={BadgeCheck} label="Applications" />
+          <Link to="/travel/visa/checklists" icon={ClipboardList} label="Checklists" />
+        </>
+      )}
 
       <div style={labelStyle}>Sales pipeline</div>
       <Link to="/leads" icon={UserPlus} label="Leads" />

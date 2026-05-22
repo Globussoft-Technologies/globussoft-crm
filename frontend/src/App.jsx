@@ -138,6 +138,11 @@ const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
 const TravelLeadDetail = lazy(() => import("./pages/travel/LeadDetail"));
+// Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells only.
+// Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9.
+const TravelVisaDashboard = lazy(() => import("./pages/travel/visa/Dashboard"));
+const TravelVisaApplications = lazy(() => import("./pages/travel/visa/Applications"));
+const TravelVisaChecklists = lazy(() => import("./pages/travel/visa/Checklists"));
 // Wellness vertical
 const WellnessOwnerDashboard = lazy(
   () => import("./pages/wellness/OwnerDashboard"),
@@ -943,6 +948,12 @@ export default function App() {
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
               <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />
               <Route path="travel/leads/:contactId" element={<TravelOnly><TravelLeadDetail /></TravelOnly>} />
+              {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells.
+                  Real implementation gated on product calls in
+                  docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}
+              <Route path="travel/visa" element={<TravelOnly><TravelVisaDashboard /></TravelOnly>} />
+              <Route path="travel/visa/applications" element={<TravelOnly><TravelVisaApplications /></TravelOnly>} />
+              <Route path="travel/visa/checklists" element={<TravelOnly><TravelVisaChecklists /></TravelOnly>} />
                     {/* Wellness vertical — gated by WellnessOnly so generic-CRM
                   tenants can't surface wellness pages by URL (#325). */}
               <Route path="wellness" element={<WellnessOnly><WellnessOwnerOnly><WellnessOwnerDashboard /></WellnessOwnerOnly></WellnessOnly>} />

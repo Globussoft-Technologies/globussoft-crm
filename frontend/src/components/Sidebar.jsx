@@ -1023,7 +1023,7 @@ function renderTravelNav({
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
       <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
-      <Link to="/travel/webcheckins" icon={Ticket} label="Web Check-ins" />
+      <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
       <Link to="/travel/cost-master" icon={DollarSign} label="Cost Master" />
       {isAdmin && <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" />}
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />

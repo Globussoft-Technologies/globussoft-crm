@@ -915,6 +915,10 @@ export default function App() {
               <Route path="travel/itineraries" element={<TravelOnly><TravelItineraries /></TravelOnly>} />
               <Route path="travel/trips" element={<TravelOnly><TravelTrips /></TravelOnly>} />
               <Route path="travel/trips/:id" element={<TravelOnly><TravelTripDetail /></TravelOnly>} />
+              {/* #912 — canonical kebab-case path matches sibling travel routes
+                  (cost-master, pricing-rules, religious-packets). The unhyphenated
+                  alias stays registered so existing bookmarks / sidebar links keep working. */}
+              <Route path="travel/web-checkins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
               <Route path="travel/webcheckins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
               <Route path="travel/cost-master" element={<TravelOnly><TravelCostMaster /></TravelOnly>} />
               <Route path="travel/leads" element={<TravelOnly><TravelLeads /></TravelOnly>} />

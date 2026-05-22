@@ -9,9 +9,9 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **61** (~78%) — up from 60 (+1: form-vs-call comparison endpoint `4a7c623`)
-- **PARTIAL:** **6** (~8%)
-- **GAP-AUTONOMOUS:** **3** (~4%) — down from 4 since form-vs-call shipped (closes both the §4.1 row and the §9.1 task-routing row from the same dispatch)
+- **SHIPPED:** **62** (~79%) — up from 61 (+1: TMC ops dashboard rollup endpoint `9eda0b6`)
+- **PARTIAL:** **5** (~6%) — down from 6 since TMC ops dashboard row flipped PARTIAL → SHIPPED
+- **GAP-AUTONOMOUS:** **2** (~3%) — down from 3 since TMC ops dashboard's Notes-side GAP-AUTONOMOUS marker flipped
 - **GAP-STUB-ABLE:** **6** (~8%) — was 8; talking-points + LLM router consumed two slots
 - **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
 - **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
@@ -156,7 +156,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | Travel Stall analytics | PARTIAL | Phase 2 per Q17 | Schema ready |
 | Visa Sure analytics | PARTIAL | Phase 3 per Q18 | Schema ready |
 | Platform-wise marketing reports (AdsGPT) | GAP-CRED-BLOCKED | No AdsGPT route in travel namespace | Q1 |
-| TMC ops dashboard per confirmed trip | PARTIAL | `pages/travel/TripDetail.jsx` shipped; explicit `/trips/:id/ops-dashboard` endpoint NOT shipped | GAP-AUTONOMOUS |
+| TMC ops dashboard per confirmed trip | SHIPPED | `pages/travel/TripDetail.jsx` + `GET /api/travel/trips/:id/ops-dashboard` rollup endpoint (commit `9eda0b6`); parallel-fetch envelope with participants / payments / documents / rooming counts + 30/30/30/10 weighted departureReadiness.score | **Schema drift noted:** `TripDocumentRequirement` has no `status` / `participantId` columns — `submittedCount=0` placeholder until submission tracking ships; `docsFrac` defaults to 1 to avoid penalising trips with no doc tracking. `TmcTrip.targetStudentCount` doesn't exist — `participants.target` always null. Both noted in route header. Frontend dashboard widget is P1.5 |
 
 ### §4.10 Sub-vertical call-outs
 

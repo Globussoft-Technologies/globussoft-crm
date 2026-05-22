@@ -118,6 +118,7 @@ const TravelDashboard = lazy(() => import("./pages/travel/Dashboard"));
 const TravelDiagnostics = lazy(() => import("./pages/travel/Diagnostics"));
 const TravelDiagnosticWizard = lazy(() => import("./pages/travel/DiagnosticWizard"));
 const TravelDiagnosticBuilder = lazy(() => import("./pages/travel/DiagnosticBuilder"));
+const TravelDiagnosticDetail = lazy(() => import("./pages/travel/DiagnosticDetail"));
 const TravelItineraries = lazy(() => import("./pages/travel/Itineraries"));
 const TravelTrips = lazy(() => import("./pages/travel/Trips"));
 const TravelTripDetail = lazy(() => import("./pages/travel/TripDetail"));
@@ -890,6 +891,7 @@ export default function App() {
               <Route path="travel/diagnostics" element={<TravelOnly><TravelDiagnostics /></TravelOnly>} />
               <Route path="travel/diagnostics/new" element={<TravelOnly><TravelDiagnosticWizard /></TravelOnly>} />
               <Route path="travel/diagnostics/banks/new" element={<TravelOnly><TravelDiagnosticBuilder /></TravelOnly>} />
+              <Route path="travel/diagnostics/:id" element={<TravelOnly><TravelDiagnosticDetail /></TravelOnly>} />
               <Route path="travel/itineraries" element={<TravelOnly><TravelItineraries /></TravelOnly>} />
               <Route path="travel/trips" element={<TravelOnly><TravelTrips /></TravelOnly>} />
               <Route path="travel/trips/:id" element={<TravelOnly><TravelTripDetail /></TravelOnly>} />

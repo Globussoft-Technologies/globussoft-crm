@@ -162,7 +162,15 @@ export default function Diagnostics() {
                 const tc = TIER_COLORS[tier] || { bg: 'var(--subtle-bg)', color: 'var(--text-secondary)' };
                 return (
                   <tr key={d.id} style={{ borderTop: '1px solid var(--border-light)' }}>
-                    <td style={td}>{fmt(d.createdAt)}</td>
+                    <td style={td}>
+                      <Link
+                        to={`/travel/diagnostics/${d.id}`}
+                        style={rowLink}
+                        aria-label={`Open diagnostic #${d.id}`}
+                      >
+                        {fmt(d.createdAt)}
+                      </Link>
+                    </td>
                     <td style={td}><span style={brandBadge}>{d.subBrand}</span></td>
                     <td style={td}>{d.contactId ? `#${d.contactId}` : '—'}</td>
                     <td style={td}>{d.score !== null ? Number(d.score).toFixed(2) : '—'}</td>
@@ -240,4 +248,10 @@ const brandBadge = {
 const tierBadge = {
   padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
   textTransform: 'uppercase', letterSpacing: 0.5,
+};
+
+const rowLink = {
+  color: 'var(--primary-color, var(--accent-color))',
+  textDecoration: 'none',
+  fontWeight: 500,
 };

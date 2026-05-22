@@ -75,6 +75,18 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 
 **PRD coverage after tick #2:** 6 of 12 total PRDs done (50%). Remaining 6 for cron: Airline web-checkin automation / RateHawk / Booking-Expedia / Callified AI calling / AdsGPT / Excel Software.
 
+**Tick #3 (cron) shipped 3/3 PRDs in parallel:**
+
+| SHA | PRD file | Decisions surfaced |
+|---|---|---|
+| `d79a7f7` | `docs/PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md` (537 lines) | 6 design calls — Playwright vs MCP / airline priority / containerization / fallback retry / ToS audit / completion notification |
+| `f514028` | `docs/PRD_RATEHAWK_INTEGRATION.md` (319 lines) | 6 design calls — pricing model / config storage / caching policy / tiebreaker / zero-results UX / Phase-2 abstraction |
+| `3c5d468` | `docs/PRD_AI_CALLING_CALLIFIED.md` (445 lines) | 7 decisions — cost cap / lead-source whitelist / persona scripts / opt-out wording / TRAI disclosure / failure-path UX / per-tenant disable |
+
+**Portal-matrix drift caught:** AI calling agent found that `scripts/sandbox/callified-mock.js` doesn't actually exist despite the portal matrix O17 row claiming it does. Next portal-matrix refresh should verify-via-grep. Status flipped to 🟡 PARTIAL in the AI calling PRD §10.
+
+**PRD coverage after tick #3:** 9 of 12 total PRDs done (75%). Remaining 3 for next tick: Booking-Expedia / AdsGPT / Excel Software.
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

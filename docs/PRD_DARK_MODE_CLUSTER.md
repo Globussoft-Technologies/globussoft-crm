@@ -1,7 +1,7 @@
 # Dark Mode Cluster — Product Requirements
 
 **Status:** SPEC — Phase 1 demonstration shipped (`f67b4fc` for #867 Diagnostics);
-3 of 17 issues closed (`#863` `#864` `#867`); the remaining 14 require a
+**4 of 17 issues closed** (`#863` `#864` `#867` `#871`); the remaining 13 require a
 per-page refactor wave drained at ~1-2 pages per cron tick. This PRD
 formalises the pattern so subsequent agents and human reviewers share the same
 contract.
@@ -340,9 +340,12 @@ GS engineering owns AC-1..AC-5; QA owns AC-6 (visual observation).
 
 ### 10.1 Cluster status
 
+**Cluster progress: 4 of 17 closed (`#863` `#864` `#867` `#871`); 13 remaining.**
+
 - **Foundation (global CSS, form fields)** ✅ shipped `afdc61b` (closed `#863` + `#864`).
 - **Pattern demonstration (Diagnostics tier badges)** ✅ shipped `f67b4fc` (closed `#867`).
-- **Per-page refactor wave (14 pages)** 🔴 outstanding per §10.2 below.
+- **Inbox per-page refactor** ✅ shipped `68b09db` tick #9 (closed `#871`); 6 inline-style objects → 11 CSS classes; 9 dark-mode token pairs verified WCAG-AA 5.4-7.4:1.
+- **Per-page refactor wave (13 pages remaining)** 🔴 outstanding per §10.2 below.
 - **Sub-cluster (toggle UX + persistence)** 🔴 outstanding per §10.2 below.
 - **Discovery doc** 🔴 NOT-STARTED — DC-1 + DC-3 dependency.
 
@@ -354,7 +357,7 @@ GS engineering owns AC-1..AC-5; QA owns AC-6 (visual observation).
 | `#864` | (global form fields) | n/a — was `theme/travel.css` token extension | ✅ SHIPPED `afdc61b` | done |
 | `#867` | `pages/travel/Diagnostics.jsx` | `TIER_COLORS` (entry / primary / premium) | ✅ SHIPPED `f67b4fc` | done |
 | `#866` | `pages/travel/Dashboard.jsx` + Recharts components | KPI tile bg literals + Recharts `stroke` / `fill` hardcoded; ChartTheme decision per FR-8 | 🔴 NOT-STARTED | 60 min (chart-heavy) |
-| `#871` | `pages/Inbox.jsx` | Message status pills + urgency badges + sender / snippet color literals + quoted-reply `#fff8e1` | 🔴 NOT-STARTED | 45 min |
+| `#871` | `pages/Inbox.jsx` | Message status pills + urgency badges + sender / snippet color literals + quoted-reply `#fff8e1` | ✅ SHIPPED `68b09db` — 6 inline-style objects refactored to 11 CSS classes; 9 dark-mode token pairs; WCAG-AA 5.4-7.4:1 | done |
 | `#872` | `pages/Sequences.jsx` (ReactFlow canvas) | Node card `background: #ffffff` + edge `stroke: '#1f1b14'` hardcoded in node defs | 🔴 NOT-STARTED | 45 min |
 | `#873` | `pages/Reports.jsx` + Recharts | KPI tile + chart canvas `#ffffff` + grid color literals; same FR-8 dependency as `#866` | 🔴 NOT-STARTED | 60 min |
 | `#877` | `pages/Pipeline.jsx` | Column header bg `#faf6ee` + card bg `#ffffff` + border `#e8e1d5` (KanbanColumn / DealCard inline) | 🔴 NOT-STARTED | 45 min |
@@ -369,10 +372,10 @@ GS engineering owns AC-1..AC-5; QA owns AC-6 (visual observation).
 | `#876` | App.jsx + `lib/userPreferences` + sub-brand switcher | `themeBySubBrand` JSON field + sub-brand-aware hydration | 🔴 NOT-STARTED | 60 min (sub-cluster) |
 | `#862` | App.jsx + Settings.jsx + maybe top bar | Visible toggle UI in Profile / top bar; depends on #870 / #876 for persistence | 🔴 NOT-STARTED | 60 min (sub-cluster) |
 
-**Closed:** 3 / 17.
-**Open per-page (FR-1 pattern):** 11.
+**Closed:** 4 / 17.
+**Open per-page (FR-1 pattern):** 10.
 **Open sub-cluster (FR-7 + persistence):** 3.
-**Total open:** 14 / 17.
+**Total open:** 13 / 17.
 
 ### 10.3 Effort summary
 

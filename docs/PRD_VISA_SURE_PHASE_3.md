@@ -207,9 +207,24 @@ don't have a "rejection" outcome class.
 
 | FR-ID | Requirement | Implementation |
 |---|---|---|
-| FR-3.1 | **Complex case flagging** — applicant marked complex when (a) applicationType ∈ {work, student, business, hajj} OR (b) priorRejectionCount ≥ 1 OR (c) family/dependents in the trip OR (d) destination is a high-rejection-rate embassy | New cron `backend/cron/visaRiskFlagEngine.js` — runs every 15 min, scans `VisaApplication` rows in status ∈ {intake, docs-pending}, computes `complexCase` + `advisorRiskFlag` |
+| FR-3.1 | **Complex case flagging** — applicant marked complex when (a) applicationType ∈ {work, student, business, hajj} OR (b) priorRejectionCount ≥ 1 OR (c) family/dependents on the application[^family-gap] OR (d) destination is a high-rejection-rate embassy | New cron `backend/cron/visaRiskFlagEngine.js` — runs every 15 min, scans `VisaApplication` rows in status ∈ {intake, docs-pending}, computes `complexCase` + `advisorRiskFlag` |
 | FR-3.2 | **Rejection-history tagging** — `priorRejectionCount` populated from diagnostic answer to Q "have you been refused a visa before?"; `priorRejectionReasons` (JSON array of `{country, date, reason}`) populated from follow-up Qs | Stamped at diagnostic submit time; mirrored to `VisaApplication.rejectionHistoryJson` when application created |
 | FR-3.3 | **Advisor priority alerts** — within 5 min of a high-risk flag transition, advisor receives in-app notification + WA alert (post-Q9). High-risk = `advisorRiskFlag ∈ {high, priority}` OR readinessLevel = 4 OR rejection history non-empty | Cron reuses the existing `Notification` model + `WhatsAppMessage` stub-dispatch pattern (subBrandConfig helper handles WABA selection — already shipped at commit `621aab7`) |
+
+[^family-gap]: **Schema gap (surfaced by tick #9 Agent 3, 2026-05-23).** The
+    `VisaApplication` model at [prisma/schema.prisma:4498](../backend/prisma/schema.prisma#L4498)
+    has **no column for family / dependents count or list** — it carries a
+    1:1 `contactId` only. Trigger (c) as currently worded cannot be evaluated
+    by the risk-flag engine until one of three things happens: (A) an
+    additive nullable column (e.g. `dependentCount Int?` or
+    `dependentsJson String? @db.Text`) lands on `VisaApplication` via a
+    safe migration when PC-1 lands; (B) the trigger is refined to read
+    `Contact`-level family signals if any exist (`Contact.familySize` or
+    similar — NONE in current schema either, so this option also implies
+    schema work); (C) the trigger is dropped from V1 scope and reintroduced
+    in a later phase once Yasin's diagnostic-bank delivery (OQ-1) clarifies
+    whether the 15-Q bank captures family-size and where it should persist.
+    Tracked as **PC-8** in §5.1 + **OQ-8** in §9.
 
 The cron's run cadence + cluster B3 ownership: the engine itself is **a new
 file** (`backend/cron/visaRiskFlagEngine.js`) **shipped by the sibling
@@ -312,6 +327,7 @@ cluster B3 engineering work starts.
 | **PC-5** | **Visa categories in scope for Phase 1 of Phase 3.** Tourist + business + family + student is clearly in scope; what about transit, work, dependent, medical, journalism, religious-pilgrimage visas? Each has different document checklists + risk profiles. | Yasin | Adding categories post-launch is cheap (just new checklist templates); but agreeing the launch set scopes the seed data. |
 | **PC-6** | **Region focus.** Is Visa Sure (a) US-outbound only, (b) India-outbound to any country, (c) any-region-to-any-region? | Yasin | India-outbound is the safe Phase-3 default (matches RFU's geography). Cross-region multiplies the embassy-rule complexity in PC-3. |
 | **PC-7** | **Embassy-quirk catalogue maintainer.** Once shipped, who keeps the per-country / per-visa-type rule database current? Embassy rules change quarterly. | Yasin + advisor team | If no maintainer is named, the system goes stale within 6 months. Could be an advisor-curated wiki, an admin-UI CRUD surface, or an outsourced data feed. |
+| **PC-8** | **Family / dependents trigger source for FR-3.1(c).** `VisaApplication` has no column for family / dependents (only 1:1 `contactId`); the FR-3.1(c) trigger as worded cannot be evaluated today. Three options: **(A) additive nullable VisaApplication column** — add `dependentCount Int?` (or `dependentsJson String? @db.Text`) via safe migration when PC-1 lands; ~15 min schema work + risk-flag engine reads it; supports per-application accuracy when one Contact has multiple visa applications across years with different family compositions. **(B) Reuse Contact-level family signals** — add `familySize Int?` (or similar) to `Contact`, read from the risk-flag engine; cheaper schema (1 column shared across all sub-brands) but loses per-application granularity. **(C) Drop trigger (c) from V1 scope** — refine FR-3.1 to (a)+(b)+(d) only; reintroduce family/dependents as a later-phase enhancement once OQ-1's diagnostic content delivery clarifies how family-size is captured. | Yasin + GS engineering | Risk-flag engine cannot ship a faithful FR-3.1 until this resolves. Cheapest interim path while waiting: ship (a)+(b)+(d) and leave (c) as a TODO in the cron code — but the PRD-claimed contract is unmet until PC-8 closes. Surfaced by tick #9 Agent 3 (2026-05-23). |
 
 ### 5.2 Cred chase
 
@@ -438,6 +454,7 @@ disambiguations that can be answered inline.
 | OQ-5 | **Document-rejection retry budget.** If an uploaded document is rejected by an advisor (e.g. blurry passport scan), is there a retry limit before the application enters a stuck state? | Advisor team |
 | OQ-6 | **Pricing of the entry-level "Visa Readiness & Correctness Check".** Blueprint §3.1 says "this is a low-friction, high-value diagnostic tool" but doesn't specify whether it's free, ₹X paid-but-credited-toward-primary, or something else. Current PRD proposal: free + credit toward primary. Yasin to confirm. | Yasin |
 | OQ-7 | **Audit trail granularity.** Should `VisaApplication.status` transitions be append-only-logged (a `VisaApplicationStatusHistory` model)? Or just `updatedAt` + last-known-status? The compliance + dispute-resolution use case argues for append-only. | GS engineering + counsel |
+| OQ-8 | **Family / dependents trigger source for FR-3.1(c)** — see PC-8 in §5.1. Three options on the table (additive nullable VisaApplication column / reuse Contact-level family signals / drop trigger (c) from V1). The risk-flag engine cannot honour FR-3.1's full contract until this resolves; until then the cron ships (a)+(b)+(d) only and trigger (c) is a TODO in the engine source. | Yasin + GS engineering |
 
 ---
 
@@ -479,8 +496,8 @@ specs + vitest coverage + gate-wiring.
 
 **Ownership chain:**
 
-- **Yasin** owes the §5.1 product-call answers (PC-1..PC-7) + §9 content
-  loads (OQ-1, OQ-2, OQ-3, OQ-4, OQ-6).
+- **Yasin** owes the §5.1 product-call answers (PC-1..PC-8) + §9 content
+  loads (OQ-1, OQ-2, OQ-3, OQ-4, OQ-6, OQ-8).
 - **Advisor team** owes OQ-5 + the post-launch embassy-quirk catalogue
   maintenance (PC-7).
 - **Counsel** owes OQ-7 (audit trail granularity) + PC-4 (rejection

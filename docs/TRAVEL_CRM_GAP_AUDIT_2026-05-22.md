@@ -9,9 +9,9 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **71** (~91%) — up from 70 (+1: Itinerary draft via LLM router `f02fa5a` — first non-Claude-Opus consumer)
+- **SHIPPED:** **72** (~92%) — up from 71 (+1: `ReligiousPackets.jsx` admin UI `f903f4b` — closes the §4.10 UI side of `1e62ee9`'s backend CRUD)
 - **PARTIAL:** **5** (~6%) — unchanged
-- **GAP-AUTONOMOUS:** **1** (~1%) — down from 2 since Itinerary-draft consumer shipped (only `ReligiousPackets.jsx` admin UI remains in Recommended next 5)
+- **GAP-AUTONOMOUS:** **0** (0%) — down from 1 since `ReligiousPackets.jsx` admin UI shipped (`f903f4b`); recommended-next-5 pool is now exhausted of autonomous-doable PRD-blocking work
 - **GAP-STUB-ABLE:** **5** (~6%) — unchanged
 - **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
 - **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
@@ -27,7 +27,7 @@ After those, what remains is dominated by:
 
 1. ~~**Itinerary draft via LLM router (consumer wiring)** (PRD §4.3 + §9.1). Add `POST /api/travel/itineraries/:id/draft/regen` (ADMIN/MANAGER, requireTravelTenant) that pulls the diagnostic + cost-master rows + season + markup rules for the sub-brand and routes through `llmRouter.routeRequest({ task: "bulk-text", payload })` returning a draft summary block. Persist as `Itinerary.draftSummary` (new nullable column — no bless marker needed) so the next GET serves the cached draft. Stub-mode returns synthetic copy; Q11 keys swap to Gemini Flash. ~3-4 hrs. **Why next:** Itinerary draft is the THIRD LLM-router consumer the PRD §9.1 default-model map names (after talking-points which ships and form-vs-call which ships); proves the `bulk-text` task taxonomy cited in `LlmCallLog.task`; first non-Claude-Opus consumer of the router (locks in the per-task default model dispatch).~~ — ✅ **commit `f02fa5a`** (additive nullable `Itinerary.draftSummary` column + `POST /draft/regen` + public projection surfaces it + 8 new gate-spec cases; first non-Claude-Opus router consumer landed)
 
-2. **`ReligiousPackets.jsx` admin UI** (PRD §4.10 + §7). New page under `frontend/src/pages/travel/ReligiousPackets.jsx` consuming the 5-endpoint admin CRUD from `routes/travel_religious_packets.js` (commit `1e62ee9`). Renders a sub-brand filter, packet list (title / dayOffset / channels / isActive), create/edit drawer with the validation contract (subBrand in VALID_SUB_BRANDS, dayOffset 0..365, title 1..200, contentHtml ≤20kB, channels CSV from wa/email/sms). Sidebar link from the existing travel nav. ~½ day, pure frontend, zero cred deps. **Why next:** the backend admin CRUD shipped without an operator surface; Yasin's Q1 content lands via admin PATCH per the commit body, but there's no UI to do that today. Closes the §4.10 row's UI side.
+2. ~~**`ReligiousPackets.jsx` admin UI** (PRD §4.10 + §7). New page under `frontend/src/pages/travel/ReligiousPackets.jsx` consuming the 5-endpoint admin CRUD from `routes/travel_religious_packets.js` (commit `1e62ee9`). Renders a sub-brand filter, packet list (title / dayOffset / channels / isActive), create/edit drawer with the validation contract (subBrand in VALID_SUB_BRANDS, dayOffset 0..365, title 1..200, contentHtml ≤20kB, channels CSV from wa/email/sms). Sidebar link from the existing travel nav.~~ — ✅ **commit `f903f4b`** (new page + lazy import + admin sidebar link + 8 vitest cases pinning header/empty-state/row-rendering/filter-URL/POST-shape/DELETE/PATCH/blank-title-rejection contracts)
 
 3. **`ItineraryDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/ItineraryDetail.jsx`; fetches itinerary + items + version chain + (after pick #1 lands) `draftSummary`; renders items grid + version-history drawer + accept/reject actions + draft-summary block with "Regenerate" button. Mount at `/travel/itineraries/:id`. ~½ day, pure frontend. **Why third:** pairs cleanly with pick #1 (draftSummary becomes visible the moment this page exists); §7 lists it but the row-click from `Itineraries.jsx` is dead today.
 
@@ -295,7 +295,7 @@ After those, what remains is dominated by:
 | `TravelReports.jsx` | SHIPPED | `pages/travel/Reports.jsx` |
 | `TripBooking.jsx` (50%-advance bonus) | SHIPPED | `pages/public/TripBooking.jsx` |
 | `LlmSpendDashboard.jsx` (admin observability surface for `/api/admin/llm-spend`) | NOT SHIPPED — GAP-AUTONOMOUS | Single-page admin chart consuming the daily summary; pairs with R7 observability |
-| `ReligiousPackets.jsx` (admin CRUD UI for `/api/travel/religious-packets`) | NOT SHIPPED — GAP-AUTONOMOUS | **Top pick #2 below** — 5-endpoint backend ships; no operator surface |
+| `ReligiousPackets.jsx` (admin CRUD UI for `/api/travel/religious-packets`) | SHIPPED | commit `f903f4b` — page mounts at `/travel/religious-packets`, admin-only sidebar link, sub-brand + active filters, create/edit/delete with validation parity, 8 vitest cases |
 
 ### §7.1 Public micro-sites
 

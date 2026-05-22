@@ -966,6 +966,16 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initTravelJourneyRemindersCron } = require('./cron/travelJourneyReminders');
   initTravelJourneyRemindersCron();
 
+  // Initialize Visa Sure risk-flagging engine (every 6 hours, SHELL).
+  // PRD Phase 3 §3 FR-3 (rows V5-V7, cluster B3) — scans VisaApplication
+  // rows in pending/intake/docs-pending/docs-collected status; writes
+  // high-priority Notification rows for complex-case / rejection-history /
+  // readinessLevel-4 / existing-flag signals. Real rule-set pending
+  // PRD §5 PC-1..PC-5 product calls.
+  const { initVisaRiskFlagCron } = require('./cron/visaRiskFlagEngine');
+  initVisaRiskFlagCron();
+  console.log("✓ Cron engine: visaRiskFlagEngine (every 6 hours)");
+
   // Initialize Travel CRM web check-in scheduler (every 15 min).
   // PRD §4.6 + §6.3 row 1 — flips WebCheckin status pending → reminded
   // when windowOpenAt arrives, then reminded → fallback-agent if stalled

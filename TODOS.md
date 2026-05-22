@@ -68,6 +68,8 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 
 **Tick #2 incident:** dark-mode agent's first commit `d0a4e36` accidentally over-swept sibling Payments files because `git commit -F <file>` commits everything STAGED in the index (not just newly-added files). Recovered via soft-reset + clean recommit `afdc61b` (force-pushed); Payments agent recommitted standalone as `5d9a95e`. **3rd instance of this hazard** — promoted to cron-learnings ([CLAUDE.md](CLAUDE.md) 🤖 section) + standing rule for future agent dispatches to use `git commit --only <files>` (explicit path arg overrides the index).
 
+**Tick #3 — single-agent gate triage (deploy was RED on 3 consecutive code commits).** Root cause: spec rot from `8269e20` Tasks drawer refactor — `wave7-empty-state-warnings.test.jsx` `#608 Tasks` tests directly queried for form inputs that now live inside an unmounted drawer. Fix shipped at `831ac10` mirroring `50ac575`'s `openDrawer()` helper pattern: 1 file touched, all 5 tests in file pass (was 3 pass / 2 fail), ESLint clean, single commit via `git commit --only` (standing rule held). Deploy queued on `831ac10`.
+
 Cron will continue at :07/:22/:37/:52 until empty-tick threshold trips or user CronDeletes (`00d468d5`).
 
 ---

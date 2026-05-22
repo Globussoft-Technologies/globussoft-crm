@@ -63,6 +63,7 @@ const Clients = lazy(() => import("./pages/Clients"));
 const Expenses = lazy(() => import("./pages/Expenses"));
 const Contracts = lazy(() => import("./pages/Contracts"));
 const Estimates = lazy(() => import("./pages/Estimates"));
+const QuotesComingSoon = lazy(() => import("./pages/QuotesComingSoon"));
 const Projects = lazy(() => import("./pages/Projects"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Pricing = lazy(() => import("./pages/Pricing"));
@@ -736,6 +737,13 @@ export default function App() {
                     <Route path="contracts" element={<Contracts />} />
                     <Route path="estimates" element={<Estimates />} />
                     <Route path="invoices" element={<Invoices />} />
+                    {/* #886 / BUG-T24: /quotes used to 404 because no Route
+                        was registered. Full Quotes module is multi-day work
+                        (cluster B2 in docs/MANUAL_CODING_BACKLOG.md). Until
+                        then, render a coming-soon stub that points users at
+                        Estimates (the existing Draft→Accepted→Converted
+                        analog) and the Pipeline. */}
+                    <Route path="quotes" element={<QuotesComingSoon />} />
                     <Route path="tickets" element={<Tickets />} />
                     <Route path="tasks" element={<Tasks />} />
                     <Route path="lead-scoring" element={<LeadScoring />} />

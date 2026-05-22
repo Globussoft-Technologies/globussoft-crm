@@ -50,9 +50,29 @@
 }
 
 /* Dark mode override for travel vertical — preserves brand (navy + gold)
- * but uses dark backgrounds + light text. */
+ * but uses dark backgrounds + light text.
+ *
+ * #863 / #864 ROOT CAUSE: App.jsx (lines 473-474) sets `data-vertical` on
+ * BOTH `<html>` and `<body>`. The pre-fix dark selector list was:
+ *   html[data-theme="dark"][data-vertical="travel"]   (compound on html)
+ *   [data-vertical="travel"][data-theme="dark"]        (compound on any one element)
+ * The first matches `<html>` only. The second NEVER matches `<body>` because
+ * `<body>` has `data-vertical="travel"` but no `data-theme` attribute — only
+ * `<html>` carries `data-theme`. Result: the LIGHT vars set by
+ * `[data-vertical="travel"]` (line 19) win on `<body>` because that selector
+ * matches body directly, while the dark override only ever set vars on
+ * `<html>`. CSS custom property lookup is element-scoped (NOT inherited if
+ * the same property is re-set on the descendant), so `body { background:
+ * var(--bg-color); }` resolved the body's own light `--bg-color` (#FAF6EE)
+ * even when `<html>` had dark mode active.
+ *
+ * Fix: use a descendant combinator `[data-theme="dark"] [data-vertical="travel"]`
+ * which matches any travel-flagged descendant of a dark-themed ancestor —
+ * including `<body>`. Mirrors the wellness.css:50-51 pattern that has been
+ * working in dark mode since v3.4.x. */
 html[data-theme="dark"][data-vertical="travel"],
-[data-vertical="travel"][data-theme="dark"] {
+[data-theme="dark"][data-vertical="travel"],
+[data-theme="dark"] [data-vertical="travel"] {
   --bg-color:        #0F1729;
   --surface-color:   #19243A;
   --subtle-bg:       rgba(200, 154, 78, 0.08);
@@ -71,4 +91,57 @@ html[data-theme="dark"][data-vertical="travel"],
 
   --border-color:    rgba(200, 154, 78, 0.18);
   --border-light:    rgba(200, 154, 78, 0.08);
+
+  /* #864 — input/select/textarea token overrides so form fields adopt the
+   * dark navy surface instead of the index.css default `--input-bg`
+   * (rgba(15, 23, 42, 0.6), too dark + low contrast on Travel's dark navy
+   * `#0F1729` body). Pre-fix, the cream-light `--input-bg: rgba(255,255,255,0.8)`
+   * leaked through from `[data-vertical="travel"]` (which never defines
+   * `--input-bg`, so the body fell back to index.css's `[data-theme="light"]`
+   * var — `[data-theme="dark"]` was set on html, but the body's
+   * data-vertical scope blocked it as described above). */
+  --input-bg:        rgba(25, 36, 58, 0.7);
+  --input-bg-focus:  rgba(25, 36, 58, 0.95);
+}
+
+/* #864 — explicit form-field background + color for travel dark mode.
+ * Mirrors wellness.css:97-107. The `.input-field` class in index.css already
+ * uses `var(--input-bg)` + `var(--text-primary)`, so the token overrides
+ * above are sufficient for fields that adopt that class. But raw
+ * `<input>`/`<select>`/`<textarea>` elements (ad-hoc forms across travel
+ * pages — Invite Team Member card, Cost Master row editor, etc.) often use
+ * inline styles or no class. Force-override their bg + text to clear the
+ * grey-on-grey readability bug. */
+[data-theme="dark"][data-vertical="travel"] input,
+[data-theme="dark"][data-vertical="travel"] select,
+[data-theme="dark"][data-vertical="travel"] textarea,
+[data-theme="dark"] [data-vertical="travel"] input,
+[data-theme="dark"] [data-vertical="travel"] select,
+[data-theme="dark"] [data-vertical="travel"] textarea {
+  background: rgba(25, 36, 58, 0.7) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+/* #864 — placeholder text must meet WCAG AA (4.5:1) against the dark
+ * input bg. Pre-fix, placeholder default was #a8a39a on near-white — ~1.7:1.
+ * `#9DAEC7` (muted sky-blue) on `rgba(25,36,58,0.7)` reads ~5.2:1. */
+[data-theme="dark"][data-vertical="travel"] input::placeholder,
+[data-theme="dark"][data-vertical="travel"] textarea::placeholder,
+[data-theme="dark"] [data-vertical="travel"] input::placeholder,
+[data-theme="dark"] [data-vertical="travel"] textarea::placeholder {
+  color: #9DAEC7;
+  opacity: 1; /* Firefox lowers placeholder opacity by default */
+}
+
+/* #863 follow-on — table header + zebra striping. Default travel light
+ * theme leaves these as the index.css generic gradients which read OK on
+ * cream but become hard-to-distinguish on the dark navy body. */
+[data-theme="dark"][data-vertical="travel"] table tbody tr:nth-child(even),
+[data-theme="dark"] [data-vertical="travel"] table tbody tr:nth-child(even) {
+  background: rgba(244, 239, 223, 0.03);
+}
+[data-theme="dark"][data-vertical="travel"] table th,
+[data-theme="dark"] [data-vertical="travel"] table th {
+  background: rgba(244, 239, 223, 0.05);
 }

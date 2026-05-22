@@ -55,13 +55,18 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 
 ## 🤖 QA-CRON tick — 2026-05-23 (15-min cadence, 3 parallel agents)
 
-**Cron `00d468d5` fired its first tick at ~05:23 UTC.** 3 parallel agents shipped 3 commits — clean 3/3 ship, no rebase conflicts, all 3 GitHub issues auto-closed via `Closes #N` trailers.
+**Cron `00d468d5` running.** 2 ticks shipped 6 unique issue closures via 6 commits (3 per tick, clean 3/3 each).
 
 | Tick | SHA | Issue | What |
 |---|---|---|---|
 | #1 | `85a843f` | #889 | `+ Create Itinerary` CTA + drawer on `/travel/itineraries` |
-| #1 | `50ac575` | #892 | `/leads` inline form → header CTA + drawer (refactor; 12 existing tests updated + 1 new CTA-visibility test) |
+| #1 | `50ac575` | #892 | `/leads` inline form → header CTA + drawer (refactor; 13 vitest cases) |
 | #1 | `8269e20` | #893 | `/tasks` Enqueue Activity inline form → header CTA + drawer |
+| #2 | `d6d3857` | #894 | `/invoices` inline form → header CTA + drawer (refactor; 10 vitest cases) |
+| #2 | `afdc61b` | #863 + #864 | Dark-mode body bg + form-field contrast fix in `frontend/src/theme/travel.css` (root-cause: selector specificity bug — `<body>` had `data-vertical` but `data-theme` lives on `<html>`; fixed via descendant combinator + input/select/textarea overrides + WCAG-AA placeholder rule) |
+| #2 | `5d9a95e` | #895 | `+ Record Payment` CTA + drawer on `/payments` (canonical endpoint: `POST /api/v1/invoices/:id/payments`; 11 vitest cases) |
+
+**Tick #2 incident:** dark-mode agent's first commit `d0a4e36` accidentally over-swept sibling Payments files because `git commit -F <file>` commits everything STAGED in the index (not just newly-added files). Recovered via soft-reset + clean recommit `afdc61b` (force-pushed); Payments agent recommitted standalone as `5d9a95e`. **3rd instance of this hazard** — promoted to cron-learnings ([CLAUDE.md](CLAUDE.md) 🤖 section) + standing rule for future agent dispatches to use `git commit --only <files>` (explicit path arg overrides the index).
 
 Cron will continue at :07/:22/:37/:52 until empty-tick threshold trips or user CronDeletes (`00d468d5`).
 

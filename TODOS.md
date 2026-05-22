@@ -265,6 +265,25 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **Visa Sure now SHIPPED both read AND write surfaces** (GET list + GET :id + POST CREATE)
 - **Dark-mode cluster: 7 of 17 closed; 10 remaining**
 
+**Tick #13 (cron) — 3/3 SHIPPED, Visa write surface end-to-end + #879 partial:**
+
+| SHA | Type | What |
+|---|---|---|
+| `57aa856` | Visa write graduation | **Applications.jsx Create drawer** consumes POST endpoint. 3 form fields (contact picker visasure-scoped client-side / application-type enum / destination country) + 4 backend error codes handled (including bonus INVALID_DESTINATION). Drawer mirrors Leads.jsx c031ba0 canonical pattern. **Visa Sure CREATE flow now end-to-end frontend↔backend.** |
+| `8169ce8` | Dark-mode #879 partial | **Itineraries.jsx** — 4 inline-style objects → 4 CSS class families with 12 variants (status/tier pills + drawer); 11 dark-mode token pairs. Load-bearing fix: tier `primary` variant was 1:1 contrast (invisible) → 7.7:1. **Refs #879 partial** (Itineraries slice; Cost Master + Pricing Rules pages remain) |
+| `4cacc19` | PRD #878 flip | PRD §10 — #878 row flipped to ✅ SHIPPED `58986ef` + header status block refreshed (was stale "4 of 17" → now "7 of 17"); §10.1 progress + §10.2 footer all aligned |
+
+**Schema-vs-PRD finding (tick #13):** Agent 1 found `/api/contacts` GET doesn't support `?subBrand=` filter (only status/assignedToId/unassigned/includeDeleted). Agent fell back to client-side filter + documented as follow-up. **10th schema-or-spec gap** this session — pattern is structural.
+
+**Cumulative session totals (13 ticks):**
+- **40 commits** (14 features/scaffolds + 13 PRDs + 1 backlog + 1 matrix refresh + 3 backend endpoints + 5 dark-mode refactors + 1 rule extension + 3 visa frontend wires + 2 PRD audit flips)
+- **5 GitHub issues closed + 1 partial** (#867 #871 #872 #873-partial #878; #879 partial in flight)
+- 5 phantoms + **10 schema-or-spec gaps** caught
+- Zero rebase conflicts, zero over-commits across all 40 commits
+- ~6,200 lines of PRD documentation across 13 PRDs
+- **Visa Sure operator surface SHIPPED end-to-end** (read + write + analytics; AdvisorDashboard detail)
+- **Dark-mode cluster: 7 of 17 closed + #879 partial; 10 issues remaining (of which #879 has 2 pages still)**
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

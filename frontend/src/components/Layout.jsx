@@ -51,7 +51,13 @@ function TenantChip({ tenant }) {
         // produce light-blue-on-dark again.
         background: 'var(--accent-bg, var(--subtle-bg-3, rgba(255,255,255,0.08)))',
         border: '1px solid var(--accent-color)',
-        color: 'var(--text-primary)', borderRadius: 8,
+        // #885 / #882 — use --accent-text (white in wellness + travel themes,
+        // both of which set --accent-bg to a dark navy/teal surface) with a
+        // fallback to --text-primary for the generic theme where --accent-bg
+        // is a translucent light tint and dark text reads fine. Pre-fix the
+        // chip was --text-primary always, giving ~1.2:1 contrast on Travel
+        // Stall (dark-brown text on navy bg).
+        color: 'var(--accent-text, var(--text-primary))', borderRadius: 8,
         padding: '6px 12px', fontSize: '0.85rem',
         fontWeight: 500,
       }}

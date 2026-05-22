@@ -688,6 +688,12 @@ export default function App() {
                       }
                     />
                     <Route path="reports" element={<Reports />} />
+                    {/* #822: /reports/pnl deep-link alias. The P&L + Attribution
+                        report lives at /wellness/reports as the default tab
+                        (Reports.jsx:37 — useState('pnl')). External bookmarks /
+                        CS-team shared URLs that omit the /wellness prefix used
+                        to 404. Mirrors the #183/#406 redirect-alias pattern. */}
+                    <Route path="reports/pnl" element={<Navigate to="/wellness/reports" replace />} />
                     <Route path="agent-reports" element={<AgentReports />} />
                     <Route path="workflows" element={<Workflows />} />
                     <Route path="developer" element={<Developer />} />

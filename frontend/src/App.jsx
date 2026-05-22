@@ -136,6 +136,7 @@ const TravelReports = lazy(() => import("./pages/travel/Reports"));
 const TravelRfuCustomerProfile = lazy(() => import("./pages/travel/RfuCustomerProfile"));
 const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
+const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
 const TravelLeadDetail = lazy(() => import("./pages/travel/LeadDetail"));
 // Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells only.
@@ -950,6 +951,7 @@ export default function App() {
               <Route path="travel/reports" element={<TravelOnly><TravelReports /></TravelOnly>} />
               <Route path="travel/suppliers" element={<TravelOnly><TravelSuppliers /></TravelOnly>} />
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
+              <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
               <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />
               <Route path="travel/leads/:contactId" element={<TravelOnly><TravelLeadDetail /></TravelOnly>} />
               {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells.

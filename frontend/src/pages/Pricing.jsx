@@ -125,15 +125,11 @@ export default function Pricing() {
   // Fetch subscription plans from API if authenticated
   useEffect(() => {
     if (token) {
-      console.log('[Pricing] Fetching plans with token:', token.slice(0, 20) + '...');
       fetchApi('/api/subscriptions/plans')
         .then(plans => {
-          console.log('[Pricing] Plans loaded:', plans);
           setApiPlans(plans);
         })
         .catch(err => console.error('[Pricing] Failed to fetch plans:', err.message || err));
-    } else {
-      console.log('[Pricing] No token, apiPlans not loading');
     }
   }, [token]);
 
@@ -155,13 +151,10 @@ export default function Pricing() {
     setLoadingPayment(planName);
     try {
       // Create order
-      console.log('[Pricing] Creating order for planId:', planId);
       const orderData = await fetchApi('/api/subscriptions/create-order', {
         method: 'POST',
         body: JSON.stringify({ planId: parseInt(planId) })
       });
-
-      console.log('[Pricing] Order created:', orderData);
 
       const razorpayKeyId = import.meta.env.VITE_RAZORPAY_KEY_ID;
       if (!razorpayKeyId) {
@@ -183,7 +176,6 @@ export default function Pricing() {
         handler: async (response) => {
           // Verify payment
           try {
-            console.log('[Pricing] Payment handler response:', response);
             const verifyData = await fetchApi('/api/subscriptions/verify-payment', {
               method: 'POST',
               body: JSON.stringify({
@@ -194,7 +186,6 @@ export default function Pricing() {
               })
             });
 
-            console.log('[Pricing] Verification response:', verifyData);
             if (verifyData?.success) {
               // Pass subscription details to success page
               navigate('/payment-success', {
@@ -222,7 +213,6 @@ export default function Pricing() {
         }
       };
 
-      console.log('[Pricing] Opening Razorpay with options:', options);
       const rzp = new window.Razorpay(options);
       rzp.open();
     } catch (err) {
@@ -347,7 +337,6 @@ export default function Pricing() {
                   onClick={() => {
                     const dbPlan = apiPlans[index];
                     if (dbPlan) {
-                      console.log('[Pricing] Paying for plan:', dbPlan);
                       handlePayment(dbPlan.id, plan.name);
                     }
                   }}

@@ -16,9 +16,9 @@
  *     - rejection-history JSON parse: malformed → degrades gracefully (no crash)
  *
  *   evaluateRiskShell (pure-function tests):
- *     - applicationType=work → flag
- *     - readinessLevel=4 → flag
- *     - advisorRiskFlag=priority → flag
+ *     - applicationType=work → flag (R1)
+ *     - readinessLevel=4 → flag (R4)
+ *     - advisorRiskFlag=priority → flag (R5)
  *     - applicationType=tourist + everything else null → no flag
  *     - R6 docs-incomplete: required + status≠verified + status∈{docs-pending|collected} → flag
  *     - R6 docs-incomplete: all required verified → no flag from this signal
@@ -26,6 +26,16 @@
  *     - R7 stale-application: updatedAt > 14d ago + status=docs-collected → flag
  *     - R7 stale-application: recent updatedAt → no flag from this signal
  *     - R7 stale-application: old updatedAt BUT status=intake → no flag (status gate)
+ *     - R8 stale-intake: status=intake + createdAt >7d → flag
+ *     - R8 stale-intake: status=intake + recent createdAt → no flag
+ *     - R8 stale-intake: old createdAt BUT status=docs-pending → no flag (status gate)
+ *     - R9 rejected-reopen: outcome=rejected + updatedAt > decidedAt+grace + within 30d → flag
+ *     - R9 rejected-reopen: outcome=rejected + updatedAt ≤ decidedAt+grace → no flag
+ *     - R9 rejected-reopen: outcome=rejected + updatedAt > 30d ago → no flag (window expired)
+ *     - R9 rejected-reopen: outcome≠rejected → no flag
+ *     - R10 new-destination: context.knownDestinations omitted → no flag (back-compat)
+ *     - R10 new-destination: destinationCountry NOT in knownDestinations → flag
+ *     - R10 new-destination: destinationCountry IN knownDestinations → no flag
  */
 
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
@@ -344,9 +354,11 @@ describe('cron/visaRiskFlagEngine — evaluateRiskShell pure-function', () => {
     expect(reasons).toEqual([]);
   });
 
-  test('R7 stale-application: old updatedAt BUT status=intake → no flag (status gate)', () => {
+  test('R7 stale-application: old updatedAt BUT status=intake → no flag from R7 (status gate)', () => {
     // Stale-dwell only fires in docs-pending / docs-collected; intake
-    // pre-dates the checklist gate so dwell-time isn't meaningful yet.
+    // pre-dates the checklist gate so R7's threshold isn't meaningful.
+    // Note: status=intake + old createdAt would trigger R8; this test
+    // omits createdAt so only R7 is under test.
     const NOW = new Date('2026-05-23T00:00:00Z').getTime();
     const OLD = new Date('2026-04-01T00:00:00Z'); // 52d before NOW
     const { flag, reasons } = evaluateRiskShell(
@@ -358,8 +370,226 @@ describe('cron/visaRiskFlagEngine — evaluateRiskShell pure-function', () => {
         rejectionHistoryJson: null,
         advisorRiskFlag: null,
         updatedAt: OLD,
+        // createdAt deliberately omitted so R8 doesn't fire either
       },
       NOW,
+    );
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  // ── R8 stale-intake ────────────────────────────────────────────────
+
+  test('R8 stale-intake: status=intake + createdAt >7d ago → flag', () => {
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const OLD_CREATE = new Date('2026-05-10T00:00:00Z'); // 13d before NOW
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'intake',
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        createdAt: OLD_CREATE,
+      },
+      NOW,
+    );
+    expect(flag).toBe(true);
+    expect(reasons).toContain('stale-intake:7d');
+  });
+
+  test('R8 stale-intake: status=intake + recent createdAt (<7d) → no flag', () => {
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const RECENT_CREATE = new Date('2026-05-20T00:00:00Z'); // 3d before NOW
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'intake',
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        createdAt: RECENT_CREATE,
+      },
+      NOW,
+    );
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  test('R8 stale-intake: old createdAt BUT status=docs-pending → no flag (status gate)', () => {
+    // R8 fires only when status=intake. A docs-pending app with an old
+    // createdAt is the territory of R7 (driven by updatedAt), not R8.
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const OLD_CREATE = new Date('2026-05-01T00:00:00Z'); // 22d before NOW
+    const RECENT_UPDATE = new Date('2026-05-22T00:00:00Z'); // 1d before NOW
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'docs-pending',
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        createdAt: OLD_CREATE,
+        updatedAt: RECENT_UPDATE, // not stale by R7 either
+      },
+      NOW,
+    );
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  // ── R9 rejected-reopen ─────────────────────────────────────────────
+
+  test('R9 rejected-reopen: outcome=rejected + updatedAt > decidedAt+grace + within 30d → flag', () => {
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const DECIDED = new Date('2026-05-01T00:00:00Z'); // 22d before NOW
+    const TOUCHED = new Date('2026-05-15T00:00:00Z'); // 8d before NOW, 14d after decided
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'docs-pending', // re-opened — back in flight
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        outcome: 'rejected',
+        decidedAt: DECIDED,
+        updatedAt: TOUCHED,
+      },
+      NOW,
+    );
+    expect(flag).toBe(true);
+    expect(reasons).toContain('rejected-reopen:30d');
+  });
+
+  test('R9 rejected-reopen: outcome=rejected + updatedAt = decidedAt (within grace) → no flag', () => {
+    // The natural status-write that records the rejection sets
+    // updatedAt = decidedAt (same transaction). Within the 1-minute
+    // grace, that's not evidence of an active re-open.
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const DECIDED = new Date('2026-05-15T00:00:00Z');
+    const TOUCHED = new Date('2026-05-15T00:00:30Z'); // 30s after — within grace
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'docs-pending',
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        outcome: 'rejected',
+        decidedAt: DECIDED,
+        updatedAt: TOUCHED,
+      },
+      NOW,
+    );
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  test('R9 rejected-reopen: outcome=rejected + updatedAt >30d ago → no flag (window expired)', () => {
+    // Old re-open touch — advisor has moved on, no longer active recovery.
+    // Note: status='pending' deliberately to keep R7 quiet (R7 fires on
+    // docs-pending/docs-collected). This test isolates R9's window gate.
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const DECIDED = new Date('2026-03-01T00:00:00Z');
+    const TOUCHED = new Date('2026-03-15T00:00:00Z'); // 69d before NOW
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'pending', // not in STALE_STATUSES; R7 won't fire
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        outcome: 'rejected',
+        decidedAt: DECIDED,
+        updatedAt: TOUCHED,
+      },
+      NOW,
+    );
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  test('R9 rejected-reopen: outcome≠rejected → no flag (outcome gate)', () => {
+    // An approved application with recent touch is normal post-decide
+    // activity (e.g. uploading post-approval docs), not a re-open.
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const DECIDED = new Date('2026-05-01T00:00:00Z');
+    const TOUCHED = new Date('2026-05-15T00:00:00Z');
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'docs-pending',
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        outcome: 'approved',
+        decidedAt: DECIDED,
+        updatedAt: TOUCHED,
+      },
+      NOW,
+    );
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  // ── R10 new-destination ────────────────────────────────────────────
+
+  test('R10 new-destination: context.knownDestinations omitted → no flag (back-compat)', () => {
+    // Pure-function callers (e.g. existing unit tests) that don't set
+    // up context must not see R10 fire — keeps the test suite stable.
+    const { flag, reasons } = evaluateRiskShell({
+      applicationType: 'tourist',
+      destinationCountry: 'PT', // not in any set
+      status: 'intake',
+      readinessLevel: 1,
+      complexCase: false,
+      rejectionHistoryJson: null,
+      advisorRiskFlag: null,
+    });
+    expect(flag).toBe(false);
+    expect(reasons).toEqual([]);
+  });
+
+  test('R10 new-destination: destinationCountry NOT in knownDestinations → flag', () => {
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        destinationCountry: 'PT', // never filed for before
+        status: 'intake',
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+      },
+      NOW,
+      { knownDestinations: new Set(['US', 'UK', 'AE']) },
+    );
+    expect(flag).toBe(true);
+    expect(reasons).toContain('new-destination:PT');
+  });
+
+  test('R10 new-destination: destinationCountry IN knownDestinations → no flag', () => {
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        destinationCountry: 'US', // already in the set
+        status: 'intake',
+        readinessLevel: 1,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+      },
+      NOW,
+      { knownDestinations: new Set(['US', 'UK', 'AE']) },
     );
     expect(flag).toBe(false);
     expect(reasons).toEqual([]);

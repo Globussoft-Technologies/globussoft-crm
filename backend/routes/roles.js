@@ -10,8 +10,30 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 const { requirePermission, clearUserCache, clearTenantCache } = require("../middleware/requirePermission");
-const { isValidPermission, getCatalog } = require("../lib/permissionCatalog");
+const {
+  isValidPermission,
+  getCatalog,
+  getGroupedCatalog,
+} = require("../lib/permissionCatalog");
 const { writeAudit } = require("../lib/audit");
+const { validateLandingPath, normalizeLandingPath } = require("../lib/landingPath");
+const { isValidWidgetKey } = require("../lib/widgetCatalog");
+const {
+  getAccessiblePages,
+  canAccessPath,
+} = require("../lib/pageCatalog");
+
+// Build the Set<"module.action"> a role currently holds. Re-used by the
+// accessible-pages endpoint + the landingPath validator + the auto-clear
+// hook after a permissions bulk-update. Returns an empty Set if the role
+// has no permissions; the caller is responsible for OWNER short-circuits.
+async function permissionSetForRole(roleId) {
+  const rows = await prisma.rolePermission.findMany({
+    where: { roleId },
+    select: { module: true, action: true },
+  });
+  return new Set(rows.map((r) => `${r.module}.${r.action}`));
+}
 
 // GET /api/roles — list all roles (tenant-scoped; OWNER sees all)
 router.get(
@@ -49,6 +71,10 @@ router.get(
 
 // GET /api/roles/catalog — the permission catalog (module → [actions]).
 // Source of truth for the role-editor matrix; prevents UI/server drift.
+// `domains` groups the modules by domain (CRM Core / Communications /
+// Wellness Inventory / etc.) so the Permissions modal can render section
+// headers instead of a flat grid — keep an existing client compatible by
+// also returning the plain `modules` array.
 router.get(
   "/catalog",
   verifyToken,
@@ -59,7 +85,8 @@ router.get(
       module,
       actions,
     }));
-    res.json({ catalog, modules });
+    const domains = getGroupedCatalog();
+    res.json({ catalog, modules, domains });
   }
 );
 
@@ -107,7 +134,7 @@ router.post(
   requirePermission("roles", "manage"),
   async (req, res) => {
     try {
-      const { name, description, key, userType } = req.body;
+      const { name, description, key, userType, landingPath } = req.body;
 
       if (!name || typeof name !== "string") {
         return res.status(400).json({ error: "Role name is required" });
@@ -120,6 +147,11 @@ router.post(
       // Keys must be uppercase alphanumeric_underscore
       if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
         return res.status(400).json({ error: "Role key must start with letter and contain only A-Z, 0-9, _" });
+      }
+
+      const landingPathErr = validateLandingPath(landingPath);
+      if (landingPathErr) {
+        return res.status(400).json({ error: landingPathErr });
       }
 
       // Check if key already exists in this tenant
@@ -142,7 +174,8 @@ router.post(
           description: description || null,
           isSystem: false,
           userType: userType || "STAFF",
-          isActive: true
+          isActive: true,
+          landingPath: normalizeLandingPath(landingPath),
         },
         include: { permissions: true }
       });
@@ -161,7 +194,9 @@ router.post(
   }
 );
 
-// PUT /api/roles/:id — update role (not key/isSystem)
+// PUT /api/roles/:id — update role (not key/isSystem). landingPath IS
+// editable on system roles so admins can re-point ADMIN / CUSTOMER landings
+// without recreating the row.
 router.put(
   "/:id",
   verifyToken,
@@ -169,7 +204,7 @@ router.put(
   async (req, res) => {
     try {
       const roleId = parseInt(req.params.id);
-      const { name, description } = req.body;
+      const { name, description, landingPath } = req.body;
 
       const role = await prisma.role.findUnique({ where: { id: roleId } });
       if (!role) {
@@ -181,11 +216,35 @@ router.put(
         return res.status(403).json({ error: "Access denied" });
       }
 
+      if (landingPath !== undefined) {
+        const landingPathErr = validateLandingPath(landingPath);
+        if (landingPathErr) {
+          return res.status(400).json({ error: landingPathErr });
+        }
+        // If a non-empty landingPath was provided, also confirm the role
+        // has permissions to access that page. /home is permission-free
+        // (always allowed) so the typical "park new role at /home until
+        // we configure widgets" flow still works.
+        const normalized = normalizeLandingPath(landingPath);
+        if (normalized) {
+          const perms = await permissionSetForRole(roleId);
+          if (!canAccessPath(normalized, perms)) {
+            return res.status(400).json({
+              error:
+                "Landing page is not accessible by this role. Grant the required permissions first, or pick a page the role already has access to.",
+              code: "LANDING_PATH_NOT_ACCESSIBLE",
+              path: normalized,
+            });
+          }
+        }
+      }
+
       const updated = await prisma.role.update({
         where: { id: roleId },
         data: {
           name: name !== undefined ? name : role.name,
-          description: description !== undefined ? description : role.description
+          description: description !== undefined ? description : role.description,
+          landingPath: landingPath !== undefined ? normalizeLandingPath(landingPath) : role.landingPath,
         },
         include: { permissions: true }
       });
@@ -193,7 +252,7 @@ router.put(
       await writeAudit("Role", "UPDATE_ROLE", req.user.userId, req.user.userId, req.user.tenantId, {
         roleId: updated.id,
         key: updated.key,
-        changes: { name, description }
+        changes: { name, description, landingPath }
       });
 
       res.json(updated);
@@ -454,16 +513,40 @@ router.put(
       // (connection pool, unique-constraint race, transient lock),
       // the deleteMany rolls back and the role keeps its prior
       // permissions — no more "half-applied + 500" state.
-      const newPermissions = await prisma.$transaction(async (tx) => {
-        await tx.rolePermission.deleteMany({ where: { roleId } });
-        if (normalized.length > 0) {
-          await tx.rolePermission.createMany({
-            data: normalized,
-            skipDuplicates: true,
-          });
-        }
-        return tx.rolePermission.findMany({ where: { roleId } });
-      });
+      //
+      // Also clears Role.landingPath when the new permission set no
+      // longer grants access to the saved page. Without this, an admin
+      // who revokes (e.g.) appointments.read leaves the role's
+      // landingPath pointing at /wellness/calendar, and the next user
+      // who logs in is redirected to a page they immediately 403 on.
+      // Same transaction so a failed clear rolls back the perms too.
+      const { newPermissions, landingPathCleared } = await prisma.$transaction(
+        async (tx) => {
+          await tx.rolePermission.deleteMany({ where: { roleId } });
+          if (normalized.length > 0) {
+            await tx.rolePermission.createMany({
+              data: normalized,
+              skipDuplicates: true,
+            });
+          }
+          const newPerms = await tx.rolePermission.findMany({ where: { roleId } });
+
+          // Auto-clear landingPath if it's no longer accessible. /home is
+          // permission-free so it always survives.
+          let cleared = false;
+          if (role.landingPath) {
+            const permSet = new Set(newPerms.map((p) => `${p.module}.${p.action}`));
+            if (!canAccessPath(role.landingPath, permSet)) {
+              await tx.role.update({
+                where: { id: roleId },
+                data: { landingPath: null },
+              });
+              cleared = true;
+            }
+          }
+          return { newPermissions: newPerms, landingPathCleared: cleared };
+        },
+      );
 
       // Clear permission cache for all users with this role
       clearTenantCache(role.tenantId);
@@ -471,10 +554,12 @@ router.put(
       await writeAudit("Role", "BULK_UPDATE_PERMISSIONS", req.user.userId, req.user.userId, req.user.tenantId, {
         roleId,
         roleKey: role.key,
-        permissionCount: newPermissions.length
+        permissionCount: newPermissions.length,
+        landingPathCleared,
+        previousLandingPath: landingPathCleared ? role.landingPath : null,
       });
 
-      res.json({ roleId, permissions: newPermissions });
+      res.json({ roleId, permissions: newPermissions, landingPathCleared });
     } catch (err) {
       console.error("[roles] bulk update permissions error:", err);
       res.status(500).json({ error: "Failed to update permissions" });
@@ -559,19 +644,30 @@ router.post(
         return res.status(404).json({ error: "User not found in this tenant" });
       }
 
-      // Check if assignment already exists
-      const existing = await prisma.userRole.findUnique({
-        where: {
-          userId_roleId: { userId, roleId }
-        }
+      // Single-role-per-user contract: replace any existing UserRole row(s)
+      // for this user with the new one. Application-enforced for now (the
+      // schema's @@unique([userId, roleId]) only blocks dup pairs, not dup
+      // users). Surfacing previous-role swaps in the audit log gives the
+      // admin a clear escalation trail.
+      const previousAssignments = await prisma.userRole.findMany({
+        where: { userId },
+        orderBy: { assignedAt: 'desc' },
       });
 
-      if (existing) {
+      if (
+        previousAssignments.length === 1 &&
+        previousAssignments[0].roleId === roleId
+      ) {
         return res.status(409).json({ error: "User already has this role" });
       }
 
-      const userRole = await prisma.userRole.create({
-        data: { userId, roleId, assignedById: req.user.userId }
+      const userRole = await prisma.$transaction(async (tx) => {
+        if (previousAssignments.length > 0) {
+          await tx.userRole.deleteMany({ where: { userId } });
+        }
+        return tx.userRole.create({
+          data: { userId, roleId, assignedById: req.user.userId }
+        });
       });
 
       // Clear this user's permission cache
@@ -581,7 +677,8 @@ router.post(
         roleId,
         roleKey: role.key,
         targetUserId: userId,
-        targetEmail: user.email
+        targetEmail: user.email,
+        previousRoleIds: previousAssignments.map((a) => a.roleId),
       });
 
       res.status(201).json(userRole);
@@ -649,6 +746,166 @@ router.delete(
       res.status(500).json({ error: "Failed to remove role from user" });
     }
   }
+);
+
+// ─────────────────── Per-role widget layout ──────────────────────────
+
+// GET /api/roles/:id/widgets — current widget layout for a role
+router.get(
+  "/:id/widgets",
+  verifyToken,
+  requirePermission("roles", "read"),
+  async (req, res) => {
+    try {
+      const roleId = parseInt(req.params.id);
+      const role = await prisma.role.findUnique({
+        where: { id: roleId },
+        include: { widgets: true },
+      });
+      if (!role) {
+        return res.status(404).json({ error: "Role not found" });
+      }
+      if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const widgets = (role.widgets || [])
+        .slice()
+        .sort((a, b) => a.position - b.position);
+      res.json({ roleId, widgets });
+    } catch (err) {
+      console.error("[roles] widgets list error:", err);
+      res.status(500).json({ error: "Failed to fetch role widgets" });
+    }
+  },
+);
+
+// PUT /api/roles/:id/widgets — bulk-set the widget layout (replace all).
+// Body shape: { widgets: [{ widgetKey, position, isEnabled?, settings? }, ...] }
+// Mirrors the bulk-permissions PUT pattern: atomic deleteMany +
+// createMany inside one transaction. Validates every widgetKey against
+// the static catalogue so an unknown key can never land in the table.
+router.put(
+  "/:id/widgets",
+  verifyToken,
+  requirePermission("roles", "manage"),
+  async (req, res) => {
+    try {
+      const roleId = parseInt(req.params.id);
+      const { widgets } = req.body;
+
+      if (!Array.isArray(widgets)) {
+        return res.status(400).json({ error: "widgets must be an array" });
+      }
+
+      const normalized = [];
+      const seen = new Set();
+      for (let i = 0; i < widgets.length; i++) {
+        const w = widgets[i];
+        if (!w || typeof w !== "object") {
+          return res.status(400).json({
+            error: "Each widget must be an object { widgetKey, position }",
+          });
+        }
+        const { widgetKey } = w;
+        if (!isValidWidgetKey(widgetKey)) {
+          return res.status(400).json({
+            error: `Invalid widget key: ${widgetKey}`,
+          });
+        }
+        if (seen.has(widgetKey)) continue;
+        seen.add(widgetKey);
+        const position = Number.isFinite(w.position)
+          ? Math.floor(w.position)
+          : i * 10;
+        const isEnabled = w.isEnabled === false ? false : true;
+        let settings = null;
+        if (w.settings != null && w.settings !== "") {
+          if (typeof w.settings === "string") {
+            settings = w.settings.slice(0, 4000);
+          } else {
+            try {
+              settings = JSON.stringify(w.settings).slice(0, 4000);
+            } catch {
+              return res
+                .status(400)
+                .json({ error: `widget settings not serialisable: ${widgetKey}` });
+            }
+          }
+        }
+        normalized.push({ roleId, widgetKey, position, isEnabled, settings });
+      }
+
+      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      if (!role) {
+        return res.status(404).json({ error: "Role not found" });
+      }
+      if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const newWidgets = await prisma.$transaction(async (tx) => {
+        await tx.roleWidget.deleteMany({ where: { roleId } });
+        if (normalized.length > 0) {
+          await tx.roleWidget.createMany({
+            data: normalized,
+            skipDuplicates: true,
+          });
+        }
+        return tx.roleWidget.findMany({
+          where: { roleId },
+          orderBy: { position: "asc" },
+        });
+      });
+
+      await writeAudit(
+        "Role",
+        "UPDATE_ROLE_WIDGETS",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          roleId,
+          roleKey: role.key,
+          widgetCount: newWidgets.length,
+        },
+      );
+
+      res.json({ roleId, widgets: newWidgets });
+    } catch (err) {
+      console.error("[roles] bulk update widgets error:", err);
+      res.status(500).json({ error: "Failed to update widgets" });
+    }
+  },
+);
+
+// ─────────────────── Per-role accessible pages ───────────────────────
+//
+// GET /api/roles/:id/accessible-pages — returns the subset of the static
+// page catalog that this role's current permissions grant access to.
+// Drives the landingPath dropdown in the Roles & Permissions admin UI —
+// no admin can pick a page the role doesn't already have permission for.
+router.get(
+  "/:id/accessible-pages",
+  verifyToken,
+  requirePermission("roles", "read"),
+  async (req, res) => {
+    try {
+      const roleId = parseInt(req.params.id);
+      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      if (!role) {
+        return res.status(404).json({ error: "Role not found" });
+      }
+      if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const perms = await permissionSetForRole(roleId);
+      const pages = getAccessiblePages(perms, { isOwner: false });
+      res.json({ roleId, pages });
+    } catch (err) {
+      console.error("[roles] accessible-pages error:", err);
+      res.status(500).json({ error: "Failed to compute accessible pages" });
+    }
+  },
 );
 
 module.exports = router;

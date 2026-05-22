@@ -881,6 +881,7 @@ async function main() {
       isSystem: true,
       isActive: true,
       userType: 'OWNER',
+      landingPath: '/dashboard',
     },
   });
 
@@ -904,6 +905,7 @@ async function main() {
       isSystem: true,
       isActive: true,
       userType: 'STAFF',
+      landingPath: '/dashboard',
     },
   });
 
@@ -930,6 +932,7 @@ async function main() {
       isSystem: false,
       isActive: true,
       userType: 'STAFF',
+      landingPath: '/dashboard',
     },
   });
 
@@ -956,6 +959,9 @@ async function main() {
     'documents.read', 'documents.write', 'documents.update',
     'contracts.read', 'contracts.write', 'contracts.update',
     'estimates.read', 'estimates.write', 'estimates.update', 'estimates.export',
+    // Wellness master catalog — Manager curates products + auto-consumption
+    // rules. Mirrors MANAGER_PERMISSIONS in scripts/ensureRbacOnBoot.js.
+    'products.read', 'products.write', 'products.update',
   ];
 
   for (const perm of managerPermissions) {
@@ -979,6 +985,7 @@ async function main() {
       isSystem: true,
       isActive: true,
       userType: 'CUSTOMER',
+      landingPath: '/portal',
     },
   });
 
@@ -1037,6 +1044,7 @@ async function main() {
       isSystem: false,
       isActive: true,
       userType: 'STAFF',
+      landingPath: '/dashboard',
     },
   });
 

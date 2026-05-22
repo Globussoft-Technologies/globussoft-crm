@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useContext,
   useState,
   useRef,
@@ -73,13 +74,15 @@ import {
   Package,
   // Wave 2 Agent II — POS / Cash Register / Shift / Sale
   Calculator,
+  // Used by the dynamic page-catalog → sidebar icon lookup for /portal
+  UserCircle,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
-import { launchAdsGptAs, ADSGPT_DASHBOARD } from '../utils/adsgpt';
-import { launchCallifiedSSO } from '../utils/callified';
-import { useNotify } from '../utils/notify';
-import { usePermissions } from '../hooks/usePermissions';
+import { launchAdsGptAs, ADSGPT_DASHBOARD } from "../utils/adsgpt";
+import { launchCallifiedSSO } from "../utils/callified";
+import { useNotify } from "../utils/notify";
+import { usePermissions } from "../hooks/usePermissions";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -107,6 +110,7 @@ const Sidebar = ({
   const {
     hasPermission,
     isReady: permissionsReady,
+    permissions,
   } = usePermissions();
   const isWellness = tenant?.vertical === "wellness";
   const location = useLocation();
@@ -288,32 +292,32 @@ const Sidebar = ({
     socket.on("error", () => {});
     socket.on("marketplace_lead_imported", () =>
       debouncedSetCounts(() =>
-        setCounts((c) => ({ ...c, leads: c.leads + 1 }))
+        setCounts((c) => ({ ...c, leads: c.leads + 1 })),
       ),
     );
     socket.on("marketplace_lead_new", (p) =>
       debouncedSetCounts(() =>
-        setCounts((c) => ({ ...c, leads: c.leads + (p?.count || 1) }))
+        setCounts((c) => ({ ...c, leads: c.leads + (p?.count || 1) })),
       ),
     );
     socket.on("email_received", () =>
       debouncedSetCounts(() =>
-        setCounts((c) => ({ ...c, inbox: c.inbox + 1 }))
+        setCounts((c) => ({ ...c, inbox: c.inbox + 1 })),
       ),
     );
     socket.on("lead_created", () =>
       debouncedSetCounts(() =>
-        setCounts((c) => ({ ...c, leads: c.leads + 1 }))
+        setCounts((c) => ({ ...c, leads: c.leads + 1 })),
       ),
     );
     socket.on("task_created", () =>
       debouncedSetCounts(() =>
-        setCounts((c) => ({ ...c, tasks: c.tasks + 1 }))
+        setCounts((c) => ({ ...c, tasks: c.tasks + 1 })),
       ),
     );
     socket.on("ticket_created", () =>
       debouncedSetCounts(() =>
-        setCounts((c) => ({ ...c, tickets: c.tickets + 1 }))
+        setCounts((c) => ({ ...c, tickets: c.tickets + 1 })),
       ),
     );
     // Generic invalidation event — any module can emit and we re-fetch.
@@ -387,13 +391,24 @@ const Sidebar = ({
     const tail = current[target.length];
     return tail === "/" || tail === undefined;
   };
-  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, wellnessRoles, requiredPermission, count, matchPaths = [] }) => {
+  const Link = ({
+    to,
+    icon: Icon,
+    label,
+    adminOnly,
+    managerOnly,
+    wellnessRoles,
+    requiredPermission,
+    count,
+    matchPaths = [],
+  }) => {
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
     // wellnessRoles gates a link to specific wellnessRole values. Managers
     // and admins always pass through (mirrors the server's verifyWellnessRole
     // gate which whitelists admin/manager alongside the named clinical roles).
-    if (wellnessRoles && !isManager && !wellnessRoles.includes(wellnessRole)) return null;
+    if (wellnessRoles && !isManager && !wellnessRoles.includes(wellnessRole))
+      return null;
     // RBAC permission gate. Only HIDE once permissions have resolved so admin
     // users don't see a flash of an empty sidebar during the first frame of
     // /auth/me/permissions resolving. After the answer arrives, an entry with
@@ -411,7 +426,9 @@ const Sidebar = ({
       <NavLink
         to={to}
         className={({ isActive }) => {
-          const isPathMatch = matchPaths.some(path => location.pathname === path);
+          const isPathMatch = matchPaths.some(
+            (path) => location.pathname === path,
+          );
           const isSegmentMatch = segmentMatches(location.pathname, to);
           const active = isActive || isPathMatch || isSegmentMatch;
           return `nav-link ${active ? "active" : ""}`;
@@ -441,24 +458,69 @@ const Sidebar = ({
     </a>
   );
 
+  // Accessible pages — fetched from /api/pages/me (the server's
+  // intersection of the page catalog with the signed-in user's effective
+  // permissions). The wellness sidebar renders EVERY visible item from
+  // this list, so when admin grants/revokes a permission via the Roles
+  // & Permissions matrix the sidebar updates without a JSX change and
+  // without any role-string check anywhere.
+  //
+  // Re-fetch triggers:
+  //   • on mount (initial state)
+  //   • when the user's permission list changes (handles same-user perm
+  //     edits — usePermissions' module-level cache is invalidated by
+  //     RolesAdmin after every PUT, which propagates a new `permissions`
+  //     array here and re-fires this effect)
+  //   • on the `sidebar:pages-changed` window event — cross-component
+  //     invalidation channel for any code that mutates permissions
+  //     (RolesAdmin, the assign-roles flow on Staff, etc.) and wants
+  //     the sidebar to pick up the change immediately
+  const [accessiblePages, setAccessiblePages] = useState([]);
+  // Permissions from the shared usePermissions hook. Stable key avoids
+  // re-fetching on every render — only when the actual permission set
+  // changes (different membership, not same content).
+  const permissionsKey = (permissions || []).slice().sort().join("|");
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      fetchApi("/api/pages/me", { silent: true })
+        .then((res) => {
+          if (cancelled) return;
+          setAccessiblePages(Array.isArray(res?.pages) ? res.pages : []);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setAccessiblePages([]);
+        });
+    };
+    refresh();
+    const onInvalidate = () => refresh();
+    window.addEventListener("sidebar:pages-changed", onInvalidate);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("sidebar:pages-changed", onInvalidate);
+    };
+  }, [permissionsKey]);
+
   // SSO-authenticated AdsGPT launcher — does the same token + Redis-key
   // handoff as the wellness OwnerDashboard card. If the SSO flow fails
   // (network / provider down), degrade to opening the plain dashboard URL
   // so the link is never dead.
   const [adsLoading, setAdsLoading] = useState(false);
-  const [adsgptLogin, setAdsgptLogin] = useState('');
+  const [adsgptLogin, setAdsgptLogin] = useState("");
 
   useEffect(() => {
-    fetchApi('/api/integrations/adsgpt/config')
-      .then((res) => setAdsgptLogin(res.adsgptLogin || ''))
-      .catch(() => setAdsgptLogin(''));
+    fetchApi("/api/integrations/adsgpt/config")
+      .then((res) => setAdsgptLogin(res.adsgptLogin || ""))
+      .catch(() => setAdsgptLogin(""));
 
     // Listen for config updates from Settings page
     const handleConfigUpdate = (event) => {
-      setAdsgptLogin(event.detail?.adsgptLogin || '');
+      setAdsgptLogin(event.detail?.adsgptLogin || "");
     };
-    window.addEventListener('adsgpt:config-updated', handleConfigUpdate);
-    return () => window.removeEventListener('adsgpt:config-updated', handleConfigUpdate);
+    window.addEventListener("adsgpt:config-updated", handleConfigUpdate);
+    return () =>
+      window.removeEventListener("adsgpt:config-updated", handleConfigUpdate);
   }, []);
 
   const AdsGptLink = ({ icon: Icon = Sparkles, label = "AdsGPT" }) => {
@@ -470,7 +532,7 @@ const Sidebar = ({
         await launchAdsGptAs(adsgptLogin);
       } catch (err) {
         console.error("[Sidebar] AdsGPT SSO error:", err.message);
-        notify.error(err.message || 'Failed to open AdsGPT');
+        notify.error(err.message || "Failed to open AdsGPT");
       } finally {
         setAdsLoading(false);
       }
@@ -643,13 +705,15 @@ const Sidebar = ({
           {isWellness
             ? renderWellnessNav({
                 Link,
-                ExtLink,
                 AdsGptLink,
                 CallifiedLink,
                 isAdmin,
                 isManager,
+                hasPermission,
+                permissionsReady,
                 sectionLabelStyle,
                 counts,
+                accessiblePages,
               })
             : renderGenericNav({
                 Link,
@@ -658,7 +722,10 @@ const Sidebar = ({
                 CallifiedLink,
                 isAdmin,
                 isManager,
+                hasPermission,
+                permissionsReady,
                 counts,
+                user,
               })}
         </nav>
       </aside>
@@ -668,15 +735,167 @@ const Sidebar = ({
 
 // ── Wellness sidebar — slim, clinic-focused ───────────────────────
 
+// Icon lookup keyed by page path. Each page-catalog entry doesn't carry
+// its own icon (the catalog lives on the backend; importing lucide icons
+// there would be wrong). Instead we look up the icon here by path, with
+// a sensible defaultIcon fallback so a brand-new catalog entry still
+// renders (just with a generic icon until someone adds a row here).
+const PAGE_ICON_BY_PATH = {
+  // Core
+  "/home": LayoutDashboard,
+  // Manager
+  "/wellness": LayoutDashboard,
+  "/wellness/recommendations": Sparkles,
+  // Clinical
+  "/wellness/calendar": Calendar,
+  "/wellness/appointments": Calendar,
+  "/wellness/my-appointments": Calendar,
+  "/wellness/patients": HeartPulse,
+  "/wellness/waitlist": Clock,
+  "/wellness/prescriptions": PenTool,
+  "/wellness/visits": HeartPulse,
+  "/signatures": FileSignature,
+  "/wellness/inventory": Package,
+  // Catalog
+  "/wellness/services": Stethoscope,
+  "/wellness/service-categories": Layers,
+  "/wellness/drugs": Stethoscope,
+  "/wellness/memberships": Crown,
+  // Scheduling
+  "/wellness/resources": Building2,
+  "/wellness/holidays": Calendar,
+  "/wellness/working-hours": Clock,
+  // Staff self-service
+  "/wellness/attendance": Clock,
+  "/wellness/leave": Calendar,
+  // Leads & Revenue
+  "/inbox": InboxIcon,
+  "/wellness/whatsapp": MessageSquare,
+  "/wellness/telecaller": PhoneCall,
+  "/leads": UserPlus,
+  "/converted-leads": UserPlus,
+  "/callified-data": PhoneCall,
+  "/tasks": CheckSquare,
+  "/marketplace-leads": ShoppingBag,
+  "/lead-routing": Send,
+  // Sales (generic only, not in wellness sidebar)
+  "/dashboard": LayoutDashboard,
+  "/contacts": Users,
+  "/pipeline": Briefcase,
+  // Finance
+  "/wellness/pos": Calculator,
+  "/invoices": Receipt,
+  "/estimates": FileSpreadsheet,
+  "/expenses": DollarSign,
+  "/payments": CreditCard,
+  "/wellness/wallet": WalletIcon,
+  "/wellness/giftcards": Gift,
+  "/wellness/coupons": TicketPercent,
+  "/wellness/cashback-rules": Coins,
+  // Marketing
+  "/marketing": Send,
+  "/sequences": Network,
+  "/landing-pages": PanelTop,
+  // Reports
+  "/wellness/reports": BarChart3,
+  "/wellness/per-location": Building2,
+  "/wellness/loyalty": Award,
+  "/surveys": ClipboardList,
+  "/knowledge-base": BookOpen,
+  "/reports": BarChart3,
+  "/dashboards": LayoutDashboard,
+  // Appointments
+  "/wellness/book-appointment": Calendar,
+  // Patient portal
+  "/portal": UserCircle,
+  // Admin
+  "/wellness/locations": Building2,
+  "/staff": UsersRound,
+  "/settings/roles": ShieldCheck,
+  "/commission-profiles": Award,
+  "/revenue-goals": Target,
+  "/channels": Radio,
+  "/approvals": CheckSquare,
+  "/audit-log": ScrollText,
+  "/privacy": Shield,
+  "/settings": Settings,
+  // Inventory Admin
+  "/wellness/product-categories": Layers,
+  "/wellness/products": Package,
+  "/wellness/vendors": Truck,
+  "/wellness/inventory-receipts": ArrowDownToLine,
+  "/wellness/inventory-adjustments": Receipt,
+  "/wellness/auto-consumption-rules": Recycle,
+  // User self-service
+  "/notification-settings": Bell,
+};
+
+// Wellness sidebar — which catalog categories render here and in what
+// order. Categories not in this list (e.g. 'Sales' which holds generic-
+// CRM-only pages, or 'Patient' which is the customer-facing portal entry
+// surfaced elsewhere) are intentionally skipped so the wellness sidebar
+// stays clinic-focused even for users whose role happens to grant a
+// generic-CRM permission like contacts.read.
+const WELLNESS_CATEGORY_ORDER = [
+  "Core",
+  "Manager",
+  "Clinical",
+  "Catalog",
+  "Scheduling",
+  "Staff",
+  "Leads & Revenue",
+  "Finance",
+  "Marketing",
+  "Reports",
+  "Appointments",
+  // Products is the master catalog config (categories, products, auto-
+  // consumption rules); Inventory Admin is the operational ledger
+  // (vendors, receipts, adjustments). Same underlying permission module
+  // (`inventory`) — split into two sections only for sidebar grouping.
+  "Products",
+  "Inventory Admin",
+  // User holds personal-user surfaces (Notification Settings) — only
+  // rendered for non-admin-tier users. Admin sits last so admin sees
+  // management surfaces (Locations / Staff / Roles / Settings / etc.) at
+  // the very bottom of the nav; non-admin users see User there instead.
+  "User",
+  "Admin",
+];
+
+// Categories rendered without a section header — they appear at the top of
+// the sidebar as the landing items (Home + manager dashboards) so a label
+// above them would be redundant. Every other category gets its name as the
+// section header.
+const WELLNESS_HEADERLESS_CATEGORIES = new Set(["Core", "Manager"]);
+
+// Count-badge mapping. Path → key on the `counts` state object. Live counters
+// come from /api/{contacts|tasks|tickets|email} polling + socket events and
+// are rendered as a pill on the right side of the matching nav entry.
+const PATH_COUNT_KEY = {
+  "/inbox": "inbox",
+  "/leads": "leads",
+  "/tasks": "tasks",
+  "/tickets": "tickets",
+};
+
+// Some links want to highlight as active even when on a different path
+// (e.g. /marketplace-leads stays active when the user is on /marketplace,
+// the legacy alias). Path → list of additional pathnames to treat as matches.
+const PATH_MATCH_ALIASES = {
+  "/marketplace-leads": ["/marketplace"],
+};
+
 function renderWellnessNav({
   Link,
-  ExtLink,
   AdsGptLink,
   CallifiedLink,
   isAdmin,
   isManager,
+  hasPermission = () => false,
+  permissionsReady = false,
   sectionLabelStyle,
   counts = {},
+  accessiblePages = [],
 }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
   return (
@@ -850,10 +1069,30 @@ function renderWellnessNav({
       <Link to="/expenses" icon={DollarSign} label="Expenses" />
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
       {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback (manager+) */}
-      <Link to="/wellness/wallet" icon={WalletIcon} label="Patient Wallets" managerOnly />
-      <Link to="/wellness/giftcards" icon={Gift} label="Gift Cards" managerOnly />
-      <Link to="/wellness/coupons" icon={TicketPercent} label="Coupons" managerOnly />
-      <Link to="/wellness/cashback-rules" icon={Coins} label="Cashback Rules" managerOnly />
+      <Link
+        to="/wellness/wallet"
+        icon={WalletIcon}
+        label="Patient Wallets"
+        managerOnly
+      />
+      <Link
+        to="/wellness/giftcards"
+        icon={Gift}
+        label="Gift Cards"
+        managerOnly
+      />
+      <Link
+        to="/wellness/coupons"
+        icon={TicketPercent}
+        label="Coupons"
+        managerOnly
+      />
+      <Link
+        to="/wellness/cashback-rules"
+        icon={Coins}
+        label="Cashback Rules"
+        managerOnly
+      />
 
       {/* Marketing — clinic-side comms (ad campaigns live in AdsGPT). All items are
           managerOnly, so the whole section is hidden for plain users — otherwise the
@@ -934,12 +1173,42 @@ function renderWellnessNav({
               Categories + Vendors are config; Receipts/Adjustments are the
               operational ledger surfaces; Auto-consumption is the rules engine. */}
           <div style={labelStyle}>Inventory</div>
-          <Link to="/wellness/product-categories" icon={Layers} label="Product Categories" managerOnly />
-          <Link to="/wellness/products" icon={Package} label="Products" managerOnly />
-          <Link to="/wellness/vendors" icon={Truck} label="Vendors" managerOnly />
-          <Link to="/wellness/inventory-receipts" icon={ArrowDownToLine} label="Receipts" managerOnly />
-          <Link to="/wellness/inventory-adjustments" icon={Receipt} label="Adjustments" managerOnly />
-          <Link to="/wellness/auto-consumption-rules" icon={Recycle} label="Auto-consumption" managerOnly />
+          <Link
+            to="/wellness/product-categories"
+            icon={Layers}
+            label="Product Categories"
+            managerOnly
+          />
+          <Link
+            to="/wellness/products"
+            icon={Package}
+            label="Products"
+            managerOnly
+          />
+          <Link
+            to="/wellness/vendors"
+            icon={Truck}
+            label="Vendors"
+            managerOnly
+          />
+          <Link
+            to="/wellness/inventory-receipts"
+            icon={ArrowDownToLine}
+            label="Receipts"
+            managerOnly
+          />
+          <Link
+            to="/wellness/inventory-adjustments"
+            icon={Receipt}
+            label="Adjustments"
+            managerOnly
+          />
+          <Link
+            to="/wellness/auto-consumption-rules"
+            icon={Recycle}
+            label="Auto-consumption"
+            managerOnly
+          />
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
           {/* RBAC role + permission admin. Shown to anyone with `roles.read`
               granted via RBAC (typically ADMIN). The page itself rechecks. */}
@@ -947,7 +1216,7 @@ function renderWellnessNav({
             to="/settings/roles"
             icon={ShieldCheck}
             label="Roles"
-            requiredPermission={{ module: 'roles', action: 'read' }}
+            requiredPermission={{ module: "roles", action: "read" }}
           />
           {/* PRD Gap §1.5 / §1.6 — wellness admins also manage payroll. */}
           <Link
@@ -965,7 +1234,6 @@ function renderWellnessNav({
           <Link to="/channels" icon={Radio} label="Channels" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
-          <Link to="/data-import-export" icon={Database} label="Import / Export" adminOnly />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </>
       )}
@@ -981,7 +1249,11 @@ function renderWellnessNav({
       {!isAdmin && !isManager && (
         <>
           <div style={labelStyle}>Appointments</div>
-          <Link to="/wellness/book-appointment" icon={Calendar} label="Book Appointment" />
+          <Link
+            to="/wellness/book-appointment"
+            icon={Calendar}
+            label="Book Appointment"
+          />
         </>
       )}
 
@@ -989,7 +1261,11 @@ function renderWellnessNav({
       {!isAdmin && !isManager && (
         <>
           <div style={labelStyle}>User</div>
-          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
+          <Link
+            to="/notification-settings"
+            icon={Settings}
+            label="Notification Settings"
+          />
         </>
       )}
     </>
@@ -1005,22 +1281,43 @@ function renderGenericNav({
   CallifiedLink,
   isAdmin,
   isManager,
+  hasPermission = () => false,
+  permissionsReady = false,
   counts = {},
 }) {
+  // Generic-nav finance links use the per-link `requiredPermission` prop
+  // directly; the hook references here keep the destructure stable for
+  // when we promote generic to the same fully-dynamic shape wellness uses.
+  void hasPermission;
+  void permissionsReady;
   return (
     <>
       {/* Core — visible to ALL roles */}
+      <Link to="/home" icon={LayoutDashboard} label="Home" />
       <Link to="/dashboard" icon={LayoutDashboard} label="Dashboard" />
-      <AdsGptLink icon={Sparkles} label="AdsGPT" />
-      <CallifiedLink icon={PhoneCall} label="Callified" />
+      {/* AdsGPT + Callified are marketing / call-centre integrations
+          intended for ADMIN + MANAGER only. Mirrors the same gate in the
+          wellness sidebar; keep both branches in sync. */}
+      {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
+      {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
       <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} />
       <Link to="/contacts" icon={Users} label="Contacts" />
       <Link to="/pipeline" icon={Briefcase} label="Pipeline" />
       <Link to="/leads" icon={UserPlus} label="Leads" count={counts.leads} />
       <Link to="/converted-leads" icon={UserPlus} label="Converted Leads" />
       <Link to="/clients" icon={Building2} label="Clients" />
-      <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} />
-      <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} />
+      <Link
+        to="/tasks"
+        icon={CheckSquare}
+        label="Task Queue"
+        count={counts.tasks}
+      />
+      <Link
+        to="/tickets"
+        icon={Ticket}
+        label="Tickets"
+        count={counts.tickets}
+      />
       {/* #474: label was "Calendar" pointing at /calendar-sync — the integration
           settings page (Google/Outlook bindings), not an event calendar. Users
           clicked expecting a day/week agenda view. There IS no generic event
@@ -1038,10 +1335,32 @@ function renderGenericNav({
       <Link to="/document-templates" icon={FileText} label="Doc Templates" />
       <Link to="/document-tracking" icon={Eye} label="Doc Tracking" />
 
-      <Link to="/invoices" icon={Receipt} label="Invoices" />
-      <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
-      <Link to="/expenses" icon={DollarSign} label="Expenses" />
-      <Link to="/contracts" icon={FileText} label="Contracts" />
+      {/* Finance items gated on per-module read perms so a custom role
+          without billing access doesn't see the surfaces at all. */}
+      <Link
+        to="/invoices"
+        icon={Receipt}
+        label="Invoices"
+        requiredPermission={{ module: "billing", action: "read" }}
+      />
+      <Link
+        to="/estimates"
+        icon={FileSpreadsheet}
+        label="Estimates"
+        requiredPermission={{ module: "estimates", action: "read" }}
+      />
+      <Link
+        to="/expenses"
+        icon={DollarSign}
+        label="Expenses"
+        requiredPermission={{ module: "expenses", action: "read" }}
+      />
+      <Link
+        to="/contracts"
+        icon={FileText}
+        label="Contracts"
+        requiredPermission={{ module: "contracts", action: "read" }}
+      />
       <Link to="/projects" icon={FolderKanban} label="Projects" />
 
       <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly />
@@ -1127,7 +1446,7 @@ function renderGenericNav({
             to="/settings/roles"
             icon={ShieldCheck}
             label="Roles"
-            requiredPermission={{ module: 'roles', action: 'read' }}
+            requiredPermission={{ module: "roles", action: "read" }}
           />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
@@ -1173,7 +1492,12 @@ function renderGenericNav({
           />
           <Link to="/zapier" icon={Code} label="Zapier" adminOnly />
           <Link to="/developer" icon={Code} label="Developers" adminOnly />
-          <Link to="/data-import-export" icon={Database} label="Import / Export" adminOnly />
+          <Link
+            to="/data-import-export"
+            icon={Database}
+            label="Import / Export"
+            adminOnly
+          />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </div>
       )}
@@ -1205,7 +1529,11 @@ function renderGenericNav({
             gap: "0.25rem",
           }}
         >
-          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
+          <Link
+            to="/notification-settings"
+            icon={Settings}
+            label="Notification Settings"
+          />
         </div>
       )}
     </>

@@ -31,6 +31,7 @@ import {
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Home = lazy(() => import("./pages/Home"));
 const Contacts = lazy(() => import("./pages/Contacts"));
 const ContactDetail = lazy(() => import("./pages/ContactDetail"));
 const Pipeline = lazy(() => import("./pages/Pipeline"));
@@ -154,8 +155,13 @@ const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
 const WellnessBookAppointment = lazy(() => import("./pages/wellness/BookAppointment"));
+const WellnessAppointments = lazy(() => import("./pages/wellness/Appointments"));
+const WellnessMyAppointments = lazy(() => import("./pages/wellness/MyAppointments"));
 const WellnessReports = lazy(() => import("./pages/wellness/Reports"));
 const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
+const WellnessPrescriptions = lazy(
+  () => import("./pages/wellness/Prescriptions"),
+);
 const WellnessPublicBooking = lazy(
   () => import("./pages/wellness/PublicBooking"),
 );
@@ -243,6 +249,17 @@ function wellnessLandingFor(user) {
   }
 }
 
+// Per-role landingPath (configured by admin via Roles & Permissions) wins
+// over the vertical-default heuristic. Lets a new role become a config
+// change rather than a code edit in this file. Exported helper so the
+// GenericOnly / WellnessOwnerOnly guards use a single source of truth.
+function landingFor(user, tenant) {
+  const configured = user?.landingPath || user?.primaryRole?.landingPath || null;
+  if (configured) return configured;
+  if (tenant?.vertical === 'wellness') return wellnessLandingFor(user);
+  return '/dashboard';
+}
+
 // Route guard: bounces wellness tenants away from generic-CRM-only pages.
 // The generic Enterprise Overview, deal pipeline, forecasting, etc. don't apply
 // to a clinic — wellness has its own /wellness Owner Dashboard. Without this
@@ -253,7 +270,7 @@ function wellnessLandingFor(user) {
 function GenericOnly({ children }) {
   const { tenant, user } = useContext(AuthContext);
   if (tenant?.vertical === 'wellness') {
-    return <Navigate to={wellnessLandingFor(user)} replace />;
+    return <Navigate to={landingFor(user, tenant)} replace />;
   }
   return children;
 }
@@ -264,8 +281,8 @@ function GenericOnly({ children }) {
 // (or `wellnessRole === owner|manager|admin`) and redirect everyone else to
 // their role-appropriate landing.
 function WellnessOwnerOnly({ children }) {
-  const { user } = useContext(AuthContext);
-  const target = wellnessLandingFor(user);
+  const { user, tenant } = useContext(AuthContext);
+  const target = landingFor(user, tenant);
   if (target !== '/wellness') {
     return <Navigate to={target} replace />;
   }
@@ -608,14 +625,18 @@ export default function App() {
                   />
                   {/* #240: unauthenticated visitors to `/` should land on /login, not the
                 marketing Landing page. The Landing component is still importable
-                for any explicit /landing CTA but is no longer the implicit root. */}
+                for any explicit /landing CTA but is no longer the implicit root.
+                For logged-in users, route to the per-role landingPath when
+                configured (Roles & Permissions admin), falling back to the
+                vertical default — so a new role lands on its configured page
+                even when the user types `/` in the URL bar. */}
                   <Route
                     path="/"
                     element={
                       !token ? (
                         <Navigate to="/login" replace />
                       ) : (
-                        <Navigate to="/dashboard" replace />
+                        <Navigate to={landingFor(user, tenant)} replace />
                       )
                     }
                   />
@@ -631,6 +652,10 @@ export default function App() {
                         </GenericOnly>
                       }
                     />
+                    {/* /home — role-aware widget dashboard. Open to any
+                        logged-in user; the widgets themselves filter by
+                        permission server-side via /api/widgets/me. */}
+                    <Route path="home" element={<Home />} />
                     <Route path="contacts" element={<Contacts />} />
                     <Route path="contacts/:id" element={<ContactDetail />} />
                     <Route
@@ -904,37 +929,68 @@ export default function App() {
               <Route path="wellness/patients/:id" element={<WellnessOnly><WellnessPatientDetail /></WellnessOnly>} />
               <Route path="wellness/services" element={<WellnessOnly><WellnessServices /></WellnessOnly>} />
               {/* Wave 7 Agent A — ServiceCategory + Drug admin pages (admin/manager) */}
+              {/* Wave 7 Agent A — ServiceCategory + Drug admin pages. Gated
+                  by permissions that mirror the page catalog's entries — any
+                  role granted `services.write` / `prescriptions.write` passes
+                  (no hardcoded ADMIN/MANAGER allowlist). */}
               <Route path="wellness/service-categories" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Service Categories requires manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'services', action: 'read' }}
+                    feature="Service Categories"
+                    lockedInPlace
+                  >
                     <WellnessServiceCategories />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/drugs" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Drug catalogue requires manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'prescriptions', action: 'read' }}
+                    feature="Drug catalogue"
+                    lockedInPlace
+                  >
                     <WellnessDrugs />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/visits" element={<WellnessOnly><WellnessVisits /></WellnessOnly>} />
+              {/* Prescriptions list — tenant-wide, with patient filter +
+                  per-row PDF download. Gated on prescriptions.read via
+                  the page catalog (Sidebar) AND the page-level RoleGuard
+                  here (route protection). Backend PDF endpoint inherits
+                  the same RBAC + tenant scope. */}
+              <Route path="wellness/prescriptions" element={
+                <WellnessOnly>
+                  <RoleGuard
+                    requiredPermission={{ module: 'prescriptions', action: 'read' }}
+                    feature="Prescriptions"
+                    lockedInPlace
+                  >
+                    <WellnessPrescriptions />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
               <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
-              {/* Wave 11 Agent EE: Memberships catalog — admin/manager only */}
+              {/* Wave 11 Agent EE: Memberships catalog */}
               <Route path="wellness/memberships" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Memberships requires manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'services', action: 'read' }}
+                    feature="Memberships"
+                    lockedInPlace
+                  >
                     <WellnessMemberships />
                   </RoleGuard>
                 </WellnessOnly>
               } />
-              {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback (admin/manager) */}
+              {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback */}
               <Route path="wellness/wallet" element={
                 <WellnessOnly>
                   <RoleGuard
-                    allow={["ADMIN", "MANAGER"]}
+                    requiredPermission={{ module: 'billing', action: 'read' }}
                     feature="Wallet ledger"
-                    roles="manager (or admin)"
                     lockedInPlace
                   >
                     <WellnessWallet />
@@ -944,9 +1000,8 @@ export default function App() {
               <Route path="wellness/giftcards" element={
                 <WellnessOnly>
                   <RoleGuard
-                    allow={["ADMIN", "MANAGER"]}
+                    requiredPermission={{ module: 'billing', action: 'read' }}
                     feature="Gift Cards"
-                    roles="manager (or admin)"
                     lockedInPlace
                   >
                     <WellnessGiftCards />
@@ -956,9 +1011,8 @@ export default function App() {
               <Route path="wellness/coupons" element={
                 <WellnessOnly>
                   <RoleGuard
-                    allow={["ADMIN", "MANAGER"]}
+                    requiredPermission={{ module: 'marketing', action: 'read' }}
                     feature="Coupons"
-                    roles="manager (or admin)"
                     lockedInPlace
                   >
                     <WellnessCoupons />
@@ -968,9 +1022,8 @@ export default function App() {
               <Route path="wellness/cashback-rules" element={
                 <WellnessOnly>
                   <RoleGuard
-                    allow={["ADMIN", "MANAGER"]}
+                    requiredPermission={{ module: 'marketing', action: 'read' }}
                     feature="Cashback rules"
-                    roles="manager (or admin)"
                     lockedInPlace
                   >
                     <WellnessCashbackRules />
@@ -978,6 +1031,8 @@ export default function App() {
                 </WellnessOnly>
               } />
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
+              <Route path="wellness/appointments" element={<WellnessOnly><WellnessAppointments /></WellnessOnly>} />
+              <Route path="wellness/my-appointments" element={<WellnessOnly><WellnessMyAppointments /></WellnessOnly>} />
               <Route path="wellness/book-appointment" element={<WellnessOnly><WellnessBookAppointment /></WellnessOnly>} />
               {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
               <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
@@ -996,70 +1051,113 @@ export default function App() {
               <Route path="wellness/loyalty" element={<WellnessOnly><WellnessLoyalty /></WellnessOnly>} />
               <Route path="wellness/waitlist" element={<WellnessOnly><WellnessWaitlist /></WellnessOnly>} />
               <Route path="wellness/inventory" element={<WellnessOnly><WellnessInventory /></WellnessOnly>} />
-              {/* Wave 11 Agent HH — Inventory backbone admin pages (5 routes).
-                  All ADMIN/MANAGER-only via RoleGuard wrap. */}
+              {/* Wave 11 Agent HH — Inventory backbone admin pages. All
+                  6 pages gated on `inventory.read` for sidebar + page-mount
+                  visibility (matches the page catalog). The create / edit
+                  / delete actions inside each page are gated separately at
+                  the backend route level (.write / .update / .delete /
+                  .manage in routes/inventory.js) — a read-only role sees
+                  the page in read-only mode; the action buttons should
+                  hide themselves based on per-action permission checks
+                  via usePermissions(). */}
               <Route path="wellness/product-categories" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Product categories require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'products', action: 'read' }}
+                    feature="Product categories"
+                    lockedInPlace
+                  >
                     <WellnessProductCategories />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/products" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Products require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'products', action: 'read' }}
+                    feature="Products"
+                    lockedInPlace
+                  >
                     <WellnessProducts />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/vendors" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Vendors require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'inventory', action: 'read' }}
+                    feature="Vendors"
+                    lockedInPlace
+                  >
                     <WellnessVendors />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/inventory-receipts" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Inventory receipts require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'inventory', action: 'read' }}
+                    feature="Inventory receipts"
+                    lockedInPlace
+                  >
                     <WellnessInventoryReceipts />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/inventory-adjustments" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Inventory adjustments require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'inventory', action: 'read' }}
+                    feature="Inventory adjustments"
+                    lockedInPlace
+                  >
                     <WellnessInventoryAdjustments />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/auto-consumption-rules" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Auto-consumption rules require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'products', action: 'read' }}
+                    feature="Auto-consumption rules"
+                    lockedInPlace
+                  >
                     <WellnessAutoConsumptionRules />
                   </RoleGuard>
                 </WellnessOnly>
               } />
-              {/* Wave 11 Agent GG — Resource availability admin pages (3 routes).
-                  All ADMIN/MANAGER-only. The booking-conflict gate runs on
-                  every POST/PUT visit. */}
+              {/* Wave 11 Agent GG — Resource availability admin pages.
+                  Gated on settings.read (matches page catalog). The
+                  booking-conflict gate runs on every POST/PUT visit. */}
               <Route path="wellness/resources" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Resources require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'settings', action: 'read' }}
+                    feature="Resources"
+                    lockedInPlace
+                  >
                     <WellnessResources />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/holidays" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Holidays require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'settings', action: 'read' }}
+                    feature="Holidays"
+                    lockedInPlace
+                  >
                     <WellnessHolidays />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/working-hours" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Working hours require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'settings', action: 'read' }}
+                    feature="Working hours"
+                    lockedInPlace
+                  >
                     <WellnessWorkingHours />
                   </RoleGuard>
                 </WellnessOnly>
@@ -1074,7 +1172,11 @@ export default function App() {
                   except plain USER) so a cashier user can ring sales. */}
               <Route path="wellness/pos" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="POS requires staff access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'pos', action: 'read' }}
+                    feature="Point of Sale"
+                    lockedInPlace
+                  >
                     <WellnessPointOfSale />
                   </RoleGuard>
                 </WellnessOnly>

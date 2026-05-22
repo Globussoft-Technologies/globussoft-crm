@@ -70,6 +70,11 @@ import { NumberInput } from '../../utils/numberInput';
 import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 
 const tierColor = { high: '#ef4444', medium: '#f59e0b', low: '#64748b' };
+const TICKET_TIER_OPTIONS = [
+  { value: 'low', label: 'Low tier' },
+  { value: 'medium', label: 'Medium tier' },
+  { value: 'high', label: 'High tier' },
+];
 const statusColor = { active: '#10b981', completed: '#6366f1', paused: '#f59e0b', cancelled: '#ef4444' };
 
 export default function Services() {
@@ -158,7 +163,7 @@ export default function Services() {
                 filters object — the export reflects the same all-active view
                 as the catalog tab. */}
             <CsvImportExportToolbar entity="services" label="Services" formats={['csv', 'xlsx']} onImported={load} />
-            <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+            <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
               <Plus size={16} /> {showAdd ? 'Cancel' : 'New service'}
             </button>
           </div>
@@ -175,7 +180,7 @@ export default function Services() {
                 const el = document.getElementById('package-builder-anchor');
                 if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
               }}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
             >
               <Plus size={16} /> Create Package
             </button>
@@ -313,11 +318,11 @@ function CatalogTab({ services, loading, categories, categoriesLoading, showAdd,
             </div>
             <div>
               <label style={fieldLabel}>Ticket tier</label>
-              <select value={form.ticketTier} onChange={(e) => setForm({ ...form, ticketTier: e.target.value })} style={inputStyle}>
-                <option value="low">Low tier</option>
-                <option value="medium">Medium tier</option>
-                <option value="high">High tier</option>
-              </select>
+              <SingleSelectDropdown
+                value={form.ticketTier}
+                onChange={(v) => setForm({ ...form, ticketTier: v })}
+                options={TICKET_TIER_OPTIONS}
+              />
               {/* #364: explain tier semantics inline so the dropdown isn't a guessing game. */}
               <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.3rem', lineHeight: 1.4 }}>
                 LOW = quick consult / under {currencySymbol()}2K · MED = standard treatment / {currencySymbol()}2K-{currencySymbol()}10K · HIGH = procedure / {currencySymbol()}10K+
@@ -1157,7 +1162,12 @@ const labelStyle = {
 
 function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onChange }) {
   const [isOpen, setIsOpen] = useState(false);
-  const containerRef = useRef(null);
+  // Portal-rendered menu uses fixed positioning anchored to the button's
+  // viewport rect — sidesteps the .glass parent's backdrop-filter, which
+  // creates a stacking context that trapped the previous absolute-positioned
+  // menu behind the sibling service cards.
+  const [menuRect, setMenuRect] = useState({ top: 0, left: 0, width: 0 });
+  const buttonRef = useRef(null);
 
   const selectedNames = categories
     .filter(cat => selectedIds.includes(cat.id))
@@ -1172,9 +1182,28 @@ function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onCha
     }
   };
 
+  const updateRect = () => {
+    if (!buttonRef.current) return;
+    const r = buttonRef.current.getBoundingClientRect();
+    setMenuRect({ top: r.bottom + 8, left: r.left, width: r.width });
+  };
+
   const handleOpen = () => {
+    updateRect();
     setIsOpen(true);
   };
+
+  // Re-anchor menu on scroll / resize while open.
+  useEffect(() => {
+    if (!isOpen) return;
+    updateRect();
+    window.addEventListener('scroll', updateRect, true);
+    window.addEventListener('resize', updateRect);
+    return () => {
+      window.removeEventListener('scroll', updateRect, true);
+      window.removeEventListener('resize', updateRect);
+    };
+  }, [isOpen]);
 
   // Close on escape key
   useEffect(() => {
@@ -1190,15 +1219,21 @@ function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onCha
   }, [isOpen]);
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', width: '100%' }}>
+    <div style={{ position: 'relative', width: '100%' }}>
       <button
+        ref={buttonRef}
         type="button"
         onClick={handleOpen}
         style={{
           width: '100%',
           padding: '0.6rem 0.75rem',
-          background: isOpen ? 'rgba(0, 0, 0, 0.3)' : 'rgba(0, 0, 0, 0.2)',
-          border: isOpen ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid rgba(255, 255, 255, 0.1)',
+          // --surface-color matches the adjacent <input> background under each
+          // theme (wellness.css force-overrides input bg to white in light mode;
+          // buttons need the same treatment to avoid a faint teal-grey tint).
+          background: 'var(--surface-color, rgba(255,255,255,0.04))',
+          border: isOpen
+            ? '1px solid var(--primary-color, var(--accent-color))'
+            : '1px solid var(--border-color, rgba(255,255,255,0.1))',
           borderRadius: '6px',
           color: 'var(--text-primary)',
           display: 'flex',
@@ -1207,8 +1242,6 @@ function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onCha
           cursor: 'pointer',
           fontSize: '0.9rem',
           transition: 'border-color 0.2s, background 0.2s',
-          position: 'relative',
-          zIndex: 1,
         }}
       >
         <span style={{ textAlign: 'left', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1217,7 +1250,7 @@ function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onCha
         <ChevronDown size={16} style={{ marginLeft: '0.5rem', flexShrink: 0, transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
       </button>
 
-      {isOpen && (
+      {isOpen && createPortal(
         <>
           {/* Backdrop overlay - closes dropdown on click */}
           <div
@@ -1232,20 +1265,19 @@ function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onCha
             onClick={() => setIsOpen(false)}
           />
 
-          {/* Dropdown menu - white background, positioned directly below button */}
+          {/* Dropdown menu — themed via CSS vars so light + dark mode both render legibly */}
           <div
             style={{
-              position: 'absolute',
-              top: '100%',
-              left: 0,
-              right: 0,
-              marginTop: '8px',
-              height: '340px',
-              background: '#ffffff',
-              border: '1px solid #e5e7eb',
+              position: 'fixed',
+              top: menuRect.top,
+              left: menuRect.left,
+              width: menuRect.width,
+              maxHeight: '340px',
+              background: 'var(--bg-color)',
+              border: '1px solid var(--border-color)',
               borderRadius: '8px',
               overflow: 'hidden',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.08)',
+              boxShadow: 'var(--shadow-lg, 0 20px 25px -5px rgba(0,0,0,0.25), 0 10px 10px -5px rgba(0,0,0,0.15))',
               zIndex: 10000,
               display: 'flex',
               flexDirection: 'column',
@@ -1260,51 +1292,54 @@ function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onCha
               }}
             >
               {categoriesLoading ? (
-                <div style={{ padding: '1rem', color: '#6b7280', textAlign: 'center', fontSize: '0.9rem' }}>
+                <div style={{ padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>
                   Loading categories...
                 </div>
               ) : categories.length === 0 ? (
-                <div style={{ padding: '1rem', color: '#6b7280', textAlign: 'center', fontSize: '0.9rem' }}>
+                <div style={{ padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>
                   No categories available
                 </div>
               ) : (
-                categories.map((cat, idx) => (
-                  <label
-                    key={cat.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.75rem',
-                      padding: '0.65rem 1rem',
-                      cursor: 'pointer',
-                      borderBottom: idx < categories.length - 1 ? '1px solid #f3f4f6' : 'none',
-                      transition: 'background 0.15s ease',
-                      backgroundColor: selectedIds.includes(cat.id) ? '#eff6ff' : 'transparent',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!selectedIds.includes(cat.id)) {
-                        e.currentTarget.style.backgroundColor = '#f9fafb';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = selectedIds.includes(cat.id) ? '#eff6ff' : 'transparent';
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.includes(cat.id)}
-                      onChange={() => handleToggle(cat.id)}
+                categories.map((cat, idx) => {
+                  const isSelected = selectedIds.includes(cat.id);
+                  return (
+                    <label
+                      key={cat.id}
                       style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        padding: '0.65rem 1rem',
                         cursor: 'pointer',
-                        accentColor: '#3b82f6',
-                        width: '16px',
-                        height: '16px',
-                        flexShrink: 0,
+                        borderBottom: idx < categories.length - 1 ? '1px solid var(--border-light, var(--border-color))' : 'none',
+                        transition: 'background 0.15s ease',
+                        backgroundColor: isSelected ? 'var(--subtle-bg-3, var(--accent-bg))' : 'transparent',
                       }}
-                    />
-                    <span style={{ fontSize: '0.9rem', color: '#1f2937', fontWeight: selectedIds.includes(cat.id) ? 500 : 400 }}>{cat.name}</span>
-                  </label>
-                ))
+                      onMouseEnter={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.backgroundColor = 'var(--hover-bg, var(--subtle-bg))';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = isSelected ? 'var(--subtle-bg-3, var(--accent-bg))' : 'transparent';
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleToggle(cat.id)}
+                        style={{
+                          cursor: 'pointer',
+                          accentColor: 'var(--primary-color, var(--accent-color))',
+                          width: '16px',
+                          height: '16px',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span style={{ fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: isSelected ? 500 : 400 }}>{cat.name}</span>
+                    </label>
+                  );
+                })
               )}
             </div>
 
@@ -1313,10 +1348,10 @@ function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onCha
               <div
                 style={{
                   padding: '0.65rem 1rem',
-                  borderTop: '1px solid #f3f4f6',
+                  borderTop: '1px solid var(--border-light, var(--border-color))',
                   fontSize: '0.8rem',
-                  color: '#6b7280',
-                  backgroundColor: '#f9fafb',
+                  color: 'var(--text-secondary)',
+                  backgroundColor: 'var(--subtle-bg, var(--hover-bg))',
                   textAlign: 'center',
                 }}
               >
@@ -1324,7 +1359,145 @@ function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onCha
               </div>
             )}
           </div>
-        </>
+        </>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+// Single-select variant of MultiSelectDropdown — same portal anchoring + theme
+// vars so light/dark and wellness/generic all render consistently. Replaces the
+// native <select> which leaks browser-default chrome on the ticket-tier field.
+function SingleSelectDropdown({ value, onChange, options }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [menuRect, setMenuRect] = useState({ top: 0, left: 0, width: 0 });
+  const buttonRef = useRef(null);
+
+  const selected = options.find((o) => o.value === value);
+  const selectedLabel = selected ? selected.label : '';
+
+  const updateRect = () => {
+    if (!buttonRef.current) return;
+    const r = buttonRef.current.getBoundingClientRect();
+    setMenuRect({ top: r.bottom + 8, left: r.left, width: r.width });
+  };
+
+  const handleOpen = () => {
+    updateRect();
+    setIsOpen((v) => !v);
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    updateRect();
+    window.addEventListener('scroll', updateRect, true);
+    window.addEventListener('resize', updateRect);
+    return () => {
+      window.removeEventListener('scroll', updateRect, true);
+      window.removeEventListener('resize', updateRect);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && isOpen) setIsOpen(false);
+    };
+    if (isOpen) {
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [isOpen]);
+
+  return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={handleOpen}
+        style={{
+          width: '100%',
+          padding: '0.6rem 0.75rem',
+          background: 'var(--surface-color, rgba(255,255,255,0.04))',
+          border: isOpen
+            ? '1px solid var(--primary-color, var(--accent-color))'
+            : '1px solid var(--border-color, rgba(255,255,255,0.1))',
+          borderRadius: '6px',
+          color: 'var(--text-primary)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          cursor: 'pointer',
+          fontSize: '0.9rem',
+          transition: 'border-color 0.2s, background 0.2s',
+        }}
+      >
+        <span style={{ textAlign: 'left', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {selectedLabel}
+        </span>
+        <ChevronDown size={16} style={{ marginLeft: '0.5rem', flexShrink: 0, transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+      </button>
+
+      {isOpen && createPortal(
+        <>
+          <div
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9998 }}
+            onClick={() => setIsOpen(false)}
+          />
+          <div
+            role="listbox"
+            style={{
+              position: 'fixed',
+              top: menuRect.top,
+              left: menuRect.left,
+              width: menuRect.width,
+              maxHeight: '340px',
+              background: 'var(--bg-color)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              boxShadow: 'var(--shadow-lg, 0 20px 25px -5px rgba(0,0,0,0.25), 0 10px 10px -5px rgba(0,0,0,0.15))',
+              zIndex: 10000,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div style={{ overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
+              {options.map((opt, idx) => {
+                const isSelected = opt.value === value;
+                return (
+                  <div
+                    key={opt.value}
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => { onChange(opt.value); setIsOpen(false); }}
+                    style={{
+                      padding: '0.65rem 1rem',
+                      cursor: 'pointer',
+                      borderBottom: idx < options.length - 1 ? '1px solid var(--border-light, var(--border-color))' : 'none',
+                      transition: 'background 0.15s ease',
+                      backgroundColor: isSelected ? 'var(--subtle-bg-3, var(--accent-bg))' : 'transparent',
+                      fontSize: '0.9rem',
+                      color: 'var(--text-primary)',
+                      fontWeight: isSelected ? 500 : 400,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isSelected) {
+                        e.currentTarget.style.backgroundColor = 'var(--hover-bg, var(--subtle-bg))';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = isSelected ? 'var(--subtle-bg-3, var(--accent-bg))' : 'transparent';
+                    }}
+                  >
+                    {opt.label}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>,
+        document.body
       )}
     </div>
   );

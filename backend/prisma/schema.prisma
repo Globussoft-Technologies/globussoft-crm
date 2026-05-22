@@ -949,18 +949,18 @@ model SequenceStep {
 }
 
 model Product {
-  id           Int      @id @default(autoincrement())
-  name         String
-  sku          String?  @unique
-  description  String?  @db.Text
-  price        Float // sale_price / MRP
-  isRecurring  Boolean  @default(true) // true = MRR, false = One-Time
+  id            Int      @id @default(autoincrement())
+  name          String
+  sku           String?  @unique
+  description   String?  @db.Text
+  price         Float // sale_price / MRP
+  isRecurring   Boolean  @default(true) // true = MRR, false = One-Time
   // Agent A: low stock support — threshold=0 disables alerting per product
-  threshold    Int      @default(0) // threshold in complete units
-  currentStock Int      @default(0) // number of complete units in stock
-  partialMlUsed Float   @default(0) // ml consumed from the current open unit (0 to volume-1)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @default(now()) @updatedAt
+  threshold     Int      @default(0) // threshold in complete units
+  currentStock  Int      @default(0) // number of complete units in stock
+  partialMlUsed Float    @default(0) // ml consumed from the current open unit (0 to volume-1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
 
   // Product catalog fields
   brandName       String? // Brand/Manufacturer
@@ -2670,7 +2670,7 @@ model Patient {
   // Patient tag join rows. Soft-deletes leave PatientTag rows orphaned —
   // the route handler filters by patient.deletedAt at read time, so dangling
   // tag links resurrect on patient restore.
-  tags      PatientTag[]
+  tags PatientTag[]
 
   /// One Patient per (tenant, normalized phone number). DB-level dedup gate guarding against the recurring "same patient created N times by overlapping intake flows" inflation pattern. Cross-tenant duplicates allowed — different clinics can each have a Patient with phone +91-9876543210.
   // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic
@@ -3396,32 +3396,32 @@ model Vendor {
 }
 
 model InventoryReceipt {
-  id            Int       @id @default(autoincrement())
-  tenantId      Int       @default(1)
-  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                    Int       @id @default(autoincrement())
+  tenantId              Int       @default(1)
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // Tenant-scoped human-readable id ("RCP-2026-0001"). Generated server-side
   // per tenant — do NOT use the autoincrement id in customer-facing artefacts.
-  receiptNumber String
+  receiptNumber         String
   // Supplier's own invoice number (e.g. "LE0155", "BHNS/TI/26/01175") — distinct
   // from our internal receiptNumber. Captured for vendor reconciliation and
   // GST audit trails. Optional because samples / in-kind transfers have no
   // paper invoice.
   supplierInvoiceNumber String?
-  vendorId      Int?
-  vendor        Vendor?   @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-  productId     Int
-  product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
-  quantity      Float // received units (Float so we can support fractional mL/g)
-  unitCost      Float
-  totalCost     Float // computed = quantity * unitCost; stored for fast P&L rollups
+  vendorId              Int?
+  vendor                Vendor?   @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  productId             Int
+  product               Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity              Float // received units (Float so we can support fractional mL/g)
+  unitCost              Float
+  totalCost             Float // computed = quantity * unitCost; stored for fast P&L rollups
   // Optional batch / expiry tracking — wellness clinical inventory needs this
   // for FIFO consumption + expiry alerts.
-  batchNumber   String?
-  expiryDate    DateTime?
-  receivedAt    DateTime  @default(now())
-  receivedBy    Int // userId
-  notes         String?   @db.Text
-  createdAt     DateTime  @default(now())
+  batchNumber           String?
+  expiryDate            DateTime?
+  receivedAt            DateTime  @default(now())
+  receivedBy            Int // userId
+  notes                 String?   @db.Text
+  createdAt             DateTime  @default(now())
 
   @@unique([tenantId, receiptNumber])
   @@index([tenantId, productId, receivedAt])
@@ -4059,46 +4059,46 @@ model CommissionProfile {
 // Stores historical commission data with detailed revenue breakdowns.
 // ─────────────────────────────────────────────────────────────────────
 model CommissionData {
-  id                               Int      @id @default(autoincrement())
-  tenantId                         Int      @default(1)
-  tenant                           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  userId                           Int?
-  user                             User?    @relation("commissionData", fields: [userId], references: [id], onDelete: SetNull)
-  employeeName                     String
-  periodStart                      DateTime
-  periodEnd                        DateTime
-  serviceRevenue                   Decimal  @default(0) @db.Decimal(14, 2)
-  packageRedemptionCommissionBase  Decimal  @default(0) @db.Decimal(14, 2)
-  packageRedemptionCommissionBasePrice Decimal @default(0) @db.Decimal(14, 2)
-  serviceCount                     Int      @default(0)
-  serviceCommissionableAmount      Decimal  @default(0) @db.Decimal(14, 2)
-  serviceCommission                Decimal  @default(0) @db.Decimal(14, 2)
-  productRevenue                   Decimal  @default(0) @db.Decimal(14, 2)
-  productCount                     Int      @default(0)
-  productCommissionableAmount      Decimal  @default(0) @db.Decimal(14, 2)
-  productCommission                Decimal  @default(0) @db.Decimal(14, 2)
-  packageRevenue                   Decimal  @default(0) @db.Decimal(14, 2)
-  packageCount                     Int      @default(0)
-  packageCommissionableAmount      Decimal  @default(0) @db.Decimal(14, 2)
-  packageCommission                Decimal  @default(0) @db.Decimal(14, 2)
-  membershipRevenue                Decimal  @default(0) @db.Decimal(14, 2)
-  membershipCount                  Int      @default(0)
-  membershipCommissionableAmount   Decimal  @default(0) @db.Decimal(14, 2)
-  membershipCommission             Decimal  @default(0) @db.Decimal(14, 2)
-  prepaidCardRevenue               Decimal  @default(0) @db.Decimal(14, 2)
-  prepaidCardCount                 Int      @default(0)
-  prepaidCardCommissionableAmount  Decimal  @default(0) @db.Decimal(14, 2)
-  prepaidCardCommission            Decimal  @default(0) @db.Decimal(14, 2)
-  totalCommissionableAmount        Decimal  @default(0) @db.Decimal(14, 2)
-  commission                       Decimal  @default(0) @db.Decimal(14, 2)
-  walletRedemption                 Decimal  @default(0) @db.Decimal(14, 2)
-  grossSales                       Decimal  @default(0) @db.Decimal(14, 2)
-  discount                         Decimal  @default(0) @db.Decimal(14, 2)
-  netSales                         Decimal  @default(0) @db.Decimal(14, 2)
-  tax                              Decimal  @default(0) @db.Decimal(14, 2)
-  totalSales                       Decimal  @default(0) @db.Decimal(14, 2)
-  createdAt                        DateTime @default(now())
-  updatedAt                        DateTime @updatedAt
+  id                                   Int      @id @default(autoincrement())
+  tenantId                             Int      @default(1)
+  tenant                               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId                               Int?
+  user                                 User?    @relation("commissionData", fields: [userId], references: [id], onDelete: SetNull)
+  employeeName                         String
+  periodStart                          DateTime
+  periodEnd                            DateTime
+  serviceRevenue                       Decimal  @default(0) @db.Decimal(14, 2)
+  packageRedemptionCommissionBase      Decimal  @default(0) @db.Decimal(14, 2)
+  packageRedemptionCommissionBasePrice Decimal  @default(0) @db.Decimal(14, 2)
+  serviceCount                         Int      @default(0)
+  serviceCommissionableAmount          Decimal  @default(0) @db.Decimal(14, 2)
+  serviceCommission                    Decimal  @default(0) @db.Decimal(14, 2)
+  productRevenue                       Decimal  @default(0) @db.Decimal(14, 2)
+  productCount                         Int      @default(0)
+  productCommissionableAmount          Decimal  @default(0) @db.Decimal(14, 2)
+  productCommission                    Decimal  @default(0) @db.Decimal(14, 2)
+  packageRevenue                       Decimal  @default(0) @db.Decimal(14, 2)
+  packageCount                         Int      @default(0)
+  packageCommissionableAmount          Decimal  @default(0) @db.Decimal(14, 2)
+  packageCommission                    Decimal  @default(0) @db.Decimal(14, 2)
+  membershipRevenue                    Decimal  @default(0) @db.Decimal(14, 2)
+  membershipCount                      Int      @default(0)
+  membershipCommissionableAmount       Decimal  @default(0) @db.Decimal(14, 2)
+  membershipCommission                 Decimal  @default(0) @db.Decimal(14, 2)
+  prepaidCardRevenue                   Decimal  @default(0) @db.Decimal(14, 2)
+  prepaidCardCount                     Int      @default(0)
+  prepaidCardCommissionableAmount      Decimal  @default(0) @db.Decimal(14, 2)
+  prepaidCardCommission                Decimal  @default(0) @db.Decimal(14, 2)
+  totalCommissionableAmount            Decimal  @default(0) @db.Decimal(14, 2)
+  commission                           Decimal  @default(0) @db.Decimal(14, 2)
+  walletRedemption                     Decimal  @default(0) @db.Decimal(14, 2)
+  grossSales                           Decimal  @default(0) @db.Decimal(14, 2)
+  discount                             Decimal  @default(0) @db.Decimal(14, 2)
+  netSales                             Decimal  @default(0) @db.Decimal(14, 2)
+  tax                                  Decimal  @default(0) @db.Decimal(14, 2)
+  totalSales                           Decimal  @default(0) @db.Decimal(14, 2)
+  createdAt                            DateTime @default(now())
+  updatedAt                            DateTime @updatedAt
 
   @@index([tenantId, userId])
   @@index([tenantId, periodStart, periodEnd])
@@ -4199,16 +4199,31 @@ model Role {
   isSystem    Boolean  @default(false) // ADMIN, CUSTOMER, OWNER — immutable key
   isActive    Boolean  @default(true)
   userType    String   @default("STAFF") // which user type this role applies to
+  // Post-login landing route for users with this role. Null falls back to
+  // tenant-vertical default (/wellness or /dashboard). Set per-role from the
+  // Roles & Permissions admin UI so adding a new role becomes a config
+  // change rather than a code change in Login.jsx / App.jsx.
+  landingPath String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   permissions RolePermission[]
   userRoles   UserRole[]
+  widgets     RoleWidget[]
 
   @@unique([tenantId, key])
   @@index([tenantId, isActive])
 }
 
+// Single-role-per-user enforced at the application layer (the assign
+// endpoint at routes/roles.js does a delete-then-create rather than append,
+// and ensureRbacOnBoot.js does the same on every boot). The composite
+// @@unique([userId, roleId]) blocks duplicate (user, role) pairs but DOES
+// NOT prevent a user from having 2+ rows with different roleIds — that
+// invariant is application-enforced for now. Adding @@unique([userId]) at
+// the DB level is the right long-term fix but requires a one-shot dedupe
+// pass against any demo/prod data that pre-dates the contract. Filed for
+// follow-up; track it in TODOS.md when this commit lands.
 model UserRole {
   id           Int      @id @default(autoincrement())
   userId       Int
@@ -4234,23 +4249,55 @@ model RolePermission {
   @@index([roleId])
 }
 
+// Per-role widget layout for the /home dashboard. Each row pins a widget
+// from the static widget registry (frontend/src/components/home/widgets/)
+// to a specific role at a specific position. Admin configures this via
+// the Roles & Permissions UI; staff with this role see the configured
+// widgets on their /home page in the configured order. Widgets the user
+// lacks PERMISSIONS for are skipped at render time even if the row exists
+// (defence in depth — a role row could have an out-of-date widget after
+// permissions are pared back).
+//
+// position: smaller renders first. Gaps allowed (the configurator inserts
+// new widgets at the end with position = max+10).
+// isEnabled: soft-disable a widget without losing its position; lets admin
+// toggle a widget on/off without re-running the drag-drop layout.
+// settings: optional JSON for per-row config (e.g. "show 7-day or 30-day
+// window on RevenueVsTarget"). Kept as String? @db.Text because Prisma's
+// MySQL connector doesn't have a native JSON type that round-trips cleanly
+// — sanitizeJsonForStringColumn pattern applies.
+model RoleWidget {
+  id        Int      @id @default(autoincrement())
+  roleId    Int
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  widgetKey String // e.g. "today-appointments" — matches widget registry
+  position  Int      @default(0)
+  isEnabled Boolean  @default(true)
+  settings  String?  @db.Text // JSON; null = widget defaults
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([roleId, widgetKey])
+  @@index([roleId, position])
+}
+
 // Wave 3: Staff availability blocks (breaks, leave, personal time, etc.)
 // Prevents bookings during these periods. Used by wellness appointment booking
 // and calendar availability calculations.
 model BlockTime {
-  id        Int      @id @default(autoincrement())
-  userId    Int      // Staff member
-  user      User     @relation("UserBlockTimes", fields: [userId], references: [id], onDelete: Cascade)
+  id     Int  @id @default(autoincrement())
+  userId Int // Staff member
+  user   User @relation("UserBlockTimes", fields: [userId], references: [id], onDelete: Cascade)
 
-  startAt   DateTime
-  endAt     DateTime
-  reason    String   // "Lunch Break", "Leave", "Personal", "Maintenance", etc.
+  startAt DateTime
+  endAt   DateTime
+  reason  String // "Lunch Break", "Leave", "Personal", "Maintenance", etc.
 
   // Recurrence: null (one-time), "daily", "weekly", "monthly"
   recurring String?
 
-  tenantId  Int
-  tenant    Tenant   @relation("TenantBlockTimes", fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId Int
+  tenant   Tenant @relation("TenantBlockTimes", fields: [tenantId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4266,17 +4313,17 @@ model BlockTime {
 // tag and the @@unique constraint will reject a recreate; we keep this
 // simple to start.
 model Tag {
-  id        Int       @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   name      String
   // Optional hex like #265855 for chip rendering. Falls back to a
   // deterministic theme colour at the UI layer when null.
   color     String?
   tenantId  Int
-  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  patients  PatientTag[]
+  patients PatientTag[]
 
   @@unique([tenantId, name])
   @@index([tenantId])

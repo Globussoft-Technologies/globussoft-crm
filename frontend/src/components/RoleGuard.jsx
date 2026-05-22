@@ -3,11 +3,26 @@ import { Navigate } from 'react-router-dom';
 import { Lock } from 'lucide-react';
 import { AuthContext } from '../App';
 import { useNotify } from '../utils/notify';
+import { usePermissions } from '../hooks/usePermissions';
 
 /**
  * RoleGuard — route-level RBAC gate.
  *
- * Two modes:
+ * Two checking modes (per call) — only one needs to apply, both can be
+ * supplied for belt-and-braces:
+ *  - Permission mode (preferred): `requiredPermission={{module, action}}` or
+ *    `requiredPermissions=[{module, action}, …]`. Passes when the user has
+ *    ALL listed permissions in their effective grant set (resolved via the
+ *    same /api/auth/me/permissions cache `usePermissions` uses). This is
+ *    the mode that aligns with the page-catalog gating in Sidebar.jsx —
+ *    any role (system or custom) whose permissions overlap the page's
+ *    requiredPermissions passes the gate.
+ *  - Role mode (legacy): `allow={["ADMIN", "MANAGER", ...]}`. Hard-codes
+ *    against the user's User.role string. Kept for info-disclosure routes
+ *    that don't yet have a clean permission mapping (audit-log, settings,
+ *    field-permissions) — those will migrate later.
+ *
+ * Two render modes:
  *  - Strict (default): redirect away from the route + emit one denial toast.
  *    Used for info-disclosure-sensitive routes like /audit-log, /staff,
  *    /field-permissions, /settings — even the chrome of the page would leak
@@ -16,34 +31,32 @@ import { useNotify } from '../utils/notify';
  *    panel WHERE the user navigated, so the URL bar stays put and the user
  *    keeps context. Used for the wellness/marketing manager-or-admin family
  *    (#721 / #727). Toast copy follows the shared pattern
- *    `You don't have access to <feature>. Required role: <roles>.
- *      Contact your administrator to request access.`
+ *    `You don't have access to <feature>. Contact your administrator to
+ *     request access.`
  *
  * Auth-loading safety: when the AuthContext is still rehydrating (`loading`
- * true) OR the user object is null AFTER loading completes (corrupted session,
- * cold-start with token but missing user cache), we DO NOT fire the toast +
- * DO NOT redirect to /dashboard — that would surface a misleading "you don't
- * have access" message to a user whose session simply hadn't finished loading,
- * and was the most plausible repro path for #721's "ADMIN sees manager-access
- * toast" report. Instead we render a silent splash; the AuthContext provider
- * upstream is responsible for bouncing to /login if the token is gone.
+ * true), the user object is null AFTER loading completes, OR permissions
+ * are still resolving on first render, we DO NOT fire the toast + DO NOT
+ * redirect — that would surface a misleading "you don't have access"
+ * message to a user whose session simply hadn't finished loading. Instead
+ * we render a silent splash; the AuthContext provider upstream is
+ * responsible for bouncing to /login if the token is gone.
  *
  * Props:
- *   allow          — string | string[]    role(s) that pass the gate
- *   children       — React node           the protected page
- *   feature        — string (optional)    user-facing feature label, e.g.
- *                                          "Gift Cards". Drives the toast
- *                                          + locked-panel heading copy.
- *   roles          — string (optional)    user-facing role list, e.g.
- *                                          "manager (or admin)". Falls back
- *                                          to a humanised form of `allow`.
- *   message        — string (optional)    legacy escape hatch — full custom
- *                                          toast text. Overrides feature/roles.
- *   redirectTo     — string (default /dashboard)
- *                                          where to send the user in strict
- *                                          mode. Unused in lockedInPlace.
- *   lockedInPlace  — bool (default false) opt-in to the in-place locked panel
- *                                          (preserves URL context).
+ *   requiredPermission   — {module, action}              single perm required
+ *   requiredPermissions  — Array<{module, action}>       all perms required (AND)
+ *   allow                — string | string[]             legacy role-string gate
+ *   children             — React node                    the protected page
+ *   feature              — string (optional)             user-facing feature label,
+ *                                                        e.g. "Gift Cards". Drives
+ *                                                        the toast + locked-panel
+ *                                                        heading copy.
+ *   roles                — string (optional)             user-facing role list
+ *                                                        (legacy mode only).
+ *   message              — string (optional)             legacy escape hatch.
+ *   redirectTo           — string (default /dashboard)   where to send the user
+ *                                                        in strict mode.
+ *   lockedInPlace        — bool (default false)          opt-in in-place panel.
  */
 const ROLE_LABELS = {
   ADMIN: 'admin',
@@ -60,8 +73,17 @@ function humaniseRoles(allow) {
   return `${labels.slice(0, -1).join(', ')}, or ${labels[labels.length - 1]}`;
 }
 
-function buildDeniedMessage({ message, feature, roles, allow }) {
+function buildDeniedMessage({ message, feature, roles, allow, permissionMode }) {
   if (message) return message;
+  // Permission-mode denial deliberately omits the role list — we don't want
+  // to surface internal RBAC role names to staff. "Contact your administrator"
+  // is the right copy because permission grants are admin-controlled.
+  if (permissionMode) {
+    if (feature) {
+      return `You don't have access to ${feature}. Contact your administrator to request access.`;
+    }
+    return "You don't have access to that page. Contact your administrator to request access.";
+  }
   const rolesText = roles || humaniseRoles(allow);
   if (feature && rolesText) {
     return `You don't have access to ${feature}. Required role: ${rolesText}. Contact your administrator to request access.`;
@@ -74,6 +96,8 @@ function buildDeniedMessage({ message, feature, roles, allow }) {
 
 export default function RoleGuard({
   allow,
+  requiredPermission,
+  requiredPermissions,
   children,
   redirectTo = '/dashboard',
   message,
@@ -84,21 +108,47 @@ export default function RoleGuard({
   const auth = useContext(AuthContext) || {};
   const { user, loading, token } = auth;
   const notify = useNotify();
+  const {
+    hasAllPermissions,
+    isReady: permissionsReady,
+  } = usePermissions();
   const role = user?.role;
-  const allowed = Array.isArray(allow) ? allow.includes(role) : role === allow;
   const toastedRef = useRef(false);
 
+  // Permission mode wins when present — it's the more granular check and
+  // aligns with the page catalog. Falls back to legacy `allow` role-string
+  // matching only when no permission props are supplied.
+  const permsList = useMemo(() => {
+    if (Array.isArray(requiredPermissions) && requiredPermissions.length > 0) {
+      return requiredPermissions;
+    }
+    if (requiredPermission && requiredPermission.module && requiredPermission.action) {
+      return [requiredPermission];
+    }
+    return null;
+  }, [requiredPermission, requiredPermissions]);
+
+  const permissionMode = permsList !== null;
+  const allowed = permissionMode
+    ? hasAllPermissions(permsList)
+    : Array.isArray(allow)
+      ? allow.includes(role)
+      : role === allow;
+
   const deniedMessage = useMemo(
-    () => buildDeniedMessage({ message, feature, roles, allow }),
-    [message, feature, roles, allow],
+    () => buildDeniedMessage({ message, feature, roles, allow, permissionMode }),
+    [message, feature, roles, allow, permissionMode],
   );
 
   // #721 auth-loading safety: don't fire the denial toast when the session
-  // is still rehydrating. The upstream provider already gates initial render
-  // on `loading`, but a corrupted/race-y session can leave user=null after
-  // loading completes; firing the manager-access toast in that case is the
-  // most likely repro for the user's "ADMIN sees manager-access toast" report.
-  const sessionReady = !loading && !!user && !!role;
+  // is still rehydrating, OR when we're in permission mode but the perms
+  // haven't finished resolving yet. The upstream provider already gates
+  // initial render on `loading`, but a corrupted/race-y session can leave
+  // user=null after loading completes; firing the access toast in that
+  // case is the most likely repro for the user's "ADMIN sees manager-
+  // access toast" report.
+  const sessionReady =
+    !loading && !!user && !!role && (!permissionMode || permissionsReady);
 
   useEffect(() => {
     if (sessionReady && !allowed && !toastedRef.current) {
@@ -124,7 +174,12 @@ export default function RoleGuard({
   // In-place locked panel (#721 / #727 UX): keep the user on the URL they
   // navigated to + show a friendly explanation instead of a silent redirect.
   if (lockedInPlace) {
-    return <LockedPanel feature={feature} rolesText={roles || humaniseRoles(allow)} />;
+    return (
+      <LockedPanel
+        feature={feature}
+        rolesText={permissionMode ? null : roles || humaniseRoles(allow)}
+      />
+    );
   }
 
   // Strict mode — redirect (legacy /audit-log family).

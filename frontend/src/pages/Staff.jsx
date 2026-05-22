@@ -101,13 +101,18 @@ export default function Staff() {
   // PRD Gap §1.5 — commission profiles are listed in the edit modal as a
   // dropdown so admins can assign payroll rules per staff member.
   const [commissionProfiles, setCommissionProfiles] = useState([]);
+  // RBAC roles available in the current tenant. Populates the "Job role"
+  // dropdown in both Add Staff + Edit Staff modals so admins can assign
+  // any custom role (Doctor / Nurse / Receptionist / Telecaller / …)
+  // without going through a separate Roles & Permissions step.
+  const [availableRoles, setAvailableRoles] = useState([]);
   // Staff availability tracking
   const [availDate, setAvailDate] = useState(new Date());
   const [availability, setAvailability] = useState([]);
   const [availLoading, setAvailLoading] = useState(false);
   const [showAvailability, setShowAvailability] = useState(false);
 
-  useEffect(() => { loadStaff(); loadCommissionProfiles(); }, []);
+  useEffect(() => { loadStaff(); loadCommissionProfiles(); loadAvailableRoles(); }, []);
 
   // Load availability when date changes or showAvailability is toggled
   useEffect(() => {
@@ -126,6 +131,31 @@ export default function Staff() {
       // is preserved on save because we only send commissionProfileId when
       // it actually changed.
       setCommissionProfiles([]);
+    }
+  };
+
+  // Fetch the list of roles in the current tenant. Filtered to STAFF (no
+  // CUSTOMER, no platform OWNER) since this page only manages staff. The
+  // dropdown options populate from /api/roles so a new Custom role becomes
+  // immediately assignable from the Add Staff modal — no code change needed.
+  const loadAvailableRoles = async () => {
+    if (!canManageStaff) return;
+    try {
+      const res = await fetchApi('/api/roles');
+      const all = Array.isArray(res?.roles) ? res.roles : [];
+      const staffOnly = all.filter(
+        (r) => (!r.userType || r.userType === 'STAFF') && r.isActive !== false,
+      );
+      // Sort: System roles first (ADMIN / MANAGER), then Custom alphabetical
+      // so the dropdown reads predictably across sessions.
+      staffOnly.sort((a, b) => {
+        if (a.isSystem !== b.isSystem) return a.isSystem ? -1 : 1;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      setAvailableRoles(staffOnly);
+    } catch {
+      // Non-fatal — the dropdown just hides if the catalog can't be loaded.
+      setAvailableRoles([]);
     }
   };
 
@@ -173,6 +203,9 @@ export default function Staff() {
       wellnessRole: member.wellnessRole || '',
       // PRD Gap §1.5 — current commission-profile assignment (null = unassigned).
       commissionProfileId: member.commissionProfileId == null ? '' : String(member.commissionProfileId),
+      // Pre-populate the RBAC role dropdown from the member's current
+      // primary role (surfaced by GET /api/staff). Empty string = unset.
+      rbacRoleId: member.primaryRole?.id ? String(member.primaryRole.id) : '',
     });
   };
 
@@ -191,6 +224,13 @@ export default function Staff() {
           wellnessRole: editing.wellnessRole || null,
           // PRD Gap §1.5 — number or null. '' becomes null (clear assignment).
           commissionProfileId: editing.commissionProfileId === '' ? null : Number(editing.commissionProfileId),
+          // rbacRoleId: '' → explicit null (clear), number → assign that
+          // role, undefined → don't touch. We always send the field here
+          // because the admin can have explicitly cleared the dropdown,
+          // and the backend distinguishes null-vs-undefined.
+          rbacRoleId: editing.rbacRoleId === ''
+            ? null
+            : parseInt(editing.rbacRoleId, 10),
         }),
       });
       notify.success('Staff member updated.');
@@ -203,12 +243,21 @@ export default function Staff() {
     }
   };
 
-  // Open the Add-Staff modal with empty defaults. Role defaults to USER (the
-  // most common new hire). wellnessRole stays empty so the field is hidden
-  // for generic tenants — the backend accepts null and a separate Edit pass
-  // can promote a member to doctor / professional / telecaller later.
+  // Open the Add-Staff modal with empty defaults. The legacy `role` field
+  // (USER/MANAGER/ADMIN) drives the User.role column. The new `rbacRoleId`
+  // is the modern junction-table assignment — what /home routing and the
+  // widget layout key off of. Empty rbacRoleId = let the boot-time RBAC
+  // sync auto-assign the matching role, but for new staff the admin
+  // should always pick one explicitly so the user lands on the right page.
   const openCreate = () => {
-    setCreating({ name: '', email: '', password: '', role: 'USER', wellnessRole: '' });
+    setCreating({
+      name: '',
+      email: '',
+      password: '',
+      role: 'USER',
+      wellnessRole: '',
+      rbacRoleId: '',
+    });
   };
 
   const saveCreate = async () => {
@@ -232,6 +281,11 @@ export default function Staff() {
           password,
           role: creating.role,
           wellnessRole: creating.wellnessRole || null,
+          // Empty string → undefined so the backend treats it as "no
+          // RBAC role specified" rather than "clear to null".
+          rbacRoleId: creating.rbacRoleId
+            ? parseInt(creating.rbacRoleId, 10)
+            : undefined,
         }),
       });
       notify.success(`${name} added to the team.`);
@@ -620,6 +674,18 @@ export default function Staff() {
                         // #323: non-admins see role as a read-only badge.
                         <RoleBadge role={member.role} />
                       )}
+                      {/* Surface the primary RBAC role assignment next to
+                          the legacy access tier. Helps admins eyeball
+                          which staff are mapped to which custom role
+                          (DOCTOR / NURSE / etc.) without opening Edit. */}
+                      {member.primaryRole && member.primaryRole.key !== member.role && (
+                        <div style={{
+                          marginTop: 4, fontSize: '0.7rem', color: 'var(--text-secondary)',
+                          display: 'flex', alignItems: 'center', gap: '0.25rem',
+                        }}>
+                          <Shield size={11} /> {member.primaryRole.name}
+                        </div>
+                      )}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                       {formatDate(member.createdAt)}
@@ -791,6 +857,23 @@ export default function Staff() {
                 </select>
               </label>
               <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Job role <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(drives /home dashboard + permissions)</span>
+                <select
+                  className="input-field"
+                  value={creating.rbacRoleId}
+                  onChange={(e) => setCreating({ ...creating, rbacRoleId: e.target.value })}
+                  data-testid="staff-create-rbac-role"
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                >
+                  <option value="">— Use access tier default —</option>
+                  {availableRoles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}{r.description ? ` — ${r.description}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                 Wellness role <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(optional)</span>
                 <select
                   className="input-field"
@@ -885,7 +968,7 @@ export default function Staff() {
                 />
               </label>
               <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                RBAC role
+                Access tier
                 <select
                   className="input-field"
                   value={editing.role}
@@ -895,6 +978,23 @@ export default function Staff() {
                   <option value="ADMIN">ADMIN</option>
                   <option value="MANAGER">MANAGER</option>
                   <option value="USER">USER</option>
+                </select>
+              </label>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Job role <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(drives /home dashboard + permissions)</span>
+                <select
+                  className="input-field"
+                  value={editing.rbacRoleId}
+                  onChange={(e) => setEditing({ ...editing, rbacRoleId: e.target.value })}
+                  data-testid="staff-edit-rbac-role"
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                >
+                  <option value="">— None —</option>
+                  {availableRoles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}{r.description ? ` — ${r.description}` : ''}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>

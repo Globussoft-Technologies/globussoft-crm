@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
+const { resolvePrimaryRole } = require("../lib/roleResolution");
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 
 // In-memory store for password reset tokens (token -> { userId, expiresAt })
@@ -422,9 +423,22 @@ router.post("/login", async (req, res) => {
       sessionInfo: 'Single tenant per session enforced'
     });
 
+    // Resolve the user's primary RBAC role so the frontend can route to
+    // its configured landingPath on login. Falls back gracefully through
+    // UserRole join → legacy User.role string → null (vertical default).
+    const primaryRole = await resolvePrimaryRole({ id: user.id, role: user.role, tenantId });
+
     res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        wellnessRole: user.wellnessRole || null,
+        primaryRole, // { id, key, name, landingPath } | null
+        landingPath: primaryRole?.landingPath || null,
+      },
       tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US", logoUrl: user.tenant.logoUrl, brandColor: user.tenant.brandColor } : null
     });
   } catch (error) {
@@ -582,7 +596,7 @@ router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, wellnessRole: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
+      select: { id: true, name: true, email: true, role: true, wellnessRole: true, tenantId: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -604,7 +618,17 @@ router.get("/me", verifyToken, async (req, res) => {
       smsConfigured = false;
     }
 
-    res.json({ ...user, features: { smsConfigured } });
+    // Carry primaryRole + landingPath on /me so a page-refresh restores the
+    // same routing context the login response gave us.
+    const primaryRole = await resolvePrimaryRole({ id: user.id, role: user.role, tenantId: user.tenantId });
+
+    res.json({
+      ...user,
+      tenantId: undefined, // hide raw FK; client should use user.tenant.id
+      primaryRole,
+      landingPath: primaryRole?.landingPath || null,
+      features: { smsConfigured },
+    });
   } catch (_error) {
     res.status(500).json({ error: "Failed to fetch profile" });
   }
@@ -634,7 +658,9 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
         isOwner: true,
         userType: 'OWNER',
         roles: ['OWNER'],
-        permissions: [] // OWNER bypasses all checks at middleware level
+        permissions: [], // OWNER bypasses all checks at middleware level
+        primaryRole: null,
+        landingPath: null,
       });
     }
 
@@ -645,11 +671,23 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
     // Extract role names from userRoles
     const roleNames = user.userRoles.map(ur => ur.role.key);
 
+    // Single-role-per-user: surface the primary role + its landing path so
+    // the frontend doesn't need a second round-trip to figure out where to
+    // route this user. Falls back through the same precedence as
+    // /api/auth/login (UserRole join → legacy User.role string → null).
+    const primaryRole = await resolvePrimaryRole({
+      id: user.id,
+      role: user.role,
+      tenantId: req.user.tenantId,
+    });
+
     res.json({
       isOwner: false,
       userType: user.userType || 'STAFF',
       roles: roleNames,
-      permissions: permissionArray
+      permissions: permissionArray,
+      primaryRole,
+      landingPath: primaryRole?.landingPath || null,
     });
   } catch (_error) {
     console.error("[auth/me/permissions] error:", _error);

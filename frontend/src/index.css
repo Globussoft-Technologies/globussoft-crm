@@ -661,3 +661,41 @@ table.stable-table td {
  * issue tracked by #697's audit; the @media rule resolves the most
  * common visual collision (KPI tile wrap).
  */
+
+/* ── /home landing-page polish ─────────────────────────────────────
+ * Home page (pages/Home.jsx + components/home/WidgetCard.jsx) uses
+ * these hover affordances to make the grid feel responsive. Kept here
+ * (not inline styles) so we don't have to track mouseover state in
+ * React just for the lift effect.
+ */
+.widget-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(
+    in srgb,
+    var(--primary-color, var(--accent-color)) 35%,
+    var(--border-color)
+  );
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+
+.widget-card-link:hover {
+  background: color-mix(
+    in srgb,
+    var(--primary-color, var(--accent-color)) 22%,
+    transparent
+  );
+}
+
+.home-quick-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(
+    in srgb,
+    var(--primary-color, var(--accent-color)) 40%,
+    var(--border-color)
+  );
+  background: color-mix(
+    in srgb,
+    var(--primary-color, var(--accent-color)) 6%,
+    var(--subtle-bg-2)
+  );
+}

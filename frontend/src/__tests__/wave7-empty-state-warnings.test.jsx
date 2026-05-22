@@ -99,7 +99,17 @@ describe('#604 DocumentTemplates — empty state CTA', () => {
 // ───────────────────────────────────────────────────────────────
 // #608 — Tasks: past-date warning
 // ───────────────────────────────────────────────────────────────
+// #893 — The Enqueue Activity form was refactored from an always-visible
+// inline form into a header CTA + drawer (commit 8269e20, mirrors the
+// 50ac575 Leads.jsx pattern). The form fields + the past-date warning
+// + the data-testid hooks all live inside the drawer now, which only
+// mounts after the CTA is clicked. Call openTaskDrawer() before any
+// field interaction. The CTA has aria-label "Create a new task".
 describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
+  const openTaskDrawer = () => {
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+  };
+
   it('shows the warning when dueDate is in the past', async () => {
     const Tasks = (await import('../pages/Tasks')).default;
     fetchApiMock.mockImplementation((url) => {
@@ -118,6 +128,9 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
 
     // No warning before a date is picked.
     expect(screen.queryByTestId('task-past-date-warning')).not.toBeInTheDocument();
+
+    // #893: open the drawer to mount the datetime-local input.
+    openTaskDrawer();
 
     // Pick a date well in the past (yesterday relative to now).
     const past = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -153,6 +166,9 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
     );
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+
+    // #893: open the drawer to mount the datetime-local input.
+    openTaskDrawer();
 
     // Pick a date a week ahead.
     const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);

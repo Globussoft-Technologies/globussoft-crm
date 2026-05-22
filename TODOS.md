@@ -65,6 +65,16 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 | `875c082` | Phase 3 scaffold | Visa Sure `/travel/visa/*` landing + sidebar Visa Sure group (admin-only) + 3 shell pages (Dashboard / Applications / Checklists) all linking to the PRD |
 | `46c61d8` | Phase 2 LLM consumer | Travel Stall personalised 3-5 destination PDF endpoint (4th LLM-router consumer); STUB markers for Q11 LLM keys + Q22 brand assets; 12 gate spec cases wired into deploy.yml + coverage.yml |
 
+**Tick #2 (cron) shipped 3/3 PRDs in parallel:**
+
+| SHA | PRD file | Decisions surfaced |
+|---|---|---|
+| `d34d514` | `docs/PRD_PASSPORT_OCR.md` (374 lines) | 5 product calls — vendor (Google DocAI vs Azure FR vs hybrid) / data residency / consent text / manual-fallback SLA / re-upload attempt limit |
+| `d58c5a5` | `docs/PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md` (475 lines) | 6 design calls — repo location / Chrome Web Store publisher account / airline priority / auth model / update mechanism / demo env config; CRM-side endpoint independently shippable |
+| `af7b3bd` | `docs/PRD_TMC_CURRICULUM_MAPPING.md` (436 lines) | 5 product calls — THE blocker is PC-1 (academic team produces mapping CSV); 4 more on scope / granularity / fitScore methodology / destination universe |
+
+**PRD coverage after tick #2:** 6 of 12 total PRDs done (50%). Remaining 6 for cron: Airline web-checkin automation / RateHawk / Booking-Expedia / Callified AI calling / AdsGPT / Excel Software.
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

@@ -811,6 +811,62 @@ async function seedSampleTrips(tenantId) {
   } else {
     console.log(`[seed-travel] RFU itinerary already exists (id=${existingItin.id}) — skipping`);
   }
+
+  // ── WebCheckin seed (PRD §4.6 + §8.5) ────────────────────────────────
+  //
+  // Give the demo box a pending web check-in so the scheduler cron
+  // (cron/webCheckinScheduler.js) has something to scan AND the operator-
+  // facing WebCheckinQueue.jsx (shipped in bfe956c) renders a non-empty
+  // list on first login. Keys the row to the same demo personas the rest
+  // of the seed already uses — the RFU pilgrim (Ahmed Khan) + the seeded
+  // Umrah Itinerary. Plausible Emirates BLR→DXB leg as a stand-in flight.
+  //
+  // Idempotency: WebCheckin has no single-column @unique; use the natural
+  // compound (tenantId, pnr) with a stable pnr=RFUDEMO<tenantId> as the
+  // seed-marker. Re-running seed-travel.js no-ops.
+  //
+  // Hard NOs (per PRD §4.6 demo-flow guidance):
+  //   - status MUST stay "pending" — the cron transitions through the
+  //     state machine; pre-seeding any other state breaks the demo arc.
+  //   - departureAt MUST be in the future — past dates trigger
+  //     "already-departed" edge cases in the scheduler.
+  //   - boardingPassUrl + attemptsJson MUST stay null — the seed exists
+  //     to drive the operator workflow of uploading the boarding pass
+  //     and the scheduler's attempts log.
+  const rfuItineraryForCheckin = await prisma.itinerary.findFirst({
+    where: { tenantId, subBrand: "rfu", contactId: pilgrim.id },
+    select: { id: true },
+  });
+  const seedPnr = `RFUDEMO${tenantId}`;
+  const existingCheckin = await prisma.webCheckin.findFirst({
+    where: { tenantId, pnr: seedPnr },
+    select: { id: true },
+  });
+  if (!existingCheckin) {
+    // Depart 21 days from seed run; Emirates (EK) is Tier-1 per
+    // webCheckinWindow.js → window opens T-48h.
+    const departureAt = new Date(now.getTime() + 21 * 86400_000);
+    const windowOpenAt = new Date(departureAt.getTime() - 48 * 60 * 60 * 1000);
+    await prisma.webCheckin.create({
+      data: {
+        tenantId,
+        contactId: pilgrim.id,
+        itineraryId: rfuItineraryForCheckin?.id || null,
+        pnr: seedPnr,
+        airlineCode: "EK",         // Emirates — Tier-1 per webCheckinWindow.js
+        flightNumber: "EK-571",    // BLR → DXB (plausible Umrah leg)
+        departureAt,
+        windowOpenAt,
+        passengerName: pilgrim.name, // "Ahmed Khan"
+        seatPref: "window",
+        mealPref: "halal",
+        status: "pending",
+      },
+    });
+    console.log(`[seed-travel] WebCheckin row seeded for ${pilgrim.name} (PNR ${seedPnr}, EK-571, PRD §4.6)`);
+  } else {
+    console.log(`[seed-travel] WebCheckin already seeded (PNR ${seedPnr}, id=${existingCheckin.id}) — skipping`);
+  }
 }
 
 /**

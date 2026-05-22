@@ -33,6 +33,12 @@
  *     assertion is possible from this gate; documented for the future
  *     /api/travel/visa-applications spec.
  *
+ * Covered (WebCheckin seed — PRD §4.6 + §8.5):
+ *   - /api/travel/webcheckins?status=pending lists ≥1 row whose pnr
+ *     starts with "RFUDEMO" (the seed-marker compound key)
+ *   - The seeded row has the expected demo-fixture shape: airlineCode=EK,
+ *     flightNumber=EK-571, passengerName="Ahmed Khan", status="pending"
+ *
  * Idempotency of the seed is verified at the unit level via the guards
  * in seedPipelineTaxonomies + seedTmcOperationalExtras; spec-level we
  * just pin the post-seed contract.
@@ -329,5 +335,48 @@ test.describe("Travel seed Section 9 — TMC operational fixtures (PRD §8.5)", 
     }
     // else: WELLNESS_FIELD_KEY unset on the target stack — seed skipped.
     // Either branch is a valid contract.
+  });
+});
+
+// ── WebCheckin seed (PRD §4.6 + §8.5) ────────────────────────────────
+//
+// Seed creates 1 WebCheckin row for the RFU pilgrim with a stable
+// pnr=RFUDEMO<tenantId>. Both checks are read-only — they pin the
+// existence + shape of that row, not the operator workflow itself
+// (covered separately by webcheckin-api.spec.js if/when written).
+
+test.describe("Travel seed — WebCheckin (PRD §4.6 + §8.5)", () => {
+  test("GET /api/travel/webcheckins?status=pending lists the seeded RFUDEMO row", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    expect(token).toBeTruthy();
+    const res = await get(request, token, "/api/travel/webcheckins?status=pending&limit=200");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.webcheckins), "/api/travel/webcheckins body.webcheckins must be array").toBe(true);
+
+    // pnr is the natural seed-marker — stable across re-runs.
+    const seeded = body.webcheckins.filter((r) => typeof r.pnr === "string" && r.pnr.startsWith("RFUDEMO"));
+    expect(seeded.length, "≥1 RFUDEMO-prefixed web check-in must be seeded for demo").toBeGreaterThanOrEqual(1);
+  });
+
+  test("Seeded WebCheckin row has the expected demo-fixture shape", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    expect(token).toBeTruthy();
+    const res = await get(request, token, "/api/travel/webcheckins?status=pending&limit=200");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    const seeded = body.webcheckins.find((r) => typeof r.pnr === "string" && r.pnr.startsWith("RFUDEMO"));
+    expect(seeded, "seeded RFUDEMO row must be present").toBeTruthy();
+
+    expect(seeded.airlineCode).toBe("EK");
+    expect(seeded.flightNumber).toBe("EK-571");
+    expect(seeded.passengerName).toBe("Ahmed Khan");
+    expect(seeded.status).toBe("pending");
+    // departureAt must be in the future — past dates would trip the
+    // scheduler's "already-departed" edge case (Hard NO per seed comment).
+    expect(new Date(seeded.departureAt).getTime()).toBeGreaterThan(Date.now());
+    // boardingPassUrl must be absent — seed exists to drive the operator
+    // UPLOAD workflow, pre-uploaded breaks that demo flow.
+    expect(seeded.boardingPassUrl == null).toBe(true);
   });
 });

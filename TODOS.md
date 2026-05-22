@@ -68,7 +68,17 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 
 **Tick #2 incident:** dark-mode agent's first commit `d0a4e36` accidentally over-swept sibling Payments files because `git commit -F <file>` commits everything STAGED in the index (not just newly-added files). Recovered via soft-reset + clean recommit `afdc61b` (force-pushed); Payments agent recommitted standalone as `5d9a95e`. **3rd instance of this hazard** — promoted to cron-learnings ([CLAUDE.md](CLAUDE.md) 🤖 section) + standing rule for future agent dispatches to use `git commit --only <files>` (explicit path arg overrides the index).
 
-**Tick #3 — single-agent gate triage (deploy was RED on 3 consecutive code commits).** Root cause: spec rot from `8269e20` Tasks drawer refactor — `wave7-empty-state-warnings.test.jsx` `#608 Tasks` tests directly queried for form inputs that now live inside an unmounted drawer. Fix shipped at `831ac10` mirroring `50ac575`'s `openDrawer()` helper pattern: 1 file touched, all 5 tests in file pass (was 3 pass / 2 fail), ESLint clean, single commit via `git commit --only` (standing rule held). Deploy queued on `831ac10`.
+**Tick #3 — single-agent gate triage (deploy was RED on 3 consecutive code commits).** Root cause: spec rot from `8269e20` Tasks drawer refactor — `wave7-empty-state-warnings.test.jsx` `#608 Tasks` tests directly queried for form inputs that now live inside an unmounted drawer. Fix shipped at `831ac10` mirroring `50ac575`'s `openDrawer()` helper pattern: 1 file touched, all 5 tests in file pass (was 3 pass / 2 fail), ESLint clean, single commit via `git commit --only` (standing rule held). Deploy on `831ac10` ✅ GREEN.
+
+**Tick #4 — 2/3 SHIPPED + 1 PHANTOM (Priority B/C mixed).** Verify-before-pickup discipline caught the phantom.
+
+| SHA | Issue | What |
+|---|---|---|
+| `585988d` | #886 | `/quotes` 404 → coming-soon stub page (`pages/QuotesComingSoon.jsx`) + route mount in App.jsx + CTAs to `/estimates` + `/pipeline` (Estimates is the actual quotes-analog, not Invoices). Tactical fix per cluster B2; full Quotes module stays in MANUAL_CODING_BACKLOG. |
+| `4c350e4` | #836 | OwnerDashboard "Top recommendation" surfaces freshness chip + manual Refresh button + honest empty state. Critical insight: root cause was a stale seeded AgentRecommendation row at `seed-wellness.js:833-834`, NOT frontend hard-coding. Frontend always read live data; demo never re-fired orchestrator. Fix surfaces staleness explicitly. 10/10 vitest cases. |
+| — | #828 | REJECTED (phantom) — already fixed by `d567ce2` 2026-05-15; surface code at `Sidebar.jsx:697-699` already carries `wellnessRoles=["doctor", "professional", "telecaller"]`. Issue was a stale repro against pre-deploy staging. Closed via `gh issue close` with comment pointing at d567ce2 + redeploy recommendation. |
+
+Cron continues at :07/:22/:37/:52.
 
 Cron will continue at :07/:22/:37/:52 until empty-tick threshold trips or user CronDeletes (`00d468d5`).
 

@@ -208,6 +208,25 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **V16-V18 graduated** to fully ✅ SHIPPED (frontend wired to live backend endpoints)
 - **Dark-mode cluster: 4 of 17 closed; 13 remaining at ~30-60min per page**
 
+**Tick #10 (cron) — 3/3 SHIPPED, dark-mode drain + Visa Applications backend + PRD sweep:**
+
+| SHA | Type | What |
+|---|---|---|
+| `706514c` | Dark-mode drain | **#872 Sequences.jsx** — 6 inline-style objects → 7 CSS classes + 7 dark-mode token pairs (WCAG-AA 5.8-9.2:1); cluster progress **5 of 17 closed**; deferred ReactFlow node `style.background` (always-dark canvas — acceptable) + 6 toolbar palette button borderColors + modal backdrop + Controls/MiniMap fills for future ticks |
+| `ce5f5db` | Phase 3 backend | **Visa Applications GET endpoints** — `/api/travel/visa/applications` (list with status / pagination filters) + `/:id` (detail with Contact + diagnostic + documentChecklist joins); 11 gate-spec cases; sub-brand isolation via Contact.subBrand defense-in-depth; deploy/coverage wires. **Unblocks Applications.jsx + AdvisorDashboard.jsx frontend wiring** |
+| `a390e44` | PRD updates | **PRD_DARK_MODE_CLUSTER.md** §10 — #871 row flipped 🔴 → ✅ with `68b09db` evidence + cluster progress note (4 closed / 13 open). **PRD_VISA_SURE_PHASE_3.md** — schema gap for family/dependents added as **§3 FR-3.1(c) footnote + new PC-8 in §5** with 3 resolution options + new OQ-8 in §9 |
+
+**Observation worth flagging:** Agent 3 noted that **inline footnote markers (`[^family-gap]`) inside markdown table cells may be linter-targeted on this repo** — survived once on first try but re-edits got reverted (possible autosave/linter interaction). Possible cron-learning if 2nd instance hits.
+
+**Cumulative session totals (10 ticks):**
+- **31 commits** (11 features/scaffolds + 13 PRDs + 1 backlog + 1 matrix refresh + 2 backend endpoints + 2 dark-mode refactors + 1 rule extension)
+- **3 GitHub issues closed** (#867 #871 #872)
+- 5 phantom-carry-over instances caught (stable)
+- Zero rebase conflicts, zero over-commits across all 31 commits
+- ~6,200 lines of PRD documentation across 13 PRDs
+- **Visa Sure backend now fully shippable end-to-end**: V1-V4 seed ✅ + V5-V7 risk-flag cron 🟡 (18 cases) + V8-V10 AdvisorDashboard 🟡 (endpoint now exists) + V16-V18 analytics ✅ + V19 + 3 shell pages ✅ + Applications GET ✅
+- **Dark-mode cluster: 5 of 17 closed; 12 remaining**
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

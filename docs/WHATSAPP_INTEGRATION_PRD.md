@@ -24,6 +24,54 @@ delivery; today every one of them logs *"WhatsApp dispatch pending"* to the
 console and writes a placeholder row, because the credentials to actually
 send a message are not yet in place.
 
+### 1.1 Source attribution + how the architecture evolved
+
+The WhatsApp requirement originates from a **single paragraph in Yasin's
+clarifications email** (`travel-crm/Understanding and clarifications - Yasin.pdf`,
+2026-05-13 16:48 IST → chandrikapaul@globussoft.in / souravpatra@globussoft.in /
+sumit@globussoft.com). Under "Additional clarifications we need from you,"
+Yasin wrote:
+
+> **Vati (WhatsApp):** cost model, template approval timelines, message-volume
+> limits, and how the shared Travel Stall number stays cleanly separated
+> between TMC and RFU.
+
+(Spelled "Vati" in the original — correct spelling is **Wati**; that's the
+BSP that helped Travel Stall onboard the numbers to Meta. Runtime path is
+direct to Meta Cloud API; Wati is upstream-only — see §2.3.)
+
+That paragraph asks 4 distinct questions. Yasin also committed in the same
+email's Section 13 inputs list to deliver: *"WhatsApp numbers planned for use"*
++ *"existing email and WhatsApp templates"*.
+
+**Architectural evolution 2026-05-13 → 2026-05-20:** Yasin's original framing
+implied **one shared Travel Stall number** with multi-tenanting routing
+("how the shared Travel Stall number stays cleanly separated between TMC and
+RFU"). On 2026-05-20 the decision flipped to **3 separate WABAs** (TMC + RFU
++ ops-shared) per the Q9 update (*"All 3 procured + Meta-verified … Share
+Meta Business Manager access; GS provisions 3 Wati WABAs immediately"*).
+
+This is a real product simplification — separation moved from application
+layer (routing logic on every send + per-sub-brand template variants on one
+WABA) to infrastructure layer (separate WABAs with independent number-quality
+ratings). The `subBrandConfig` helper at `backend/lib/subBrandConfig.js`
+(commit `621aab7`) is the code embodiment of this evolution — per-tenant
+config keyed by sub-brand returns the right `wabaId` + `phoneNumberId` so
+each cron / endpoint dispatch routes to the right WABA without per-callsite
+logic.
+
+§5.4 below answers Yasin's original 4 questions point-by-point so the PRD
+serves as the formal reply to his email.
+
+**Source-of-truth chain:**
+```
+Yasin's email (2026-05-13)         ← original ask, 1 paragraph, 4 questions
+  └─ Q9 decision (2026-05-20)       ← architecture choice (3 WABAs not 1)
+       └─ this PRD (live)            ← full spec; serves as reply to his email
+            └─ subBrandConfig (621aab7) + 10 stub call sites
+                 └─ Q9 cred handover ← outstanding (§5 below)
+```
+
 Travel Stall has procured and Meta-verified **3 WhatsApp Business numbers**
 (per Q9 decision 2026-05-20):
 
@@ -183,6 +231,19 @@ Recommended GS email: `sumit@chingari.io` or a service identity like
 **Yasin's personal username / password are never shared in either path.**
 Meta's user-add flow is invitation-based — it sends an email to the GS
 address with an accept-link.
+
+### 5.4 Answering Yasin's original 4 questions (formal reply to 2026-05-13 email)
+
+Yasin's clarification paragraph asked 4 distinct things. Map:
+
+| # | Yasin's question (verbatim, 2026-05-13) | GS answer |
+|---|---|---|
+| 1 | **Cost model** | Meta charges per conversation (24-hour window, not per message). Pricing varies by country + category: India utility ~₹0.30 / conversation, marketing ~₹0.85, authentication (OTP) ~₹0.12. **2-layer cost cap shipping pre-launch:** per-tenant monthly budget ($50 default, configurable) + per-number daily soft cap (200/day during days 1-3, relax after stability). Real-time spend visible in admin LlmSpend-style dashboard (Phase 2). |
+| 2 | **Template approval timelines** | Meta SLA: 24-48 hours per template; rejections common on first submission, expect 1 round trip. **Mitigation:** GS submits 2 alternate copy variants per template in parallel (Meta charges $0 for review). Starter set of 6 templates (§9 OQ-1): `otp_verification`, `payment_reminder_t_minus_n`, `journey_reminder`, `post_trip_feedback`, `web_checkin_nudge`, `birthday_greeting` — submitted on Day 1 in parallel with env wiring. |
+| 3 | **Message-volume limits** | Meta tier-rate-limits per number, starting Tier 1: 1k unique recipients / 24h. Tier 2: 10k/24h (auto-promoted after ~24h of clean Tier-1 traffic + good number-quality rating). Tier 3: 100k/24h. **Mitigation:** opt-out enforced within 1 minute (FR-6) + per-number quality monitoring in MBM. |
+| 4 | **How shared Travel Stall number stays cleanly separated between TMC and RFU** | **Architecture changed 2026-05-20 (Q9 update):** no longer one shared number with routing — now **3 separate WABAs** (TMC + RFU + ops-shared). Separation moved from application layer (routing logic on every send) to infrastructure layer (independent number-quality ratings + independent rate-limit budgets per WABA). Code embodiment: `subBrandConfig` helper at `backend/lib/subBrandConfig.js` (commit `621aab7`) returns the right `wabaId` + `phoneNumberId` per sub-brand. All 7 cron engines + 3 endpoints already resolve via this helper — the Q9 cred drop is a one-line `if (apiKey) wati.send(...)` per consumer, no per-callsite WABA-routing decision needed. |
+
+This section IS the formal answer Yasin asked for on 2026-05-13. Send this PRD link to Yasin to close the loop on his clarification request + unblock his Section 13 deliverable on WhatsApp.
 
 ### 5.3 Webhook setup (Meta → GS callback)
 

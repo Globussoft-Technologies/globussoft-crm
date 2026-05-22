@@ -53,6 +53,14 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 
 ---
 
+## 🎯 SEND TO YASIN (one-line action)
+
+**Send [`docs/WHATSAPP_INTEGRATION_PRD.md`](docs/WHATSAPP_INTEGRATION_PRD.md) to Yasin.** It's the formal answer to his 2026-05-13 clarifications email (the "Vati (WhatsApp)" paragraph asking for cost model + template approval timelines + message-volume limits + per-sub-brand separation). PRD now has a §5.4 that maps his 4 questions to GS answers point-by-point. Once he sees this, he can deliver the Q9 bundle (§5.2 Path A — ~30 min one-time work) to unblock 10 stubbed call sites in one cred drop.
+
+Pair it with [`docs/DIGILOCKER_USE_CASE.md`](docs/DIGILOCKER_USE_CASE.md) for the Q3 ask (single env-var drop unlocks real Aadhaar pull).
+
+---
+
 ## 🤖 QA-CRON tick — 2026-05-23 (15-min cadence, 3 parallel agents)
 
 **Cron `00d468d5` running.** 2 ticks shipped 6 unique issue closures via 6 commits (3 per tick, clean 3/3 each).

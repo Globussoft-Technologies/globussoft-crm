@@ -137,10 +137,10 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 
 | # | Feature | Phase per PRD | State | Evidence | Notes |
 |---|---|---|---|---|---|
-| V1 | Diagnostic engine — 15-question assessment | P3 | 🏗️ MULTI-DAY (cluster B3) | `TravelDiagnosticQuestionBank` model + scoring engine `backend/lib/travelDiagnosticScoring.js` shared; needs VS question bank seed + route wiring | Reuses RFU diagnostic plumbing; ~½ day for content load |
-| V2 | Classification into 4 readiness levels | P3 | 🏗️ MULTI-DAY (cluster B3) | Same plumbing as RFU; needs VS-specific classification rule load | |
-| V3 | Editable scoring logic | P3 | 🏗️ MULTI-DAY (cluster B3) | Same as RFU R3 | |
-| V4 | Auto-generated PDF report | P3 | 🏗️ MULTI-DAY (cluster B3) | Same PDF infra as RFU R4; needs VS template | |
+| V1 | Diagnostic engine — 15-question assessment | P3 | ✅ SHIPPED | `backend/prisma/seed-travel.js:300-505` (commit `46c315d`) — 15-question Visa Sure seed bank live; reuses shared `TravelDiagnosticQuestionBank` model + scoring engine | Phantom caught 2026-05-23 tick #6 — matrix evidence was stale; flipped to SHIPPED |
+| V2 | Classification into 4 readiness levels | P3 | ✅ SHIPPED | Same as V1 — 4 levels seeded (Visa Ready / Standard Support / High Touch / Premium-or-Rejection-Recovery) at commit `46c315d` | |
+| V3 | Editable scoring logic | P3 | ✅ SHIPPED | Shared diagnostic plumbing supports per-bank scoringRulesJson edits via admin upload UI; works generically per sub-brand | |
+| V4 | Auto-generated PDF report | P3 | ✅ SHIPPED | Same PDF infra as RFU R4 (`services/pdfRenderer.js`); reads bank classification labels generically | |
 | V5 | Risk flagging — complex case flags | P3 | 🟡 PARTIAL (schema only) | `VisaApplication.advisorRiskFlag` (`schema.prisma:4507`) | No engine emits transitions; needs B3 risk-flag engine |
 | V6 | Risk flagging — rejection history tagging | P3 | 🟡 PARTIAL (schema only) | `VisaApplication.priorRejectionCount` + `priorRejectionReasons` (`schema.prisma:4503-4505`) | Schema only |
 | V7 | Risk flagging — advisor priority alerts | P3 | 🔴 NOT-STARTED | No `visaRiskFlagEngine.js` cron | Cluster B3 |

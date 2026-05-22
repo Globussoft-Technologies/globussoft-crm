@@ -127,6 +127,25 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - Yasin's cred chase: 7 → 10 items (Zikr / 5-portal / Haramain)
 - Zero rebase conflicts, zero over-commits across all 18 commits
 
+**Tick #6 (cron) — 1 SHIPPED + 2 REJECTED (portal-matrix drift caught twice):**
+
+| SHA | Type | What |
+|---|---|---|
+| `90b58fa` | Phase 3 SHELL | V8-V10 Visa AdvisorDashboard.jsx — read-only per-application drilldown at `/travel/visa/applications/:applicationId`; 3 sections (diagnostic answers / AI summary placeholder / risk indicators) mirroring PRD §3 FR-4; useParams + fetchApi STUB for endpoint TODO |
+| — | REJECTED | V1-V4 Visa diagnostic seed → already shipped at `46c315d` 7 commits ago. Portal matrix V1-V4 evidence column was stale. **5th confirmed phantom-carry-over instance.** Agent caught it via 30-second `git log --oneline -- backend/prisma/seed-travel.js` — verify-before-pickup discipline working as designed. |
+| — | REJECTED | #867 Diagnostics dark-mode → strict-scope hit. Page uses inline JSX `TIER_COLORS` object with hardcoded RGBA literals, NOT CSS tokens. CSS-only fix path doesn't work. **17-issue dark-mode cluster needs a two-phase plan first: (1) per-page refactor wave converting inline-style badges to CSS classes + token defs; (2) CSS-only theme-extension wave that adds dark overrides.** Today's cron parallel discipline blocks phase 2 until phase 1 lands. Flagged for next-tick or human review. |
+
+**Portal-matrix drift pattern confirmed at scale.** 2 of the 3 agents this tick rejected because the portal matrix's evidence column doesn't match actual code state:
+- V1-V4: matrix said "🔴 NOT-STARTED" but `46c315d` shipped it.
+- #867: matrix said "dark-mode root-cause cascade" but the actual root is inline-styled JSX (refactor needed before CSS override).
+
+**Recommended action for morning:** trigger a portal-matrix refresh (mirror the `08bc240` background agent dispatch) to re-verify all NOT-STARTED rows via grep before further cron dispatches. The matrix is now 1 day old + 18 commits of drift behind.
+
+**Cumulative session totals (6 ticks):**
+- 19 commits (6 features/scaffolds + 12 PRDs + 1 backlog/GH-issues)
+- 5 phantom-carry-over instances caught by verify-before-pickup (running total since session start)
+- Zero rebase conflicts, zero over-commits across all 19 commits
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

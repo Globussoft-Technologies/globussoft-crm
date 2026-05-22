@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import {
   Sparkles,
@@ -15,9 +16,51 @@ import {
   Save,
   Activity,
   ChevronDown,
+  Upload,
 } from 'lucide-react';
-import { fetchApi } from '../../utils/api';
+import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+
+// Parse Service.imageUrls (Prisma stores a JSON-stringified array of URLs).
+// `allImagesOf` returns the full array; `firstImageOf` is a convenience
+// wrapper used by the card thumbnail + the inline edit-form preview.
+// Tolerates both array and string-encoded shapes — older rows may carry
+// either form, and a few legacy rows hold a plain non-JSON URL.
+function allImagesOf(service) {
+  const raw = service?.imageUrls;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.filter(Boolean);
+  } catch {
+    if (typeof raw === 'string' && /^https?:\/\//i.test(raw)) return [raw];
+  }
+  return [];
+}
+function firstImageOf(service) {
+  return allImagesOf(service)[0] || null;
+}
+
+// POST a file to /api/wellness/upload/service-image and return the URL.
+// Mirrors the multipart pattern used by Products.jsx — same `file` field
+// name, same response shape, same backend uploadImage() helper.
+async function uploadImageFile(file) {
+  const token = getAuthToken();
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch('/api/wellness/upload/service-image', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: fd,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Upload failed (${res.status})`);
+  }
+  const data = await res.json();
+  return data.url;
+}
 import { formatMoney, currencySymbol } from '../../utils/money';
 import { formatDate } from '../../utils/date';
 // #316: NumberInput strips the `<oldValue><newTyped>` concatenation artifact
@@ -42,9 +85,15 @@ export default function Services() {
   const [treatmentsLoading, setTreatmentsLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTreatment, setSelectedTreatment] = useState(null);
+  const [selectedService, setSelectedService] = useState(null);
+  // When the modal's "Edit" button fires, we close the modal AND tell the
+  // matching ServiceCard to flip into edit mode. The card watches this id
+  // via a useEffect + clears it on consumption, so the next modal-edit
+  // click works repeatedly.
+  const [editRequestId, setEditRequestId] = useState(null);
   // #115: basePrice starts blank (not 0) so the placeholder shows and the
   // validity gate rejects submit until the user enters ≥ ₹1.
-  const [form, setForm] = useState({ name: '', categoryIds: [], ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
+  const [form, setForm] = useState({ name: '', categoryIds: [], ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '', imageUrl: '' });
 
   const load = () => {
     setLoading(true);
@@ -77,15 +126,19 @@ export default function Services() {
   const submit = async (e) => {
     e.preventDefault();
     try {
-      // Use first category as primary categoryId for backend compatibility
+      // Use first category as primary categoryId for backend compatibility.
+      // imageUrls is a JSON array column — backend stringifies for us when
+      // we pass an array.
       const submitData = {
         ...form,
         categoryId: form.categoryIds?.[0] || null,
+        imageUrls: form.imageUrl ? [form.imageUrl] : null,
       };
+      delete submitData.imageUrl;
       await fetchApi('/api/wellness/services', { method: 'POST', body: JSON.stringify(submitData) });
       notify.success(`Service "${form.name}" created`);
       setShowAdd(false);
-      setForm({ name: '', categoryIds: [], ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
+      setForm({ name: '', categoryIds: [], ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '', imageUrl: '' });
       load();
     } catch (_err) { /* fetchApi already toasted */ }
   };
@@ -155,6 +208,9 @@ export default function Services() {
           setForm={setForm}
           submit={submit}
           onChanged={load}
+          onOpenService={setSelectedService}
+          editRequestId={editRequestId}
+          clearEditRequest={() => setEditRequestId(null)}
         />
       )}
 
@@ -174,6 +230,19 @@ export default function Services() {
           treatment={selectedTreatment}
           onClose={() => setSelectedTreatment(null)}
           onChanged={() => { loadTreatments(); setSelectedTreatment(null); }}
+        />
+      )}
+
+      {selectedService && (
+        <ServiceDetailModal
+          service={selectedService}
+          categories={categories}
+          onClose={() => setSelectedService(null)}
+          onEdit={(svc) => {
+            setSelectedService(null);
+            setEditRequestId(svc.id);
+          }}
+          onChanged={load}
         />
       )}
     </div>
@@ -203,7 +272,7 @@ function TabBtn({ active, onClick, icon: Icon, label }) {
   );
 }
 
-function CatalogTab({ services, loading, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged }) {
+function CatalogTab({ services, loading, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
   const notify = useNotify();
   return (
     <>
@@ -269,6 +338,13 @@ function CatalogTab({ services, loading, categories, categoriesLoading, showAdd,
               <label style={fieldLabel}>Marketing radius (km)</label>
               <input type="number" min="0" placeholder="blank = unlimited" value={form.targetRadiusKm || ''} onChange={(e) => setForm({ ...form, targetRadiusKm: e.target.value ? parseInt(e.target.value) : null })} style={inputStyle} />
             </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label style={fieldLabel}>Service image</label>
+              <ImageUploadField
+                imageUrl={form.imageUrl}
+                onChange={(url) => setForm({ ...form, imageUrl: url })}
+              />
+            </div>
             <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'flex-end' }}>
               <button
                 type="submit"
@@ -294,18 +370,40 @@ function CatalogTab({ services, loading, categories, categoriesLoading, showAdd,
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
         {services.map((s) => (
-          <ServiceCard key={s.id} service={s} onChanged={onChanged} />
+          <ServiceCard
+            key={s.id}
+            service={s}
+            onChanged={onChanged}
+            onOpen={onOpenService}
+            editRequested={editRequestId === s.id}
+            onEditConsumed={clearEditRequest}
+          />
         ))}
       </div>
     </>
   );
 }
 
-function ServiceCard({ service, onChanged }) {
+function ServiceCard({ service, onChanged, onOpen, editRequested, onEditConsumed }) {
   const notify = useNotify();
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(service);
+  // Hydrate the draft with a flat `imageUrl` (first of the JSON array) so
+  // the inline ImageUploadField stays controlled.
+  const [draft, setDraft] = useState(() => ({ ...service, imageUrl: firstImageOf(service) || '' }));
   const [saving, setSaving] = useState(false);
+  const imageSrc = firstImageOf(service);
+
+  // External edit trigger — the detail modal sets editRequestId on the
+  // parent; we flip into edit mode then clear the request so a subsequent
+  // modal-edit on the same card works again.
+  useEffect(() => {
+    if (editRequested) {
+      setEditing(true);
+      setDraft({ ...service, imageUrl: firstImageOf(service) || '' });
+      if (onEditConsumed) onEditConsumed();
+    }
+
+  }, [editRequested]);
 
   const save = async () => {
     // #149: validate before submit. Backend rejects basePrice<=0 (batch 1 #115)
@@ -342,6 +440,7 @@ function ServiceCard({ service, onChanged }) {
           targetRadiusKm: radius,
           description: draft.description || null,
           isActive: draft.isActive !== false,
+          imageUrls: draft.imageUrl ? [draft.imageUrl] : null,
         }),
       });
       notify.success(`Saved "${draft.name}"`);
@@ -381,11 +480,15 @@ function ServiceCard({ service, onChanged }) {
           <input type="number" min="0" step="1" value={draft.targetRadiusKm || ''} onChange={(e) => setDraft({ ...draft, targetRadiusKm: e.target.value })} style={inputStyle} placeholder="km radius" />
         </div>
         <textarea value={draft.description || ''} onChange={(e) => setDraft({ ...draft, description: e.target.value })} rows={2} style={{ ...inputStyle, resize: 'vertical' }} placeholder="Description" />
+        <div>
+          <label style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Image</label>
+          <ImageUploadField imageUrl={draft.imageUrl || ''} onChange={(url) => setDraft({ ...draft, imageUrl: url })} />
+        </div>
         <div style={{ display: 'flex', gap: '0.4rem' }}>
           <button onClick={save} disabled={saving} style={{ flex: 1, padding: '0.5rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
             <Save size={14} /> {saving ? 'Saving…' : 'Save'}
           </button>
-          <button onClick={() => { setEditing(false); setDraft(service); }} style={{ padding: '0.5rem 0.75rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, cursor: 'pointer' }}>
+          <button onClick={() => { setEditing(false); setDraft({ ...service, imageUrl: firstImageOf(service) || '' }); }} style={{ padding: '0.5rem 0.75rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, cursor: 'pointer' }}>
             <X size={14} />
           </button>
         </div>
@@ -394,11 +497,27 @@ function ServiceCard({ service, onChanged }) {
   }
 
   return (
-    <div className="glass" style={{ padding: '1.25rem', position: 'relative' }}>
-      <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem' }}>
-        <button onClick={() => setEditing(true)} aria-label={`Edit service ${service.name}`} title="Edit" style={iconBtn}><Pencil size={12} /></button>
-        <button onClick={remove} aria-label={`Deactivate service ${service.name}`} title="Deactivate" style={{ ...iconBtn, color: 'var(--danger-color)' }}><Trash2 size={12} /></button>
+    <div
+      className="glass"
+      style={{ padding: '1.25rem', position: 'relative', cursor: onOpen ? 'pointer' : 'default' }}
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={() => onOpen && onOpen(service)}
+      onKeyDown={(ev) => { if (onOpen && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); onOpen(service); } }}
+      title="Click to view details"
+    >
+      <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem', zIndex: 2 }} onClick={(e) => e.stopPropagation()}>
+        <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} aria-label={`Edit service ${service.name}`} title="Edit" style={iconBtn}><Pencil size={12} /></button>
+        <button onClick={(e) => { e.stopPropagation(); remove(); }} aria-label={`Deactivate service ${service.name}`} title="Deactivate" style={{ ...iconBtn, color: 'var(--danger-color)' }}><Trash2 size={12} /></button>
       </div>
+      {imageSrc && (
+        <img
+          src={imageSrc}
+          alt=""
+          style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, marginBottom: '0.75rem', background: 'rgba(255,255,255,0.04)' }}
+          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+        />
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', paddingRight: '3rem' }}>
         <div>
           <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{service.category}</div>
@@ -414,6 +533,165 @@ function ServiceCard({ service, onChanged }) {
         <span><MapPin size={12} style={{ verticalAlign: 'middle' }} /> {service.targetRadiusKm ? `${service.targetRadiusKm} km` : 'Unlimited'}</span>
       </div>
       {service.description && <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem', lineHeight: 1.4 }}>{service.description}</p>}
+    </div>
+  );
+}
+
+function ServiceDetailModal({ service, categories, onClose, onChanged, onEdit }) {
+  const notify = useNotify();
+  const images = allImagesOf(service);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [deleting, setDeleting] = useState(false);
+  const activeImage = images[Math.min(activeIdx, images.length - 1)];
+  const categoryName = (() => {
+    const cat = (categories || []).find((c) => c.id === service.categoryId);
+    return cat?.name || service.category || '—';
+  })();
+
+  const handleDelete = async () => {
+    if (deleting) return;
+    if (!await notify.confirm({ message: `Deactivate "${service.name}"? It won't show in the catalog or booking page.`, destructive: true, confirmText: 'Deactivate' })) return;
+    setDeleting(true);
+    try {
+      await fetchApi(`/api/wellness/services/${service.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ isActive: false }),
+      });
+      notify.success(`Deactivated "${service.name}"`);
+      onChanged && onChanged();
+      onClose && onClose();
+    } catch (_err) { /* fetchApi already surfaced the message */ }
+    setDeleting(false);
+  };
+
+  // Close on Escape + lock page scroll so the modal is the focus point.
+  // A previous version rendered the backdrop inline and a Layout-level
+  // transform/animation ancestor was making `position: fixed` resolve
+  // relative to the page content instead of the viewport — i.e. the modal
+  // would float somewhere near the top of the document and look invisible
+  // when the user had scrolled down. Rendering through a portal into
+  // document.body bypasses every ancestor containing-block, so `fixed`
+  // means "the viewport" and the centered modal lands where the user
+  // expects it.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
+
+  return createPortal((
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
+      onClick={onClose}
+    >
+      <div className="glass" style={{ maxWidth: 720, width: '100%', maxHeight: '90vh', overflow: 'auto', padding: '1.75rem', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} aria-label="Close" style={{ position: 'absolute', top: '0.75rem', right: '0.75rem', background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--text-secondary)', lineHeight: 1 }}>×</button>
+
+        {/* Image gallery — main image + thumbnail strip. If no images are
+            attached we render a neutral placeholder rather than empty space. */}
+        {images.length > 0 ? (
+          <div style={{ marginBottom: '1.25rem' }}>
+            <img
+              src={activeImage}
+              alt={service.name}
+              style={{ width: '100%', maxHeight: 320, objectFit: 'cover', borderRadius: 10, background: 'rgba(255,255,255,0.04)' }}
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            />
+            {images.length > 1 && (
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
+                {images.map((url, i) => (
+                  <button
+                    key={`${url}-${i}`}
+                    type="button"
+                    onClick={() => setActiveIdx(i)}
+                    aria-label={`Show image ${i + 1}`}
+                    style={{
+                      padding: 0,
+                      width: 60, height: 60,
+                      borderRadius: 6,
+                      overflow: 'hidden',
+                      border: i === activeIdx ? '2px solid var(--accent-color)' : '2px solid transparent',
+                      background: 'transparent',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ marginBottom: '1.25rem', padding: '2rem', textAlign: 'center', background: 'rgba(255,255,255,0.04)', borderRadius: 10, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            No images attached to this service.
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '1rem', marginBottom: '0.75rem' }}>
+          <div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {categoryName}
+            </div>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginTop: '0.2rem' }}>{service.name}</h2>
+          </div>
+          <span style={{ background: tierColor[service.ticketTier] || tierColor.medium, color: '#fff', padding: '0.25rem 0.65rem', borderRadius: 6, fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {service.ticketTier}
+          </span>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+          <DetailStat icon={<IndianRupee size={14} />} label="Base price" value={service.basePrice != null ? formatMoney(service.basePrice, { maximumFractionDigits: 0 }) : '—'} />
+          <DetailStat icon={<Clock size={14} />} label="Duration" value={service.durationMin ? `${service.durationMin} min` : '—'} />
+          <DetailStat icon={<MapPin size={14} />} label="Marketing radius" value={service.targetRadiusKm ? `${service.targetRadiusKm} km` : 'Unlimited'} />
+          <DetailStat icon={<Activity size={14} />} label="Status" value={service.isActive !== false ? 'Active' : 'Inactive'} />
+        </div>
+
+        {service.description && (
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.3rem' }}>Description</div>
+            <p style={{ fontSize: '0.9rem', lineHeight: 1.5, color: 'var(--text-primary)', margin: 0 }}>{service.description}</p>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+          <button
+            type="button"
+            onClick={() => onEdit && onEdit(service)}
+            disabled={!onEdit}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.55rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: onEdit ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: '0.85rem' }}
+          >
+            <Pencil size={14} /> Edit
+          </button>
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={deleting}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.55rem 1rem', background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 8, cursor: deleting ? 'wait' : 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+          >
+            <Trash2 size={14} /> {deleting ? 'Deactivating…' : 'Deactivate'}
+          </button>
+        </div>
+
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+          Service ID: {service.id} {service.createdAt && <> · Added {formatDate(service.createdAt)}</>}
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
+function DetailStat({ icon, label, value }) {
+  return (
+    <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.65rem 0.8rem', borderRadius: 8 }}>
+      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.2rem' }}>
+        {icon} {label}
+      </div>
+      <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-primary)' }}>{value}</div>
     </div>
   );
 }
@@ -537,7 +815,55 @@ function DetailRow({ label, value }) {
   );
 }
 
-const iconBtn = { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text-secondary)', padding: '0.25rem', borderRadius: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' };
+// Solid dark backdrop so the Edit / Delete icons stay legible when they
+// sit on top of a service image (transparent background made them
+// disappear against bright photos).
+const iconBtn = { background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.18)', color: '#fff', padding: '0.3rem', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' };
+
+// Shared upload control — preview + replace + remove. Used by the Create
+// form AND the inline edit form on each service card.
+function ImageUploadField({ imageUrl, onChange }) {
+  const notify = useNotify();
+  const [uploading, setUploading] = useState(false);
+  const inputRef = useRef(null);
+
+  const pick = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploading(true);
+    try {
+      const url = await uploadImageFile(file);
+      onChange(url);
+      notify.success('Image uploaded');
+    } catch (err) {
+      notify.error(err.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+      <input ref={inputRef} type="file" accept="image/*" onChange={pick} style={{ display: 'none' }} />
+      {imageUrl ? (
+        <>
+          <img src={imageUrl} alt="" style={{ width: 56, height: 56, borderRadius: 6, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.1)' }} />
+          <button type="button" onClick={() => inputRef.current?.click()} disabled={uploading} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.7rem', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem' }}>
+            <Upload size={13} /> {uploading ? 'Uploading…' : 'Replace'}
+          </button>
+          <button type="button" onClick={() => onChange('')} title="Remove image" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.7rem', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: 'var(--danger-color, #ef4444)', cursor: 'pointer', fontSize: '0.8rem' }}>
+            <X size={13} /> Remove
+          </button>
+        </>
+      ) : (
+        <button type="button" onClick={() => inputRef.current?.click()} disabled={uploading} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.8rem', background: 'transparent', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.85rem' }}>
+          <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload image'}
+        </button>
+      )}
+    </div>
+  );
+}
 
 function PackageBuilder({ services }) {
   const notify = useNotify();

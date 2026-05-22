@@ -235,7 +235,7 @@ router.post('/', async (req, res) => {
     // ownerId = req.user.userId. Explicit body.assignedToId still wins.
     if (normalised.assignedToId == null) normalised.assignedToId = req.user.userId;
     const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
-    try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
+    try { const { emitEvent } = require('../lib/eventBus'); await emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
     // #179: audit row for new contact.
     await writeAudit('Contact', 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
     res.status(201).json(contact);

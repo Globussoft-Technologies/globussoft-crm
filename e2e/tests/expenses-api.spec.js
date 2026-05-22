@@ -170,6 +170,33 @@ test.describe('Expenses API — POST /', () => {
     expect(e.receiptUrl).toBe('https://example.com/r.png');
   });
 
+  // `description` column added to the POST/PUT body 2026-05-21 alongside
+  // the Expenses form redesign (Recipient Name + Description + Payment
+  // Method split). The column was always present on the Prisma model but
+  // never wired through routes/expenses.js until this change.
+  test('description persists when provided', async ({ request }) => {
+    const e = await createExpense(request, {
+      title: 'descr-test',
+      description: `${RUN_TAG} Quarterly client lunch — full quote attached`,
+    });
+    expect(e.description).toContain('Quarterly client lunch');
+  });
+  test('description omitted → null (not undefined / empty-string)', async ({ request }) => {
+    const e = await createExpense(request, { title: 'descr-blank' });
+    expect(e.description === null || e.description === undefined).toBe(true);
+  });
+  test('PUT can update description in isolation', async ({ request }) => {
+    const created = await createExpense(request, { title: 'descr-put' });
+    const updRes = await authPut(request, `/api/expenses/${created.id}`, {
+      description: `${RUN_TAG} updated copy`,
+    });
+    expect(updRes.status()).toBe(200);
+    const updated = await updRes.json();
+    expect(updated.description).toContain('updated copy');
+    // Other fields untouched.
+    expect(updated.title).toBe(created.title);
+  });
+
   test('user + contact relations are included in create response', async ({ request }) => {
     const e = await createExpense(request, { title: 'with-user' });
     // user relation should resolve when req.user.userId is present (it is for admin login).

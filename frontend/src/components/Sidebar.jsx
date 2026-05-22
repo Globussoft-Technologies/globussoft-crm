@@ -965,6 +965,7 @@ function renderWellnessNav({
           <Link to="/channels" icon={Radio} label="Channels" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
+          <Link to="/data-import-export" icon={Database} label="Import / Export" adminOnly />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </>
       )}
@@ -1172,6 +1173,7 @@ function renderGenericNav({
           />
           <Link to="/zapier" icon={Code} label="Zapier" adminOnly />
           <Link to="/developer" icon={Code} label="Developers" adminOnly />
+          <Link to="/data-import-export" icon={Database} label="Import / Export" adminOnly />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </div>
       )}

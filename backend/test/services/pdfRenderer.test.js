@@ -16,7 +16,7 @@ import { describe, test, expect } from 'vitest';
 import zlib from 'node:zlib';
 import pdfR from '../../services/pdfRenderer.js';
 
-const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf } = pdfR;
+const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, scrubZyluText, scrubZyluSource } = pdfR;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -690,5 +690,54 @@ describe('renderBrandedInvoicePdf', () => {
     const txt = extractPdfText(buf);
     expect(txt).toContain('hello@enhancedwellness.in');
     expect(txt).toContain('+919999000011');
+  });
+});
+
+// Zylu mask — the renderer must NOT leak upstream-POS markers into any
+// customer-facing PDF (patient summary download). The helpers are
+// exported so the unit-level rules stay tight without going through the
+// expensive renderPatientSummaryPdf path.
+describe('scrubZyluText', () => {
+  test('returns empty string for null / undefined / non-string input', () => {
+    expect(scrubZyluText(null)).toBe('');
+    expect(scrubZyluText(undefined)).toBe('');
+    expect(scrubZyluText(42)).toBe(42); // non-string passes through as-is
+  });
+
+  test('passes ordinary notes through unchanged', () => {
+    expect(scrubZyluText('Patient arrived early.')).toBe('Patient arrived early.');
+  });
+
+  test('strips "Zylu booking #N" tokens (case-insensitive, hash optional)', () => {
+    expect(scrubZyluText('Zylu booking #15029981 followed up.')).toBe('followed up.');
+    expect(scrubZyluText('zylu booking 14514296')).toBe('');
+    expect(scrubZyluText('Visit notes. ZYLU booking #99.')).toMatch(/^Visit notes\.?\s*$/);
+  });
+
+  test('strips the [ZYLU-#N] / [zylu-N] tag form used by imported Rx', () => {
+    expect(scrubZyluText('[ZYLU-#260] Hair fall consult.')).toBe('Hair fall consult.');
+    expect(scrubZyluText('[zylu-1234] more text')).toBe('more text');
+  });
+
+  test('collapses run-of-whitespace + extra blank lines after scrubbing', () => {
+    const cleaned = scrubZyluText('First.   Zylu booking #1   Second line.');
+    // Two spaces are NOT collapsed by the helper, but 2+ consecutive
+    // spaces created by the strip get reduced to one.
+    expect(cleaned).toBe('First. Second line.');
+  });
+});
+
+describe('scrubZyluSource', () => {
+  test('returns null for falsy + zylu-prefixed sources', () => {
+    expect(scrubZyluSource(null)).toBe(null);
+    expect(scrubZyluSource('')).toBe(null);
+    expect(scrubZyluSource('zylu-import')).toBe(null);
+    expect(scrubZyluSource('ZYLU-WEBHOOK')).toBe(null);
+    expect(scrubZyluSource('  zylu-import  ')).toBe(null);
+  });
+  test('passes other source values through unchanged', () => {
+    expect(scrubZyluSource('walk-in')).toBe('walk-in');
+    expect(scrubZyluSource('Instagram')).toBe('Instagram');
+    expect(scrubZyluSource('referral')).toBe('referral');
   });
 });

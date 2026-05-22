@@ -532,6 +532,13 @@ router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
     const target = await prisma.user.findFirst({ where: { id: userId, tenantId: req.user.tenantId } });
     if (!target) return res.status(404).json({ error: "User not found." });
 
+    // #323: refuse to delete the tenant OWNER. The owner is the sole user with
+    // userType=OWNER (set during signup); managers/admins must not be able to
+    // remove them, regardless of RBAC role.
+    if (target.userType === "OWNER") {
+      return res.status(403).json({ error: "Cannot delete the tenant owner.", code: "OWNER_PROTECTED" });
+    }
+
     await prisma.user.delete({
       where: { id: target.id },
     });

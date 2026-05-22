@@ -43,6 +43,7 @@ import {
   UserX,
   Tag,
   ShieldAlert,
+  MapPin,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -64,8 +65,24 @@ export default function PointOfSale() {
   const isAdminOrManager = user && (user.role === 'ADMIN' || user.role === 'MANAGER');
 
   const [registers, setRegisters] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [currentShift, setCurrentShift] = useState(null);
   const [openingForm, setOpeningForm] = useState({ registerId: '', openingFloat: '' });
+  // Inline register creation (admin/manager only) — surfaced when there are
+  // zero registers configured OR via the "+ New register" link beside the
+  // existing dropdown. Avoids forcing the operator to leave the POS page
+  // just to spin up a till on first run.
+  const [showRegisterForm, setShowRegisterForm] = useState(false);
+  const [registerForm, setRegisterForm] = useState({ name: '', locationId: '', openingFloat: '0' });
+  const [registerBusy, setRegisterBusy] = useState(false);
+  // Catalog lookup for the line-item builder — replaces the manual
+  // "Ref ID + Name + Unit price" trio with a single pick-from-catalog
+  // dropdown that auto-fills the three fields. Lazy-loaded per type the
+  // first time the user selects it so the page boots fast even on
+  // tenants with hundreds of services / products.
+  const [catalogServices, setCatalogServices] = useState(null);
+  const [catalogProducts, setCatalogProducts] = useState(null);
+  const [catalogMemberships, setCatalogMemberships] = useState(null);
   const [closingTotal, setClosingTotal] = useState('');
   const [closingNotes, setClosingNotes] = useState('');
   const [basket, setBasket] = useState([]); // local lineItems
@@ -110,6 +127,15 @@ export default function PointOfSale() {
     }
   };
 
+  const loadLocations = async () => {
+    try {
+      const list = await fetchApi('/api/wellness/locations');
+      setLocations(Array.isArray(list) ? list : []);
+    } catch (_e) {
+      setLocations([]);
+    }
+  };
+
   const loadCurrentShift = async () => {
     try {
       const shift = await fetchApi('/api/pos/shifts/current');
@@ -120,10 +146,103 @@ export default function PointOfSale() {
     }
   };
 
+  // Auto-open the inline register form for admin/manager when there are
+  // no registers yet — turns the dead-end empty dropdown into a do-it-now
+  // setup card.
+  useEffect(() => {
+    if (isAdminOrManager && registers.length === 0) {
+      setShowRegisterForm(true);
+    }
+  }, [registers.length, isAdminOrManager]);
+
+  const createRegister = async () => {
+    if (!registerForm.name.trim()) return notify.error('Register name is required');
+    if (!registerForm.locationId) return notify.error('Pick a location');
+    setRegisterBusy(true);
+    try {
+      const created = await fetchApi('/api/pos/registers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: registerForm.name.trim(),
+          locationId: parseInt(registerForm.locationId, 10),
+          openingFloat: parseFloat(registerForm.openingFloat || '0'),
+        }),
+      });
+      notify.success(`Register "${created.name}" created`);
+      setRegisterForm({ name: '', locationId: '', openingFloat: '0' });
+      setShowRegisterForm(false);
+      // Refresh the list and auto-select the newly created register so the
+      // user can hit "Open shift" immediately.
+      await loadRegisters();
+      setOpeningForm((f) => ({ ...f, registerId: String(created.id) }));
+    } catch (e) {
+      // fetchApi already toasted the server error
+    } finally {
+      setRegisterBusy(false);
+    }
+  };
+
   useEffect(() => {
     loadRegisters();
     loadCurrentShift();
+    loadLocations();
   }, []);
+
+  // Lazy-load the catalog for the currently-selected line type the first
+  // time the user picks it. `null` = not yet loaded, `[]` = loaded-empty
+  // — distinguishing the two lets us avoid re-fetching after a failed
+  // empty load and lets the dropdown show "Loading…" vs "No items".
+  useEffect(() => {
+    const lt = draftLine.lineType;
+    if (lt === 'SERVICE' && catalogServices === null) {
+      fetchApi('/api/wellness/services').then(
+        (rows) => setCatalogServices(Array.isArray(rows) ? rows : []),
+      ).catch(() => setCatalogServices([]));
+    } else if (lt === 'PRODUCT' && catalogProducts === null) {
+      fetchApi('/api/wellness/products').then(
+        (rows) => setCatalogProducts(Array.isArray(rows) ? rows : []),
+      ).catch(() => setCatalogProducts([]));
+    } else if (lt === 'MEMBERSHIP' && catalogMemberships === null) {
+      fetchApi('/api/wellness/membership-plans').then(
+        (rows) => setCatalogMemberships(Array.isArray(rows) ? rows : []),
+      ).catch(() => setCatalogMemberships([]));
+    }
+  }, [draftLine.lineType, catalogServices, catalogProducts, catalogMemberships]);
+
+  // Resolve the right catalog + price field per line type. Returns
+  // { list, priceKey, supported } — when `supported` is false we keep
+  // the original manual-entry inputs (Gift Card + Package don't have
+  // a fixed catalog in this build).
+  const catalogForType = (() => {
+    switch (draftLine.lineType) {
+      case 'SERVICE':
+        return { list: catalogServices, priceKey: 'basePrice', supported: true };
+      case 'PRODUCT':
+        return { list: catalogProducts, priceKey: 'price', supported: true };
+      case 'MEMBERSHIP':
+        return { list: catalogMemberships, priceKey: 'price', supported: true };
+      default:
+        return { list: null, priceKey: null, supported: false };
+    }
+  })();
+
+  // When the user picks an item from the catalog dropdown, auto-fill
+  // the three downstream fields (refId, name, unitPrice). The cashier
+  // can still tweak quantity / unit price / line discount afterwards.
+  const pickFromCatalog = (id) => {
+    if (!id) {
+      setDraftLine({ ...draftLine, refId: '', name: '', unitPrice: '' });
+      return;
+    }
+    const row = (catalogForType.list || []).find((r) => String(r.id) === String(id));
+    if (!row) return;
+    setDraftLine({
+      ...draftLine,
+      refId: String(row.id),
+      name: row.name || '',
+      unitPrice: String(row[catalogForType.priceKey] ?? ''),
+    });
+  };
 
   // ── Computed totals (denormalised on every render — small basket size) ──
   const subtotal = useMemo(
@@ -438,14 +557,24 @@ export default function PointOfSale() {
             <Lock size={18} /> No shift open — open one to start a sale
           </h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '0.75rem' }}>
-            <div>
+            <div style={{ position: 'relative' }}>
               <label style={labelStyle}>Register</label>
+              {isAdminOrManager && registers.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterForm((s) => !s)}
+                  style={{ position: 'absolute', top: 0, right: 0, background: 'transparent', border: 'none', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.75rem', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                >
+                  {showRegisterForm ? 'Cancel' : '+ New register'}
+                </button>
+              )}
               <select
                 style={inputStyle}
                 value={openingForm.registerId}
                 onChange={(e) => setOpeningForm({ ...openingForm, registerId: e.target.value })}
+                disabled={registers.length === 0}
               >
-                <option value="">Select…</option>
+                <option value="">{registers.length === 0 ? 'Select…' : 'Select…'}</option>
                 {registers.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.name} {r.location?.name ? `— ${r.location.name}` : ''}
@@ -466,12 +595,74 @@ export default function PointOfSale() {
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-              <button onClick={openShift} disabled={busy} style={primaryBtnStyle}>
+              <button onClick={openShift} disabled={busy || registers.length === 0} style={primaryBtnStyle}>
                 <Unlock size={14} /> Open shift
               </button>
             </div>
           </div>
-          {registers.length === 0 && (
+
+          {/* Inline "create register" form — auto-opens for admin/manager
+              when there are zero registers, so the dropdown empty state is
+              never a dead-end. Non-admins still see the friendly hint. */}
+          {showRegisterForm && isAdminOrManager && (
+            <div style={{ marginTop: '0.85rem', padding: '0.85rem', background: 'rgba(38, 88, 85, 0.06)', border: '1px solid var(--border-color, rgba(0,0,0,0.08))', borderRadius: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>
+                <Plus size={14} /> {registers.length === 0 ? 'Set up your first register' : 'Add a new register'}
+              </div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: '0 0 0.6rem' }}>
+                Registers map to physical cash drawers / till stations. You'll pick this register when opening a shift.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.6rem', alignItems: 'flex-end' }}>
+                <div>
+                  <label style={labelStyle}>Name</label>
+                  <input
+                    type="text"
+                    style={inputStyle}
+                    placeholder="e.g. Reception Counter"
+                    value={registerForm.name}
+                    onChange={(e) => setRegisterForm({ ...registerForm, name: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}><MapPin size={11} style={{ verticalAlign: 'middle' }} /> Location</label>
+                  <select
+                    style={inputStyle}
+                    value={registerForm.locationId}
+                    onChange={(e) => setRegisterForm({ ...registerForm, locationId: e.target.value })}
+                  >
+                    <option value="">Select…</option>
+                    {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>Default opening float</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    style={inputStyle}
+                    value={registerForm.openingFloat}
+                    onChange={(e) => setRegisterForm({ ...registerForm, openingFloat: e.target.value })}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={createRegister}
+                  disabled={registerBusy}
+                  style={{ ...primaryBtnStyle, whiteSpace: 'nowrap' }}
+                >
+                  {registerBusy ? 'Creating…' : 'Create register'}
+                </button>
+              </div>
+              {locations.length === 0 && (
+                <p style={{ color: 'var(--danger-color, #ef4444)', fontSize: '0.8rem', marginTop: '0.5rem' }}>
+                  No locations configured yet. Add one under <strong>Locations</strong> first, then come back.
+                </p>
+              )}
+            </div>
+          )}
+
+          {!isAdminOrManager && registers.length === 0 && (
             <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem', fontSize: '0.9rem' }}>
               No registers configured. Ask an admin to create a Register first.
             </p>
@@ -520,13 +711,58 @@ export default function PointOfSale() {
                 <select
                   style={inputStyle}
                   value={draftLine.lineType}
-                  onChange={(e) => setDraftLine({ ...draftLine, lineType: e.target.value })}
+                  onChange={(e) => {
+                    // Switching type clears the previously-picked item so
+                    // the cashier doesn't accidentally book a service
+                    // priced at a product's amount.
+                    setDraftLine({ ...draftLine, lineType: e.target.value, refId: '', name: '', unitPrice: '' });
+                  }}
                 >
                   {LINE_TYPES.map((t) => (
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
               </div>
+              {/* Catalog picker — only shown for types that have a real
+                  catalog endpoint (Service / Product / Membership). Picking
+                  an item auto-fills Ref ID + Name + Unit price below; the
+                  cashier can then tweak qty / discount / override the
+                  pre-filled name (e.g. add a note like "— Promo"). */}
+              {catalogForType.supported && (
+                <div style={{ gridColumn: 'span 2' }}>
+                  <label style={labelStyle}>
+                    {draftLine.lineType === 'SERVICE' ? 'Pick service' : draftLine.lineType === 'PRODUCT' ? 'Pick product' : 'Pick membership plan'}
+                  </label>
+                  <select
+                    style={inputStyle}
+                    value={draftLine.refId}
+                    onChange={(e) => pickFromCatalog(e.target.value)}
+                  >
+                    {catalogForType.list === null ? (
+                      <option value="">Loading…</option>
+                    ) : (
+                      <>
+                        <option value="">
+                          {catalogForType.list.length === 0
+                            ? `No ${draftLine.lineType.toLowerCase()}s configured`
+                            : 'Select from catalog…'}
+                        </option>
+                        {catalogForType.list.map((r) => {
+                          const price = r[catalogForType.priceKey];
+                          const priceLabel = (price != null && Number.isFinite(Number(price)))
+                            ? ` — ${formatMoney(price, 'INR')}`
+                            : '';
+                          return (
+                            <option key={r.id} value={r.id}>
+                              {r.name}{priceLabel}
+                            </option>
+                          );
+                        })}
+                      </>
+                    )}
+                  </select>
+                </div>
+              )}
               <div>
                 <label style={labelStyle}>Ref ID</label>
                 <input
@@ -544,7 +780,7 @@ export default function PointOfSale() {
                   style={inputStyle}
                   value={draftLine.name}
                   onChange={(e) => setDraftLine({ ...draftLine, name: e.target.value })}
-                  placeholder="Optional"
+                  placeholder={catalogForType.supported ? 'Auto-fills from catalog' : draftLine.lineType === 'GIFTCARD' ? 'e.g. ₹500 Gift Card' : 'Custom line name'}
                 />
               </div>
               <div>

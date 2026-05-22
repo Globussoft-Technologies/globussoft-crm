@@ -281,6 +281,45 @@ test.describe('Calendar Availability API — Holidays CRUD', () => {
     });
     expect([401, 403]).toContain(res.status());
   });
+  // recurringAnnually column added 2026-05-21 — the booking-availability
+  // gate matches month+day so a single row covers Diwali / Republic Day
+  // across every future year. POST persists the flag; GET includes
+  // recurring rows even when they fall outside the ?from&to window.
+  test('POST /holidays — recurringAnnually=true persists the flag', async ({ request }) => {
+    const res = await post(request, wellnessAdminToken, '/api/wellness/holidays', {
+      date: '2024-11-12', name: `${RUN_TAG} Recurring Diwali`, recurringAnnually: true,
+    });
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.recurringAnnually).toBe(true);
+    created.holidays.add(body.id);
+  });
+  test('POST /holidays — recurringAnnually defaults to false when omitted', async ({ request }) => {
+    const res = await post(request, wellnessAdminToken, '/api/wellness/holidays', {
+      date: '2027-08-15', name: `${RUN_TAG} OneOff`,
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(body.recurringAnnually).toBe(false);
+    created.holidays.add(body.id);
+  });
+  test('GET /holidays — recurring rows appear even outside the ?from&to window', async ({ request }) => {
+    // Seed a recurring row stored in 2024.
+    const seed = await post(request, wellnessAdminToken, '/api/wellness/holidays', {
+      date: '2024-05-15', name: `${RUN_TAG} AnnualMarker`, recurringAnnually: true,
+    });
+    const seedBody = await seed.json();
+    created.holidays.add(seedBody.id);
+
+    // Query a window in 2027 that excludes the stored date. The recurring
+    // row must still be returned by GET because the booking gate needs to
+    // know about it on every same-MM-DD visit going forward.
+    const res = await get(request, wellnessAdminToken, '/api/wellness/holidays?from=2027-01-01&to=2027-12-31');
+    expect(res.status()).toBe(200);
+    const list = await res.json();
+    expect(list.some((h) => h.id === seedBody.id)).toBe(true);
+  });
+
   test('DELETE /holidays/:id — 204', async ({ request }) => {
     const create = await post(request, wellnessAdminToken, '/api/wellness/holidays', {
       date: '2027-11-15', name: `${RUN_TAG} delete-me`,

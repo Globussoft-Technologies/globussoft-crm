@@ -128,6 +128,40 @@ test.describe("Service Categories API — CRUD happy path", () => {
     expect(updated.displayOrder).toBe(10);
   });
 
+  // New columns added 2026-05-21: imageUrl + color + description are
+  // accepted on POST and PUT, normalised to null when sent as empty
+  // strings. Mirrors the same fields on ProductCategory so the wellness
+  // service-catalog and inventory surfaces stay shape-equivalent.
+  test("POST persists imageUrl / color / description and PUT round-trips them", async ({ request }) => {
+    const token = await getAdmin(request);
+    const create = await request.post(`${BASE_URL}/api/wellness/service-categories`, {
+      headers: headers(token),
+      data: {
+        name: `${RUN_TAG} HairImage`,
+        imageUrl: 'https://example.com/cat.png',
+        color: '#265855',
+        description: 'Hair treatments bucket',
+      },
+    });
+    expect(create.status(), `POST: ${await create.text()}`).toBe(201);
+    const created = await create.json();
+    createdIds.add(created.id);
+    expect(created.imageUrl).toBe('https://example.com/cat.png');
+    expect(created.color).toBe('#265855');
+    expect(created.description).toBe('Hair treatments bucket');
+
+    // PUT — change imageUrl, blank description (empty string → null).
+    const upd = await request.put(`${BASE_URL}/api/wellness/service-categories/${created.id}`, {
+      headers: headers(token),
+      data: { imageUrl: 'https://example.com/new.png', description: '' },
+    });
+    expect(upd.status()).toBe(200);
+    const updated = await upd.json();
+    expect(updated.imageUrl).toBe('https://example.com/new.png');
+    expect(updated.description).toBeNull();
+    expect(updated.color).toBe('#265855'); // not touched by PUT
+  });
+
   test("DELETE removes a category (204)", async ({ request }) => {
     const token = await getAdmin(request);
     const create = await request.post(`${BASE_URL}/api/wellness/service-categories`, {

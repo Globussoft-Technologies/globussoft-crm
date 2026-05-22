@@ -205,8 +205,13 @@ function computeCashbackEarn(rules, amountPaid, serviceId = null) {
     return { earn: 0, ruleId: null, applied: false };
   }
 
+  const now = Date.now();
   for (const rule of rules) {
     if (!rule || rule.isActive !== true) continue;
+    if (rule.expiresAt != null) {
+      const exp = rule.expiresAt instanceof Date ? rule.expiresAt.getTime() : new Date(rule.expiresAt).getTime();
+      if (Number.isFinite(exp) && exp <= now) continue;
+    }
     const pct = Number.isFinite(Number(rule.earnPercent)) ? Number(rule.earnPercent) : 0;
     if (pct <= 0) continue;
     const min = rule.minSpend == null ? 0 : Number(rule.minSpend);

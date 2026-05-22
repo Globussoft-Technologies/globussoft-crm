@@ -34,7 +34,25 @@ export function registerGlobalNotify(notify) {
 // ---------------------------------------------------------------------------
 let _inMemoryToken = null;
 
-export function setAuthToken(token) {
+// "Keep me signed in" — opt-in cross-tab token persistence.
+//
+// Default (remember=false): token lives in memory + sessionStorage only.
+// sessionStorage is tab-scoped, which means deep links opened in NEW tabs
+// land on /login instead of the requested page — the tab can't see the
+// originating tab's session. Acceptable for short, focused work sessions
+// on a shared/public device.
+//
+// Opt-in (remember=true): token ALSO mirrored to localStorage. New tabs
+// rehydrate from localStorage on cold start, so shared deep links land on
+// the requested page without a re-login. Cost: XSS can still exfiltrate
+// the token from localStorage; we accept that risk for users who chose
+// the "Keep me signed in" UX.
+//
+// The flag is passed by Login.jsx (checkbox state) on successful auth.
+// Callsites that don't pass it (SSO callback, programmatic token install)
+// leave the localStorage entry alone — they don't change a user's prior
+// remember choice in either direction.
+export function setAuthToken(token, opts = {}) {
   _inMemoryToken = token || null;
   try {
     if (token) {
@@ -45,17 +63,45 @@ export function setAuthToken(token) {
   } catch {
     /* sessionStorage may be disabled in private mode; in-memory still works */
   }
+  // `remember` is a tri-state: true → enable persistence; false → explicitly
+  // turn it off (clears any prior "remember" entry); undefined → preserve
+  // the caller's prior choice. The Login form always passes a boolean; SSO
+  // and silent-refresh paths pass undefined.
+  if (typeof opts.remember === 'boolean') {
+    try {
+      if (opts.remember && token) {
+        localStorage.setItem('token', token);
+      } else {
+        localStorage.removeItem('token');
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 export function getAuthToken() {
   if (_inMemoryToken) return _inMemoryToken;
-  // Cold start after a hard refresh: rehydrate from sessionStorage. We
-  // intentionally do NOT read localStorage — we're migrating off it.
+  // Cold start: try sessionStorage first (same-tab hard-refresh case),
+  // then fall back to localStorage for users who chose "Keep me signed in".
+  // When we find one in localStorage, promote it to sessionStorage so this
+  // tab's subsequent reads stay fast and stay aligned with the in-memory
+  // copy.
   try {
     const fromSession = sessionStorage.getItem('token');
     if (fromSession) {
       _inMemoryToken = fromSession;
       return fromSession;
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    const fromLocal = localStorage.getItem('token');
+    if (fromLocal) {
+      _inMemoryToken = fromLocal;
+      try { sessionStorage.setItem('token', fromLocal); } catch { /* ignore */ }
+      return fromLocal;
     }
   } catch {
     /* ignore */
@@ -70,8 +116,8 @@ export function clearAuthToken() {
   } catch {
     /* ignore */
   }
-  // Belt-and-braces: scrub any legacy token stuck in localStorage from
-  // a pre-#343 build / older session, so it can't be picked up later.
+  // Always clear localStorage too — logout fully ends the "Keep me signed
+  // in" persistence (and scrubs any legacy pre-#343 token).
   try {
     localStorage.removeItem('token');
   } catch {

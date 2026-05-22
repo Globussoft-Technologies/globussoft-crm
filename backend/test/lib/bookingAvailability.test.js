@@ -170,6 +170,82 @@ describe('lib/bookingAvailability — HOLIDAY_BLOCKED', () => {
     // The resource/doctor lookup must NOT have run because holiday blocked first.
     expect(prisma.visit.findFirst).not.toHaveBeenCalled();
   });
+
+  // Recurring-annually coverage. The route makes TWO holiday.findMany calls:
+  // (a) exact-date rows for the visit's IST day, (b) all recurringAnnually
+  // rows for the tenant — the latter filtered in JS to ones whose stored
+  // MM-DD matches the visit's MM-DD. Mock both calls separately so we can
+  // exercise the year-agnostic match independently of the exact-date path.
+  test('recurringAnnually holiday blocks a visit on the same MM-DD in a different year', async () => {
+    prisma.holiday.findMany
+      .mockResolvedValueOnce([]) // exact-date query — no match (different year stored)
+      .mockResolvedValueOnce([   // recurring query — original was 2024-05-15, visit is 2026-05-15
+        { id: 10, name: 'Republic Day', date: new Date('2024-05-15'), locationId: null, doctorId: null, recurringAnnually: true },
+      ]);
+    const result = await assertVisitSlotAvailable({
+      tenantId: 1,
+      visitDate: IST_FRIDAY_14_00,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe(CONFLICT_CODES.HOLIDAY_BLOCKED);
+    expect(result.detail).toMatch(/Republic Day/);
+  });
+  test('recurringAnnually holiday does NOT block a different MM-DD', async () => {
+    prisma.holiday.findMany
+      .mockResolvedValueOnce([]) // exact-date query — no match
+      .mockResolvedValueOnce([   // recurring row for 12-25 (Christmas), visit is 05-15
+        { id: 11, name: 'Christmas', date: new Date('2024-12-25'), locationId: null, doctorId: null, recurringAnnually: true },
+      ]);
+    const result = await assertVisitSlotAvailable({
+      tenantId: 1,
+      visitDate: IST_FRIDAY_14_00,
+    });
+    expect(result.ok).toBe(true);
+  });
+  test('recurringAnnually scope precedence — location/doctor filters still apply', async () => {
+    // Recurring annual leave for a specific doctor on 05-15. Same-day visit
+    // for a DIFFERENT doctor should pass; visit for THIS doctor should block.
+    prisma.holiday.findMany
+      .mockResolvedValueOnce([]) // exact-date — empty
+      .mockResolvedValueOnce([   // recurring — doctor-scoped
+        { id: 12, name: 'Dr Sharma annual leave', date: new Date('2024-05-15'), locationId: null, doctorId: 7, recurringAnnually: true },
+      ]);
+    const passes = await assertVisitSlotAvailable({
+      tenantId: 1,
+      visitDate: IST_FRIDAY_14_00,
+      doctorId: 99,
+    });
+    expect(passes.ok).toBe(true);
+
+    // Reset the mock for the second call (mockResolvedValueOnce is consumed).
+    prisma.holiday.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: 12, name: 'Dr Sharma annual leave', date: new Date('2024-05-15'), locationId: null, doctorId: 7, recurringAnnually: true },
+      ]);
+    const blocked = await assertVisitSlotAvailable({
+      tenantId: 1,
+      visitDate: IST_FRIDAY_14_00,
+      doctorId: 7,
+    });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.code).toBe(CONFLICT_CODES.HOLIDAY_BLOCKED);
+  });
+  test('exact-date + recurring rows are de-duped (no double-block from the same row)', async () => {
+    // Same row stored as both exact-date hit AND recurring hit (admin
+    // accidentally created it that way). Should not crash; should still
+    // block; should not produce a "duplicate-detail" message.
+    const dup = { id: 13, name: 'Diwali', date: new Date('2026-05-15'), locationId: null, doctorId: null, recurringAnnually: true };
+    prisma.holiday.findMany
+      .mockResolvedValueOnce([dup])
+      .mockResolvedValueOnce([dup]);
+    const result = await assertVisitSlotAvailable({
+      tenantId: 1,
+      visitDate: IST_FRIDAY_14_00,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe(CONFLICT_CODES.HOLIDAY_BLOCKED);
+  });
 });
 
 describe('lib/bookingAvailability — OUTSIDE_WORKING_HOURS', () => {

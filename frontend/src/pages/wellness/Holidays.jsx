@@ -20,7 +20,7 @@ export default function Holidays() {
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ date: '', name: '', locationId: '', doctorId: '' });
+  const [form, setForm] = useState({ date: '', name: '', locationId: '', doctorId: '', recurringAnnually: false });
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
   const [rangeStart, rangeEnd] = resolveDateRange(filter);
@@ -69,10 +69,11 @@ export default function Holidays() {
           name: form.name,
           locationId: form.locationId ? parseInt(form.locationId, 10) : null,
           doctorId: form.doctorId ? parseInt(form.doctorId, 10) : null,
+          recurringAnnually: form.recurringAnnually,
         }),
       });
-      notify.success(`Marked ${form.date} as "${form.name}"`);
-      setForm({ date: '', name: '', locationId: '', doctorId: '' });
+      notify.success(`Marked ${form.date} as "${form.name}"${form.recurringAnnually ? ' (recurring annually)' : ''}`);
+      setForm({ date: '', name: '', locationId: '', doctorId: '', recurringAnnually: false });
       setAdding(false);
       load();
     } catch (_err) { /* fetchApi already toasted */ }
@@ -121,6 +122,20 @@ export default function Holidays() {
             <option value="">— all practitioners —</option>
             {doctors.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
+          <label style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={form.recurringAnnually}
+              onChange={(e) => setForm({ ...form, recurringAnnually: e.target.checked })}
+              style={{ width: 16, height: 16, cursor: 'pointer' }}
+            />
+            <span>
+              Recurring annually
+              <span style={{ marginLeft: '0.4rem', color: 'var(--text-tertiary, var(--text-secondary))', fontSize: '0.75rem' }}>
+                — repeats every year on the same date, no need to re-add
+              </span>
+            </span>
+          </label>
           <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
             <button type="button" onClick={() => setAdding(false)} style={btnSecondary}>Cancel</button>
             <button type="submit" disabled={saving || !form.date || !form.name} style={btnPrimary}>{saving ? 'Saving…' : 'Mark holiday'}</button>
@@ -170,9 +185,19 @@ export default function Holidays() {
                         : loc
                           ? `Location: ${loc.name}`
                           : 'Clinic-wide';
-                      return (
+                      const dateCell = h.recurringAnnually
+                    ? `${new Date(h.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} (every year)`
+                    : fmtDate(h.date);
+                  return (
                         <tr key={h.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <td style={td}>{fmtDate(h.date)}</td>
+                          <td style={td}>
+                        {dateCell}
+                        {h.recurringAnnually && (
+                          <span style={{ marginLeft: '0.5rem', fontSize: '0.7rem', padding: '0.1rem 0.45rem', borderRadius: 999, background: 'rgba(34,197,94,0.15)', color: 'rgb(34,197,94)', border: '1px solid rgba(34,197,94,0.3)' }}>
+                            Annual
+                          </span>
+                        )}
+                      </td>
                           <td style={td}>{h.name}</td>
                           <td style={td}>{scope}</td>
                           <td style={{ ...td, textAlign: 'right' }}>

@@ -19,6 +19,15 @@ const Login = () => {
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [twoFactorBusy, setTwoFactorBusy] = useState(false);
 
+  // "Keep me signed in" — when true, the token is mirrored to localStorage
+  // so deep links opened in a new tab don't bounce to /login. Default ON:
+  // the primary user pain we're solving is "I'm logged in, someone shares a
+  // page link, I click it, I'm punted back to /login because the new tab
+  // can't see my session". Users on shared/public devices can opt out by
+  // unchecking the box. See utils/api.js setAuthToken for the full
+  // sessionStorage-vs-localStorage trade-off.
+  const [rememberMe, setRememberMe] = useState(true);
+
   const { setUser, setToken, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
 
@@ -37,9 +46,12 @@ const Login = () => {
     }
 
     if (ssoToken) {
-      // #343: setToken (in App.jsx) now writes through to the in-memory
-      // holder + sessionStorage via setAuthToken — no localStorage write.
-      setToken(ssoToken);
+      // #343: setToken (in App.jsx) routes through setAuthToken — in-memory
+      // + sessionStorage by default. SSO callbacks land on this page in a
+      // fresh redirect so there's no checkbox state to read; treat SSO as
+      // "Keep me signed in" since users explicitly chose a federated
+      // identity provider, expecting persistent sign-in.
+      setToken(ssoToken, { remember: true });
 
       let parsedTenant = null;
       if (tenantParam) {
@@ -48,6 +60,12 @@ const Login = () => {
       if (parsedTenant && setTenant) {
         setTenant(parsedTenant);
         localStorage.setItem('tenant', JSON.stringify(parsedTenant));
+        // Match finalizeLogin: write the body attribute synchronously so the
+        // SSO landing page renders under the correct theme + e2e selectors
+        // resolve on the first frame.
+        const v = parsedTenant.vertical || 'generic';
+        document.documentElement.setAttribute('data-vertical', v);
+        document.body.setAttribute('data-vertical', v);
       }
 
       // Pull canonical user profile from the server now that we have a token.
@@ -114,8 +132,19 @@ const Login = () => {
 
   const finalizeLogin = (data) => {
     setUser(data.user);
-    setToken(data.token);
+    // Pass the "Keep me signed in" choice through so utils/api.js can
+    // mirror to localStorage when enabled (cross-tab deep links work) or
+    // explicitly scrub localStorage when disabled (session-only).
+    setToken(data.token, { remember: rememberMe });
     if (data.tenant && setTenant) setTenant(data.tenant);
+    // Set data-vertical synchronously — the App.jsx useEffect that mirrors
+    // tenant.vertical onto the body fires AFTER the render that follows
+    // setTenant, so the first frame on /wellness can otherwise read
+    // body[data-vertical="generic"]. Route guards + e2e tests that land
+    // immediately after login depend on the correct value being present.
+    const v = data.tenant?.vertical || 'generic';
+    document.documentElement.setAttribute('data-vertical', v);
+    document.body.setAttribute('data-vertical', v);
     const landing = data.tenant?.vertical === 'wellness'
       ? wellnessLandingFor(data.user)
       : '/dashboard';
@@ -259,16 +288,36 @@ const Login = () => {
               onChange={(e) => setEmail(e.target.value)}
             />
           </div>
-          <div style={{ marginBottom: '1.5rem' }}>
+          <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Password</label>
-            <input 
-              type="password" 
-              className="input-field" 
+            <input
+              type="password"
+              className="input-field"
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '1.5rem',
+              fontSize: '0.875rem',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              userSelect: 'none',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              style={{ accentColor: 'var(--primary-color, var(--accent-color))' }}
+            />
+            <span>Keep me signed in on this device</span>
+          </label>
           <button type="submit" className="btn-primary" style={{ width: '100%' }}>
             Sign In
           </button>

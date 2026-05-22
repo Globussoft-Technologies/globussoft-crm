@@ -240,6 +240,51 @@ router.post("/upload/product-image", adminGate, upload.single("file"), async (re
   }
 });
 
+// Service catalog + category image uploads — mirrors the product-image
+// shape above so the frontend uploader (multipart 'file' field, returns
+// `{ success, url, filename }`) is identical across both surfaces.
+router.post("/upload/service-image", adminGate, upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "file is required (multipart field 'file')" });
+    }
+    const url = await uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      'services'
+    );
+    res.status(201).json({ success: true, url, filename: req.file.originalname });
+  } catch (err) {
+    console.error("[inventory] service image upload error:", err.message);
+    if (/file too large|allowed/i.test(err.message)) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to upload image" });
+  }
+});
+
+router.post("/upload/service-category-image", adminGate, upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "file is required (multipart field 'file')" });
+    }
+    const url = await uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      'service-categories'
+    );
+    res.status(201).json({ success: true, url, filename: req.file.originalname });
+  } catch (err) {
+    console.error("[inventory] service-category image upload error:", err.message);
+    if (/file too large|allowed/i.test(err.message)) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to upload image" });
+  }
+});
+
 // ── Product read (list for forms) ───────────────────────────────────
 
 router.get("/products", adminGate, async (req, res) => {

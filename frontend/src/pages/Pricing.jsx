@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Check, ArrowRight, X, Plus, Loader } from 'lucide-react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const C = {
   bg: '#f8fafc', bg2: '#ffffff', text: '#1e293b', text2: '#334155', text3: '#64748b', text4: '#94a3b8',
@@ -106,6 +107,7 @@ const FAQ_ITEMS = [
 
 export default function Pricing() {
   const navigate = useNavigate();
+  const notify = useNotify();
   const { token } = useContext(AuthContext);
   const [annual, setAnnual] = useState(true);
   const [currency, setCurrency] = useState(() => {
@@ -120,22 +122,23 @@ export default function Pricing() {
   });
 
   const [apiPlans, setApiPlans] = useState(null);
+  const [plansError, setPlansError] = useState(null);
   const [loadingPayment, setLoadingPayment] = useState(null);
 
   // Fetch subscription plans from API if authenticated
   useEffect(() => {
-    if (token) {
-      console.log('[Pricing] Fetching plans with token:', token.slice(0, 20) + '...');
-      fetchApi('/api/subscriptions/plans')
-        .then(plans => {
-          console.log('[Pricing] Plans loaded:', plans);
-          setApiPlans(plans);
-        })
-        .catch(err => console.error('[Pricing] Failed to fetch plans:', err.message || err));
-    } else {
-      console.log('[Pricing] No token, apiPlans not loading');
-    }
-  }, [token]);
+    if (!token) return;
+    fetchApi('/api/subscriptions/plans')
+      .then(plans => {
+        setApiPlans(plans);
+        setPlansError(null);
+      })
+      .catch(err => {
+        const msg = err?.message || 'Failed to load plans';
+        setPlansError(msg);
+        notify.error(`Could not load subscription plans: ${msg}`);
+      });
+  }, [token, notify]);
 
   // Load Razorpay script
   useEffect(() => {
@@ -148,20 +151,16 @@ export default function Pricing() {
 
   const handlePayment = async (planId, planName) => {
     if (!window.Razorpay) {
-      alert('Payment system is not loaded. Please refresh and try again.');
+      notify.error('Payment system is still loading. Please try again in a moment.');
       return;
     }
 
     setLoadingPayment(planName);
     try {
-      // Create order
-      console.log('[Pricing] Creating order for planId:', planId);
       const orderData = await fetchApi('/api/subscriptions/create-order', {
         method: 'POST',
         body: JSON.stringify({ planId: parseInt(planId) })
       });
-
-      console.log('[Pricing] Order created:', orderData);
 
       const razorpayKeyId = import.meta.env.VITE_RAZORPAY_KEY_ID;
       if (!razorpayKeyId) {
@@ -169,7 +168,7 @@ export default function Pricing() {
       }
 
       if (!orderData.orderId || !orderData.amount || !orderData.currency) {
-        throw new Error('Invalid order data from server: ' + JSON.stringify(orderData));
+        throw new Error('Invalid order data from server');
       }
 
       // Open Razorpay popup
@@ -181,9 +180,7 @@ export default function Pricing() {
         name: 'GlobusCRM',
         description: `${planName} Plan`,
         handler: async (response) => {
-          // Verify payment
           try {
-            console.log('[Pricing] Payment handler response:', response);
             const verifyData = await fetchApi('/api/subscriptions/verify-payment', {
               method: 'POST',
               body: JSON.stringify({
@@ -194,9 +191,7 @@ export default function Pricing() {
               })
             });
 
-            console.log('[Pricing] Verification response:', verifyData);
             if (verifyData?.success) {
-              // Pass subscription details to success page
               navigate('/payment-success', {
                 state: {
                   planName: planName,
@@ -205,11 +200,9 @@ export default function Pricing() {
                 }
               });
             } else {
-              console.error('[Pricing] Verification failed:', verifyData);
               navigate('/payment-failed');
             }
           } catch (err) {
-            console.error('[Pricing] Payment verification error:', err);
             navigate('/payment-failed');
           }
         },
@@ -222,13 +215,10 @@ export default function Pricing() {
         }
       };
 
-      console.log('[Pricing] Opening Razorpay with options:', options);
       const rzp = new window.Razorpay(options);
       rzp.open();
     } catch (err) {
-      console.error('[Pricing] Payment error:', err.message);
-      alert(`Payment failed: ${err.message}`);
-      setLoadingPayment(null);
+      notify.error(`Payment failed: ${err.message}`);
     } finally {
       setLoadingPayment(null);
     }
@@ -342,15 +332,14 @@ export default function Pricing() {
                 <div style={{ fontSize: '0.69rem', color: C.text4, marginTop: 3, opacity: 0.8 }}>{getYearLabel(plan.priceKey)}</div>
               </div>
 
-              {token && apiPlans && apiPlans.length > 0 ? (
+              {!token ? (
+                // Anonymous visitor: drive them through signup → trial.
+                <Link to="/signup" style={getCtaStyle(plan)}>
+                  {plan.cta} <ArrowRight size={14} />
+                </Link>
+              ) : apiPlans && apiPlans[index] ? (
                 <button
-                  onClick={() => {
-                    const dbPlan = apiPlans[index];
-                    if (dbPlan) {
-                      console.log('[Pricing] Paying for plan:', dbPlan);
-                      handlePayment(dbPlan.id, plan.name);
-                    }
-                  }}
+                  onClick={() => handlePayment(apiPlans[index].id, plan.name)}
                   disabled={loadingPayment === plan.name}
                   style={{
                     ...getCtaStyle(plan),
@@ -370,9 +359,21 @@ export default function Pricing() {
                   )}
                 </button>
               ) : (
-                <Link to="/signup" style={getCtaStyle(plan)}>
-                  {plan.cta} <ArrowRight size={14} />
-                </Link>
+                // Logged in but plans haven't loaded yet (or errored). NEVER fall
+                // back to <Link to="/signup"> here — the signup route redirects
+                // logged-in users to /dashboard, which silently swallowed the
+                // subscribe action before this fix.
+                <button
+                  disabled
+                  style={{ ...getCtaStyle(plan), cursor: 'not-allowed', opacity: 0.6 }}
+                >
+                  {plansError ? 'Unable to load plans' : (
+                    <>
+                      <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                      Loading…
+                    </>
+                  )}
+                </button>
               )}
 
               {/* Separator */}

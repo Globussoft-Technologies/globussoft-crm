@@ -781,7 +781,7 @@ router.post("/patients/tags", phiWriteGate, async (req, res) => {
     }
     const color =
       typeof req.body.color === "string" &&
-      /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
+        /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
         ? req.body.color.trim()
         : null;
     const existing = await prisma.tag.findFirst({
@@ -812,13 +812,13 @@ router.post("/patients/tags/bulk", phiWriteGate, async (req, res) => {
   try {
     const patientIds = Array.isArray(req.body.patientIds)
       ? req.body.patientIds
-          .map((n) => parseInt(n, 10))
-          .filter((n) => Number.isFinite(n))
+        .map((n) => parseInt(n, 10))
+        .filter((n) => Number.isFinite(n))
       : [];
     const tagIds = Array.isArray(req.body.tagIds)
       ? req.body.tagIds
-          .map((n) => parseInt(n, 10))
-          .filter((n) => Number.isFinite(n))
+        .map((n) => parseInt(n, 10))
+        .filter((n) => Number.isFinite(n))
       : [];
     if (!patientIds.length || !tagIds.length) {
       return res
@@ -885,13 +885,13 @@ router.delete("/patients/tags/bulk", phiWriteGate, async (req, res) => {
   try {
     const patientIds = Array.isArray(req.body.patientIds)
       ? req.body.patientIds
-          .map((n) => parseInt(n, 10))
-          .filter((n) => Number.isFinite(n))
+        .map((n) => parseInt(n, 10))
+        .filter((n) => Number.isFinite(n))
       : [];
     const tagIds = Array.isArray(req.body.tagIds)
       ? req.body.tagIds
-          .map((n) => parseInt(n, 10))
-          .filter((n) => Number.isFinite(n))
+        .map((n) => parseInt(n, 10))
+        .filter((n) => Number.isFinite(n))
       : [];
     if (!patientIds.length || !tagIds.length) {
       return res
@@ -972,9 +972,9 @@ async function buildPatientExportPayload(req) {
   const dataRows = rows.map((p) => {
     const tagNames = Array.isArray(p.tags)
       ? p.tags
-          .map((pt) => (pt && pt.tag ? pt.tag.name : null))
-          .filter(Boolean)
-          .join(", ")
+        .map((pt) => (pt && pt.tag ? pt.tag.name : null))
+        .filter(Boolean)
+        .join(", ")
       : "";
     return [
       p.id,
@@ -1151,7 +1151,7 @@ router.post("/patients/:id/tags", phiWriteGate, async (req, res) => {
       }
       const color =
         typeof req.body.color === "string" &&
-        /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
+          /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
           ? req.body.color.trim()
           : null;
       tag = await prisma.tag.findFirst({
@@ -2943,10 +2943,10 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
       newDrugs = null;
     try {
       priorDrugs = JSON.parse(existing.drugs || "[]");
-    } catch (_) {}
+    } catch (_) { }
     try {
       newDrugs = JSON.parse(updated.drugs || "[]");
-    } catch (_) {}
+    } catch (_) { }
     await writeAudit(
       "Prescription",
       "UPDATE_PRESCRIPTION",
@@ -3668,268 +3668,165 @@ function normalizeSupportedBookingTypesInput(raw) {
   return { value: JSON.stringify(normalized) };
 }
 
-router.post(
-  "/services",
-  verifyWellnessRole(["admin", "manager"]),
-  async (req, res) => {
-    try {
-      const {
+router.post("/services", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const { name, category, ticketTier, basePrice, durationMin, targetRadiusKm, description, supportedBookingTypes, imageUrls } = req.body;
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
+    // #115: refuse zero-priced services from the catalog. Existing ₹0 rows
+    // (e.g. seed-only "spa") stay visible until manually corrected — only
+    // new creations are blocked.
+    const price = Number(basePrice);
+    if (!Number.isFinite(price) || price <= 0) {
+      return res.status(400).json({ error: "basePrice must be greater than 0", code: "PRICE_REQUIRED" });
+    }
+    // #209: cap basePrice at ₹50L (5_000_000). Public booking page exposes
+    // garbage rows like ₹1e15 / 999999 min when there's no upper bound.
+    if (price > 5_000_000) {
+      return res.status(400).json({ error: "basePrice exceeds maximum (₹50,00,000)", code: "PRICE_TOO_HIGH" });
+    }
+    // #149: durationMin must be positive; targetRadiusKm must be non-negative
+    // when supplied (null = unlimited is fine).
+    // #209: cap durationMin at 8 hours (480 min) — anything beyond that is
+    // not a single appointment.
+    if (durationMin !== undefined && durationMin !== null) {
+      const d = Number(durationMin);
+      if (!Number.isFinite(d) || d <= 0) {
+        return res.status(400).json({ error: "durationMin must be greater than 0", code: "DURATION_INVALID" });
+      }
+      // 720 min (12h) supports real long procedures like full hair transplant
+      // sessions, which legitimately take 9-10 hours. The earlier 480 cap
+      // accidentally caught real seed rows on the wellness tenant.
+      if (d > 720) {
+        return res.status(400).json({ error: "durationMin exceeds maximum (720)", code: "DURATION_TOO_HIGH" });
+      }
+    }
+    if (targetRadiusKm !== undefined && targetRadiusKm !== null && targetRadiusKm !== "") {
+      const r = Number(targetRadiusKm);
+      if (!Number.isFinite(r) || r < 0) {
+        return res.status(400).json({ error: "targetRadiusKm cannot be negative", code: "RADIUS_INVALID" });
+      }
+    }
+    // Wave 2 Agent LL — validate supportedBookingTypes before write.
+    const sbtResult = normalizeSupportedBookingTypesInput(supportedBookingTypes);
+    if (sbtResult.error) {
+      return res.status(sbtResult.error.status).json({ error: sbtResult.error.error, code: sbtResult.error.code });
+    }
+    // imageUrls is a JSON-stringified array of URLs (matches the Prisma
+    // column shape). Accept either an array (we stringify) or a pre-
+    // stringified value — frontends typically send the array form.
+    let imageUrlsValue = null;
+    if (imageUrls !== undefined && imageUrls !== null && imageUrls !== "") {
+      imageUrlsValue = Array.isArray(imageUrls) ? JSON.stringify(imageUrls) : String(imageUrls);
+    }
+    const svc = await prisma.service.create({
+      data: {
         name,
         category,
-        ticketTier,
-        basePrice,
-        durationMin,
-        targetRadiusKm,
+        ticketTier: ticketTier || "medium",
+        basePrice: basePrice ? parseFloat(basePrice) : 0,
+        durationMin: durationMin ? parseInt(durationMin) : 30,
+        targetRadiusKm: targetRadiusKm !== undefined && targetRadiusKm !== null ? parseInt(targetRadiusKm) : null,
         description,
-        supportedBookingTypes,
-      } = req.body;
-      if (!name || !String(name).trim())
-        return res.status(400).json({ error: "name required" });
-      // #115: refuse zero-priced services from the catalog. Existing ₹0 rows
-      // (e.g. seed-only "spa") stay visible until manually corrected — only
-      // new creations are blocked.
-      const price = Number(basePrice);
-      if (!Number.isFinite(price) || price <= 0) {
-        return res
-          .status(400)
-          .json({
-            error: "basePrice must be greater than 0",
-            code: "PRICE_REQUIRED",
-          });
-      }
-      // #209: cap basePrice at ₹50L (5_000_000). Public booking page exposes
-      // garbage rows like ₹1e15 / 999999 min when there's no upper bound.
-      if (price > 5_000_000) {
-        return res
-          .status(400)
-          .json({
-            error: "basePrice exceeds maximum (₹50,00,000)",
-            code: "PRICE_TOO_HIGH",
-          });
-      }
-      // #149: durationMin must be positive; targetRadiusKm must be non-negative
-      // when supplied (null = unlimited is fine).
-      // #209: cap durationMin at 8 hours (480 min) — anything beyond that is
-      // not a single appointment.
-      if (durationMin !== undefined && durationMin !== null) {
-        const d = Number(durationMin);
-        if (!Number.isFinite(d) || d <= 0) {
-          return res
-            .status(400)
-            .json({
-              error: "durationMin must be greater than 0",
-              code: "DURATION_INVALID",
-            });
-        }
-        // 720 min (12h) supports real long procedures like full hair transplant
-        // sessions, which legitimately take 9-10 hours. The earlier 480 cap
-        // accidentally caught real seed rows on the wellness tenant.
-        if (d > 720) {
-          return res
-            .status(400)
-            .json({
-              error: "durationMin exceeds maximum (720)",
-              code: "DURATION_TOO_HIGH",
-            });
-        }
-      }
-      if (
-        targetRadiusKm !== undefined &&
-        targetRadiusKm !== null &&
-        targetRadiusKm !== ""
-      ) {
-        const r = Number(targetRadiusKm);
-        if (!Number.isFinite(r) || r < 0) {
-          return res
-            .status(400)
-            .json({
-              error: "targetRadiusKm cannot be negative",
-              code: "RADIUS_INVALID",
-            });
-        }
-      }
-      // Wave 2 Agent LL — validate supportedBookingTypes before write.
-      const sbtResult = normalizeSupportedBookingTypesInput(
-        supportedBookingTypes,
-      );
-      if (sbtResult.error) {
-        return res
-          .status(sbtResult.error.status)
-          .json({ error: sbtResult.error.error, code: sbtResult.error.code });
-      }
-      const svc = await prisma.service.create({
-        data: {
-          name,
-          category,
-          ticketTier: ticketTier || "medium",
-          basePrice: basePrice ? parseFloat(basePrice) : 0,
-          durationMin: durationMin ? parseInt(durationMin) : 30,
-          targetRadiusKm:
-            targetRadiusKm !== undefined && targetRadiusKm !== null
-              ? parseInt(targetRadiusKm)
-              : null,
-          description,
-          supportedBookingTypes: sbtResult.value,
-          tenantId: req.user.tenantId,
-        },
-      });
-      // #179: catalog mutations are operational config — audit so price/duration
-      // changes are traceable for billing-dispute investigations.
-      try {
-        await writeAudit(
-          "Service",
-          "CREATE",
-          svc.id,
-          req.user.userId,
-          req.user.tenantId,
-          {
-            name: svc.name,
-            category: svc.category,
-            basePrice: svc.basePrice,
-            durationMin: svc.durationMin,
-          },
-        );
-      } catch (auditErr) {
-        console.warn("[audit]", auditErr.message);
-      }
-      res.status(201).json(svc);
-    } catch (e) {
-      console.error("[wellness] create service error:", e.message);
-      // #165: bad service input now surfaces as 400 with the real reason.
-      const mapped = httpFromPrismaError(e);
-      if (mapped) return res.status(mapped.status).json(mapped);
-      res.status(500).json({ error: "Failed to create service" });
-    }
-  },
-);
-
-router.put(
-  "/services/:id",
-  verifyWellnessRole(["admin", "manager"]),
-  async (req, res) => {
+        supportedBookingTypes: sbtResult.value,
+        imageUrls: imageUrlsValue,
+        tenantId: req.user.tenantId,
+      },
+    });
+    // #179: catalog mutations are operational config — audit so price/duration
+    // changes are traceable for billing-dispute investigations.
     try {
-      const id = parseInt(req.params.id);
-      const existing = await prisma.service.findFirst({
-        where: tenantWhere(req, { id }),
+      await writeAudit('Service', 'CREATE', svc.id, req.user.userId, req.user.tenantId, {
+        name: svc.name,
+        category: svc.category,
+        basePrice: svc.basePrice,
+        durationMin: svc.durationMin,
       });
-      if (!existing)
-        return res.status(404).json({ error: "Service not found" });
-      const data = {};
-      const allowed = [
-        "name",
-        "category",
-        "ticketTier",
-        "basePrice",
-        "durationMin",
-        "targetRadiusKm",
-        "description",
-        "isActive",
-      ];
-      for (const k of allowed)
-        if (req.body[k] !== undefined) data[k] = req.body[k];
-      // Wave 2 Agent LL — supportedBookingTypes is handled separately because
-      // it requires JSON-stringification + vocabulary validation, NOT a raw
-      // copy of req.body[k] like the other allowed fields.
-      if (req.body.supportedBookingTypes !== undefined) {
-        const sbtResult = normalizeSupportedBookingTypesInput(
-          req.body.supportedBookingTypes,
-        );
-        if (sbtResult.error) {
-          return res
-            .status(sbtResult.error.status)
-            .json({ error: sbtResult.error.error, code: sbtResult.error.code });
-        }
-        data.supportedBookingTypes = sbtResult.value;
-      }
-      // #115: same price guard on edit — can't update a service to ₹0.
-      if (data.basePrice !== undefined) {
-        const price = Number(data.basePrice);
-        if (!Number.isFinite(price) || price <= 0) {
-          return res
-            .status(400)
-            .json({
-              error: "basePrice must be greater than 0",
-              code: "PRICE_REQUIRED",
-            });
-        }
-        // #209: same upper-bound cap on edit.
-        if (price > 5_000_000) {
-          return res
-            .status(400)
-            .json({
-              error: "basePrice exceeds maximum (₹50,00,000)",
-              code: "PRICE_TOO_HIGH",
-            });
-        }
-      }
-      // #149: same duration / radius guards on edit.
-      if (data.durationMin !== undefined && data.durationMin !== null) {
-        const d = Number(data.durationMin);
-        if (!Number.isFinite(d) || d <= 0) {
-          return res
-            .status(400)
-            .json({
-              error: "durationMin must be greater than 0",
-              code: "DURATION_INVALID",
-            });
-        }
-        // #209: same 8-hour cap on edit.
-        // 720 min (12h) supports real long procedures like full hair transplant
-        // sessions, which legitimately take 9-10 hours. The earlier 480 cap
-        // accidentally caught real seed rows on the wellness tenant.
-        if (d > 720) {
-          return res
-            .status(400)
-            .json({
-              error: "durationMin exceeds maximum (720)",
-              code: "DURATION_TOO_HIGH",
-            });
-        }
-      }
-      if (
-        data.targetRadiusKm !== undefined &&
-        data.targetRadiusKm !== null &&
-        data.targetRadiusKm !== ""
-      ) {
-        const r = Number(data.targetRadiusKm);
-        if (!Number.isFinite(r) || r < 0) {
-          return res
-            .status(400)
-            .json({
-              error: "targetRadiusKm cannot be negative",
-              code: "RADIUS_INVALID",
-            });
-        }
-      }
-      const updated = await prisma.service.update({ where: { id }, data });
-      // #179: audit only the keys that actually changed.
-      try {
-        const changes = diffFields(existing, updated, Object.keys(data));
-        if (Object.keys(changes).length > 0) {
-          await writeAudit(
-            "Service",
-            "UPDATE",
-            updated.id,
-            req.user.userId,
-            req.user.tenantId,
-            {
-              changedFields: changes,
-            },
-          );
-        }
-      } catch (auditErr) {
-        console.warn("[audit]", auditErr.message);
-      }
-      res.json(updated);
-    } catch (e) {
-      console.error("[wellness] update service error:", e.message);
-      // #168 #165: same mapping as create.
-      const mapped = httpFromPrismaError(e);
-      if (mapped) return res.status(mapped.status).json(mapped);
-      res.status(500).json({ error: "Failed to update service" });
+    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+    res.status(201).json(svc);
+  } catch (e) {
+    console.error("[wellness] create service error:", e.message);
+    // #165: bad service input now surfaces as 400 with the real reason.
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    res.status(500).json({ error: "Failed to create service" });
+  }
+});
+
+router.put("/services/:id", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.service.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Service not found" });
+    const data = {};
+    const allowed = ["name", "category", "ticketTier", "basePrice", "durationMin", "targetRadiusKm", "description", "isActive"];
+    for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    // imageUrls accepts either an array (we stringify) or a pre-stringified
+    // JSON value. Pass `null` or `[]` to clear.
+    if (req.body.imageUrls !== undefined) {
+      const v = req.body.imageUrls;
+      if (v === null || v === "") data.imageUrls = null;
+      else data.imageUrls = Array.isArray(v) ? JSON.stringify(v) : String(v);
     }
-  },
-);
+    // Wave 2 Agent LL — supportedBookingTypes is handled separately because
+    // it requires JSON-stringification + vocabulary validation, NOT a raw
+    // copy of req.body[k] like the other allowed fields.
+    if (req.body.supportedBookingTypes !== undefined) {
+      const sbtResult = normalizeSupportedBookingTypesInput(req.body.supportedBookingTypes);
+      if (sbtResult.error) {
+        return res.status(sbtResult.error.status).json({ error: sbtResult.error.error, code: sbtResult.error.code });
+      }
+      data.supportedBookingTypes = sbtResult.value;
+    }
+    // #115: same price guard on edit — can't update a service to ₹0.
+    if (data.basePrice !== undefined) {
+      const price = Number(data.basePrice);
+      if (!Number.isFinite(price) || price <= 0) {
+        return res.status(400).json({ error: "basePrice must be greater than 0", code: "PRICE_REQUIRED" });
+      }
+      // #209: same upper-bound cap on edit.
+      if (price > 5_000_000) {
+        return res.status(400).json({ error: "basePrice exceeds maximum (₹50,00,000)", code: "PRICE_TOO_HIGH" });
+      }
+    }
+    // #149: same duration / radius guards on edit.
+    if (data.durationMin !== undefined && data.durationMin !== null) {
+      const d = Number(data.durationMin);
+      if (!Number.isFinite(d) || d <= 0) {
+        return res.status(400).json({ error: "durationMin must be greater than 0", code: "DURATION_INVALID" });
+      }
+      // #209: same 8-hour cap on edit.
+      // 720 min (12h) supports real long procedures like full hair transplant
+      // sessions, which legitimately take 9-10 hours. The earlier 480 cap
+      // accidentally caught real seed rows on the wellness tenant.
+      if (d > 720) {
+        return res.status(400).json({ error: "durationMin exceeds maximum (720)", code: "DURATION_TOO_HIGH" });
+      }
+    }
+    if (data.targetRadiusKm !== undefined && data.targetRadiusKm !== null && data.targetRadiusKm !== "") {
+      const r = Number(data.targetRadiusKm);
+      if (!Number.isFinite(r) || r < 0) {
+        return res.status(400).json({ error: "targetRadiusKm cannot be negative", code: "RADIUS_INVALID" });
+      }
+    }
+    const updated = await prisma.service.update({ where: { id }, data });
+    // #179: audit only the keys that actually changed.
+    try {
+      const changes = diffFields(existing, updated, Object.keys(data));
+      if (Object.keys(changes).length > 0) {
+        await writeAudit('Service', 'UPDATE', updated.id, req.user.userId, req.user.tenantId, {
+          changedFields: changes,
+        });
+      }
+    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] update service error:", e.message);
+    // #168 #165: same mapping as create.
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    res.status(500).json({ error: "Failed to update service" });
+  }
+});
 
 // ── Memberships ────────────────────────────────────────────────────
 //
@@ -4178,7 +4075,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       res.status(201).json(plan);
     } catch (e) {
       console.error("[wellness] create membership plan error:", e.message);
@@ -4457,7 +4354,7 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json(membership);
   } catch (e) {
     console.error("[wellness] purchase membership error:", e.message);
@@ -4597,7 +4494,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
             req.user.tenantId,
             req.io,
           );
-        } catch (_e) {}
+        } catch (_e) { }
       }
       return res
         .status(410)
@@ -4698,7 +4595,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) {}
+    } catch (_e) { }
 
     res.json({
       success: true,
@@ -4858,7 +4755,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       res.json({ success: true, membership: updated });
     } catch (e) {
       console.error("[wellness] cancel membership error:", e.message);
@@ -5676,91 +5573,97 @@ router.delete(
   },
 );
 
-router.get(
-  "/holidays",
-  verifyWellnessRole([
-    "doctor",
-    "professional",
-    "telecaller",
-    "admin",
-    "manager",
-  ]),
-  async (req, res) => {
-    try {
-      const where = tenantWhere(req);
-      const { from, to } = req.query;
-      if (from || to) {
-        where.date = {};
-        if (from) where.date.gte = new Date(from);
-        if (to) where.date.lte = new Date(to);
-      }
-      const rows = await prisma.holiday.findMany({
-        where,
+router.get("/holidays", verifyWellnessRole(["doctor", "professional", "telecaller", "admin", "manager"]), async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    // Two-bucket fetch: (a) date-bounded non-recurring rows, (b) all
+    // recurringAnnually rows for the tenant (small set; client renders
+    // them as "every year on MM-DD"). Without (b), an annual holiday
+    // stored in 2026 disappears from the list in 2027.
+    const baseWhere = tenantWhere(req);
+    const dateBoundWhere = { ...baseWhere };
+    if (from || to) {
+      dateBoundWhere.date = {};
+      if (from) dateBoundWhere.date.gte = new Date(from);
+      if (to) dateBoundWhere.date.lte = new Date(to);
+    }
+    const [bounded, recurring] = await Promise.all([
+      prisma.holiday.findMany({
+        where: { ...dateBoundWhere, recurringAnnually: false },
         orderBy: { date: "asc" },
-      });
-      res.json(rows);
-    } catch (e) {
-      console.error("[wellness] list holidays error:", e.message);
-      res.status(500).json({ error: "Failed to list holidays" });
-    }
-  },
-);
-
-router.post(
-  "/holidays",
-  verifyWellnessRole(["admin", "manager"]),
-  async (req, res) => {
-    try {
-      const { date, name, locationId, doctorId } = req.body;
-      if (!date)
-        return res
-          .status(400)
-          .json({ error: "date is required", code: "DATE_REQUIRED" });
-      if (!name || typeof name !== "string" || !name.trim())
-        return res
-          .status(400)
-          .json({ error: "name is required", code: "NAME_REQUIRED" });
-      const istDay = formatInTenantTZ(
-        new Date(date),
-        "Asia/Kolkata",
-        "yyyy-MM-dd",
-      );
-      const anchored = new Date(istDay + "T00:00:00.000Z");
-      const row = await prisma.holiday.create({
-        data: {
-          date: anchored,
-          name: name.trim(),
-          locationId: locationId ? parseInt(locationId, 10) : null,
-          doctorId: doctorId ? parseInt(doctorId, 10) : null,
-          tenantId: req.user.tenantId,
-        },
-      });
-      try {
-        await writeAudit(
-          "Holiday",
-          "CREATE",
-          row.id,
-          req.user.userId,
-          req.user.tenantId,
-          {
-            date: row.date,
-            name: row.name,
-            locationId: row.locationId,
-            doctorId: row.doctorId,
-          },
-        );
-      } catch (auditErr) {
-        console.warn("[audit]", auditErr.message);
+      }),
+      prisma.holiday.findMany({
+        where: { ...baseWhere, recurringAnnually: true },
+        orderBy: { date: "asc" },
+      }),
+    ]);
+    // Recurring annuals are stored at the original year's anchor date; to
+    // appear in [from, to] their MM-DD must produce an occurrence inside
+    // the window for SOME year in the spanning range. Pre-fix the recurring
+    // list was returned unfiltered for any from/to query, so an Aug-15
+    // Independence Day surfaced as "today's holiday" on May 21 etc.
+    let recurringInWindow = recurring;
+    if (from && to) {
+      const fromDate = new Date(from);
+      const toDate = new Date(to);
+      if (!Number.isNaN(fromDate.getTime()) && !Number.isNaN(toDate.getTime())) {
+        const fromMs = fromDate.getTime();
+        const toMs = toDate.getTime();
+        recurringInWindow = recurring.filter((h) => {
+          const hd = new Date(h.date);
+          const hM = hd.getUTCMonth();
+          const hD = hd.getUTCDate();
+          for (let y = fromDate.getUTCFullYear(); y <= toDate.getUTCFullYear(); y++) {
+            const occMs = Date.UTC(y, hM, hD);
+            if (occMs >= fromMs && occMs <= toMs) return true;
+          }
+          return false;
+        });
       }
-      res.status(201).json(row);
-    } catch (e) {
-      console.error("[wellness] create holiday error:", e.message);
-      const mapped = httpFromPrismaError(e);
-      if (mapped) return res.status(mapped.status).json(mapped);
-      res.status(500).json({ error: "Failed to create holiday" });
     }
-  },
-);
+    // De-dupe in case a recurring holiday also falls inside the bounded
+    // window (it would otherwise appear twice).
+    const seen = new Set();
+    const out = [];
+    for (const r of [...recurringInWindow, ...bounded]) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      out.push(r);
+    }
+    out.sort((a, b) => new Date(a.date) - new Date(b.date));
+    res.json(out);
+  } catch (e) {
+    console.error("[wellness] list holidays error:", e.message);
+    res.status(500).json({ error: "Failed to list holidays" });
+  }
+});
+
+router.post("/holidays", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const { date, name, locationId, doctorId, recurringAnnually } = req.body;
+    if (!date) return res.status(400).json({ error: "date is required", code: "DATE_REQUIRED" });
+    if (!name || typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
+    const istDay = formatInTenantTZ(new Date(date), "Asia/Kolkata", "yyyy-MM-dd");
+    const anchored = new Date(istDay + "T00:00:00.000Z");
+    const row = await prisma.holiday.create({
+      data: {
+        date: anchored,
+        name: name.trim(),
+        locationId: locationId ? parseInt(locationId, 10) : null,
+        doctorId: doctorId ? parseInt(doctorId, 10) : null,
+        recurringAnnually: Boolean(recurringAnnually),
+        tenantId: req.user.tenantId,
+      },
+    });
+    try { await writeAudit('Holiday', 'CREATE', row.id, req.user.userId, req.user.tenantId, { date: row.date, name: row.name, locationId: row.locationId, doctorId: row.doctorId, recurringAnnually: row.recurringAnnually }); } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+    res.status(201).json(row);
+  } catch (e) {
+    console.error("[wellness] create holiday error:", e.message);
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    res.status(500).json({ error: "Failed to create holiday" });
+  }
+});
 
 router.delete(
   "/holidays/:id",
@@ -7244,17 +7147,17 @@ router.get(
         prisma.agentRecommendation.findMany({
           where: locationId
             ? {
-                tenantId,
-                status: "pending",
-                // AgentRecommendation has no direct locationId. The orchestrator
-                // stores per-location recommendations with locationId in the
-                // JSON `payload`. Match either explicit JSON-substring or
-                // tenant-wide recommendations that lack a locationId scope.
-                OR: [
-                  { payload: { contains: `"locationId":${locationId}` } },
-                  { payload: { contains: `"locationId": ${locationId}` } },
-                ],
-              }
+              tenantId,
+              status: "pending",
+              // AgentRecommendation has no direct locationId. The orchestrator
+              // stores per-location recommendations with locationId in the
+              // JSON `payload`. Match either explicit JSON-substring or
+              // tenant-wide recommendations that lack a locationId scope.
+              OR: [
+                { payload: { contains: `"locationId":${locationId}` } },
+                { payload: { contains: `"locationId": ${locationId}` } },
+              ],
+            }
             : { tenantId, status: "pending" },
           orderBy: { priority: "desc" },
           take: 5,
@@ -7768,9 +7671,9 @@ function sanitizeUtmInput(utm, referrer) {
       v == null
         ? null
         : String(v)
-            .replace(/[\x00-\x1f\x7f]/g, "")
-            .slice(0, 191)
-            .trim() || null;
+          .replace(/[\x00-\x1f\x7f]/g, "")
+          .slice(0, 191)
+          .trim() || null;
     out.utmSource = trim(utm.utmSource ?? utm.source);
     out.utmMedium = trim(utm.utmMedium ?? utm.medium);
     out.utmCampaign = trim(utm.utmCampaign ?? utm.campaign);
@@ -8337,10 +8240,10 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
 
     const walletTransactions = wallet
       ? await prisma.walletTransaction.findMany({
-          where: { tenantId: req.user.tenantId, walletId: wallet.id },
-          orderBy: { createdAt: "desc" },
-          take: 50,
-        })
+        where: { tenantId: req.user.tenantId, walletId: wallet.id },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      })
       : [];
 
     // Resolve a logo image to embed: prefer tenant's uploaded logoUrl
@@ -9132,7 +9035,7 @@ const brandingLogoUpload = multer({
       cb(null, `logo${ext || ".png"}`);
     },
   }),
-  limits: { fileSize: 2 * 1024 * 1024 }, // 2 MB
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
   fileFilter: (_req, file, cb) => {
     const ok = /^image\/(png|jpe?g|gif|webp|svg\+xml)$/i.test(
       file.mimetype || "",
@@ -9633,9 +9536,9 @@ router.get(
       const ids = grouped.map((g) => g.patientId);
       const patients = ids.length
         ? await prisma.patient.findMany({
-            where: { id: { in: ids }, tenantId: req.user.tenantId },
-            select: { id: true, name: true, phone: true },
-          })
+          where: { id: { in: ids }, tenantId: req.user.tenantId },
+          select: { id: true, name: true, phone: true },
+        })
         : [];
       const byId = Object.fromEntries(patients.map((p) => [p.id, p]));
       res.json(
@@ -10252,7 +10155,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       res.status(201).json(tx);
     } catch (e) {
       console.error("[wellness] wallet credit error:", e.message);
@@ -10328,7 +10231,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       res.status(201).json(tx);
     } catch (e) {
       console.error("[wellness] wallet debit error:", e.message);
@@ -10486,7 +10389,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       // Return the plaintext ONCE in the response as `code` (back-compat with
       // 48 existing spec assertions) + `oneTimeCode` (explicit alias making
       // the disclosure semantics obvious to API consumers).
@@ -10651,7 +10554,7 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json({ giftCard: updated, transaction: tx });
   } catch (e) {
     console.error("[wellness] giftcard redeem error:", e.message);
@@ -10803,7 +10706,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       res.status(201).json({ giftCard: updated, transaction: tx });
     } catch (e) {
       console.error("[wellness] giftcard apply error:", e.message);
@@ -10868,10 +10771,10 @@ router.post("/coupons", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
       serviceIds: req.body.serviceIds
         ? Array.isArray(req.body.serviceIds)
           ? JSON.stringify(
-              req.body.serviceIds
-                .map((n) => parseInt(n, 10))
-                .filter(Number.isFinite),
-            )
+            req.body.serviceIds
+              .map((n) => parseInt(n, 10))
+              .filter(Number.isFinite),
+          )
           : String(req.body.serviceIds)
         : null,
       isActive: req.body.isActive === false ? false : true,
@@ -10955,10 +10858,10 @@ router.put(
           data[k] = req.body[k]
             ? Array.isArray(req.body[k])
               ? JSON.stringify(
-                  req.body[k]
-                    .map((n) => parseInt(n, 10))
-                    .filter(Number.isFinite),
-                )
+                req.body[k]
+                  .map((n) => parseInt(n, 10))
+                  .filter(Number.isFinite),
+              )
               : String(req.body[k])
             : null;
         }
@@ -11161,100 +11064,74 @@ function validateCashbackRuleBody(body) {
   const errors = [];
   if (!body.name || !String(body.name).trim()) errors.push("name is required");
   const v = Number(body.earnPercent);
-  if (!Number.isFinite(v) || v < 0)
-    errors.push("earnPercent must be a non-negative number");
+  if (!Number.isFinite(v) || v < 0) errors.push("earnPercent must be a non-negative number");
   if (v > 100) errors.push("earnPercent must be ≤ 100");
   if (body.minSpend != null) {
     const m = Number(body.minSpend);
-    if (!Number.isFinite(m) || m < 0)
-      errors.push("minSpend must be a non-negative number");
+    if (!Number.isFinite(m) || m < 0) errors.push("minSpend must be a non-negative number");
+  }
+  if (body.expiresAt != null && body.expiresAt !== "") {
+    const d = new Date(body.expiresAt);
+    if (Number.isNaN(d.getTime())) errors.push("expiresAt must be a valid ISO date");
   }
   return errors;
 }
 
 router.get(
-  "/cashback-rules",
-  verifyRole(["ADMIN", "MANAGER"]),
-  async (req, res) => {
-    try {
-      const where = tenantWhere(req);
-      if (req.query.isActive === "true") where.isActive = true;
-      if (req.query.isActive === "false") where.isActive = false;
-      const rules = await prisma.cashbackRule.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-      });
-      res.json({ rules });
-    } catch (e) {
-      console.error("[wellness] cashback list error:", e.message);
-      res.status(500).json({ error: "Failed to list cashback rules" });
-    }
-  },
-);
+    "/cashback-rules",
+    verifyRole(["ADMIN", "MANAGER"]),
+    async (req, res) => {
+      try {
+        const where = tenantWhere(req);
+        if (req.query.isActive === "true") where.isActive = true;
+        if (req.query.isActive === "false") where.isActive = false;
+        const rules = await prisma.cashbackRule.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+        });
+        res.json({ rules });
+      } catch (e) {
+        console.error("[wellness] cashback list error:", e.message);
+        res.status(500).json({ error: "Failed to list cashback rules" });
+      }
+    },
+  );
 
-router.post(
-  "/cashback-rules",
-  verifyRole(["ADMIN", "MANAGER"]),
-  async (req, res) => {
+  router.post("/cashback-rules", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
     try {
       const errors = validateCashbackRuleBody(req.body);
-      if (errors.length)
-        return res.status(400).json({ error: errors.join("; ") });
+      if (errors.length) return res.status(400).json({ error: errors.join("; ") });
       const data = {
         tenantId: req.user.tenantId,
         name: String(req.body.name).trim(),
         earnPercent: Number(req.body.earnPercent),
         minSpend: req.body.minSpend != null ? Number(req.body.minSpend) : null,
         serviceIds: req.body.serviceIds
-          ? Array.isArray(req.body.serviceIds)
-            ? JSON.stringify(
-                req.body.serviceIds
-                  .map((n) => parseInt(n, 10))
-                  .filter(Number.isFinite),
-              )
-            : String(req.body.serviceIds)
+          ? (Array.isArray(req.body.serviceIds)
+            ? JSON.stringify(req.body.serviceIds.map((n) => parseInt(n, 10)).filter(Number.isFinite))
+            : String(req.body.serviceIds))
           : null,
         isActive: req.body.isActive === false ? false : true,
+        expiresAt: req.body.expiresAt ? new Date(req.body.expiresAt) : null,
       };
       const row = await prisma.cashbackRule.create({ data });
-      await writeAudit(
-        "CashbackRule",
-        "CREATE",
-        row.id,
-        req.user.userId,
-        req.user.tenantId,
-        {
-          name: row.name,
-          earnPercent: row.earnPercent,
-        },
-      );
+      await writeAudit("CashbackRule", "CREATE", row.id, req.user.userId, req.user.tenantId, {
+        name: row.name, earnPercent: row.earnPercent,
+      });
       res.status(201).json(row);
     } catch (e) {
       console.error("[wellness] cashback create error:", e.message);
       res.status(500).json({ error: "Failed to create cashback rule" });
     }
-  },
-);
+  });
 
-router.put(
-  "/cashback-rules/:id",
-  verifyRole(["ADMIN", "MANAGER"]),
-  async (req, res) => {
+  router.put("/cashback-rules/:id", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
-      const existing = await prisma.cashbackRule.findFirst({
-        where: tenantWhere(req, { id }),
-      });
-      if (!existing)
-        return res.status(404).json({ error: "Cashback rule not found" });
+      const existing = await prisma.cashbackRule.findFirst({ where: tenantWhere(req, { id }) });
+      if (!existing) return res.status(404).json({ error: "Cashback rule not found" });
       const data = {};
-      const allowed = [
-        "name",
-        "earnPercent",
-        "minSpend",
-        "serviceIds",
-        "isActive",
-      ];
+      const allowed = ["name", "earnPercent", "minSpend", "serviceIds", "isActive", "expiresAt"];
       for (const k of allowed) {
         if (req.body[k] === undefined) continue;
         if (k === "name") {
@@ -11262,9 +11139,7 @@ router.put(
         } else if (k === "earnPercent") {
           const v = Number(req.body[k]);
           if (!Number.isFinite(v) || v < 0 || v > 100) {
-            return res
-              .status(400)
-              .json({ error: "earnPercent must be 0..100" });
+            return res.status(400).json({ error: "earnPercent must be 0..100" });
           }
           data[k] = v;
         } else if (k === "minSpend") {
@@ -11273,567 +11148,570 @@ router.put(
           data[k] = !!req.body[k];
         } else if (k === "serviceIds") {
           data[k] = req.body[k]
-            ? Array.isArray(req.body[k])
-              ? JSON.stringify(
-                  req.body[k]
-                    .map((n) => parseInt(n, 10))
-                    .filter(Number.isFinite),
-                )
-              : String(req.body[k])
+            ? (Array.isArray(req.body[k])
+              ? JSON.stringify(req.body[k].map((n) => parseInt(n, 10)).filter(Number.isFinite))
+              : String(req.body[k]))
             : null;
+        } else if (k === "expiresAt") {
+          if (req.body[k] === null || req.body[k] === "") {
+            data[k] = null;
+          } else {
+            const d = new Date(req.body[k]);
+            if (Number.isNaN(d.getTime())) {
+              return res.status(400).json({ error: "expiresAt must be a valid ISO date" });
+            }
+            data[k] = d;
+          }
         }
       }
       const updated = await prisma.cashbackRule.update({ where: { id }, data });
-      await writeAudit(
-        "CashbackRule",
-        "UPDATE",
-        id,
-        req.user.userId,
-        req.user.tenantId,
-        diffFields(existing, updated),
-      );
+      await writeAudit("CashbackRule", "UPDATE", id, req.user.userId, req.user.tenantId, diffFields(existing, updated));
       res.json(updated);
     } catch (e) {
       console.error("[wellness] cashback update error:", e.message);
       res.status(500).json({ error: "Failed to update cashback rule" });
     }
-  },
-);
+  });
 
-router.delete(
-  "/cashback-rules/:id",
-  verifyRole(["ADMIN"]),
-  async (req, res) => {
-    try {
-      const id = parseInt(req.params.id, 10);
-      const existing = await prisma.cashbackRule.findFirst({
-        where: tenantWhere(req, { id }),
-      });
-      if (!existing)
-        return res.status(404).json({ error: "Cashback rule not found" });
-      await prisma.cashbackRule.delete({ where: { id } });
-      await writeAudit(
-        "CashbackRule",
-        "DELETE",
-        id,
-        req.user.userId,
-        req.user.tenantId,
-        { name: existing.name },
-      );
-      res.status(204).send();
-    } catch (e) {
-      console.error("[wellness] cashback delete error:", e.message);
-      res.status(500).json({ error: "Failed to delete cashback rule" });
-    }
-  },
-);
-
-router.post("/visits/:id/apply-cashback", phiWriteGate, async (req, res) => {
-  try {
-    const visitId = parseInt(req.params.id, 10);
-    const visit = await prisma.visit.findFirst({
-      where: tenantWhere(req, { id: visitId }),
-      select: {
-        id: true,
-        patientId: true,
-        serviceId: true,
-        amountCharged: true,
-        status: true,
-      },
-    });
-    if (!visit) return res.status(404).json({ error: "Visit not found" });
-    if (visit.status !== "completed") {
-      return res
-        .status(409)
-        .json({
-          error: "Cashback can only be applied to completed visits",
-          code: "VISIT_NOT_COMPLETED",
+  router.delete(
+    "/cashback-rules/:id",
+    verifyRole(["ADMIN"]),
+    async (req, res) => {
+      try {
+        const id = parseInt(req.params.id, 10);
+        const existing = await prisma.cashbackRule.findFirst({
+          where: tenantWhere(req, { id }),
         });
-    }
-    const existing = await prisma.walletTransaction.findFirst({
-      where: { tenantId: req.user.tenantId, visitId, type: "CREDIT_CASHBACK" },
-      select: { id: true, amount: true },
-    });
-    if (existing) {
-      return res.status(409).json({
-        error: "Cashback already applied for this visit",
-        code: "CASHBACK_ALREADY_APPLIED",
-        transactionId: existing.id,
-      });
-    }
-    const rules = await prisma.cashbackRule.findMany({
-      where: { tenantId: req.user.tenantId, isActive: true },
-      orderBy: { createdAt: "asc" },
-    });
-    const result = computeCashbackEarn(
-      rules,
-      Number(visit.amountCharged) || 0,
-      visit.serviceId,
-    );
-    if (!result.applied) {
-      return res.json({ applied: false, earn: 0, ruleId: null });
-    }
-    const wallet = await getOrCreateWallet(req, visit.patientId);
-    const tx = await writeWalletTransaction({
-      tenantId: req.user.tenantId,
-      walletId: wallet.id,
-      type: "CREDIT_CASHBACK",
-      absAmount: result.earn,
-      performedBy: req.user.userId,
-      reason: `Cashback for Visit #${visitId} (rule ${result.ruleId})`,
-      visitId,
-    });
-    await writeAudit(
-      "Patient",
-      "CASHBACK_EARN",
-      visit.patientId,
-      req.user.userId,
-      req.user.tenantId,
-      {
-        visitId,
-        ruleId: result.ruleId,
-        earn: result.earn,
-        transactionId: tx.id,
-      },
-    );
-    // PRD Gap §13 wave-6a — emit cashback.credited so workflow rules can
-    // react (cashback-redemption SMS, loyalty-tier upgrades).
+        if (!existing)
+          return res.status(404).json({ error: "Cashback rule not found" });
+        await prisma.cashbackRule.delete({ where: { id } });
+        await writeAudit(
+          "CashbackRule",
+          "DELETE",
+          id,
+          req.user.userId,
+          req.user.tenantId,
+          { name: existing.name },
+        );
+        res.status(204).send();
+      } catch (e) {
+        console.error("[wellness] cashback delete error:", e.message);
+        res.status(500).json({ error: "Failed to delete cashback rule" });
+      }
+    },
+  );
+
+  router.post("/visits/:id/apply-cashback", phiWriteGate, async (req, res) => {
     try {
-      require("../lib/eventBus").emitEvent(
-        "cashback.credited",
-        {
-          patientId: visit.patientId,
-          visitId,
-          ruleId: result.ruleId,
-          amount: result.earn,
-          walletId: wallet.id,
-          transactionId: tx.id,
+      const visitId = parseInt(req.params.id, 10);
+      const visit = await prisma.visit.findFirst({
+        where: tenantWhere(req, { id: visitId }),
+        select: {
+          id: true,
+          patientId: true,
+          serviceId: true,
+          amountCharged: true,
+          status: true,
         },
-        req.user.tenantId,
-        req.io,
-      );
-    } catch (_e) {}
-    res
-      .status(201)
-      .json({
-        applied: true,
-        earn: result.earn,
-        ruleId: result.ruleId,
-        transaction: tx,
       });
-  } catch (e) {
-    console.error("[wellness] cashback apply error:", e.message);
-    res.status(500).json({ error: "Failed to apply cashback" });
-  }
-});
-
-// Get doctors availability for patient appointment booking
-// Returns minimal doctor info (only id, name, availability status)
-// No email or sensitive fields exposed to prevent data leakage to patients
-router.get("/doctors/availability", verifyToken, async (req, res) => {
-  try {
-    const { tenantId } = req.user;
-    const dateParam = req.query.date || new Date().toISOString().split("T")[0];
-
-    // Fetch all active doctors (staff with wellnessRole='doctor')
-    // Only select id and name — no email or other sensitive fields
-    const doctors = await prisma.user.findMany({
-      where: {
-        tenantId,
-        wellnessRole: "doctor",
-        deactivatedAt: null,
-      },
-      select: {
-        id: true,
-        name: true,
-      },
-      orderBy: { name: "asc" },
-    });
-
-    // Fetch approved leave requests for all doctors on the specified date
-    const targetDate = new Date(dateParam + "T00:00:00Z");
-    if (isNaN(targetDate.getTime())) {
-      return res
-        .status(400)
-        .json({ error: "Invalid date format. Use YYYY-MM-DD." });
-    }
-
-    const startOfDay = new Date(targetDate);
-    startOfDay.setUTCHours(0, 0, 0, 0);
-    const endOfDay = new Date(targetDate);
-    endOfDay.setUTCHours(23, 59, 59, 999);
-
-    const approvedLeaves = await prisma.leaveRequest.findMany({
-      where: {
-        tenantId,
-        status: "APPROVED",
-        startDate: { lte: endOfDay },
-        endDate: { gte: startOfDay },
-      },
-      select: {
-        userId: true,
-      },
-    });
-
-    // Also check for block times (breaks, personal time, etc.) that span the entire day
-    const blockTimes = await prisma.blockTime.findMany({
-      where: {
-        tenantId,
-        startAt: { lte: endOfDay },
-        endAt: { gte: startOfDay },
-      },
-      select: {
-        userId: true,
-      },
-    });
-
-    const onLeaveIds = new Set(approvedLeaves.map((l) => l.userId));
-    const hasBlockTimeIds = new Set(blockTimes.map((b) => b.userId));
-
-    // Return only necessary fields: id, name, availability status
-    const doctorsList = doctors.map((doctor) => ({
-      id: doctor.id,
-      name: doctor.name,
-      available: !onLeaveIds.has(doctor.id) && !hasBlockTimeIds.has(doctor.id),
-    }));
-
-    res.json(doctorsList);
-  } catch (err) {
-    console.error("[wellness] get doctors availability error:", err.message);
-    res.status(500).json({ error: "Failed to fetch doctors availability" });
-  }
-});
-
-// Get available time slots for a doctor on a specific date
-// Returns array of 30-min slots between 9 AM - 6 PM that are not already booked
-router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
-  try {
-    const { doctorId } = req.params;
-    const { tenantId } = req.user;
-    const dateParam = req.query.date || new Date().toISOString().split("T")[0];
-
-    // Validate doctor exists and belongs to tenant
-    const doctor = await prisma.user.findFirst({
-      where: {
-        id: parseInt(doctorId),
-        tenantId,
-        wellnessRole: "doctor",
-        deactivatedAt: null,
-      },
-      select: { id: true },
-    });
-
-    if (!doctor) {
-      return res.status(404).json({ error: "Doctor not found" });
-    }
-
-    // Check if doctor is on leave
-    const targetDate = new Date(dateParam + "T00:00:00Z");
-    const startOfDay = new Date(targetDate);
-    startOfDay.setUTCHours(0, 0, 0, 0);
-    const endOfDay = new Date(targetDate);
-    endOfDay.setUTCHours(23, 59, 59, 999);
-
-    const leaveReq = await prisma.leaveRequest.findFirst({
-      where: {
-        tenantId,
-        userId: parseInt(doctorId),
-        status: "APPROVED",
-        startDate: { lte: endOfDay },
-        endDate: { gte: startOfDay },
-      },
-    });
-
-    if (leaveReq) {
-      return res.json({
-        available: false,
-        reason: "Doctor is on leave",
-        slots: [],
+      if (!visit) return res.status(404).json({ error: "Visit not found" });
+      if (visit.status !== "completed") {
+        return res
+          .status(409)
+          .json({
+            error: "Cashback can only be applied to completed visits",
+            code: "VISIT_NOT_COMPLETED",
+          });
+      }
+      const existing = await prisma.walletTransaction.findFirst({
+        where: { tenantId: req.user.tenantId, visitId, type: "CREDIT_CASHBACK" },
+        select: { id: true, amount: true },
       });
-    }
-
-    // Check for block times (breaks, personal time, etc.)
-    const blockTime = await prisma.blockTime.findFirst({
-      where: {
-        tenantId,
-        userId: parseInt(doctorId),
-        startAt: { lte: endOfDay },
-        endAt: { gte: startOfDay },
-      },
-    });
-
-    if (blockTime) {
-      return res.json({
-        available: false,
-        reason: `Doctor unavailable: ${blockTime.reason}`,
-        slots: [],
-      });
-    }
-
-    // Get all booked visits for this doctor on this date
-    const bookedVisits = await prisma.visit.findMany({
-      where: {
-        tenantId,
-        doctorId: parseInt(doctorId),
-        visitDate: {
-          gte: new Date(dateParam + "T00:00:00+05:30"),
-          lte: new Date(dateParam + "T23:59:59+05:30"),
-        },
-        status: { not: "cancelled" },
-      },
-      select: { visitDate: true },
-    });
-
-    // Generate 30-min slots from 9 AM to 6 PM
-    const slots = [];
-    for (let hour = 9; hour < 18; hour++) {
-      for (let min = 0; min < 60; min += 30) {
-        const timeStr = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-
-        // Check if this slot is booked
-        const isBooked = bookedVisits.some((visit) => {
-          const visitHour = visit.visitDate.getHours();
-          const visitMin = visit.visitDate.getMinutes();
-          return visitHour === hour && visitMin === min;
-        });
-
-        slots.push({
-          time: timeStr,
-          available: !isBooked,
+      if (existing) {
+        return res.status(409).json({
+          error: "Cashback already applied for this visit",
+          code: "CASHBACK_ALREADY_APPLIED",
+          transactionId: existing.id,
         });
       }
-    }
-
-    res.json({
-      available: true,
-      date: dateParam,
-      doctorId: parseInt(doctorId),
-      slots: slots.filter((s) => s.available).map((s) => s.time),
-    });
-  } catch (err) {
-    console.error("[wellness] get time slots error:", err.message);
-    res.status(500).json({ error: "Failed to fetch available time slots" });
-  }
-});
-
-// User appointment booking endpoint
-// Allows any authenticated user to book an appointment
-router.post("/appointments/book", verifyToken, async (req, res) => {
-  try {
-    const { doctorId, serviceId, appointmentDate, appointmentTime, duration } =
-      req.body;
-    const { userId, tenantId } = req.user;
-
-    // Validate required fields
-    if (!doctorId || !appointmentDate || !appointmentTime) {
-      return res.status(400).json({
-        error:
-          "Missing required fields: doctorId, appointmentDate, appointmentTime",
+      const now = new Date();
+      const rules = await prisma.cashbackRule.findMany({
+        where: {
+          tenantId: req.user.tenantId,
+          isActive: true,
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        },
+        orderBy: { createdAt: "asc" },
       });
-    }
-
-    // Parse date and time
-    const apptDate = new Date(appointmentDate);
-    if (isNaN(apptDate.getTime())) {
-      return res.status(400).json({ error: "Invalid appointment date" });
-    }
-
-    // Check if doctor is available (approved leave check)
-    const leaveReq = await prisma.leaveRequest.findFirst({
-      where: {
-        tenantId,
-        userId: parseInt(doctorId),
-        status: "APPROVED",
-        startDate: { lte: apptDate },
-        endDate: { gte: apptDate },
-      },
-    });
-
-    if (leaveReq) {
-      return res.status(409).json({
-        error: "Doctor is not available on this date",
-        code: "DOCTOR_UNAVAILABLE",
+      const result = computeCashbackEarn(
+        rules,
+        Number(visit.amountCharged) || 0,
+        visit.serviceId,
+      );
+      if (!result.applied) {
+        return res.json({ applied: false, earn: 0, ruleId: null });
+      }
+      const wallet = await getOrCreateWallet(req, visit.patientId);
+      const tx = await writeWalletTransaction({
+        tenantId: req.user.tenantId,
+        walletId: wallet.id,
+        type: "CREDIT_CASHBACK",
+        absAmount: result.earn,
+        performedBy: req.user.userId,
+        reason: `Cashback for Visit #${visitId} (rule ${result.ruleId})`,
+        visitId,
       });
-    }
-
-    // Get or create patient for current user
-    let patient = await prisma.patient.findFirst({
-      where: {
-        tenant: { id: tenantId },
-        user: { id: userId },
-      },
-    });
-
-    if (!patient) {
-      // Create patient record for user
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { name: true, email: true },
-      });
-
-      patient = await prisma.patient.create({
-        data: {
-          name: user.name || user.email || "Patient",
-          email: user.email,
-          source: "self-booking",
-          tenant: {
-            connect: { id: tenantId },
+      await writeAudit(
+        "Patient",
+        "CASHBACK_EARN",
+        visit.patientId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          visitId,
+          ruleId: result.ruleId,
+          earn: result.earn,
+          transactionId: tx.id,
+        },
+      );
+      // PRD Gap §13 wave-6a — emit cashback.credited so workflow rules can
+      // react (cashback-redemption SMS, loyalty-tier upgrades).
+      try {
+        require("../lib/eventBus").emitEvent(
+          "cashback.credited",
+          {
+            patientId: visit.patientId,
+            visitId,
+            ruleId: result.ruleId,
+            amount: result.earn,
+            walletId: wallet.id,
+            transactionId: tx.id,
           },
-          user: {
-            connect: { id: userId },
-          },
+          req.user.tenantId,
+          req.io,
+        );
+      } catch (_e) { }
+      res
+        .status(201)
+        .json({
+          applied: true,
+          earn: result.earn,
+          ruleId: result.ruleId,
+          transaction: tx,
+        });
+    } catch (e) {
+      console.error("[wellness] cashback apply error:", e.message);
+      res.status(500).json({ error: "Failed to apply cashback" });
+    }
+  });
+
+  // Get doctors availability for patient appointment booking
+  // Returns minimal doctor info (only id, name, availability status)
+  // No email or sensitive fields exposed to prevent data leakage to patients
+  router.get("/doctors/availability", verifyToken, async (req, res) => {
+    try {
+      const { tenantId } = req.user;
+      const dateParam = req.query.date || new Date().toISOString().split("T")[0];
+
+      // Fetch all active doctors (staff with wellnessRole='doctor')
+      // Only select id and name — no email or other sensitive fields
+      const doctors = await prisma.user.findMany({
+        where: {
+          tenantId,
+          wellnessRole: "doctor",
+          deactivatedAt: null,
+        },
+        select: {
+          id: true,
+          name: true,
+        },
+        orderBy: { name: "asc" },
+      });
+
+      // Fetch approved leave requests for all doctors on the specified date
+      const targetDate = new Date(dateParam + "T00:00:00Z");
+      if (isNaN(targetDate.getTime())) {
+        return res
+          .status(400)
+          .json({ error: "Invalid date format. Use YYYY-MM-DD." });
+      }
+
+      const startOfDay = new Date(targetDate);
+      startOfDay.setUTCHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetDate);
+      endOfDay.setUTCHours(23, 59, 59, 999);
+
+      const approvedLeaves = await prisma.leaveRequest.findMany({
+        where: {
+          tenantId,
+          status: "APPROVED",
+          startDate: { lte: endOfDay },
+          endDate: { gte: startOfDay },
+        },
+        select: {
+          userId: true,
         },
       });
+
+      // Also check for block times (breaks, personal time, etc.) that span the entire day
+      const blockTimes = await prisma.blockTime.findMany({
+        where: {
+          tenantId,
+          startAt: { lte: endOfDay },
+          endAt: { gte: startOfDay },
+        },
+        select: {
+          userId: true,
+        },
+      });
+
+      const onLeaveIds = new Set(approvedLeaves.map((l) => l.userId));
+      const hasBlockTimeIds = new Set(blockTimes.map((b) => b.userId));
+
+      // Return only necessary fields: id, name, availability status
+      const doctorsList = doctors.map((doctor) => ({
+        id: doctor.id,
+        name: doctor.name,
+        available: !onLeaveIds.has(doctor.id) && !hasBlockTimeIds.has(doctor.id),
+      }));
+
+      res.json(doctorsList);
+    } catch (err) {
+      console.error("[wellness] get doctors availability error:", err.message);
+      res.status(500).json({ error: "Failed to fetch doctors availability" });
     }
+  });
 
-    // Create visit/appointment with IST timezone
-    const [hours, mins] = appointmentTime.split(":").map((x) => parseInt(x));
-    const visitDate = new Date(
-      appointmentDate +
-        `T${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}:00+05:30`,
-    );
+  // Get available time slots for a doctor on a specific date
+  // Returns array of 30-min slots between 9 AM - 6 PM that are not already booked
+  router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
+    try {
+      const { doctorId } = req.params;
+      const { tenantId } = req.user;
+      const dateParam = req.query.date || new Date().toISOString().split("T")[0];
 
-    const visit = await prisma.visit.create({
-      data: {
-        tenantId,
-        patientId: patient.id,
+      // Validate doctor exists and belongs to tenant
+      const doctor = await prisma.user.findFirst({
+        where: {
+          id: parseInt(doctorId),
+          tenantId,
+          wellnessRole: "doctor",
+          deactivatedAt: null,
+        },
+        select: { id: true },
+      });
+
+      if (!doctor) {
+        return res.status(404).json({ error: "Doctor not found" });
+      }
+
+      // Check if doctor is on leave
+      const targetDate = new Date(dateParam + "T00:00:00Z");
+      const startOfDay = new Date(targetDate);
+      startOfDay.setUTCHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetDate);
+      endOfDay.setUTCHours(23, 59, 59, 999);
+
+      const leaveReq = await prisma.leaveRequest.findFirst({
+        where: {
+          tenantId,
+          userId: parseInt(doctorId),
+          status: "APPROVED",
+          startDate: { lte: endOfDay },
+          endDate: { gte: startOfDay },
+        },
+      });
+
+      if (leaveReq) {
+        return res.json({
+          available: false,
+          reason: "Doctor is on leave",
+          slots: [],
+        });
+      }
+
+      // Check for block times (breaks, personal time, etc.)
+      const blockTime = await prisma.blockTime.findFirst({
+        where: {
+          tenantId,
+          userId: parseInt(doctorId),
+          startAt: { lte: endOfDay },
+          endAt: { gte: startOfDay },
+        },
+      });
+
+      if (blockTime) {
+        return res.json({
+          available: false,
+          reason: `Doctor unavailable: ${blockTime.reason}`,
+          slots: [],
+        });
+      }
+
+      // Get all booked visits for this doctor on this date
+      const bookedVisits = await prisma.visit.findMany({
+        where: {
+          tenantId,
+          doctorId: parseInt(doctorId),
+          visitDate: {
+            gte: new Date(dateParam + "T00:00:00+05:30"),
+            lte: new Date(dateParam + "T23:59:59+05:30"),
+          },
+          status: { not: "cancelled" },
+        },
+        select: { visitDate: true },
+      });
+
+      // Generate 30-min slots from 9 AM to 6 PM
+      const slots = [];
+      for (let hour = 9; hour < 18; hour++) {
+        for (let min = 0; min < 60; min += 30) {
+          const timeStr = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+
+          // Check if this slot is booked
+          const isBooked = bookedVisits.some((visit) => {
+            const visitHour = visit.visitDate.getHours();
+            const visitMin = visit.visitDate.getMinutes();
+            return visitHour === hour && visitMin === min;
+          });
+
+          slots.push({
+            time: timeStr,
+            available: !isBooked,
+          });
+        }
+      }
+
+      res.json({
+        available: true,
+        date: dateParam,
         doctorId: parseInt(doctorId),
-        serviceId: serviceId ? parseInt(serviceId) : null,
-        visitDate,
-        status: "booked",
-        bookingType: "CLINIC_VISIT",
-        createdAt: new Date(),
-      },
-      include: {
-        patient: { select: { id: true, name: true, email: true } },
-        doctor: { select: { id: true, name: true } },
-        service: { select: { id: true, name: true } },
-      },
-    });
-
-    // Write audit log
-    await writeAudit("Visit", "CREATE", userId, visit.id, tenantId, {
-      patientId: patient.id,
-      doctorId,
-      visitDate: visitDate.toISOString(),
-      action: "User self-booked appointment",
-    });
-
-    res.status(201).json({
-      success: true,
-      appointment: {
-        id: visit.id,
-        patientName: visit.patient.name,
-        doctorName: visit.doctor?.name || "N/A",
-        serviceName: visit.service?.name || "General",
-        appointmentDate: visit.visitDate,
-        status: visit.status,
-      },
-    });
-  } catch (err) {
-    console.error("[wellness] appointment booking failed:", err.message);
-    res.status(500).json({
-      error: "Failed to book appointment",
-      code: "APPOINTMENT_BOOKING_FAILED",
-    });
-  }
-});
-
-// Get user's appointments
-router.get("/appointments/my", verifyToken, async (req, res) => {
-  try {
-    const { userId, tenantId } = req.user;
-
-    // Find patient record for current user
-    const patient = await prisma.patient.findFirst({
-      where: {
-        tenant: { id: tenantId },
-        user: { id: userId },
-      },
-    });
-
-    if (!patient) {
-      return res.json([]);
+        slots: slots.filter((s) => s.available).map((s) => s.time),
+      });
+    } catch (err) {
+      console.error("[wellness] get time slots error:", err.message);
+      res.status(500).json({ error: "Failed to fetch available time slots" });
     }
+  });
 
-    // Get all visits for this patient (booked, arrived, in-treatment; exclude cancelled/completed/no-show)
-    const visits = await prisma.visit.findMany({
-      where: {
-        tenantId,
+  // User appointment booking endpoint
+  // Allows any authenticated user to book an appointment
+  router.post("/appointments/book", verifyToken, async (req, res) => {
+    try {
+      const { doctorId, serviceId, appointmentDate, appointmentTime, duration } =
+        req.body;
+      const { userId, tenantId } = req.user;
+
+      // Validate required fields
+      if (!doctorId || !appointmentDate || !appointmentTime) {
+        return res.status(400).json({
+          error:
+            "Missing required fields: doctorId, appointmentDate, appointmentTime",
+        });
+      }
+
+      // Parse date and time
+      const apptDate = new Date(appointmentDate);
+      if (isNaN(apptDate.getTime())) {
+        return res.status(400).json({ error: "Invalid appointment date" });
+      }
+
+      // Check if doctor is available (approved leave check)
+      const leaveReq = await prisma.leaveRequest.findFirst({
+        where: {
+          tenantId,
+          userId: parseInt(doctorId),
+          status: "APPROVED",
+          startDate: { lte: apptDate },
+          endDate: { gte: apptDate },
+        },
+      });
+
+      if (leaveReq) {
+        return res.status(409).json({
+          error: "Doctor is not available on this date",
+          code: "DOCTOR_UNAVAILABLE",
+        });
+      }
+
+      // Get or create patient for current user
+      let patient = await prisma.patient.findFirst({
+        where: {
+          tenant: { id: tenantId },
+          user: { id: userId },
+        },
+      });
+
+      if (!patient) {
+        // Create patient record for user
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { name: true, email: true },
+        });
+
+        patient = await prisma.patient.create({
+          data: {
+            name: user.name || user.email || "Patient",
+            email: user.email,
+            source: "self-booking",
+            tenant: {
+              connect: { id: tenantId },
+            },
+            user: {
+              connect: { id: userId },
+            },
+          },
+        });
+      }
+
+      // Create visit/appointment with IST timezone
+      const [hours, mins] = appointmentTime.split(":").map((x) => parseInt(x));
+      const visitDate = new Date(
+        appointmentDate +
+        `T${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}:00+05:30`,
+      );
+
+      const visit = await prisma.visit.create({
+        data: {
+          tenantId,
+          patientId: patient.id,
+          doctorId: parseInt(doctorId),
+          serviceId: serviceId ? parseInt(serviceId) : null,
+          visitDate,
+          status: "booked",
+          bookingType: "CLINIC_VISIT",
+          createdAt: new Date(),
+        },
+        include: {
+          patient: { select: { id: true, name: true, email: true } },
+          doctor: { select: { id: true, name: true } },
+          service: { select: { id: true, name: true } },
+        },
+      });
+
+      // Write audit log
+      await writeAudit("Visit", "CREATE", userId, visit.id, tenantId, {
         patientId: patient.id,
-        status: { in: ["booked", "arrived", "in-treatment", "checked-in"] },
-      },
-      include: {
-        doctor: { select: { id: true, name: true } },
-        service: { select: { id: true, name: true } },
-      },
-      orderBy: { visitDate: "asc" },
-    });
+        doctorId,
+        visitDate: visitDate.toISOString(),
+        action: "User self-booked appointment",
+      });
 
-    const appointments = visits.map((v) => ({
-      id: v.id,
-      doctorName: v.doctor?.name || "N/A",
-      serviceName: v.service?.name || "General",
-      appointmentDate: v.visitDate,
-      status: v.status,
-    }));
-
-    res.json(appointments);
-  } catch (err) {
-    console.error("[wellness] get appointments failed:", err.message);
-    res.status(500).json({ error: "Failed to fetch appointments" });
-  }
-});
-
-// Cancel appointment
-router.post("/appointments/:id/cancel", verifyToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { userId, tenantId } = req.user;
-
-    // Find visit
-    const visit = await prisma.visit.findUnique({
-      where: { id: parseInt(id) },
-    });
-
-    if (!visit) {
-      return res.status(404).json({ error: "Appointment not found" });
+      res.status(201).json({
+        success: true,
+        appointment: {
+          id: visit.id,
+          patientName: visit.patient.name,
+          doctorName: visit.doctor?.name || "N/A",
+          serviceName: visit.service?.name || "General",
+          appointmentDate: visit.visitDate,
+          status: visit.status,
+        },
+      });
+    } catch (err) {
+      console.error("[wellness] appointment booking failed:", err.message);
+      res.status(500).json({
+        error: "Failed to book appointment",
+        code: "APPOINTMENT_BOOKING_FAILED",
+      });
     }
+  });
 
-    if (visit.tenantId !== tenantId) {
-      return res.status(403).json({ error: "Unauthorized" });
+  // Get user's appointments
+  router.get("/appointments/my", verifyToken, async (req, res) => {
+    try {
+      const { userId, tenantId } = req.user;
+
+      // Find patient record for current user
+      const patient = await prisma.patient.findFirst({
+        where: {
+          tenant: { id: tenantId },
+          user: { id: userId },
+        },
+      });
+
+      if (!patient) {
+        return res.json([]);
+      }
+
+      // Get all visits for this patient (booked, arrived, in-treatment; exclude cancelled/completed/no-show)
+      const visits = await prisma.visit.findMany({
+        where: {
+          tenantId,
+          patientId: patient.id,
+          status: { in: ["booked", "arrived", "in-treatment", "checked-in"] },
+        },
+        include: {
+          doctor: { select: { id: true, name: true } },
+          service: { select: { id: true, name: true } },
+        },
+        orderBy: { visitDate: "asc" },
+      });
+
+      const appointments = visits.map((v) => ({
+        id: v.id,
+        doctorName: v.doctor?.name || "N/A",
+        serviceName: v.service?.name || "General",
+        appointmentDate: v.visitDate,
+        status: v.status,
+      }));
+
+      res.json(appointments);
+    } catch (err) {
+      console.error("[wellness] get appointments failed:", err.message);
+      res.status(500).json({ error: "Failed to fetch appointments" });
     }
+  });
 
-    // Check if user is the patient
-    const patient = await prisma.patient.findUnique({
-      where: { id: visit.patientId },
-    });
+  // Cancel appointment
+  router.post("/appointments/:id/cancel", verifyToken, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { userId, tenantId } = req.user;
 
-    if (patient.userId !== userId) {
-      return res
-        .status(403)
-        .json({ error: "Can only cancel your own appointments" });
+      // Find visit
+      const visit = await prisma.visit.findUnique({
+        where: { id: parseInt(id) },
+      });
+
+      if (!visit) {
+        return res.status(404).json({ error: "Appointment not found" });
+      }
+
+      if (visit.tenantId !== tenantId) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+
+      // Check if user is the patient
+      const patient = await prisma.patient.findUnique({
+        where: { id: visit.patientId },
+      });
+
+      if (patient.userId !== userId) {
+        return res
+          .status(403)
+          .json({ error: "Can only cancel your own appointments" });
+      }
+
+      // Update visit status to cancelled
+      const updated = await prisma.visit.update({
+        where: { id: parseInt(id) },
+        data: { status: "cancelled" },
+      });
+
+      await writeAudit("Visit", "UPDATE", userId, visit.id, tenantId, {
+        action: "User cancelled appointment",
+        status: "cancelled",
+      });
+
+      res.json({
+        success: true,
+        appointment: { id: updated.id, status: "cancelled" },
+      });
+    } catch (err) {
+      console.error("[wellness] cancel appointment failed:", err.message);
+      res.status(500).json({ error: "Failed to cancel appointment" });
     }
+  });
 
-    // Update visit status to cancelled
-    const updated = await prisma.visit.update({
-      where: { id: parseInt(id) },
-      data: { status: "cancelled" },
-    });
-
-    await writeAudit("Visit", "UPDATE", userId, visit.id, tenantId, {
-      action: "User cancelled appointment",
-      status: "cancelled",
-    });
-
-    res.json({
-      success: true,
-      appointment: { id: updated.id, status: "cancelled" },
-    });
-  } catch (err) {
-    console.error("[wellness] cancel appointment failed:", err.message);
-    res.status(500).json({ error: "Failed to cancel appointment" });
-  }
-});
-
-module.exports = router;
+  module.exports = router;

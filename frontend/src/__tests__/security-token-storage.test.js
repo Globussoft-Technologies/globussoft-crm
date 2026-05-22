@@ -1,27 +1,30 @@
-// Regression suite for #343 — JWT bearer token must never live in localStorage.
+// Regression suite for #343 — JWT bearer token storage discipline.
 //
-// Why this test exists:
+// History:
 //   v3.2.5 migrated the bearer token off localStorage onto an in-memory holder
-//   + sessionStorage rehydration (utils/api.js, App.jsx token state). The
-//   migration was correct but App.jsx:357's loginWithToken() retained an
-//   explicit `localStorage.setItem("token", ...)` from before the fix — silently
-//   undoing the migration on every SSO callback. Caught by external QA on
-//   2026-05-04 (#343 still-open). The dead-code line was deleted in the same
-//   commit that introduced this test.
+//   + sessionStorage rehydration. The original v3.2.5 contract was "token must
+//   NEVER touch localStorage anywhere"; App.jsx:357 still wrote to localStorage
+//   on SSO callbacks and was caught on 2026-05-04 (#343).
 //
-// What this test guards against:
-//   1. Any production source file (frontend/src/**, excluding __tests__/) that
-//      contains `localStorage.setItem('token'` or `localStorage.setItem("token"`
-//      will fail this test. The token is the credential — losing it to XSS
-//      means session theft. user/tenant remain in localStorage by documented
-//      design (PII leak, not credential leak — the token gates access to both
-//      via /api/auth/me anyway).
-//   2. setAuthToken (the canonical writer) must not touch localStorage. If a
-//      future refactor reintroduces a localStorage write inside the helper,
-//      every component that calls it would silently leak the token again.
+//   v3.7.17+ extended setAuthToken with an opt-in `remember` flag so deep
+//   links shared between users open in the destination tab WITHOUT a
+//   re-login. The flag is sourced from the "Keep me signed in" checkbox on
+//   the Login form (default ON) and exclusively flows through setAuthToken
+//   in utils/api.js. Every other source file must still go through that
+//   helper — direct localStorage.setItem('token', ...) elsewhere is
+//   forbidden because it sidesteps the rememberMe UX and re-introduces the
+//   #343 silent-leak failure mode.
 //
-// Tests are intentionally narrow (token-only). user/tenant in localStorage is
-// a documented design decision — see App.jsx line 251 and utils/api.js header.
+// What this suite still guards:
+//   1. Production source files OTHER than utils/api.js must never write the
+//      token to localStorage directly. utils/api.js is the canonical writer
+//      and is allowed to mirror to localStorage when opt-in flag is set.
+//   2. setAuthToken's default behavior (no opts, or remember=false) leaves
+//      localStorage untouched (or scrubs any prior entry on explicit-false).
+//   3. Only setAuthToken({ remember: true }) populates localStorage.
+//   4. clearAuthToken() drops both stores so logout fully ends persistence.
+//   5. getAuthToken() prefers sessionStorage but falls back to localStorage
+//      so cross-tab deep-link sessions rehydrate cleanly.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -48,6 +51,10 @@ function listSourceFiles(dir) {
       // Skip co-located test/spec files just in case (.test.js next to a
       // module rather than under __tests__/).
       if (/\.(test|spec)\./.test(entry.name)) continue;
+      // utils/api.js is the canonical token-writer; it is allowed (and
+      // expected) to write to localStorage when setAuthToken's `remember`
+      // flag is true. Every OTHER source file still must not.
+      if (full.endsWith(path.join('utils', 'api.js'))) continue;
       out.push(full);
     }
   }
@@ -152,5 +159,62 @@ describe('#343 — setAuthToken must not touch localStorage', () => {
     // Force a fresh in-memory read by re-setting via setAuthToken.
     setAuthToken('from-session');
     expect(getAuthToken()).toBe('from-session');
+  });
+});
+
+describe('v3.7.17 — opt-in "Keep me signed in" via setAuthToken({remember})', () => {
+  // Behaviour added so deep links shared between users open in the
+  // destination tab WITHOUT a re-login. The flag is sourced from the
+  // "Keep me signed in" checkbox on the Login form.
+  beforeEach(() => {
+    sessionStorage.clear();
+    localStorage.clear();
+    // Drain any in-memory token from prior tests by clearing.
+    clearAuthToken();
+  });
+
+  test('setAuthToken("abc", { remember: true }) mirrors token to localStorage', () => {
+    setAuthToken('abc', { remember: true });
+    expect(sessionStorage.getItem('token')).toBe('abc');
+    expect(localStorage.getItem('token')).toBe('abc');
+  });
+
+  test('setAuthToken("abc", { remember: false }) scrubs any prior localStorage entry', () => {
+    // Simulate a user who previously chose "Keep me signed in" and is now
+    // signing in again with the box unchecked.
+    localStorage.setItem('token', 'stale');
+    setAuthToken('abc', { remember: false });
+    expect(sessionStorage.getItem('token')).toBe('abc');
+    expect(localStorage.getItem('token')).toBeNull();
+  });
+
+  test('setAuthToken("abc") with no opts preserves any prior localStorage entry (SSO/silent path)', () => {
+    // Callsites that don't pass `remember` (SSO callback, programmatic
+    // refresh) must NOT clobber the user's prior remember choice in
+    // either direction.
+    localStorage.setItem('token', 'prior-remember-token');
+    setAuthToken('abc');
+    expect(sessionStorage.getItem('token')).toBe('abc');
+    // Prior localStorage entry left intact — caller didn't ask us to
+    // change the remember state.
+    expect(localStorage.getItem('token')).toBe('prior-remember-token');
+  });
+
+  test('getAuthToken() falls back to localStorage when sessionStorage is empty (cross-tab cold start)', () => {
+    // A new tab from a shared deep link: sessionStorage is empty for this
+    // tab, but a "Keep me signed in" token exists in localStorage. The
+    // getter must surface it AND promote it to sessionStorage so the rest
+    // of the tab's lifetime matches a normal session.
+    localStorage.setItem('token', 'persisted-remember');
+    expect(getAuthToken()).toBe('persisted-remember');
+    expect(sessionStorage.getItem('token')).toBe('persisted-remember');
+  });
+
+  test('clearAuthToken() drops both stores so logout fully ends remember-me', () => {
+    setAuthToken('abc', { remember: true });
+    expect(localStorage.getItem('token')).toBe('abc');
+    clearAuthToken();
+    expect(sessionStorage.getItem('token')).toBeNull();
+    expect(localStorage.getItem('token')).toBeNull();
   });
 });

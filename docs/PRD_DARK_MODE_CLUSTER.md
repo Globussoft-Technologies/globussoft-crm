@@ -1,10 +1,10 @@
 # Dark Mode Cluster — Product Requirements
 
 **Status:** SPEC — Phase 1 demonstration shipped (`f67b4fc` for #867 Diagnostics);
-**4 of 17 issues closed** (`#863` `#864` `#867` `#871`); the remaining 13 require a
-per-page refactor wave drained at ~1-2 pages per cron tick. This PRD
-formalises the pattern so subsequent agents and human reviewers share the same
-contract.
+**7 of 17 issues closed** (`#863` `#864` `#867` `#871` `#872` `#878` + `#873` partial);
+the remaining 10 require a per-page refactor wave drained at ~1-2 pages per cron
+tick. This PRD formalises the pattern so subsequent agents and human reviewers
+share the same contract.
 
 **Master anchor:** `frontend/src/theme/travel.css` `[data-theme="dark"][data-vertical="travel"]`
 block (foundation laid in `afdc61b`, extended in `f67b4fc`).
@@ -340,14 +340,15 @@ GS engineering owns AC-1..AC-5; QA owns AC-6 (visual observation).
 
 ### 10.1 Cluster status
 
-**Cluster progress: 6 of 17 closed (`#863` `#864` `#867` `#871` `#872` + `#873` partial); 11 remaining.**
+**Cluster progress: 7 of 17 closed (`#863` `#864` `#867` `#871` `#872` `#878` + `#873` partial); 10 remaining.**
 
 - **Foundation (global CSS, form fields)** ✅ shipped `afdc61b` (closed `#863` + `#864`).
 - **Pattern demonstration (Diagnostics tier badges)** ✅ shipped `f67b4fc` (closed `#867`).
 - **Inbox per-page refactor** ✅ shipped `68b09db` tick #9 (closed `#871`); 6 inline-style objects → 11 CSS classes; 9 dark-mode token pairs verified WCAG-AA 5.4-7.4:1.
 - **Sequences per-page refactor** ✅ shipped `706514c` (closed `#872`); 6 inline-style objects → 7 CSS classes; 7 dark-mode token pairs WCAG-AA 5.8-9.2:1; ReactFlow node bg deferred to follow-up (always-dark canvas).
 - **Reports per-page refactor (Phase 1)** 🟡 shipped `3d82e34` (partial close of `#873`); 5 inline-style objects → 11 CSS classes (StageBadge + StatusBadge collapsed to `.report-pill` family); 10 dark-mode token pairs WCAG-AA 5.1+. Recharts COLORS palette + AreaChart linearGradient deferred per FR-8 `useChartTheme()` hook recommendation; needs follow-up dispatch.
-- **Per-page refactor wave (11 pages remaining)** 🔴 outstanding per §10.2 below.
+- **AuditLog per-page refactor** ✅ shipped `58986ef` tick #12 (closed `#878`); 9 inline-style objects → 13 CSS classes (ActionBadge variants + integrity chips + backfill banner + table header + row drawer); 14 dark-mode token pairs verified WCAG-AA 5.1+.
+- **Per-page refactor wave (10 pages remaining)** 🔴 outstanding per §10.2 below.
 - **Sub-cluster (toggle UX + persistence)** 🔴 outstanding per §10.2 below.
 - **Discovery doc** 🔴 NOT-STARTED — DC-1 + DC-3 dependency.
 
@@ -363,7 +364,7 @@ GS engineering owns AC-1..AC-5; QA owns AC-6 (visual observation).
 | `#872` | `pages/Sequences.jsx` (ReactFlow canvas) | Node card `background: #ffffff` + edge `stroke: '#1f1b14'` hardcoded in node defs | ✅ SHIPPED `706514c` — 6 inline-style objects refactored to 7 CSS classes; 7 dark-mode token pairs (WCAG-AA 5.8-9.2:1); ReactFlow node bg deferred to follow-up (always-dark canvas) | done |
 | `#873` | `pages/Reports.jsx` + Recharts | KPI tile + chart canvas `#ffffff` + grid color literals; same FR-8 dependency as `#866` | 🟡 PARTIAL `3d82e34` — 5 inline-style objects refactored to 11 CSS classes (StageBadge + StatusBadge collapsed to `.report-pill` family); 10 dark-mode token pairs (WCAG-AA 5.1+). Recharts COLORS + AreaChart linearGradient deferred per issue's own `useChartTheme()` hook recommendation; needs follow-up dispatch. | Phase 2 pending |
 | `#877` | `pages/Pipeline.jsx` | Column header bg `#faf6ee` + card bg `#ffffff` + border `#e8e1d5` (KanbanColumn / DealCard inline) | 🔴 NOT-STARTED | 45 min |
-| `#878` | `pages/AuditLog.jsx` | Zebra-stripe `#fafafa` / `#ffffff` + timestamp `#cfc8bd` + action-verb gold literal | 🔴 NOT-STARTED | 30 min |
+| `#878` | `pages/AuditLog.jsx` | Zebra-stripe `#fafafa` / `#ffffff` + timestamp `#cfc8bd` + action-verb gold literal | ✅ SHIPPED `58986ef` — 9 inline-style objects refactored to 13 CSS classes (ActionBadge variants / integrity chips / backfill banner / table header / row drawer); 14 dark-mode token pairs (WCAG-AA 5.1+); full close | done |
 | `#879` | `pages/travel/Itineraries.jsx` + `CostMaster.jsx` + `PricingRules.jsx` (shared Table component likely) | Table wrapper `#ffffff` + header `#faf6ee` + numeric-cell `#666` | 🔴 NOT-STARTED | 60 min (3 pages, shared component) |
 | `#880` | `pages/Quotes.jsx` + `Invoices.jsx` + `Payments.jsx` | Form card bg `#faf6ee` + line-item row white + PDF preview chrome | 🔴 NOT-STARTED | 60 min (3 pages) |
 | `#881` | App-wide modal / popover / tooltip components | Modal body `#ffffff` + popover bg + tooltip background — likely centralised in a `Modal.jsx` / `Tooltip.jsx` / `Popover.jsx` | 🔴 NOT-STARTED | 45 min (centralised payoff) |
@@ -374,10 +375,10 @@ GS engineering owns AC-1..AC-5; QA owns AC-6 (visual observation).
 | `#876` | App.jsx + `lib/userPreferences` + sub-brand switcher | `themeBySubBrand` JSON field + sub-brand-aware hydration | 🔴 NOT-STARTED | 60 min (sub-cluster) |
 | `#862` | App.jsx + Settings.jsx + maybe top bar | Visible toggle UI in Profile / top bar; depends on #870 / #876 for persistence | 🔴 NOT-STARTED | 60 min (sub-cluster) |
 
-**Closed:** 6 / 17 (incl. `#873` Phase 1 partial — Recharts Phase 2 pending).
-**Open per-page (FR-1 pattern):** 8 (+ `#873` Phase 2 Recharts work).
+**Closed:** 7 / 17 (incl. `#873` Phase 1 partial — Recharts Phase 2 pending).
+**Open per-page (FR-1 pattern):** 7 (+ `#873` Phase 2 Recharts work).
 **Open sub-cluster (FR-7 + persistence):** 3.
-**Total open:** 11 / 17.
+**Total open:** 10 / 17.
 
 ### 10.3 Effort summary
 

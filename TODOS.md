@@ -338,7 +338,28 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - Zero rebase conflicts, zero over-commits across all 48 commits
 - **Dark-mode cluster: 9 of 17 closed + #879 partial; 8 issues remaining** (#862 #866 #868 #869 #870 #876 #877 #879-partial #880)
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** (picker EXHAUSTED per Step 4):
+**Tick #17 (cron) — 3/3 USEFUL, P0 #899 SHELL + 14th PRD + 8th phantom catch:**
+
+| SHA | Type | What |
+|---|---|---|
+| `149d394` | New PRD (14th) | **`docs/PRD_RFU_GROUND_SERVICES.md`** — 543-line consolidated PRD covering #926 Zikr Cabs + #927 5-portal hotel-scraper + #928 Haramain HSR. **10 Open Questions + 7 cred-chase items** (was 3 in backlog — broken down into Zikr/Booking/Expedia/Agoda/Hotels.com/Trip.com/HHR). `docs/MANUAL_CODING_BACKLOG.md` cluster G updated with PRD pointer + per-G1/G2/G3 OQ references. **Suggests filing a 4th combined RFU operator UI PRD.** Refs #926 #927 #928. |
+| `84efe0f` | #899 Part A SHELL | **Per-sub-brand API key scoping** — `ApiKey.subBrand String?` additive nullable column (no bless marker); `req.requireSubBrandMatch()` helper in `voyagrAuth.js`; voyagr POST /leads enforces match (proof-of-wire); developer.js POST accepts subBrand with 4-value whitelist validation (400 INVALID_SUB_BRAND on mismatch); 5 new spec cases in `developer-api.spec.js`. **Part B (expanded webhook events) filed as #929** for follow-up. prisma generate + node --check + eslint all PASS. **Refs #899** (NOT Closes — Part B remains). |
+| `d757bd6` | #866 phantom + docs flip | **#866 Dashboard tiles/charts/KPI dark-mode** was ALREADY RESOLVED by upstream `afdc61b` (#863/#864 body bg + cascade fix). All 4 dashboards (Travel/TravelStall/visa/visa-AdvisorDashboard) consume `var(--surface-color)` correctly; cascade fix made tokens resolve right under dark theme. No new theme work needed. Issue closed via gh CLI + PRD §10 audit table flipped 🔴 → ✅. **8th verify-before-pickup catch.** Cluster: **10 of 17 closed + #879 partial; 7 issues remaining.** |
+
+**New cron-learning candidate (3rd-instance promotion-eligible):** Phantom-from-upstream-root-cause-fix — gap cards filed BEFORE the root-cause commit lands frequently become phantom carry-over once the upstream fix ships. **Recommendation:** pre-pickup grep `git log --since=<issue-date> --oneline -- <relevant-file>` to catch upstream fixes within 30s. Pairs with existing `verifying-issue-before-pickup` skill. Confirmed 2nd instance now (1st was 2026-05-22 #864 cascade fix resolving multiple downstream dark-mode reports). Promote to skill or one-liner standing rule on next instance.
+
+**Scope reinterpretation (tick #17 Agent 3):** Prompt said update `externalAuth.js`; agent correctly updated `voyagrAuth.js` instead (the actual middleware mounted on voyagr leads route). voyagrAuth.js had a TODO comment calling out this exact gap. Sweeping the helper into externalAuth.js is filed as a P1 follow-up; the standing-rule risk is contained because no current external.js route surfaces subBrand. Worth noting: cron prompts should specify "the middleware that gates the proof-of-wire route" rather than naming a specific file, since multiple middlewares may be in play.
+
+**Cumulative session totals (17 ticks):**
+- **51 commits** (+3 this tick: 1 SHELL + 1 PRD + 1 docs flip)
+- **8 GitHub issues closed + 1 partial** (added #866; #898 still Refs)
+- **1 new GH issue filed** (#929 Webhook events Part B)
+- 8 phantoms + 12 schema-or-spec gaps caught
+- Zero rebase conflicts, zero over-commits across all 51 commits
+- **14 PRDs shipped** (10 from original P3 list + DARK_MODE + AI_ERA + RFU_GROUND_SERVICES + WHATSAPP/DIGILOCKER already-existed)
+- **Dark-mode cluster: 10 of 17 closed + #879 partial; 7 issues remaining** (#862 #868 #869 #870 #876 #877 #880)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **14 PRDs total** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

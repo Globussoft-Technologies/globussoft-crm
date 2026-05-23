@@ -448,6 +448,10 @@ const brandKitsRoutes = require("./routes/brand_kits");
 // (stub today, real-mode post Q1 cred handover). Mounted at /api/adsgpt;
 // not under /api/travel because the cap applies tenant-wide (any vertical).
 const adsgptRoutes = require("./routes/adsgpt");
+// RateHawk operator routes — thin wrapper around services/ratehawkClient.js
+// (stub today, real-mode post Q19 cred handover). Mounted at /api/ratehawk;
+// not under /api/travel because the cap applies tenant-wide (any vertical).
+const ratehawkRoutes = require("./routes/ratehawk");
 const travelMicrositesRoutes = require("./routes/travel_microsites");
 const travelRfuProfilesRoutes = require("./routes/travel_rfu_profiles");
 const travelReligiousPacketsRoutes = require("./routes/travel_religious_packets");
@@ -677,6 +681,7 @@ app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/adsgpt", adsgptRoutes);
+app.use("/api/ratehawk", ratehawkRoutes);
 app.use("/api/travel", travelMicrositesRoutes);
 app.use("/api/travel", travelRfuProfilesRoutes);
 app.use("/api/travel", travelReligiousPacketsRoutes);

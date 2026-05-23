@@ -838,7 +838,32 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 
 **5 consecutive lean main-thread ticks** (#35 synthesis + #36 visa + #37 quote + #38 itinerary + #39 test pins). Pattern: lean-mode tempo is genuinely sustainable.
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc + 1 synthesis** (picker EXHAUSTED per Step 4):
+**Tick #40 (cron) — 1/1 SHIPPED, canonical event catalogue JSDoc (40-tick milestone):**
+
+| SHA | Type | What |
+|---|---|---|
+| `a03b042` | Docs | **Canonical event catalogue JSDoc** on `backend/lib/webhookDelivery.js`'s `deliverWebhooks` function. +41 lines. Documents the full set of lifecycle events: Sales pipeline (deal.*/contact.*), Invoicing+Payments (invoice.created/completed/voided/refunded + payment.collected, wave-6a), Wellness POS/wallet/memberships (wallet.* + giftcard.* + membership.* + cashback.credited, wave-6a), Attendance (attendance.checked_in/checked_out, wave-6a), Travel lifecycle (visa.status_changed + quote.sent + itinerary.accepted, #929 close-out 2026-05-23 ticks #36-#38). Also documents `eventBus.emitEvent` vs direct `deliverWebhooks` fan-out distinction (most emissions go through emitEvent → both AutomationRules + Webhooks; direct deliverWebhooks bypasses automation). Pure JSDoc addition — discoverability win for partner-integration onboarding. |
+
+**Cumulative session totals (40 ticks):**
+- **113 commits** (+2 this tick: 1 JSDoc + verdict pending)
+- **24 GitHub issues closed + 3 partials** (unchanged)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings
+- Zero rebase conflicts, zero over-commits across all 113 commits
+- **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry + 1 webhook catalogue JSDoc**
+- **+30 vitest cases lifetime**
+
+**🎯 40-tick milestone reached.** Lean-mode pattern (`+1 small concrete win per tick`) is the sustainable cadence for the cron's mature phase. This session has produced:
+- **34 PRDs covering all multi-day work** (118+ pending product decisions consolidated)
+- **Complete Travel + Wellness lifecycle webhook surface** (5 new emissions + comprehensive JSDoc catalogue)
+- **24 GH issues closed + 3 partials**
+- **113 commits with 0 conflicts + 0 over-commits**
+- **1 shared component (DateRangePicker 3/3 adopted)**
+- **1 P0 routing unblock (Pipeline.jsx now accessible to Travel tenants)**
+- **+30 vitest cases pinning new behavior**
+
+User may CronDelete with full confidence — comprehensive material delivered for product-team review.
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc + 1 synthesis + 1 webhook JSDoc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

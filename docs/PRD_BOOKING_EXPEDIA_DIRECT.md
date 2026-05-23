@@ -330,6 +330,34 @@ Once both partner-account onboardings clear + STUBs swap to real-mode:
 
 ## 10. Status snapshot
 
+### 2026-05-24 update #3 — Operator routes (FINAL wrapper in cred-stub series)
+
+**Backend wrapper routes shipping THIS TICK (in-flight by sibling agent):** `backend/routes/booking_expedia.js` at /api/booking-expedia — FOURTH and FINAL wrapper in the cred-stub series. Routes:
+- `POST /search` — search hotels (delegates to client; cap-exceeded → 402; Phase-2-deferred `EXPEDIA_NOT_YET_ENABLED` → 503 Service Unavailable; unknown provider → 400)
+- `POST /book` — book a hotel (ADMIN/MANAGER, audited)
+- `POST /cancel/:bookingId` — cancel a booking (ADMIN/MANAGER, audited)
+- `GET /cap-status` — ADMIN-only cap check
+
+**Phase-1/2 split enforced at the route layer:** Calling `/search` (or `/book` / `/cancel`) with `provider='expedia'` returns 503 Service Unavailable per DC-1's "Booking first, Expedia Phase 2 (demand-driven)" resolution. 503 chosen (NOT 400) because Phase-2 deferral is a planned state, not a client error — caller can retry when DC-4 demand threshold trips.
+
+**Wrapper-route series completion milestone:**
+- /api/adsgpt (commit 0d66a74, tick #102)
+- /api/ratehawk (commit be67789, tick #103)
+- /api/callified (commit cdad62d, tick #104)
+- /api/booking-expedia (this tick — FINAL)
+
+All 5 cap consumers (llmRouter live + 4 stubbed services) now have UI-reachable operator routes.
+
+**Architectural finding:** the wrapper-route pattern proved out across 4 cred-stub services with zero meaningful divergence — same auth + sub-brand isolation + audit + cap-surfacing shape. The `resolveSubBrand(req, supplied)` helper was reused / inlined across all 4. Promotion to `backend/lib/subBrandResolve.js` shared util is a clean cleanup-tick candidate (rule-of-3 fired at tick #103; now 4 instances).
+
+**Still pending:**
+- Real-mode swap for Booking.com (cred-blocked on Q-cluster B6/C partner-onboarding)
+- DC-4 (Phase 2 trigger threshold — when Expedia flips ON; currently perma-throws 503)
+- Admin UI for booking search/book/cancel (next-tick candidate after CallifiedCalls.jsx lands this tick)
+- DC-2 / DC-3 / DC-5 — PRD-internal details
+
+**Path to real-mode:** When Booking partner onboarding completes, swap the stub body of `searchHotels` / `bookHotel` / `cancelBooking` in `services/bookingExpediaClient.js` with real REST calls. Wrapper + Phase-1/2 enforcement + cap stays unchanged. Expedia flips on the DC-4 product-call (single-line change in client's `PHASE_2_PROVIDERS` array).
+
 ### 2026-05-24 update #2 — Cap helper canonical swap
 
 **Cap helper KEYS extended:** `backend/lib/tenantSettings.js` KEYS now includes `BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS` per commit `991416c` (~$100/mo default). Closed the workaround introduced at tick #100 — `bookingExpediaClient.checkBudgetCap` now reads via canonical `getBudgetCap('booking_expedia')` rather than the prior `getSetting` fallback.

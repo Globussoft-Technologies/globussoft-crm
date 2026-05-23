@@ -330,6 +330,22 @@ Once both partner-account onboardings clear + STUBs swap to real-mode:
 
 ## 10. Status snapshot
 
+### 2026-05-24 update #2 — Cap helper canonical swap
+
+**Cap helper KEYS extended:** `backend/lib/tenantSettings.js` KEYS now includes `BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS` per commit `991416c` (~$100/mo default). Closed the workaround introduced at tick #100 — `bookingExpediaClient.checkBudgetCap` now reads via canonical `getBudgetCap('booking_expedia')` rather than the prior `getSetting` fallback.
+
+**Operator route surface:** NOT yet shipped (pending — schedule: `/api/booking-expedia` wrapper after ratehawk + callified land). Stub-mode client is reachable via direct require for now (e.g. internal cron tasks); UI consumer pending the wrapper route + admin page.
+
+**All 5 cap consumers canonical:** llmRouter + adsgpt + ratehawk + callified + bookingExpedia all read via `getBudgetCap` post commit `991416c`. No workarounds remaining in the codebase. KEYS export is the single source of truth for cap-name registration.
+
+**Still pending:**
+- Real-mode swap for Booking.com (cred-blocked on Q-cluster B6/C partner-onboarding)
+- DC-4 (Phase 2 trigger threshold — when does Expedia get enabled? — flagged as the highest-leverage remaining DD per tick #101 surfacing)
+- DC-2 / DC-3 / DC-5 — PRD-internal details (cancellation policies, inventory filters, ToS counsel review)
+- Operator route surface + admin UI
+
+**Path to real-mode:** When Booking partner account onboarding completes, swap the stub body of `searchHotels` / `bookHotel` / `cancelBooking` with real REST calls. Cap + observability + Phase-1/2 enforcement scaffold stays unchanged. Expedia stays disabled until DC-4 product call.
+
 ### 2026-05-24 update — STUB client shipped + Phase-1/2 split enforced
 
 **Backend STUB shipped:** `backend/services/bookingExpediaClient.js` at commit `db06414` (~213 LOC). Mirrors the canonical STUB pattern (header marker + `// STUB:` warning + canned response shape + console.log observability + CJS self-mocking seam). 11/11 vitest cases pass.

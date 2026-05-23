@@ -321,6 +321,27 @@ GS owns the e2e validation; Travel Stall owns acknowledging acceptance.
 
 ## 10. Status snapshot
 
+### 2026-05-24 update #2 — Operator routes + admin UI
+
+**Backend wrapper routes shipped:** `backend/routes/adsgpt.js` at commit `0d66a74` (~154 LOC, 5/5 vitest pass). Routes:
+- `GET /reports/ads` — fetch per-platform performance report (delegates to client; surfaces `ADSGPT_BUDGET_EXCEEDED` as 402)
+- `GET /cap-status` — ADMIN-only cap check returning `{spentCents, capCents, percent, withinCap, alertThreshold}`
+
+**Admin UI shipping THIS TICK (in-flight by sibling agent):** `frontend/src/pages/admin/AdsGPTReports.jsx` — operator reporting surface with date-range filter + platform selector + cap-status pill + stub-mode banner ("real metrics populate when Q1 creds land").
+
+**Sub-brand isolation:** `?subBrand=` query param force-overridden by `req.apiKeySubBrand` when set (external API keys can't fetch reports for other sub-brands; 403 SUB_BRAND_MISMATCH).
+
+**Architectural finding (post-ship):** the wrapper pattern (route handles auth + isolation + audit + cap surfacing; service does provider call) was promoted to a reusable template. Sibling routes scheduled: `/api/ratehawk` (THIS TICK by sibling), `/api/callified` (next tick), `/api/booking-expedia` (after).
+
+**CJS-mock pitfall captured:** vitest agent had to use `requireCJS('../../services/adsGptClient')` for both mock-target AND router so they share the require-cache object. Documented inline in the test header for sibling wrapper authors.
+
+**Still pending:**
+- Real-mode swap (cred-blocked on Q1 Yasin handover)
+- DC-3 (per-platform attribution model — not yet specified beyond the canned platforms)
+- DC-4 (sub-brand budget split — per-sub-brand caps under the tenant cap; PRD-internal future slice)
+
+**Path to real-mode:** When Yasin's handover lands, swap the stub body of `fetchAdReport` in `services/adsGptClient.js` with the real REST call. The wrapper routes / cap / sub-brand isolation / admin UI stay unchanged — only the service-internal body changes. ~1 day post-cred per the precedent.
+
 ### 2026-05-24 update — STUB client shipped + cap wired
 
 **Backend STUB shipped:** `backend/services/adsGptClient.js` at commit `9f35040`. Mirrors the

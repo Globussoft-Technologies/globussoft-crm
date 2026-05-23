@@ -2888,30 +2888,42 @@ model ConsentTemplate {
   @@index([tenantId, isActive])
 }
 
-/// Generic per-tenant key/value settings (PRD §4.7). Each row is a
-/// freeform string value keyed by `(tenantId, key)`; callers parse
-/// `value` into whatever shape they need (number, JSON blob, boolean
-/// string). First consumer is the travel advance-ratio override:
-///   key = "travel.advanceRatio.default"             value = "0.5"
-///   key = "travel.advanceRatio.travelstall"         value = "0.5"
-///   key = "travel.advanceRatio.rfu"                 value = "0.3"
+/// Generic per-tenant key/value settings (PRD §4.7 + 2026-05-24 product-
+/// call). Each row is a freeform string value keyed by `(tenantId, key)`;
+/// callers parse `value` into whatever shape they need (number, JSON
+/// blob, boolean string). Consumers so far:
+///   PRD §4.7 travel advance-ratio:
+///     key = "travel.advanceRatio.default"             value = "0.5"
+///     key = "travel.advanceRatio.travelstall"         value = "0.5"
+///     key = "travel.advanceRatio.rfu"                 value = "0.3"
+///   2026-05-24 per-tenant budget cap pattern (AdsGPT DC-2, AI_CALLING
+///   DC-1, RateHawk DC-1) — values stored as USD cents (integers):
+///     key = "budgetCap_adsgpt_monthly_usd_cents"      value = "5000"   ($50.00)
+///     key = "budgetCap_ai_calling_monthly_usd_cents"  value = "10000"  ($100.00)
+///     key = "budgetCap_ratehawk_monthly_usd_cents"    value = "5000"   ($50.00)
+///     key = "budgetCap_llm_monthly_usd_cents"         value = "10000"  ($100.00)
 /// Lookup chain in backend/lib/tenantSettings.js:
-///   sub-brand-scoped → tenant default → hard-coded 0.5 fallback.
+///   sub-brand-scoped → tenant default → hard-coded fallback (varies by helper).
 /// The `@@unique([tenantId, key])` is intentional — every key is
-/// per-tenant unique. Brand-new table, zero existing rows, so the
-/// migration-safety detector's unique-constraint guard is blessed
-/// in the introducing commit (`[allow-unique]`).
+/// per-tenant unique. Brand-new table, zero existing rows when first
+/// introduced, so the migration-safety detector's unique-constraint
+/// guard was blessed in the introducing commit (`[allow-unique]`).
+/// `category` is a NEW nullable column (additive — no bless marker
+/// needed) added 2026-05-24 to group settings in the future admin UI
+/// ("budget", "feature-flag", "branding", "travel-pricing").
 model TenantSetting {
   id        Int      @id @default(autoincrement())
   tenantId  Int
-  key       String // dotted namespace, e.g. "travel.advanceRatio.travelstall"
+  key       String // dotted/snake namespace, e.g. "travel.advanceRatio.travelstall" or "budgetCap_adsgpt_monthly_usd_cents"
   value     String   @db.Text // freeform; caller parses
+  category  String?  @db.VarChar(50) // optional grouping for admin UI: "budget", "feature-flag", "branding"
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([tenantId, key])
   @@index([tenantId, key])
+  @@index([tenantId, category])
 }
 
 model TreatmentPlan {

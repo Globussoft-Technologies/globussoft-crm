@@ -1,23 +1,55 @@
-// Per-tenant settings helper (PRD §4.7) — generic key/value reader
-// over the TenantSetting table.
+// Per-tenant settings helper — generic key/value reader over the
+// TenantSetting table.
 //
-// `getTenantSetting(prisma, tenantId, key, fallback?)` returns the
-// row's `value` string (caller parses) or the supplied fallback.
+// Two layers of API on this module:
 //
-// `getTravelAdvanceRatio(prisma, tenantId, subBrand)` is the first
-// consumer. Lookup chain:
-//   1. sub-brand-scoped key  travel.advanceRatio.<subBrand>
-//   2. tenant default key    travel.advanceRatio.default
-//   3. hard-coded 0.5 fallback (Phase 2 baseline)
-// Values outside (0, 1] (negative, > 1, NaN, non-numeric) are rejected
-// and skipped — falling through to the next layer rather than
-// poisoning the booking flow with a bad ratio. This is intentional:
-// an admin who fat-fingers "1.5" sees Travel Stall keep working on
-// the 0.5 default instead of demanding 150% upfront on every trip.
+// 1) PRD §4.7 travel advance-ratio (original, prisma-as-arg):
+//
+//    `getTenantSetting(prisma, tenantId, key, fallback?)` returns the
+//    row's `value` string (caller parses) or the supplied fallback.
+//
+//    `getTravelAdvanceRatio(prisma, tenantId, subBrand)` is the first
+//    consumer. Lookup chain:
+//      1. sub-brand-scoped key  travel.advanceRatio.<subBrand>
+//      2. tenant default key    travel.advanceRatio.default
+//      3. hard-coded 0.5 fallback (Phase 2 baseline)
+//    Values outside (0, 1] (negative, > 1, NaN, non-numeric) are rejected
+//    and skipped — falling through to the next layer rather than
+//    poisoning the booking flow with a bad ratio. An admin who fat-
+//    fingers "1.5" sees Travel Stall keep working on the 0.5 default
+//    instead of demanding 150% upfront on every trip.
+//
+// 2) 2026-05-24 per-tenant budget cap pattern (singleton-prisma API):
+//
+//    Resolved in the 2026-05-24 product-call (DECISIONS_TRACKER.md commit
+//    `a8f24ca`) for AdsGPT DC-2 ($50/mo), AI_CALLING DC-1 ($100/mo +
+//    90s per-call ceiling), RateHawk DC-1 (per-call cents cap). Each
+//    capped integration reads `TenantSetting.budgetCap_<integration>`
+//    from the DB and falls back to env-var default. Admin UI override
+//    per-tenant. Hard-stop at cap + Slack/notification alert at 80%.
+//
+//    `KEYS`         — canonical setting keys; extend as new caps land.
+//    `DEFAULTS`     — env-var-backed defaults per key.
+//    `getSetting`   — read a setting (uses imported prisma singleton);
+//                     returns the value coerced via `opts.coerce`
+//                     (default Number) or `opts.fallback` (default
+//                     from DEFAULTS map, or null).
+//    `setSetting`   — upsert a setting row for (tenantId, key).
+//    `getBudgetCap` — convenience: read the monthly-USD-cents cap for
+//                     a named integration (validates against KEYS).
+//    `evaluateCap`  — pure helper: given spent vs cap, returns
+//                     { spentCents, capCents, percent, withinCap,
+//                     alertThreshold (80%) }. Callers compute spent
+//                     themselves (e.g. SUM of LlmCallLog rows scoped
+//                     to tenantId + provider + month-window).
 
-async function getTenantSetting(prisma, tenantId, key, fallback = null) {
+const prisma = require("./prisma");
+
+// ─── PRD §4.7 originals (prisma-as-arg) ───────────────────────────────
+
+async function getTenantSetting(prismaArg, tenantId, key, fallback = null) {
   if (!tenantId || !key) return fallback;
-  const row = await prisma.tenantSetting.findUnique({
+  const row = await prismaArg.tenantSetting.findUnique({
     where: { tenantId_key: { tenantId, key } },
     select: { value: true },
   });
@@ -31,10 +63,10 @@ function parseRatio(raw) {
   return n;
 }
 
-async function getTravelAdvanceRatio(prisma, tenantId, subBrand) {
+async function getTravelAdvanceRatio(prismaArg, tenantId, subBrand) {
   if (subBrand) {
     const subVal = await getTenantSetting(
-      prisma,
+      prismaArg,
       tenantId,
       `travel.advanceRatio.${subBrand}`,
       null,
@@ -43,7 +75,7 @@ async function getTravelAdvanceRatio(prisma, tenantId, subBrand) {
     if (parsed != null) return parsed;
   }
   const defaultVal = await getTenantSetting(
-    prisma,
+    prismaArg,
     tenantId,
     "travel.advanceRatio.default",
     null,
@@ -53,4 +85,127 @@ async function getTravelAdvanceRatio(prisma, tenantId, subBrand) {
   return 0.5;
 }
 
-module.exports = { getTenantSetting, getTravelAdvanceRatio };
+// ─── 2026-05-24 budget cap helpers (singleton-prisma API) ─────────────
+
+// Canonical setting keys — extend as new capped integrations land.
+const KEYS = {
+  ADSGPT_MONTHLY_CAP_USD_CENTS:     "budgetCap_adsgpt_monthly_usd_cents",
+  AI_CALLING_MONTHLY_CAP_USD_CENTS: "budgetCap_ai_calling_monthly_usd_cents",
+  RATEHAWK_MONTHLY_CAP_USD_CENTS:   "budgetCap_ratehawk_monthly_usd_cents",
+  LLM_MONTHLY_CAP_USD_CENTS:        "budgetCap_llm_monthly_usd_cents",
+};
+
+// Env-var defaults (overridable per-tenant via TenantSetting row).
+// $50.00 = 5000 cents; $100.00 = 10000 cents. The product-call resolution
+// chose these specific defaults (AdsGPT $50, AI_CALLING $100, RateHawk
+// $50, LLM $100). Reading via `process.env.<KEY> ?? <fallback>` lets ops
+// override the floor without code changes.
+const DEFAULTS = {
+  [KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS]:
+    Number(process.env.ADSGPT_MONTHLY_CAP_USD_CENTS ?? 5000),
+  [KEYS.AI_CALLING_MONTHLY_CAP_USD_CENTS]:
+    Number(process.env.AI_CALLING_MONTHLY_CAP_USD_CENTS ?? 10000),
+  [KEYS.RATEHAWK_MONTHLY_CAP_USD_CENTS]:
+    Number(process.env.RATEHAWK_MONTHLY_CAP_USD_CENTS ?? 5000),
+  [KEYS.LLM_MONTHLY_CAP_USD_CENTS]:
+    Number(process.env.LLM_MONTHLY_CAP_USD_CENTS ?? 10000),
+};
+
+/**
+ * Get setting value for a tenant. Reads TenantSetting row; falls back
+ * to the supplied fallback or to DEFAULTS[key] if the key is known.
+ * Returns the value coerced via the provided coercer (e.g. Number,
+ * JSON.parse, identity). Default coercer is Number (most budget-cap
+ * consumers want a number).
+ *
+ * Uses the imported prisma singleton — call sites don't pass prisma.
+ */
+async function getSetting(tenantId, key, { coerce = Number, fallback } = {}) {
+  if (!tenantId || !key) {
+    return fallback !== undefined ? fallback : (DEFAULTS[key] ?? null);
+  }
+  const row = await prisma.tenantSetting.findUnique({
+    where: { tenantId_key: { tenantId, key } },
+    select: { value: true },
+  });
+  if (!row) {
+    return fallback !== undefined ? fallback : (DEFAULTS[key] ?? null);
+  }
+  return coerce(row.value);
+}
+
+/**
+ * Set setting value for a tenant. Upserts the row keyed by the unique
+ * (tenantId, key) constraint. Stores the value as a string (callers
+ * may pass any type; we coerce via String()).
+ *
+ * `opts.category` lets the caller stamp the optional grouping column
+ * ("budget" / "feature-flag" / "branding") for the admin-UI grouper.
+ */
+async function setSetting(tenantId, key, value, { category = null } = {}) {
+  if (!tenantId || !key) {
+    throw new Error("setSetting requires non-empty tenantId and key");
+  }
+  const storedValue = String(value);
+  return prisma.tenantSetting.upsert({
+    where: { tenantId_key: { tenantId, key } },
+    create: { tenantId, key, value: storedValue, category },
+    update: { value: storedValue, category },
+  });
+}
+
+/**
+ * Convenience: get budget cap in USD cents for an integration name.
+ * Integration name is the short token used in KEYS (e.g. "adsgpt",
+ * "ai_calling", "ratehawk", "llm"). Throws on unknown integration
+ * names so callers don't silently fall through to a null cap.
+ */
+async function getBudgetCap(tenantId, integration) {
+  const key = `budgetCap_${integration}_monthly_usd_cents`;
+  if (!Object.values(KEYS).includes(key)) {
+    throw new Error(`Unknown integration: ${integration}`);
+  }
+  return getSetting(tenantId, key, { coerce: Number, fallback: DEFAULTS[key] });
+}
+
+/**
+ * Pure helper: evaluate spent vs cap. Returns the canonical envelope
+ * the budget-cap callers (AdsGPT, AI Calling, RateHawk) all expect:
+ *   - spentCents
+ *   - capCents
+ *   - percent          0..∞ (e.g. 0.5 = 50% spent, 1.2 = 120% over)
+ *   - withinCap        spentCents < capCents (strict — at-cap blocks)
+ *   - alertThreshold   percent >= 0.80 (the 80% alert pin from the
+ *                      product-call resolution)
+ * Callers compute `spentCents` themselves (SUM of usage rows scoped
+ * to tenantId + provider + month-window).
+ *
+ * Edge: capCents <= 0 → percent = 1 (treat as fully consumed) and
+ * withinCap = false. Defensive: a zero-or-negative cap is treated as
+ * "no spending allowed" rather than infinite spend.
+ */
+function evaluateCap(spentCents, capCents) {
+  const spent = Number(spentCents) || 0;
+  const cap = Number(capCents) || 0;
+  const percent = cap > 0 ? spent / cap : 1;
+  return {
+    spentCents: spent,
+    capCents: cap,
+    percent,
+    withinCap: cap > 0 ? spent < cap : false,
+    alertThreshold: percent >= 0.80,
+  };
+}
+
+module.exports = {
+  // PRD §4.7 originals
+  getTenantSetting,
+  getTravelAdvanceRatio,
+  // 2026-05-24 budget cap pattern
+  KEYS,
+  DEFAULTS,
+  getSetting,
+  setSetting,
+  getBudgetCap,
+  evaluateCap,
+};

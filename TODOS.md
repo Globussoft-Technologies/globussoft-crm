@@ -966,12 +966,32 @@ User may CronDelete with full confidence — comprehensive material delivered fo
 
 At 15-min cadence × ~8 hours of sleep × 3 agents = ~96 agent dispatches available. Plenty for the 9 remaining PRDs + many scaffolds.
 
-**Wake-up checklist:**
-1. `git log --oneline origin/main` to see what landed (commit messages auto-prefix `feat(...)` / `fix(...)` / `docs(...)`)
-2. Skim `docs/TRAVEL_CRM_PORTAL_FEATURE_MATRIX.md` for status flips
-3. Skim new PRD files for product-call decisions needed from you
-4. `gh issue list --state closed --search "closed:>2026-05-23T19:00"` for any GH issues auto-closed by trailers
-5. Review TODOS section below for tick-by-tick handoff
+**Wake-up checklist (refreshed tick #46 of 2026-05-23 cron arc):**
+
+**Read these 3 files in this order — total wake-up time ~10 minutes:**
+
+1. **[CHANGELOG.md](CHANGELOG.md)** — top-of-file "Unreleased — Autonomous overnight cron 2026-05-23 (34-tick session)" entry has a quantitative + qualitative session summary with every PRD link. Single scannable file.
+
+2. **[docs/DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md)** — 118 pending product decisions (DD-5.X items) consolidated across 20 PRDs, with 6 cross-cutting themes. **This is your design-call agenda.** Pick the 5-10 highest-value DD items to settle first; the rest follow naturally.
+
+3. **[TODOS.md](TODOS.md)** (this file) — per-tick handoff details below if you want full audit trail (tick #1 through tick #46+). The latest cumulative-totals line lives in the most-recent tick verdict commit.
+
+**Optional commands:**
+```bash
+git log --oneline origin/main -30           # see last 30 commits
+gh issue list --state closed --limit 30     # see this session's closures
+ls docs/PRD_*.md | wc -l                    # 34 PRDs shipped (16 from this session)
+```
+
+**🎯 SEND TO YASIN — 2 cred-chase docs ready to email:**
+- [`docs/WHATSAPP_INTEGRATION_PRD.md`](docs/WHATSAPP_INTEGRATION_PRD.md) — formal answer to his 2026-05-13 clarifications; §5.4 maps his 4 questions to GS answers point-by-point. Once he provides Q9 bundle (§5.2 Path A, ~30 min one-time), unblocks 10 stubbed WhatsApp call sites.
+- [`docs/DIGILOCKER_USE_CASE.md`](docs/DIGILOCKER_USE_CASE.md) — Q3 cred ask; single env-var drop unlocks real Aadhaar pull.
+
+**Cron status:** Mature lean-mode (1 small win per tick). User may `CronDelete` at any time with full confidence — comprehensive material delivered.
+
+**Stop conditions hit so far:**
+- ✅ All 10 P3 PRDs shipped (Step 4 — drop to 2 agents per tick; cron has been at 1-2 agents since tick #32)
+- Approaching: GitHub open-issue count <50 (currently ~65; closing 1-2 per tick)
 
 ---
 

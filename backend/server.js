@@ -444,6 +444,10 @@ const travelInvoicesRoutes = require("./routes/travel_invoices");
 // Brand kits — multi-vertical (travel + generic + wellness). Mounted at
 // /api/brand-kits, not /api/travel, because subBrand is optional.
 const brandKitsRoutes = require("./routes/brand_kits");
+// AdsGPT operator routes — thin wrapper around services/adsGptClient.js
+// (stub today, real-mode post Q1 cred handover). Mounted at /api/adsgpt;
+// not under /api/travel because the cap applies tenant-wide (any vertical).
+const adsgptRoutes = require("./routes/adsgpt");
 const travelMicrositesRoutes = require("./routes/travel_microsites");
 const travelRfuProfilesRoutes = require("./routes/travel_rfu_profiles");
 const travelReligiousPacketsRoutes = require("./routes/travel_religious_packets");
@@ -672,6 +676,7 @@ app.use("/api/travel", travelSuppliersRoutes);
 app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/brand-kits", brandKitsRoutes);
+app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/travel", travelMicrositesRoutes);
 app.use("/api/travel", travelRfuProfilesRoutes);
 app.use("/api/travel", travelReligiousPacketsRoutes);

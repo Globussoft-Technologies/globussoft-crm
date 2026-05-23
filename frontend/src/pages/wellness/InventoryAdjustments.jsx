@@ -1,5 +1,12 @@
 // Wave 11 Agent HH — Inventory adjustments admin page.
 // Signed deltas (positive=credit, negative=debit) with a reason enum dropdown.
+//
+// #842 (2026-05-23): the "Filter by product" dropdown was shipping with only
+// "All" when /api/wellness/products returned [] (empty tenant) OR silently
+// 4xx'd through the .catch(() => []). Now the dropdown options are a UNION
+// of (a) the master products list and (b) products surfaced by the loaded
+// adjustments via the GET /inventory/adjustments include. So a tenant with
+// adjustments but no separate product master still gets a useful filter.
 
 import { useEffect, useState } from 'react';
 import { ScaleIcon, Plus } from 'lucide-react';
@@ -32,6 +39,26 @@ export default function InventoryAdjustments() {
     }).finally(() => setLoading(false));
   };
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // #842: the master /products fetch can return [] when no products are
+  // seeded for the tenant OR when the fetch silently 4xx's (the .catch
+  // above swallows errors). Fall back to deriving options from the
+  // adjustments' joined `product` data so the filter dropdown stays
+  // useful (the GET /inventory/adjustments include adds product.{id,name,sku}).
+  // Union of both ensures a fresh seed shows the full master list AND a
+  // partial 4xx still surfaces every product that has historical activity.
+  const filterOptions = (() => {
+    const seen = new Map();
+    for (const p of products) {
+      if (p && p.id != null) seen.set(p.id, { id: p.id, name: p.name });
+    }
+    for (const a of adjustments) {
+      if (a?.product?.id != null && !seen.has(a.product.id)) {
+        seen.set(a.product.id, { id: a.product.id, name: a.product.name });
+      }
+    }
+    return [...seen.values()].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  })();
 
   const submit = async (e) => {
     e.preventDefault();
@@ -73,7 +100,7 @@ export default function InventoryAdjustments() {
         <label style={{ fontSize: '0.85rem' }}>Filter by product:&nbsp;
           <select value={productFilter} onChange={(e) => setProductFilter(e.target.value)} style={inputStyle}>
             <option value="">All</option>
-            {products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+            {filterOptions.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
           </select>
         </label>
         <button onClick={load} style={secondaryBtnStyle}>Apply</button>

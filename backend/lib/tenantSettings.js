@@ -89,17 +89,18 @@ async function getTravelAdvanceRatio(prismaArg, tenantId, subBrand) {
 
 // Canonical setting keys — extend as new capped integrations land.
 const KEYS = {
-  ADSGPT_MONTHLY_CAP_USD_CENTS:     "budgetCap_adsgpt_monthly_usd_cents",
-  AI_CALLING_MONTHLY_CAP_USD_CENTS: "budgetCap_ai_calling_monthly_usd_cents",
-  RATEHAWK_MONTHLY_CAP_USD_CENTS:   "budgetCap_ratehawk_monthly_usd_cents",
-  LLM_MONTHLY_CAP_USD_CENTS:        "budgetCap_llm_monthly_usd_cents",
+  ADSGPT_MONTHLY_CAP_USD_CENTS:          "budgetCap_adsgpt_monthly_usd_cents",
+  AI_CALLING_MONTHLY_CAP_USD_CENTS:      "budgetCap_ai_calling_monthly_usd_cents",
+  RATEHAWK_MONTHLY_CAP_USD_CENTS:        "budgetCap_ratehawk_monthly_usd_cents",
+  LLM_MONTHLY_CAP_USD_CENTS:             "budgetCap_llm_monthly_usd_cents",
+  BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS: "budgetCap_booking_expedia_monthly_usd_cents",
 };
 
 // Env-var defaults (overridable per-tenant via TenantSetting row).
 // $50.00 = 5000 cents; $100.00 = 10000 cents. The product-call resolution
 // chose these specific defaults (AdsGPT $50, AI_CALLING $100, RateHawk
-// $50, LLM $100). Reading via `process.env.<KEY> ?? <fallback>` lets ops
-// override the floor without code changes.
+// $50, LLM $100, Booking/Expedia $100). Reading via `process.env.<KEY>
+// ?? <fallback>` lets ops override the floor without code changes.
 const DEFAULTS = {
   [KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS]:
     Number(process.env.ADSGPT_MONTHLY_CAP_USD_CENTS ?? 5000),
@@ -109,6 +110,8 @@ const DEFAULTS = {
     Number(process.env.RATEHAWK_MONTHLY_CAP_USD_CENTS ?? 5000),
   [KEYS.LLM_MONTHLY_CAP_USD_CENTS]:
     Number(process.env.LLM_MONTHLY_CAP_USD_CENTS ?? 10000),
+  [KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS]:
+    Number(process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS ?? 10000),
 };
 
 /**

@@ -15,43 +15,40 @@
  * per DC-1's "RateHawk aggregator for Phase 1; direct APIs as inventory
  * deepens" architectural framing.
  *
- * NOTE on cap-helper integration: tenantSettings.KEYS does not yet contain
- * a 'booking_expedia' entry (locked to adsgpt / ai_calling / ratehawk / llm
- * at commit d8119a1). Calling getBudgetCap('booking_expedia') would throw
- * 'Unknown integration'. This client reads the cap directly via getSetting()
- * with an explicit env-var fallback (BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS
- * defaults to 10000 = $100/mo, mirroring the AI_CALLING + LLM defaults).
- * Next tenantSettings refresh should add BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS
- * to KEYS + DEFAULTS; then swap the direct getSetting() call below for the
- * canonical getBudgetCap() form. Flagged in the commit body.
+ * Cap helper KEYS extended with `BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS` at
+ * tick #101 (this commit); canonical `getBudgetCap` path now works. Prior
+ * incarnation used `getSetting(tenantId, BUDGET_CAP_KEY, { fallback })` as
+ * a workaround because KEYS was locked to 4 entries at commit d8119a1 —
+ * see git log for the swap commit. The $100/mo (10000 cents) default lives
+ * in tenantSettings.DEFAULTS now, overridable via
+ * `process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS` or per-tenant via a
+ * TenantSetting row.
  *
  * Cred chase: docs/CREDS_TRACKER.md Cat 1 B6/C row.
  */
 
 const prisma = require('../lib/prisma');
-const { getSetting, evaluateCap } = require('../lib/tenantSettings');
+const { getBudgetCap, evaluateCap } = require('../lib/tenantSettings');
 
 const INTEGRATION = 'booking_expedia';
 const BUDGET_CAP_KEY = 'budgetCap_booking_expedia_monthly_usd_cents';
 const PROVIDERS = ['booking', 'expedia'];
 const PHASE_2_PROVIDERS = ['expedia']; // Per DC-4 — disabled until demand-driven flip.
 
-// Default monthly cap when no TenantSetting row + no env-var override.
-// $100/mo (10000 cents) — mirrors AI_CALLING + LLM defaults from
-// tenantSettings.DEFAULTS. Override per-tenant via TenantSetting row, or
-// globally via process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS.
+// Default monthly cap exposed for back-compat / observability (unit tests
+// + admin tooling read this constant). Canonical resolution path is now
+// `getBudgetCap(tenantId, INTEGRATION)`, which reads
+// tenantSettings.DEFAULTS[KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS]
+// (same env-var + same 10000-cent fallback). Kept as a literal here so the
+// module's exported shape is stable for downstream consumers.
 const DEFAULT_CAP_CENTS = Number(
   process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS ?? 10000,
 );
 
 async function checkBudgetCap(tenantId) {
-  // Direct getSetting() rather than getBudgetCap() because KEYS doesn't
-  // yet include 'booking_expedia' — see header NOTE. Swap to getBudgetCap()
-  // when tenantSettings.KEYS gains the entry.
-  const capCents = await getSetting(tenantId, BUDGET_CAP_KEY, {
-    coerce: Number,
-    fallback: DEFAULT_CAP_CENTS,
-  });
+  // Canonical cap lookup — KEYS now includes 'booking_expedia' so
+  // getBudgetCap resolves without the prior getSetting() workaround.
+  const capCents = await getBudgetCap(tenantId, INTEGRATION);
   // Resolve via module.exports so vi.spyOn(client, 'computeMonthlySpendCents')
   // in unit tests intercepts the call. Direct local-binding reference would
   // bypass the spy (closure-captured at module load). CJS self-mocking seam

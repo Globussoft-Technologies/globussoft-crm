@@ -236,11 +236,14 @@ beforeEach(() => {
 });
 
 describe('budget-cap helpers — KEYS + DEFAULTS shape', () => {
-  test('KEYS exposes all four canonical integration keys', () => {
+  test('KEYS exposes all canonical integration keys (4 base + booking_expedia)', () => {
     expect(KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_adsgpt_monthly_usd_cents');
     expect(KEYS.AI_CALLING_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_ai_calling_monthly_usd_cents');
     expect(KEYS.RATEHAWK_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_ratehawk_monthly_usd_cents');
     expect(KEYS.LLM_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_llm_monthly_usd_cents');
+    // Tick #101: booking_expedia added so bookingExpediaClient can drop
+    // its getSetting() workaround in favour of canonical getBudgetCap().
+    expect(KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_booking_expedia_monthly_usd_cents');
   });
 
   test('DEFAULTS map covers every KEYS entry', () => {
@@ -266,6 +269,9 @@ describe('budget-cap helpers — KEYS + DEFAULTS shape', () => {
     }
     if (process.env.LLM_MONTHLY_CAP_USD_CENTS == null) {
       expect(DEFAULTS[KEYS.LLM_MONTHLY_CAP_USD_CENTS]).toBe(10000);
+    }
+    if (process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS == null) {
+      expect(DEFAULTS[KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS]).toBe(10000);
     }
   });
 });
@@ -388,10 +394,33 @@ describe('budget-cap helpers — getBudgetCap', () => {
     expect(out).toBe(7777);
   });
 
+  test('returns the DEFAULTS $100 cap for booking_expedia when no row exists', async () => {
+    // Regression guard for tick #101 — KEYS extension lets bookingExpediaClient
+    // drop its getSetting() workaround in favour of getBudgetCap('booking_expedia').
+    // Pre-extension this call would have thrown 'Unknown integration'.
+    singletonPrisma.tenantSetting.findUnique.mockResolvedValueOnce(null);
+    const out = await getBudgetCap(1, 'booking_expedia');
+    expect(out).toBe(DEFAULTS[KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS]);
+  });
+
+  test('returns the per-tenant override for booking_expedia when a row exists', async () => {
+    singletonPrisma.tenantSetting.findUnique.mockResolvedValueOnce({ value: '12345' });
+    const out = await getBudgetCap(1, 'booking_expedia');
+    expect(out).toBe(12345);
+  });
+
   test('throws on unknown integration name', async () => {
     await expect(getBudgetCap(1, 'not-a-real-integration')).rejects.toThrow(
       /Unknown integration/,
     );
+  });
+
+  test('throw-on-unknown path still works after booking_expedia addition (regression guard)', async () => {
+    // Adding a 5th KEYS entry must not weaken the throw-on-unknown contract —
+    // unknown names still throw, only the 5 canonical names are accepted.
+    await expect(getBudgetCap(1, 'expedia')).rejects.toThrow(/Unknown integration/);
+    await expect(getBudgetCap(1, 'booking')).rejects.toThrow(/Unknown integration/);
+    await expect(getBudgetCap(1, 'BOOKING_EXPEDIA')).rejects.toThrow(/Unknown integration/);
   });
 });
 

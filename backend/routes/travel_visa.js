@@ -602,9 +602,11 @@ router.patch(
       }
 
       // Verify application exists on this tenant.
+      // #929 Part B — also select `status` so we can detect status
+      // transitions + emit `visa.status_changed` webhook after update.
       const existing = await prisma.visaApplication.findFirst({
         where: { id, tenantId },
-        select: { id: true, contactId: true },
+        select: { id: true, contactId: true, status: true },
       });
       if (!existing) {
         return res.status(404).json({
@@ -719,6 +721,36 @@ router.patch(
           changedFields: Object.keys(data),
         },
       ).catch(() => {});
+
+      // #929 Part B — fire-and-forget webhook emission when status
+      // transitions (e.g. intake → docs-pending → filed → approved).
+      // Subscribers (Callified.ai, partner SaaSes) can react to lifecycle
+      // events without polling. Mirrors the canonical pattern from
+      // billing.js's payment.collected emission (wave-6a).
+      if (data.status && data.status !== existing.status) {
+        try {
+          const eventBus = require("../lib/eventBus");
+          eventBus
+            .emitEvent(
+              "visa.status_changed",
+              {
+                id,
+                contactId: existing.contactId,
+                subBrand: VISA_SUB_BRAND,
+                oldStatus: existing.status,
+                newStatus: data.status,
+                tenantId,
+                changedAt: new Date().toISOString(),
+              },
+              tenantId,
+            )
+            .catch((err) =>
+              console.warn("[travel-visa/patch] visa.status_changed emit failed:", err.message),
+            );
+        } catch (emitErr) {
+          console.warn("[travel-visa/patch] visa.status_changed setup failed:", emitErr.message);
+        }
+      }
 
       res.json(updated);
     } catch (e) {

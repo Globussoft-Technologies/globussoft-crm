@@ -6,70 +6,32 @@
 // #843 (Cron tick #26 / Agent 2) — UI/UX polish:
 //   1. Search bar — enlarged client-side filter across receipt #, supplier,
 //      product name/SKU, batch, notes. Sits prominently above the date row.
-//   2. Date filter — replaced bare From/To with the preset-dropdown pattern
-//      from Payments.jsx (#846): Today / Yesterday / Last 7 days / This month
-//      / Custom… — same shape used by the Case-history-style filter that the
-//      issue cross-references. Custom mode reveals the two date inputs.
-//   3. Default to today — initial datePreset is 'today' (not 'all'), so the
+//   2. Date filter — preset-dropdown pattern (Today / Yesterday / Last 7 days
+//      / This month / All / Custom…). Backed by the shared
+//      <DateRangePicker> component (cron tick #29 / Agent 1).
+//   3. Default to today — initial preset is 'today' (not 'all'), so the
 //      page lands on today's receipts instead of "No receipts in window."
+//
+// Cron tick #29 / Agent 1 — migrated the inline preset/<select>/date-input
+// block to the shared <DateRangePicker> component (extracted in tick #27,
+// `fabf035`). Closes the rule-of-3 DRY loop: Payments.jsx (tick #28,
+// `5b3ed01`) + PatientDetail.jsx (tick #27, `fabf035`) + this file are
+// now all consuming the single source of truth. Future date-filter
+// additions just import the component.
+//
 // Backend GET /api/wellness/inventory/receipts already supports ?from&to with
 // the validateDateRange (#665) guard, so no backend change was needed.
 
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDownToLine, Plus, Calendar, Search } from 'lucide-react';
+import { ArrowDownToLine, Plus, Search } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import DateRangePicker, { effectiveRangeFor } from '../../components/DateRangePicker';
 
 const EMPTY = {
   productId: '', vendorId: '', quantity: '', unitCost: '',
   batchNumber: '', expiryDate: '', notes: '',
 };
-
-// #843 — preset → {from, to} date-range resolver. Mirrors the pattern in
-// frontend/src/pages/Payments.jsx so the UX is consistent across the app.
-// Returns ISO date strings (YYYY-MM-DD) in the browser's local timezone,
-// which is what the backend's validateDateRange + Prisma `gte/lte` expect.
-function toIsoDate(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function rangeFromPreset(preset) {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  switch (preset) {
-    case 'today':
-      return { from: toIsoDate(today), to: toIsoDate(today) };
-    case 'yesterday': {
-      const y = new Date(today);
-      y.setDate(today.getDate() - 1);
-      return { from: toIsoDate(y), to: toIsoDate(y) };
-    }
-    case 'week7': {
-      const f = new Date(today);
-      f.setDate(today.getDate() - 6);
-      return { from: toIsoDate(f), to: toIsoDate(today) };
-    }
-    case 'month': {
-      const f = new Date(today.getFullYear(), today.getMonth(), 1);
-      return { from: toIsoDate(f), to: toIsoDate(today) };
-    }
-    case 'all':
-    default:
-      return { from: null, to: null };
-  }
-}
-
-const DATE_PRESETS = [
-  { value: 'today',     label: 'Today' },
-  { value: 'yesterday', label: 'Yesterday' },
-  { value: 'week7',     label: 'Last 7 days' },
-  { value: 'month',     label: 'This month' },
-  { value: 'all',       label: 'All time' },
-  { value: 'custom',    label: 'Custom…' },
-];
 
 export default function InventoryReceipts() {
   const notify = useNotify();
@@ -83,21 +45,26 @@ export default function InventoryReceipts() {
 
   // #843 — default landing window is TODAY (not 'all'), so the page is useful
   // immediately on open. Operator can broaden via the preset dropdown.
-  const [datePreset, setDatePreset] = useState('today');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
+  // Cron tick #29 — single controlled state object owned by the parent and
+  // passed to <DateRangePicker> as a controlled input (mirrors Payments.jsx
+  // and PatientDetail.jsx).
+  const [dateRange, setDateRange] = useState({
+    preset: 'today',
+    customFrom: '',
+    customTo: '',
+  });
 
   // #843 — client-side free-text filter across receipt #, supplier name,
   // product name/SKU, batch, notes. Kept client-side because list size is
   // capped at 500 by the backend; a server-side search isn't justified yet.
   const [search, setSearch] = useState('');
 
-  const effectiveRange = useMemo(() => {
-    if (datePreset === 'custom') {
-      return { from: customFrom || null, to: customTo || null };
-    }
-    return rangeFromPreset(datePreset);
-  }, [datePreset, customFrom, customTo]);
+  // Cron tick #29 — delegate preset → {from, to} resolution to the shared
+  // helper so the logic stays single-sourced across consumers.
+  const effectiveRange = useMemo(
+    () => effectiveRangeFor(dateRange),
+    [dateRange],
+  );
 
   const load = () => {
     setLoading(true);
@@ -114,9 +81,9 @@ export default function InventoryReceipts() {
       setVendors(Array.isArray(vens) ? vens.filter((v) => v.isActive) : []);
     }).finally(() => setLoading(false));
   };
-  // #843 — re-fetch when the effective date range changes. Same shape as
-  // Payments.jsx (#846). Custom-mode with both inputs blank → no params →
-  // backend returns unfiltered (preserves the broad-window option).
+  // #843 — re-fetch when the effective date range changes. Custom-mode with
+  // both inputs blank → no params → backend returns unfiltered (preserves
+  // the broad-window option).
   useEffect(load, [effectiveRange.from, effectiveRange.to]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async (e) => {
@@ -203,49 +170,17 @@ export default function InventoryReceipts() {
         />
       </div>
 
-      {/* #843 — Date filter (preset dropdown, mirroring Payments.jsx #846).
-          The Custom… option reveals two date inputs for arbitrary windows.
-          Defaults to "Today" so the page lands on today's data. */}
-      <div className="glass" style={{ padding: '0.85rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-        <Calendar size={16} />
-        <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }} htmlFor="receipts-date-preset">
-          Date:
-        </label>
-        <select
+      {/* #843 — Date filter via shared <DateRangePicker> (cron tick #29).
+          Custom… reveals two date inputs for arbitrary windows. Defaults
+          to "Today" so the page lands on today's data. */}
+      <div style={{ marginBottom: '1rem' }}>
+        <DateRangePicker
           id="receipts-date-preset"
-          value={datePreset}
-          onChange={(e) => setDatePreset(e.target.value)}
-          aria-label="Filter receipts by date"
-          style={inputStyle}
-        >
-          {DATE_PRESETS.map((p) => (
-            <option key={p.value} value={p.value}>{p.label}</option>
-          ))}
-        </select>
-        {datePreset === 'custom' && (
-          <>
-            <label style={{ fontSize: '0.85rem' }}>
-              From{' '}
-              <input
-                type="date"
-                value={customFrom}
-                onChange={(e) => setCustomFrom(e.target.value)}
-                aria-label="Custom from date"
-                style={inputStyle}
-              />
-            </label>
-            <label style={{ fontSize: '0.85rem' }}>
-              To{' '}
-              <input
-                type="date"
-                value={customTo}
-                onChange={(e) => setCustomTo(e.target.value)}
-                aria-label="Custom to date"
-                style={inputStyle}
-              />
-            </label>
-          </>
-        )}
+          value={dateRange}
+          onChange={setDateRange}
+          presets={['today', 'yesterday', 'week7', 'month', 'all', 'custom']}
+          label="Receipt date:"
+        />
       </div>
 
       {showForm && (

@@ -885,6 +885,25 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 
 **8 consecutive lean ticks** — switching back to code-shipping (R11/R12 rules) after 6 consecutive docs ticks. Pattern: lean cadence accommodates either docs or focused code work as the work pool surfaces it.
 
+**Tick #43 (cron) — 0/1 SHIPPED-CODE + 1 issue closed via dupe (covered by PRD):**
+
+| SHA | Type | What |
+|---|---|---|
+| (no commit) | Issue triage | **#923 closed as "not planned"** with rationale comment + PRD link. **#923 `X-XSS-Protection: 0` is safe only when paired with strict CSP** (Informational severity) — reporter already acknowledged `0` is the modern OWASP recommendation; concern is conditional on CSP still allowing `unsafe-inline` (which is multi-day work covered by **PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.2** shipped tick #22). Current state explicitly documented in [security.js:48-94](backend/middleware/security.js) as TRANSITIONAL with tightening path inline. Close-as-dupe-of-PRD is cleaner than holding it open. |
+
+**Tick composition note:** 0 commits this tick — pure GH issue management. Productive triage that moves an OPEN issue off the queue without phantom-fix risk. Doesn't reset 8-consecutive-lean-ticks counter (not a 0-commit content tick; this is dispositive triage).
+
+**Cumulative session totals (43 ticks):**
+- **118 commits** (+1 verdict pending; no code commit this tick)
+- **25 GitHub issues closed + 3 partials** (added #923 dupe-close)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings + **1 informational-issue-closed-as-PRD-covered**
+- Zero rebase conflicts, zero over-commits
+- **34 PRDs + 1 meta-doc + 1 synthesis + 1 JSDoc + 1 partner-doc**
+- **+36 vitest cases lifetime**
+- **visaRiskFlagEngine 12 rules / 34 tests**
+
+**9 lean ticks total** (1 GH-triage + 8 code/docs). The GH triage pattern is valid lean work — closes a real open issue by surfacing existing-coverage rather than implementing a fix that wouldn't be useful.
+
 **🎯 40-tick milestone reached.** Lean-mode pattern (`+1 small concrete win per tick`) is the sustainable cadence for the cron's mature phase. This session has produced:
 - **34 PRDs covering all multi-day work** (118+ pending product decisions consolidated)
 - **Complete Travel + Wellness lifecycle webhook surface** (5 new emissions + comprehensive JSDoc catalogue)

@@ -517,13 +517,13 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com â†’ Settings â
         />
         <StatCard
           icon={<Clock size={20} />}
-          label={`Pending (${kpiWindowLabel})`}
+          label="Pending"
           value={stats.pending}
           color="#f59e0b"
         />
         <StatCard
           icon={<XCircle size={20} />}
-          label={`Failed (${kpiWindowLabel})`}
+          label="Failed"
           value={stats.failed}
           color="#ef4444"
         />

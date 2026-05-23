@@ -441,6 +441,9 @@ const travelCostMasterRoutes = require("./routes/travel_cost_master");
 const travelSuppliersRoutes = require("./routes/travel_suppliers");
 const travelQuotesRoutes = require("./routes/travel_quotes");
 const travelInvoicesRoutes = require("./routes/travel_invoices");
+// Brand kits — multi-vertical (travel + generic + wellness). Mounted at
+// /api/brand-kits, not /api/travel, because subBrand is optional.
+const brandKitsRoutes = require("./routes/brand_kits");
 const travelMicrositesRoutes = require("./routes/travel_microsites");
 const travelRfuProfilesRoutes = require("./routes/travel_rfu_profiles");
 const travelReligiousPacketsRoutes = require("./routes/travel_religious_packets");
@@ -668,6 +671,7 @@ app.use("/api/travel", travelCostMasterRoutes);
 app.use("/api/travel", travelSuppliersRoutes);
 app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
+app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/travel", travelMicrositesRoutes);
 app.use("/api/travel", travelRfuProfilesRoutes);
 app.use("/api/travel", travelReligiousPacketsRoutes);

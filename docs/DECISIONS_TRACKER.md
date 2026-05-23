@@ -2,8 +2,8 @@
 
 Consolidated index of every product/design decision flagged across the 22 PRDs in `docs/`. Use this to drive product-call agendas — each row is something the product team needs to settle before the corresponding PRD can move to (or finish) implementation.
 
-**Updated:** 2026-05-23 (tick #22, auto-aggregated by the overnight cron)
-**Total decisions pending:** 118 across 20 of the 22 cron-tracked PRDs (the 2 without surfaced decisions are WHATSAPP, DIGILOCKER_USE_CASE — pure cred-chase + use-case narrative; see "no decisions surfaced" section below for rationale). Two additional adjacent docs (`DIGILOCKER_INTEGRATION_SPEC.md`, `TRAVEL_CRM_PRD.md`) also surveyed and listed there.
+**Updated:** 2026-05-23 (tick #65, refresh covering 13 PRDs that landed after the tick-#22 snapshot)
+**Total decisions pending:** 192 across 33 of the 33 cron-tracked PRDs (113 from the tick-#22 snapshot + 79 new rows from 13 new sections added 2026-05-23 tick #65). The 2 PRDs without surfaced decisions remain WHATSAPP + DIGILOCKER_USE_CASE — pure cred-chase + use-case narrative; see "no decisions surfaced" section below for rationale. Two additional adjacent docs (`DIGILOCKER_INTEGRATION_SPEC.md`, `TRAVEL_CRM_PRD.md`) also surveyed and listed there.
 **Format note:** PRDs use three competing naming conventions for decisions — `DD-5.X` (newer Travel-vertical PRDs), `DC-N` (mid-cycle PRDs), `PC-N` / `D-N` (earliest PRDs). This tracker preserves the source ID so cross-references stay clickable; consider standardising to `DD-` in future PRDs.
 
 ---
@@ -177,6 +177,111 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 - PC-6 [PENDING] Region focus — US-outbound only / India-outbound / any-to-any. Rec: India-outbound.
 - PC-7 [PENDING] Embassy-quirk catalogue maintainer post-ship (rules change quarterly).
 - PC-8 [PENDING] Family/dependents trigger source for FR-3.1(c) — VisaApplication column / Contact-level / drop from V1. Surfaced by tick #9 Agent 3. Risk-flag engine cannot ship faithful FR-3.1 until this resolves.
+
+### PRD_ADMIN_SETTINGS_DISCOVERY.md (6 pending)
+- DD-5.1 [PENDING] Settings sub-tab structure — confirm 12-tab list (Profile/Appearance/Notifications/Branding/Integrations/Pipeline Stages/Email Messages/Quiet Hours/Audit Log/Privacy/Tax/Compliance), order + admin-only items.
+- DD-5.2 [PENDING] Integration health-check cadence — live / cached / on-demand. Rec: cached 5-min poll + on-demand "check now" button.
+- DD-5.3 [PENDING] Tag merge semantics — reassign+delete secondary vs link-as-alias. Rec: reassign+delete with audit-log entry.
+- DD-5.4 [PENDING] Segment definition surface — visual builder / JSON / both. Rec: visual v1; JSON-edit for power users v2.
+- DD-5.5 [PENDING] Notifications retention window — 30/90/365 days. Rec: 90 days with tenant-configurable override.
+- DD-5.6 [PENDING] AI history scope — per-tenant vs per-operator. Rec: Admin sees all; non-Admin sees only their own.
+
+### PRD_AI_SURFACES.md (6 pending)
+- DD-5.1 [PENDING] Default model per task class — confirm Claude/GPT/Gemini choices in FR-3.1.b for the 8 new task classes (existing 7 locked via Q11).
+- DD-5.2 [PENDING] Cost budget per tenant — flat monthly / per-task / pay-as-you-go. Rec: 3-tier flat (free/starter/pro) per FR-3.2.c.
+- DD-5.3 [PENDING] Customer-visible AI — operator opt-in vs per-tenant opt-in. Rec: per-tenant; EU AI Act implications.
+- DD-5.4 [PENDING] Operator-feedback storage — per-tenant vs cross-tenant shared learning. Rec: per-tenant; aggregate only for GS-managed shared prompts.
+- DD-5.5 [PENDING] PII redaction strategy — rule-based regex vs sanitized-via-LLM. Rec: rule-based (cheaper, deterministic, auditable).
+- DD-5.6 [PENDING] Data residency for EU tenants — OpenAI EU / Anthropic EU / Gemini EU endpoint choice. Product + finance call.
+
+### PRD_MOBILE_RESPONSIVENESS.md (8 pending)
+- DD-5.1 [PENDING] Mobile nav pattern — bottom-tab-bar / hamburger-only / hybrid. Rec: hybrid (hamburger drawer + bottom-tab-bar for top-5 destinations).
+- DD-5.2 [PENDING] Mobile-first or desktop-first CSS. Rec: stay desktop-first; mobile-first only for new components.
+- DD-5.3 [PENDING] Tablet treatment — closer to mobile or desktop. Rec: closer to desktop above 900px, closer to mobile below.
+- DD-5.4 [PENDING] Offline-mode scope — read-only vs limited-write. Rec: read-only Phase 2, write-queue Phase 3.
+- DD-5.5 [PENDING] Per-page degradation — hide features or simplify. Rec: simplify before hide.
+- DD-5.6 [PENDING] PWA install prompt timing. Rec: never on first visit, prompt on 2nd with 30-day dismiss.
+- DD-5.7 [PENDING] Bottom-tab-bar contents per vertical — confirm FR-3.4(a) defaults via product usage data.
+- DD-5.8 [PENDING] Customer portal — same codebase or separate mobile-optimised build. Rec: same codebase with `data-surface="portal"` scoping.
+
+### PRD_PLANS_BILLING_SELF_SERVE.md (6 pending)
+- DD-5.1 [PENDING] Plan tiers + per-tier feature matrix — Free/Starter/Pro/Enterprise boundaries + user/record/API quotas + gated integrations. Owner: Globussoft product.
+- DD-5.2 [PENDING] Cancellation policy — grace-period length, refund rules, monthly-vs-annual differences. Owner: Globussoft commercial/legal.
+- DD-5.3 [PENDING] Payment-method storage — Stripe Customer / Razorpay Customer / both (per-tenant-currency routing). Owner: Globussoft + #848 author.
+- DD-5.4 [PENDING] Usage metering granularity — per-record / per-action, sliding 30d vs calendar-month, metered+capped vs metered+overage. Owner: Globussoft product.
+- DD-5.5 [PENDING] Multi-tenant subscription scoping — per-Tenant vs per-Organization (parent of Tenants). Owner: Globussoft architecture (Suresh).
+- DD-5.6 [PENDING] Failed-payment retry policy — attempts before PAST_DUE, grace before SUSPENDED, read-only access during PAST_DUE. Owner: Globussoft commercial+ops.
+
+### PRD_THEME_MANAGEMENT.md (6 pending)
+- DD-5.1 [PENDING] Toggle placement — top nav / sidebar / both. Owner: PM/Yasin.
+- DD-5.2 [PENDING] User pref vs tenant default conflict on first login — which wins. Rec: user wins (localStorage migration is explicit choice).
+- DD-5.3 [PENDING] Per-sub-brand theme — opt-in vs auto-applied. Rec: auto-applied (per-sub-brand override is the explicit opt-in).
+- DD-5.4 [PENDING] System preference responsiveness in `system` mode — live matchMedia listener vs on-next-load. Rec: keep live (current behavior).
+- DD-5.5 [PENDING] Customer portal theme — always sub-brand default vs honor visitor preference. Rec: always sub-brand default.
+- DD-5.6 [PENDING] Migration of existing `localStorage.theme` values — silent or one-time prompt. Rec: silent.
+
+### PRD_TRAVEL_ITINERARY_UPGRADES.md (5 pending)
+- DD-5.1 [PENDING] Template-library content sourcing — hand-curated by GS / operator marketplace / hybrid. Rec: hybrid (GS seeds 20-25, operators expand).
+- DD-5.2 [PENDING] POI master ownership — extend Cost Master (6th category) vs separate `TravelPOI` model. Confirmed: extend Cost Master.
+- DD-5.3 [PENDING] POI seed-data source — WikiVoyage CSV vs OpenTripMap free tier. Rec: OpenTripMap (CC-BY, ~3.4M POIs, lat/lng comprehensive).
+- DD-5.4 [PENDING] Map tile provider — Mapbox (paid) vs Leaflet+OSM (free). Rec: Leaflet+OSM v1, Mapbox via pluggable adapter later.
+- DD-5.5 [PENDING] LLM-suggested-itinerary acceptance flow — accept-all-or-nothing vs per-day accept/edit/reject. Rec: per-day.
+
+### PRD_TRAVEL_MARKETING_FLYER.md (5 pending)
+- DD-5.1 [PENDING] Editor library — build in-house atop LandingPageBuilder vs embed Polotno / GrapesJS / Tldraw. Rec: embed Polotno Phase 1.
+- DD-5.2 [PENDING] Asset storage backend — local disk (Multer) vs S3 vs Cloudinary. Cloudinary replaces 30% of rasterization work but costs $89-549/mo.
+- DD-5.3 [PENDING] AI image generation provider — DALL-E 3 vs Stable Diffusion vs Midjourney API. Rec: DALL-E 3 Phase 1; Midjourney premium-tier Phase 2.
+- DD-5.4 [PENDING] Template marketplace moderation — open / curator-only / admin-moderated queue. Rec: admin-moderated queue.
+- DD-5.5 [PENDING] Brand-lock default — enforced by default vs operator-opt-in per flyer. Rec: enforced by default for new flyers; MANAGER+ can toggle per-flyer.
+
+### PRD_TRAVEL_PER_SUBBRAND_BRANDING.md (6 pending)
+- DD-5.1 [PENDING] Custom font support — Google Fonts only vs custom-font-upload. Rec: Google Fonts only v1; revisit if Yasin's brand handover specifies paid font.
+- DD-5.2 [PENDING] Brand-kit storage shape — extend `Tenant.subBrandConfigJson` vs new `BrandKit` Prisma model. Rec: new BrandKit model (version history + WCAG + audit trails want proper columns).
+- DD-5.3 [PENDING] Default brand kits at seed time — ship 4 starter kits with placeholders vs require admin to populate. Rec: ship 4 starter kits via `seed-travel.js`.
+- DD-5.4 [PENDING] Logo placement on operator UI — sidebar header vs top-nav. Rec: sidebar header + small top-nav badge with sub-brand dropdown.
+- DD-5.5 [PENDING] Dark-mode handling — separate `logoDarkUrl` per sub-brand vs auto-derive via CSS `filter: invert()`. Rec: require logoDarkUrl when light logo inverts poorly; auto-derive fallback.
+- DD-5.6 [PENDING] Brand-kit version history — keep last 10 versions per sub-brand for revert; older hard-purged. Storage growth vs rollback tradeoff.
+
+### PRD_TRAVEL_SECURITY_ARCHITECTURE.md (6 pending)
+- DD-5.1 [PENDING] Cookie storage shape — single session cookie vs split (access short-TTL + refresh long-TTL at `/api/auth/refresh`-only path). Rec: split.
+- DD-5.2 [PENDING] Sequential-ID migration shape — add `publicId` column alongside `id` (dual-route) vs migrate `id` to string column. Rec: dual-column (FR-3.3.a).
+- DD-5.3 [PENDING] CSP violation report sink — Sentry native ingestion ($) vs roll-our-own AuditLog-backed table. Rec: roll-our-own.
+- DD-5.4 [PENDING] PII redaction scope — per-endpoint hand-curated projection vs global response middleware. Rec: per-endpoint.
+- DD-5.5 [PENDING] Rollout cadence — tenant-by-tenant feature flag with 14d windows vs single CI-cutover. Rec: tenant-flag.
+- DD-5.6 [PENDING] Existing localStorage data lifecycle — clear-on-next-login vs background-migrate via `/api/auth/migrate-session`. Rec: clear-on-next-login.
+
+### PRD_UNIFIED_GLOBAL_SEARCH.md (6 pending)
+- DD-5.1 [PENDING] Shortcut conflict — header search takes Cmd+K (palette moves to Cmd+/) vs keep Cmd+K for palette + use `/` for search. Rec: `/` for header search; CommandPalette stays on Cmd+K.
+- DD-5.2 [PENDING] Backend search strategy Phase 1 — per-entity Prisma `contains` vs Postgres `pg_trgm` vs full-text engine (Meilisearch/OpenSearch). Rec: start with Prisma contains, promote to `pg_trgm` once P95 > 500ms.
+- DD-5.3 [PENDING] Cross-vertical scope — wellness tenant shows Contacts AND Patients or only Patients. Rec: show all entity types user has role-permission for, vertical-specific first.
+- DD-5.4 [PENDING] Recent-search cache — per-tenant+per-user vs per-user only. Rec: per-user only.
+- DD-5.5 [PENDING] Result-click action — deep-link to detail vs side-panel preview before nav. Rec: deep-link first; side-panel Phase 2.
+- DD-5.6 [PENDING] Ranking — rule-based (hand-tuned weights) vs learning-to-rank (LightGBM + click-data). Rec: rule-based; LTR Phase 3.
+
+### PRD_WELLNESS_POS_HARDENING.md (5 pending)
+- DD-5.1 [PENDING] Routing fix shape — permanent redirect `/pos` → `/wellness/pos` vs drop `/wellness/` prefix entirely. Rec: redirect (less surface change).
+- DD-5.2 [PENDING] First-time onboarding — in-app wizard vs admin-only setup via existing Cash Registers admin page. Rec: in-app wizard (Owner hitting dead-end is the actual #826 bug).
+- DD-5.3 [PENDING] "POS module enabled" toggle — per-tenant vs per-vertical. Rec: per-tenant (vertical-level is too coarse).
+- DD-5.4 [PENDING] Role granularity — keep 6-tier wellness scheme vs collapse to 2-tier (Owner-plus/Cashier). Rec: keep 6-tier (avoid drift).
+- DD-5.5 [PENDING] Offline mode scope — queue-and-sync / read-only / no-offline. Rec: no-offline Phase 1 with banner; queue-and-sync separate Phase 2 PRD.
+
+### PRD_WELLNESS_RBAC.md (6 pending)
+- DD-5.1 [PENDING] Cashier role — extend `wellnessRole` enum with `'cashier'` vs separate `salesRole` column. Rec: extend wellnessRole v1.
+- DD-5.2 [PENDING] Owner singleton vs plural — keep `Tenant.ownerId` conceptually singular vs allow multi-owner for clinic chains. Rec: keep singular v1.
+- DD-5.3 [PENDING] Per-tenant role customization (admin defines custom labels + permission bitmaps) — Phase 2 only, explicitly out-of-scope here (FR-3.1.d).
+- DD-5.4 [PENDING] Unauthorized-navigation handling — dedicated `/403?role=...` page vs redirect-to-role-landing vs `<RoleAccessDenied>` inline component. Rec: inline component.
+- DD-5.5 [PENDING] Data scoping enforcement layer — middleware-only vs middleware+frontend-render-time guard. Rec: middleware-only v1.
+- DD-5.6 [PENDING] USER-role × wellnessRole interaction — verify `phiReadGate` correctly omits `'cashier'` (cashier is sales role, not clinical) when DD-5.1 extends wellnessRole.
+
+### PRD_ZYLU_GAP_CONSOLIDATED.md (8 pending)
+- DD-5.1 [PENDING] POS Invoice polymorphism — schema fork vs sourceType enum + shared child tables (InvoiceLineItem + InvoicePayment). Rec: sourceType enum.
+- DD-5.2 [PENDING] CSV column-mapping UI — drag-drop with fuzzy-match auto-suggest vs fixed columns. Rec: drag-drop + save mapping per tenant.
+- DD-5.3 [PENDING] Memberships — per-tenant SKUs vs central catalog. Rec: per-tenant (each clinic prices differently).
+- DD-5.4 [PENDING] Wallet bonus rules — admin UI vs hard-coded. Rec: admin UI (rules change quarterly).
+- DD-5.5 [PENDING] Wallet expiry — per-entry vs per-balance (FIFO). Rec: per-entry (friendlier audit trail).
+- DD-5.6 [PENDING] Biometric device vendor — Mantra / Realtime / eSSL. Open. Drives webhook contract + device-pairing UI.
+- DD-5.7 [PENDING] Mini-site editor — in-app block builder vs templates. Rec: block builder (4-5 blocks: logo/hero/services/contact/cta).
+- DD-5.8 [PENDING] Per-clinic-location mini-site vs per-tenant. Open. If chain (e.g. 3 clinics), each location may want own page vs umbrella.
 
 ---
 

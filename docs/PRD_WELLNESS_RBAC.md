@@ -199,7 +199,8 @@ The bugs share a single anti-pattern: **permission-as-empty-result instead of pe
 
 ## §10 Status snapshot
 
-- **As of 2026-05-23:** 3 OPEN RBAC bugs from the May 2026 Globussoft demo QA audit (#827, #829, #830). Underlying infrastructure (RBAC + wellnessRole + phiReadGate + sidebar role-gating) is already correctly written and shipped.
+- **As of 2026-05-23 (refreshed tick #53):** 3 OPEN RBAC bugs from the May 2026 Globussoft demo QA audit (#827, #829, #830). Underlying infrastructure (RBAC + wellnessRole + phiReadGate + sidebar role-gating) is already correctly written and shipped.
+- **FR-3.2 sidebar role-gating ALREADY PARTIALLY SHIPPED** at `d567ce2` (2026-05-15, pre-session) for the Calendar / Patients / Waitlist clinical-staff items — verified at autonomous cron tick #34 (phantom catch on #828 which was filed against pre-`d567ce2` build but landed in QA scope post-fix). Sidebar.jsx:673-675 now carries `wellnessRoles={["doctor", "professional", "telecaller"]}` on these items; Demo User (`role=USER, wellnessRole=null`) fails all 3 predicates → links structurally hidden. The remaining FR-3.2 work is adding `wellnessRoles` / `adminOnly` props to the OTHER unconditional items (Channels, Commission Profiles, Revenue Goals, POS, Privacy, Audit Log).
 - **This PRD:** WRITTEN 2026-05-23 (autonomous cron tick #29). Coordinates the role-scoping remediation across the three issues.
 - **Sibling PRD:** [PRD_WELLNESS_POS_HARDENING.md](PRD_WELLNESS_POS_HARDENING.md) — covers the POS Register-configuration half of #830. Both PRDs ship in lockstep to close #830 end-to-end.
 - **Path to remediation:** ~5–10 engineering days for FR-3.1 through FR-3.6, gated on product-call resolutions for DD-5.1, DD-5.2, OQ-9.3, OQ-9.4.

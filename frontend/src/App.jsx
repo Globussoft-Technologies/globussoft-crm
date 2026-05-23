@@ -100,6 +100,10 @@ const TenantSettings = lazy(() => import("./pages/admin/TenantSettings"));
 // (backend route commit e4783e0). Operator manages logo / colors / font /
 // tagline per (subBrand, version) with one-active-per-sub-brand semantics.
 const BrandKits = lazy(() => import("./pages/admin/BrandKits"));
+// AdsGPT Reports admin UI — consumes /api/adsgpt (backend route commit
+// 0d66a74, tick #102). Operator views per-platform ad performance + cap
+// utilisation; stub-mode banner surfaces while Q1 cred-blocked.
+const AdsGPTReports = lazy(() => import("./pages/admin/AdsGPTReports"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -903,6 +907,20 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Brand Kits requires admin access.">
                           <BrandKits />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* AdsGPT Reports admin UI. ADMIN + MANAGER (analytics —
+                        not tenant-config). Consumes /api/adsgpt (backend route
+                        commit 0d66a74). Cap-status endpoint is ADMIN-only on
+                        the backend; MANAGER gets a 403 there which is swallowed
+                        silently (no pill renders). Report fetch works for both
+                        roles. */}
+                    <Route
+                      path="admin/adsgpt-reports"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="AdsGPT Reports requires admin or manager access.">
+                          <AdsGPTReports />
                         </RoleGuard>
                       }
                     />

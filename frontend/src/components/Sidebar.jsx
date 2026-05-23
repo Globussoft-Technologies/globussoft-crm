@@ -942,6 +942,15 @@ function renderWellnessNav({
             label="Brand Kits"
             adminOnly
           />
+          {/* AdsGPT Reports admin UI. Surfaces /api/adsgpt (backend commit
+              0d66a74) — per-platform ad performance + cap utilisation.
+              managerOnly so MANAGERs see it too (analytics, not config). */}
+          <Link
+            to="/admin/adsgpt-reports"
+            icon={TrendingUp}
+            label="AdsGPT Reports"
+            managerOnly
+          />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </>
       )}
@@ -1290,6 +1299,15 @@ function renderGenericNav({
             icon={Palette}
             label="Brand Kits"
             adminOnly
+          />
+          {/* AdsGPT Reports admin UI. Surfaces /api/adsgpt (backend commit
+              0d66a74) — per-platform ad performance + cap utilisation.
+              managerOnly so MANAGERs see it too (analytics, not config). */}
+          <Link
+            to="/admin/adsgpt-reports"
+            icon={TrendingUp}
+            label="AdsGPT Reports"
+            managerOnly
           />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </div>

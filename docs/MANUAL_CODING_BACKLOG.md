@@ -374,11 +374,11 @@ These don't need an engineer — they need a stakeholder decision. Once the deci
 
 **Context:** voyagr powers the 4 travel sub-brand websites (TMC / RFU / Travel Stall / Visa Sure). Lead capturing + the full top-of-funnel happen on the websites; the CRM is the system of record for captured leads. Implementation spans TWO repos with coordinated CORS / auth / schema work.
 
-### F1. CRM-side public lead-capture endpoint
+### F1. CRM-side public lead-capture endpoint ✅ SHIPPED
 **Labels:** `multi-day-feature`, `backend`, `voyagr-integration`, `gbs-crm-repo`
 **Design decision LOCKED 2026-05-23:** API-key auth (Option 1) — mirror `/api/v1/external` partner-API pattern at `backend/routes/external.js` + `backend/middleware/externalAuth.js`. Per-site API key issued via CRM admin UI; voyagr stores in env vars; sent as `X-API-Key` header from a tiny Next.js API route so the key never reaches the browser.
 
-**Why manual:** new public endpoint with API-key auth + CORS allowlist update for voyagr site domains + spam guards + source attribution (sub-brand + UTM + page URL) + dedup against existing Contacts. ~2-3 days.
+**Status:** ✅ SHIPPED pre-session at commit `0299031` — `backend/routes/voyagr.js` (POST `/api/v1/voyagr/leads`) + `backend/middleware/voyagrAuth.js` (X-API-Key validation + `req.requireSubBrandMatch` helper extracted to `lib/apiKeyAuth.js` tick #21 `d784d3f`). Auth + dedup + Touchpoint creation + audit log all working. Subsequently extended at tick #17 with **per-sub-brand API key scoping** (#899 Part A `84efe0f` — `ApiKey.subBrand String?` additive nullable + helper) and the helper extracted at tick #21 (`d784d3f`).
 
 **Acceptance criteria:**
 - New `POST /api/v1/voyagr/leads` endpoint (NOT `/api/public/...` — auth-required path stays under `/api/v1/`)
@@ -414,15 +414,10 @@ These don't need an engineer — they need a stakeholder decision. Once the deci
 
 ---
 
-### F3. Cross-system attribution + UTM tracking
+### F3. Cross-system attribution + UTM tracking ✅ BACKEND SHIPPED
 **Labels:** `multi-day-feature`, `backend`, `voyagr-integration`, `analytics`
 
-**Why manual:** captures need to flow through to the existing `Touchpoint` model (already exists at `backend/prisma/schema.prisma`) + tie into the marketing attribution reports. ~1-2 days.
-
-**Acceptance criteria:**
-- Lead-capture endpoint persists UTM params (utm_source / utm_medium / utm_campaign / utm_term / utm_content) on the Contact row + creates a Touchpoint
-- Marketing report (`backend/routes/attribution.js` already exists) extended to filter by `voyagr` source
-- Admin UI surface in `frontend/src/pages/MarketingDashboard.jsx` (or similar) showing voyagr-sourced leads per sub-brand × campaign
+**Status:** ✅ Backend SHIPPED tick #15 at commit `4770054` — `GET /api/attribution/voyagr/summary?days=N` in `backend/routes/attribution.js` surfaces voyagr-sourced leads via `bySubBrand` (via `Contact.subBrand`) + `byUtmSource` (via `Touchpoint.source`) + `byChannel` + `wonValue` per subBrand (joined to Deal). 6 new gate-spec cases (15→21). **Schema drift caught + documented:** `Touchpoint` only has `channel/source/medium/url/campaignId` columns — `siteSlug` / `utm_campaign` / `utm_term` / `utm_content` are written to `AuditLog.details` JSON only (not queryable columns). `bySiteSlug` ships as forward-compat `[]` placeholder. Admin UI surface (originally specced) remains as follow-up — operators can hit the endpoint directly or via the existing `MarketingDashboard.jsx`.
 
 ---
 

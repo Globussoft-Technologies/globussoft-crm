@@ -96,6 +96,50 @@ Session continued past the original 34-tick milestone as the user kept firing th
 - **6 phantom-shipped closures** confirmed by code-grep (saved ~3 hours of agent dispatch on already-shipped work): #841 (login redirect — no specific module), #854 (consent history — fully wired), #869 (OS theme matchMedia — listener already shipped), #879 (CostMaster/PricingRules tables — already token-driven), #880 (form chrome dark-mode — fixed by #863/#864 chain), #898 (Campaigns surfacing — already at sidebar + alias route).
 - **Cron-learning entry** added (tick #76) for the per-worker test-helper pattern — second instance of multi-version triage in one session; promotion candidate.
 
+### Architectural arc — ticks #92-#107 (cap-consumer + wrapper-route + travel-fork completion)
+
+The autonomous cron continued past tick #77 into a focused architectural arc completing the **per-tenant budget-cap pattern end-to-end** + the **wrapper-route series** for all 4 stub-mode integrations + the **Travel-vertical fork models** + the **BrandKit per-sub-brand asset system**. Every commit ships with verifiable SHAs and the rule-of-3 promotion of `resolveSubBrand` landed at tick #106.
+
+**Per-tenant budget-cap pattern (5 consumers, end-to-end):**
+- `d8119a1` — TenantSetting Prisma model + `backend/lib/budgetCap.js` helper (initial cap pattern infra from product-call)
+- `cb0901f` — llmRouter wired as **first consumer** (tenant-scoped LLM monthly cap)
+- `1542b8e` — `/api/tenant-settings` CRUD route (operator-writable cap-override surface)
+- `0054a03` — Tenant Settings admin page (completes UX loop)
+- `991416c` — `evaluateCap`/`getBudgetCap` canonical swap + `KEYS` extended with `booking_expedia` (5 stub clients now read from a single helper)
+
+**Wrapper-route series (4/4 complete) — stub-mode clients + operator routes + admin UIs:**
+- AdsGPT — `9f35040` (STUB client + cap wiring, 2nd cap consumer) → `0d66a74` (wrapper routes) → `850391d` (admin Reports page)
+- RateHawk — `2852b82` (STUB client + cap wiring, 3rd cap consumer) → `be67789` (wrapper routes) → `f4268c1` (admin hotel-search page)
+- Callified — `9ec52df` (STUB client + cap + feature-flag + per-call ceiling, 4th cap consumer) → `cdad62d` (wrapper routes) → `7c7b88b` (admin AI Calls page)
+- BookingExpedia — `db06414` (STUB client + Phase-1/2 split + cap wiring, 5th cap consumer) → `bb33cbe` (wrapper routes) → `7a95d74` (admin operator page, FINAL cap-consumer UI)
+
+**Travel-vertical fork models (Quote/Invoice/Supplier trio):**
+- `fdb793e` — TravelQuote / TravelInvoice / TravelSupplier Prisma schema (DD-5.1 trio)
+- `b02c091` + `aaf8cb2` — TravelQuote CRUD routes + admin page
+- `192b8c1` + `08ebe5e` — TravelSupplier CRUD routes + admin page
+- `b2a9dcb` + `c156df4` — TravelInvoice CRUD routes + admin page (completes admin-UI trio)
+
+**BrandKit per-sub-brand asset system:**
+- `5060dda` — BrandKit Prisma model (per-sub-brand brand assets + version history)
+- `e4783e0` — BrandKit CRUD routes + active-version atomic demotion (DD-5.2 first slice)
+- `df2271c` — 4 starter BrandKits seeded per sub-brand (DD-5.3 RESOLVED)
+- `a20f2d9` — Brand Kits admin page
+
+**Shared helpers (rule-of-3 extractions):**
+- `3236d35` — **tick #106 rule-of-3 promotion** — `backend/lib/subBrandResolve.js` extracted from 3 wrapper routes (AdsGPT + RateHawk + Callified)
+- `9310196` — `frontend/src/utils/travelSubBrand.js` shared `SUB_BRAND_BG` util (rule-of-3 across SuppliersAdmin + QuotesAdmin + InvoicesAdmin)
+
+**Decision tracking (mid-arc product call):**
+- `a8f24ca` — DECISIONS_TRACKER.md: 27 product decisions RESOLVED in 2026-05-24 product-call session
+
+**Cron-learnings logged (4 entries promoted to CLAUDE.md cron-learnings section):**
+- CJS self-mocking seam (4 confirmed instances: `safeEmitEvent` + adsGptClient `9f35040` + ratehawkClient `2852b82` + callifiedClient `9ec52df`) — `module.exports.fn()` indirection required for `vi.spyOn` to intercept inter-function calls
+- e2e shared-DB helper PID-bucket (2 instances `62a4e5a` + `86a01fa` — `nextVisitDate()` iterations)
+- `git commit --only <files>` promoted to **standing rule** (3rd instance `d0a4e36` recovered to `afdc61b` + `5d9a95e`)
+- `git checkout HEAD -- <file>` data-restoring gotcha + phantom-carry-over via verify-before-pickup (tick #106 entry)
+
+**Cumulative since session start:** ~165+ commits, 44 GH closures (subset: #834 #835 #823 #826 #829 #836 #845 #851 #853 #854 #862 #867 #871 #877 #883 #884 #885 #886 #887 #888 #889 #890 #891 #892 #893 #894 #895 #897 #898 #899 #912 #913 #922 #923 #924 #929 #930 — per `gh issue list --state closed --search "closed:>=2026-05-22"`), 34+ PRDs shipped, 0 rebase conflicts across all parallel-agent waves.
+
 See [TODOS.md](TODOS.md) for per-tick handoff details, [DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md) for the 192-item product-decision queue, and [CREDS_TRACKER.md](docs/CREDS_TRACKER.md) for the 47-item credential/asset chase queue.
 
 ---

@@ -53,6 +53,37 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 
 ---
 
+## 🏁 SESSION HANDOFF (tick #92 → #107 — architectural arc completion: cap pattern + wrapper-routes + travel-fork + BrandKit)
+
+**Tick range covered:** #92 → #107 of the autonomous 2026-05-23/2026-05-24 cron arc (continuation of the 34-tick + 51-tick session documented in CHANGELOG's Unreleased entry). Anchor: tick #92 began with `d8119a1` (TenantSetting model + cap helper); tick #107 closed with the docs sweep capturing everything.
+
+**Architectural arc completion (4 milestones, end-to-end):**
+
+1. **Per-tenant budget-cap pattern (5/5 consumers wired):** `d8119a1` (model + helper) → `cb0901f` (llmRouter live consumer) → `1542b8e` (CRUD route) → `0054a03` (admin UI) → `991416c` (canonical helper swap). All 4 stub clients now read caps through the same surface.
+2. **Wrapper-route series (4/4 complete):** AdsGPT + RateHawk + Callified + BookingExpedia each shipped STUB-client → operator-routes → admin-UI triple. See CHANGELOG for the 12 SHAs.
+3. **Travel-vertical fork models (trio):** TravelQuote / TravelInvoice / TravelSupplier — schema (`fdb793e`) + 3 CRUD route scaffolds + 3 admin UIs. Replaces the "use Estimate/Invoice for travel" Day-1 placeholder.
+4. **BrandKit per-sub-brand asset system:** `5060dda` (schema) → `e4783e0` (CRUD + atomic version-demotion) → `df2271c` (4 seeded starter kits) → `a20f2d9` (admin UI).
+
+**Shared helpers extracted (rule-of-3 promotions):**
+- `3236d35` (tick #106) — `backend/lib/subBrandResolve.js` extracted from 3 wrapper routes (AdsGPT + RateHawk + Callified)
+- `9310196` — `frontend/src/utils/travelSubBrand.js` extracted from 3 admin pages
+
+**Mid-arc product call:** `a8f24ca` — 27 product decisions RESOLVED via 7 AskUserQuestion rounds (DECISIONS_TRACKER refreshed).
+
+**Remaining work-pool reality (post-arc):**
+- **49 GitHub issues open** (was 50+ at session start; 44 closed cumulatively across session)
+- **P3 PRD-writer role exhausted** — all 12 originally-queued PRDs shipped, plus 13th (PRD_DARK_MODE_CLUSTER)
+- **Cap-consumer wrapper series exhausted** — 4/4 stub-mode integrations now have operator routes + admin UIs
+- Remaining work is: multi-day architectural (Phase 3 Visa Sure / Chrome flight plugin / airline web-checkin / Travel Security cluster #913-#924) **OR** cred-blocked (Q9 Wati / Q11 LLM keys / Q3 DigiLocker / Q1 Workspace+AdsGPT+Callified handover / Q19 RateHawk creds / Q8 Excel Software docs / Q22 brand assets pack) **OR** product-call-blocked (Q2 Aadhaar consent copy / Q13 TMC curriculum mapping / DECISIONS_TRACKER's 192 open items) **OR** file-collision-prone single-commit slices (dark-mode cluster needs per-page sequential, not parallel)
+
+**Cron status — Step 4 phase-transition signals fired tick #106:**
+- ✅ All 12+ P3 PRDs shipped (Step 4 first signal — drop to 2 agents/tick already in effect)
+- ✅ GH open-issue count crossed below 50
+- ✅ Cap-consumer wrapper series exhausted (no more parallel-safe lean-shape work)
+- → **Recommendation: user `CronDelete` + redirect to one of:** (a) directed product-call session against [DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md) — pick 1 PRD's DD-5.X items to resolve; (b) focused architectural wave (Phase 3 Visa Sure full implementation OR Travel Security cluster #913-#924 OR Chrome flight plugin Manifest V3 codebase); (c) cred-drop cycle — Q22 brand assets pack unblocks 4 PRDs simultaneously per [CREDS_TRACKER.md](docs/CREDS_TRACKER.md)
+
+---
+
 ## 🌙 OVERNIGHT MODE — 2026-05-23 evening into 2026-05-24 morning
 
 **Cron `5a0ad5d3` running** (15-min cadence at :08/:23/:38/:53; expanded scope = Phase 1.5 + Phase 2 + Phase 3 work + PRD writer for blockers). Old QA-only cron `00d468d5` deleted.

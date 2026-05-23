@@ -88,18 +88,23 @@ function nextPhone() {
 }
 
 // Wave 11 GG booking-conflict gate: visits with the same (doctorId, UTC-hour)
-// collide with 409 DOCTOR_DOUBLE_BOOKED. The original "random hour across
-// 720h" shape was probabilistic — with 100+ tests in this spec each calling
-// nextVisitDate(), the birthday-paradox math made (doctor, hour) collisions
-// inevitable over time. Tick #64 sweep replaced it with a deterministic
-// monotonic counter: every call advances by one hour within the
-// [now+720h, now+8520h] window (~30d to ~1y, well inside the #170 [now-5y,
-// now+1y] guard). Wraps at 7800 to leave headroom under the 1y cap.
-// Mathematically eliminates (doctor, hour) collisions across the spec's
-// test suite — each call returns a unique hour offset.
+// collide with 409 DOCTOR_DOUBLE_BOOKED. Iterations:
+//   v1 (pre-#64): Math.random()*720 — probabilistic; birthday-paradox
+//     collisions inevitable across 100+ tests on the same doctor.
+//   v2 (tick #64): monotonic counter — deterministic per-PROCESS but every
+//     Playwright worker starts with _visitDateOffset=0, so 4 workers all
+//     created visit #1 at hourOffset=720 → second-onwards POSTs hit 409.
+//     Surfaced as "DOCTOR_DOUBLE_BOOKED visit #232" on tick #71.
+//   v3 (this — tick #72): PID-bucketed monotonic. Each worker process gets
+//     a unique 200-hour range based on its PID; within the range,
+//     _visitDateOffset advances by 1 hour per call. 40 worker buckets * 200
+//     slots = 8000 unique (worker, hour) combinations, well within the
+//     [now+720h, now+8720h] window (~30d to ~1y, inside the #170 [now-5y,
+//     now+1y] guard).
 let _visitDateOffset = 0;
 function nextVisitDate() {
-  const hourOffset = 720 + (_visitDateOffset++ % 7800);
+  const workerBucket = (process.pid % 40) * 200;
+  const hourOffset = 720 + workerBucket + (_visitDateOffset++ % 200);
   return new Date(Date.now() + hourOffset * 3600 * 1000).toISOString();
 }
 

@@ -620,8 +620,129 @@ async function main() {
   // duplicates. Consumed by backend/cron/religiousGuidanceEngine.js.
   await seedReligiousGuidancePackets(tenant.id);
 
+  // ── 11. Per-sub-brand starter BrandKits (DD-5.3 RESOLVED 2026-05-24) ─
+  //
+  // 4 starter brand kits — one per sub-brand (tmc / rfu / travelstall /
+  // visasure). Placeholder palette pending Yasin's Q22 brand pack
+  // handover (CREDS_TRACKER Cat 2 — unblocks 4 PRDs simultaneously when
+  // delivered).
+  //
+  // Without these, fresh tenants see an empty BrandKit table → all
+  // consumers fall back to tenant-wide branding → the PRD's core promise
+  // (per-sub-brand identity) is invisible until an operator manually
+  // creates 4 kits. Closing that gap is what DD-5.3 resolved.
+  //
+  // Each kit is version=1, isActive=true. When Yasin's pack lands,
+  // replace these via a new version (POST /api/brand-kits) — keeps
+  // version history per DD-5.6 retention.
+  //
+  // Idempotent: skips if a kit with version=1 already exists for the
+  // (tenantId, subBrand) tuple. Re-runs of seed do NOT create duplicates.
+  await seedStarterBrandKits(tenant.id);
+
   console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
   console.log("[seed-travel] Login: yasin@travelstall.in / password123");
+}
+
+/**
+ * Seed 4 starter BrandKits — one per sub-brand. PRD DD-5.3 RESOLVED
+ * 2026-05-24. Placeholder palette pending Yasin's Q22 brand pack.
+ *
+ * Idempotent: `findFirst` keyed on (tenantId, subBrand, version=1).
+ * Re-runs of seed-travel.js do NOT create duplicates. When Yasin's
+ * real brand pack lands, ship via POST /api/brand-kits (auto-bumps to
+ * v2, keeps history per DD-5.6).
+ *
+ * Logo / favicon URLs intentionally null — DD-5.3 framing is "starter
+ * palette so the page isn't empty"; real assets land via the admin
+ * BrandKits UI (frontend/src/pages/admin/BrandKits.jsx) once Yasin
+ * delivers Q22.
+ */
+async function seedStarterBrandKits(tenantId) {
+  const STARTER_BRAND_KITS = [
+    {
+      subBrand: "tmc",
+      logoUrl: null, // placeholder — Yasin's TMC logo lands here
+      logoDarkUrl: null,
+      faviconUrl: null,
+      primaryColor: "#122647",     // travel-navy (placeholder)
+      secondaryColor: "#1F3A5F",
+      accentColor: "#C89A4E",      // warm-gold
+      bgColor: "#FAF6EE",          // warm-cream
+      textColor: "#1F1B14",
+      fontFamily: "Inter, sans-serif",
+      fontUrl: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap",
+      tagline: "School trips, expertly planned.",
+    },
+    {
+      subBrand: "rfu",
+      logoUrl: null,
+      logoDarkUrl: null,
+      faviconUrl: null,
+      primaryColor: "#2F7A4D",     // forest-green (Umrah / Hajj traditional)
+      secondaryColor: "#1F5A37",
+      accentColor: "#C89A4E",
+      bgColor: "#FAF6EE",
+      textColor: "#1F1B14",
+      fontFamily: "Inter, sans-serif",
+      fontUrl: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap",
+      tagline: "Sacred journeys, trusted hands.",
+    },
+    {
+      subBrand: "travelstall",
+      logoUrl: null,
+      logoDarkUrl: null,
+      faviconUrl: null,
+      primaryColor: "#C89A4E",     // warm-gold (family-leisure feel)
+      secondaryColor: "#A8823F",
+      accentColor: "#2F7A4D",
+      bgColor: "#FAF6EE",
+      textColor: "#1F1B14",
+      fontFamily: "Inter, sans-serif",
+      fontUrl: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap",
+      tagline: "Family holidays, hand-picked.",
+    },
+    {
+      subBrand: "visasure",
+      logoUrl: null,
+      logoDarkUrl: null,
+      faviconUrl: null,
+      primaryColor: "#6366F1",     // indigo (formal / customs feel)
+      secondaryColor: "#4F46E5",
+      accentColor: "#C89A4E",
+      bgColor: "#FAF6EE",
+      textColor: "#1F1B14",
+      fontFamily: "Inter, sans-serif",
+      fontUrl: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap",
+      tagline: "Visas demystified.",
+    },
+  ];
+
+  let created = 0;
+  let skipped = 0;
+  for (const kitSpec of STARTER_BRAND_KITS) {
+    const existing = await prisma.brandKit.findFirst({
+      where: { tenantId, subBrand: kitSpec.subBrand, version: 1 },
+      select: { id: true },
+    });
+    if (existing) {
+      skipped++;
+      continue;
+    }
+    await prisma.brandKit.create({
+      data: {
+        ...kitSpec,
+        tenantId,
+        version: 1,
+        isActive: true,
+        createdBy: null, // system-seeded — no user attribution
+      },
+    });
+    created++;
+  }
+  console.log(
+    `[seed-travel] BrandKits: ${created} created, ${skipped} already existed (4 starter kits, placeholder palette pending Yasin Q22)`,
+  );
 }
 
 /**

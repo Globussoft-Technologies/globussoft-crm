@@ -564,7 +564,36 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **28 PRDs shipped + 1 meta-doc** (added PRD_THEME_MANAGEMENT)
 - **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining** (#862 #869 #870 #876 #877 — all now have coordinating PRD)
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **28 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
+**Tick #27 (cron) — 3/3 SHIPPED, rule-of-3 DateRangePicker extraction + POS PRD + 2 closures:**
+
+| SHA | Type | What |
+|---|---|---|
+| `fabf035` | Rule-of-3 extraction | **`frontend/src/components/DateRangePicker.jsx` extracted** (219 lines + 138-line test, 19 cases) + adopted in PatientDetail.jsx CaseHistoryTab (+56/-4). Controlled component: `{preset, customFrom, customTo}` state, `onChange` emits full state, 2 named exports (`rangeFromPreset` + `effectiveRangeFor`). Default preset='all' for case-history (retrospective). **My survey at tick start swapped #837/#839 titles** — agent correctly verified actual issue body matched #837 (date filter) not #839 (PDF format), shipped against right scope. **Closes #837.** 28/28 tests pass. |
+| `fb33c0e` | New PRD (29th) | **`docs/PRD_WELLNESS_POS_HARDENING.md`** (323 lines) — **coordinating PRD for #823 + #824 + #826 + #830** (all 4 OPEN verified). 12 FRs across 5 groups (routing / RBAC / onboarding / sale-flow / observability); 5 DDs (notably DD-5.1 recommends `/pos` → `/wellness/pos` redirect over URL-prefix overhaul); 7 OQs; 10 ACs. **§1.2 existing-infrastructure inventory pattern now standard across 3 coordinating PRDs** (theme management / travel security / wellness POS hardening — 24h cadence). **Refs #823 #824 #826 #830.** |
+| `64b37a7` | Small fix #833 | **Demo Admin greeting + nav label fix.** Sidebar.jsx: role-aware label (ADMIN → "Admin Dashboard", MANAGER → "Manager Dashboard", default Owner). OwnerDashboard.jsx: dropped `.split(' ')[0]` so `name="Demo Admin"` renders "Good evening, Demo Admin" (was "Good evening, Demo" — first word looked like role-suffix). 23/23 tests pass. **Closes #833.** |
+
+**Five cron-learning candidates surfaced (rich tick):**
+
+1. **Phantom issue-number in cron prompt** (Agent 1) — my start-of-tick survey scrambled #837/#839 title mapping; agent verified via `gh issue view` and shipped against right scope. Worth a one-liner: "every cron prompt's `Closes #N` line should be verified against `gh issue view N --json title` BEFORE writing the prompt."
+
+2. **Sibling-agent stash interception during `git pull --rebase`** (Agent 1 + Agent 3) — when 2+ parallel agents run `git pull --rebase` close in time, the later agent's pull silently stashes the earlier agent's untracked files. Recovery: `git stash list | head` + `git stash show stash@{0} -u --stat`. 2nd-class variant of `--only` flag — same root cause, untracked surface. **Worth promoting to standing rule on next instance.**
+
+3. **§1.2 existing-infrastructure inventory pattern** (Agent 2) — now standard across 3 coordinating PRDs in 24h. Worth promoting to hard requirement for any coordinating-PRD-shaped doc.
+
+4. **Issue-text "page title" can mean nav-label, not `<h1>`** (Agent 3) — when pen-test screenshot points to top-left page label, that location is usually sidebar nav-link, not in-page heading. Grep audit Sidebar.jsx BEFORE assuming bug is in page component.
+
+5. **`user.name.split(' ')[0]` fragile for display labels like "Demo Admin"** (Agent 3) — second word looks like last name but is role-suffix. Worth standing rule: "for greeting strings, prefer full `user.name` over first-name extraction unless a `firstName` field is the source of truth."
+
+**Cumulative session totals (27 ticks):**
+- **81 commits** (+4 this tick: 1 PRD + 1 extraction + 1 fix + verdict pending)
+- **16 GitHub issues closed + 2 partials** (added #837 + #833)
+- 10 phantoms + 13 gaps + 1 self-regression caught
+- Zero rebase conflicts, zero over-commits across all 81 commits
+- **29 PRDs shipped + 1 meta-doc** (added PRD_WELLNESS_POS_HARDENING)
+- **+19 new vitest cases** (DateRangePicker)
+- **NEW SHARED COMPONENT: `<DateRangePicker>`** — Payments.jsx + InventoryReceipts.jsx adoption is follow-up scope
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **29 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

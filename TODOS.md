@@ -454,7 +454,31 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining**
 - **+8 vitest cases** added (apiKeyAuth.test.js)
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **21 PRDs total** (picker EXHAUSTED per Step 4):
+**Tick #22 (cron) — 3/3 SHIPPED, 2 PRDs + DECISIONS_TRACKER meta-doc surfacing 118 pending decisions:**
+
+| SHA | Type | What |
+|---|---|---|
+| `e7f9245` | New PRD (22nd) | **`docs/PRD_AI_SURFACES.md`** (518 lines, #909 P3). 12 use cases, 8 FR clusters, 6 DDs, 5 cred items, 10 ACs, 7 OQs. **7 existing task classes pinned** (`search`, `citation`, `reasoning`, `talking-points`, `form-vs-call`, `bulk-text`, `call-summary`) **+ 8 NEW task classes** (`next-best-action`, `inbox-reply-draft`, `upsell-suggest`, `objection-counter`, `lead-cluster`, `ticket-categorize`, `weekly-digest`, `nlq-to-sql`) with per-task model/fallback/budget pinned. **§1.2 "existing infrastructure (do NOT rebuild)" table** — promotes a pattern for future PRDs to lead with what's shipped before enumerating gaps. **Refs #909.** |
+| `0286a65` | New PRD (23rd) | **`docs/PRD_TRAVEL_SECURITY_ARCHITECTURE.md`** (227 lines, **coordinating PRD for May 2026 security cluster**). 7 FRs across 4 remediation projects (auth-migration / CSP / IDOR / PII), 6 DDs, 8 OQs, 12 ACs. **Issue survey:** 9 OPEN (#914 #915 #917-#921 #923 #924) + 2 CLOSED (#913 #922) + 1 MERGED (#916). Sibling PRD interlocks explicit: B2B_AGENT_PORTAL inherits FR-3.1 auth; MULTICHANNEL_LEADS inherits FR-3.4 tenant-scoping; BILLING inherits FR-3.5 PII redaction. **Refs all 12.** |
+| `cc6d52c` | NEW meta-doc | **`docs/DECISIONS_TRACKER.md`** (290 lines) — **118 pending decisions consolidated across 20 of 22 PRDs**. Per-PRD breakdown: VISA_SURE_PHASE_3 (8 including PC-8 family-dependents from tick #9), BILLING/B2B_AGENT_PORTAL/AI_CALLING/BOOKING_EXPEDIA (7 each), most others 5-6. **6 cross-cutting themes identified:** (1) Fork-vs-extend across Quote/Billing/Supplier, (2) Per-tenant budget cap + feature flagging across ADSGPT/AI_CALLING/RATEHAWK, (3) AI model+vendor selection cascades, (4) Sub-brand defaulting across 5 PRDs, (5) Counsel-owned single-review session (PASSPORT_OCR/AI_CALLING/AIRLINE/RFU), (6) Auto-vs-prompt UX defaulting. **Format finding:** 3 competing decision-ID conventions (DD-5.X / DC-N / PC-N+D-N) — future PRDs should default to DD-5.X. |
+
+**Three cron-learning candidates surfaced:**
+
+1. **§1.2 "existing infrastructure (do NOT rebuild)" PRD pattern** (Agent 1) — every PRD should lead with "what's already shipped" to prevent phantom-scope dispatches when the PRD eventually moves to implementation. Worth promoting to standard PRD template addition.
+
+2. **Coordinating-PRD pattern for inter-related architectural findings** (Agent 2) — 9 OPEN security issues collapsed into 4 remediation projects with overlap explicitly mapped in §1. Worth promoting to a skill if 2nd cluster (e.g. performance findings) ships the same shape.
+
+3. **Multiple decision-ID conventions across PRDs** (Agent 3) — DD-5.X (newer) vs DC-N (mid) vs PC-N/D-N (earliest). Future PRDs should default to DD-5.X. Worth one-liner standing rule if 23rd PRD lands with yet-another convention.
+
+**Cumulative session totals (22 ticks):**
+- **65 commits** (+3 this tick: 2 PRDs + 1 meta-doc)
+- **10 GitHub issues closed + 2 partials** (no new closures this tick)
+- 10 phantoms + 13 schema-or-spec gaps caught
+- Zero rebase conflicts, zero over-commits across all 65 commits
+- **23 PRDs shipped + 1 meta-doc (DECISIONS_TRACKER)** — 118 pending decisions surfaced for product team review
+- **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining**
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **23 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

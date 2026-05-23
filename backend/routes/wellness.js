@@ -23,6 +23,7 @@ const { getPatientsSummary, getPatientDetails } = require("../controllers/visitC
 const {
   renderPrescriptionPdf,
   renderConsentPdf,
+  renderFullPatientReportPdf,
   renderBrandedInvoicePdf,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
@@ -5303,6 +5304,152 @@ async function primaryClinic(tenantId) {
   if (active) return active;
   return prisma.location.findFirst({ where: { tenantId }, orderBy: { id: "asc" } });
 }
+
+// #840 — single consolidated patient-record PDF.
+//
+// Problem: pre-this-fix the operator had to download visits / prescriptions
+// / consents individually and manually staple them together to hand a
+// complete record to a referring provider or to archive. There was no
+// "Download full patient record" surface.
+//
+// Path: GET /api/wellness/patients/:id/full-report.pdf
+//   - PHI gate: phiReadGate (doctor / professional / admin / manager;
+//     telecaller is intentionally INCLUDED here because telecallers do
+//     route hand-offs and need the consolidated view; this matches the
+//     gate on GET /patients/:id itself).
+//   - Tenant scoping: tenantWhere() on every relation read.
+//   - Audit: PATIENT_FULL_REPORT_DOWNLOAD row written via writeAudit
+//     (fire-and-forget per #534 PERF-1 — never fail the download because
+//     the audit row failed; the catch just warns).
+//   - Response: application/pdf with Content-Disposition: attachment
+//     (force-save, not inline — operator typically wants this on disk for
+//     archival, not in a tab).
+//
+// Service consumptions live on Visit, not Patient — we fetch them by
+// visitId after loading the patient + visits. Photos come from visit.photosBefore
+// / photosAfter JSON columns (parsed inline). Consents include signatureSvg
+// so the renderer can inline-embed the captured signature.
+router.get("/patients/:id/full-report.pdf", phiReadGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ error: "Invalid patient id" });
+    }
+    const where = tenantWhere(req, { id });
+    where.deletedAt = null; // never expose soft-deleted patients via export
+
+    const patient = await prisma.patient.findFirst({
+      where,
+      include: {
+        visits: {
+          orderBy: { visitDate: "desc" },
+          include: {
+            service: { select: { id: true, name: true, category: true } },
+            doctor: { select: { id: true, name: true } },
+          },
+        },
+        prescriptions: {
+          orderBy: { createdAt: "desc" },
+          include: { doctor: { select: { id: true, name: true } } },
+        },
+        consents: {
+          orderBy: { signedAt: "desc" },
+          // signatureSvg is needed so the PDF renderer can inline-embed
+          // the captured signature image; rest of the columns mirror the
+          // detail-view select shape.
+          select: {
+            id: true, templateName: true, signedAt: true,
+            patientId: true, serviceId: true,
+            signatureSvg: true,
+            service: { select: { id: true, name: true } },
+          },
+        },
+        treatmentPlans: { include: { service: { select: { id: true, name: true } } } },
+      },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    // Photos: extract from visit.photosBefore / photosAfter JSON columns.
+    // Only include visits that actually have at least one photo so the
+    // section stays focused.
+    const photos = patient.visits
+      .map((v) => {
+        let before = [];
+        let after = [];
+        try { before = v.photosBefore ? JSON.parse(v.photosBefore) : []; } catch { before = []; }
+        try { after = v.photosAfter ? JSON.parse(v.photosAfter) : []; } catch { after = []; }
+        if (!Array.isArray(before)) before = [];
+        if (!Array.isArray(after)) after = [];
+        return { visitDate: v.visitDate, before, after };
+      })
+      .filter((p) => p.before.length > 0 || p.after.length > 0);
+
+    // Inventory consumed: ServiceConsumption rows for every visit this
+    // patient has. Tenant-scoped read; flatten with visitDate denorm for
+    // the renderer's table.
+    const visitIds = patient.visits.map((v) => v.id);
+    let consumptions = [];
+    if (visitIds.length > 0) {
+      const rows = await prisma.serviceConsumption.findMany({
+        where: tenantWhere(req, { visitId: { in: visitIds } }),
+        orderBy: { createdAt: "desc" },
+        include: { visit: { select: { id: true, visitDate: true } } },
+      });
+      consumptions = rows.map((r) => ({
+        visitDate: r.visit?.visitDate || r.createdAt,
+        productName: r.productName,
+        qty: r.qty,
+        unitCost: r.unitCost,
+      }));
+    }
+
+    const clinic = await primaryClinic(req.user.tenantId);
+
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient,
+        visits: patient.visits,
+        prescriptions: patient.prescriptions,
+        consents: patient.consents,
+        treatmentPlans: patient.treatmentPlans,
+        photos,
+        consumptions,
+        operator: { name: req.user?.name, email: req.user?.email },
+        generatedAt: new Date(),
+      },
+      clinic,
+    );
+
+    // Audit: PATIENT_FULL_REPORT_DOWNLOAD. Fire-and-forget — see
+    // PATIENT_DETAIL_READ above (#534 PERF-1). Never reference values that
+    // could contain PHI in the audit details (counts / IDs only).
+    writeAudit('Patient', 'PATIENT_FULL_REPORT_DOWNLOAD', patient.id, req.user.userId, req.user.tenantId, {
+      patientId: patient.id,
+      visitCount: patient.visits.length,
+      rxCount: patient.prescriptions.length,
+      consentCount: patient.consents.length,
+      treatmentPlanCount: patient.treatmentPlans.length,
+      photoSets: photos.length,
+      consumptionCount: consumptions.length,
+    }).catch((auditErr) => {
+      console.warn("[wellness] audit PATIENT_FULL_REPORT_DOWNLOAD failed:", auditErr.message);
+    });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="patient-${id}-full-report.pdf"`,
+    );
+    res.setHeader("Content-Length", buf.length);
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.send(buf);
+  } catch (e) {
+    console.error("[wellness] full patient report pdf error:", e.message);
+    res.status(500).json({ error: "Failed to render patient report PDF" });
+  }
+});
 
 router.get("/prescriptions/:id/pdf", async (req, res) => {
   try {

@@ -278,6 +278,281 @@ async function renderConsentPdf(consent, patient, service, clinic, signatureData
   return bufPromise;
 }
 
+// ── 2b. Full Patient Report PDF ────────────────────────────────────
+//
+// #840: clinicians + admins need a single consolidated patient record
+// (visits + Rx + consents + treatment plans + photos + inventory consumed)
+// as one PDF for hand-offs to referring providers, patient archives, and
+// medico-legal documentation. Pre-this-fix the operator had to download
+// each section individually and manually staple them together.
+//
+// Shape mirrors renderPrescriptionPdf / renderConsentPdf — same clinic
+// header + IST-locale date formatting + Helvetica typography so the
+// consolidated report visually matches the per-section docs operators are
+// already used to handing over.
+//
+// Caller responsibilities (in routes/wellness.js):
+//   - Tenant + role scoping (PHI gate)
+//   - Loading patient + all relations + consumptions (consumptions live on
+//     Visit, not Patient — caller flattens before passing).
+//   - Embedding signature images inline via consent.signatureSvg (data URL).
+//   - Writing the PATIENT_FULL_REPORT_DOWNLOAD audit row.
+//
+// `payload` shape:
+//   {
+//     patient: { id, name, phone, email, dob, gender, bloodGroup, allergies, source, createdAt, gst, anniversary },
+//     visits: [{ visitDate, status, service:{name,category}, doctor:{name}, notes, amountCharged }],
+//     prescriptions: [{ createdAt, drugs (string|array), instructions, doctor:{name} }],
+//     consents: [{ templateName, signedAt, service:{name}, signatureSvg }],
+//     treatmentPlans: [{ name, totalSessions, completedSessions, status, startedAt, nextDueAt, totalPrice, service:{name} }],
+//     photos: [{ visitDate, before:[url], after:[url] }],   // optional
+//     consumptions: [{ visitDate, productName, qty, unitCost }],
+//     operator: { name, email },
+//     generatedAt: Date
+//   }
+async function renderFullPatientReportPdf(payload, clinic) {
+  const {
+    patient = {},
+    visits = [],
+    prescriptions = [],
+    consents = [],
+    treatmentPlans = [],
+    photos = [],
+    consumptions = [],
+    operator = null,
+    generatedAt = new Date(),
+  } = payload || {};
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+
+  // ── Header ───────────────────────────────────────────────────────
+  drawClinicHeader(doc, clinic);
+
+  doc.font("Helvetica-Bold").fontSize(16).fillColor("#111")
+    .text("Patient Record — Consolidated Report", { align: "center" });
+  doc.moveDown(0.4);
+  doc.font("Helvetica").fontSize(9).fillColor("#666")
+    .text(`Generated ${formatDate(generatedAt)}${operator?.name ? ` by ${operator.name}` : ""}`, { align: "center" });
+  doc.moveDown(0.8);
+
+  // ── Patient profile block ────────────────────────────────────────
+  const age = computeAge(patient.dob);
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111").text("Patient Profile");
+  doc.moveDown(0.3);
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  const left = doc.page.margins.left;
+  const colWidth = (doc.page.width - left - doc.page.margins.right) / 2;
+  const pTop = doc.y;
+  doc.text(`Name: ${patient.name || "—"}`, left, pTop, { width: colWidth });
+  doc.text(`Phone: ${patient.phone || "—"}`, left, doc.y, { width: colWidth });
+  doc.text(`Email: ${patient.email || "—"}`, left, doc.y, { width: colWidth });
+  doc.text(`DOB: ${formatDate(patient.dob)} (${age})`, left, doc.y, { width: colWidth });
+  const leftEndY = doc.y;
+  // Right column
+  doc.text(`Gender: ${patient.gender || "—"}`, left + colWidth, pTop, { width: colWidth });
+  doc.text(`Blood group: ${patient.bloodGroup || "—"}`, left + colWidth, doc.y, { width: colWidth });
+  doc.text(`Source: ${patient.source || "—"}`, left + colWidth, doc.y, { width: colWidth });
+  doc.text(`Registered: ${formatDate(patient.createdAt)}`, left + colWidth, doc.y, { width: colWidth });
+  doc.y = Math.max(leftEndY, doc.y);
+  if (patient.allergies) {
+    doc.moveDown(0.3);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#a33").text("Allergies:", { continued: true });
+    doc.font("Helvetica").fillColor("#222").text(` ${patient.allergies}`);
+  }
+  doc.moveDown(0.8);
+
+  // Helper — section title renderer with page-break awareness.
+  function sectionTitle(label) {
+    if (doc.y > 720) doc.addPage();
+    doc.moveDown(0.3);
+    doc.font("Helvetica-Bold").fontSize(12).fillColor("#111").text(label);
+    doc.moveTo(left, doc.y + 2)
+      .lineTo(doc.page.width - doc.page.margins.right, doc.y + 2)
+      .lineWidth(0.5).strokeColor("#bbb").stroke();
+    doc.moveDown(0.4);
+    doc.fillColor("#222");
+  }
+
+  function ensureRoom(neededLines = 4) {
+    // Each "line" ≈ 14pt; bail-out at ~720 for A4 margin=50.
+    if (doc.y + neededLines * 14 > 760) {
+      doc.addPage();
+    }
+  }
+
+  // ── Section 1: Visits ────────────────────────────────────────────
+  sectionTitle(`Visits (${visits.length})`);
+  if (visits.length === 0) {
+    doc.font("Helvetica-Oblique").fontSize(9).fillColor("#777").text("(no visits on file)");
+  } else {
+    doc.font("Helvetica").fontSize(9).fillColor("#222");
+    for (const v of visits) {
+      ensureRoom(3);
+      const head = `${formatDate(v.visitDate)} — ${v.service?.name || "Consultation"}${v.status ? ` [${v.status}]` : ""}`;
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111").text(head);
+      doc.font("Helvetica").fontSize(9).fillColor("#444");
+      const sub = [];
+      if (v.doctor?.name) sub.push(`Doctor: ${v.doctor.name}`);
+      if (v.amountCharged != null) sub.push(`Charged: ${formatMoney(v.amountCharged)}`);
+      if (sub.length) doc.text(sub.join("  ·  "));
+      if (v.notes) doc.fillColor("#222").text(v.notes, { width: 495 });
+      doc.moveDown(0.4);
+    }
+  }
+
+  // ── Section 2: Prescriptions ─────────────────────────────────────
+  sectionTitle(`Prescriptions (${prescriptions.length})`);
+  if (prescriptions.length === 0) {
+    doc.font("Helvetica-Oblique").fontSize(9).fillColor("#777").text("(no prescriptions on file)");
+  } else {
+    for (const rx of prescriptions) {
+      ensureRoom(4);
+      const drugs = parseDrugs(rx.drugs);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111").text(
+        `${formatDate(rx.createdAt)}${rx.doctor?.name ? ` — ${rx.doctor.name}` : ""}`
+      );
+      doc.font("Helvetica").fontSize(9).fillColor("#222");
+      if (drugs.length === 0) {
+        doc.fillColor("#777").text("(no medications listed)", { indent: 12 });
+      } else {
+        for (const d of drugs) {
+          const line = `  • ${d.name || d.drug || "—"} — ${d.dosage || "—"}, ${d.frequency || "—"}, ${d.duration || "—"}`;
+          doc.fillColor("#222").text(line, { width: 495 });
+        }
+      }
+      if (rx.instructions) {
+        doc.font("Helvetica-Oblique").fontSize(9).fillColor("#444")
+          .text(`Instructions: ${rx.instructions}`, { width: 495, indent: 12 });
+      }
+      doc.moveDown(0.4);
+    }
+  }
+
+  // ── Section 3: Consents ──────────────────────────────────────────
+  sectionTitle(`Consent records (${consents.length})`);
+  if (consents.length === 0) {
+    doc.font("Helvetica-Oblique").fontSize(9).fillColor("#777").text("(no consents on file)");
+  } else {
+    for (const c of consents) {
+      ensureRoom(5);
+      const label = `${formatDate(c.signedAt)} — ${(c.templateName || "general").replace(/-/g, " ")}`;
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111").text(label);
+      doc.font("Helvetica").fontSize(9).fillColor("#444");
+      if (c.service?.name) doc.text(`Service: ${c.service.name}`);
+      // Inline signature image if a data-URL is available.
+      if (c.signatureSvg && typeof c.signatureSvg === "string") {
+        const m = c.signatureSvg.match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/i);
+        if (m) {
+          try {
+            const buf = Buffer.from(m[2], "base64");
+            ensureRoom(4);
+            doc.image(buf, left + 12, doc.y + 2, { fit: [140, 50] });
+            doc.moveDown(3.5);
+          } catch {
+            // ignore — corrupt signature payload
+          }
+        }
+      }
+      doc.moveDown(0.3);
+    }
+  }
+
+  // ── Section 4: Treatment Plans ───────────────────────────────────
+  sectionTitle(`Treatment plans (${treatmentPlans.length})`);
+  if (treatmentPlans.length === 0) {
+    doc.font("Helvetica-Oblique").fontSize(9).fillColor("#777").text("(no treatment plans on file)");
+  } else {
+    for (const tp of treatmentPlans) {
+      ensureRoom(3);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111").text(
+        `${tp.name || tp.service?.name || "Plan"} [${tp.status || "active"}]`
+      );
+      doc.font("Helvetica").fontSize(9).fillColor("#444");
+      const meta = [];
+      meta.push(`Sessions: ${tp.completedSessions ?? 0}/${tp.totalSessions ?? "—"}`);
+      if (tp.startedAt) meta.push(`Started ${formatDate(tp.startedAt)}`);
+      if (tp.nextDueAt) meta.push(`Next due ${formatDate(tp.nextDueAt)}`);
+      if (tp.totalPrice != null) meta.push(`Plan total: ${formatMoney(tp.totalPrice)}`);
+      doc.text(meta.join("  ·  "));
+      doc.moveDown(0.3);
+    }
+  }
+
+  // ── Section 5: Photos (URLs/thumbnails) ──────────────────────────
+  sectionTitle(`Photos (${photos.reduce((s, p) => s + (p.before?.length || 0) + (p.after?.length || 0), 0)})`);
+  if (!photos.length) {
+    doc.font("Helvetica-Oblique").fontSize(9).fillColor("#777").text("(no photos on file)");
+  } else {
+    for (const p of photos) {
+      ensureRoom(3);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111").text(formatDate(p.visitDate));
+      doc.font("Helvetica").fontSize(9).fillColor("#444");
+      const beforeUrls = Array.isArray(p.before) ? p.before : [];
+      const afterUrls = Array.isArray(p.after) ? p.after : [];
+      if (beforeUrls.length) doc.text(`Before: ${beforeUrls.length} image(s)`);
+      if (afterUrls.length) doc.text(`After: ${afterUrls.length} image(s)`);
+      // URLs listed (PDF reader can click). We do not inline-embed remote
+      // images — the PDF renderer would have to fetch them, which adds
+      // latency + failure modes; PDFKit accepts buffers/local paths only.
+      doc.fontSize(8).fillColor("#666");
+      [...beforeUrls, ...afterUrls].forEach((u) => doc.text(`  ${u}`, { width: 495 }));
+      doc.moveDown(0.3);
+    }
+  }
+
+  // ── Section 6: Inventory consumed ────────────────────────────────
+  sectionTitle(`Inventory consumed (${consumptions.length})`);
+  if (consumptions.length === 0) {
+    doc.font("Helvetica-Oblique").fontSize(9).fillColor("#777").text("(no inventory consumed on file)");
+  } else {
+    ensureRoom(3);
+    const tableTop = doc.y;
+    const cols = [left, left + 130, left + 260, left + 340, left + 420];
+    const headers = ["Date", "Product", "Qty", "Unit cost", "Total"];
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#333");
+    headers.forEach((h, i) => doc.text(h, cols[i], tableTop, { width: (cols[i + 1] || left + 495) - cols[i] - 4 }));
+    doc.moveTo(left, tableTop + 12).lineTo(doc.page.width - doc.page.margins.right, tableTop + 12)
+      .lineWidth(0.4).strokeColor("#bbb").stroke();
+    let rowY = tableTop + 16;
+    doc.font("Helvetica").fontSize(9).fillColor("#222");
+    let grandTotal = 0;
+    for (const it of consumptions) {
+      if (rowY > 760) { doc.addPage(); rowY = 60; }
+      const total = (Number(it.qty) || 0) * (Number(it.unitCost) || 0);
+      grandTotal += total;
+      const cells = [
+        formatDate(it.visitDate),
+        String(it.productName || "—"),
+        String(it.qty ?? "—"),
+        formatMoney(it.unitCost),
+        formatMoney(total),
+      ];
+      cells.forEach((val, i) => {
+        doc.text(val, cols[i], rowY, { width: (cols[i + 1] || left + 495) - cols[i] - 4 });
+      });
+      rowY += 14;
+    }
+    doc.y = rowY + 4;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#111")
+      .text(`Total: ${formatMoney(grandTotal)}`, left, doc.y, { width: doc.page.width - left - doc.page.margins.right, align: "right" });
+  }
+
+  // ── Footer (last-page only) ─────────────────────────────────────
+  doc.moveDown(2);
+  const footerY = Math.min(doc.y, doc.page.height - doc.page.margins.bottom - 24);
+  doc.moveTo(left, footerY).lineTo(doc.page.width - doc.page.margins.right, footerY)
+    .lineWidth(0.4).strokeColor("#bbb").stroke();
+  doc.font("Helvetica").fontSize(8).fillColor("#777").text(
+    `Report generated ${formatDate(generatedAt)}${operator?.name ? ` by ${operator.name}` : ""}` +
+      ` — Confidential clinical record. Distribute only to authorized parties.`,
+    left, footerY + 6, { width: doc.page.width - left - doc.page.margins.right, align: "center" },
+  );
+
+  doc.end();
+  return bufPromise;
+}
+
 // ── 3. Branded Invoice PDF ─────────────────────────────────────────
 
 async function renderBrandedInvoicePdf(invoice, contact, clinic) {
@@ -761,6 +1036,7 @@ function renderTravelStallPersonalisedPdf(payload) {
 module.exports = {
   renderPrescriptionPdf,
   renderConsentPdf,
+  renderFullPatientReportPdf,
   renderBrandedInvoicePdf,
   renderTravelDiagnosticPdf,
   renderTravelItineraryPdf,

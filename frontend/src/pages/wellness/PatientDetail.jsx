@@ -176,9 +176,15 @@ export default function PatientDetail() {
             <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', fontWeight: 500 }}>wallet</span>
           </div>
         )}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           <span>Source: <strong style={{ color: 'var(--text-primary)' }}>{patient.source || '—'}</strong></span>
           <span>{patient.visits.length} visits • {patient.prescriptions.length} Rx • {patient.treatmentPlans.length} treatment plans</span>
+          {/* #840 — consolidated patient-record export. Forces a save (not a
+              tab-open) because operators handing off records to referring
+              providers / archives want a file on disk, not a preview. The
+              endpoint requires Bearer auth so we stream via fetch + blob
+              rather than navigating via window.location. */}
+          <DownloadFullReportButton patientId={patient.id} patientName={patient.name} />
         </div>
       </div>
 
@@ -216,6 +222,75 @@ export default function PatientDetail() {
       {tab === 'wallet' && <WalletTab patient={patient} />}
       {tab === 'memberships' && <MembershipsTab patient={patient} services={services} />}
     </div>
+  );
+}
+
+// ── Download full patient record (#840) ───────────────────────────
+//
+// Streams /api/wellness/patients/:id/full-report.pdf via fetch (the endpoint
+// is Bearer-auth-gated, so a plain anchor href won't work) and pushes the
+// resulting blob through a synthetic <a download> click. Save dialog opens
+// directly — no new tab, no preview. We do NOT use window.location.href
+// because that would drop the Authorization header.
+function DownloadFullReportButton({ patientId, patientName }) {
+  const notify = useNotify();
+  const [downloading, setDownloading] = useState(false);
+
+  const onClick = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const token = getAuthToken();
+      const res = await fetch(`/api/wellness/patients/${patientId}/full-report.pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Download failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `patient-${patientId}-full-report.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify.success(`Downloaded ${patientName || 'patient'} record`);
+    } catch (err) {
+      notify.error(err.message || 'Failed to download patient report.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      data-testid="download-full-report-btn"
+      onClick={onClick}
+      disabled={downloading}
+      title="Download visits, prescriptions, consents, treatment plans, photos, and inventory as one PDF"
+      style={{
+        marginTop: '0.25rem',
+        padding: '0.45rem 0.85rem',
+        background: 'var(--primary-color, var(--accent-color))',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 6,
+        cursor: downloading ? 'wait' : 'pointer',
+        fontSize: '0.8rem',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.35rem',
+        opacity: downloading ? 0.7 : 1,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <Download size={13} />
+      {downloading ? 'Preparing…' : 'Download full record (PDF)'}
+    </button>
   );
 }
 

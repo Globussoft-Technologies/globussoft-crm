@@ -32,6 +32,7 @@
 //     audit row written by routes/pos.js → writeAudit).
 
 import { useEffect, useMemo, useState, useContext } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Calculator,
   Plus,
@@ -590,7 +591,25 @@ export default function PointOfSale() {
           </div>
           {registers.length === 0 && (
             <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem', fontSize: '0.9rem' }}>
-              No registers configured. Ask an admin to create a Register first.
+              {/* #826 — Owner / Admin / Manager need an in-product path to
+                  the create-register UI. Pre-fix the message said "Ask an
+                  admin to create" — useless to an admin who IS the admin.
+                  Plain USERs (cashiers) keep the original copy since they
+                  legitimately need to escalate. */}
+              No registers configured.{' '}
+              {isAdminOrManager ? (
+                <>
+                  <Link
+                    to="/wellness/cash-registers"
+                    style={{ color: 'var(--accent-color)', textDecoration: 'underline', fontWeight: 500 }}
+                  >
+                    Open Cash Registers
+                  </Link>{' '}
+                  to add one.
+                </>
+              ) : (
+                <>Ask an admin to create a Register first.</>
+              )}
             </p>
           )}
         </div>

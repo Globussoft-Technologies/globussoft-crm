@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Search, Plus, Users, Phone, Mail, Pencil } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { Search, Plus, Users, Phone, Mail, Pencil, Download } from "lucide-react";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { formatDate } from "../../utils/date";
@@ -32,6 +32,11 @@ export default function Patients() {
   const [reloadTick, setReloadTick] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  // #931 + #816 Patients slice — CSV export. Backend at
+  // /api/wellness/patients.csv (phiReadGate; accepts ?q & ?locationId
+  // matching the current view). fetch+blob trick because plain <a href>
+  // can't set the Authorization header.
+  const [csvBusy, setCsvBusy] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [locations, setLocations] = useState([]);
   // #205: dob added so the form can capture it; gender already exists. Phone
@@ -108,6 +113,40 @@ export default function Patients() {
         if (myReqId !== reqIdRef.current) return;
         setLoading(false);
       });
+  };
+
+  // #931 + #816 Patients slice — Export the current view (honors the active
+  // search query `q`) as CSV. Mirrors the Services.jsx / Memberships.jsx /
+  // BookingPages.jsx CSV pattern from commits 41d15f8 / 5069871 / 962d82a.
+  // Endpoint applies phiReadGate so a USER without PHI access will receive
+  // 403; we surface that via notify (no need to also flip permissionDenied
+  // since the table state isn't affected).
+  const exportCsv = async () => {
+    setCsvBusy(true);
+    try {
+      const token = getAuthToken();
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const res = await fetch(`/api/wellness/patients.csv${qs}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `patients-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify.success(`Exported ${total.toLocaleString()} patient${total === 1 ? '' : 's'}.`);
+    } catch (e) {
+      notify.error(e.message || 'CSV export failed.');
+    } finally {
+      setCsvBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -288,14 +327,30 @@ export default function Patients() {
             {total.toLocaleString()} total
           </p>
         </div>
-        <button
-          onClick={() => {
-            setShowAdd(!showAdd);
-            if (showAdd) {
-              setEditingId(null);
-              setForm({
-                name: "",
-                phone: "",
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {/* #931 + #816 Patients slice — CSV export honors the current search
+              filter. Hidden when there's nothing to export OR when the role
+              already saw the access-restricted state (avoids tempting the user
+              to try an export that will just toast 403). */}
+          {!permissionDenied && (
+            <button
+              type="button"
+              onClick={exportCsv}
+              disabled={csvBusy || total === 0}
+              title={q ? `Download ${total} matching patient${total === 1 ? '' : 's'} as CSV` : `Download all ${total} patients as CSV`}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy || total === 0 ? 'not-allowed' : 'pointer', opacity: csvBusy || total === 0 ? 0.6 : 1 }}
+            >
+              <Download size={16} /> Export CSV
+            </button>
+          )}
+          <button
+            onClick={() => {
+              setShowAdd(!showAdd);
+              if (showAdd) {
+                setEditingId(null);
+                setForm({
+                  name: "",
+                  phone: "",
                 email: "",
                 dob: "",
                 gender: "",
@@ -318,8 +373,9 @@ export default function Patients() {
             cursor: "pointer",
           }}
         >
-          <Plus size={16} /> {showAdd ? "Cancel" : "New patient"}
-        </button>
+            <Plus size={16} /> {showAdd ? "Cancel" : "New patient"}
+          </button>
+        </div>
       </header>
 
       {showAdd && (

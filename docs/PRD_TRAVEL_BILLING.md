@@ -190,6 +190,26 @@ GH issue #901 (filed by @nilimeshnayak-max as P1 Travel Gap audit) + Travel Stal
 
 ## §10 Status snapshot
 
+### 2026-05-24 update #2 — Routes + admin UI
+
+**Backend routes shipped:** `backend/routes/travel_invoices.js` at commit `b2a9dcb`. CRUD scaffold (GET list/detail, POST create with auto-generated TINV-YYYY-NNNN serial, PUT with forward-only status-transition matrix, DELETE on Draft only). 10/10 vitest pass.
+
+**Admin UI shipped (or in-flight):** `frontend/src/pages/travel/InvoicesAdmin.jsx` shipping this tick by sibling agent — mirrors the SuppliersAdmin / QuotesAdmin pattern. Mounted at `/travel/invoices-admin`. Status badges colored Draft/Issued/Partial/Paid/Voided; delete enabled only on Draft per backend constraint.
+
+**Invoice numbering decision (post-resolution architectural finding):** TINV-YYYY-NNNN serial reset annually, race-safe via `prisma.$transaction` + `@@unique([tenantId, invoiceNum])` schema backstop. Mirror this pattern when future PRDs need tenant-scoped human-readable IDs (e.g. supplier-payable receipts, expense reports).
+
+**Status transition matrix (committed in backend):** Draft → {Issued, Voided}; Issued → {Partial, Paid, Voided}; Partial → {Paid, Voided}; Paid → {Voided}; Voided → ∅. Forward-only with universal Voided escape; backward transitions rejected with 422 INVALID_INVOICE_TRANSITION.
+
+**Still pending (per the existing 2026-05-24 entry):**
+- DD-5.2 through DD-5.7 — PRD-internal details (cancellation policy, reminder cadence specifics, per-sub-brand PDF templates DD-5.7 gates on Yasin Q22).
+- Multi-stage settlement schedules (PRD §3.2)
+- Supplier-payable ledger reconciliation (PRD §3.3 cross-PRD with Supplier Master)
+- TCS Sec 206C (PRD §3.5)
+- Payment-collection webhook (depends on #896 Stripe/Razorpay activation, cred-blocked)
+- Reminder cadence (DD-5.5 RESOLVED: hard-coded T-7/T-3/T-1)
+
+**Path to next implementation slice:** Real TravelInvoice fields per §3 spec — line items + tax breakdown (cross-PRD with GST) + supplier-payable detail. ~2-3 days for the line-items expansion alone.
+
 ### 2026-05-24 update
 
 **DD-5.1 RESOLVED:** FORK — `TravelInvoice` shipped at commit `fdb793e` (~85 LOC across the 3 trio models with `TravelQuote` + `TravelSupplier`). Tenant inverse relation threaded into the travel-vertical cluster. `prisma validate` clean.

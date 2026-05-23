@@ -178,6 +178,22 @@ The supplier-payable side is the structural mirror of the customer-receivable si
 
 ## §10 Status snapshot
 
+### 2026-05-24 update #2 — Routes + admin UI
+
+**Backend routes shipped:** `backend/routes/travel_suppliers.js` at commit `192b8c1`. CRUD scaffold including soft-delete (preserves referential integrity for any future TravelInvoice references). 11/11 vitest pass. Supplier credential vault (orthogonal SupplierCredential model) lives in the same file as a sibling block.
+
+**Admin UI shipped:** `frontend/src/pages/travel/SuppliersAdmin.jsx` at commit `08ebe5e` (mounted at `/travel/suppliers-admin`, distinct from `/travel/suppliers` which hosts the credential vault UI). Sidebar entry "Suppliers" (master) + "Supplier credentials" (vault) clarify the distinction.
+
+**Soft-delete decision:** isActive=false flip rather than hard-delete — preserves referential integrity if a TravelInvoice ever references a supplier. Operator-facing UI hides inactive by default; admin filter exposes them.
+
+**Still pending (per the existing 2026-05-24 entry):**
+- DD-5.2 through DD-5.7 — PRD-internal details (per-supplier reconciliation, dispute escalation hooks, etc.)
+- Supplier-payable ledger (PRD §3.3)
+- Commission tracking (PRD §3.4)
+- TDS auto-deduction ownership boundary with GST PRD (DD-5.5 flagged as biggest remaining gap per tick #95 surfacing)
+
+**Path to next implementation slice:** Real supplier-payable ledger model + per-supplier reconciliation flow. ~3-4 days for the ledger model + UI; gates partly on the GST DD-5.5 TDS boundary decision.
+
 ### 2026-05-24 update
 
 **DD-5.1 RESOLVED:** FORK — `TravelSupplier` shipped at commit `fdb793e` (~85 LOC across the 3 trio models with `TravelQuote` + `TravelInvoice`). Tenant inverse relation threaded into the travel-vertical cluster. `prisma validate` clean.

@@ -107,6 +107,37 @@ prisma.attendance.create = vi.fn();
 prisma.attendance.update = vi.fn();
 prisma.user = prisma.user || {};
 prisma.user.findFirst = vi.fn();
+prisma.user.findUnique = vi.fn();
+
+// ─── #929 Part B emissions (ticks #36/#37/#38) ──────────────────────────
+// visa.status_changed — routes/travel_visa.js PATCH /applications/:id
+// quote.sent           — routes/estimates.js POST /:id/email (Draft → Sent)
+// itinerary.accepted   — routes/travel_itineraries.js POST /itineraries/:id/accept
+
+prisma.visaApplication = prisma.visaApplication || {};
+prisma.visaApplication.findFirst = vi.fn();
+prisma.visaApplication.update = vi.fn();
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn();
+prisma.contact.findUnique = vi.fn();
+prisma.contact.findMany = vi.fn().mockResolvedValue([]);
+
+prisma.estimate = prisma.estimate || {};
+prisma.estimate.findFirst = vi.fn();
+prisma.estimate.update = vi.fn();
+prisma.emailMessage = prisma.emailMessage || {};
+prisma.emailMessage.create = vi.fn();
+prisma.activity = prisma.activity || {};
+prisma.activity.create = vi.fn();
+
+prisma.itinerary = prisma.itinerary || {};
+prisma.itinerary.findFirst = vi.fn();
+prisma.itinerary.findUnique = vi.fn();
+prisma.itinerary.update = vi.fn();
+prisma.itineraryItem = prisma.itineraryItem || {};
+prisma.itineraryItem.findMany = vi.fn().mockResolvedValue([]);
+prisma.webCheckin = prisma.webCheckin || {};
+prisma.webCheckin.create = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -146,6 +177,9 @@ const eventBusCJS = requireCJS('../../lib/eventBus');
 const wellnessRouter = requireCJS('../../routes/wellness');
 const billingRouter = requireCJS('../../routes/billing');
 const attendanceRouter = requireCJS('../../routes/attendance');
+const travelVisaRouter = requireCJS('../../routes/travel_visa');
+const estimatesRouter = requireCJS('../../routes/estimates');
+const travelItinerariesRouter = requireCJS('../../routes/travel_itineraries');
 
 function makeApp(routerPath, mountPath, opts = {}) {
   const app = express();
@@ -210,6 +244,26 @@ beforeEach(() => {
   prisma.attendance.create.mockReset();
   prisma.attendance.update.mockReset();
   prisma.user.findFirst.mockReset();
+  prisma.user.findUnique.mockReset();
+  // #929 Part B stubs
+  prisma.visaApplication.findFirst.mockReset();
+  prisma.visaApplication.update.mockReset();
+  prisma.contact.findFirst.mockReset();
+  prisma.contact.findUnique.mockReset();
+  prisma.estimate.findFirst.mockReset();
+  prisma.estimate.update.mockReset();
+  prisma.emailMessage.create.mockReset();
+  prisma.activity.create.mockReset();
+  prisma.itinerary.findFirst.mockReset();
+  prisma.itinerary.findUnique.mockReset();
+  prisma.itinerary.update.mockReset();
+  prisma.itineraryItem.findMany.mockReset().mockResolvedValue([]);
+  prisma.webCheckin.create.mockReset();
+  // Restore default tenant.findUnique behaviour each test (some #929 cases
+  // override with mockResolvedValueOnce to swap vertical='travel' in).
+  prisma.tenant.findUnique
+    .mockReset()
+    .mockResolvedValue({ defaultCurrency: 'INR', locale: 'en-IN' });
 });
 
 // ─── billing.js — invoice.created ───────────────────────────────────────
@@ -403,5 +457,185 @@ describe('workflows.js — TRIGGER_TYPES catalogue includes every wave-6a event'
     for (const e of expected) {
       expect(values).toContain(e);
     }
+  });
+});
+
+// ─── #929 Part B — travel_visa.js — visa.status_changed ─────────────────
+
+describe('travel_visa.js — visa.status_changed event (#929 tick #36)', () => {
+  test('PATCH /api/travel/visa/applications/:id with status change emits visa.status_changed', async () => {
+    // requireTravelTenant → prisma.tenant.findUnique must return vertical='travel'.
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      id: 1, vertical: 'travel', name: 'TravelCo', slug: 'travelco',
+    });
+    // Existing visa application, currently in 'intake' state.
+    prisma.visaApplication.findFirst.mockResolvedValueOnce({
+      id: 501, contactId: 91, status: 'intake',
+    });
+    // Sub-brand guard: contact loaded + must be subBrand=visasure.
+    prisma.contact.findFirst.mockResolvedValueOnce({ id: 91, subBrand: 'visasure' });
+    // The actual write.
+    prisma.visaApplication.update.mockResolvedValueOnce({
+      id: 501, status: 'docs-pending',
+    });
+    const app = makeApp(travelVisaRouter, '/api/travel/visa');
+    await withEmitSpy(async (emitSpy) => {
+      const res = await request(app)
+        .patch('/api/travel/visa/applications/501')
+        .send({ status: 'docs-pending' });
+      expect(res.status).toBe(200);
+      const call = findCall(emitSpy, 'visa.status_changed');
+      expect(call).toBeTruthy();
+      expect(call[1]).toMatchObject({
+        id: 501,
+        contactId: 91,
+        subBrand: 'visasure',
+        oldStatus: 'intake',
+        newStatus: 'docs-pending',
+        tenantId: 1,
+      });
+      expect(call[1].changedAt).toBeDefined();
+      // 3rd positional arg = tenantId for per-tenant rule fan-out.
+      expect(call[2]).toBe(1);
+    });
+  });
+
+  test('PATCH without status change does NOT emit visa.status_changed', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      id: 1, vertical: 'travel', name: 'TravelCo', slug: 'travelco',
+    });
+    // Same status — body only updates applicationType.
+    prisma.visaApplication.findFirst.mockResolvedValueOnce({
+      id: 502, contactId: 92, status: 'intake',
+    });
+    prisma.contact.findFirst.mockResolvedValueOnce({ id: 92, subBrand: 'visasure' });
+    prisma.visaApplication.update.mockResolvedValueOnce({
+      id: 502, applicationType: 'business',
+    });
+    const app = makeApp(travelVisaRouter, '/api/travel/visa');
+    await withEmitSpy(async (emitSpy) => {
+      const res = await request(app)
+        .patch('/api/travel/visa/applications/502')
+        .send({ applicationType: 'business' });
+      expect(res.status).toBe(200);
+      const call = findCall(emitSpy, 'visa.status_changed');
+      expect(call).toBeUndefined();
+    });
+  });
+});
+
+// ─── #929 Part B — estimates.js — quote.sent ────────────────────────────
+
+describe('estimates.js — quote.sent event (#929 tick #37)', () => {
+  test('POST /api/estimates/:id/email on Draft estimate emits quote.sent', async () => {
+    // Estimate in Draft → expect Draft → Sent flip + quote.sent emission.
+    prisma.estimate.findFirst.mockResolvedValueOnce({
+      id: 701,
+      tenantId: 1,
+      estimateNum: 'EST-DRAFT-01',
+      title: 'Quarterly retainer',
+      status: 'Draft',
+      totalAmount: 5000,
+      validUntil: null,
+      contactId: 33,
+      contact: { id: 33, name: 'Asha Patel', email: 'asha@example.com' },
+      lineItems: [],
+    });
+    prisma.emailMessage.create.mockResolvedValueOnce({ id: 9001 });
+    prisma.activity.create.mockResolvedValueOnce({ id: 9002 });
+    prisma.estimate.update.mockResolvedValueOnce({ id: 701, status: 'Sent' });
+    const app = makeApp(estimatesRouter, '/api/estimates');
+    await withEmitSpy(async (emitSpy) => {
+      const res = await request(app)
+        .post('/api/estimates/701/email')
+        .send({});
+      expect(res.status).toBe(200);
+      const call = findCall(emitSpy, 'quote.sent');
+      expect(call).toBeTruthy();
+      expect(call[1]).toMatchObject({
+        id: 701,
+        estimateNumber: 'EST-DRAFT-01',
+        contactId: 33,
+        to: 'asha@example.com',
+        totalAmount: 5000,
+      });
+      expect(call[1].sentAt).toBeDefined();
+      expect(call[2]).toBe(1);
+    });
+  });
+
+  test('POST /api/estimates/:id/email on already-Sent estimate does NOT emit (re-send guard)', async () => {
+    // Already Sent → no Draft → Sent flip → no emission.
+    prisma.estimate.findFirst.mockResolvedValueOnce({
+      id: 702,
+      tenantId: 1,
+      estimateNum: 'EST-SENT-02',
+      title: 'Already sent',
+      status: 'Sent',
+      totalAmount: 3000,
+      validUntil: null,
+      contactId: 34,
+      contact: { id: 34, name: 'Vikram Rao', email: 'vikram@example.com' },
+      lineItems: [],
+    });
+    prisma.emailMessage.create.mockResolvedValueOnce({ id: 9003 });
+    prisma.activity.create.mockResolvedValueOnce({ id: 9004 });
+    const app = makeApp(estimatesRouter, '/api/estimates');
+    await withEmitSpy(async (emitSpy) => {
+      const res = await request(app)
+        .post('/api/estimates/702/email')
+        .send({});
+      expect(res.status).toBe(200);
+      const call = findCall(emitSpy, 'quote.sent');
+      expect(call).toBeUndefined();
+    });
+  });
+});
+
+// ─── #929 Part B — travel_itineraries.js — itinerary.accepted ───────────
+
+describe('travel_itineraries.js — itinerary.accepted event (#929 tick #38)', () => {
+  test('POST /api/travel/itineraries/:id/accept emits itinerary.accepted with payload', async () => {
+    // Tenant guard.
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      id: 1, vertical: 'travel', name: 'TravelCo', slug: 'travelco',
+    });
+    // loadItineraryWithGuard: itinerary lookup + sub-brand access set.
+    prisma.itinerary.findFirst.mockResolvedValueOnce({ id: 801, subBrand: 'tmc' });
+    // ADMIN role → getSubBrandAccessSet returns null (full access).
+    prisma.user.findUnique.mockResolvedValueOnce({ role: 'ADMIN', subBrandAccess: null });
+    // Second itinerary lookup for status check inside /accept.
+    prisma.itinerary.findFirst.mockResolvedValueOnce({ id: 801, status: 'sent' });
+    // The accept-write.
+    prisma.itinerary.update.mockResolvedValueOnce({
+      id: 801,
+      status: 'accepted',
+      contactId: 55,
+      tripId: null,
+      subBrand: 'tmc',
+      totalAmount: 12500,
+      currency: 'INR',
+    });
+    // autoCreateWebCheckinsForItinerary: no flight items → no fan-out.
+    // (prisma.itineraryItem.findMany already returns [] from beforeEach.)
+    const app = makeApp(travelItinerariesRouter, '/api/travel');
+    await withEmitSpy(async (emitSpy) => {
+      const res = await request(app)
+        .post('/api/travel/itineraries/801/accept')
+        .send({});
+      expect(res.status).toBe(200);
+      const call = findCall(emitSpy, 'itinerary.accepted');
+      expect(call).toBeTruthy();
+      expect(call[1]).toMatchObject({
+        id: 801,
+        contactId: 55,
+        subBrand: 'tmc',
+        totalAmount: 12500,
+        currency: 'INR',
+        tenantId: 1,
+      });
+      expect(call[1].acceptedAt).toBeDefined();
+      expect(call[2]).toBe(1);
+    });
   });
 });

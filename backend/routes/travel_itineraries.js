@@ -620,6 +620,33 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
       console.error("[travel-itin] webcheckin auto-create error (non-fatal):", e.message);
     }
 
+    // #929 Part B — fire-and-forget webhook emission on customer accept.
+    // Subscribers (Callified.ai, partner SaaSes) can trigger downstream
+    // booking workflows (supplier PO creation, payment-request issuance,
+    // arrival pre-checks) without polling. Mirror of canonical pattern
+    // from billing.js wave-6a (payment.collected) + travel_visa.js tick
+    // #36 (visa.status_changed) + estimates.js tick #37 (quote.sent).
+    // Fire-and-forget — subscriber failures NEVER 500 the response.
+    try {
+      const eventBus = require("../lib/eventBus");
+      eventBus.emitEvent(
+        "itinerary.accepted",
+        {
+          id: updated.id,
+          contactId: updated.contactId || null,
+          tripId: updated.tripId || null,
+          subBrand: updated.subBrand || null,
+          totalAmount: updated.totalAmount || null,
+          currency: updated.currency || null,
+          tenantId: req.travelTenant.id,
+          acceptedAt: new Date().toISOString(),
+        },
+        req.travelTenant.id,
+      ).catch((err) => console.warn("[travel-itin/accept] itinerary.accepted emit failed:", err.message));
+    } catch (emitErr) {
+      console.warn("[travel-itin/accept] itinerary.accepted setup failed:", emitErr.message);
+    }
+
     res.json(updated);
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

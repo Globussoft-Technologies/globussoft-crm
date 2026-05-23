@@ -637,7 +637,31 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **DateRangePicker DRY loop CLOSED: 3 of 3 callers migrated** ✅ (rule-of-3 success across ticks #27-#29)
 - **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining** (all PRD-covered)
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **30 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
+**Tick #30 (cron) — 3/3 SHIPPED, 2 new PRDs + #838 closed:**
+
+| SHA | Type | What |
+|---|---|---|
+| `d7f0c34` | New PRD (31st) | **`docs/PRD_ZYLU_GAP_CONSOLIDATED.md`** (252 lines) — **coordinating PRD for 8 Zylu-parity issues** (#771 #775 #788 #805 #809 #816 #834 #835 — all OPEN). 23 FRs across 6 themed groups (POS / Inventory / Memberships / Wallet / Attendance / MiniSite); 8 DDs; 8 OQs; 11 ACs; 3 cred-chase markers. **Key finding: 9 of 10 surfaces have existing Prisma models** (Wallet/WalletTransaction line 3431/3447, MembershipPlan/Membership/MembershipRedemption 3218/3240/3273, Product/ProductCategory/Vendor, InventoryReceipt/InventoryAdjustment, Attendance, Invoice). **Only Microsite is net-new.** Most gaps are wiring + UI, not data modeling — significantly lowers effort estimates. Sibling overlap with PRD_WELLNESS_POS_HARDENING (#771 #775) + PRD_TRAVEL_PER_SUBBRAND_BRANDING (#809). **Refs all 8.** |
+| `fc4c8e5` | Small fix #838 | **Dedicated Prescriptions tab with Active/Past status + filter chips** — new `Prescriptions` tab + `PrescriptionsListTab` component + `RxStatusBadge` + `derivePrescriptionStatus()` + `parseDurationDays()` helpers. **Active-derivation method:** parses `duration` token from drugs JSON (N days/weeks/months); falls back to 30-day default when no parseable duration. Status = `createdAt + max(drug.duration) >= today`. Filter chips: Active (default) / Past / All with live counts. 14→20 PatientDetail tests pass. **Closes #838.** TODO comment flags future Prescription.endDate migration (DD-worthy for next tick). |
+| `16e8b9c` | New PRD (32nd) | **`docs/PRD_UNIFIED_GLOBAL_SEARCH.md`** (261 lines, #851 P2). 7 FR groups (surface / entities / ranking / backend / perf / RBAC / frontend); 6 DDs (notably DD-5.1 per-entity Prisma vs full-text engine); 8 OQs; 10 ACs. **§1.2 inventory caught CommandPalette.jsx as instance of "client-side aggregation over paginated endpoint" antipattern** (standing-rule violation in existing code, surfaced for future fix). Sibling PRDs: PRD_WELLNESS_RBAC (role-aware entity filtering) + PRD_TRAVEL_SECURITY_ARCHITECTURE (PII payload concerns). **Refs #851.** |
+
+**Three cron-learning candidates surfaced:**
+
+1. **§1.2 existing-infra audit consistently reveals "wiring-not-modeling" gap** — Agent 1's PRD found 9 of 10 surfaces have existing Prisma models. This is now the **4th coordinating-PRD instance** where §1.2 cuts effort estimates significantly. Promotable to standing rule for any PRD-writer dispatch: "lead with existing-infrastructure inventory; effort estimates without this audit will be inflated."
+
+2. **Prescription.drugs stores free-text duration** (Agent 2) — would benefit from migration to explicit `endDate DateTime?` column with backfill from current free-text parsing. 1st instance; flag for review.
+
+3. **PRD writing surfaces standing-rule violations as side-effect** (Agent 3) — §1.2 audit caught CommandPalette's paginated-aggregation antipattern. Worth promoting: "PRD §1.2 existing-infra audits should explicitly call out standing-rule violations they encounter; gives future engineering pickup a free correctness fix."
+
+**Cumulative session totals (30 ticks):**
+- **93 commits** (+4 this tick: 2 PRDs + 1 fix + verdict pending)
+- **20 GitHub issues closed + 2 partials** (added #838)
+- 10 phantoms + 13 gaps + 1 self-regression caught
+- Zero rebase conflicts, zero over-commits across all 93 commits
+- **32 PRDs shipped + 1 meta-doc** (added PRD_ZYLU_GAP_CONSOLIDATED + PRD_UNIFIED_GLOBAL_SEARCH)
+- **+6 new vitest cases** (PatientDetail #838 Prescriptions tab)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **32 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

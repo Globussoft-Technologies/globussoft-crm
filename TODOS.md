@@ -499,6 +499,23 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining**
 - **+2 vitest cases** (payments.spec.js date-filter coverage)
 
+**Tick #24 (cron) — SINGLE-AGENT TRIAGE, deploy gate RED on `7348c9b` repaired:**
+
+| SHA | Type | What |
+|---|---|---|
+| `646e3a5` | Triage fix | **Deploy gate RED on `7348c9b`** (tick #23 #846 Payments date filter). `frontend_unit_tests` job failed: `Payments.test.jsx:179` asserted `getAllByText(/^Pending$/).length >= 2` but the tick #23 change updated StatCard labels from `"Pending"` → `"Pending (Last 30 days)"`. Anchored regex stopped matching parenthesized labels (only 1 match — the row badge). **Root cause:** Agent 3 added window-text to all 3 StatCards but window context was already established by Total Collected's rightAccessory pill (W/30D/90D/Y) + code comments at line 484-485. **Fix:** revert Pending + Failed labels to plain strings (kept Total Collected's window suffix since it has the pill). 2-line revert; 11/11 cases pass locally. |
+
+**Triage cron-learning candidate (worth standing-rule consideration):**
+
+**Local-test-before-push gate** — tick #23's #846 fix was implemented + spec-extended but `Payments.test.jsx` (a SIBLING spec file) was not run before push. The agent ran `payments.spec.js` (date-filter spec it ADDED) but not `Payments.test.jsx` (existing component test). Standing rule: when modifying a frontend page, run BOTH `*.test.jsx` for that page AND any new `*.spec.js` extension. The existing `feedback_local_test_before_push` memory covers backend specs; should be extended to frontend component tests with same discipline.
+
+**Cumulative session totals (24 ticks):**
+- **69 commits** (+1 this tick: triage fix)
+- **11 GitHub issues closed + 2 partials** (no new closures; #846 stays closed; triage repaired tick #23 regression)
+- 10 phantoms + 13 schema-or-spec gaps + **1 self-introduced regression caught at gate** (turnaround: tick #23 land → tick #24 catch + fix = ~30 min)
+- Zero rebase conflicts, zero over-commits across all 69 commits
+- 25 PRDs + 1 meta-doc unchanged this tick
+
 **PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **25 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |

@@ -169,6 +169,10 @@ model Tenant {
   travelQuotes             TravelQuote[]
   travelInvoices           TravelInvoice[]
   travelSuppliers          TravelSupplier[]
+  // Per-sub-brand brand kits (PRD_TRAVEL_PER_SUBBRAND_BRANDING DD-5.2
+  // [RESOLVED 2026-05-24]) — versioned brand-asset storage forked out of
+  // subBrandConfigJson. See BrandKit model at bottom of file.
+  brandKits                BrandKit[]
   // Sub-brand config (Q9, Q14, Q21) — JSON keyed by sub-brand storing
   // per-brand WhatsApp number / Wati WABA id / legal entity / GSTIN /
   // Drive folder root / microsite domain. Nullable; sub-brands without
@@ -4754,4 +4758,52 @@ model TravelSupplier {
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, supplierCategory])
+}
+
+// ── Per-sub-brand brand kit (PRD_TRAVEL_PER_SUBBRAND_BRANDING DD-5.2 [RESOLVED 2026-05-24]) ──
+//
+// Per the 2026-05-24 product-call session, brand-kit storage forks from the
+// Tenant.subBrandConfigJson blob into a dedicated BrandKit model. Each
+// (tenantId, subBrand) pair can have multiple versions; only one is
+// isActive=true at a time per (tenantId, subBrand). Version history retained
+// (DD-5.6: last 10 versions per sub-brand; older purged by future cron).
+//
+// Consumer surfaces: per-sub-brand theme application (THEME_MANAGEMENT),
+// wellness mini-site editor (ZYLU MINI-001), marketing flyer studio
+// (MARKETING_FLYER), travel invoice PDF templates, customer portal headers.
+model BrandKit {
+  id             Int      @id @default(autoincrement())
+  tenantId       Int
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Sub-brand scope (Q25 — required for travel-vertical). For non-travel
+  // tenants (generic / wellness), subBrand stays null = tenant-wide default.
+  subBrand       String?  @db.VarChar(50)
+  // Version number — increments on every save. Latest version per
+  // (tenantId, subBrand) is the active one. Older versions kept for revert
+  // (DD-5.6 retention policy: last 10 versions; future cron purges).
+  version        Int      @default(1)
+  isActive       Boolean  @default(false)
+  // Brand assets
+  logoUrl        String?  @db.VarChar(500) // light-mode logo
+  logoDarkUrl    String?  @db.VarChar(500) // dark-mode logo (DD-5.5 — required when light inverts poorly)
+  faviconUrl     String?  @db.VarChar(500)
+  // Brand colors (hex; WCAG checked at save time per DD-5.5e)
+  primaryColor   String?  @db.VarChar(20)
+  secondaryColor String?  @db.VarChar(20)
+  accentColor    String?  @db.VarChar(20)
+  bgColor        String?  @db.VarChar(20)
+  textColor      String?  @db.VarChar(20)
+  // Typography (DD-5.1: Google Fonts only for v1)
+  fontFamily     String?  @db.VarChar(100) // e.g. "Inter, sans-serif"
+  fontUrl        String?  @db.VarChar(500) // Google Fonts URL when used
+  // Copy
+  tagline        String?  @db.VarChar(200)
+  // Audit
+  createdBy      Int? // userId who saved this version (FK omitted — User model has too many relations already; SetNull semantics via app)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, subBrand, version])
+  @@index([tenantId, subBrand, isActive])
+  @@index([tenantId, isActive])
 }

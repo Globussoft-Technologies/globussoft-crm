@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
@@ -6,6 +6,7 @@ import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
 import { formatDate } from '../../utils/date';
 import { currencySymbol, formatMoney } from '../../utils/money';
+import DateRangePicker, { effectiveRangeFor } from '../../components/DateRangePicker';
 
 const tabStyle = (active) => ({
   padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--accent-color)' : 'transparent',
@@ -328,16 +329,67 @@ function CaseHistoryTab({ patient }) {
   // #278: clicking an Rx card pops a detail modal with all fields + PDF download.
   const [openRx, setOpenRx] = useState(null);
 
-  const events = [
+  // #837 (cron tick #27 / Agent 1) — date-range filter for the case-history
+  // timeline. Filters the merged visits + prescriptions + consents stream by
+  // each event's date. Defaults to 'all' because case history is naturally
+  // retrospective: a clinician opening the tab wants the full record, not
+  // just today (unlike Payments/InventoryReceipts where 'today' is the more
+  // useful landing window). Operator can narrow via the dropdown.
+  const [dateState, setDateState] = useState({ preset: 'all', customFrom: '', customTo: '' });
+  const range = effectiveRangeFor(dateState);
+
+  const allEvents = useMemo(() => [
     ...patient.visits.map((v) => ({ kind: 'visit', date: v.visitDate, data: v })),
     ...patient.prescriptions.map((p) => ({ kind: 'rx', date: p.createdAt, data: p })),
     ...patient.consents.map((c) => ({ kind: 'consent', date: c.signedAt, data: c })),
-  ].sort((a, b) => new Date(b.date) - new Date(a.date));
+  ].sort((a, b) => new Date(b.date) - new Date(a.date)),
+  [patient.visits, patient.prescriptions, patient.consents]);
 
-  if (events.length === 0) return <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No case history yet.</div>;
+  // #837 — apply the date filter client-side. range.from/to are ISO date-only
+  // strings (YYYY-MM-DD) in the browser's local TZ; widen `to` to end-of-day
+  // so an event timestamped at 18:00 on the selected `to` date is still in
+  // window. Empty range (preset='all' or custom-mode with blank inputs)
+  // passes everything through.
+  const events = useMemo(() => {
+    const fromTs = range.from ? new Date(`${range.from}T00:00:00`).getTime() : -Infinity;
+    const toTs = range.to ? new Date(`${range.to}T23:59:59.999`).getTime() : Infinity;
+    if (!range.from && !range.to) return allEvents;
+    return allEvents.filter((e) => {
+      const ts = new Date(e.date).getTime();
+      return ts >= fromTs && ts <= toTs;
+    });
+  }, [allEvents, range.from, range.to]);
+
+  // #837 — date-filter pill always renders (even when the patient has no
+  // events) so the affordance is discoverable; the empty-state message
+  // distinguishes between "no history at all" vs "no history in this window."
+  const dateFilter = (
+    <DateRangePicker
+      id="rx-history-date-preset"
+      label="Filter by date:"
+      value={dateState}
+      onChange={setDateState}
+      presets={['today', 'yesterday', 'week7', 'last30', 'month', 'all', 'custom']}
+    />
+  );
+
+  if (allEvents.length === 0) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        {dateFilter}
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No case history yet.</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      {dateFilter}
+      {events.length === 0 && (
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          No prescriptions, visits, or consents in this window. Broaden the range to see more.
+        </div>
+      )}
       {events.map((e, i) => {
         const clickable = e.kind === 'rx';
         return (

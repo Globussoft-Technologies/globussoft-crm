@@ -94,6 +94,74 @@ function formatDate(value) {
   }
 }
 
+// #846 — date-range presets for the transactions filter + the Total Collected
+// KPI window. Each preset resolves to `{from, to}` ISO date-only strings (or
+// `{from: null, to: null}` for "All time"). Kept module-scope so the same
+// table renders for the table filter dropdown AND the KPI pill control.
+function toIsoDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function rangeFromPreset(preset) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  switch (preset) {
+    case 'today':
+      return { from: toIsoDate(today), to: toIsoDate(today) };
+    case 'yesterday': {
+      const y = new Date(today);
+      y.setDate(today.getDate() - 1);
+      return { from: toIsoDate(y), to: toIsoDate(y) };
+    }
+    case 'week7': {
+      const f = new Date(today);
+      f.setDate(today.getDate() - 6);
+      return { from: toIsoDate(f), to: toIsoDate(today) };
+    }
+    case 'month': {
+      const f = new Date(today.getFullYear(), today.getMonth(), 1);
+      return { from: toIsoDate(f), to: toIsoDate(today) };
+    }
+    case 'last30': {
+      const f = new Date(today);
+      f.setDate(today.getDate() - 29);
+      return { from: toIsoDate(f), to: toIsoDate(today) };
+    }
+    case 'last90': {
+      const f = new Date(today);
+      f.setDate(today.getDate() - 89);
+      return { from: toIsoDate(f), to: toIsoDate(today) };
+    }
+    case 'year': {
+      const f = new Date(today);
+      f.setDate(today.getDate() - 364);
+      return { from: toIsoDate(f), to: toIsoDate(today) };
+    }
+    case 'all':
+    default:
+      return { from: null, to: null };
+  }
+}
+
+const TABLE_PRESETS = [
+  { value: 'all',       label: 'All time' },
+  { value: 'today',     label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'week7',     label: 'Last 7 days' },
+  { value: 'month',     label: 'This month' },
+  { value: 'custom',    label: 'Custom…' },
+];
+
+const KPI_PRESETS = [
+  { value: 'week7',  label: 'W',   title: 'Last 7 days' },
+  { value: 'last30', label: '30D', title: 'Last 30 days' },
+  { value: 'last90', label: '90D', title: 'Last 90 days' },
+  { value: 'year',   label: 'Y',   title: 'Last 12 months' },
+];
+
 export default function Payments() {
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
@@ -105,6 +173,22 @@ export default function Payments() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
+
+  // #846 — date-range filter state for the transactions table. `preset`
+  // drives the dropdown UI; `customFrom`/`customTo` are only meaningful when
+  // preset === 'custom'. The effective range used for fetching is computed
+  // by `effectiveRange` below and persists across the Stripe / Razorpay tab
+  // switches (the tab is gateway-only filtering, applied client-side).
+  const [datePreset, setDatePreset] = useState('all');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+
+  // #846 — Time-range window for the "Total Collected" KPI card. Independent
+  // from the table filter so the operator can keep the KPI on its trailing-
+  // 30-day default while drilling into a specific day's transactions in the
+  // table below. Pending + Failed cards follow the same window so the three
+  // KPIs read as one consistent header (per issue's "follow same range").
+  const [kpiWindow, setKpiWindow] = useState('last30');
 
   // #895 — Record Payment drawer state. Operator-facing /payments previously
   // had no way to capture a cash/UPI/manual receipt — the page was read-only
@@ -120,9 +204,23 @@ export default function Payments() {
     reference: '',
   });
 
+  // #846 — compute the effective {from, to} range to send to the backend.
+  // For non-'custom' presets, derive from rangeFromPreset(); for 'custom',
+  // use the user-typed inputs (both must be set; otherwise treat as no
+  // range — same shape as preset='all').
+  const effectiveRange = useMemo(() => {
+    if (datePreset === 'custom') {
+      return {
+        from: customFrom || null,
+        to: customTo || null,
+      };
+    }
+    return rangeFromPreset(datePreset);
+  }, [datePreset, customFrom, customTo]);
+
   useEffect(() => {
-    loadAll();
-  }, []);
+    loadAll(effectiveRange);
+  }, [effectiveRange.from, effectiveRange.to]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // #895 — fetch the open-invoice list once for the picker. Kept separate
   // from loadAll() so a Refresh-payments click doesn't re-fetch invoices
@@ -152,12 +250,20 @@ export default function Payments() {
     setForm({ invoiceId: '', amount: '', method: 'cash', reference: '' });
   };
 
-  async function loadAll() {
+  async function loadAll(range) {
     setLoading(true);
     setError('');
     try {
+      // #846 — build /api/payments query with optional from/to. Omit the
+      // params entirely when the range is empty so the backend returns
+      // unfiltered (preserves the pre-#846 default behaviour).
+      const params = new URLSearchParams();
+      if (range && range.from) params.set('from', range.from);
+      if (range && range.to) params.set('to', range.to);
+      const qs = params.toString();
+      const listUrl = qs ? `/api/payments?${qs}` : '/api/payments';
       const [list, cfg] = await Promise.all([
-        fetchApi('/api/payments').catch(() => []),
+        fetchApi(listUrl).catch(() => []),
         fetchApi('/api/payments/config').catch(() => null),
       ]);
       setPayments(Array.isArray(list) ? list : []);
@@ -203,7 +309,7 @@ export default function Payments() {
       });
       notify.success('Payment recorded');
       closeCreate();
-      loadAll();
+      loadAll(effectiveRange);
     } catch (err) {
       notify.error(err.message || 'Failed to record payment');
     } finally {
@@ -216,14 +322,22 @@ export default function Payments() {
     return payments.filter(p => String(p.gateway || '').toLowerCase() === tab);
   }, [payments, tab]);
 
+  // #846 — KPI stats honour the selected `kpiWindow` (W / 30D / 90D / Y).
+  // Collected sums SUCCESS amounts whose paidAt (or createdAt fallback)
+  // falls within the window; Pending and Failed are row counts within
+  // the same window for consistency. When the operator narrows the table
+  // by date too, `payments` is already a subset, so the KPIs naturally
+  // reflect whichever is more restrictive (window intersect table-range).
   const stats = useMemo(() => {
-    const now = Date.now();
-    const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+    const { from, to } = rangeFromPreset(kpiWindow);
+    const fromTs = from ? new Date(from).getTime() : -Infinity;
+    const toTs = to ? new Date(`${to}T23:59:59.999`).getTime() : Infinity;
     let collected = 0, pending = 0, failed = 0;
     for (const p of payments) {
+      const ts = p.paidAt ? new Date(p.paidAt).getTime() : new Date(p.createdAt).getTime();
+      if (ts < fromTs || ts > toTs) continue;
       if (p.status === 'SUCCESS') {
-        const ts = p.paidAt ? new Date(p.paidAt).getTime() : new Date(p.createdAt).getTime();
-        if (ts >= thirtyDaysAgo) collected += Number(p.amount || 0);
+        collected += Number(p.amount || 0);
       } else if (p.status === 'PENDING') {
         pending += 1;
       } else if (p.status === 'FAILED') {
@@ -231,7 +345,12 @@ export default function Payments() {
       }
     }
     return { collected, pending, failed };
-  }, [payments]);
+  }, [payments, kpiWindow]);
+
+  const kpiWindowLabel = useMemo(() => {
+    const found = KPI_PRESETS.find(p => p.value === kpiWindow);
+    return found ? found.title : '';
+  }, [kpiWindow]);
 
   // ── Render ─────────────────────────────────────────────────────
   return (
@@ -268,7 +387,7 @@ export default function Payments() {
             Record Payment
           </button>
           <button
-            onClick={loadAll}
+            onClick={() => loadAll(effectiveRange)}
             disabled={loading}
             style={{
               ...GLASS,
@@ -361,30 +480,61 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
         </div>
       )}
 
-      {/* Stats row */}
+      {/* Stats row — #846: KPI window selector (W/30D/90D/Y pill) on the
+          Total Collected card. Pending + Failed follow the same window per
+          the issue's "ideally follow same range" note. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard
           icon={<DollarSign size={20} />}
-          label="Total Collected (30d)"
+          label={`Total Collected (${kpiWindowLabel})`}
           value={formatMoney(stats.collected)}
           color="#10b981"
+          rightAccessory={(
+            <div role="group" aria-label="Total Collected window" style={{ display: 'inline-flex', gap: '0.2rem' }}>
+              {KPI_PRESETS.map(p => (
+                <button
+                  key={p.value}
+                  type="button"
+                  title={p.title}
+                  aria-pressed={kpiWindow === p.value}
+                  onClick={() => setKpiWindow(p.value)}
+                  style={{
+                    padding: '0.2rem 0.45rem',
+                    borderRadius: '6px',
+                    fontSize: '0.7rem',
+                    fontWeight: 600,
+                    border: kpiWindow === p.value ? '1px solid #10b98180' : '1px solid rgba(255,255,255,0.12)',
+                    background: kpiWindow === p.value ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.04)',
+                    color: kpiWindow === p.value ? '#10b981' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          )}
         />
         <StatCard
           icon={<Clock size={20} />}
-          label="Pending"
+          label={`Pending (${kpiWindowLabel})`}
           value={stats.pending}
           color="#f59e0b"
         />
         <StatCard
           icon={<XCircle size={20} />}
-          label="Failed"
+          label={`Failed (${kpiWindowLabel})`}
           value={stats.failed}
           color="#ef4444"
         />
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+      {/* Tabs + date-range filter — #846: date filter sits next to gateway
+          tabs so an operator can narrow by date AND gateway at the same time.
+          The date selection persists across All / Stripe / Razorpay clicks
+          (the tab filters payments client-side; date filtering is server-
+          side and re-fetches on change). */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
         {['all', 'stripe', 'razorpay'].map(t => (
           <button
             key={t}
@@ -404,6 +554,66 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
             {t === 'all' ? 'All' : t}
           </button>
         ))}
+
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', marginLeft: 'auto' }}>
+          <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }} htmlFor="payments-date-preset">
+            Date:
+          </label>
+          <select
+            id="payments-date-preset"
+            value={datePreset}
+            onChange={(e) => setDatePreset(e.target.value)}
+            aria-label="Filter transactions by date"
+            style={{
+              padding: '0.45rem 0.7rem',
+              borderRadius: '8px',
+              background: 'rgba(255,255,255,0.05)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              color: 'var(--text-primary)',
+              fontSize: '0.82rem',
+              cursor: 'pointer',
+            }}
+          >
+            {TABLE_PRESETS.map(p => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+          {datePreset === 'custom' && (
+            <>
+              <input
+                type="date"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                aria-label="From date"
+                style={{
+                  padding: '0.4rem 0.5rem',
+                  borderRadius: '6px',
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.8rem',
+                  colorScheme: 'dark',
+                }}
+              />
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>→</span>
+              <input
+                type="date"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                aria-label="To date"
+                style={{
+                  padding: '0.4rem 0.5rem',
+                  borderRadius: '6px',
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.8rem',
+                  colorScheme: 'dark',
+                }}
+              />
+            </>
+          )}
+        </div>
       </div>
 
       {/* Payments table */}
@@ -743,7 +953,7 @@ function Td({ children, onClick }) {
   return <td onClick={onClick} style={{ padding: '0.75rem 1rem', verticalAlign: 'middle' }}>{children}</td>;
 }
 
-function StatCard({ icon, label, value, color }) {
+function StatCard({ icon, label, value, color, rightAccessory }) {
   const bgAlpha = color === '#10b981' ? '0.08' : color === '#f59e0b' ? '0.08' : '0.08';
   const getBgColor = () => {
     if (color === '#10b981') return 'rgba(16,185,129,0.1)';
@@ -791,6 +1001,9 @@ function StatCard({ icon, label, value, color }) {
             {icon}
           </div>
           <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', fontWeight: 600 }}>{label}</span>
+          {rightAccessory && (
+            <span style={{ marginLeft: 'auto' }}>{rightAccessory}</span>
+          )}
         </div>
         <div style={{ fontSize: '2.2rem', fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
       </div>

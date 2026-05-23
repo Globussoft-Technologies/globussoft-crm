@@ -920,6 +920,22 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 
 **10 lean ticks total** (2 GH-triage + 8 code/docs). GH triage continues to be productive — Travel Security audit had filed-twice + PRD-already-covered issues that cleanly close.
 
+**Tick #45 (cron) — 1/1 SHIPPED, PRD_DARK_MODE_CLUSTER §10 drift cleanup:**
+
+| SHA | Type | What |
+|---|---|---|
+| `ec06101` | PRD drift fix | **`PRD_DARK_MODE_CLUSTER.md` §10 audit table flipped** for 5 closures from this session that hadn't been reflected. ✅ flipped: #866 (cascade-resolved tick #17), #868 (FOUC fix tick #19), #881 (modals tick #16), #883 (Sidebar tick #15). 🟡 PARTIAL flipped: #880 (forms tick #18 — 3 residual JSX literals need Phase 1 refactor). Header counts updated 7→11 closed; 10→6 open with 3 partials. Per-issue table updated with commit SHAs + close notes. Added "This session's closures" callout in §10.1. +16/-9. Pure docs drift-cleanup — next product review now reads accurate cluster state. |
+
+**Cumulative session totals (45 ticks):**
+- **121 commits** (+2 this tick: 1 PRD update + verdict)
+- **26 GitHub issues closed + 3 partials** (no new GH closes this tick — the 5 PRD flips were of issues already closed in prior ticks)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings + 2 dupe-or-PRD-covered closures
+- Zero rebase conflicts, zero over-commits
+- **34 PRDs + 1 meta-doc + 1 synthesis + 1 JSDoc + 1 partner-doc**
+- **+36 vitest cases lifetime**
+
+**11 lean ticks total** (2 GH-triage + 9 code/docs). PRD §10 drift cleanup is a valid lean-tick shape — keeps coordinating-PRD reality in sync with shipped code so next product review session reads accurate state.
+
 **🎯 40-tick milestone reached.** Lean-mode pattern (`+1 small concrete win per tick`) is the sustainable cadence for the cron's mature phase. This session has produced:
 - **34 PRDs covering all multi-day work** (118+ pending product decisions consolidated)
 - **Complete Travel + Wellness lifecycle webhook surface** (5 new emissions + comprehensive JSDoc catalogue)

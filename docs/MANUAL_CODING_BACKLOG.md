@@ -13,6 +13,8 @@ These are architecture changes whose **first hour is a meeting, not a commit**. 
 ### A1. Move JWT from localStorage to HttpOnly cookies
 **Labels:** `needs-design-call`, `security`, `cross-cutting`
 
+**PRD:** [PRD_TRAVEL_SECURITY_ARCHITECTURE.md](PRD_TRAVEL_SECURITY_ARCHITECTURE.md) §3.1 FR-3.1 (auth model migration — closes #914 #915 #924) + §5 design decisions + §9 OQ-9.4 (OAuth callback SameSite collision).
+
 **Why manual:** touches every E2E spec + every frontend page that reads the token + every API consumer. Auto-shipping breaks ~50 specs and the demo simultaneously.
 
 **Design call topics:**
@@ -31,6 +33,8 @@ These are architecture changes whose **first hour is a meeting, not a commit**. 
 ### A2. CSP `unsafe-inline` removal — adopt nonce strategy
 **Labels:** `needs-design-call`, `security`, `cross-cutting`
 
+**PRD:** [PRD_TRAVEL_SECURITY_ARCHITECTURE.md](PRD_TRAVEL_SECURITY_ARCHITECTURE.md) §3.2 FR-3.2 (CSP hardening — closes #917 #923).
+
 **Why manual:** every inline `<script>` and `<style>` in the React-rendered HTML needs a per-request nonce; Vite's dev server doesn't emit them; needs build-step changes too.
 
 **Design call topics:**
@@ -47,6 +51,8 @@ These are architecture changes whose **first hour is a meeting, not a commit**. 
 
 ### A3. Sequential IDs → opaque IDs across travel models
 **Labels:** `needs-design-call`, `security`, `cross-cutting`, `schema-migration`
+
+**PRD:** [PRD_TRAVEL_SECURITY_ARCHITECTURE.md](PRD_TRAVEL_SECURITY_ARCHITECTURE.md) §3.3 FR-3.3 (IDOR mitigation — closes #918).
 
 **Why manual:** the schema is full of `Int @id @default(autoincrement())`. Replacing with UUIDs / hashids / per-tenant slugs is a multi-week migration touching every route handler + every E2E spec.
 
@@ -65,6 +71,8 @@ These are architecture changes whose **first hour is a meeting, not a commit**. 
 
 ### A4. IDOR audit — defense pattern across all travel routes
 **Labels:** `needs-design-call`, `security`, `multi-day-feature`
+
+**PRD:** [PRD_TRAVEL_SECURITY_ARCHITECTURE.md](PRD_TRAVEL_SECURITY_ARCHITECTURE.md) §3.4 FR-3.4 (tenant scoping completeness audit — closes #919) + §3.5 FR-3.5 (PII payload reduction — closes #920).
 
 **Why manual:** each route currently has its own `tenantWhere` / `requireXAccess` boilerplate; some are duplicated, some are missing edge cases (e.g. PATCH path-param mismatches body-param). Need a unified middleware that enforces "this user can touch this entity" for every resource.
 
@@ -104,6 +112,8 @@ These are concrete feature specs. The Day-1 scaffold may be cron-doable, but the
 ### B2. Quote Builder (#900)
 **Labels:** `multi-day-feature`, `frontend`, `backend`, `travel`
 
+**PRD:** [PRD_TRAVEL_QUOTE_BUILDER.md](PRD_TRAVEL_QUOTE_BUILDER.md) — 6 design decisions (fork vs extend Quote/Estimate is DD-5.1, cross-ref Billing DD-5.1 + Supplier DD-5.1 — settle in single call).
+
 **Why manual:** line-items table + tax + discount + currency + PDF export + send-via-WA/email flow. Sits at `/quotes` (currently 404 per #886). ~5-7 days.
 
 **Acceptance criteria:**
@@ -119,6 +129,8 @@ These are concrete feature specs. The Day-1 scaffold may be cron-doable, but the
 ### B3. Phase 3 Visa Sure — route + UI + risk-flag engine
 **Labels:** `multi-day-feature`, `backend`, `frontend`, `travel`, `phase-3`
 
+**PRD:** [PRD_VISA_SURE_PHASE_3.md](PRD_VISA_SURE_PHASE_3.md) — V1-V19 spec. SHELL pages (Dashboard / Applications / Checklists / AdvisorDashboard / Reports) shipped across this session's earlier ticks; risk-flag engine SHELL at `9e8c28f`; real implementation pending PC-8 + cred-chase for AI assessment.
+
 **Why manual:** the whole Visa Sure sub-brand. Routes for `VisaApplication` already exist (schema models shipped); needs the operator UI + risk-flag engine + rejection-recovery workflow. ~2 weeks.
 
 **Acceptance criteria:**
@@ -132,6 +144,8 @@ These are concrete feature specs. The Day-1 scaffold may be cron-doable, but the
 
 ### B4. Chrome flight-quote plugin (browser extension)
 **Labels:** `multi-day-feature`, `chrome-extension`, `separate-repo`
+
+**PRD:** [PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md](PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md) — 6 design decisions including DC-1 (repo location — blocks scaffolding).
 
 **Why manual:** Manifest V3 browser extension. Lives in a SEPARATE repo (not `globussoft-crm`). Per-airline DOM adapters for IndiGo / Air India / Vistara / SpiceJet / etc. ~10-15 engineer-days.
 
@@ -149,6 +163,8 @@ These are concrete feature specs. The Day-1 scaffold may be cron-doable, but the
 ### B5. Airline web check-in automation (#P1B)
 **Labels:** `multi-day-feature`, `automation`, `travel`, `paired-with-B4`
 
+**PRD:** [PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md](PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md) — 6 design decisions including DC-1 (Playwright vs MCP — gates engineering scope) + DC-5 (per-airline ToS counsel review).
+
 **Why manual:** browser automation per airline (Playwright in production?). High maintenance burden — airlines change DOM weekly. ~5-7 days for MVP + ongoing maintenance.
 
 **Acceptance criteria:**
@@ -165,6 +181,8 @@ These are concrete feature specs. The Day-1 scaffold may be cron-doable, but the
 
 ### B6. Booking.com / Expedia direct API integration
 **Labels:** `multi-day-feature`, `backend`, `cred-dependent`, `phase-2`
+
+**PRD:** [PRD_BOOKING_EXPEDIA_DIRECT.md](PRD_BOOKING_EXPEDIA_DIRECT.md) — 7 design decisions including DC-1 (vendor priority — gates 2-4 week onboarding clock) + DC-4 (direct-book Phase 2 timing — demand-driven).
 
 **Why manual:** OAuth flow + inventory sync + booking lifecycle + cancellation/refund handling. ~7-10 days per provider. Cred-blocked too (need Booking.com partner account + Expedia EAN credentials).
 
@@ -237,6 +255,8 @@ These items are stub-mode-complete today. When the cred drops, an engineer needs
 ### C4. Q19 RateHawk — write client from scratch + RFU integration
 **Labels:** `cred-dependent`, `Q19`, `backend`, `multi-day-feature`
 
+**PRD:** [PRD_RATEHAWK_INTEGRATION.md](PRD_RATEHAWK_INTEGRATION.md) — 6 design decisions including DC-1 (pricing model — gates FR-10 cap design) + DC-4 (lowest-rate auto-pick tiebreaker).
+
 **Why manual:** **NO stub exists today** (unlike Q9/Q11/Q3). Need to write `backend/services/ratehawkClient.js` from scratch + wire into RFU unified-search lowest-rate auto-pick. ~3-5 days.
 
 **Acceptance criteria post-cred:**
@@ -251,6 +271,8 @@ These items are stub-mode-complete today. When the cred drops, an engineer needs
 ### C5. Q8 Excel Software for Travel — write accounting bridge
 **Labels:** `cred-dependent`, `Q8`, `backend`, `multi-day-feature`
 
+**PRD:** [PRD_EXCEL_SOFTWARE_ACCOUNTING.md](PRD_EXCEL_SOFTWARE_ACCOUNTING.md) — 6 design decisions including DC-1 (API path vs CSV path — gates transport-layer code). Doc-blocked (Yasin owes vendor REST spec before §3 can be specified concretely).
+
 **Why manual:** **NO docs yet** (chase Yasin for the API spec first). Once we have the REST docs, write `backend/services/excelSoftwareClient.js` + sync invoice/payment from CRM → Excel Software for reconciliation. ~3-5 days post-docs.
 
 **Acceptance criteria post-docs:**
@@ -264,6 +286,8 @@ These items are stub-mode-complete today. When the cred drops, an engineer needs
 ### C6. Q1 Callified.ai — AI calling + form-vs-call live mode
 **Labels:** `cred-dependent`, `Q1`, `backend`, `integration`
 
+**PRD:** [PRD_AI_CALLING_CALLIFIED.md](PRD_AI_CALLING_CALLIFIED.md) — 7 design decisions including DC-1 ($100/mo cap + 90s per-call ceiling), DC-3 (persona/script per sub-brand), DC-5 (TRAI disclosure — counsel-owned), DC-7 (per-tenant disable toggle).
+
 **Why manual:** waiting on Yasin's Callified.ai handover (creds + API docs). Once received, ~2-3 days to wire into the form-vs-call compute endpoint with real call recording.
 
 **Acceptance criteria post-handover:**
@@ -275,6 +299,8 @@ These items are stub-mode-complete today. When the cred drops, an engineer needs
 
 ### C7. Q1 AdsGPT — marketing reports integration
 **Labels:** `cred-dependent`, `Q1`, `backend`, `integration`
+
+**PRD:** [PRD_ADSGPT_MARKETING_REPORTS.md](PRD_ADSGPT_MARKETING_REPORTS.md) — 6 design decisions including DC-2 ($50/mo cap, hard stop) + DC-4 (per-sub-brand budget tracking).
 
 **Why manual:** waiting on AdsGPT handover. Once received, ~2-3 days to add `services/adsGptClient.js` + attribution wiring + marketing-report endpoints.
 

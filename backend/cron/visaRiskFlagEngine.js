@@ -45,6 +45,8 @@
 //   R8 FR-3.3   stale-intake            — status=intake + createdAt >7d
 //   R9 FR-3.2   rejected-reopen         — outcome=rejected + recent touch after decidedAt
 //   R10 FR-3.1(d) new-destination       — tenant has no prior filed app for this country
+//   R11 FR-3.1+3 complex-stale          — complexCase=true + updatedAt >5d (neglect risk)
+//   R12 FR-3.2   high-rejection-history — rejectionHistoryJson parsed length ≥2 (severity tier)
 //
 // Cadence: every 6 hours per the parallel-wave dispatch contract. PRD
 // §4 latency target is "< 15 min p95" which the production cron will hit
@@ -93,6 +95,23 @@ const REOPEN_WINDOW_DAYS = 30;
 const REOPEN_WINDOW_MS = REOPEN_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 const REOPEN_GRACE_MS = 60 * 1000; // 1 minute
 
+// R11 threshold — complex-case applications that haven't moved forward
+// in COMPLEX_STALE_DAYS days. Tighter than R7's 14d because complex
+// cases (visa work/student/hajj — i.e. the ones FR-3.1 explicitly calls
+// out as needing active advisor attention) shouldn't sit unattended.
+// 5d is a holding value pending PC-4 SLA sign-off; the production cron
+// will parameterise this per-applicationType once PC-4 lands.
+const COMPLEX_STALE_DAYS = 5;
+const COMPLEX_STALE_MS = COMPLEX_STALE_DAYS * 24 * 60 * 60 * 1000;
+
+// R12 threshold — high rejection-history count that severity-escalates
+// the basic R3 signal. R3 fires on ANY non-empty array (length ≥1);
+// R12 adds a "this applicant has compounding risk" signal when the
+// history has ≥2 entries. The exact tier-boundary (≥2 vs ≥3) and the
+// downstream priority mapping is a PC-3 design call; this is the
+// today-shippable proxy that surfaces the worst cases to advisors.
+const HIGH_REJECTION_HISTORY_THRESHOLD = 2;
+
 // SHELL evaluation — returns { flag, reasons[] } for a VisaApplication
 // row. Real engine replaces this with a rule-engine + LLM narrative once
 // PC-1..PC-5 resolve.
@@ -124,11 +143,21 @@ function evaluateRiskShell(app, now = Date.now(), context = {}) {
   }
 
   // R3 — FR-3.2 non-empty rejection history (defensive parse per §4 reliability)
+  //
+  // R12 — FR-3.2 severity-tier escalation: parsed length ≥ HIGH_REJECTION_
+  //   HISTORY_THRESHOLD adds a compounding-risk reason on TOP of R3's
+  //   base signal. Both fire together when the threshold is crossed —
+  //   advisors see both `rejection-history:N` (count) AND
+  //   `high-rejection-history:N` (severity tier) in the reason list,
+  //   which surfaces "worst cases first" in the Visa Sure queue.
   if (app.rejectionHistoryJson) {
     try {
       const parsed = JSON.parse(app.rejectionHistoryJson);
       if (Array.isArray(parsed) && parsed.length > 0) {
         reasons.push(`rejection-history:${parsed.length}`);
+        if (parsed.length >= HIGH_REJECTION_HISTORY_THRESHOLD) {
+          reasons.push(`high-rejection-history:${parsed.length}`);
+        }
       }
     } catch {
       // Malformed JSON — log non-fatally, treat as no history (per §4)
@@ -230,6 +259,25 @@ function evaluateRiskShell(app, now = Date.now(), context = {}) {
     !knownDestinations.has(app.destinationCountry)
   ) {
     reasons.push(`new-destination:${app.destinationCountry}`);
+  }
+
+  // R11 (FR-3.1 + FR-3.3 — neglect escalation) — complex-case row that
+  // hasn't been touched in COMPLEX_STALE_DAYS days. R2 fires on the
+  // mere presence of complexCase=true; R11 fires when an advisor has
+  // ALSO let the case go quiet for ≥5d, which is the neglect-risk
+  // failure mode for the hardest-to-process applications. Both R2 and
+  // R11 fire together when the threshold is crossed — the reason list
+  // carries `complex-case` (R2) AND `complex-stale:5d` (R11), giving
+  // the advisor queue a tier-1 sort signal.
+  //
+  // Schema fields read: complexCase, updatedAt (both present on
+  // VisaApplication). No PC-1 dependency.
+  if (
+    app.complexCase === true &&
+    app.updatedAt &&
+    now - new Date(app.updatedAt).getTime() > COMPLEX_STALE_MS
+  ) {
+    reasons.push(`complex-stale:${COMPLEX_STALE_DAYS}d`);
   }
 
   return { flag: reasons.length > 0, reasons };

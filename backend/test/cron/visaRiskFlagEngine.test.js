@@ -36,6 +36,12 @@
  *     - R10 new-destination: context.knownDestinations omitted → no flag (back-compat)
  *     - R10 new-destination: destinationCountry NOT in knownDestinations → flag
  *     - R10 new-destination: destinationCountry IN knownDestinations → no flag
+ *     - R11 complex-stale: complexCase=true + updatedAt >5d → flag (fires alongside R2)
+ *     - R11 complex-stale: complexCase=true + recent updatedAt → no R11 flag (R2 still fires)
+ *     - R11 complex-stale: complexCase=false + old updatedAt → no flag (complexCase gate)
+ *     - R12 high-rejection-history: parsed length ≥ 2 → flag (fires alongside R3)
+ *     - R12 high-rejection-history: parsed length = 1 → R3 only, no R12 escalation
+ *     - R12 high-rejection-history: parsed length = 3 → both R3 + R12 fire with correct counts
  */
 
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
@@ -593,5 +599,135 @@ describe('cron/visaRiskFlagEngine — evaluateRiskShell pure-function', () => {
     );
     expect(flag).toBe(false);
     expect(reasons).toEqual([]);
+  });
+
+  // ── R11 complex-stale ──────────────────────────────────────────────
+
+  test('R11 complex-stale: complexCase=true + updatedAt >5d → flag (fires alongside R2)', () => {
+    // 7d ago — past the 5d COMPLEX_STALE_DAYS threshold. R2 (complex-case)
+    // fires from the column presence; R11 (complex-stale) escalates with
+    // a neglect-risk reason. Both reasons land in the list together.
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const UPDATED = new Date('2026-05-16T00:00:00Z'); // 7d before NOW
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'pending', // keep R7 quiet (R7 fires on docs-pending/docs-collected)
+        readinessLevel: 1,
+        complexCase: true,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        updatedAt: UPDATED,
+      },
+      NOW,
+    );
+    expect(flag).toBe(true);
+    expect(reasons).toContain('complex-case'); // R2 sanity
+    expect(reasons).toContain('complex-stale:5d'); // R11
+  });
+
+  test('R11 complex-stale: complexCase=true + recent updatedAt → R2 only, no R11 escalation', () => {
+    // 2d ago — well within the 5d threshold. R2 still fires (complex-case
+    // column presence), but R11's neglect signal does NOT.
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const UPDATED = new Date('2026-05-21T00:00:00Z'); // 2d before NOW
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'pending',
+        readinessLevel: 1,
+        complexCase: true,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        updatedAt: UPDATED,
+      },
+      NOW,
+    );
+    expect(flag).toBe(true); // R2 still fires
+    expect(reasons).toContain('complex-case');
+    expect(reasons).not.toContain('complex-stale:5d');
+  });
+
+  test('R11 complex-stale: complexCase=false + old updatedAt → no R11 flag (complexCase gate)', () => {
+    // Old updatedAt on a NON-complex case → R11 must not fire. R7 stays
+    // quiet because status is 'pending' (not docs-pending/docs-collected).
+    const NOW = new Date('2026-05-23T00:00:00Z').getTime();
+    const UPDATED = new Date('2026-05-01T00:00:00Z'); // 22d before NOW
+    const { flag, reasons } = evaluateRiskShell(
+      {
+        applicationType: 'tourist',
+        status: 'pending',
+        readinessLevel: 1,
+        complexCase: false, // gate closed
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        updatedAt: UPDATED,
+      },
+      NOW,
+    );
+    expect(flag).toBe(false);
+    expect(reasons).not.toContain('complex-stale:5d');
+  });
+
+  // ── R12 high-rejection-history ─────────────────────────────────────
+
+  test('R12 high-rejection-history: parsed length ≥ 2 → flag (fires alongside R3)', () => {
+    // 2 prior rejections crosses HIGH_REJECTION_HISTORY_THRESHOLD. Both
+    // R3 (base history signal) and R12 (severity escalation) land in
+    // the reason list, surfacing this applicant as a compounding-risk
+    // case to the advisor queue.
+    const history = [
+      { country: 'US', date: '2024-01-01', reason: 'incomplete docs' },
+      { country: 'UK', date: '2024-06-01', reason: 'insufficient ties' },
+    ];
+    const { flag, reasons } = evaluateRiskShell({
+      applicationType: 'tourist',
+      readinessLevel: 1,
+      complexCase: false,
+      rejectionHistoryJson: JSON.stringify(history),
+      advisorRiskFlag: null,
+    });
+    expect(flag).toBe(true);
+    expect(reasons).toContain('rejection-history:2'); // R3
+    expect(reasons).toContain('high-rejection-history:2'); // R12
+  });
+
+  test('R12 high-rejection-history: parsed length = 1 → R3 fires, R12 does NOT escalate', () => {
+    // Single prior rejection — R3 base signal fires, but the severity
+    // tier (≥2) is not crossed, so R12 stays quiet.
+    const history = [
+      { country: 'US', date: '2024-01-01', reason: 'incomplete docs' },
+    ];
+    const { flag, reasons } = evaluateRiskShell({
+      applicationType: 'tourist',
+      readinessLevel: 1,
+      complexCase: false,
+      rejectionHistoryJson: JSON.stringify(history),
+      advisorRiskFlag: null,
+    });
+    expect(flag).toBe(true); // R3 still fires
+    expect(reasons).toContain('rejection-history:1');
+    expect(reasons).not.toContain('high-rejection-history:1');
+  });
+
+  test('R12 high-rejection-history: parsed length = 3 → both R3 + R12 fire with correct counts', () => {
+    // Three prior rejections — both reasons carry the actual count so
+    // advisor-queue sorting / dashboards can rank by severity tier AND
+    // raw count. Pins the format contract (`:${len}` suffix on both).
+    const history = [
+      { country: 'US', date: '2023-01-01', reason: 'incomplete docs' },
+      { country: 'UK', date: '2023-06-01', reason: 'insufficient ties' },
+      { country: 'CA', date: '2024-03-01', reason: 'misrepresentation' },
+    ];
+    const { flag, reasons } = evaluateRiskShell({
+      applicationType: 'tourist',
+      readinessLevel: 1,
+      complexCase: false,
+      rejectionHistoryJson: JSON.stringify(history),
+      advisorRiskFlag: null,
+    });
+    expect(flag).toBe(true);
+    expect(reasons).toContain('rejection-history:3');
+    expect(reasons).toContain('high-rejection-history:3');
   });
 });

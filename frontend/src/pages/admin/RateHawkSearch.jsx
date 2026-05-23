@@ -39,9 +39,6 @@ import { useEffect, useState } from "react";
 import {
   Hotel,
   AlertCircle,
-  CheckCircle2,
-  AlertTriangle,
-  Info,
   Search,
   MapPin,
   Calendar,
@@ -52,6 +49,11 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
 import { SUB_BRAND_IDS, subBrandLabel } from "../../utils/travelSubBrand";
+import {
+  CapStatusPill,
+  StubModeBanner,
+  CapExceededBanner,
+} from "../../components/CapBanners";
 
 // Sub-brand options — "(no sub-brand)" maps to the tenant-wide bucket.
 const SUB_BRAND_OPTIONS = [
@@ -71,16 +73,6 @@ function defaultCheckOut() {
   const d = new Date();
   d.setDate(d.getDate() + 10);
   return d.toISOString().slice(0, 10);
-}
-
-// Cents → USD helper (backend caps are USD cents).
-function centsToUsd(cents) {
-  return formatMoney((Number(cents) || 0) / 100, { currency: "USD" });
-}
-
-function formatPercent(p) {
-  if (!Number.isFinite(p)) return "0%";
-  return `${Math.round(p * 100)}%`;
 }
 
 export default function RateHawkSearch() {
@@ -192,13 +184,6 @@ export default function RateHawkSearch() {
     }
   };
 
-  // Cap pill color: green if <50%, amber if alertThreshold (80%+), red if !withinCap.
-  let capPillStyle = capPillGreen;
-  if (capStatus) {
-    if (!capStatus.withinCap) capPillStyle = capPillRed;
-    else if (capStatus.alertThreshold) capPillStyle = capPillAmber;
-  }
-
   const hotels = Array.isArray(searchResult?.hotels) ? searchResult.hotels : [];
 
   return (
@@ -252,41 +237,17 @@ export default function RateHawkSearch() {
           </p>
         </div>
         {/* Cap-status pill (ADMIN-only; silent for MANAGER) */}
-        {capStatusLoading ? null : capStatus ? (
-          <div
-            style={capPillStyle}
-            data-testid="ratehawk-cap-pill"
-            title={`${centsToUsd(capStatus.spentCents)} spent of ${centsToUsd(capStatus.capCents)} monthly cap`}
-          >
-            {capStatus.withinCap ? (
-              <CheckCircle2 size={13} aria-hidden />
-            ) : (
-              <AlertTriangle size={13} aria-hidden />
-            )}
-            <span>
-              {formatPercent(capStatus.percent)} of{" "}
-              {centsToUsd(capStatus.capCents)}/mo cap
-            </span>
-          </div>
-        ) : null}
+        {capStatusLoading ? null : (
+          <CapStatusPill cap={capStatus} testid="ratehawk-cap-pill" />
+        )}
       </header>
 
       {/* Cap-exceeded banner — fires when search returns 402 */}
-      {capExceeded && (
-        <div
-          style={capExceededBanner}
-          role="alert"
-          data-testid="ratehawk-cap-exceeded-banner"
-        >
-          <AlertTriangle size={18} aria-hidden />
-          <div>
-            <strong>Monthly RateHawk cap reached</strong> (
-            {centsToUsd(capExceeded.spentCents)} /{" "}
-            {centsToUsd(capExceeded.capCents)}). Increase the cap via Tenant
-            Settings, or wait for the monthly reset.
-          </div>
-        </div>
-      )}
+      <CapExceededBanner
+        cap={capExceeded}
+        providerLabel="RateHawk"
+        testid="ratehawk-cap-exceeded-banner"
+      />
 
       {/* Filter bar */}
       <div
@@ -402,19 +363,12 @@ export default function RateHawkSearch() {
 
       {/* Stub-mode banner — surfaces when backend client is still pre-cred */}
       {searchResult?.stub && (
-        <div
-          style={stubBanner}
-          role="status"
-          data-testid="ratehawk-stub-banner"
-        >
-          <Info size={18} aria-hidden />
-          <div>
-            <strong>Stub-mode response</strong> (Q19 cred pending) — RateHawk
-            partner onboarding is the unblock; real hotel inventory will
-            populate once the swap is done. The dashboard layout and contract
-            won&apos;t change.
-          </div>
-        </div>
+        <StubModeBanner testid="ratehawk-stub-banner">
+          <strong>Stub-mode response</strong> (Q19 cred pending) — RateHawk
+          partner onboarding is the unblock; real hotel inventory will populate
+          once the swap is done. The dashboard layout and contract won&apos;t
+          change.
+        </StubModeBanner>
       )}
 
       {/* Search result area */}
@@ -700,55 +654,4 @@ const starBadge = {
   color: "#f59e0b",
   border: "1px solid rgba(245, 158, 11, 0.5)",
   whiteSpace: "nowrap",
-};
-const capPillBase = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "6px 12px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 600,
-};
-const capPillGreen = {
-  ...capPillBase,
-  background: "rgba(34, 197, 94, 0.18)",
-  color: "#22c55e",
-  border: "1px solid #22c55e",
-};
-const capPillAmber = {
-  ...capPillBase,
-  background: "rgba(245, 158, 11, 0.18)",
-  color: "#f59e0b",
-  border: "1px solid #f59e0b",
-};
-const capPillRed = {
-  ...capPillBase,
-  background: "rgba(244, 63, 94, 0.18)",
-  color: "#f43f5e",
-  border: "1px solid #f43f5e",
-};
-const stubBanner = {
-  display: "flex",
-  alignItems: "flex-start",
-  gap: 10,
-  padding: "12px 14px",
-  marginBottom: 16,
-  borderRadius: 8,
-  background: "rgba(99, 102, 241, 0.12)",
-  border: "1px solid rgba(99, 102, 241, 0.45)",
-  color: "var(--text-primary)",
-  fontSize: 13,
-};
-const capExceededBanner = {
-  display: "flex",
-  alignItems: "flex-start",
-  gap: 10,
-  padding: "12px 14px",
-  marginBottom: 16,
-  borderRadius: 8,
-  background: "rgba(244, 63, 94, 0.12)",
-  border: "1px solid rgba(244, 63, 94, 0.45)",
-  color: "var(--text-primary)",
-  fontSize: 13,
 };

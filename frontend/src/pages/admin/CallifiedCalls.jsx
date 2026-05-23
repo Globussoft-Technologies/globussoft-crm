@@ -49,9 +49,6 @@ import {
   Phone,
   PhoneCall,
   AlertCircle,
-  CheckCircle2,
-  AlertTriangle,
-  Info,
   PhoneOff,
   Download,
   FileText,
@@ -59,24 +56,18 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
-import { formatMoney } from "../../utils/money";
 import { SUB_BRAND_IDS, subBrandLabel } from "../../utils/travelSubBrand";
+import {
+  CapStatusPill,
+  StubModeBanner,
+  CapExceededBanner,
+} from "../../components/CapBanners";
 
 // Sub-brand options — "(no sub-brand)" maps to the tenant-wide bucket.
 const SUB_BRAND_OPTIONS = [
   { value: "", label: "(no sub-brand)" },
   ...SUB_BRAND_IDS.map((id) => ({ value: id, label: subBrandLabel(id) })),
 ];
-
-// Cents → USD helper (backend caps are USD cents).
-function centsToUsd(cents) {
-  return formatMoney((Number(cents) || 0) / 100, { currency: "USD" });
-}
-
-function formatPercent(p) {
-  if (!Number.isFinite(p)) return "0%";
-  return `${Math.round(p * 100)}%`;
-}
 
 export default function CallifiedCalls() {
   const notify = useNotify();
@@ -251,13 +242,6 @@ export default function CallifiedCalls() {
     }
   };
 
-  // Cap pill color: green if <50%, amber if alertThreshold (80%+), red if !withinCap.
-  let capPillStyle = capPillGreen;
-  if (capStatus) {
-    if (!capStatus.withinCap) capPillStyle = capPillRed;
-    else if (capStatus.alertThreshold) capPillStyle = capPillAmber;
-  }
-
   // ── Feature-flag disabled state ────────────────────────────────────────
   // If GET /enabled returned { enabled: false }, render a full-page state
   // pointing at Tenant Settings rather than the action form.
@@ -389,41 +373,17 @@ export default function CallifiedCalls() {
           </p>
         </div>
         {/* Cap-status pill (ADMIN-only; silent for MANAGER) */}
-        {capStatusLoading ? null : capStatus ? (
-          <div
-            style={capPillStyle}
-            data-testid="callified-cap-pill"
-            title={`${centsToUsd(capStatus.spentCents)} spent of ${centsToUsd(capStatus.capCents)} monthly cap`}
-          >
-            {capStatus.withinCap ? (
-              <CheckCircle2 size={13} aria-hidden />
-            ) : (
-              <AlertTriangle size={13} aria-hidden />
-            )}
-            <span>
-              {formatPercent(capStatus.percent)} of{" "}
-              {centsToUsd(capStatus.capCents)}/mo cap
-            </span>
-          </div>
-        ) : null}
+        {capStatusLoading ? null : (
+          <CapStatusPill cap={capStatus} testid="callified-cap-pill" />
+        )}
       </header>
 
       {/* Cap-exceeded banner — fires when initiate returns 402 */}
-      {capExceeded && (
-        <div
-          style={capExceededBanner}
-          role="alert"
-          data-testid="callified-cap-exceeded-banner"
-        >
-          <AlertTriangle size={18} aria-hidden />
-          <div>
-            <strong>Monthly AI calling cap reached</strong> (
-            {centsToUsd(capExceeded.spentCents)} /{" "}
-            {centsToUsd(capExceeded.capCents)}). Increase the cap via Tenant
-            Settings, or wait for the monthly reset.
-          </div>
-        </div>
-      )}
+      <CapExceededBanner
+        cap={capExceeded}
+        providerLabel="AI calling"
+        testid="callified-cap-exceeded-banner"
+      />
 
       {/* Initiate form */}
       <div
@@ -527,19 +487,12 @@ export default function CallifiedCalls() {
 
       {/* Stub-mode banner — surfaces when backend client is still pre-cred */}
       {(lastCall?.stub || lastResult?.stub) && (
-        <div
-          style={stubBanner}
-          role="status"
-          data-testid="callified-stub-banner"
-        >
-          <Info size={18} aria-hidden />
-          <div>
-            <strong>Stub-mode response</strong> (Q1 cred pending) — Yasin&apos;s
-            Callified.ai handover lands here. Real call initiation will
-            populate the callId + recording URL + transcript once the swap is
-            done. The dashboard layout and contract won&apos;t change.
-          </div>
-        </div>
+        <StubModeBanner testid="callified-stub-banner">
+          <strong>Stub-mode response</strong> (Q1 cred pending) — Yasin&apos;s
+          Callified.ai handover lands here. Real call initiation will populate
+          the callId + recording URL + transcript once the swap is done. The
+          dashboard layout and contract won&apos;t change.
+        </StubModeBanner>
       )}
 
       {/* Result area */}
@@ -933,55 +886,4 @@ const statusBadge = {
   border: "1px solid rgba(99, 102, 241, 0.45)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
-};
-const capPillBase = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "6px 12px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 600,
-};
-const capPillGreen = {
-  ...capPillBase,
-  background: "rgba(34, 197, 94, 0.18)",
-  color: "#22c55e",
-  border: "1px solid #22c55e",
-};
-const capPillAmber = {
-  ...capPillBase,
-  background: "rgba(245, 158, 11, 0.18)",
-  color: "#f59e0b",
-  border: "1px solid #f59e0b",
-};
-const capPillRed = {
-  ...capPillBase,
-  background: "rgba(244, 63, 94, 0.18)",
-  color: "#f43f5e",
-  border: "1px solid #f43f5e",
-};
-const stubBanner = {
-  display: "flex",
-  alignItems: "flex-start",
-  gap: 10,
-  padding: "12px 14px",
-  marginBottom: 16,
-  borderRadius: 8,
-  background: "rgba(99, 102, 241, 0.12)",
-  border: "1px solid rgba(99, 102, 241, 0.45)",
-  color: "var(--text-primary)",
-  fontSize: 13,
-};
-const capExceededBanner = {
-  display: "flex",
-  alignItems: "flex-start",
-  gap: 10,
-  padding: "12px 14px",
-  marginBottom: 16,
-  borderRadius: 8,
-  background: "rgba(244, 63, 94, 0.12)",
-  border: "1px solid rgba(244, 63, 94, 0.45)",
-  color: "var(--text-primary)",
-  fontSize: 13,
 };

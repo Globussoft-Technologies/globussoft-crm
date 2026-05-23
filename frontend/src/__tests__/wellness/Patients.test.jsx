@@ -115,7 +115,10 @@ describe('<wellness/Patients /> — page surface', () => {
       expect(screen.getByRole('heading', { name: /Patients/i })).toBeInTheDocument();
     });
     // Total counter from /api/wellness/patients's .total field — "2 total".
-    expect(screen.getByText(/2 total/i)).toBeInTheDocument();
+    // Async findByText: data-dependent text appears AFTER the mock fetch
+    // resolves; synchronous getByText is a CI-only race (fast locally, slow
+    // under shard load).
+    expect(await screen.findByText(/2 total/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /New patient/i })).toBeInTheDocument();
   });
 

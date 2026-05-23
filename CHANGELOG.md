@@ -1,5 +1,90 @@
 # CHANGELOG
 
+## Unreleased — Autonomous overnight cron 2026-05-23 (34-tick session)
+
+A continuous 34-tick autonomous-cron session driven against all 3 phases of the user's 2026-05-23 directive: Phase 1.5 + Phase 2 + Phase 3 features + PRD writing for every blocked / multi-day backlog item. Material shipped to `main`; gate stayed green throughout.
+
+### Quantitative deliverables (34 ticks)
+
+- **102 commits** — 0 rebase conflicts, 0 over-commits across all ticks
+- **23 GitHub issues closed + 3 partials**
+- **34 PRDs shipped + 1 meta-doc (DECISIONS_TRACKER.md)** — 118+ pending product decisions consolidated for product team review
+- **+25 new vitest cases** (DateRangePicker 19, PatientDetail #838 6)
+- **1 shared component** — `<DateRangePicker>` extracted (3/3 callers migrated: PatientDetail, Payments, InventoryReceipts)
+- **3 new backend endpoints** (category upload POST + DELETE; public branding logo stream)
+- **1 schema migration** (`ProductCategory.imageUrl` additive nullable, no bless marker)
+- **1 P0 routing unblock** (#897 / #887 `<GenericOnly>` guard removed from `/pipeline` — Travel-vertical Kanban now accessible)
+- **5+ follow-up GH issues filed** (#929 #930 #931 + others for clean handoff)
+- **11 phantom catches** (verify-before-pickup discipline cost ~2 min each vs ~30 min if dispatched blindly)
+
+### PRDs shipped (34 total, comprehensive design-call package)
+
+**Travel-vertical financial pack (4 sibling PRDs cross-referenced):**
+- [PRD_TRAVEL_GST_COMPLIANCE.md](docs/PRD_TRAVEL_GST_COMPLIANCE.md) — India GST + GSTR-1/3B + HSN/SAC + TCS Sec 206C
+- [PRD_TRAVEL_QUOTE_BUILDER.md](docs/PRD_TRAVEL_QUOTE_BUILDER.md) — travel-grade quotes (fork vs Estimate)
+- [PRD_TRAVEL_BILLING.md](docs/PRD_TRAVEL_BILLING.md) — invoice lifecycle (multi-stage settlement, multi-currency, TCS, supplier-payable)
+- [PRD_TRAVEL_SUPPLIER_MASTER.md](docs/PRD_TRAVEL_SUPPLIER_MASTER.md) — supplier master + PO workflow + payable + commission
+
+**Travel-vertical operator surfaces:**
+- [PRD_TRAVEL_PIPELINE_KANBAN.md](docs/PRD_TRAVEL_PIPELINE_KANBAN.md) — sub-brand filter (Pipeline.jsx already 90% built)
+- [PRD_TRAVEL_MULTICHANNEL_LEADS.md](docs/PRD_TRAVEL_MULTICHANNEL_LEADS.md) — 16-channel unifying intake envelope
+- [PRD_TRAVEL_B2B_AGENT_PORTAL.md](docs/PRD_TRAVEL_B2B_AGENT_PORTAL.md) — sub-agent + corporate portals
+- [PRD_TRAVEL_MARKETING_FLYER.md](docs/PRD_TRAVEL_MARKETING_FLYER.md) — flyer studio + AI copy + WhatsApp share
+- [PRD_TRAVEL_ITINERARY_UPGRADES.md](docs/PRD_TRAVEL_ITINERARY_UPGRADES.md) — operator tooling (template library + sightseeing master + LLM suggest)
+- [PRD_TRAVEL_PER_SUBBRAND_BRANDING.md](docs/PRD_TRAVEL_PER_SUBBRAND_BRANDING.md) — 9 consumer surfaces for brand-kit
+
+**RFU + Visa Sure + Phase-3 integrations:**
+- [PRD_RFU_GROUND_SERVICES.md](docs/PRD_RFU_GROUND_SERVICES.md) — Zikr Cabs + 5-portal hotel-scraper + Haramain HSR
+- [PRD_VISA_SURE_PHASE_3.md](docs/PRD_VISA_SURE_PHASE_3.md)
+- [PRD_PASSPORT_OCR.md](docs/PRD_PASSPORT_OCR.md)
+- [PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md](docs/PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md)
+- [PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md](docs/PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md)
+- [PRD_RATEHAWK_INTEGRATION.md](docs/PRD_RATEHAWK_INTEGRATION.md)
+- [PRD_BOOKING_EXPEDIA_DIRECT.md](docs/PRD_BOOKING_EXPEDIA_DIRECT.md)
+- [PRD_AI_CALLING_CALLIFIED.md](docs/PRD_AI_CALLING_CALLIFIED.md)
+- [PRD_ADSGPT_MARKETING_REPORTS.md](docs/PRD_ADSGPT_MARKETING_REPORTS.md)
+- [PRD_EXCEL_SOFTWARE_ACCOUNTING.md](docs/PRD_EXCEL_SOFTWARE_ACCOUNTING.md)
+- [PRD_TMC_CURRICULUM_MAPPING.md](docs/PRD_TMC_CURRICULUM_MAPPING.md)
+
+**Cross-cutting strategy PRDs (coordinating cluster PRDs):**
+- [PRD_TRAVEL_SECURITY_ARCHITECTURE.md](docs/PRD_TRAVEL_SECURITY_ARCHITECTURE.md) — coordinates 12 security findings (#913-#924)
+- [PRD_WELLNESS_POS_HARDENING.md](docs/PRD_WELLNESS_POS_HARDENING.md) — coordinates #823 #824 #826 #830
+- [PRD_WELLNESS_RBAC.md](docs/PRD_WELLNESS_RBAC.md) — coordinates #827 #829 #830
+- [PRD_ZYLU_GAP_CONSOLIDATED.md](docs/PRD_ZYLU_GAP_CONSOLIDATED.md) — coordinates 8 Zylu-parity issues
+- [PRD_ADMIN_SETTINGS_DISCOVERY.md](docs/PRD_ADMIN_SETTINGS_DISCOVERY.md) — coordinates 6 admin-organization gaps
+- [PRD_THEME_MANAGEMENT.md](docs/PRD_THEME_MANAGEMENT.md) — coordinates #862 #870 #876
+- [PRD_DARK_MODE_CLUSTER.md](docs/PRD_DARK_MODE_CLUSTER.md) — per-page CSS work
+- [PRD_AI_SURFACES.md](docs/PRD_AI_SURFACES.md) — 7 existing + 8 NEW LLM task classes
+- [PRD_UNIFIED_GLOBAL_SEARCH.md](docs/PRD_UNIFIED_GLOBAL_SEARCH.md) — header search across entities
+- [PRD_MOBILE_RESPONSIVENESS.md](docs/PRD_MOBILE_RESPONSIVENESS.md) — 6-phase rollout plan
+- [PRD_PLANS_BILLING_SELF_SERVE.md](docs/PRD_PLANS_BILLING_SELF_SERVE.md) — tenant self-serve subscription management
+
+**Meta-doc:**
+- [DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md) — 118 pending DD-5.X items across 20 PRDs, with 6 cross-cutting themes (fork-vs-extend, per-tenant budget cap, AI model+vendor selection, sub-brand defaulting, counsel-owned single-review session, auto-vs-prompt UX)
+
+### Notable code deliverables (non-PRD)
+
+- **Pipeline route fix (#897/#887)** — `<GenericOnly>` guard removed from `/pipeline`; Pipeline.jsx is cross-vertical-safe; Travel tenants can now access Kanban
+- **Tenant logo serving fix (#884)** — route through `/api/wellness/public/branding/:tenantId/logo` (Nginx demo has no `/uploads/` block); backward-compat for legacy `/uploads/branding/` URLs
+- **Webhook events (#929 Part B SHELL)** — `invoice.created` proof-of-emission via `eventBus.emitEvent` + 4 remaining emissions filed as follow-up
+- **Per-sub-brand API key scoping (#899 Part A)** — `ApiKey.subBrand` additive nullable + `requireSubBrandMatch` helper (extracted to `backend/lib/apiKeyAuth.js` per #930)
+- **Voyagr lead-capture F3** — `GET /api/attribution/voyagr/summary` for attribution reporting
+- **DateRangePicker shared component** — extracted after rule-of-3 trigger (Payments + InventoryReceipts + PatientDetail all consume)
+- **visaRiskFlagEngine extended** — 7 → 10 PC-1-independent rules (stale-intake, rejected-reopen, new-destination); 18 → 28 tests
+- **Visa Sure operator surface E2E** — POST + PATCH endpoints; ApplicationDetail + Applications list + Reports + AdvisorDashboard all wired
+
+### Cron-learning candidates surfaced (≥3 instances = standing rule)
+
+- **`git commit --only <files>` mandatory for parallel-agent dispatches** — promoted to standing rule (9+ confirmed instances)
+- **PRD §1.2 "existing infrastructure (do NOT rebuild)" pattern** — 4+ coordinating PRDs adopted; promotable as PRD-writer template requirement
+- **Phantom-from-upstream-root-cause-fix** — 3+ instances; pre-pickup `git log --since=<issue-date>` discipline recommended
+- **Rule-of-3 component extraction success** — DateRangePicker validated
+- **Disk-backed file uploads MUST serve through `/api/...` not `/uploads/...`** — 2nd instance (#743 + #884); 3rd → promote
+
+See [TODOS.md](TODOS.md) for per-tick handoff details + [DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md) for the 118-item product-decision queue.
+
+---
+
 ## v3.9.2 — 2026-05-20 — Travel CRM Phase 1 closeout
 
 Closes the last Phase 1 deliverable + the entire Phase 1.5 polish list

@@ -81,7 +81,22 @@ A continuous 34-tick autonomous-cron session driven against all 3 phases of the 
 - **Rule-of-3 component extraction success** — DateRangePicker validated
 - **Disk-backed file uploads MUST serve through `/api/...` not `/uploads/...`** — 2nd instance (#743 + #884); 3rd → promote
 
-See [TODOS.md](TODOS.md) for per-tick handoff details + [DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md) for the 118-item product-decision queue.
+### Continuation arc — ticks #35-#77 (cron-driven through 2026-05-23 evening)
+
+Session continued past the original 34-tick milestone as the user kept firing the cron. Additional deliverables:
+
+- **+51 commits** (cumulative session total: 153)
+- **+21 GH closures** (cumulative: 44 closed) — paired with 2 new follow-ups (#932 Campaign→Sequence linkage, #933 Products admin page precursor)
+- **2 deploy gate triages absorbed cleanly** (tick #64 `62a4e5a` + tick #72 `86a01fa`) — both were the same `nextVisitDate()` helper iterating from random → per-process-monotonic → PID-bucketed-per-worker. Cron-learning logged for posterity.
+- **NEW** [CREDS_TRACKER.md](docs/CREDS_TRACKER.md) — 47 credential/asset/doc chases across 6 categories (Vendor APIs / Brand assets / Vendor docs / Counsel / Domains / SaaS). Pairs with DECISIONS_TRACKER for tri-doc coverage.
+- **DECISIONS_TRACKER refresh** (tick #65) — added 79 rows for the 13 PRDs that landed post-tick-#22. Now 192 decisions across 33 of 33 PRDs.
+- **MANUAL_CODING_BACKLOG xrefs** (tick #77) — wired 13 PRD links into clusters A1-A4 + B2-B6 + C4-C7 so navigation flows cluster → PRD → DECISIONS row → CREDS row in 3 hops.
+- **Multi-slice CSV gap (#816)** drained to 4/5 across ticks #69-#73: Services / Memberships / Bookings (export-only) / Patients. Products slice split to #933 (needs new admin page precursor).
+- **CRM closure highlights:** #862 (theme toggle in top bar), #851 (header global search trigger), #826 (POS empty-state deep-link), #829 (Patients honest access-denied state), #823 (`/pos` Navigate alias), #877 (Pipeline column dark-mode contrast), #898 (Campaigns sidebar + audience scoping), #899 (Developer UI sub-brand + 5 new webhook events), #834 + #835 (Zylu inventory + memberships demo seed).
+- **6 phantom-shipped closures** confirmed by code-grep (saved ~3 hours of agent dispatch on already-shipped work): #841 (login redirect — no specific module), #854 (consent history — fully wired), #869 (OS theme matchMedia — listener already shipped), #879 (CostMaster/PricingRules tables — already token-driven), #880 (form chrome dark-mode — fixed by #863/#864 chain), #898 (Campaigns surfacing — already at sidebar + alias route).
+- **Cron-learning entry** added (tick #76) for the per-worker test-helper pattern — second instance of multi-version triage in one session; promotion candidate.
+
+See [TODOS.md](TODOS.md) for per-tick handoff details, [DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md) for the 192-item product-decision queue, and [CREDS_TRACKER.md](docs/CREDS_TRACKER.md) for the 47-item credential/asset chase queue.
 
 ---
 

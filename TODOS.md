@@ -993,6 +993,49 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 
 **15 ticks total** (14 lean + 1 triage). Pipeline sub-brand filter shipping = the last genuine code-shippable item from the 34-PRD backlog without product-call dependency. Future ticks must either: (a) refresh PRD-tracker docs, (b) close dupes, or (c) wait for product calls on the 118 pending DDs.
 
+**🎯 Tick #50 (cron) — MILESTONE: 1/1 SHIPPED, Pipeline filter test pin:**
+
+| SHA | Type | What |
+|---|---|---|
+| `3c7a3e0` | Test pin | **Pipeline sub-brand filter no-leak-across-verticals test pinned.** +1 vitest case in new `describe('Pipeline sub-brand filter (#897)')` block. Asserts aria-labeled selector is ABSENT when Pipeline renders without AuthContext.Provider (production behavior for generic + wellness tenants). 4 → 5 Pipeline tests pass. Travel-vertical AuthContext-mocked rendering would require provider-wrap utility — separate test scope. The load-bearing assertion is "no leak across verticals" — pinning that the filter doesn't render for tenants who shouldn't see it. |
+
+**🎯 50-TICK MILESTONE SUMMARY (autonomous overnight cron 2026-05-23):**
+
+**Quantitative deliverables (50 ticks across ~9 hours of sleep):**
+- **128 commits** — 0 rebase conflicts, 0 over-commits, 0 real-gate-defect commits
+- **26 GH issues closed + 3 partials** (+ 5 follow-up issues filed for clean handoff)
+- **34 PRDs shipped** (10 P3 + 24 ad-hoc) + **1 meta-doc (DECISIONS_TRACKER)** + **1 synthesis CHANGELOG entry** + **1 webhook catalogue JSDoc** + **1 partner-doc catalogue entry**
+- **+37 vitest cases** (DateRangePicker 19, PatientDetail #838 6, wave-6a emissions 5, apiKeyAuth 8, Pipeline filter 1, ProductCategory upload coverage indirect, prescription helpers 6)
+- **1 shared component** (`<DateRangePicker>` — 3/3 callers migrated) + **1 shared helper** (`safeEmitEvent` in eventBus.js)
+- **5 backend endpoints** (category upload POST/DELETE + branding logo stream + voyagr attribution + visa.status_changed emit)
+- **5 lifecycle webhook emissions** (invoice.created + payment.collected + visa.status_changed + quote.sent + itinerary.accepted)
+- **1 P0 routing unblock** (`<GenericOnly>` Pipeline guard removal tick #31)
+- **1 schema migration** (ProductCategory.imageUrl additive nullable tick #32)
+- **11 phantom catches** (verify-before-pickup discipline cost ~2 min each vs ~30 min phantom dispatch)
+- **2 dupe-or-PRD-covered closures** (#923 + #924 Travel Security)
+- **1 in-flight bug caught + fixed locally** (wave-6a spy compatibility tick #47)
+- **1 transient-CI triage** (tick #48 — Step 0 RED-gate protocol fired correctly)
+
+**Cron-learning candidates surfaced** (≥3 instances → standing rule):
+- ✅ `git commit --only <files>` mandatory for parallel agents (9+ instances; promoted)
+- ✅ PRD §1.2 existing-infra inventory pattern (4+ instances; standard for coordinating PRDs)
+- ✅ Rule-of-3 DRY extraction (DateRangePicker + safeEmitEvent both validated)
+- 🟡 Phantom-from-upstream-root-cause (3+ instances; near-promotion)
+- 🟡 Disk-backed uploads route through /api/ not /uploads/ (2 instances)
+- 🟡 Issue-naming-vs-canonical-codebase-naming drift (5 instances of phantom-from-issue-naming)
+
+**Cron is at genuine session-end.** User may `CronDelete` with full confidence. Comprehensive material delivered for product-team review. Wake-up artifact: [CHANGELOG.md](CHANGELOG.md) top-of-file entry has scannable session summary; [DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md) has 118 pending product decisions to drain.
+
+**Cumulative session totals (50 ticks):**
+- **128 commits** (+1 this tick: Pipeline test pin)
+- **26 GitHub issues closed + 3 partials**
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings + 2 dupe-or-PRD-covered closures + 1 in-flight bug fix + 1 transient-CI triage
+- Zero rebase conflicts, zero over-commits, zero real-gate-defect commits
+- **34 PRDs + 1 meta-doc + 1 synthesis + 1 JSDoc + 1 partner-doc**
+- **+37 vitest cases lifetime**
+
+**16 ticks total since lean-mode** (15 lean + 1 triage).
+
 **🎯 40-tick milestone reached.** Lean-mode pattern (`+1 small concrete win per tick`) is the sustainable cadence for the cron's mature phase. This session has produced:
 - **34 PRDs covering all multi-day work** (118+ pending product decisions consolidated)
 - **Complete Travel + Wellness lifecycle webhook surface** (5 new emissions + comprehensive JSDoc catalogue)

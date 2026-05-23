@@ -209,10 +209,14 @@ None external. All security infrastructure is in-house.
 
 - **Current state:** All 9 open security findings are unmitigated as architectural risks; each has discrete remediation work scoped but inter-dependencies make uncoordinated fixes wasteful. CSP transitional state has been live since `#654` landed; auth-in-localStorage has been the shape since v1.
 - **This PRD:** WRITTEN 2026-05-23 (tick #22). DRAFT; needs DD-5.1, DD-5.2, DD-5.3, DD-5.4, DD-5.5, DD-5.6 design-call answers before implementation can start.
-- **Issue map (filing date 2026-05-23):**
-  - **OPEN (9):** #914 #915 #917 #918 #919 #920 #921 #923 #924 — all coordinated by this PRD.
-  - **CLOSED (2):** #913 (JWT console-log fix landed), #922 (WWW-Authenticate realm dropped).
-  - **MERGED (1):** #916 (umbrella security PR landed earlier).
+- **Issue map (refreshed tick #52, 2026-05-23):**
+  - **OPEN (7):** #914 #915 #917 #918 #919 #920 #921 — coordinated by this PRD; FR-3.1..FR-3.6 cover all.
+  - **CLOSED (5):**
+    - `#913` JWT console-log fix landed (pre-session)
+    - `#922` WWW-Authenticate realm dropped (pre-session)
+    - `#923` closed tick #43 — X-XSS-Protection: 0 is canon-correct with strict CSP per FR-3.2.e; reporter's framing satisfied by FR-3.2 landing not by header value change
+    - `#924` closed tick #44 as duplicate of `#914` — same JWT-localStorage architectural concern; near-verbatim issue bodies (same audit author filed twice)
+  - **MERGED (1):** `#916` (umbrella security PR landed pre-session)
 - **Path to remediation:** 18-32 engineering days end-to-end:
   - FR-3.1 (auth migration) — 4-6 days (cookie wiring + csrf + grace-period dual-mode + AuthContext refactor + per-tenant flag rollout)
   - FR-3.2 (CSP hardening) — 2-3 days (nonce middleware + Vite build update + report-only inspection + enforcement flip)

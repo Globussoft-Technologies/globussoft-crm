@@ -5,7 +5,7 @@ import { Outlet, useNavigate } from 'react-router-dom';
 // to /profile. Logout is already a separate sibling button, so the simplest
 // honest fix is to drop the chevron rather than add a dropdown that
 // duplicates the logout button.
-import { LogOut, Menu, Building2 } from 'lucide-react';
+import { LogOut, Menu, Building2, Sun, Moon, Monitor } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Omnibar from './Omnibar';
 import Presence from './Presence';
@@ -14,7 +14,7 @@ import NotificationBell from './NotificationBell';
 import Avatar from './Avatar';
 import TrialBanner from './TrialBanner';
 import SubscriptionExpiryModal from './SubscriptionExpiryModal';
-import { AuthContext } from '../App';
+import { AuthContext, ThemeContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { setupPush } from '../utils/pushSetup';
 
@@ -83,6 +83,11 @@ const MOBILE_BREAKPOINT_PX = 900;
 
 const Layout = () => {
   const { user, setUser, setToken, token, tenant, setTenant } = useContext(AuthContext);
+  // #862 — top-bar theme toggle. Cycles light → dark → system (matches the
+  // /settings Appearance card's 3-option group). Discoverable from anywhere
+  // in the app, addressing the QA observation that the only theme control
+  // was buried in /settings.
+  const { theme, toggleTheme } = useContext(ThemeContext) || {};
   const navigate = useNavigate();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === 'wellness';
@@ -296,6 +301,30 @@ const Layout = () => {
             />
             <span>{user?.name || user?.email || 'User'}</span>
           </button>
+          {/* #862 — discoverable theme toggle button. Cycles
+              light → dark → system and surfaces the active mode via icon
+              + tooltip (Sun = light, Moon = dark, Monitor = system).
+              Pre-fix the only control was buried under /settings →
+              Appearance. */}
+          {toggleTheme && (
+            <button
+              type="button"
+              onClick={toggleTheme}
+              title={`Theme: ${theme === 'light' ? 'Light' : theme === 'dark' ? 'Dark' : 'System'} — click to cycle`}
+              aria-label={`Switch theme (currently ${theme || 'system'})`}
+              style={{
+                display: 'flex', alignItems: 'center',
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--text-secondary)',
+                padding: '6px 8px', borderRadius: '6px',
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            >
+              {theme === 'light' ? <Sun size={16} /> : theme === 'dark' ? <Moon size={16} /> : <Monitor size={16} />}
+            </button>
+          )}
           <button
             onClick={handleLogout}
             title="Logout"

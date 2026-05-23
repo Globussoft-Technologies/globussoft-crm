@@ -16,6 +16,15 @@ import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
 import { formatMoney } from '../utils/money';
 import { useNotify } from '../utils/notify';
+// Shared date-range picker — DRY follow-up to fabf035 (cron tick #27).
+// Centralises preset dropdown + Custom range UX so the three+ consumers
+// (Payments / InventoryReceipts / PatientDetail) stay in sync. Imports the
+// `rangeFromPreset` + `effectiveRangeFor` helpers used here for the KPI
+// pill row + the table-filter effective range.
+import DateRangePicker, {
+  rangeFromPreset,
+  effectiveRangeFor,
+} from '../components/DateRangePicker';
 
 // ── Style constants ───────────────────────────────────────────────
 const GLASS = {
@@ -94,67 +103,12 @@ function formatDate(value) {
   }
 }
 
-// #846 — date-range presets for the transactions filter + the Total Collected
-// KPI window. Each preset resolves to `{from, to}` ISO date-only strings (or
-// `{from: null, to: null}` for "All time"). Kept module-scope so the same
-// table renders for the table filter dropdown AND the KPI pill control.
-function toIsoDate(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function rangeFromPreset(preset) {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  switch (preset) {
-    case 'today':
-      return { from: toIsoDate(today), to: toIsoDate(today) };
-    case 'yesterday': {
-      const y = new Date(today);
-      y.setDate(today.getDate() - 1);
-      return { from: toIsoDate(y), to: toIsoDate(y) };
-    }
-    case 'week7': {
-      const f = new Date(today);
-      f.setDate(today.getDate() - 6);
-      return { from: toIsoDate(f), to: toIsoDate(today) };
-    }
-    case 'month': {
-      const f = new Date(today.getFullYear(), today.getMonth(), 1);
-      return { from: toIsoDate(f), to: toIsoDate(today) };
-    }
-    case 'last30': {
-      const f = new Date(today);
-      f.setDate(today.getDate() - 29);
-      return { from: toIsoDate(f), to: toIsoDate(today) };
-    }
-    case 'last90': {
-      const f = new Date(today);
-      f.setDate(today.getDate() - 89);
-      return { from: toIsoDate(f), to: toIsoDate(today) };
-    }
-    case 'year': {
-      const f = new Date(today);
-      f.setDate(today.getDate() - 364);
-      return { from: toIsoDate(f), to: toIsoDate(today) };
-    }
-    case 'all':
-    default:
-      return { from: null, to: null };
-  }
-}
-
-const TABLE_PRESETS = [
-  { value: 'all',       label: 'All time' },
-  { value: 'today',     label: 'Today' },
-  { value: 'yesterday', label: 'Yesterday' },
-  { value: 'week7',     label: 'Last 7 days' },
-  { value: 'month',     label: 'This month' },
-  { value: 'custom',    label: 'Custom…' },
-];
-
+// #846 — KPI pill control uses single-letter labels (W / 30D / 90D / Y) and is
+// intentionally distinct from the table-filter dropdown UX. The shared
+// <DateRangePicker> covers the table filter (preset dropdown + Custom range);
+// this list is the compact pill row rendered as `rightAccessory` on the Total
+// Collected card. `rangeFromPreset` is imported from the shared component so
+// the date math is single-sourced across consumers.
 const KPI_PRESETS = [
   { value: 'week7',  label: 'W',   title: 'Last 7 days' },
   { value: 'last30', label: '30D', title: 'Last 30 days' },
@@ -174,14 +128,18 @@ export default function Payments() {
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
 
-  // #846 — date-range filter state for the transactions table. `preset`
-  // drives the dropdown UI; `customFrom`/`customTo` are only meaningful when
-  // preset === 'custom'. The effective range used for fetching is computed
-  // by `effectiveRange` below and persists across the Stripe / Razorpay tab
-  // switches (the tab is gateway-only filtering, applied client-side).
-  const [datePreset, setDatePreset] = useState('all');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
+  // #846 — date-range filter state for the transactions table. Single
+  // state object owned by the parent (controlled <DateRangePicker> input);
+  // `preset` drives the dropdown UI; `customFrom`/`customTo` are only
+  // meaningful when preset === 'custom'. The effective range used for
+  // fetching is computed by `effectiveRange` below and persists across the
+  // Stripe / Razorpay tab switches (the tab is gateway-only filtering,
+  // applied client-side).
+  const [dateRange, setDateRange] = useState({
+    preset: 'all',
+    customFrom: '',
+    customTo: '',
+  });
 
   // #846 — Time-range window for the "Total Collected" KPI card. Independent
   // from the table filter so the operator can keep the KPI on its trailing-
@@ -205,18 +163,14 @@ export default function Payments() {
   });
 
   // #846 — compute the effective {from, to} range to send to the backend.
-  // For non-'custom' presets, derive from rangeFromPreset(); for 'custom',
-  // use the user-typed inputs (both must be set; otherwise treat as no
-  // range — same shape as preset='all').
-  const effectiveRange = useMemo(() => {
-    if (datePreset === 'custom') {
-      return {
-        from: customFrom || null,
-        to: customTo || null,
-      };
-    }
-    return rangeFromPreset(datePreset);
-  }, [datePreset, customFrom, customTo]);
+  // Delegates to the shared `effectiveRangeFor()` helper from
+  // ../components/DateRangePicker so the resolution logic stays
+  // single-sourced across consumers (Payments / InventoryReceipts /
+  // PatientDetail).
+  const effectiveRange = useMemo(
+    () => effectiveRangeFor(dateRange),
+    [dateRange],
+  );
 
   useEffect(() => {
     loadAll(effectiveRange);
@@ -555,64 +509,13 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
           </button>
         ))}
 
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', marginLeft: 'auto' }}>
-          <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }} htmlFor="payments-date-preset">
-            Date:
-          </label>
-          <select
+        <div style={{ marginLeft: 'auto' }}>
+          <DateRangePicker
             id="payments-date-preset"
-            value={datePreset}
-            onChange={(e) => setDatePreset(e.target.value)}
-            aria-label="Filter transactions by date"
-            style={{
-              padding: '0.45rem 0.7rem',
-              borderRadius: '8px',
-              background: 'rgba(255,255,255,0.05)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              color: 'var(--text-primary)',
-              fontSize: '0.82rem',
-              cursor: 'pointer',
-            }}
-          >
-            {TABLE_PRESETS.map(p => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </select>
-          {datePreset === 'custom' && (
-            <>
-              <input
-                type="date"
-                value={customFrom}
-                onChange={(e) => setCustomFrom(e.target.value)}
-                aria-label="From date"
-                style={{
-                  padding: '0.4rem 0.5rem',
-                  borderRadius: '6px',
-                  background: 'rgba(255,255,255,0.05)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  color: 'var(--text-primary)',
-                  fontSize: '0.8rem',
-                  colorScheme: 'dark',
-                }}
-              />
-              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>→</span>
-              <input
-                type="date"
-                value={customTo}
-                onChange={(e) => setCustomTo(e.target.value)}
-                aria-label="To date"
-                style={{
-                  padding: '0.4rem 0.5rem',
-                  borderRadius: '6px',
-                  background: 'rgba(255,255,255,0.05)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  color: 'var(--text-primary)',
-                  fontSize: '0.8rem',
-                  colorScheme: 'dark',
-                }}
-              />
-            </>
-          )}
+            value={dateRange}
+            onChange={setDateRange}
+            presets={['all', 'today', 'yesterday', 'week7', 'month', 'custom']}
+          />
         </div>
       </div>
 

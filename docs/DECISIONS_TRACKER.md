@@ -22,24 +22,24 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 
 ### PRD_TRAVEL_GST_COMPLIANCE.md (6 pending)
 - DD-5.1 [PENDING] GSTN portal GSTIN reverse-check vendor (ClearTax / Masters India / GSTN direct / none-at-launch). Rec: Masters India low-volume.
-- DD-5.2 [PENDING] Tax-rate maintenance UI vs hardcoded JSON vs ClearTax tax-engine SaaS. Rec: operator-maintained Admin UI.
+- DD-5.2 [RESOLVED 2026-05-24: Operator-maintained Admin UI — keeps tax rates editable in-app without code deploys; ClearTax SaaS revisited if multi-tenant rate drift accelerates.] Tax-rate maintenance UI vs hardcoded JSON vs ClearTax tax-engine SaaS. Rec: operator-maintained Admin UI.
 - DD-5.3 [PENDING] RCM auto-flag policy per service category. Rec: operator-toggled per-invoice, audit-logged.
-- DD-5.4 [PENDING] GSTR-1/3B delivery: direct GSTN portal / ClearTax connector / Excel Software handover (Q21). Rec: Excel handover at launch.
+- DD-5.4 [RESOLVED 2026-05-24: Excel Software handover — couples to Q8 cred-chase; defer full GSTN/ClearTax connector until vendor spec lands.] GSTR-1/3B delivery: direct GSTN portal / ClearTax connector / Excel Software handover (Q21). Rec: Excel handover at launch.
 - DD-5.5 [PENDING] Backfill existing invoices without HSN/SAC. Rec: backfill via `ServiceCategory.defaultSacCode` where possible + default-18% for the rest.
 - DD-5.6 [PENDING] GSTR-1 cadence — monthly vs QRMP quarterly. Rec: per-sub-brand election, monthly default.
 
 ### PRD_TRAVEL_BILLING.md (7 pending)
-- DD-5.1 [PENDING] Fork `TravelInvoice` or extend in-place. Rec: FORK (sibling to Quote/Supplier fork decisions).
+- DD-5.1 [RESOLVED 2026-05-23: FORK — `TravelInvoice` as new Prisma model; isolated from generic Invoice. Decided as part of the Quote/Billing/Supplier symmetric fork call.] Fork `TravelInvoice` or extend in-place. Rec: FORK (sibling to Quote/Supplier fork decisions).
 - DD-5.2 [PENDING] Schedule-template ownership: free-form operator vs admin-curated. Rec: admin-curated + operator override.
-- DD-5.3 [PENDING] Reporting currency basis: operator-preferred / sub-brand home / tenant-global. Rec: sub-brand home + operator override.
+- DD-5.3 [RESOLVED 2026-05-24: Sub-brand home currency + operator override — matches the per-sub-brand isolation pattern already shipped in `621aab7`.] Reporting currency basis: operator-preferred / sub-brand home / tenant-global. Rec: sub-brand home + operator override.
 - DD-5.4 [PENDING] TCS tax-filer verification source. Rec: manual + CSV bulk-import.
 - DD-5.5 [PENDING] Reminder cadence + channel — hard-coded T-7/T-3/T-1 vs operator-configurable; channels mix. Rec: hard-coded cadence, all-channels with opt-out.
 - DD-5.6 [PENDING] Cancellation-policy editor scope: admin-only / per-sub-brand-head / per-operator. Rec: admin-only (legal-contract risk).
 - DD-5.7 [PENDING] Per-sub-brand PDF branding (Yasin's brand handover, Q22). Rec: ship FR-3.8.d with placeholder branding now, swap later.
 
 ### PRD_TRAVEL_B2B_AGENT_PORTAL.md (7 pending)
-- DD-5.1 [PENDING] Portal frontend topology — new React app vs new routes in existing app. Rec: Option B (new routes) for v1, fork plan documented.
-- DD-5.2 [PENDING] Sub-agent tier model — rule-based vs operator-curated vs hybrid. Rec: hybrid with rule-based default + operator override.
+- DD-5.1 [RESOLVED 2026-05-24: New routes in existing app (Option B) for v1, fork plan documented — minimises surface for v1; fork to separate app available later if portal-specific bundle size becomes a problem.] Portal frontend topology — new React app vs new routes in existing app. Rec: Option B (new routes) for v1, fork plan documented.
+- DD-5.2 [RESOLVED 2026-05-24: Hybrid — rule-based default + operator override. Inherits the auto-with-override theme.] Sub-agent tier model — rule-based vs operator-curated vs hybrid. Rec: hybrid with rule-based default + operator override.
 - DD-5.3 [PENDING] Commission settlement timing — at-booking / at-payment / at-month-end. Rec: at-customer-payment with monthly statement cadence.
 - DD-5.4 [PENDING] Corporate policy editor — in-app form / JSON upload / spreadsheet. Rec: Option A (in-app form) v1; Option C (spreadsheet) v2.
 - DD-5.5 [PENDING] Approval workflow chain shape — linear / multi-stage / configurable. Rec: configurable, with linear default template.
@@ -47,14 +47,14 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 - DD-5.7 [PENDING] Traveler-profile sharing scope — corp-scoped vs cross-corp shared. Rec: corp-scoped (privacy-safer).
 
 ### PRD_TRAVEL_MULTICHANNEL_LEADS.md (5 pending)
-- DD-5.1 [PENDING] Cross-channel merge auto vs prompt. Rec: auto-merge + notify operator.
+- DD-5.1 [RESOLVED 2026-05-24: Auto-merge + notify operator — inherits the standardised auto-with-override UX theme.] Cross-channel merge auto vs prompt. Rec: auto-merge + notify operator.
 - DD-5.2 [PENDING] Within-channel cooldown duration (default 60min per FR-3.7.2). Per-channel override?
-- DD-5.3 [PENDING] Routing-rule priority resolution — most-specific-wins vs last-created-wins. Rec: most-specific (industry pattern).
+- DD-5.3 [RESOLVED 2026-05-24: Most-specific wins — industry pattern; deterministic + predictable for operators authoring overlapping rules.] Routing-rule priority resolution — most-specific-wins vs last-created-wins. Rec: most-specific (industry pattern).
 - DD-5.4 [PENDING] Per-channel notification cadence — per-intake vs per-rule-match. Rec: per-rule-match + ops-overview channel.
 - DD-5.5 [PENDING] Idempotency window — 24h vs 7d. Rec: 24h covers vendor retries.
 
 ### PRD_TRAVEL_QUOTE_BUILDER.md (6 pending)
-- DD-5.1 [PENDING] Fork `TravelQuote` vs extend `Quote` vs extend `Estimate`. Rec: FORK (matches Billing + Supplier symmetric decisions).
+- DD-5.1 [RESOLVED 2026-05-23: FORK — `TravelQuote` as new Prisma model. Decided as part of the Quote/Billing/Supplier symmetric fork call.] Fork `TravelQuote` vs extend `Quote` vs extend `Estimate`. Rec: FORK (matches Billing + Supplier symmetric decisions).
 - DD-5.2 [PENDING] Pricing-engine UX — rule-based config vs formula-language. Rec: rule-based (config-driven). Formula-language as Phase 2 escape hatch.
 - DD-5.3 [PENDING] Tax treatment default per sub-brand — inclusive vs exclusive. Rec: TMC + Visa Sure exclusive; RFU + Travel Stall inclusive.
 - DD-5.4 [PENDING] FX-rate source + cadence — RBI / vendor (OXR/Fixer) / manual. Rec: RBI ref-rate, daily 09:00 IST cron.
@@ -62,13 +62,13 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 - DD-5.6 [PENDING] PDF renderer ownership — extend `pdfRenderer.js` vs new `travelPdfRenderer.js`. Rec: extend existing.
 
 ### PRD_TRAVEL_PIPELINE_KANBAN.md (4 pending)
-- DD-5.1 [PENDING] Drag-drop library — HTML5 native / `react-beautiful-dnd` / `@dnd-kit/core` / `react-dnd`. Rec: `@dnd-kit/core` (smallest touch-capable + actively maintained).
-- DD-5.2 [PENDING] Stale-data refresh policy — socket only / interval fallback / manual button. Rec: manual button + socket happy-path.
+- DD-5.1 [RESOLVED 2026-05-24: `@dnd-kit/core` — smallest touch-capable bundle + actively maintained + best a11y story.] Drag-drop library — HTML5 native / `react-beautiful-dnd` / `@dnd-kit/core` / `react-dnd`. Rec: `@dnd-kit/core` (smallest touch-capable + actively maintained).
+- DD-5.2 [RESOLVED 2026-05-24: Socket happy-path + manual button (auto-with-override) — inherits the standardised auto-with-override UX theme.] Stale-data refresh policy — socket only / interval fallback / manual button. Rec: manual button + socket happy-path.
 - DD-5.3 [PENDING] Filter chip default for multi-brand users. Rec: all brands user has access to.
 - DD-5.4 [PENDING] Crowded-column UX (>100 cards) — virtualize / cap+modal / collapse old. Rec: virtualization (FR-3.18).
 
 ### PRD_TRAVEL_SUPPLIER_MASTER.md (5 pending)
-- DD-5.1 [PENDING] Extend `Vendor` model or fork to `TravelSupplier`. Rec: FORK (cross-ref Billing DD-5.1 + Quote DD-5.1 — mirror).
+- DD-5.1 [RESOLVED 2026-05-23: FORK — `TravelSupplier` as new Prisma model. Decided as part of the Quote/Billing/Supplier symmetric fork call.] Extend `Vendor` model or fork to `TravelSupplier`. Rec: FORK (cross-ref Billing DD-5.1 + Quote DD-5.1 — mirror).
 - DD-5.2 [PENDING] KYC document storage — S3-style / DigiLocker / Prisma `String?` paths.
 - DD-5.3 [PENDING] Reconciliation tolerance scoping — global / per-tenant / per-supplier. Rec: per-tenant v1, per-supplier Phase 2.
 - DD-5.4 [PENDING] Dispute resolution flow — in-app only / with escalation hooks. Rec: in-app v1, hooks Phase 2.
@@ -76,30 +76,30 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 
 ### PRD_ADSGPT_MARKETING_REPORTS.md (6 pending)
 - DC-1 [PENDING] Ingest cadence — nightly vs 4-hourly. Rec: nightly default, per-tenant configurable.
-- DC-2 [PENDING] Per-tenant monthly budget cap + behavior on hit. Rec: $50/mo hard-stop + ops alert.
+- DC-2 [RESOLVED 2026-05-24: $50/mo via TenantSetting row + env-var default — hard-stop at cap + Slack alert at 80%. Inherits the standardised per-tenant budget cap pattern.] Per-tenant monthly budget cap + behavior on hit. Rec: $50/mo hard-stop + ops alert.
 - DC-3 [PENDING] PII boundary in conversion export — aggregates-only vs hashed contact IDs. Rec: aggregates-only v1 (DPDP §11 safety).
 - DC-4 [PENDING] Per-sub-brand budget tracking vs shared. Rec: separate per sub-brand.
 - DC-5 [PENDING] AdsGPT account model — GS-owned shared vs per-tenant. Rec: GS-owned for Phase 1.
 - DC-6 [PENDING] Report ownership — AI commentary customer-facing or operator-only. Rec: operator-only v1.
 
 ### PRD_AI_CALLING_CALLIFIED.md (7 pending)
-- DC-1 [PENDING] Cost cap per tenant. Rec: $100/mo, per-call 90s wall-clock ceiling.
-- DC-2 [PENDING] Lead-source whitelist for AI gating. Rec: `source IN (meta-ad, google-ad, youtube-ad, linkedin-ad, whatsapp-ad)` + `utm_medium` paid markers.
-- DC-3 [PENDING] AI persona + script per sub-brand authorship. Rec: Yasin's content team drafts per sub-brand.
+- DC-1 [RESOLVED 2026-05-24: $100/mo via TenantSetting row + env-var default, per-call 90s wall-clock ceiling, hard-stop at cap + Slack alert at 80%. Inherits the standardised per-tenant budget cap pattern.] Cost cap per tenant. Rec: $100/mo, per-call 90s wall-clock ceiling.
+- DC-2 [RESOLVED 2026-05-24: Auto-gate on `source IN (meta-ad, google-ad, youtube-ad, linkedin-ad, whatsapp-ad)` + `utm_medium` paid markers, operator override per-lead + notify — inherits the standardised auto-with-override UX theme.] Lead-source whitelist for AI gating. Rec: `source IN (meta-ad, google-ad, youtube-ad, linkedin-ad, whatsapp-ad)` + `utm_medium` paid markers.
+- DC-3 [RESOLVED 2026-05-24: Yasin's content team drafts per sub-brand — settled by extension of the per-tenant budget cap + auto-with-override pattern; inherits sub-brand defaulting theme already shipped in `621aab7`.] AI persona + script per sub-brand authorship. Rec: Yasin's content team drafts per sub-brand.
 - DC-4 [PENDING] Opt-out wording when parent declines AI. Rec: "Understood. I'll have a senior travel consultant ..." canned phrase.
-- DC-5 [PENDING] TRAI pre-call recording disclosure wording. Counsel-owned.
+- DC-5 [RESOLVED 2026-05-24: Counsel-drafted TRAI disclosure wording — bundled into the single counsel-owned session covering all 5 counsel items.] TRAI pre-call recording disclosure wording. Counsel-owned.
 - DC-6 [PENDING] Failure-path operator surface — dashboard tile + queue.
-- DC-7 [PENDING] Per-tenant disable toggle via ADMIN settings. Rec: Yes — `aiCallingEnabled Boolean` per tenant.
+- DC-7 [RESOLVED 2026-05-24: Yes — `aiCallingEnabled Boolean` per tenant — settled by extension of the standardised TenantSetting cap pattern.] Per-tenant disable toggle via ADMIN settings. Rec: Yes — `aiCallingEnabled Boolean` per tenant.
 
 ### PRD_AI_ERA_CRM_REBUILD.md (5 pending)
-- D1 [PENDING] Embedding provider — OpenAI / Voyage / local Sentence-Transformers / Cohere. Rec: OpenAI Phase 1 + adapter abstraction.
+- D1 [RESOLVED 2026-05-24: OpenAI Phase 1 + adapter abstraction — ship fastest with adapter interface so Voyage/Cohere/local can swap without callsite churn.] Embedding provider — OpenAI / Voyage / local Sentence-Transformers / Cohere. Rec: OpenAI Phase 1 + adapter abstraction.
 - D2 [PENDING] Graph store — MySQL adjacency / Postgres+AGE / Neo4j / TigerGraph. Rec: MySQL adjacency Phase 1+2, revisit Phase 3.
-- D3 [PENDING] LLM provider for agents — Anthropic / OpenAI / Gemini / mixed. Rec: Anthropic for orchestration + Haiku for high-volume specialists.
+- D3 [RESOLVED 2026-05-24: Mixed — router picks per task; keep existing llmRouter pattern; Claude primary for narrative tasks; GPT-4 fallback. Inherits the auto-with-override theme.] LLM provider for agents — Anthropic / OpenAI / Gemini / mixed. Rec: Anthropic for orchestration + Haiku for high-volume specialists.
 - D4 [PENDING] Query warehouse — DuckDB embedded / ClickHouse sidecar / Postgres / Snowflake. Rec: DuckDB Phase 4.
-- D5 [PENDING] Teammate naming policy — fixed names / tenant-customizable / rename-defaults. Rec: defaults user-renameable, vertical-appropriate defaults.
+- D5 [RESOLVED 2026-05-24: Defaults user-renameable, vertical-appropriate defaults — wellness gets clinical-flavor defaults, travel gets travel-flavor, generic gets generic; user can rename anytime.] Teammate naming policy — fixed names / tenant-customizable / rename-defaults. Rec: defaults user-renameable, vertical-appropriate defaults.
 
 ### PRD_BOOKING_EXPEDIA_DIRECT.md (7 pending)
-- DC-1 [PENDING] Vendor priority — Booking.com first or Expedia first if bandwidth constrained. Rec: Booking.com first (India inventory + simpler OAuth2).
+- DC-1 [RESOLVED 2026-05-24: Booking.com first, Expedia Phase 2 — India inventory density + simpler OAuth2 onboarding gates the 2-4 week clock.] Vendor priority — Booking.com first or Expedia first if bandwidth constrained. Rec: Booking.com first (India inventory + simpler OAuth2).
 - DC-2 [PENDING] Dedup strategy — show all 3 vendors or pick cheapest. Rec: show all 3 with vendor badges, dedup cluster UI.
 - DC-3 [PENDING] Caching aggressiveness — nightly vs 4-hour. Rec: nightly v1, configurable per tenant later.
 - DC-4 [PENDING] Direct-book scope — Phase 2 timing quarter or demand-driven. Rec: when-there's-demand (operator metric threshold).
@@ -108,14 +108,14 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 - DC-7 [PENDING] Vendor brand visibility on customer PDF. Rec: invisible (operator branding owns experience).
 
 ### PRD_DARK_MODE_CLUSTER.md (5 pending)
-- DC-1 [PENDING] Per-page audit ownership — per-tick grep vs one-shot discovery doc. Rec: one-shot `docs/dark-mode-audit.md` discovery agent.
+- DC-1 [RESOLVED 2026-05-24: One engineer dedicated 2-3 day sprint — comprehensive audit + sweep beats per-tick incremental grep for a visual-consistency class fix.] Per-page audit ownership — per-tick grep vs one-shot discovery doc. Rec: one-shot `docs/dark-mode-audit.md` discovery agent.
 - DC-2 [PENDING] Page priority order — issue-number / sub-brand / user-traffic. Rec: user-traffic with issue-number fallback.
 - DC-3 [PENDING] Scope extent — 14 named pages vs comprehensive audit. Rec: comprehensive (5-min grep add-on).
 - DC-4 [PENDING] Dark-mode toggle UX + persistence sub-cluster. Rec: sibling sub-cluster covering #862/#868/#869/#870/#876.
 - DC-5 [PENDING] Wellness vertical scope — own cluster or shared. Rec: VERIFY before assuming (one-shot grep).
 
 ### PRD_EXCEL_SOFTWARE_ACCOUNTING.md (6 pending)
-- DC-1 [PENDING] Transport — API path vs CSV path. Rec: API if vendor has idempotency, else CSV.
+- DC-1 [RESOLVED 2026-05-24: REST API path — when Yasin delivers vendor spec; stub today against assumed contract so transport-layer code can scaffold.] Transport — API path vs CSV path. Rec: API if vendor has idempotency, else CSV.
 - DC-2 [PENDING] CSV path: SFTP vs local NFS mount. Rec: SFTP (consistent ops).
 - DC-3 [PENDING] Per-tenant directory structure — `/tenants/<slug>/<date>.csv` vs flat. Rec: hierarchical.
 - DC-4 [PENDING] Reconciliation discrepancy threshold. Rec: any diff into queue (FR-9).
@@ -123,15 +123,15 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 - DC-6 [PENDING] Cancellation handling — re-export vs cancellation-notification. Rec: re-export with `status=cancelled`.
 
 ### PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md (6 pending)
-- DC-1 [PENDING] Browser runtime — Playwright vs MCP-via-LLM. Rec: Playwright (deterministic + free + Phase 1 cost-predictable).
+- DC-1 [RESOLVED 2026-05-24: Playwright headless Chromium server-side — deterministic + zero per-call LLM cost + reuses existing playwright/chromium ops surface.] Browser runtime — Playwright vs MCP-via-LLM. Rec: Playwright (deterministic + free + Phase 1 cost-predictable).
 - DC-2 [PENDING] Initial airline priority. Rec: Phase 1 = IndiGo + Air India + Vistara + Emirates (~85% volume).
 - DC-3 [PENDING] Containerization / hosting alongside cron engines. Rec: containerize Playwright + Chromium.
 - DC-4 [PENDING] Retry policy on `fallback-agent` rows. Rec: once at next 15-min cron tick.
-- DC-5 [PENDING] ToS audit pre-launch counsel review. Rec: mandatory for all 4 Phase 1 airlines.
+- DC-5 [RESOLVED 2026-05-24: Counsel mandatory for all 4 Phase 1 airlines — bundled into the single counsel-owned session covering all 5 counsel items.] ToS audit pre-launch counsel review. Rec: mandatory for all 4 Phase 1 airlines.
 - DC-6 [PENDING] Parent completion-notification channel + timing. Rec: reuse `/deliver` endpoint (Q9 cred-blocked).
 
 ### PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md (6 pending)
-- DC-1 [PENDING] Repo location — separate `globussoft-flight-plugin` vs `chrome-extension/` subdir. Rec: separate repo.
+- DC-1 [RESOLVED 2026-05-24: Separate repo `globussoft-flight-plugin` — Chrome Web Store publishing + version cadence + manifest lifecycle differ enough from main CRM to warrant repo isolation.] Repo location — separate `globussoft-flight-plugin` vs `chrome-extension/` subdir. Rec: separate repo.
 - DC-2 [PENDING] Chrome Web Store publisher account — GS / Travel Stall / hybrid. Rec: GS + Yasin co-admin (hybrid).
 - DC-3 [PENDING] Airline coverage priority for first 3. Rec: IndiGo + Air India + Emirates (3-week rollout).
 - DC-4 [PENDING] Auth model — per-advisor / per-tenant / OAuth. (See PRD for trade-off.)
@@ -139,22 +139,22 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 - DC-6 [PENDING] Demo environment config — build-time vs runtime endpoint discovery. Rec: config-by-build, 2 distinct extension IDs (dev + prod).
 
 ### PRD_PASSPORT_OCR.md (5 pending)
-- PC-1 [PENDING] OCR vendor — Google DocAI / Azure Form Recognizer / hybrid / Indian alt. Rec: Google DocAI V1.
-- PC-2 [PENDING] Data residency — strict India-region pin vs loose. Rec: strict (`asia-south1` Mumbai).
-- PC-3 [PENDING] Consent text wording. Rec: mirror Q2 Aadhaar consent format (counsel review).
+- PC-1 [RESOLVED 2026-05-24: Google Document AI — best OCR quality for Indian passports + asia-south1 region available; unlocks PC-2 residency pin.] OCR vendor — Google DocAI / Azure Form Recognizer / hybrid / Indian alt. Rec: Google DocAI V1.
+- PC-2 [RESOLVED 2026-05-24: Strict (`asia-south1` Mumbai) — bundled into the single counsel-owned session covering all 5 counsel items.] Data residency — strict India-region pin vs loose. Rec: strict (`asia-south1` Mumbai).
+- PC-3 [RESOLVED 2026-05-24: Mirror Q2 Aadhaar consent format — bundled into the single counsel-owned session covering all 5 counsel items.] Consent text wording. Rec: mirror Q2 Aadhaar consent format (counsel review).
 - PC-4 [PENDING] Manual fallback SLA. Rec: 24h TMC+RFU; same-day Visa Sure.
 - PC-5 [PENDING] Re-upload attempt limit before operator intervention. Rec: 3 attempts then notify.
 
 ### PRD_RATEHAWK_INTEGRATION.md (6 pending)
-- DC-1 [PENDING] Pricing model with RateHawk — per-API-call vs per-booking. Rec: pick whichever Yasin negotiates; PRD assumes per-call.
+- DC-1 [RESOLVED 2026-05-24: Per-API-call cap (cents-per-search-query) — aligns with PRD assumption + lets per-tenant TenantSetting budget cap pattern govern cost.] Pricing model with RateHawk — per-API-call vs per-booking. Rec: pick whichever Yasin negotiates; PRD assumes per-call.
 - DC-2 [PENDING] Config storage — new model vs extend `Integration`. Rec: extend `Integration` (consistent).
 - DC-3 [PENDING] Rate caching policy — 5-min default configurable per tenant. Rec: not configurable v1.
-- DC-4 [PENDING] Lowest-rate auto-pick tiebreaker — refundability vs raw lowest. Rec: refundability-preferred.
+- DC-4 [RESOLVED 2026-05-24: Refundability-preferred auto-pick + operator override + notify — inherits the standardised auto-with-override UX theme.] Lowest-rate auto-pick tiebreaker — refundability vs raw lowest. Rec: refundability-preferred.
 - DC-5 [PENDING] Error UX on 0 results. Rec: "no inventory" + manual-quote CTA.
 - DC-6 [PENDING] Phase-2 multi-vendor expansion — side-by-side clients vs unified abstraction. Rec: side-by-side (no premature abstraction).
 
 ### PRD_RFU_GROUND_SERVICES.md (6 pending)
-- D-5.2.a [PENDING] Scrape-vs-partner-API per hotel portal (per-portal call). Counsel-owned (ToS review).
+- D-5.2.a [RESOLVED 2026-05-24: Counsel-owned per-portal ToS review — bundled into the single counsel-owned session covering all 5 counsel items.] Scrape-vs-partner-API per hotel portal (per-portal call). Counsel-owned (ToS review).
 - D-5.2.b [PENDING] Group-booking flow — single PNR per leg vs per-pilgrim individual PNRs.
 - D-5.2.c [PENDING] Auto-confirmation policy — auto-book on cheapest vs human review (matches RateHawk default).
 - D-5.2.d [PENDING] Sub-agent margin override — fixed % / per-leg / per-vendor.
@@ -205,7 +205,7 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 - DD-5.8 [PENDING] Customer portal — same codebase or separate mobile-optimised build. Rec: same codebase with `data-surface="portal"` scoping.
 
 ### PRD_PLANS_BILLING_SELF_SERVE.md (6 pending)
-- DD-5.1 [PENDING] Plan tiers + per-tier feature matrix — Free/Starter/Pro/Enterprise boundaries + user/record/API quotas + gated integrations. Owner: Globussoft product.
+- DD-5.1 [RESOLVED 2026-05-24: Free / Starter / Pro / Enterprise (4 tiers) — per-tier feature matrix + quotas + gated integrations to be ratified during implementation.] Plan tiers + per-tier feature matrix — Free/Starter/Pro/Enterprise boundaries + user/record/API quotas + gated integrations. Owner: Globussoft product.
 - DD-5.2 [PENDING] Cancellation policy — grace-period length, refund rules, monthly-vs-annual differences. Owner: Globussoft commercial/legal.
 - DD-5.3 [PENDING] Payment-method storage — Stripe Customer / Razorpay Customer / both (per-tenant-currency routing). Owner: Globussoft + #848 author.
 - DD-5.4 [PENDING] Usage metering granularity — per-record / per-action, sliding 30d vs calendar-month, metered+capped vs metered+overage. Owner: Globussoft product.
@@ -214,7 +214,7 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 
 ### PRD_THEME_MANAGEMENT.md (6 pending)
 - DD-5.1 [PENDING] Toggle placement — top nav / sidebar / both. Owner: PM/Yasin.
-- DD-5.2 [PENDING] User pref vs tenant default conflict on first login — which wins. Rec: user wins (localStorage migration is explicit choice).
+- DD-5.2 [RESOLVED 2026-05-24: User preference wins — localStorage migration is treated as an explicit choice; tenant default only applies when user has no preference set.] User pref vs tenant default conflict on first login — which wins. Rec: user wins (localStorage migration is explicit choice).
 - DD-5.3 [PENDING] Per-sub-brand theme — opt-in vs auto-applied. Rec: auto-applied (per-sub-brand override is the explicit opt-in).
 - DD-5.4 [PENDING] System preference responsiveness in `system` mode — live matchMedia listener vs on-next-load. Rec: keep live (current behavior).
 - DD-5.5 [PENDING] Customer portal theme — always sub-brand default vs honor visitor preference. Rec: always sub-brand default.
@@ -236,7 +236,7 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 
 ### PRD_TRAVEL_PER_SUBBRAND_BRANDING.md (6 pending)
 - DD-5.1 [PENDING] Custom font support — Google Fonts only vs custom-font-upload. Rec: Google Fonts only v1; revisit if Yasin's brand handover specifies paid font.
-- DD-5.2 [PENDING] Brand-kit storage shape — extend `Tenant.subBrandConfigJson` vs new `BrandKit` Prisma model. Rec: new BrandKit model (version history + WCAG + audit trails want proper columns).
+- DD-5.2 [RESOLVED 2026-05-24: New BrandKit Prisma model — version history + WCAG + audit trails want proper columns; replaces JSON-blob approach.] Brand-kit storage shape — extend `Tenant.subBrandConfigJson` vs new `BrandKit` Prisma model. Rec: new BrandKit model (version history + WCAG + audit trails want proper columns).
 - DD-5.3 [PENDING] Default brand kits at seed time — ship 4 starter kits with placeholders vs require admin to populate. Rec: ship 4 starter kits via `seed-travel.js`.
 - DD-5.4 [PENDING] Logo placement on operator UI — sidebar header vs top-nav. Rec: sidebar header + small top-nav badge with sub-brand dropdown.
 - DD-5.5 [PENDING] Dark-mode handling — separate `logoDarkUrl` per sub-brand vs auto-derive via CSS `filter: invert()`. Rec: require logoDarkUrl when light logo inverts poorly; auto-derive fallback.
@@ -266,7 +266,7 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 - DD-5.5 [PENDING] Offline mode scope — queue-and-sync / read-only / no-offline. Rec: no-offline Phase 1 with banner; queue-and-sync separate Phase 2 PRD.
 
 ### PRD_WELLNESS_RBAC.md (6 pending)
-- DD-5.1 [PENDING] Cashier role — extend `wellnessRole` enum with `'cashier'` vs separate `salesRole` column. Rec: extend wellnessRole v1.
+- DD-5.1 [RESOLVED 2026-05-24: Extend `wellnessRole` enum with `'cashier'` — minimises schema surface; DD-5.6 phiReadGate interaction tracked at code level.] Cashier role — extend `wellnessRole` enum with `'cashier'` vs separate `salesRole` column. Rec: extend wellnessRole v1.
 - DD-5.2 [PENDING] Owner singleton vs plural — keep `Tenant.ownerId` conceptually singular vs allow multi-owner for clinic chains. Rec: keep singular v1.
 - DD-5.3 [PENDING] Per-tenant role customization (admin defines custom labels + permission bitmaps) — Phase 2 only, explicitly out-of-scope here (FR-3.1.d).
 - DD-5.4 [PENDING] Unauthorized-navigation handling — dedicated `/403?role=...` page vs redirect-to-role-landing vs `<RoleAccessDenied>` inline component. Rec: inline component.
@@ -379,11 +379,96 @@ These are interlocked decisions across sibling PRDs — settling them in isolati
 
 ## Resolution log
 
-_(empty — populate as decisions land)_
+### 2026-05-24 — Product-call session (27 decisions resolved)
+
+Trigger: User cron-prompt directive after viewing DECISIONS_TRACKER.md. 7 AskUserQuestion rounds × ~4 decisions each.
+
+**Resolved (cross-cutting themes — all 6):**
+- Fork-vs-extend: FORK all three (TravelQuote / TravelInvoice / TravelSupplier — logged 2026-05-23)
+- Per-tenant budget cap: TenantSetting row + env-var default + hard-stop at cap + Slack alert at 80% (AdsGPT DC-2 $50/mo, AI_CALLING DC-1 $100/mo + 90s call ceiling, RateHawk DC-1 per-call cents-cap)
+- AI model + vendor: mixed router; Claude primary for narrative, GPT-4 fallback; keep llmRouter pattern (AI_ERA_CRM_REBUILD D3); OpenAI Phase 1 for embeddings + adapter abstraction (D1)
+- Counsel-owned items: single combined counsel session for all 5 (Passport OCR PC-2 + PC-3, AI Calling DC-5, Airline DC-5, RFU D-5.2.a)
+- Auto-vs-prompt UX: auto-with-override + notify operator (Multichannel DD-5.1, Pipeline Kanban DD-5.2, AI Calling DC-2, RateHawk DC-4)
+- Sub-brand defaulting: already shipped via `621aab7` (AI Calling DC-3 + AI Calling DC-7 settle by extension)
+
+**Resolved (block-immediate implementation):**
+- PRD_TRAVEL_GST_COMPLIANCE DD-5.4 — Excel Software handover (couples to Q8 cred-chase)
+- PRD_TRAVEL_BILLING DD-5.3 — sub-brand home currency + operator override
+
+**Resolved (block-per-PRD implementation):**
+- PRD_BOOKING_EXPEDIA_DIRECT DC-1 — Booking.com first, Expedia Phase 2
+- PRD_AIRLINE_WEBCHECKIN_AUTOMATION DC-1 — Playwright headless Chromium server-side
+- PRD_FLIGHT_PLUGIN_CHROME_EXTENSION DC-1 — separate `globussoft-flight-plugin` repo
+- PRD_DARK_MODE_CLUSTER DC-1 — one engineer dedicated 2-3 day sprint
+- PRD_EXCEL_SOFTWARE_ACCOUNTING DC-1 — REST API path (stub today against assumed contract)
+- PRD_PASSPORT_OCR PC-1 — Google Document AI
+
+**Resolved (per-PRD details with downstream impact):**
+- PRD_TRAVEL_GST_COMPLIANCE DD-5.2 — operator-maintained Admin UI for tax rates
+- PRD_TRAVEL_PER_SUBBRAND_BRANDING DD-5.2 — new BrandKit Prisma model (replaces JSON-blob)
+- PRD_TRAVEL_PIPELINE_KANBAN DD-5.1 — `@dnd-kit/core`
+- PRD_TRAVEL_B2B_AGENT_PORTAL DD-5.1 — new routes in existing app (Option B v1, fork plan documented)
+- PRD_TRAVEL_B2B_AGENT_PORTAL DD-5.2 — hybrid rule-based + operator override
+- PRD_TRAVEL_MULTICHANNEL_LEADS DD-5.3 — most-specific routing rule wins
+- PRD_PLANS_BILLING_SELF_SERVE DD-5.1 — 4 tiers (Free / Starter / Pro / Enterprise)
+- PRD_WELLNESS_RBAC DD-5.1 — extend `wellnessRole` enum with `'cashier'`
+- PRD_THEME_MANAGEMENT DD-5.2 — user preference wins on first-login conflict
+- PRD_AI_ERA_CRM_REBUILD D5 — teammate-name defaults user-renameable, vertical-appropriate
+
+**Still pending (~165 items):** PRD-internal implementation details — none gate immediate implementation work. Each PRD has 2-5 remaining DD-5.X rows that are settle-during-implementation shape.
+
+**Next steps unblocked by this session:**
+- Travel-vertical schema cluster: 3 new Prisma models (TravelQuote / TravelInvoice / TravelSupplier) can scaffold
+- Per-tenant budget cap helper: 1 backend lib module + TenantSetting model + admin UI (shared across AdsGPT + AI Calling + RateHawk)
+- AI provider mixed-router: existing llmRouter.js validated; D1 OpenAI client adapter can scaffold
+- BrandKit Prisma model: schema design unblocked (replaces JSON-blob approach)
+- Travel B2B Agent Portal: routes-in-existing-app scaffolding unblocked
+- Pipeline Kanban: `@dnd-kit/core` library pin unblocks frontend implementation
+- Booking.com integration: vendor onboarding clock can start
+- Passport OCR: Google Document AI client + asia-south1 residency pin unblocked
+- Plans + Billing: 4-tier matrix work unblocked (commercial/legal still owns DD-5.2)
+- Flight plugin: separate repo scaffold unblocked
+- Counsel session: 5 items can batch into one billable session
 
 | Date | PRD | DD/DC/PC ID | Decision | Ratified by |
 |---|---|---|---|---|
-| _example_ | _PRD_TRAVEL_QUOTE_BUILDER.md_ | _DD-5.1_ | _FORK_ | _commit XYZ + Suresh sign-off_ |
+| 2026-05-23 | PRD_TRAVEL_QUOTE_BUILDER.md | DD-5.1 | FORK `TravelQuote` | Product-call session |
+| 2026-05-23 | PRD_TRAVEL_BILLING.md | DD-5.1 | FORK `TravelInvoice` | Product-call session |
+| 2026-05-23 | PRD_TRAVEL_SUPPLIER_MASTER.md | DD-5.1 | FORK `TravelSupplier` | Product-call session |
+| 2026-05-24 | PRD_TRAVEL_GST_COMPLIANCE.md | DD-5.2 | Operator-maintained Admin UI | 2026-05-24 session |
+| 2026-05-24 | PRD_TRAVEL_GST_COMPLIANCE.md | DD-5.4 | Excel Software handover | 2026-05-24 session |
+| 2026-05-24 | PRD_TRAVEL_BILLING.md | DD-5.3 | Sub-brand home + operator override | 2026-05-24 session |
+| 2026-05-24 | PRD_TRAVEL_MULTICHANNEL_LEADS.md | DD-5.1 | Auto-merge + notify | 2026-05-24 session |
+| 2026-05-24 | PRD_TRAVEL_MULTICHANNEL_LEADS.md | DD-5.3 | Most-specific wins | 2026-05-24 session |
+| 2026-05-24 | PRD_TRAVEL_PIPELINE_KANBAN.md | DD-5.1 | `@dnd-kit/core` | 2026-05-24 session |
+| 2026-05-24 | PRD_TRAVEL_PIPELINE_KANBAN.md | DD-5.2 | Socket + manual button | 2026-05-24 session |
+| 2026-05-24 | PRD_TRAVEL_B2B_AGENT_PORTAL.md | DD-5.1 | Option B (new routes v1) | 2026-05-24 session |
+| 2026-05-24 | PRD_TRAVEL_B2B_AGENT_PORTAL.md | DD-5.2 | Hybrid (rule-based + override) | 2026-05-24 session |
+| 2026-05-24 | PRD_TRAVEL_PER_SUBBRAND_BRANDING.md | DD-5.2 | New BrandKit Prisma model | 2026-05-24 session |
+| 2026-05-24 | PRD_ADSGPT_MARKETING_REPORTS.md | DC-2 | $50/mo TenantSetting cap | 2026-05-24 session |
+| 2026-05-24 | PRD_AI_CALLING_CALLIFIED.md | DC-1 | $100/mo TenantSetting cap + 90s | 2026-05-24 session |
+| 2026-05-24 | PRD_AI_CALLING_CALLIFIED.md | DC-2 | Auto-gate + override + notify | 2026-05-24 session |
+| 2026-05-24 | PRD_AI_CALLING_CALLIFIED.md | DC-3 | Yasin content team drafts | 2026-05-24 session |
+| 2026-05-24 | PRD_AI_CALLING_CALLIFIED.md | DC-5 | Counsel-drafted TRAI disclosure | 2026-05-24 session |
+| 2026-05-24 | PRD_AI_CALLING_CALLIFIED.md | DC-7 | `aiCallingEnabled` per tenant | 2026-05-24 session |
+| 2026-05-24 | PRD_AI_ERA_CRM_REBUILD.md | D1 | OpenAI + adapter abstraction | 2026-05-24 session |
+| 2026-05-24 | PRD_AI_ERA_CRM_REBUILD.md | D3 | Mixed router (Claude primary + GPT-4) | 2026-05-24 session |
+| 2026-05-24 | PRD_AI_ERA_CRM_REBUILD.md | D5 | User-renameable defaults | 2026-05-24 session |
+| 2026-05-24 | PRD_BOOKING_EXPEDIA_DIRECT.md | DC-1 | Booking.com first | 2026-05-24 session |
+| 2026-05-24 | PRD_DARK_MODE_CLUSTER.md | DC-1 | One eng 2-3 day sprint | 2026-05-24 session |
+| 2026-05-24 | PRD_EXCEL_SOFTWARE_ACCOUNTING.md | DC-1 | REST API path | 2026-05-24 session |
+| 2026-05-24 | PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md | DC-1 | Playwright headless | 2026-05-24 session |
+| 2026-05-24 | PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md | DC-5 | Counsel batch | 2026-05-24 session |
+| 2026-05-24 | PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md | DC-1 | Separate repo | 2026-05-24 session |
+| 2026-05-24 | PRD_PASSPORT_OCR.md | PC-1 | Google Document AI | 2026-05-24 session |
+| 2026-05-24 | PRD_PASSPORT_OCR.md | PC-2 | `asia-south1` pin (counsel batch) | 2026-05-24 session |
+| 2026-05-24 | PRD_PASSPORT_OCR.md | PC-3 | Mirror Q2 Aadhaar (counsel batch) | 2026-05-24 session |
+| 2026-05-24 | PRD_RATEHAWK_INTEGRATION.md | DC-1 | Per-call cents cap | 2026-05-24 session |
+| 2026-05-24 | PRD_RATEHAWK_INTEGRATION.md | DC-4 | Refundability-preferred + override | 2026-05-24 session |
+| 2026-05-24 | PRD_RFU_GROUND_SERVICES.md | D-5.2.a | Counsel batch (per-portal ToS) | 2026-05-24 session |
+| 2026-05-24 | PRD_PLANS_BILLING_SELF_SERVE.md | DD-5.1 | 4-tier (Free/Starter/Pro/Ent) | 2026-05-24 session |
+| 2026-05-24 | PRD_WELLNESS_RBAC.md | DD-5.1 | Extend wellnessRole with cashier | 2026-05-24 session |
+| 2026-05-24 | PRD_THEME_MANAGEMENT.md | DD-5.2 | User pref wins | 2026-05-24 session |
 
 ---
 

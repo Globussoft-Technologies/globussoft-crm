@@ -759,6 +759,24 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry**
 - **Empty-tick counter RESET to 0** (genuine ship via synthesis, not phantom)
 
+**Tick #36 (cron) — 1/1 SHIPPED (lean main-thread), #929 audit + 3/5 emission:**
+
+| SHA | Type | What |
+|---|---|---|
+| `94b3529` | #929 Part 3/5 | **`visa.status_changed` webhook emission** in `routes/travel_visa.js` PATCH handler. Extends `existing` query to include `status` for transition detection; fires `eventBus.emitEvent('visa.status_changed', {id, contactId, subBrand, oldStatus, newStatus, tenantId, changedAt})` after `prisma.update` succeeds. Fire-and-forget — subscriber failures NEVER 500 the PATCH. Mirror of canonical `payment.collected` pattern from billing.js wave-6a. +33/-1. **#929 audit posted as gh comment:** 2 of 5 requested events were ALREADY emitted under canonical names (#1 invoice.created via billing.js wave-6a found tick #18; #2 payment.received → canonical `payment.collected` found this tick). Issue re-scoped to 2 remaining (`quote.sent` + `itinerary.accepted`) as single-line follow-up commits. |
+
+**One cron-learning candidate:**
+
+**Issue-naming-vs-canonical-codebase-naming drift** — #929 asked for `payment.received` but codebase emits canonical `payment.collected`. Same class as #828's "no permission" toast on already-fixed sidebar gating + #837/#839 prescription numbering swap. **5th instance of phantom-from-issue-naming-assumption pattern** — issues are filed against developer mental-models of the codebase rather than the codebase's actual names. **Recommended:** verify-before-pickup grep on issue's literal event/field/feature names BEFORE accepting issue framing.
+
+**Cumulative session totals (36 ticks):**
+- **105 commits** (+2 this tick: 1 emission + verdict pending)
+- **23 GitHub issues closed + 3 partials** (no closures — #929 stays open with re-scoped 2-of-5 remaining)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + **2 emission-already-shipped findings** caught this tick
+- Zero rebase conflicts, zero over-commits across all 105 commits
+- **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry**
+- **4 backend endpoint additions lifetime** (+1 webhook emission today; previous: category upload POST/DELETE + branding logo stream)
+
 **PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc + 1 synthesis** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |

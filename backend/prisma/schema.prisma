@@ -3316,6 +3316,11 @@ model ProductCategory {
   parent    ProductCategory?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children  ProductCategory[] @relation("CategoryHierarchy")
   isActive  Boolean           @default(true)
+  // #845 — optional image/icon thumbnail for the category. Served as a static
+  // URL like "/uploads/product-categories/pc-<stamp>.png" via the multer disk
+  // pattern from routes/booking_pages.js. Nullable + VarChar(500) keeps the
+  // migration additive (no [allow-*] bless marker needed per CLAUDE.md).
+  imageUrl  String?           @db.VarChar(500)
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
 

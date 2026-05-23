@@ -4,13 +4,21 @@
 // can be filed under (parent + children). The DnD-to-nest from the spec is
 // trimmed back here to a "select parent" dropdown — full DnD is a v3.5
 // extension once the model is real and the data has shape.
+//
+// #845 (May 2026) — category image upload. Mirrors the create-then-upload
+// flow used by BookingPages: form persists the category first (POST /), then
+// uploads the selected file to POST /:id/upload which sets imageUrl. Edit
+// mode uploads directly against the existing id. Remove button calls DELETE
+// /:id/upload to clear the image without deleting the category itself.
 
 import { useEffect, useState } from 'react';
-import { Layers, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Layers, Plus, Pencil, Trash2, ImageIcon, X as XIcon } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 
-const EMPTY_FORM = { name: '', parentId: '', isActive: true };
+const EMPTY_FORM = { name: '', parentId: '', isActive: true, imageUrl: '' };
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2 MB — matches backend multer limit
+const IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml';
 
 export default function ProductCategories() {
   const notify = useNotify();
@@ -21,6 +29,10 @@ export default function ProductCategories() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  // #845 — pending image File before submit (create mode uploads after the
+  // POST returns an id; edit mode uploads against the existing id immediately).
+  const [pendingImage, setPendingImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
 
   const load = () => {
     setLoading(true);
@@ -35,6 +47,8 @@ export default function ProductCategories() {
     setForm(EMPTY_FORM);
     setEditingId(null);
     setShowForm(false);
+    setPendingImage(null);
+    setImagePreview('');
   };
 
   const startEdit = (cat) => {
@@ -43,8 +57,72 @@ export default function ProductCategories() {
       name: cat.name || '',
       parentId: cat.parentId == null ? '' : String(cat.parentId),
       isActive: cat.isActive !== false,
+      imageUrl: cat.imageUrl || '',
     });
+    setPendingImage(null);
+    setImagePreview(cat.imageUrl || '');
     setShowForm(true);
+  };
+
+  // #845 — validate + preview the selected file. Browser-side size + type
+  // gating mirrors the backend multer config (2 MB, jpg/png/webp/svg).
+  const onImagePick = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (file.size > MAX_IMAGE_BYTES) {
+      notify.error('Image must be 2 MB or smaller');
+      e.target.value = '';
+      return;
+    }
+    if (!/^image\/(png|jpe?g|webp|svg\+xml)$/i.test(file.type)) {
+      notify.error('Only PNG, JPG, WebP, or SVG images are supported');
+      e.target.value = '';
+      return;
+    }
+    setPendingImage(file);
+    // FileReader gives us a synchronous-ish data: URL for the preview without
+    // a network round-trip.
+    const reader = new FileReader();
+    reader.onload = (ev) => setImagePreview(ev.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  // #845 — clear the pending or saved image. In edit mode this hits the
+  // server to actually drop the imageUrl + unlink the file; in create mode
+  // it just discards the pending pick.
+  const clearImage = async () => {
+    if (editingId && form.imageUrl) {
+      try {
+        await fetchApi(`/api/wellness/product-categories/${editingId}/upload`, { method: 'DELETE' });
+        notify.success('Image removed');
+        setForm((prev) => ({ ...prev, imageUrl: '' }));
+        load();
+      } catch (_err) { /* toasted */ return; }
+    }
+    setPendingImage(null);
+    setImagePreview('');
+  };
+
+  // #845 — upload the multipart file to the category-image endpoint. Used
+  // by both create (after the POST returns an id) and edit (against the
+  // existing id). Returns the server's normalised imageUrl on success.
+  const uploadImageFor = async (categoryId) => {
+    if (!pendingImage) return null;
+    const fd = new FormData();
+    fd.append('file', pendingImage);
+    // fetchApi can't be used for FormData (it JSON-stringifies); hit the API
+    // directly with the bearer token from localStorage.
+    const token = typeof window !== 'undefined' ? window.localStorage.getItem('token') : null;
+    const res = await fetch(`/api/wellness/product-categories/${categoryId}/upload`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: fd,
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error || 'Failed to upload image');
+    }
+    return res.json();
   };
 
   const submit = async (e) => {
@@ -56,19 +134,30 @@ export default function ProductCategories() {
         parentId: form.parentId ? parseInt(form.parentId) : null,
         isActive: form.isActive,
       };
+      let savedId = editingId;
       if (editingId) {
         await fetchApi(`/api/wellness/product-categories/${editingId}`, {
           method: 'PUT',
           body: JSON.stringify(payload),
         });
-        notify.success(`Updated "${payload.name}"`);
       } else {
-        await fetchApi('/api/wellness/product-categories', {
+        const created = await fetchApi('/api/wellness/product-categories', {
           method: 'POST',
           body: JSON.stringify(payload),
         });
-        notify.success(`Created "${payload.name}"`);
+        savedId = created?.id;
       }
+      // #845 — upload the image AFTER the category exists. If the row save
+      // succeeds but the upload fails, the category is still created/updated
+      // and the user can re-upload; we surface the upload-specific error.
+      if (pendingImage && savedId) {
+        try {
+          await uploadImageFor(savedId);
+        } catch (upErr) {
+          notify.error(upErr.message || 'Failed to upload image');
+        }
+      }
+      notify.success(editingId ? `Updated "${payload.name}"` : `Created "${payload.name}"`);
       reset();
       load();
     } catch (_err) { /* fetchApi already toasted */ }
@@ -129,6 +218,55 @@ export default function ProductCategories() {
             <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
             Active
           </label>
+          {/* #845 — image upload row spans the full grid width. Preview shows
+              the staged File (create mode) or the existing imageUrl (edit
+              mode). Remove button clears the pending pick or, in edit mode,
+              hits the DELETE /upload endpoint. */}
+          <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div
+              style={{
+                width: 64,
+                height: 64,
+                borderRadius: 8,
+                border: '1px dashed var(--border-color)',
+                background: 'var(--input-bg, rgba(255,255,255,0.04))',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
+                flexShrink: 0,
+              }}
+              aria-label="Category image preview"
+            >
+              {imagePreview ? (
+                <img src={imagePreview} alt="Category preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <ImageIcon size={22} color="var(--text-secondary)" aria-hidden="true" />
+              )}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flex: 1, minWidth: 200 }}>
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                Image (optional) — JPG / PNG / WebP / SVG, up to 2 MB
+              </label>
+              <input
+                type="file"
+                accept={IMAGE_ACCEPT}
+                onChange={onImagePick}
+                aria-label="Choose category image"
+                style={{ fontSize: '0.85rem' }}
+              />
+            </div>
+            {(imagePreview || pendingImage) && (
+              <button
+                type="button"
+                onClick={clearImage}
+                style={{ ...iconBtnStyle, color: 'var(--danger-color, #dc2626)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                aria-label="Remove image"
+              >
+                <XIcon size={14} /> Remove
+              </button>
+            )}
+          </div>
           <button type="submit" disabled={saving} style={{ ...primaryBtnStyle, gridColumn: '1 / -1' }}>
             {saving ? 'Saving…' : editingId ? 'Save changes' : 'Create category'}
           </button>
@@ -166,6 +304,7 @@ export default function ProductCategories() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
+                <th style={cellStyle}>Image</th>
                 <th style={cellStyle}>Name</th>
                 <th style={cellStyle}>Parent</th>
                 <th style={cellStyle}>Products</th>
@@ -177,6 +316,15 @@ export default function ProductCategories() {
             <tbody>
               {filteredCategories.map((c) => (
                 <tr key={c.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                  <td style={cellStyle}>
+                    {c.imageUrl ? (
+                      <img src={c.imageUrl} alt={`${c.name} icon`} style={{ width: 32, height: 32, borderRadius: 4, objectFit: 'cover' }} />
+                    ) : (
+                      <span style={{ display: 'inline-flex', width: 32, height: 32, borderRadius: 4, border: '1px dashed var(--border-color)', alignItems: 'center', justifyContent: 'center' }} aria-hidden="true">
+                        <ImageIcon size={14} color="var(--text-secondary)" />
+                      </span>
+                    )}
+                  </td>
                   <td style={cellStyle}>{c.name}</td>
                   <td style={cellStyle}>{c.parentId ? (categories.find((p) => p.id === c.parentId)?.name || `#${c.parentId}`) : '—'}</td>
                   <td style={cellStyle}>{c._count?.products ?? 0}</td>

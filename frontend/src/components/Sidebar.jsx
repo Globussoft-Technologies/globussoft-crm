@@ -1012,7 +1012,8 @@ function renderTravelNav({
       <Link to="/travel/cost-master" icon={DollarSign} label="Cost Master" />
       {isAdmin && <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" />}
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />
-      {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Suppliers" />}
+      <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" />
+      {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />}
       {isAdmin && <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" />}
 
       {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells, admin-only.

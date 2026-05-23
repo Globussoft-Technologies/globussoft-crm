@@ -540,7 +540,31 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **27 PRDs shipped + 1 meta-doc** (added PRD_TRAVEL_ITINERARY_UPGRADES + PRD_MOBILE_RESPONSIVENESS)
 - **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining**
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **27 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
+**Tick #26 (cron) — 3/3 SHIPPED, theme-mgmt PRD + 2 inventory closures:**
+
+| SHA | Type | What |
+|---|---|---|
+| `a159394` | New PRD (28th) | **`docs/PRD_THEME_MANAGEMENT.md`** (223 lines) — **coordinating PRD for #862 + #870 + #876** (all OPEN verified). 13 FRs across 4 groups (in-app toggle / server persistence / per-sub-brand / migration); 6 DDs; 7 OQs; 10 ACs. **4 schema additions documented** (additive nullable, no bless markers): `User.themePreference`, `User.subBrandThemeOverrides`, `Tenant.defaultThemePreference`, `Tenant.featureFlags.themeManagementV2`. Phased delivery: A (toggle 1d) → B (server 3-5d) → C (per-sub-brand 4-9d); 8-15 eng-days total. Sibling to PRD_DARK_MODE_CLUSTER (per-page CSS) + PRD_TRAVEL_PER_SUBBRAND_BRANDING (brand kit palette). **Refs #862 #870 #876.** |
+| `edf7ff5` | Small fix #843 | **Inventory Receipts** — 3 fixes: search bar + date filter + default-today. Mirrors `Payments.jsx` (#846) canonical date-filter pattern — **first re-use confirms the pattern.** Search filters client-side across receipt #, supplier, product name/SKU, batch, notes. Backend already supports `?from=&to=` via `validateDateRange` (#665). +176/-15. vite build clean. **Closes #843.** |
+| `9f28fda` | Small fix #844 | **Product Categories search bar** — added input with "search via consumables" placeholder; filters on name+description case-insensitive; distinct empty-state for no-matches vs no-categories. Uses theme tokens (var(--input-bg) etc.) — resolves under both themes. +33/-1. vite build clean. **Closes #844.** |
+
+**Three cron-learning candidates surfaced:**
+
+1. **Payments.jsx is now the canonical date-filter pattern — 2nd instance confirmed** (Agent 2). First re-use across InventoryReceipts. If 3rd page adopts the preset-dropdown shape → extract shared `DateRangePicker` component (rule-of-3 trigger).
+
+2. **Issue placeholder text can be aspirational, not descriptive** (Agent 2) — #843 quoted a search placeholder that didn't exist in codebase. The verify-before-pickup grep caught it, but the lesson is: **when an issue quotes UI strings, grep the codebase for them — absence means the issue is asking for NEW UI, not a tweak to existing.** Worth one-liner on next instance.
+
+3. **Rebase BEFORE editing, not after editing + before committing** (Agent 3) — minor process glitch when agent edited first then tried to rebase with unstaged changes. Self-evident but worth codifying in dispatch templates.
+
+**Cumulative session totals (26 ticks):**
+- **77 commits** (+4 this tick: 1 PRD + 2 fixes + verdict pending)
+- **14 GitHub issues closed + 2 partials** (added #843 + #844)
+- 10 phantoms + 13 gaps + 1 self-regression caught
+- Zero rebase conflicts, zero over-commits across all 77 commits
+- **28 PRDs shipped + 1 meta-doc** (added PRD_THEME_MANAGEMENT)
+- **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining** (#862 #869 #870 #876 #877 — all now have coordinating PRD)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **28 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

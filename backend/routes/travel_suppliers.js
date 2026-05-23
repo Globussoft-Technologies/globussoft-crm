@@ -346,4 +346,312 @@ router.get(
   },
 );
 
+// ─── TravelSupplier CRUD (PRD_TRAVEL_SUPPLIER_MASTER DD-5.1) ──────────
+//
+// Mounted at /api/travel/suppliers (via the file's /api/travel base mount
+// in server.js:661 + the local "/suppliers" path prefix).
+//
+// The TravelSupplier model landed at commit fdb793e (tick #94) as the
+// fork-side of the symmetric Quote/Billing/Supplier decision. This block
+// ships the operator-facing CRUD scaffold — list/create/update/soft-delete.
+// It coexists alongside the SupplierCredential vault above (different
+// model, different concern: vault stores encrypted logins for airline
+// portals / GDS / payment gateways; this stores the operator-facing
+// supplier master — name, GSTIN, category).
+//
+// Future slices (not in this commit): supplier-payable ledger (PRD §3.3),
+// commission tracking (PRD §3.4), per-supplier reconciliation (PRD §3.5),
+// dispute escalation hooks (DD-5.4 deferred to Phase 2).
+//
+// Sub-brand isolation: every supplier carries .subBrand. Operator auth
+// (verifyToken) plus the sub-brand access set (getSubBrandAccessSet) gates
+// cross-sub-brand reads/writes — same pattern as travel_itineraries.js.
+
+const {
+  getSubBrandAccessSet,
+  canAccessSubBrand,
+  assertValidSubBrand,
+} = require("../middleware/travelGuards");
+const { writeAudit } = require("../lib/audit");
+
+const VALID_SUPPLIER_CATEGORIES = ["hotel", "flight", "transport", "visa-consul", "other"];
+
+function assertValidSupplierCategory(c) {
+  if (c == null) return;
+  if (!VALID_SUPPLIER_CATEGORIES.includes(c)) {
+    const err = new Error(
+      `supplierCategory must be one of: ${VALID_SUPPLIER_CATEGORIES.join(", ")}`,
+    );
+    err.status = 400;
+    err.code = "INVALID_SUPPLIER_CATEGORY";
+    throw err;
+  }
+}
+
+// GET /api/travel/suppliers
+// Honors ?subBrand=tmc (filter to that sub-brand) and ?includeInactive=1.
+router.get("/suppliers", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+    if (req.query.subBrand) {
+      assertValidSubBrand(String(req.query.subBrand));
+      where.subBrand = String(req.query.subBrand);
+    }
+    if (req.query.includeInactive !== "1" && req.query.includeInactive !== "true") {
+      where.isActive = true;
+    }
+    if (req.query.supplierCategory) {
+      assertValidSupplierCategory(String(req.query.supplierCategory));
+      where.supplierCategory = String(req.query.supplierCategory);
+    }
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed) {
+      where.subBrand = where.subBrand
+        ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
+        : { in: [...allowed] };
+    }
+
+    const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const skip = parseInt(req.query.offset, 10) || 0;
+
+    const [suppliers, total] = await Promise.all([
+      prisma.travelSupplier.findMany({
+        where,
+        orderBy: [{ subBrand: "asc" }, { supplierCategory: "asc" }, { name: "asc" }],
+        take,
+        skip,
+      }),
+      prisma.travelSupplier.count({ where }),
+    ]);
+    res.json({ suppliers, total, limit: take, offset: skip });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-sup] list suppliers error:", e.message);
+    res.status(500).json({ error: "Failed to list suppliers" });
+  }
+});
+
+// GET /api/travel/suppliers/:id
+router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const supplier = await prisma.travelSupplier.findFirst({
+      where: { id, tenantId: req.travelTenant.id },
+    });
+    if (!supplier) {
+      return res.status(404).json({ error: "Supplier not found", code: "NOT_FOUND" });
+    }
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, supplier.subBrand)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+    res.json(supplier);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-sup] get supplier error:", e.message);
+    res.status(500).json({ error: "Failed to get supplier" });
+  }
+});
+
+// POST /api/travel/suppliers — ADMIN/MANAGER only.
+// Required: name. Optional: contactPerson, phone, email, gstin,
+// addressLine, supplierCategory (whitelist), subBrand.
+router.post(
+  "/suppliers",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const {
+        name, contactPerson, phone, email, gstin,
+        addressLine, supplierCategory, subBrand,
+      } = req.body || {};
+
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({
+          error: "name required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      assertValidSupplierCategory(supplierCategory);
+      if (subBrand) assertValidSubBrand(subBrand);
+
+      // Sub-brand isolation: reject create that targets a sub-brand the
+      // caller can't access. Same pattern as travel_itineraries POST.
+      const targetSubBrand = subBrand || "tmc"; // default to first valid for safety
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, targetSubBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      const created = await prisma.travelSupplier.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          subBrand: targetSubBrand,
+          name: String(name).trim(),
+          contactPerson: contactPerson ? String(contactPerson) : null,
+          phone: phone ? String(phone) : null,
+          email: email ? String(email) : null,
+          gstin: gstin ? String(gstin) : null,
+          addressLine: addressLine ? String(addressLine) : null,
+          supplierCategory: supplierCategory || "other",
+          isActive: true,
+        },
+      });
+
+      await writeAudit(
+        "TravelSupplier",
+        "CREATE",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { name: created.name, subBrand: created.subBrand, supplierCategory: created.supplierCategory },
+      );
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] create supplier error:", e.message);
+      res.status(500).json({ error: "Failed to create supplier" });
+    }
+  },
+);
+
+// PUT /api/travel/suppliers/:id — ADMIN/MANAGER only.
+router.put(
+  "/suppliers/:id",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.travelSupplier.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Supplier not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, existing.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      const data = {};
+      const {
+        name, contactPerson, phone, email, gstin,
+        addressLine, supplierCategory, subBrand, isActive,
+      } = req.body || {};
+
+      if (name !== undefined) {
+        if (!String(name).trim()) {
+          return res.status(400).json({ error: "name must be non-empty", code: "INVALID_NAME" });
+        }
+        data.name = String(name).trim();
+      }
+      if (contactPerson !== undefined) data.contactPerson = contactPerson ? String(contactPerson) : null;
+      if (phone !== undefined) data.phone = phone ? String(phone) : null;
+      if (email !== undefined) data.email = email ? String(email) : null;
+      if (gstin !== undefined) data.gstin = gstin ? String(gstin) : null;
+      if (addressLine !== undefined) data.addressLine = addressLine ? String(addressLine) : null;
+      if (supplierCategory !== undefined) {
+        assertValidSupplierCategory(supplierCategory);
+        data.supplierCategory = supplierCategory || "other";
+      }
+      if (subBrand !== undefined) {
+        assertValidSubBrand(subBrand);
+        // Reject moving the supplier to a sub-brand the caller can't access.
+        if (!canAccessSubBrand(allowed, subBrand)) {
+          return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        }
+        data.subBrand = subBrand;
+      }
+      if (isActive !== undefined) data.isActive = Boolean(isActive);
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+
+      const updated = await prisma.travelSupplier.update({
+        where: { id },
+        data,
+      });
+
+      await writeAudit(
+        "TravelSupplier",
+        "UPDATE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { fields: Object.keys(data) },
+      );
+
+      res.json(updated);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] update supplier error:", e.message);
+      res.status(500).json({ error: "Failed to update supplier" });
+    }
+  },
+);
+
+// DELETE /api/travel/suppliers/:id — ADMIN/MANAGER only.
+// Soft-delete via isActive=false flip (preserve referential integrity
+// for any future TravelInvoice/ItineraryItem.supplierId references).
+router.delete(
+  "/suppliers/:id",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.travelSupplier.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Supplier not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, existing.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      await prisma.travelSupplier.update({
+        where: { id },
+        data: { isActive: false },
+      });
+
+      await writeAudit(
+        "TravelSupplier",
+        "DELETE",
+        id,
+        req.user.userId,
+        req.travelTenant.id,
+        { softDelete: true, name: existing.name, subBrand: existing.subBrand },
+      );
+
+      res.status(204).end();
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] delete supplier error:", e.message);
+      res.status(500).json({ error: "Failed to delete supplier" });
+    }
+  },
+);
+
 module.exports = router;

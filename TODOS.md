@@ -478,7 +478,28 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **23 PRDs shipped + 1 meta-doc (DECISIONS_TRACKER)** — 118 pending decisions surfaced for product team review
 - **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining**
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **23 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
+**Tick #23 (cron) — 3/3 SHIPPED, 2 PRDs + #846 Payments date filter closed:**
+
+| SHA | Type | What |
+|---|---|---|
+| `2441362` | New PRD (24th) | **`docs/PRD_TRAVEL_MARKETING_FLYER.md`** (236 lines, #908 P2). 22 FRs across 7 groups (editor / asset library / brand / output / distribution / AI / marketplace); 5 DDs (editor library Polotno-vs-build / asset storage / AI image-gen / marketplace moderation / brand-lock default); 3 cred deps (Q-MF-1 storage / Q-MF-2 overlaps AI Q-AI-3 / Q-MF-3 overlaps WhatsApp Q9); 10 ACs (4 verbatim from #908 + 6 expanded). **§1.2 existing-infrastructure table** with 9 surfaces pinned. Cross-refs AI_SURFACES/WHATSAPP/B2B_AGENT_PORTAL/QUOTE_BUILDER. **Refs #908.** |
+| `9fc6990` | New PRD (25th) | **`docs/PRD_TRAVEL_PER_SUBBRAND_BRANDING.md`** (212 lines, #911 P3). 5 FR groups (schema / admin UI / 9 consumer surfaces / context detection / upload validation) covering 30+ sub-FRs; 6 DDs (storage shape / font support / starter kits / logo placement / dark-mode / version history); 7 OQs; 10 ACs; 1 cred dep (Q-BR-1 brand assets, overlaps Q22). **9 consumer surfaces identified** (sidebar / operator UI / PDF / email / SMS-WhatsApp / portal / embed / landing / microsites) — only WABA currently consumes. Cross-refs B2B_AGENT_PORTAL/BILLING/QUOTE_BUILDER. **Refs #911.** |
+| `7348c9b` | Small fix #846 | **`/api/payments` date filter + Total Collected time-range presets.** Backend `?from=&to=` (both optional, independent; canonical `INVALID_DATE_RANGE` error code matched from billing.js — agent chose canon over prompt's literal); frontend Payments.jsx with preset `<select>` (All time / Today / Yesterday / Last 7 days / This month / Custom) + W/30D/90D/Y pill on KPI card via new optional `StatCard.rightAccessory` prop; +2 spec cases. **Default KPI window = last30 preserves prior behavior.** **Closes #846.** **Finding:** no shared DateRangePicker component exists in frontend/src/components/ — flagged for 2nd-instance promotion. |
+
+**One cron-learning candidate surfaced:**
+
+**Canon-over-prompt-literal judgment** (Agent 3) — prompt suggested error code `INVALID_DATE`; agent verified existing billing.js uses `INVALID_DATE_RANGE` and matched canon. Right judgment — error-code consistency across routes matters more than literal prompt fidelity. Worth a one-liner in agent-dispatch templates: "if a prompt-specified literal conflicts with codebase canon, follow canon + note in commit body."
+
+**Cumulative session totals (23 ticks):**
+- **68 commits** (+3 this tick: 2 PRDs + 1 fix)
+- **11 GitHub issues closed + 2 partials** (added #846)
+- 10 phantoms + 13 schema-or-spec gaps caught
+- Zero rebase conflicts, zero over-commits across all 68 commits
+- **25 PRDs shipped + 1 meta-doc (DECISIONS_TRACKER)** — 118+ pending decisions surfaced
+- **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining**
+- **+2 vitest cases** (payments.spec.js date-filter coverage)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **25 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

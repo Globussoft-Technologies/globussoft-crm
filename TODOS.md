@@ -516,7 +516,31 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - Zero rebase conflicts, zero over-commits across all 69 commits
 - 25 PRDs + 1 meta-doc unchanged this tick
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **25 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
+**Tick #25 (cron) — 3/3 SHIPPED, 2 PRDs + #842 closed:**
+
+| SHA | Type | What |
+|---|---|---|
+| `6d6691a` | New PRD (26th) | **`docs/PRD_TRAVEL_ITINERARY_UPGRADES.md`** (269 lines, #907 P2). 7 FR groups (template library / sightseeing master / visual editor / LLM suggest / cross-cutting / operator UX / master-data-grows-from-usage); 5 DDs; 3 Q-IT cred chases; 10 ACs; 8 OQs. **§1.2 existing-infrastructure table** with 11 surfaces (Itinerary CRUD, ItineraryItem polymorphism, Cost Master 5-cat enum, llmRouter /draft/regen consumer pattern at travel_itineraries.js:632-727, lib/travelPricing, subBrandConfigJson, pdfRenderer, csv_io, subBrandAccess RBAC). **PROMPT-DRIFT CAUGHT (2nd instance):** prompt described customer-facing upgrade flows; #907 is actually operator-facing tooling. Agent reshaped PRD to match issue body. Cross-refs AI_SURFACES/QUOTE_BUILDER/SUPPLIER_MASTER/BILLING/MARKETING_FLYER (shared LandingPageBuilder.jsx VisualBuilder pattern — both PRDs flag for extraction). **Refs #907.** |
+| `5ef2407` | New PRD (27th) | **`docs/PRD_MOBILE_RESPONSIVENESS.md`** (243 lines, #910 P3 — cross-cutting strategy PRD). 35+ FRs across 7 groups (breakpoint strategy / per-page priority / component patterns / navigation / touch-friendly / performance / testing); 8 DDs; 8 OQs; 10 ACs. **§1.2 pinned 10 existing surfaces** (MOBILE_BREAKPOINT_PX=900 at Layout.jsx:82, `frontend/src/styles/responsive.css`, CLAUDE.md's `repeat(auto-fit, minmax(min(100%, 240px), 1fr))` standing pattern, data-vertical body attribute, Sidebar render branches, theme files, Playwright config). Per-page priority: P0=10-15 / P1=~40 / P2=~30 / P3=~15. 6-phase rollout: Foundation 5d → P0 10d → Drawer-polish 5d → P1 20d → Component-level 10d → Test+Lighthouse 10d. **Refs #910.** |
+| `3ca7384` | Small fix #842 | **Inventory Adjustments "Filter by product" dropdown** populated via **union of master products + row-data fallback**. Root cause: `.catch(() => [])` on `/api/wellness/products` fetch silently degraded UX when fresh tenant had no products seeded OR fetch 4xx'd. Fix derives filter options from BOTH master list AND adjustments' joined `product` data (already returned by GET /inventory/adjustments include). De-duped by id via Map, sorted by name. Backend unchanged. +28/-1. vite build clean. **Closes #842.** |
+
+**Three cron-learning candidates surfaced:**
+
+1. **Prompt-drift vs GH issue (2nd confirmed instance)** — Agent 1 caught my prompt described customer-facing upgrades but #907 is operator-facing tooling. Verify-before-pickup `gh issue view` always runs before PRD-writer agents — pattern now confirmed across QUOTE_BUILDER (tick #19) + ITINERARY_UPGRADES (tick #25). **Promotable to standing-rule one-liner.**
+
+2. **Sibling-PRD substrate extraction** (Agent 1) — both #907 PRD and Marketing Flyer PRD consume `LandingPageBuilder.jsx` pattern. §1.2 table should flag "extract once" so two PRDs don't ship two different VisualBuilder components. Worth promoting if 3rd PRD targets the same substrate.
+
+3. **`.catch(() => [])` silently degrades filter UX** (Agent 3) — filter-population fetches whose data overlaps loaded row data should derive options as union, not from fetch alone. Worth one-liner standing rule on next instance.
+
+**Cumulative session totals (25 ticks):**
+- **73 commits** (+4 this tick: 2 PRDs + 1 fix + verdict pending)
+- **12 GitHub issues closed + 2 partials** (added #842)
+- 10 phantoms + 13 gaps + 1 self-regression caught
+- Zero rebase conflicts, zero over-commits across all 73 commits
+- **27 PRDs shipped + 1 meta-doc** (added PRD_TRAVEL_ITINERARY_UPGRADES + PRD_MOBILE_RESPONSIVENESS)
+- **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining**
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **27 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

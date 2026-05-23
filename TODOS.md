@@ -726,6 +726,25 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **34 PRDs + 1 meta-doc** (unchanged this tick)
 - **3 new backend endpoints lifetime** (+1: public branding logo stream)
 
+**Tick #34 (cron) — 0/1 SHIPPED, PHANTOM (#828 already fixed pre-bug-report):**
+
+| SHA | Type | What |
+|---|---|---|
+| _phantom_ | #828 verify | **Demo User sees Calendar/Patients/Waitlist links → "no permission" toast** — **already fixed by `d567ce2` (2026-05-15)** wave #756-#768 "one canonical permission-denial pattern". Sidebar.jsx:673-675 already carries `wellnessRoles={["doctor", "professional", "telecaller"]}` gating. Demo User (`role=USER, wellnessRole=null`) fails all 3 predicates → links structurally hidden. Bug filed 2026-05-19 (4 days AFTER fix landed); likely stale repro against non-redeployed staging. **#828 already CLOSED in GH state.** **11th phantom-carry-over catch this session** — verify-before-pickup discipline cost ~2 min vs ~30 min phantom work. |
+
+**One cron-learning candidate:**
+
+**Phantom-carry-over recurs in autonomous-cron dispatch** (Agent 1's observation) — even though `verify-before-pickup` catches them at agent-step 1, the parent cron could enrich the dispatch with `git log --grep="#NNN"` cross-reference BEFORE writing the agent prompt. Would eliminate the wasted dispatch entirely. **5th instance** of phantom-carry-over in standing-rule's catalogue — pattern is over-confirmed; verify-step is what saves us.
+
+**Cumulative session totals (34 ticks):**
+- **102 commits** (no new this tick — phantom)
+- **23 GitHub issues closed + 3 partials** (no new — #828 already closed)
+- **11 phantoms** + 13 gaps + 1 self-regression + 1 routing fix (added #828 to phantom count)
+- Zero rebase conflicts, zero over-commits across all 102 commits
+- **34 PRDs + 1 meta-doc** (unchanged)
+
+**🛑 Lean-tick mode confirmed — cron is at diminishing-returns saturation point.** Future ticks should default to 1-agent + accept phantom-rejection as a normal outcome rather than a wasted dispatch. The verify-before-pickup discipline is doing its job (5 phantoms caught at step 1, ~2 min cost each vs ~30 min if dispatched blindly).
+
 **PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |

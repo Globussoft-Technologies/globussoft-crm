@@ -80,6 +80,12 @@ router.post("/agent-activity", verifyToken, verifyRole(["ADMIN"]), (req, res) =>
   }
 });
 
+// #899 Part A: per-sub-brand API key scoping. Optional `subBrand` body field
+// MUST be one of these 4 values when present; absent / null = tenant-wide
+// (legacy behaviour, backward compatible). Kept in sync with VALID_SUB_BRANDS
+// in routes/voyagr.js — refactor to a shared constant if a 3rd caller appears.
+const VALID_API_KEY_SUB_BRANDS = ["tmc", "rfu", "travelstall", "visasure"];
+
 // Generate a new secure API Key for the user
 //
 // #720: `name` is REQUIRED — pre-fix the route silently fell back to
@@ -89,6 +95,12 @@ router.post("/agent-activity", verifyToken, verifyRole(["ADMIN"]), (req, res) =>
 // only names with 400 + KEY_NAME_REQUIRED so the UI can show an inline
 // validation error and so external API callers can't pollute the
 // credentials list either.
+//
+// #899 Part A: optional `subBrand` body field — when set, scopes the key
+// to ONE Travel sub-brand (tmc / rfu / travelstall / visasure). The
+// /api/v1/voyagr route's middleware (voyagrAuth) enforces this on every
+// inbound request, rejecting cross-sub-brand misuse with 403. Absent /
+// null = tenant-wide key (legacy / generic — every existing key today).
 router.post("/apikeys", verifyToken, async (req, res) => {
   try {
     const name = typeof req.body.name === "string" ? req.body.name.trim() : "";
@@ -99,6 +111,19 @@ router.post("/apikeys", verifyToken, async (req, res) => {
       });
     }
 
+    // #899 Part A: validate optional subBrand against the whitelist.
+    let subBrand = null;
+    if (req.body.subBrand !== undefined && req.body.subBrand !== null && req.body.subBrand !== "") {
+      if (typeof req.body.subBrand !== "string" ||
+          !VALID_API_KEY_SUB_BRANDS.includes(req.body.subBrand)) {
+        return res.status(400).json({
+          error: `subBrand must be one of: ${VALID_API_KEY_SUB_BRANDS.join(", ")}`,
+          code: "INVALID_SUB_BRAND",
+        });
+      }
+      subBrand = req.body.subBrand;
+    }
+
     const rawKey = `glbs_${crypto.randomBytes(24).toString('hex')}`;
 
     // In production, we would hash the key secret before storing it.
@@ -107,6 +132,7 @@ router.post("/apikeys", verifyToken, async (req, res) => {
       data: {
         name,
         keySecret: rawKey,
+        subBrand, // #899 Part A: null = tenant-wide; 'tmc'|'rfu'|'travelstall'|'visasure' = scoped
         userId: req.user.userId,
         tenantId: req.user.tenantId,
       }

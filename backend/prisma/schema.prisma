@@ -772,6 +772,12 @@ model ApiKey {
   id        Int       @id @default(autoincrement())
   keySecret String    @unique // Hashed or raw token
   name      String
+  // #899 Part A: per-sub-brand key scoping (Travel vertical).
+  // null = tenant-wide key (legacy / generic); 'tmc'|'rfu'|'travelstall'|'visasure'
+  // = scoped to one Travel sub-brand. Enforced by externalAuth/voyagrAuth via
+  // req.requireSubBrandMatch(targetSubBrand) helper — a key with subBrand='tmc'
+  // posting a lead with subBrand='rfu' is rejected 403 SUB_BRAND_MISMATCH.
+  subBrand  String?
   createdAt DateTime  @default(now())
   lastUsed  DateTime?
 

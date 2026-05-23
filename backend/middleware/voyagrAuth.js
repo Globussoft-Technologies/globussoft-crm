@@ -25,14 +25,18 @@
  * docs/MANUAL_CODING_BACKLOG.md cluster F1 for the rationale (Option 1:
  * per-site API key minted by CRM admin; voyagr stores in env vars).
  *
- * Per-site key scoping (TODO follow-up): the ApiKey model has no `purpose`
- * column today (verified in backend/prisma/schema.prisma:771 — only id,
- * keySecret, name, createdAt, lastUsed, tenantId, userId). For F1 we
- * accept any valid ApiKey for the tenant; the F1+ scope refinement that
- * adds `purpose IN ('voyagr-lead-capture', 'all')` filtering needs an
- * additive nullable column on ApiKey + the admin-issuance UI to set it.
- * The voyagr endpoint is otherwise narrow enough (POST one row, public
- * payload, audit-logged) that mis-use of a non-voyagr key is low impact.
+ * Per-sub-brand key scoping (#899 Part A, shipped 2026-05-23):
+ *   ApiKey.subBrand is the additive nullable column scoping a key to ONE
+ *   Travel sub-brand. null = tenant-wide key (legacy / generic); set =
+ *   'tmc'|'rfu'|'travelstall'|'visasure'. This middleware exposes the
+ *   resolved subBrand on `req.apiKeySubBrand` and installs a small helper
+ *   `req.requireSubBrandMatch(targetSubBrand)` that route handlers call
+ *   after parsing the body's subBrand to enforce isolation. A scoped key
+ *   posting against a different sub-brand → 403 SUB_BRAND_MISMATCH; a
+ *   tenant-wide key (subBrand=null) is accepted against any sub-brand
+ *   so existing keys keep working (backward-compatible). Route handlers
+ *   that don't have a sub-brand concept (e.g. /me, /health) simply never
+ *   call the helper.
  */
 const prisma = require("../lib/prisma");
 
@@ -77,6 +81,41 @@ module.exports = async function voyagrAuth(req, res, next) {
     req.voyagrApiKey = apiKey; // alias for audit-log forensic attribution
     req.tenant = apiKey.tenant;
     req.tenantId = apiKey.tenantId;
+    // #899 Part A: expose the key's sub-brand scope (null = tenant-wide).
+    req.apiKeySubBrand = apiKey.subBrand || null;
+    // Install the sub-brand-match helper. Route handlers call this after
+    // parsing the body's subBrand to reject cross-sub-brand misuse:
+    //   - key.subBrand === null   → any target accepted (tenant-wide key)
+    //   - key.subBrand === target → accepted
+    //   - key.subBrand !== target → 403 SUB_BRAND_MISMATCH (throws here;
+    //     caller catches via try/catch OR uses requireSubBrandMatchOrSend
+    //     which writes the response directly). We expose both shapes so
+    //     handlers can pick whichever is cleaner in context.
+    req.requireSubBrandMatch = (target) => {
+      if (req.apiKeySubBrand !== null && req.apiKeySubBrand !== target) {
+        const err = new Error("API key sub-brand scope does not match request sub-brand");
+        err.status = 403;
+        err.code = "SUB_BRAND_MISMATCH";
+        err.expected = req.apiKeySubBrand;
+        err.actual = target;
+        throw err;
+      }
+      return true;
+    };
+    req.requireSubBrandMatchOrSend = (target, res) => {
+      try {
+        return req.requireSubBrandMatch(target);
+      } catch (e) {
+        if (e.code === "SUB_BRAND_MISMATCH") {
+          res.status(403).json({
+            error: `API key scoped to '${e.expected}' cannot post for sub-brand '${e.actual}'`,
+            code: "SUB_BRAND_MISMATCH",
+          });
+          return false;
+        }
+        throw e;
+      }
+    };
     // Alias so route handlers written for internal JWT auth can reuse the
     // tenantWhere / req.user.tenantId pattern.
     req.user = {

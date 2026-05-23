@@ -278,6 +278,16 @@ router.post("/leads", perIpLimiter, voyagrAuth, perKeyLimiter, async (req, res) 
     }
     const { subBrand, name, email, phone, source, payload } = v.value;
 
+    // 2b. #899 Part A: enforce per-sub-brand key isolation. If the key is
+    //     scoped to ONE sub-brand (e.g. ApiKey.subBrand='tmc'), reject any
+    //     POST against a different target sub-brand. Tenant-wide keys
+    //     (ApiKey.subBrand=null) are accepted against any target so legacy
+    //     keys keep working unchanged. requireSubBrandMatchOrSend writes
+    //     the 403 response directly and returns false on mismatch.
+    if (typeof req.requireSubBrandMatchOrSend === "function") {
+      if (!req.requireSubBrandMatchOrSend(subBrand, res)) return;
+    }
+
     // 3. Contact dedup via @@unique([email, tenantId]) compound key.
     //    Existing contact → reuse (preserve name/phone); new email →
     //    create with subBrand tag + 'voyagr' source for attribution.

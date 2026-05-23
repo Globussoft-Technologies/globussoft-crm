@@ -88,15 +88,19 @@ function nextPhone() {
 }
 
 // Wave 11 GG booking-conflict gate: visits with the same (doctorId, UTC-hour)
-// collide with 409. This helper returns a never-collides visitDate by
-// combining a per-test random hour offset across a 720-hour spread (30 days)
-// starting 30+ days from now (always within #170 [now-5y, now+1y] window).
-// Each call returns a different ISO string, so retries don't collide either.
+// collide with 409 DOCTOR_DOUBLE_BOOKED. The original "random hour across
+// 720h" shape was probabilistic — with 100+ tests in this spec each calling
+// nextVisitDate(), the birthday-paradox math made (doctor, hour) collisions
+// inevitable over time. Tick #64 sweep replaced it with a deterministic
+// monotonic counter: every call advances by one hour within the
+// [now+720h, now+8520h] window (~30d to ~1y, well inside the #170 [now-5y,
+// now+1y] guard). Wraps at 7800 to leave headroom under the 1y cap.
+// Mathematically eliminates (doctor, hour) collisions across the spec's
+// test suite — each call returns a unique hour offset.
 let _visitDateOffset = 0;
 function nextVisitDate() {
-  const dayOffset = 30 + _visitDateOffset++;
-  const hourOffset = Math.floor(Math.random() * 720) * 3600 * 1000;
-  return new Date(Date.now() + dayOffset * 86400000 + hourOffset).toISOString();
+  const hourOffset = 720 + (_visitDateOffset++ % 7800);
+  return new Date(Date.now() + hourOffset * 3600 * 1000).toISOString();
 }
 
 // ── Fixtures ───────────────────────────────────────────────────────

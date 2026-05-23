@@ -261,10 +261,14 @@ const Pipeline = () => {
             const totalValue = stageDeals.reduce((sum, d) => sum + (d.amount || 0), 0);
 
             return (
-              <div 
-                key={stage.id} 
-                className="glass" 
-                style={{ width: '320px', flexShrink: 0, display: 'flex', flexDirection: 'column' }}
+              <div
+                key={stage.id}
+                className="glass"
+                // #877 — explicit --column-bg override (darker than --surface-color
+                // used by inner .card deal tiles) so columns visually separate
+                // from cards in both dark and light themes. Token defined in
+                // index.css across all 3 theme blocks.
+                style={{ width: '320px', flexShrink: 0, display: 'flex', flexDirection: 'column', background: 'var(--column-bg, var(--glass-bg))' }}
                 onDrop={(e) => handleDrop(e, stage.id)}
                 onDragOver={handleDragOver}
               >

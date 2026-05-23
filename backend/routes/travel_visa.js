@@ -725,31 +725,24 @@ router.patch(
       // #929 Part B — fire-and-forget webhook emission when status
       // transitions (e.g. intake → docs-pending → filed → approved).
       // Subscribers (Callified.ai, partner SaaSes) can react to lifecycle
-      // events without polling. Mirrors the canonical pattern from
-      // billing.js's payment.collected emission (wave-6a).
+      // events without polling. Uses shared safeEmitEvent helper
+      // (extracted to lib/eventBus.js tick #47).
       if (data.status && data.status !== existing.status) {
-        try {
-          const eventBus = require("../lib/eventBus");
-          eventBus
-            .emitEvent(
-              "visa.status_changed",
-              {
-                id,
-                contactId: existing.contactId,
-                subBrand: VISA_SUB_BRAND,
-                oldStatus: existing.status,
-                newStatus: data.status,
-                tenantId,
-                changedAt: new Date().toISOString(),
-              },
-              tenantId,
-            )
-            .catch((err) =>
-              console.warn("[travel-visa/patch] visa.status_changed emit failed:", err.message),
-            );
-        } catch (emitErr) {
-          console.warn("[travel-visa/patch] visa.status_changed setup failed:", emitErr.message);
-        }
+        const { safeEmitEvent } = require("../lib/eventBus");
+        safeEmitEvent(
+          "visa.status_changed",
+          {
+            id,
+            contactId: existing.contactId,
+            subBrand: VISA_SUB_BRAND,
+            oldStatus: existing.status,
+            newStatus: data.status,
+            tenantId,
+            changedAt: new Date().toISOString(),
+          },
+          tenantId,
+          "travel-visa/patch",
+        );
       }
 
       res.json(updated);

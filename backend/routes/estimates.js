@@ -589,31 +589,27 @@ router.post("/:id/email", async (req, res) => {
     // #929 Part B — fire-and-forget webhook emission for first-send.
     // Subscribers (Callified.ai, partner SaaSes) can react to quote
     // lifecycle without polling. Only fires on Draft → Sent transition
-    // (avoid duplicate emissions on re-sends). Mirror of the canonical
-    // payment.collected pattern (billing.js wave-6a) + visa.status_changed
-    // (travel_visa.js #929 part 3/5).
+    // (avoid duplicate emissions on re-sends). Uses shared safeEmitEvent
+    // helper (extracted to lib/eventBus.js tick #47).
     if (wasFirstSend) {
-      try {
-        const eventBus = require("../lib/eventBus");
-        eventBus.emitEvent(
-          "quote.sent",
-          {
-            id: estimate.id,
-            estimateNumber: estimate.estimateNum,
-            contactId: estimate.contactId || null,
-            to,
-            delivered,
-            totalAmount: estimate.totalAmount,
-            currency,
-            validUntil: estimate.validUntil,
-            tenantId: req.user.tenantId,
-            sentAt: new Date().toISOString(),
-          },
-          req.user.tenantId,
-        ).catch((err) => console.warn("[estimates/email] quote.sent emit failed:", err.message));
-      } catch (emitErr) {
-        console.warn("[estimates/email] quote.sent setup failed:", emitErr.message);
-      }
+      const { safeEmitEvent } = require("../lib/eventBus");
+      safeEmitEvent(
+        "quote.sent",
+        {
+          id: estimate.id,
+          estimateNumber: estimate.estimateNum,
+          contactId: estimate.contactId || null,
+          to,
+          delivered,
+          totalAmount: estimate.totalAmount,
+          currency,
+          validUntil: estimate.validUntil,
+          tenantId: req.user.tenantId,
+          sentAt: new Date().toISOString(),
+        },
+        req.user.tenantId,
+        "estimates/email",
+      );
     }
 
     res.json({

@@ -390,8 +390,44 @@ async function executeAction(rule, payload, tenantId, io) {
   });
 }
 
+/**
+ * Fire-and-forget wrapper around `emitEvent` for route handlers that
+ * emit lifecycle webhooks (visa.status_changed, quote.sent,
+ * itinerary.accepted, etc.). Logs subscriber failures via console.warn
+ * — never throws back into the route handler's response path.
+ *
+ * Use this from any route that wants to fire a webhook AFTER a
+ * primary action succeeds (status update, accept, send, etc.). The
+ * outer try/catch protects against unlikely require() / module-init
+ * failures; the inner .catch handles the Promise-level emit failure.
+ *
+ * @param {string} eventName     Canonical event name (see
+ *                               webhookDelivery.js JSDoc catalogue).
+ * @param {object} payload       Flat event payload — subscribers see
+ *                               this as the body's `payload` field.
+ * @param {number} tenantId      Per-tenant scoping (cannot cross
+ *                               tenant boundaries).
+ * @param {string} contextLabel  Identifier for the calling site, used
+ *                               in console.warn on failure
+ *                               (e.g. "travel-visa/patch").
+ */
+function safeEmitEvent(eventName, payload, tenantId, contextLabel) {
+  try {
+    // Invoke through `module.exports.emitEvent` so test-time spies that
+    // monkey-patch the exports surface (per wave-6a-event-emissions.test.js
+    // pattern) continue to intercept calls. Calling the local `emitEvent`
+    // closure-binding directly would bypass the spy.
+    module.exports.emitEvent(eventName, payload, tenantId).catch((err) =>
+      console.warn(`[${contextLabel}] ${eventName} emit failed:`, err.message)
+    );
+  } catch (emitErr) {
+    console.warn(`[${contextLabel}] ${eventName} setup failed:`, emitErr.message);
+  }
+}
+
 module.exports = {
   emitEvent,
+  safeEmitEvent,
   bus,
   executeAction,
   evaluateCondition,

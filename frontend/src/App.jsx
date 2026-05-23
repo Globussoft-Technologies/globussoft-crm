@@ -1189,6 +1189,13 @@ export default function App() {
                   </RoleGuard>
                 </WellnessOnly>
               } />
+              {/* #823: /pos direct-URL alias. Bookmarks, external deep-links,
+                  and operators who type the URL bare were hitting the 404
+                  catch-all because the canonical route is /wellness/pos.
+                  WellnessOnly on the canonical route still rejects non-
+                  wellness tenants downstream. Mirrors the #309/#305 alias
+                  patterns for /wellness/invoices and /wellness/inventory. */}
+              <Route path="pos" element={<Navigate to="/wellness/pos" replace />} />
               {/* Zylu-Gap #770/#779/#780/#781 — Cash Register admin page.
                   Lists registers, drills into per-register shift detail
                   (status header + open/close/deposit/withdraw + transactions).

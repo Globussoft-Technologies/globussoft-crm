@@ -12,6 +12,13 @@ export default function Patients() {
   const [patients, setPatients] = useState([]);
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState("");
+  // #820 Part 1 — client-side pagination. Demo has 51 patients today; rendering
+  // them all as one continuous table is acceptable for that scale but breaks
+  // down once tenants accumulate hundreds. 25 per page matches the "Standard
+  // pagination (25 / 50 / 100 per page)" expectation in the issue. Server-side
+  // pagination is a deliberate follow-up (tracked in the #820 follow-up issue).
+  const [page, setPage] = useState(1);
+  const PER_PAGE = 25;
   // #331-bug fix: form-create flag added so handleCreate can request a refresh
   // without re-introducing a stale-state read. The previous direct `load()`
   // call inside handleCreate re-fetched with whatever `q` the closure had
@@ -120,6 +127,19 @@ export default function Patients() {
       formRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, [showAdd]);
+
+  // #820 Part 1 — reset to page 1 whenever the active filter changes, otherwise
+  // the user can be stranded on page 3 of a result set that only has 1 page
+  // after they tighten the search.
+  useEffect(() => {
+    setPage(1);
+  }, [q]);
+
+  // #820 Part 1 — compute the visible slice. `totalPages` falls back to 1 so
+  // the "Page 1 of 1" indicator still renders when the list is empty.
+  const totalPages = Math.max(1, Math.ceil(patients.length / PER_PAGE));
+  const startIdx = (page - 1) * PER_PAGE;
+  const visiblePatients = patients.slice(startIdx, startIdx + PER_PAGE);
 
   // #108: phone may be optional, but if present must look like a real phone number
   // (10–15 digits after stripping +, -, spaces, parens). Pre-fix the form accepted
@@ -483,7 +503,7 @@ export default function Patients() {
               </tr>
             </thead>
             <tbody>
-              {patients.map((p) => (
+              {visiblePatients.map((p) => (
                 <tr
                   key={p.id}
                   style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
@@ -556,6 +576,64 @@ export default function Patients() {
               )}
             </tbody>
           </table>
+          {/* #820 Part 1 — pagination footer. Hidden when there's nothing to
+              paginate (0 patients) so the empty state stays uncluttered. */}
+          {patients.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "0.75rem 1rem",
+                borderTop: "1px solid rgba(255,255,255,0.06)",
+                color: "var(--text-secondary)",
+                fontSize: "0.85rem",
+              }}
+            >
+              <span>
+                Showing {startIdx + 1}-
+                {Math.min(startIdx + PER_PAGE, patients.length)} of{" "}
+                {patients.length}
+              </span>
+              <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+                <button
+                  type="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    color: page <= 1 ? "var(--text-secondary)" : "var(--text-primary)",
+                    padding: "0.35rem 0.75rem",
+                    borderRadius: 6,
+                    cursor: page <= 1 ? "not-allowed" : "pointer",
+                    opacity: page <= 1 ? 0.5 : 1,
+                  }}
+                >
+                  Previous
+                </button>
+                <span style={{ color: "var(--text-primary)" }}>
+                  Page {page} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    color: page >= totalPages ? "var(--text-secondary)" : "var(--text-primary)",
+                    padding: "0.35rem 0.75rem",
+                    borderRadius: 6,
+                    cursor: page >= totalPages ? "not-allowed" : "pointer",
+                    opacity: page >= totalPages ? 0.5 : 1,
+                  }}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

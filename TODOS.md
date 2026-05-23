@@ -614,7 +614,30 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **DateRangePicker adoption progress: 2 of 3 callers migrated** (PatientDetail + Payments; InventoryReceipts remains)
 - **NEW: CallifiedEmbed page + full-patient-PDF endpoint + 2 new vitest pass-points** (no new cases, validated against existing 14 + 45)
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **29 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
+**Tick #29 (cron) — 3/3 SHIPPED, DRY loop closed + 30th PRD + #825 closed:**
+
+| SHA | Type | What |
+|---|---|---|
+| `479d1ed` | DRY loop closed | **InventoryReceipts.jsx migrated to `<DateRangePicker>`** — net -65 lines (41 added / 106 removed). **3/3 callers now consume the shared component** (PatientDetail tick #27 + Payments tick #28 + InventoryReceipts tick #29). Behaviour preserved: default preset `'today'`, search bar untouched, backend `?from=&to=` contract unchanged. 14/14 DateRangePicker tests pass; vite build clean. |
+| `6310e89` | New PRD (30th) | **`docs/PRD_WELLNESS_RBAC.md`** (233 lines) — **coordinating PRD for #827 + #829 + #830** (all OPEN verified). 6 FR groups (taxonomy / sidebar / page-gates / data-scoping / UI affordance / demo seed) with 27 sub-clauses; 6 DDs; 7 OQs; 8 ACs. **§1.2 inventory: 8 pre-existing infrastructure components** (verifyRole, verifyWellnessRole, phiReadGate, wellnessRole column, sidebar `wellnessRoles` prop, renderWellnessNav(), FieldPermission+fieldFilter, RBAC_DENIED_MESSAGE). §1.4 anti-pattern callout ("permission-as-empty-result") + §10.1 implementation phasing + §10.2 test surface. Cross-refs PR #268 (PHI policy) + #325 (vertical gate) + #590/#591 (denial-copy) + sibling PRD_WELLNESS_POS_HARDENING (POS sub-aspect of #830). **Refs #827 #829 #830.** |
+| `690f1de` | Small fix #825 | **Calendar "Loading…" → Skeleton grid** — 4-column × 6-row pulse-animated grid mirroring day-view layout; `role="status"` + `aria-label="Loading calendar"` + `data-testid="calendar-loading"`. Skeleton preferred over Spinner per `ui/README` (shape cue > spinner; matches #689 canonical pattern). +47/-1. 20/20 Calendar tests pass; vite build clean. **Closes #825.** |
+
+**Two cron-learning candidates surfaced:**
+
+1. **Write tool can silently revert on this Windows box** (Agent 1) — first `Write` to InventoryReceipts.jsx appeared to apply (file content updated in agent context) but ended with working tree clean + changes not present. The PostToolUse-hook system-reminder warned of a reformatter, but actual state showed FULL revert. **Recovery: switch to Edit tool for targeted changes** (chunk-level edits seem to bypass whatever hook reverted the Write). Worth a one-liner standing rule on 3rd instance: "when a full-file Write to existing JS/JSX vanishes (git status clean post-Write), don't re-Write — switch to Edit for chunk-level changes."
+
+2. **`git pull --rebase` "unstaged changes" false positive** (Agent 1) — rebase pre-check rejected with "cannot pull with rebase: You have unstaged changes" but the subsequent `git commit --only` worked anyway because `--only` scopes to that path only. Chaining `pull --rebase && commit --only` is robust against this race. Worth a one-liner: skill commit-template should keep the `&&` chain — don't separate them.
+
+**Cumulative session totals (29 ticks):**
+- **89 commits** (+4 this tick: 1 refactor + 1 PRD + 1 fix + verdict pending)
+- **19 GitHub issues closed + 2 partials** (added #825)
+- 10 phantoms + 13 gaps + 1 self-regression caught
+- Zero rebase conflicts, zero over-commits across all 89 commits
+- **30 PRDs shipped + 1 meta-doc** (added PRD_WELLNESS_RBAC)
+- **DateRangePicker DRY loop CLOSED: 3 of 3 callers migrated** ✅ (rule-of-3 success across ticks #27-#29)
+- **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining** (all PRD-covered)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **30 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

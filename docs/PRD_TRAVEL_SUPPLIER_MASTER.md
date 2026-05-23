@@ -1,6 +1,6 @@
 # PRD — Travel Supplier Master + Supplier Payments
 
-**Status:** WRITTEN 2026-05-23 (tick #20 / Agent 2)
+**Status:** DD-5.1 RESOLVED 2026-05-24 — `TravelSupplier` Prisma model landed at commit `fdb793e`; `routes/travel_suppliers.js` (routes scaffold) shipping in-flight this tick by sibling agent; remaining DD-5.2..DD-5.5 pending. Originally WRITTEN 2026-05-23 (tick #20 / Agent 2)
 **Source:** GH #903 — [Travel Gap] P1 — Build Supplier Master + Supplier Payments
 **Tier:** P1 — Revenue-critical (Travel Stall CRM Roadmap)
 **Owner sub-brands:** TMC (school trips), RFU (Umrah), Travel Stall (family holidays), Visa Sure
@@ -111,7 +111,7 @@ The supplier-payable side is the structural mirror of the customer-receivable si
 
 ### Design decisions (require product / finance-team sign-off)
 
-- **DD-5.1 Extend existing `Vendor` model or fork to `TravelSupplier`?** Current `Vendor` ([schema.prisma:3327](../backend/prisma/schema.prisma#L3327)) is shaped for wellness inventory receipts. Travel needs PNR-tied PO lines, credit limits, sub-brand visibility, commission models, dispute history. **Recommendation: FORK to a new `TravelSupplier` model.** Vendor stays for wellness; TravelSupplier becomes the travel-side first-class entity. Reduces back-compat churn; lets travel iterate freely. Cross-reference: PRD_TRAVEL_BILLING DD-5.1 should mirror this decision symmetrically. Existing `SupplierCredential` model ([schema.prisma:4473](../backend/prisma/schema.prisma#L4473)) is the creds-vault and stays unchanged; relationship: each `SupplierCredential` may link to a `TravelSupplier` via optional FK so the "Supplier Portal Logins" sub-tab can be scoped per-supplier.
+- **DD-5.1 Extend existing `Vendor` model or fork to `TravelSupplier`?** Current `Vendor` ([schema.prisma:3327](../backend/prisma/schema.prisma#L3327)) is shaped for wellness inventory receipts. Travel needs PNR-tied PO lines, credit limits, sub-brand visibility, commission models, dispute history. **Recommendation: FORK to a new `TravelSupplier` model.** Vendor stays for wellness; TravelSupplier becomes the travel-side first-class entity. Reduces back-compat churn; lets travel iterate freely. Cross-reference: PRD_TRAVEL_BILLING DD-5.1 should mirror this decision symmetrically. Existing `SupplierCredential` model ([schema.prisma:4473](../backend/prisma/schema.prisma#L4473)) is the creds-vault and stays unchanged; relationship: each `SupplierCredential` may link to a `TravelSupplier` via optional FK so the "Supplier Portal Logins" sub-tab can be scoped per-supplier. **[RESOLVED 2026-05-24]** FORK — `TravelSupplier` as new Prisma model. Decided as part of the Quote/Billing/Supplier symmetric fork call (DECISIONS_TRACKER.md commit `a8f24ca`). Schema landed at commit `fdb793e` alongside sibling `TravelQuote` and `TravelInvoice`. Tenant inverse relation threaded into the travel-vertical cluster. Sibling agent is shipping `routes/travel_suppliers.js` (routes scaffold) THIS TICK — in-flight, not landed. Existing `Vendor` stays for wellness inventory; `SupplierCredential` will get an optional FK to `TravelSupplier` in a follow-up commit per AC-6.8.
 - **DD-5.2 KYC document storage.** S3-style object store (existing CRM uploads pattern) vs DigiLocker integration vs simple Prisma `String?` paths into `/var/uploads/`? Decision impacts FR-3.1.h.
 - **DD-5.3 Reconciliation tolerance scoping.** Hard-coded global default (₹100 / 0.5%) vs per-tenant config vs per-supplier config? Per-supplier is most flexible but more UI to build. Suggest: per-tenant first, per-supplier in Phase 2.
 - **DD-5.4 Dispute resolution flow.** In-app workflow with state transitions only, or escalation hooks (auto-email supplier on dispute open, auto-create ticket in tickets module)? Suggest: in-app first, hooks in Phase 2.
@@ -178,7 +178,26 @@ The supplier-payable side is the structural mirror of the customer-receivable si
 
 ## §10 Status snapshot
 
-- **Current state in repo (2026-05-23):**
+### 2026-05-24 update
+
+**DD-5.1 RESOLVED:** FORK — `TravelSupplier` shipped at commit `fdb793e` (~85 LOC across the 3 trio models with `TravelQuote` + `TravelInvoice`). Tenant inverse relation threaded into the travel-vertical cluster. `prisma validate` clean.
+
+**What's now possible:**
+- Backend routes scaffold is **IN-FLIGHT THIS TICK** — sibling agent shipping `backend/routes/travel_suppliers.js` against the new model (supplier-master CRUD + sub-brand visibility filters). Companion PO / payable / commission / dispute routes are follow-up commits.
+- Frontend supplier dashboard + tenant supplier index can wire to the new model once routes land.
+- The orphan `ItineraryItem.supplierId` and `TravelCostMaster.supplierId` nullable-Int FK columns can be promoted to first-class relations against `TravelSupplier` in a follow-up migration (DEPENDENCIES §8 calls this out explicitly).
+- Sub-brand isolation enforced at the schema level (`subBrand` indexed; `@@index([tenantId, subBrand])`).
+
+**Still pending (PRD-internal DD-5.2 through DD-5.5):**
+- **DD-5.2** — KYC document storage (S3-style object store vs DigiLocker vs simple Prisma path).
+- **DD-5.3** — Reconciliation tolerance scoping (per-tenant first, per-supplier in Phase 2).
+- **DD-5.4** — Dispute resolution flow (in-app workflow first, hooks in Phase 2).
+- **DD-5.5** — TDS auto-deduction ownership boundary with `PRD_TRAVEL_GST_COMPLIANCE` (avoid double-counting between supplier-commission engine and GST tax-deduction surface).
+- Per-PRD field expansion: real §3 fields (KYC checklist, PO workflow auto-creation, payable state machine, commission ledger per FY, dispute + chargeback workflow) land in follow-up commits — see the existing 10-18 engineering-day breakdown below.
+
+**Path to implementation:** Routes scaffold (supplier-master CRUD) = in-flight this tick. PO workflow + auto-creation hook from quote-to-booking = +2-3d. Payable workflow + scheduled-payment + credit-limit guard = +2-3d. Reconciliation UI (auto-match + manual review queue) = +1-2d. Commission ledger + TDS auto-deduction (depends on DD-5.5 boundary) = +1-2d. Dispute workflow = +1d. Frontend supplier dashboard + tenant index = +1d. PO PDF export = +1d. AC-6.8 rename + relocate "Supplier Portal Logins" sub-tab = +0.5d. **Net remaining: 9-15 engineering days** post DD-5.1 land and routes-scaffold tick.
+
+- **Current state in repo (2026-05-23 pre-fdb793e baseline, retained for history):**
   - `Vendor` model exists ([schema.prisma:3327](../backend/prisma/schema.prisma#L3327)) — wellness-shaped, not travel-shaped.
   - `SupplierCredential` model exists ([schema.prisma:4473](../backend/prisma/schema.prisma#L4473)) — credentials vault only.
   - `/api/travel/supplier-credentials/*` routes exist ([backend/routes/travel_suppliers.js](../backend/routes/travel_suppliers.js)) — creds CRUD + reveal + access log; metadata-only listing.

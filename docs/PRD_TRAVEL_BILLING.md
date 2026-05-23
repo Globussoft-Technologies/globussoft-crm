@@ -1,6 +1,6 @@
 # PRD — Travel-Grade Billing & Invoicing
 
-**Status:** DRAFT • **Owner:** Travel vertical squad • **Filed:** 2026-05-23 (tick #20)
+**Status:** DD-5.1 RESOLVED 2026-05-24 — `TravelInvoice` Prisma model landed at commit `fdb793e`; remaining DD-5.2..DD-5.7 pending • **Owner:** Travel vertical squad • **Filed:** 2026-05-23 (tick #20) • **Updated:** 2026-05-24 (tick #95)
 **Refs:** GH #901 (P1 Travel Gap — Modify Invoices into Travel-Grade Billing) • Travel Stall CRM Roadmap Tier P1 item 6
 **Siblings:** [PRD_TRAVEL_GST_COMPLIANCE.md](PRD_TRAVEL_GST_COMPLIANCE.md) (tax computation), [PRD_TRAVEL_QUOTE_BUILDER.md](PRD_TRAVEL_QUOTE_BUILDER.md) (quote → invoice path), [PRD_TRAVEL_SUPPLIER_MASTER.md](PRD_TRAVEL_SUPPLIER_MASTER.md) (supplier-payable side, this tick)
 
@@ -117,7 +117,7 @@ GH issue #901 (filed by @nilimeshnayak-max as P1 Travel Gap audit) + Travel Stal
 ## §5 Hand-over / design decisions / cred chase / vendor docs
 
 ### Design decisions (need user call before implementation)
-- **DD-5.1 Fork Invoice or extend in-place?** — Same trade-off as Quote Builder. Recommend FORK to a sibling `TravelInvoice` model so generic-CRM customers don't pay schema-bloat tax for per-pax lines + payment schedules + supplier payables. Cross-ref: `PRD_TRAVEL_QUOTE_BUILDER.md` DD-5.1.
+- **DD-5.1 Fork Invoice or extend in-place?** — Same trade-off as Quote Builder. Recommend FORK to a sibling `TravelInvoice` model so generic-CRM customers don't pay schema-bloat tax for per-pax lines + payment schedules + supplier payables. Cross-ref: `PRD_TRAVEL_QUOTE_BUILDER.md` DD-5.1. **[RESOLVED 2026-05-24]** FORK — `TravelInvoice` as new Prisma model. Decided as part of the Quote/Billing/Supplier symmetric fork call (DECISIONS_TRACKER.md commit `a8f24ca`). Schema landed at commit `fdb793e` alongside sibling `TravelQuote` and `TravelSupplier`. Tenant inverse relation threaded into the travel-vertical cluster. Companion `InvoiceLine` / `PaymentSchedule` / `SupplierPayable` / `InvoiceNumberSeries` models + `routes/travel_invoices.js` are follow-up commits.
 - **DD-5.2 Schedule template ownership** — Operator-configured per-invoice (free-form) vs admin-curated templates (pick from list)? Recommend admin-curated with operator-override-per-invoice. Reduces support load.
 - **DD-5.3 Reporting currency** — Operator's preferred currency (`User.preferredCurrency`), sub-brand's home currency (`SubBrand.defaultCurrency`), or tenant-global (`Tenant.defaultCurrency`)? Recommend sub-brand-home with operator-override per Aged-X report.
 - **DD-5.4 TCS verification source** — Who maintains the customer's tax-filer status (`Contact.tcsTaxFilerStatus`)? Manual operator-toggle vs govt portal/TRACES login vs CSV bulk-import? Recommend manual with import-CSV path for bulk-onboarding.
@@ -190,7 +190,28 @@ GH issue #901 (filed by @nilimeshnayak-max as P1 Travel Gap audit) + Travel Stal
 
 ## §10 Status snapshot
 
-- **Current:** Generic `Invoice` + `Payment` models shipped; tick #18 added `invoice.created` webhook; `legalEntityCode` exists but numbering is flat-global; per-pax + multi-currency + TCS + supplier-payable + settlement-schedule + doc-type enum + per-sub-brand numbering ALL missing.
+### 2026-05-24 update
+
+**DD-5.1 RESOLVED:** FORK — `TravelInvoice` shipped at commit `fdb793e` (~85 LOC across the 3 trio models with `TravelQuote` + `TravelSupplier`). Tenant inverse relation threaded into the travel-vertical cluster. `prisma validate` clean.
+
+**What's now possible:**
+- Backend routes can be scaffolded against the new model — `routes/travel_invoices.js` (CRUD + milestone-pay + cancel + Aged-Receivable + Form 27EQ) follows in subsequent commits.
+- Frontend can wire an invoice-builder + milestone-view + aged-report UI to the new model once routes exist.
+- Sub-brand isolation enforced at the schema level (`subBrand` indexed; `@@index([tenantId, subBrand])`).
+- Per-sub-brand gap-less numbering (FR-3.8.c) can ship against the new model without polluting generic `Invoice.invoiceNum @unique`.
+
+**Still pending (PRD-internal DD-5.2 through DD-5.7):**
+- **DD-5.2** — Schedule template ownership (admin-curated with operator-override recommended).
+- **DD-5.3** — Reporting currency precedence (sub-brand-home with operator-override recommended).
+- **DD-5.4** — TCS verification source (manual flag + import-CSV path; Q-BILL-1 cred chase still open).
+- **DD-5.5** — Reminder cadence + channel (hard-coded T-7/T-3/T-1, all-channels-on with operator opt-out).
+- **DD-5.6** — Cancellation-policy editor UI scope (admin-only recommended — policies are legal contract terms).
+- **DD-5.7** — Per-sub-brand PDF branding (blocked on Yasin's Q22 brand handover; can ship placeholder).
+- Per-PRD field expansion: real §3 fields (TCS, multi-stage settlement, supplier-payable, multi-currency split, per-sub-brand numbering, doc-type taxonomy) land across the existing Phase 1–5 plan in §10 (12-20 days post DD-5.1 land).
+
+**Path to implementation:** Phase 1 (line-items + per-sub-brand numbering + doc-type enum) = 5d. Phase 2 (settlement schedule + reminders + receipt PDFs) = 4d. Phase 3 (TCS + multi-currency) = 3d. Phase 4 (supplier-payable + Aged reports — depends on `TravelSupplier` routes from sibling PRD) = 4d. Phase 5 (cancellation + CR-NOTE) = 2d. **Payment-collection wiring depends on the cross-cutting per-tenant cap pattern (commit `d8119a1`) + Stripe/Razorpay activation per #896 (cred-blocked).**
+
+- **Current (pre-fdb793e baseline, retained for history):** Generic `Invoice` + `Payment` models shipped; tick #18 added `invoice.created` webhook; `legalEntityCode` exists but numbering is flat-global; per-pax + multi-currency + TCS + supplier-payable + settlement-schedule + doc-type enum + per-sub-brand numbering ALL missing.
 - **This PRD:** WRITTEN 2026-05-23 (tick #20 / Agent 1).
 - **Path to implementation:** **12–20 engineering days** (heavier if DD-5.1 picks FORK — adds ~5d for new `TravelInvoice` model + parallel routes + frontend conditional rendering by `tenant.vertical`).
 - **Sibling PRDs:** PRD_TRAVEL_GST_COMPLIANCE.md (tax math; tick #19), PRD_TRAVEL_QUOTE_BUILDER.md (quote → invoice path; tick #19), PRD_TRAVEL_SUPPLIER_MASTER.md (supplier-payable side; this tick).
@@ -209,7 +230,7 @@ GH issue #901 (filed by @nilimeshnayak-max as P1 Travel Gap audit) + Travel Stal
 
 ## §11 Implementation notes (advisory — design call still needed)
 
-### Schema-sketch (assuming DD-5.1 picks EXTEND-IN-PLACE)
+### Schema-sketch (note: DD-5.1 RESOLVED to FORK on 2026-05-24 — `TravelInvoice` landed at `fdb793e`; the sketch below was authored pre-fork and needs to be re-anchored to `TravelInvoice` + companion child models in the routes-scaffold phase)
 
 ```prisma
 // New model — child of Invoice

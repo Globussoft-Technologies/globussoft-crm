@@ -1,6 +1,6 @@
 # Travel Quote Builder (`/quotes`) — Product Requirements
 
-**Status:** STUB shipped — `/quotes` resolves to `QuotesComingSoon.jsx` (BUG-T24 / #886, commit ~v3.7.x). Full module is tracked as cluster B2 in [docs/MANUAL_CODING_BACKLOG.md](MANUAL_CODING_BACKLOG.md). Estimated 10–18 engineering days; biggest variable is DD-5.1 (fork vs extend Estimate). The existing `POST /api/travel/pricing/quote` engine + `TravelCostMaster` + `TravelSeasonCalendar` + `TravelMarkupRule` already provide most of the pricing primitives.
+**Status:** DD-5.1 RESOLVED 2026-05-24 — `TravelQuote` Prisma model landed at commit `fdb793e`. Remaining DD-5.2..DD-5.6 pending. `/quotes` UI still resolves to `QuotesComingSoon.jsx` (BUG-T24 / #886) pending routes scaffold. Full module is tracked as cluster B2 in [docs/MANUAL_CODING_BACKLOG.md](MANUAL_CODING_BACKLOG.md). Estimated 10–18 engineering days; with DD-5.1 now landed, biggest remaining variable is DD-5.2 (pricing-engine UX). The existing `POST /api/travel/pricing/quote` engine + `TravelCostMaster` + `TravelSeasonCalendar` + `TravelMarkupRule` already provide most of the pricing primitives.
 
 **Source:** GitHub #900 ([Travel Gap] P1 — Build the Quote Builder (/quotes)) + Travel Stall CRM — Implementation & Modification Roadmap (Google Doc) — Tier P1, item 5.
 
@@ -159,6 +159,8 @@ Vinay finishes a particularly clean "Europe-classic-7d" quote and saves it as a 
 
 **Decision required from:** backend lead + Suresh (architect). **Default if no decision:** (a) fork — matches every other travel-vertical module (`travel_itineraries`, `travel_trips`, `travel_diagnostics` are all forks of their generic siblings).
 
+**[RESOLVED 2026-05-24]** FORK — `TravelQuote` as new Prisma model. Decided as part of the Quote/Billing/Supplier symmetric fork call (DECISIONS_TRACKER.md commit `a8f24ca`). Schema landed at commit `fdb793e` alongside sibling `TravelInvoice` and `TravelSupplier`. Tenant inverse relation threaded into the travel-vertical cluster. Companion line-item / template / snapshot models + `routes/travel_quotes.js` are follow-up commits.
+
 ### DD-5.2 Pricing-engine UX — rule-based config or formula-language?
 
 **Trade-off:**
@@ -296,6 +298,25 @@ Existing `pdfRenderer.js` (services/) handles wellness prescription + consent + 
 ---
 
 ## 10. Status snapshot
+
+### 2026-05-24 update
+
+**DD-5.1 RESOLVED:** FORK — `TravelQuote` shipped at commit `fdb793e` (~85 LOC across the 3 trio models with `TravelInvoice` + `TravelSupplier`). Tenant inverse relation threaded into the travel-vertical cluster. `prisma validate` clean.
+
+**What's now possible:**
+- Backend routes can be scaffolded against the new model — `routes/travel_quotes.js` CRUD + send + accept + reject + counter + convert-to-invoice are follow-up commits.
+- Frontend can wire `pages/travel/QuoteBuilder.jsx` to the new model once routes exist; `/quotes` route swap from `QuotesComingSoon` to `QuoteList` follows.
+- Sub-brand isolation enforced at the schema level (`subBrand` indexed; `@@index([tenantId, subBrand])`).
+
+**Still pending (PRD-internal DD-5.2 through DD-5.6):**
+- **DD-5.2** — Pricing-engine UX: rule-based config (recommended) vs formula-language (escape hatch).
+- **DD-5.3** — Tax treatment per-sub-brand default (inclusive for B2C / RFU / Travel Stall; exclusive for TMC / Visa Sure).
+- **DD-5.4** — FX-rate source + cadence (RBI ref-rate recommended; daily 09:00 IST cron).
+- **DD-5.5** — Counter-offer flow (simple number+reason for v1).
+- **DD-5.6** — PDF renderer template ownership (extend existing `pdfRenderer.js`).
+- Per-PRD field expansion: real §3 fields (per-pax dimension, HSN-tax-aware lines, itinerary linkage, sub-agent clone-with-margin, accept-link JWT scope) land in follow-up commits.
+
+**Path to implementation:** Routes scaffold = 3-5 days (matches Day 3-5 in the existing breakdown). Full builder UI (3-pane Cost Master picker + day/category grouping + live totals) = +3-5 days. Customer accept flow + PDF render + WhatsApp/Email delivery = +2-3 days. Templates + audit + cron-expiry sweep = +3-4 days. **Net remaining: 11-17 engineering days** post DD-5.1 land; the schema decision (the longest-tail dependency) is now off the critical path.
 
 - **2026-05-23 (cron tick #19 / agent 2):** PRD WRITTEN. Verify-before-pickup found no existing Quote Builder PRD; the `/quotes` route stubs to `QuotesComingSoon.jsx` (not Estimates as the prompt assumed — minor correction logged below).
 - **Pre-existing surface:**

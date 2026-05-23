@@ -43,6 +43,9 @@ const Reports = lazy(() => import("./pages/Reports"));
 const AgentReports = lazy(() => import("./pages/AgentReports"));
 const Settings = lazy(() => import("./pages/Settings"));
 const UserSettings = lazy(() => import("./pages/UserSettings"));
+// #853 — full notifications inbox / history feed (paginated + filterable).
+// Bell dropdown deep-links here via the "View all notifications →" footer.
+const NotificationsCenter = lazy(() => import("./pages/NotificationsCenter"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
@@ -805,6 +808,9 @@ export default function App() {
                     <Route path="profile" element={<Profile />} />
                     <Route path="profile/2fa" element={<Profile2FA />} />
                     <Route path="notification-settings" element={<UserSettings />} />
+                    {/* #853 — full notifications inbox. Bell dropdown's
+                        "View all notifications →" footer deep-links here. */}
+                    <Route path="notifications" element={<NotificationsCenter />} />
                     {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
                         adminOnly visibility + the "System Admin Required"
                         toast text). Pre-fix, USER + MANAGER navigation to

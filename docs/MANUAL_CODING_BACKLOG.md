@@ -84,17 +84,20 @@ These are architecture changes whose **first hour is a meeting, not a commit**. 
 
 These are concrete feature specs. The Day-1 scaffold may be cron-doable, but the meat needs an engineer for 3-10 days.
 
-### B1. Pipeline Kanban view (#897)
+### B1. Pipeline Kanban view (#897) — mostly SHIPPED, residual is sub-brand filter + hardening
 **Labels:** `multi-day-feature`, `frontend`, `travel`
 
-**Why manual:** drag-drop board + stage column persistence + WIP limits + filter-by-sub-brand + bulk-move + activity feed per deal. ~5 days. Cron can ship the empty grid + stage columns as Day-1 scaffold; everything else is engineer work.
+**PRD:** [PRD_TRAVEL_PIPELINE_KANBAN.md](PRD_TRAVEL_PIPELINE_KANBAN.md) (10 sections, 8 design decisions, 8 open questions; written 2026-05-23 cron tick #18).
 
-**Acceptance criteria:**
-- Drag a deal between stages → `PATCH /api/deals/:id { stage }` fires + optimistic UI
-- Stage columns configurable per pipeline (read from `PipelineStage` rows)
-- Sub-brand filter chip works
-- Empty state per column ("No deals in <stage>")
-- Mobile-responsive (stack columns vertically <768px)
+**Status update 2026-05-23:** The "/pipeline redirects to dashboard" framing in #897 is **phantom** — `frontend/src/pages/Pipeline.jsx` is a fully built Kanban (~386 lines, shipped `d1a30c7` April 2026, hardened across 8 follow-up commits). Drag-drop + custom stages + optimistic update + rollback + socket.io live sync are all in place. The PRD reframes the residual work to ~3-5 engineering days (vs the original ~5 days from-scratch estimate):
+
+**Real residual work:**
+- Sub-brand filter chip-row (FR-3.11 to 3.15) — ~150 LOC frontend + 30 LOC backend `?subBrand=` query param
+- Mobile touch drag-drop (FR-3.16) — `@dnd-kit/core` swap-in for HTML5 native; 1 day
+- Keyboard a11y for drag-drop (FR-3.17) — 1 day
+- Virtualization for crowded columns (FR-3.18) — 1 day, only matters at ≥100 deals/column
+
+**Cross-cutting:** issue #887 ("/pipeline → dashboard redirect") likely shares root cause with #897 — verify before closing; both should close together.
 
 ---
 

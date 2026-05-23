@@ -2152,6 +2152,9 @@ What's left in the backlog (continue from here):
 
 ## 🔴 Bigger investments — multi-day, may need legal/compliance signoff
 
+### [ ] #897 — Pipeline Kanban: sub-brand filter + a11y/mobile/virtualization hardening
+**PRD:** [docs/PRD_TRAVEL_PIPELINE_KANBAN.md](docs/PRD_TRAVEL_PIPELINE_KANBAN.md) (2026-05-23). The "redirects to dashboard" framing was phantom — Pipeline.jsx is a fully built Kanban shipped April 2026. Residual is sub-brand filter (~150 LOC) + mobile touch drag (`@dnd-kit/core` swap) + keyboard a11y + column virtualization. ~3-5 days. Likely also closes #887 (same root cause hypothesis).
+
 ### [x] ~~#21 — Clinical artefact soft-delete~~
 **RESOLVED BY POLICY (2026-04-26).** Clinical artefacts — Patient, Visit, Prescription, ConsentForm, AgentRecommendation, ServiceConsumption — are PERMANENT. No DELETE endpoints, no `deletedAt` column, no soft-delete. Corrections happen via PUT/PATCH (amendment trail captured in the audit log). Out-of-band ops scripts only for genuine data errors, with written justification in the audit log. Policy block lives at the top of the Clinical section in `backend/routes/wellness.js` (around line 134) so a future engineer doesn't accidentally add a DELETE endpoint. Compliance basis: HIPAA 164.312(c)(1), India MoHFW EMR Standards 2016, DPDP Act 2023.
 

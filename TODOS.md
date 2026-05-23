@@ -406,7 +406,32 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **17 PRDs shipped** (added PRD_TRAVEL_GST_COMPLIANCE + PRD_TRAVEL_QUOTE_BUILDER)
 - **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining** (#862 #869 #870 #876 #877)
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **17 PRDs total** (picker EXHAUSTED per Step 4):
+**Tick #20 (cron) — 3/3 SHIPPED, dual-PRD + externalAuth sweep:**
+
+| SHA | Type | What |
+|---|---|---|
+| `fea8d0b` | New PRD (18th) | **`docs/PRD_TRAVEL_BILLING.md`** (347 lines, #901 P1). 11 FR groups (~30 sub-FRs) across line-items / multi-stage settlement / multi-currency single-invoice / TCS Sec-206C / supplier-payable side / receivable reports / cancellation+refund / doc-templates. **7 DDs**, 12 ACs, 8 OQs, 1 cred-chase. **§11 implementation notes** with full Prisma schema sketch (5 new models + 3 extensions), 3 cron engines, 6 routes, ~48 test surface. **Caught stale tick-log claim:** tick log said "hard-coded HSN/SAC shipped tick #18" — `routes/v1_invoices.js` has zero HSN/SAC/GST awareness today; PRD §1 explicitly corrected. **Refs #901.** |
+| `3a51091` | New PRD (19th) | **`docs/PRD_TRAVEL_SUPPLIER_MASTER.md`** (205 lines, #903 P1). 22 FRs across 7 functional groups (master / PO workflow / payable / reconciliation / commission / disputes / visibility). **5 DDs**, 8 ACs, 7 OQs. **Schema findings:** existing `Vendor` model is wellness-shaped (InventoryReceipt consumer); recommends **FORK to `TravelSupplier`** rather than extend. Found 2 orphan FK columns waiting for supplier master: `ItineraryItem.supplierId` (4231) + `TravelCostMaster.supplierId` (4249). **Refs #903.** |
+| `23595ae` | externalAuth sweep | **Port `requireSubBrandMatch` helper from voyagrAuth → externalAuth.js** (#899 followup). `req.apiKeySubBrand` + `req.requireSubBrandMatch(target)` + `req.requireSubBrandMatchOrSend(target, res)` mirrored verbatim; `SUB_BRAND_MISMATCH` error code preserved. Spec extension SKIPPED — no current `external.js` route uses subBrand body field. **Filed #930** for follow-up to extract shared helper to `backend/lib/apiKeyAuth.js`. **Refs #899.** |
+
+**Three cron-learning candidates surfaced:**
+
+1. **Tick-log claims need verification before being treated as authoritative** (Agent 1's finding) — I claimed in tick #18-19 verdicts that HSN/SAC code shipped to invoices; Agent 1 verified via grep that `routes/v1_invoices.js` has NO HSN/SAC/GST awareness. Worth a one-liner: PRD-writer agents should grep-verify prior tick-log claims before pinning to PRD content. 1st instance — flag for 3rd-instance promotion.
+
+2. **§11 Implementation Notes pattern** for PRD-writer agents — Agent 1 added a §11 with full Prisma schema sketch + cron engines + routes + test surface estimate when its target line-count was under-hit. Higher-density expansion than bloating FRs/ACs. Worth promoting to PRD template standard if 2nd instance lands.
+
+3. **Dual-middleware helper duplication is a temporary pattern, not a smell** (Agent 3's finding) — when porting a helper between sibling middlewares (voyagrAuth ↔ externalAuth), inline duplication + planned-extraction comment + tracking GH issue is correct. Resist extracting to lib/ in the same commit because the port itself is the load-bearing change. Worth one-liner if 3rd instance lands.
+
+**Cumulative session totals (20 ticks):**
+- **59 commits** (+3 this tick: 2 PRDs + 1 refactor)
+- **9 GitHub issues closed + 2 partials** (no new closures this tick; #930 NEW followup issue filed)
+- 10 phantoms + 13 schema-or-spec gaps caught (+1: orphan FK columns + stale tick-log claim)
+- Zero rebase conflicts, zero over-commits across all 59 commits
+- **19 PRDs shipped** (added PRD_TRAVEL_BILLING + PRD_TRAVEL_SUPPLIER_MASTER)
+- **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining**
+- **Travel-vertical financial PRD pack complete:** 4 sibling PRDs cross-referenced — PRD_TRAVEL_GST_COMPLIANCE (tax math) + PRD_TRAVEL_QUOTE_BUILDER (quote→invoice path) + PRD_TRAVEL_BILLING (invoice lifecycle) + PRD_TRAVEL_SUPPLIER_MASTER (supplier payable). Single design-call package for product team.
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **19 PRDs total** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

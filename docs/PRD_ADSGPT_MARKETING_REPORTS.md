@@ -321,12 +321,55 @@ GS owns the e2e validation; Travel Stall owns acknowledging acceptance.
 
 ## 10. Status snapshot
 
+### 2026-05-24 update — STUB client shipped + cap wired
+
+**Backend STUB shipped:** `backend/services/adsGptClient.js` at commit `9f35040`. Mirrors the
+canonical STUB pattern (header marker + `// STUB:` warning + canned response shape +
+console.log observability + CJS self-mocking seam per the 4-instance pattern logged
+to CLAUDE.md cron-learnings tick #99). 6/6 vitest cases pass.
+
+**Per-tenant cap wired:** Calls `getBudgetCap(tenantId, 'adsgpt')` via the
+cross-cutting TenantSetting pattern (helper at `backend/lib/tenantSettings.js`,
+operator-writable surface at `/api/tenant-settings` per commit `1542b8e`).
+Hard-stops at cap with `ADSGPT_BUDGET_EXCEEDED`. 80% threshold alert via console.warn.
+Admin UI for cap overrides shipping this tick by a sibling agent.
+
+**Decisions implemented:** DC-2 ($50/mo default per-tenant cap, operator-overridable).
+
+**Cred chase status:** docs/CREDS_TRACKER.md Cat 1 Q1 row, cluster C7 (Yasin AdsGPT
+handover packet). Stub is the swap-point; ~1 day to real-mode swap when creds drop
+(mirror the digilockerClient/googleDriveClient post-cred swap pattern documented at
+1babe1b/192de86).
+
+**What's now possible:**
+- Caller code can invoke `adsGptClient.fetchAdReport()` and get a structured
+  stub response (no longer throws "integration not configured")
+- Operator can set per-tenant cap override via /api/tenant-settings (admin UI in flight)
+- Tests can spy on `module.exports.fetchAdReport` per the CJS self-mocking seam
+
+**Still pending:**
+- Real-mode swap (cred-blocked on Q1 Yasin handover — AdsGPT API key + S2S endpoint URL)
+- Daily ingest cron `backend/cron/adsGptIngestEngine.js` (consumes the client; ~½ day)
+- `POST /api/v1/external/adsgpt/conversions` conversion-export endpoint (~½ day)
+- Per-platform marketing dashboard endpoint + Reports.jsx tab (~1 day)
+- AdsGPT insights LLM consumer FR-8 (~½ day, gated by Q11 LLM-spend cap decision)
+- Schema additions: `AdSpendDaily`, `IntegrationCallLog`, `Touchpoint` columns
+
+**Path to real-mode:** When creds drop, swap the stub-mode canned response body
+in `fetchAdReport()` with the real AdsGPT S2S `fetch()` call. Cap / observability /
+feature-flag scaffold stays unchanged. ~1 day post-cred per the 3-similar-stubs pattern
+that's now established (adsgpt + ratehawk + callified all built on the same skeleton
+in successive ticks; bookingExpedia in-flight this tick is the 4th).
+
+---
+
 | Component | State |
 |---|---|
 | Frontend AdsGPT SSO surface (`utils/adsgpt.js` + Sidebar card + Owner Dashboard card) | ✅ **SHIPPED** (commit `22fe62c`) |
 | `Integration{ provider: 'adsgpt' }` row + linked-status read flow | ✅ **SHIPPED** (issue #831) |
 | Existing infra leveraged (Touchpoint + attribution routes + Reports.jsx) | ✅ **SHIPPED** |
-| `backend/services/adsGptClient.js` | 🔴 **NOT-STARTED** — stub-mode ready to land per cred-blocked policy |
+| `backend/services/adsGptClient.js` (STUB-mode) | ✅ **SHIPPED** (commit `9f35040`, 6/6 vitest, cap-wired) |
+| `backend/services/adsGptClient.js` (REAL-mode swap) | 🔴 **NOT-STARTED** — cred-blocked on Q1 |
 | Daily ingest cron `backend/cron/adsGptIngestEngine.js` | 🔴 **NOT-STARTED** |
 | Conversion-export endpoint `POST /api/v1/external/adsgpt/conversions` | 🔴 **NOT-STARTED** |
 | Per-platform marketing dashboard endpoint + frontend tab | 🔴 **NOT-STARTED** (~1 day) |

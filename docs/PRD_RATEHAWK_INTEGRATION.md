@@ -294,10 +294,56 @@ Q19 cred drop unblocks:
 
 ## 10. Status snapshot
 
+### 2026-05-24 update — STUB client shipped + cap wired
+
+**Backend STUB shipped:** `backend/services/ratehawkClient.js` at commit `2852b82`. Mirrors the
+canonical STUB pattern (header marker + `// STUB:` warning + canned response shape +
+console.log observability + CJS self-mocking seam per the 4-instance pattern logged
+to CLAUDE.md cron-learnings tick #99). 6/6 vitest cases pass. **Closes the
+"no stub exists today" gap** noted in CREDS_TRACKER tick #74 — this was the ONLY
+Cat-1 cred-blocked item with no STUB written before this tick.
+
+**Per-tenant cap wired:** Calls `getBudgetCap(tenantId, 'ratehawk')` via the
+cross-cutting TenantSetting pattern (helper at `backend/lib/tenantSettings.js`,
+operator-writable surface at `/api/tenant-settings` per commit `1542b8e`).
+Hard-stops at cap with `RATEHAWK_BUDGET_EXCEEDED`. 80% threshold alert via console.warn.
+Admin UI for cap overrides shipping this tick by a sibling agent.
+
+**Decisions implemented:** DC-1 (per-call cap), DC-4 (auto-with-override
+lowest-rate tiebreaker logic baked into the stub response ordering).
+
+**Cred chase status:** docs/CREDS_TRACKER.md Cat 1 Q19 row (RateHawk partner
+onboarding — API key + API ID). Stub is the swap-point; ~1 day to real-mode swap
+when creds drop (mirror the digilockerClient/googleDriveClient post-cred swap
+pattern documented at 1babe1b/192de86).
+
+**What's now possible:**
+- Caller code can invoke `ratehawkClient.searchHotels()`, `bookHotel()`, `cancelBooking()`
+  and get structured stub responses (no longer throws "integration not configured")
+- Operator can set per-tenant cap override via /api/tenant-settings (admin UI in flight)
+- Tests can spy on `module.exports.searchHotels` / `bookHotel` / `cancelBooking` per
+  the CJS self-mocking seam
+- W3 sprint exit-gate now satisfied for the client surface
+
+**Still pending:**
+- Real-mode swap (cred-blocked on Q19 Yasin handover — RateHawk API key + API ID)
+- `POST /api/travel/quote/unified-search` endpoint (consumes the client; ~1 day)
+- `backend/lib/quoteRanker.js` rate-ranker (~½ day, DC-4 logic surfaced from stub into ranker)
+- Operator UI (RFU unified-search panel) — separate FE phase (~1-2 days)
+
+**Path to real-mode:** When creds drop, swap the stub-mode canned response bodies
+in the 3 methods with real RateHawk `fetch()` calls. Cap / observability /
+feature-flag scaffold stays unchanged. ~1 day post-cred per the 3-similar-stubs pattern
+that's now established (adsgpt + ratehawk + callified all built on the same skeleton
+in successive ticks; bookingExpedia in-flight this tick is the 4th).
+
+---
+
 | Area | Status |
 |---|---|
 | **Schema** (per DC-2 — extending `Integration` model) | ✅ READY (no schema change needed) |
-| **`backend/services/ratehawkClient.js`** | 🔴 **NOT-STARTED** — no stub exists today (unlike Q9/Q11/Q3 which had stubs ready) |
+| **`backend/services/ratehawkClient.js`** (STUB-mode) | ✅ **SHIPPED** (commit `2852b82`, 6/6 vitest, cap-wired, DC-1/DC-4 implemented) |
+| **`backend/services/ratehawkClient.js`** (REAL-mode swap) | 🔴 **NOT-STARTED** — cred-blocked on Q19 |
 | **NEW `POST /api/travel/quote/unified-search`** endpoint | 🔴 NOT-STARTED |
 | **NEW `backend/lib/quoteRanker.js`** rate-ranker | 🔴 NOT-STARTED |
 | **Operator UI** (RFU unified-search panel) | 🔴 NOT-STARTED (separate FE phase) |

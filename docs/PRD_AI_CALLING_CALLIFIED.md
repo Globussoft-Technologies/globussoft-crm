@@ -412,11 +412,82 @@ approval (DC-3 personas).
 
 ## 10. Status snapshot
 
+### 2026-05-24 update — STUB client shipped + cap wired
+
+**Backend STUB shipped:** `backend/services/callifiedClient.js` at commit `9ec52df`. Mirrors the
+canonical STUB pattern (header marker + `// STUB:` warning + canned response shape +
+console.log observability + CJS self-mocking seam per the 4-instance pattern logged
+to CLAUDE.md cron-learnings tick #99). 10/10 vitest cases pass (exceeded the 5-case
+minimum — 90s per-call ceiling, lead-source whitelist gating, per-tenant disable
+toggle, persona/script subBrand lookup, and TRAI disclosure metadata each got
+dedicated cases).
+
+**Per-tenant cap wired:** Calls `getBudgetCap(tenantId, 'callified')` via the
+cross-cutting TenantSetting pattern (helper at `backend/lib/tenantSettings.js`,
+operator-writable surface at `/api/tenant-settings` per commit `1542b8e`).
+Hard-stops at cap with `CALLIFIED_BUDGET_EXCEEDED`. 80% threshold alert via console.warn.
+Admin UI for cap overrides shipping this tick by a sibling agent.
+
+**Decisions implemented:**
+- **DC-1** — $100/mo per-tenant cap + 90s per-call ceiling (cap via `getBudgetCap`,
+  ceiling enforced inline in `initiateCall`)
+- **DC-2** — lead-source whitelist (gate at caller layer, NOT in client — client
+  documents this contract in header but doesn't enforce; dispatcher cron will
+  filter pre-invocation)
+- **DC-3** — persona/script per sub-brand looked up via `Tenant.subBrandConfigJson`
+  (consumes the same field shipped at `621aab7`)
+- **DC-5** — TRAI disclosure metadata baked into stub response shape (single
+  counsel session covers all 4 sub-brands)
+- **DC-7** — per-tenant disable toggle via `TenantSetting{ key: 'callifiedEnabled' }`
+
+**Cred chase status:** docs/CREDS_TRACKER.md Cat 1 Q1 row, cluster C6 (Yasin
+Callified.ai handover packet — Section 13 multi-vendor bundle). Stub is the
+swap-point; ~1 day to real-mode swap when creds drop (mirror the
+digilockerClient/googleDriveClient post-cred swap pattern documented at
+1babe1b/192de86).
+
+**What's now possible:**
+- Caller code can invoke `callifiedClient.initiateCall()` and `fetchCallResult()`
+  and get structured stub responses (no longer throws "integration not configured")
+- Operator can set per-tenant cap override via /api/tenant-settings + toggle
+  enable/disable via the same surface (admin UI in flight)
+- Tests can spy on `module.exports.initiateCall` / `fetchCallResult` per the
+  CJS self-mocking seam
+
+**Sandbox mock clarification:** `scripts/sandbox/callified-mock.js` (referenced
+in Portal matrix O17 as 🟡 PARTIAL) is the **INBOUND** simulator — used for
+testing the Callified→CRM webhook flow against `backend/routes/external.js`.
+It is **NOT** a swap-point for this **outbound** client. Per the new client's
+header, the swap-point is the `fetch()` placeholder lines inside `initiateCall`
++ `fetchCallResult`. The two surfaces are independent — `callified-mock.js`
+remains a 🟡 PARTIAL gap on its own track and does not block this PRD's
+real-mode swap.
+
+**Still pending:**
+- Real-mode swap (cred-blocked on Q1 Yasin handover — Callified API key + persona library access)
+- Dispatcher cron `backend/cron/aiQualificationDispatcher.js` (5-min tick;
+  consumes the client + applies DC-2 lead-source whitelist at caller layer)
+- Schema additive columns: 6 nullable on `Contact` + 1 on `Tenant` + new `CallifiedConfig` model
+- Webhook-in summary endpoint extension to `backend/routes/external.js`
+- `LeadDetail.jsx` AI summary panel (additive to commit `a84289e`)
+- Persona + script content per sub-brand (DC-3 — Yasin's content team)
+- TRAI / opt-out / AI-agent-disclosure counsel review (DC-5 wording — Travel Stall counsel)
+
+**Path to real-mode:** When creds drop, swap the stub-mode canned response bodies
+in `initiateCall` + `fetchCallResult` with real Callified `fetch()` calls. Cap /
+observability / 90s ceiling / feature-flag / disable-toggle scaffold stays
+unchanged. ~1 day post-cred per the 3-similar-stubs pattern that's now established
+(adsgpt + ratehawk + callified all built on the same skeleton in successive ticks;
+bookingExpedia in-flight this tick is the 4th).
+
+---
+
 | Component | State | Notes |
 |---|---|---|
 | Partner-API inbound (Callified → CRM) | ✅ SHIPPED | [`backend/routes/external.js`](../backend/routes/external.js) — `/calls` POST + `/calls/:id` PATCH + `/leads` POST + `/leads` GET + `/messages` POST already live |
-| Sandbox mock for stub-mode | 🟡 PARTIAL | Portal matrix O17 evidence references `scripts/sandbox/callified-mock.js` but the file does not currently exist — needs to be authored alongside the stub-mode client (FR-1) |
-| Outbound trigger client `services/callifiedClient.js` | 🔴 NOT-STARTED | Stub-mode pattern ready to land per cred-blocked policy; mirror `digilockerClient.js` shape |
+| Sandbox mock for stub-mode | 🟡 PARTIAL | Portal matrix O17 evidence references `scripts/sandbox/callified-mock.js` but the file does not currently exist — INBOUND simulator, NOT a swap-point for this outbound client (see 2026-05-24 update above) |
+| Outbound trigger client `services/callifiedClient.js` (STUB-mode) | ✅ SHIPPED | Commit `9ec52df` — 10/10 vitest, cap-wired, DC-1/DC-2/DC-3/DC-5/DC-7 implemented |
+| Outbound trigger client `services/callifiedClient.js` (REAL-mode swap) | 🔴 NOT-STARTED | Cred-blocked on Q1 |
 | Dispatcher cron `aiQualificationDispatcher.js` | 🔴 NOT-STARTED | 5-min tick; ad-source gating + per-tenant cap enforcement |
 | Schema additive columns | 🔴 NOT-STARTED | 6 nullable columns on `Contact` + 1 on `Tenant` + new `CallifiedConfig` model |
 | Webhook-in summary endpoint | 🔴 NOT-STARTED | Extends `backend/routes/external.js` partner-API surface |

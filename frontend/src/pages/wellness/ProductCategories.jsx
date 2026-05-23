@@ -20,6 +20,7 @@ export default function ProductCategories() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const load = () => {
     setLoading(true);
@@ -74,6 +75,15 @@ export default function ProductCategories() {
     setSaving(false);
   };
 
+  const filteredCategories = categories.filter((c) => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      c.name?.toLowerCase().includes(q) ||
+      c.description?.toLowerCase().includes(q)
+    );
+  });
+
   const remove = async (cat) => {
     if (!window.confirm(`Delete category "${cat.name}"? Products under it will become uncategorised.`)) return;
     try {
@@ -125,11 +135,33 @@ export default function ProductCategories() {
         </form>
       )}
 
+      <div style={{ marginBottom: '0.75rem' }}>
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="search via consumables"
+          aria-label="Search categories"
+          style={{
+            width: '100%',
+            maxWidth: '400px',
+            padding: '0.6rem 0.9rem',
+            border: '1px solid var(--border-color)',
+            borderRadius: '6px',
+            background: 'var(--input-bg)',
+            color: 'var(--text-primary)',
+            fontSize: '0.9rem',
+          }}
+        />
+      </div>
+
       <div className="glass" style={{ padding: '0.5rem 0' }}>
         {loading ? (
           <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>Loading…</div>
         ) : categories.length === 0 ? (
           <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>No categories yet.</div>
+        ) : filteredCategories.length === 0 ? (
+          <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>No categories match "{searchQuery}".</div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -143,7 +175,7 @@ export default function ProductCategories() {
               </tr>
             </thead>
             <tbody>
-              {categories.map((c) => (
+              {filteredCategories.map((c) => (
                 <tr key={c.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                   <td style={cellStyle}>{c.name}</td>
                   <td style={cellStyle}>{c.parentId ? (categories.find((p) => p.id === c.parentId)?.name || `#${c.parentId}`) : '—'}</td>

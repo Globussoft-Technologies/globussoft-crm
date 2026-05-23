@@ -22,6 +22,7 @@ import { useEffect, useState, useContext } from "react";
 import { Building2, Plus, Pencil, Trash2 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -41,15 +42,10 @@ const SUPPLIER_CATEGORIES = [
   { value: "other", label: "Other" },
 ];
 
-// Sub-brand pill background — neutral fallback works under both light
-// and travel-dark themes; the active sub-brand surfaces upstream
-// (TmcMicrositePreview etc.) carry the brand colors.
-const SUB_BRAND_BG = {
-  tmc: "rgba(18, 38, 71, 0.18)",        // travel-navy tint
-  rfu: "rgba(38, 88, 85, 0.18)",        // teal-ish (RFU pilgrim)
-  travelstall: "rgba(200, 154, 78, 0.18)", // warm gold
-  visasure: "rgba(99, 102, 241, 0.18)",  // indigo
-};
+// Sub-brand pill background: imported from utils/travelSubBrand (rule-of-3
+// promotion 2026-05-24 tick #99 — was inline here as the origin copy at
+// commit 08ebe5e, then cloned into QuotesAdmin/InvoicesAdmin; promoted to
+// the shared util once the third caller landed).
 
 const EMPTY_FORM = {
   name: "",

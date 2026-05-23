@@ -25,6 +25,7 @@ import { Receipt, Plus, Pencil, Trash2 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
+import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -43,15 +44,9 @@ const QUOTE_STATUSES = [
   { value: "Rejected", label: "Rejected" },
 ];
 
-// Mirror SuppliersAdmin's SUB_BRAND_BG map verbatim. Promotion to a
-// shared util (e.g. frontend/src/utils/travelSubBrand.js) is a future
-// tick — both admin pages keep their own copy until a third caller lands.
-const SUB_BRAND_BG = {
-  tmc: "rgba(18, 38, 71, 0.18)",        // travel-navy tint
-  rfu: "rgba(38, 88, 85, 0.18)",        // teal-ish (RFU pilgrim)
-  travelstall: "rgba(200, 154, 78, 0.18)", // warm gold
-  visasure: "rgba(99, 102, 241, 0.18)",  // indigo
-};
+// SUB_BRAND_BG now imported from ../../utils/travelSubBrand (rule-of-3
+// promotion 2026-05-24 tick #99 — inline copy was a verbatim mirror of
+// SuppliersAdmin's; promoted once InvoicesAdmin landed as the third caller).
 
 // Status pill background — matches the lightweight badge palette used
 // elsewhere in the travel admin pages.

@@ -359,7 +359,30 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **14 PRDs shipped** (10 from original P3 list + DARK_MODE + AI_ERA + RFU_GROUND_SERVICES + WHATSAPP/DIGILOCKER already-existed)
 - **Dark-mode cluster: 10 of 17 closed + #879 partial; 7 issues remaining** (#862 #868 #869 #870 #876 #877 #880)
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **14 PRDs total** (picker EXHAUSTED per Step 4):
+**Tick #18 (cron) — 2/3 SHIPPED + 2 PHANTOMS caught (9th + 10th):**
+
+| SHA | Type | What |
+|---|---|---|
+| `1a50696` | New PRD (15th) | **`docs/PRD_TRAVEL_PIPELINE_KANBAN.md`** — 237 lines. 8 Open Questions, **4 Design Decisions** (drag-drop library / stale-data refresh / filter default / crowded-column UX), 18 FRs (10 marked SHIPPED), 10 AC. **Phantom-with-residual finding:** `frontend/src/pages/Pipeline.jsx` is ALREADY a fully-built Kanban (386 lines, shipped April 2026, hardened across 8 commits). #897's "redirects-to-Dashboard" framing is WRONG. Only genuine gap is sub-brand filter (5 new FRs). **Saved 2 engineer-days.** Identifies **#887 as likely same-root-cause dupe of #897.** |
+| `8d9cad9` | Dark-mode #880 | **Forms dark theme** — 74 lines to `theme/travel.css`. Phase 2 CSS-only: line-item row containers + empty-state panes + select options + `color-scheme: dark` on number inputs. **Refs #880** (3 residual JSX inline `colorScheme: 'light'` + `color: '#000 !important'` literals on Estimates.jsx 459/473/487 unreachable from external CSS — Phase-1 JSX refactor needed in follow-up). Found `Quotes.jsx` doesn't exist (route → Estimates.jsx). Cluster: **10 of 17 closed + #879 + #880 partials; 6 issues remaining.** |
+| _phantom_ | #929 webhook | **`invoice.created` webhook already shipped pre-tick** at `backend/routes/billing.js:316-333` via `eventBus.emitEvent('invoice.created', ...)` (eventBus.js:213 calls `deliverWebhooks` under the hood). Wave-6a shipped it. **9th verify-before-pickup catch.** Agent posted PHANTOM comment on #929 + listed 4 genuinely-remaining emissions for re-scope. **Pattern:** the parent agent (tick #17) filed #929 without grepping for already-shipped emissions — phantom-at-issue-filing-layer. 5th-instance of phantom-carry-over family. |
+
+**Three cron-learning candidates surfaced (promotion-eligible next review):**
+
+1. **Phantom-from-upstream-root-cause-fix → 3rd instance.** Promote to standing-rule one-liner: pre-pickup `git log --since=<issue-date> --oneline -- <area>` for human-QA-filed BUG-Txx reports.
+2. **JSX inline `colorScheme` + `!important` is unreachable-from-CSS.** Phase-2 threshold should treat 1 such literal as effectively infinite. Worth one-liner in dark-mode dispatch prompts.
+3. **Phantom-at-issue-filing-layer.** Cron-prompt agents filing follow-up issues should grep BEFORE writing the issue body. Pattern is 5th-instance of phantom-carry-over family.
+
+**Cumulative session totals (18 ticks):**
+- **53 commits** (+2 this tick: 1 PRD + 1 partial dark-mode)
+- **8 GitHub issues closed + 2 partials** (added #880 partial; #929 NOT closed, still has 4 genuine items)
+- 10 phantoms + 12 schema-or-spec gaps caught
+- Zero rebase conflicts, zero over-commits across all 53 commits
+- **15 PRDs shipped** (added PRD_TRAVEL_PIPELINE_KANBAN)
+- **Dark-mode cluster: 10 of 17 closed + #879 + #880 partials; 6 issues remaining**
+- **#897 sub-brand filter** is the only real gap; #887 likely dupe to verify+close together
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **15 PRDs total** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

@@ -921,6 +921,15 @@ function renderWellnessNav({
           <Link to="/channels" icon={Radio} label="Channels" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
+          {/* Per-tenant cap-override admin UI. Surfaces /api/tenant-settings
+              CRUD (backend commit 1542b8e) so ADMINs can configure budget caps
+              for AdsGPT / AI calling / RateHawk / LLM without DB access. */}
+          <Link
+            to="/admin/tenant-settings"
+            icon={DollarSign}
+            label="Tenant Settings"
+            adminOnly
+          />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </>
       )}
@@ -1252,6 +1261,15 @@ function renderGenericNav({
           />
           <Link to="/zapier" icon={Code} label="Zapier" adminOnly />
           <Link to="/developer" icon={Code} label="Developers" adminOnly />
+          {/* Per-tenant cap-override admin UI. Surfaces /api/tenant-settings
+              CRUD (backend commit 1542b8e) so ADMINs can configure budget caps
+              for AdsGPT / AI calling / RateHawk / LLM without DB access. */}
+          <Link
+            to="/admin/tenant-settings"
+            icon={DollarSign}
+            label="Tenant Settings"
+            adminOnly
+          />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </div>
       )}

@@ -92,6 +92,10 @@ const Signatures = lazy(() => import("./pages/Signatures"));
 const KnowledgeBase = lazy(() => import("./pages/KnowledgeBase"));
 const Currencies = lazy(() => import("./pages/Currencies"));
 const FieldPermissions = lazy(() => import("./pages/FieldPermissions"));
+// Per-tenant cap-override admin UI — consumes /api/tenant-settings CRUD
+// (backend commit 1542b8e). Completes the per-tenant cap pattern end-to-end:
+// helper + 4 consumers + backend CRUD + admin UI.
+const TenantSettings = lazy(() => import("./pages/admin/TenantSettings"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -873,6 +877,17 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Field Permissions requires admin access.">
                           <FieldPermissions />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Per-tenant cap-override admin UI. ADMIN-only mirrors the
+                        backend gate (verifyRole(['ADMIN']) on PUT/DELETE in
+                        backend/routes/tenant_settings.js commit 1542b8e). */}
+                    <Route
+                      path="admin/tenant-settings"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Tenant Settings requires admin access.">
+                          <TenantSettings />
                         </RoleGuard>
                       }
                     />

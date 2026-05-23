@@ -6170,7 +6170,17 @@ router.post(
   async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: "No logo file provided (field 'logo')" });
-      const logoUrl = `/uploads/branding/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
+      // #884 — store the canonical API URL, not the bare `/uploads/branding/...`
+      // path. The /api/ namespace is reverse-proxied to the backend by Nginx;
+      // `/uploads/*` on demo falls through to the SPA catch-all and returns
+      // `text/html` for an <img> request → broken-image icons on the sidebar +
+      // Branding card + branded PDFs. Mirrors the #743 visit-photos fix: serve
+      // images through `/api/wellness/...` so Nginx routes them correctly.
+      // The public read endpoint (`GET /public/branding/:tenantId/logo`) is
+      // unauthenticated by design — <img> tags don't carry Authorization
+      // headers (JWT lives in localStorage, not cookie), and tenant logos are
+      // intentionally public via direct URL.
+      const logoUrl = `/api/wellness/public/branding/${req.user.tenantId}/logo`;
       await prisma.tenant.update({
         where: { id: req.user.tenantId },
         data: { logoUrl },
@@ -6207,10 +6217,82 @@ router.get("/branding", async (req, res) => {
       select: { logoUrl: true, brandColor: true, name: true, defaultCurrency: true },
     });
     if (!tenant) return res.status(404).json({ error: "Tenant not found" });
-    res.json(tenant);
+    // #884 — normalise + persist legacy `/uploads/branding/...` URLs (stored
+    // before the canonical-URL fix landed) to the API-namespaced public URL
+    // so the SPA sidebar + Branding card + auth/me responses render correctly
+    // even before the next upload. We rewrite the DB row on read so the next
+    // /api/auth/me call (which returns tenant.logoUrl verbatim from the DB
+    // for the sidebar) also gets the working URL — without forcing every
+    // existing tenant to re-upload. The disk file is untouched.
+    let logoUrl = tenant.logoUrl;
+    if (logoUrl && /^\/uploads\/branding\//.test(logoUrl)) {
+      logoUrl = `/api/wellness/public/branding/${req.user.tenantId}/logo`;
+      // Best-effort persist; don't fail the read if the update errors.
+      prisma.tenant
+        .update({ where: { id: req.user.tenantId }, data: { logoUrl } })
+        .catch((e) => console.warn("[wellness] branding logoUrl backfill failed:", e.message));
+    }
+    res.json({ ...tenant, logoUrl });
   } catch (e) {
     console.error("[wellness] branding get error:", e.message);
     res.status(500).json({ error: "Failed to load branding" });
+  }
+});
+
+// #884 — public branding-logo serve. <img src> tags from the SPA sidebar,
+// Settings → Branding card, and branded PDFs (downstream consumers) all
+// need to fetch this without auth headers (JWT lives in localStorage, not
+// cookies — so <img> requests carry no credentials). Tenant logos are
+// intentionally public via direct URL — they ship on login pages, public
+// booking pages, and customer-facing PDFs already.
+//
+// Discovery is by tenantId in the URL. The file on disk lives at
+// `backend/uploads/branding/tenant-<id>/logo.<ext>`; we list the directory
+// to find `logo.<known-ext>` and serve it with the correct MIME so the
+// browser decodes it as an image (not text/html). Path-traversal is
+// impossible because we hard-code the filename prefix + reject any tenantId
+// that isn't a positive integer.
+const BRANDING_MIME_BY_EXT = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+};
+router.get("/public/branding/:tenantId/logo", async (req, res) => {
+  try {
+    const tenantId = parseInt(req.params.tenantId, 10);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(400).json({ error: "Invalid tenantId", code: "INVALID_TENANT_ID" });
+    }
+    const dir = path.join(__dirname, "..", "uploads", "branding", `tenant-${tenantId}`);
+    if (!fs.existsSync(dir)) {
+      return res.status(404).json({ error: "Logo not found" });
+    }
+    // Find `logo.<ext>` for any supported image extension. There's only ever
+    // one logo per tenant (the upload handler writes a fixed `logo.<ext>`
+    // filename), so the first match wins.
+    let file = null;
+    let mime = null;
+    for (const ext of Object.keys(BRANDING_MIME_BY_EXT)) {
+      const candidate = path.join(dir, `logo${ext}`);
+      if (fs.existsSync(candidate)) {
+        file = candidate;
+        mime = BRANDING_MIME_BY_EXT[ext];
+        break;
+      }
+    }
+    if (!file) {
+      return res.status(404).json({ error: "Logo not found" });
+    }
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.sendFile(file);
+  } catch (e) {
+    console.error("[wellness] public branding logo error:", e.message);
+    res.status(500).json({ error: "Failed to serve logo" });
   }
 });
 

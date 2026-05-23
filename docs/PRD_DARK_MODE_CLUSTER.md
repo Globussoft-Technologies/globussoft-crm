@@ -341,7 +341,14 @@ GS engineering owns AC-1..AC-5; QA owns AC-6 (visual observation).
 
 ### 10.1 Cluster status
 
-**Cluster progress: 7 of 17 closed (`#863` `#864` `#867` `#871` `#872` `#878` + `#873` partial + `#879` Itineraries-slice partial); 10 remaining (of which `#879` has 2 pages still + `#873` has Recharts work).**
+**Cluster progress: 11 of 17 closed (`#863` `#864` `#866` `#867` `#868` `#871` `#872` `#878` `#881` `#883` + `#873` Phase 1 partial + `#879` Itineraries-slice partial + `#880` forms partial); 6 remaining (sub-cluster #862/#869/#870/#876 + #873 Recharts work + #877 Pipeline columns + #879 2 pages + #880 Phase 1 JSX residual).**
+
+**This session's closures** (2026-05-23 autonomous overnight cron arc):
+- `#868` ✅ SHIPPED tick #19 `f9bd2c3` — pre-auth FOUC inline-script fix in `index.html`
+- `#881` ✅ SHIPPED tick #16 `288dad6` — modals + popovers + tooltips dark theme (10 token pairs, [role=dialog] selector catches 13+ drawers)
+- `#883` ✅ SHIPPED tick #15 `a2da4bf` — Sidebar nav active highlight + group dividers dark theme (Phase 2 CSS-only)
+- `#866` ✅ SHIPPED tick #17 `d757bd6` — Dashboard tiles + KPI cards resolved upstream by #863/#864 cascade fix; no per-page work needed
+- `#880` 🟡 PARTIAL tick #18 `8d9cad9` — forms dark theme Phase 2 (74 lines); 3 residual JSX `colorScheme: 'light'` + `!important` literals on Estimates.jsx 459/473/487 unreachable from external CSS (Phase 1 refactor needed in follow-up)
 
 - **Foundation (global CSS, form fields)** ✅ shipped `afdc61b` (closed `#863` + `#864`).
 - **Pattern demonstration (Diagnostics tier badges)** ✅ shipped `f67b4fc` (closed `#867`).
@@ -368,19 +375,19 @@ GS engineering owns AC-1..AC-5; QA owns AC-6 (visual observation).
 | `#877` | `pages/Pipeline.jsx` | Column header bg `#faf6ee` + card bg `#ffffff` + border `#e8e1d5` (KanbanColumn / DealCard inline) | 🔴 NOT-STARTED | 45 min |
 | `#878` | `pages/AuditLog.jsx` | Zebra-stripe `#fafafa` / `#ffffff` + timestamp `#cfc8bd` + action-verb gold literal | ✅ SHIPPED `58986ef` — 9 inline-style objects refactored to 13 CSS classes (ActionBadge variants / integrity chips / backfill banner / table header / row drawer); 14 dark-mode token pairs (WCAG-AA 5.1+); full close | done |
 | `#879` | `pages/travel/Itineraries.jsx` + `CostMaster.jsx` + `PricingRules.jsx` (shared Table component likely) | Table wrapper `#ffffff` + header `#faf6ee` + numeric-cell `#666` | 🟡 PARTIAL `8169ce8` — Itineraries.jsx slice shipped (4 inline-style objects → 4 CSS class families with 12 variants; 11 dark-mode token pairs; tier `primary` variant fixed from 1:1 invisible → 7.7:1 contrast). CostMaster + Pricing Rules pages remain for follow-up ticks. | 2 pages remaining (~40 min) |
-| `#880` | `pages/Quotes.jsx` + `Invoices.jsx` + `Payments.jsx` | Form card bg `#faf6ee` + line-item row white + PDF preview chrome | 🔴 NOT-STARTED | 60 min (3 pages) |
-| `#881` | App-wide modal / popover / tooltip components | Modal body `#ffffff` + popover bg + tooltip background — likely centralised in a `Modal.jsx` / `Tooltip.jsx` / `Popover.jsx` | 🔴 NOT-STARTED | 45 min (centralised payoff) |
-| `#883` | `components/Sidebar.jsx` (token extension only — Phase 2) | `--sidebar-active-bg` + `--sidebar-divider-color` token additions; FR-6 says no JSX changes | 🔴 NOT-STARTED | 30 min |
-| `#868` | `frontend/index.html` + App.jsx theme bootstrap | Inline `<script>` injection + sync theme application; FR-7 | 🔴 NOT-STARTED | 45 min (sub-cluster) |
+| `#880` | `pages/Quotes.jsx` (→ `Estimates.jsx`) + `Invoices.jsx` + `Payments.jsx` | Form card bg `#faf6ee` + line-item row white + PDF preview chrome — Quotes.jsx doesn't exist (`/quotes` route → Estimates.jsx) | 🟡 PARTIAL `8d9cad9` — 74 lines to theme/travel.css (line-item rows + form panes + select options + `color-scheme: dark` on number inputs); 3 residual JSX `colorScheme: 'light'` + `!important` literals on Estimates.jsx 459/473/487 unreachable from external CSS, need Phase 1 JSX refactor | Phase 1 follow-up (~30 min) |
+| `#881` | App-wide modal / popover / tooltip components | Modal body `#ffffff` + popover bg + tooltip background — likely centralised in a `Modal.jsx` / `Tooltip.jsx` / `Popover.jsx` | ✅ SHIPPED `288dad6` — 10 token pairs added to travel-dark vars block (`--overlay-bg`, `--surface-hover`, `--tooltip-bg`, `--popover-bg`, `--menu-bg`, etc.); `[role="dialog"]` attribute selector catches 13+ inline-styled drawers; recharts tooltips covered; WCAG ≥3:1 surfaces / ≥13:1 text AAA; full close | done |
+| `#883` | `components/Sidebar.jsx` (token extension only — Phase 2) | `--sidebar-active-bg` + `--sidebar-divider-color` token additions; FR-6 says no JSX changes | ✅ SHIPPED `a2da4bf` — gold-gradient active background (3.2:1 surface, 7.8:1 text AAA), 3px gold border-left, distinct hover state, 28% gold divider lines; full close | done |
+| `#868` | `frontend/index.html` + App.jsx theme bootstrap | Inline `<script>` injection + sync theme application; FR-7 | ✅ SHIPPED `f9bd2c3` — 27-line inline script before React mounts; reads `localStorage.theme` (light/dark/system/null) + `prefers-color-scheme` fallback; full close (also covers /forgot-password + /reset-password) | done |
 | `#869` | App.jsx theme provider | `matchMedia.addEventListener('change', ...)` subscription when "system" mode | 🔴 NOT-STARTED | 30 min (sub-cluster) |
 | `#870` | App.jsx + `routes/users.js` + Prisma `UserPreference` | `PATCH /api/user/preferences` + schema migration + hydrate-on-login | 🔴 NOT-STARTED | 90 min (sub-cluster, backend work) |
 | `#876` | App.jsx + `lib/userPreferences` + sub-brand switcher | `themeBySubBrand` JSON field + sub-brand-aware hydration | 🔴 NOT-STARTED | 60 min (sub-cluster) |
 | `#862` | App.jsx + Settings.jsx + maybe top bar | Visible toggle UI in Profile / top bar; depends on #870 / #876 for persistence | 🔴 NOT-STARTED | 60 min (sub-cluster) |
 
-**Closed:** 7 / 17 (incl. `#873` Phase 1 partial — Recharts Phase 2 pending; incl. `#879` Itineraries-slice partial — CostMaster + Pricing Rules pages pending).
-**Open per-page (FR-1 pattern):** 7 (+ `#873` Phase 2 Recharts work + `#879` 2 remaining pages).
-**Open sub-cluster (FR-7 + persistence):** 3.
-**Total open:** 10 / 17.
+**Closed:** 11 / 17 (incl. `#866` cascade-resolved upstream + `#873` Phase 1 partial — Recharts Phase 2 pending + `#879` Itineraries-slice partial — CostMaster + Pricing Rules pages pending + `#880` Phase 2 partial — 3 JSX literals need Phase 1 refactor).
+**Open per-page (FR-1 pattern):** 1 (`#877` Pipeline) (+ `#873` Phase 2 Recharts work + `#879` 2 remaining pages + `#880` 3 Estimates.jsx JSX literals).
+**Open sub-cluster (FR-7 + persistence):** 4 (`#862` + `#869` + `#870` + `#876`).
+**Total open:** 6 / 17 (3 with partial-shipped progress).
 
 ### 10.3 Effort summary
 

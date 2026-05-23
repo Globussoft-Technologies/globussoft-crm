@@ -817,6 +817,27 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 
 **Lean-mode tempo holds — 4 consecutive 1-ship-per-tick main-thread lean ticks** (#35 synthesis + #36 visa.status_changed + #37 quote.sent + #38 itinerary.accepted). The pattern is sustainable for as long as the user keeps firing the cron prompt — each tick produces 1 small concrete win + audit findings.
 
+**Tick #39 (cron) — 1/1 SHIPPED, +5 vitest cases pinning the 3 new emissions:**
+
+| SHA | Type | What |
+|---|---|---|
+| `340d4f1` | Test pinning | **`wave-6a-event-emissions.test.js` extended** — pins the 3 new lifecycle webhook emissions from #929 close-out. 5 new test cases (2 visa + 2 quote + 1 itinerary). vitest pass count: **9 → 14 (+5)**. Prisma stubs extended for `visaApplication`, `estimate`, `itinerary` + transitive deps (`user.findUnique` for getSubBrandAccessSet, `contact.findFirst/findUnique`, `emailMessage.create`, `activity.create`, `itineraryItem.findMany`, `webCheckin.create`). All existing wave-6a tests still pass. Cases assert: visa.status_changed fires on status transition (NOT on non-status updates); quote.sent fires only on Draft → Sent transition (NOT on re-sends); itinerary.accepted fires with full payload on customer accept. Routes are now load-bearing per these assertions — future refactors can't silently lose emissions. |
+
+**One mild cron-learning candidate:**
+
+**Travel-route emit-spy tests need per-test `tenant.findUnique.mockResolvedValueOnce({vertical: 'travel', ...})` override** (Agent 1) — the shared default tenant stub returns wellness-vertical context; travel routes' `requireTravelTenant` middleware would 404 without the override. Mildly novel but not skill-worthy — one-line per-test pattern.
+
+**Cumulative session totals (39 ticks):**
+- **111 commits** (+2 this tick: 1 test extension + verdict pending)
+- **24 GitHub issues closed + 3 partials** (unchanged — #929 already closed in tick #38)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings
+- Zero rebase conflicts, zero over-commits across all 111 commits
+- **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry**
+- **+30 vitest cases lifetime** (was 25; +5 from this tick)
+- **🎯 #929 fully resolved + pinned**
+
+**5 consecutive lean main-thread ticks** (#35 synthesis + #36 visa + #37 quote + #38 itinerary + #39 test pins). Pattern: lean-mode tempo is genuinely sustainable.
+
 **PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc + 1 synthesis** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |

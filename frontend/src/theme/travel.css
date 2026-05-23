@@ -171,6 +171,80 @@ html[data-theme="dark"][data-vertical="travel"],
   background: rgba(244, 239, 223, 0.05);
 }
 
+/* #880 — Financial-form dark-mode strengthening (Estimates/Invoices/Payments).
+ *
+ * QA reported (BUG-T17 against v3.9.2 build 79b62b6) that /estimates, /invoices
+ * and /payments forms kept cream/white surfaces under dark mode. Most of that
+ * report is closed upstream by #863/#864 (body bg + universal input/select/
+ * textarea !important) and #881 (modal/popover surfaces). What remained were
+ * two gaps the upstream rules don't reach:
+ *
+ *   1) The line-item ROW containers in Estimates' create panel — divs that
+ *      hold qty/price/discount/total cells, sitting INSIDE `.card` form bodies.
+ *      Inline `background: 'rgba(255,255,255,0.02)'` is barely-visible cream
+ *      tint on dark navy (looks fine, but inconsistent next to the empty
+ *      state's `rgba(255,255,255,0.01)`). Pin both to dark cream-tint tokens
+ *      so the visual rhythm matches the rest of the dark block.
+ *
+ *   2) `.card form` ad-hoc form rows that don't adopt `.input-field` and
+ *      don't use raw `<input>/<select>/<textarea>` either — typically wrapped
+ *      labels with inline `style={{ background: 'rgba(255,255,255,...) }}`.
+ *      Already dark-correct (low-opacity white = invisible on navy), but
+ *      ensure border-color picks up the gold-tinted token rather than
+ *      whatever default leaks through.
+ *
+ * NOTE on residual JSX literals: Estimates.jsx lines 459 / 473 / 487 set
+ *   style={{ color: '#000 !important', colorScheme: 'light' }}
+ * on the line-item Qty / Unit Price / Discount numeric inputs. These were
+ * added to force-render the spinner controls with the light browser palette
+ * (the spinner arrows on dark+travel render unreadable otherwise). Inline
+ * `!important` on `color` and inline `colorScheme: light` CANNOT be beaten
+ * by external CSS — they need a JSX refactor (Phase 1) to move the spinner
+ * fix to a wrapper class or to the global :focus / @media (prefers-color-scheme)
+ * layer. Tracking under #880 (Refs, not Closes). Affects ONLY 3 inputs in
+ * the Create Estimate line-item editor; the rest of /estimates, all of
+ * /invoices, and all of /payments now read fully dark.
+ */
+[data-theme="dark"][data-vertical="travel"] .estimates-page .card form > div[style*="background"],
+[data-theme="dark"] [data-vertical="travel"] .estimates-page .card form > div[style*="background"] {
+  background: rgba(244, 239, 223, 0.03) !important;
+  border-color: var(--border-color) !important;
+}
+
+/* Estimates empty-state / line-item summary panes — inline cream tints
+ * read consistently if pinned to the same dark token used by the dark
+ * block's `--subtle-bg-2` / `--subtle-bg-4`. */
+[data-theme="dark"][data-vertical="travel"] .estimates-page div[style*="rgba(255,255,255,0.01)"],
+[data-theme="dark"][data-vertical="travel"] .estimates-page div[style*="rgba(255,255,255,0.02)"],
+[data-theme="dark"] [data-vertical="travel"] .estimates-page div[style*="rgba(255,255,255,0.01)"],
+[data-theme="dark"] [data-vertical="travel"] .estimates-page div[style*="rgba(255,255,255,0.02)"] {
+  background: rgba(244, 239, 223, 0.03) !important;
+}
+
+/* Defensive: any `.card form select option` falls back to the dark surface
+ * (closes the cross-browser native-popup-on-Windows gap that #724 fixed
+ * globally but inline-styled <option>s in Invoices.jsx:462-466 + Estimates
+ * could still trip). The select itself is covered by #864's universal
+ * `select { background: rgba(25,36,58,0.7) !important }`; this targets
+ * the <option> children. */
+[data-theme="dark"][data-vertical="travel"] select option,
+[data-theme="dark"] [data-vertical="travel"] select option {
+  background: var(--surface-color);
+  color: var(--text-primary);
+}
+
+/* Defensive: input[type="number"] spinner controls on Estimates line-item
+ * editor. The 3 inline `colorScheme: 'light'` literals on Estimates.jsx
+ * lines 459/473/487 force light browser chrome on those specific inputs;
+ * CSS cannot override inline `colorScheme`. But this rule ensures that
+ * ALL OTHER number inputs across financial forms get the dark spinner
+ * treatment by default — so the 3 light ones become the documented
+ * residual, not a pattern. */
+[data-theme="dark"][data-vertical="travel"] input[type="number"]:not([style*="colorScheme"]),
+[data-theme="dark"] [data-vertical="travel"] input[type="number"]:not([style*="colorScheme"]) {
+  color-scheme: dark;
+}
+
 /* #867 — Diagnostics tier-badge component (Phase 1 of dark-mode cluster
  * refactor). Mirrors the inline-style values previously hardcoded in
  * Diagnostics.jsx's TIER_COLORS object — refactored to CSS-class-driven

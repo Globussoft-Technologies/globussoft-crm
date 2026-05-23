@@ -55,6 +55,18 @@ const prismaMock = vi.hoisted(() => {
   const mock = {
     llmCallLog: {
       create: vi.fn().mockResolvedValue({ id: 1 }),
+      // aggregate() backs the per-tenant monthly-spend lookup that the
+      // budget-cap pre-check uses. Default: zero spend so the cap path
+      // is a no-op for existing tests; budget-cap tests override per case.
+      aggregate: vi.fn().mockResolvedValue({ _sum: { costEstimate: 0 } }),
+    },
+    // tenantSetting backs lib/tenantSettings.getBudgetCap. Default null
+    // → getBudgetCap falls back to the DEFAULTS env-var-backed value
+    // ($100 = 10000 cents for LLM), which is well above the existing
+    // tests' zero-spend so the cap check stays a no-op. Budget-cap
+    // tests below override per case to dial cap + spend in.
+    tenantSetting: {
+      findUnique: vi.fn().mockResolvedValue(null),
     },
   };
   const Module = require('node:module');
@@ -418,5 +430,141 @@ describe('routeRequest — LlmCallLog persistence (PRD §9.1, R7)', () => {
     expect(errMsg).toMatch(/LlmCallLog persist failed|DB transient failure/);
     logSpy.mockRestore();
     errSpy.mockRestore();
+  });
+});
+
+// 2026-05-24 product-call — per-tenant monthly LLM budget cap.
+//
+// routeRequest now runs a pre-call cap check using
+//   getBudgetCap(tenantId, 'llm')         → cap in USD cents
+//   computeMonthlySpendCents(tenantId)     → SUM(costEstimate*100) since MTD
+//   evaluateCap(spent, cap)                → withinCap + alertThreshold
+//
+// Cap source: TenantSetting row (mocked here via tenantSetting.findUnique)
+// or DEFAULTS env-fallback ($100 = 10000 cents). Spend source: LlmCallLog
+// aggregate (mocked via llmCallLog.aggregate). Over-cap throws a structured
+// error with code LLM_BUDGET_EXCEEDED; ≥80% triggers a console.warn.
+describe('routeRequest — per-tenant budget cap (2026-05-24 product-call)', () => {
+  test('returns normally when spend is well under cap (zero warn)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Clear stale call history from prior tests (this describe is the
+    // first to assert aggregate.toHaveBeenCalledTimes; earlier tests
+    // exercised the route enough to accumulate calls).
+    prismaMock.tenantSetting.findUnique.mockClear();
+    prismaMock.llmCallLog.aggregate.mockClear();
+    // Cap row: $100 (10000 cents). The DB stores the integer-cents string.
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: '10000' });
+    // Spend: $5 → 500 cents (5% of cap, well under).
+    prismaMock.llmCallLog.aggregate.mockResolvedValueOnce({
+      _sum: { costEstimate: 5 },
+    });
+    const r = loadRouter();
+    const out = await r.routeRequest({ task: 'reasoning', payload: {}, tenantId: 42 });
+    expect(out.stub).toBe(true);
+    expect(out.model).toBe('claude-opus-4-7');
+    // Cap query happened with the right tenant.
+    expect(prismaMock.tenantSetting.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: 42, key: 'budgetCap_llm_monthly_usd_cents' } },
+      select: { value: true },
+    });
+    // Aggregate scoped to the tenant.
+    expect(prismaMock.llmCallLog.aggregate).toHaveBeenCalledTimes(1);
+    const aggArg = prismaMock.llmCallLog.aggregate.mock.calls[0][0];
+    expect(aggArg.where.tenantId).toBe(42);
+    expect(aggArg._sum).toEqual({ costEstimate: true });
+    // No alert warning at 5%.
+    const warnMsgs = warnSpy.mock.calls.flat().map(String).join(' ');
+    expect(warnMsgs).not.toMatch(/approaching LLM monthly cap/);
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  test('emits 80%-threshold warning when spend is ≥80% but under cap', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Cap: 10000 cents ($100).
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: '10000' });
+    // Spend: $95 → 9500 cents (95% — alertThreshold true, still withinCap).
+    prismaMock.llmCallLog.aggregate.mockResolvedValueOnce({
+      _sum: { costEstimate: 95 },
+    });
+    const r = loadRouter();
+    const out = await r.routeRequest({ task: 'talking-points', payload: {}, tenantId: 7 });
+    expect(out.stub).toBe(true);
+    // Approaching-cap warning surfaced.
+    const warnMsgs = warnSpy.mock.calls.flat().map(String).join(' ');
+    expect(warnMsgs).toMatch(/approaching LLM monthly cap/);
+    expect(warnMsgs).toMatch(/spent=9500c/);
+    expect(warnMsgs).toMatch(/cap=10000c/);
+    expect(warnMsgs).toMatch(/95\.0%/);
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  test('throws LLM_BUDGET_EXCEEDED when spend reaches cap', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Cap: 10000 cents ($100).
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: '10000' });
+    // Spend: $105 → 10500 cents (over cap).
+    prismaMock.llmCallLog.aggregate.mockResolvedValueOnce({
+      _sum: { costEstimate: 105 },
+    });
+    const r = loadRouter();
+    let caught;
+    try {
+      await r.routeRequest({ task: 'reasoning', payload: {}, tenantId: 99 });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe('LLM_BUDGET_EXCEEDED');
+    expect(caught.message).toMatch(/Monthly LLM spend cap reached/);
+    expect(caught.spentCents).toBe(10500);
+    expect(caught.capCents).toBe(10000);
+    // The provider call was NOT reached — no LlmCallLog row persist for
+    // a capped-out call (we threw before the persist block).
+    // Note: we don't assert llmCallLog.create was NOT called, because
+    // earlier tests may have called it; the structural assertion is the
+    // throw itself.
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  test('falls back to env-default cap ($100/10000c) when TenantSetting row absent', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // No row → getBudgetCap returns DEFAULTS (10000 cents for LLM unless
+    // env override set; the budget-cap test in tenantSettings.test.js pins
+    // that fallback).
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce(null);
+    // Spend: $50 → 5000 cents (50% of default cap — under, no warn).
+    prismaMock.llmCallLog.aggregate.mockResolvedValueOnce({
+      _sum: { costEstimate: 50 },
+    });
+    const r = loadRouter();
+    const out = await r.routeRequest({ task: 'reasoning', payload: {}, tenantId: 3 });
+    expect(out.stub).toBe(true);
+    // Query went to the TenantSetting table — DEFAULTS only kicks in
+    // when the row is absent.
+    expect(prismaMock.tenantSetting.findUnique).toHaveBeenCalled();
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  test('skips cap check entirely when tenantId is omitted', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    prismaMock.tenantSetting.findUnique.mockClear();
+    prismaMock.llmCallLog.aggregate.mockClear();
+    const r = loadRouter();
+    // No tenantId → router skips the cap pre-check (matches existing
+    // optional-tenantId contract; callers pre-cap-pattern didn't all
+    // thread it). Aggregate + cap-row lookups must NOT fire.
+    const out = await r.routeRequest({ task: 'reasoning', payload: {} });
+    expect(out.stub).toBe(true);
+    expect(prismaMock.tenantSetting.findUnique).not.toHaveBeenCalled();
+    expect(prismaMock.llmCallLog.aggregate).not.toHaveBeenCalled();
+    logSpy.mockRestore();
   });
 });

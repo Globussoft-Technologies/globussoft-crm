@@ -31,6 +31,25 @@
 // PII discipline: payload contents (talking-points input, call
 // transcripts) are NEVER logged — only the token count. The structured
 // log line surfaces routing/cost telemetry only.
+//
+// Per-tenant monthly budget cap (2026-05-24 product-call):
+//   routeRequest performs a pre-call cap check using the shared
+//   tenantSettings helper (getBudgetCap + evaluateCap). The cap is
+//   sourced from TenantSetting.budgetCap_llm_monthly_usd_cents with
+//   env-var fallback ($100 / 10000 cents). Monthly spend is summed
+//   from LlmCallLog.costEstimate (DB Decimal, USD) since the start
+//   of the current month, converted to cents (× 100).
+//   - Over cap: throw { code: 'LLM_BUDGET_EXCEEDED', error,
+//     spentCents, capCents }. Caller decides whether to fall back
+//     or surface to the operator.
+//   - ≥80% spent: console.warn so the alert appears in logs (Slack
+//     wiring is future work — the 80% threshold is the call point).
+//   - Missing tenantId: skip the cap check (best-effort; matches the
+//     existing tenantId-optional contract).
+//   - First consumer of the per-tenant cap pattern. AdsGPT, AI Calling,
+//     RateHawk clone this wiring against their own integration name.
+
+const { getBudgetCap, evaluateCap } = require("./tenantSettings");
 
 // PRD §9.1 routing table. Each entry: { primary, fallback }.
 // Primary is what we call first; fallback is the real-mode degraded
@@ -85,6 +104,42 @@ function pickModel(task) {
   return { task, model: TASK_ROUTING[task].primary, reason: "primary" };
 }
 
+/**
+ * Compute month-to-date LLM spend in USD cents for a tenant. Sums the
+ * LlmCallLog.costEstimate column (Decimal in USD) since the first of
+ * the current month, then multiplies by 100 to land in cents (matches
+ * the unit the cap is stored in).
+ *
+ * If the LlmCallLog model is unavailable (e.g. test harness with no
+ * Prisma client patched in) the function returns 0 cents — the caller
+ * treats this as "no spend recorded yet" and proceeds. A Prisma error
+ * is logged + treated the same way (best-effort observability —
+ * don't block the LLM call on an aggregate-query hiccup).
+ */
+async function computeMonthlySpendCents(tenantId) {
+  try {
+    const prisma = require("./prisma");
+    if (!prisma.llmCallLog || typeof prisma.llmCallLog.aggregate !== "function") {
+      return 0;
+    }
+    const monthStart = new Date();
+    monthStart.setUTCDate(1);
+    monthStart.setUTCHours(0, 0, 0, 0);
+    const agg = await prisma.llmCallLog.aggregate({
+      where: { tenantId, createdAt: { gte: monthStart } },
+      _sum: { costEstimate: true },
+    });
+    // costEstimate is Decimal (USD). Prisma returns it as a Decimal-like
+    // object or string depending on driver — coerce via Number then × 100
+    // for cents. Round to integer cents to avoid float drift.
+    const dollars = Number(agg?._sum?.costEstimate ?? 0) || 0;
+    return Math.round(dollars * 100);
+  } catch (e) {
+    console.error(`[llm-router] spend aggregate failed (non-fatal, treating as 0): ${e.message}`);
+    return 0;
+  }
+}
+
 async function routeRequest({ task, payload, tenantId } = {}) {
   if (!task) {
     throw new Error("routeRequest: task required");
@@ -96,6 +151,34 @@ async function routeRequest({ task, payload, tenantId } = {}) {
     // consumers can iterate without a routing-table update.
     console.warn(`[llm-router] unknown task "${task}" — routing to reasoning fallback`);
   }
+
+  // Per-tenant monthly budget cap pre-check (2026-05-24 product-call).
+  // First consumer of the cap pattern — AdsGPT / AI Calling / RateHawk
+  // clone this block against their own integration names. The cap +
+  // evaluator come from backend/lib/tenantSettings.js; spend comes from
+  // LlmCallLog (this module's own audit row). Cap check is skipped when
+  // tenantId is omitted (best-effort; matches the existing optional-
+  // tenantId contract — pre-cap callers don't always thread it).
+  if (tenantId) {
+    const capCents = await getBudgetCap(tenantId, "llm");
+    const spentCents = await computeMonthlySpendCents(tenantId);
+    const verdict = evaluateCap(spentCents, capCents);
+    if (!verdict.withinCap) {
+      const err = new Error("Monthly LLM spend cap reached for this tenant.");
+      err.code = "LLM_BUDGET_EXCEEDED";
+      err.spentCents = verdict.spentCents;
+      err.capCents = verdict.capCents;
+      throw err;
+    }
+    if (verdict.alertThreshold) {
+      console.warn(
+        `[llm-router] tenant=${tenantId} approaching LLM monthly cap: ` +
+        `spent=${verdict.spentCents}c cap=${verdict.capCents}c ` +
+        `percent=${(verdict.percent * 100).toFixed(1)}% (Slack alert pending wire-in)`,
+      );
+    }
+  }
+
   const { model, reason } = pickModel(task);
 
   // STUB: real provider call. When the matching API key lands in
@@ -211,4 +294,5 @@ module.exports = {
   // consumer-facing contract.
   buildStubText,
   estimateTokens,
+  computeMonthlySpendCents,
 };

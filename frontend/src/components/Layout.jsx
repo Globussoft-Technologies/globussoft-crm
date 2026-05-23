@@ -5,7 +5,7 @@ import { Outlet, useNavigate } from 'react-router-dom';
 // to /profile. Logout is already a separate sibling button, so the simplest
 // honest fix is to drop the chevron rather than add a dropdown that
 // duplicates the logout button.
-import { LogOut, Menu, Building2, Sun, Moon, Monitor } from 'lucide-react';
+import { LogOut, Menu, Building2, Sun, Moon, Monitor, Search } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Omnibar from './Omnibar';
 import Presence from './Presence';
@@ -278,6 +278,27 @@ const Layout = () => {
             <Menu size={18} />
           </button>
           <TenantChip tenant={tenant} />
+          {/* #851 — discoverable cross-entity search trigger. Dispatches the
+              `omnibar:open` custom event picked up by Omnibar.jsx (kept
+              self-contained — see Omnibar useEffect). The Ctrl/Cmd+K
+              shortcut continues to work in parallel for power users. */}
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('omnibar:open'))}
+            title="Search contacts, deals, invoices (Ctrl/Cmd+K)"
+            aria-label="Open global search"
+            style={{
+              display: 'flex', alignItems: 'center',
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: 'var(--text-secondary)',
+              padding: '6px 8px', borderRadius: '6px',
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+          >
+            <Search size={16} />
+          </button>
           <NotificationBell />
           <button
             onClick={() => navigate('/profile')}

@@ -412,6 +412,29 @@ approval (DC-3 personas).
 
 ## 10. Status snapshot
 
+### 2026-05-24 update #2 — Operator routes
+
+**Backend wrapper routes shipping THIS TICK (in-flight by sibling agent):** `backend/routes/callified.js` — fourth wrapper in cred-stub series (after AdsGPT + RateHawk + BookingExpedia stubs but third route-wrapper). Routes:
+- `POST /calls/initiate` — initiate outbound AI call (ADMIN/MANAGER, audited; cap-exceeded → 402; disabled → 403)
+- `GET /calls/:callId/result` — fetch call recording / transcript / summary (read-only)
+- `GET /cap-status` — ADMIN-only cap check
+- `GET /enabled` — check whether AI calling is enabled for the tenant (DC-7 feature flag check)
+
+**Architectural finding:** callified.js wrapper handles MORE error codes than the AdsGPT/RateHawk siblings (AI_CALLING_BUDGET_EXCEEDED → 402, AI_CALLING_DISABLED → 403 per DC-7 feature flag, plus regular validation). First wrapper to need 2-distinct-error-code handling — if a 3rd wrapper hits the same pattern, candidate for `wrapError(e, errorCodeMap)` helper.
+
+**Sub-brand isolation:** persona resolution per DC-3 reads from `Tenant.subBrandConfigJson` — the wrapper uses `resolveSubBrand(req, supplied)` helper to enforce sub-brand match between caller's API key scope and request body.
+
+**DC-2 lead-source whitelist gate placement:** confirmed at the CALLER layer (workflow rule / auto-dial cron) NOT inside this client — per agent decision in commit `9ec52df`. The wrapper stays source-agnostic.
+
+**Still pending:**
+- Real-mode swap (cred-blocked on Q1 Yasin Callified.ai handover)
+- Admin UI for /calls/initiate + result viewer (future slice after wrapper lands)
+- DC-2 source-whitelist enforcement (lives at caller layer; needs workflow-rule update)
+- DC-3 per-sub-brand persona seeding (currently reads from subBrandConfigJson which has no callifiedPersona_<subBrand> rows seeded yet — needs seed-travel.js extension)
+- TRAI disclosure copy (DC-5 counsel-batched — pending the single counsel session)
+
+**Path to real-mode:** When Yasin's handover lands, swap the stub body of `initiateCall`/`fetchCallResult` in `services/callifiedClient.js` with real Callified.ai endpoint calls. Wrapper + feature-flag + cap + sub-brand isolation stays unchanged. ~2-3 days post-cred per the CREDS_TRACKER estimate.
+
 ### 2026-05-24 update — STUB client shipped + cap wired
 
 **Backend STUB shipped:** `backend/services/callifiedClient.js` at commit `9ec52df`. Mirrors the

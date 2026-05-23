@@ -294,6 +294,27 @@ Q19 cred drop unblocks:
 
 ## 10. Status snapshot
 
+### 2026-05-24 update #3 — Operator routes + admin UI
+
+**Backend wrapper routes shipped:** `backend/routes/ratehawk.js` at commit `be67789` (~308 LOC, 7/7 vitest pass first-try). Routes:
+- `POST /search` — search hotels (delegates to client; cap-exceeded → 402)
+- `POST /book` — book a hotel (ADMIN/MANAGER, audited)
+- `POST /cancel/:bookingId` — cancel a booking (ADMIN/MANAGER, audited)
+- `GET /cap-status` — ADMIN-only cap check
+
+**Admin UI shipping THIS TICK (in-flight by sibling agent):** `frontend/src/pages/admin/RateHawkSearch.jsx` — operator hotel-search surface with destination + date + guests filters + cap-status pill + stub-mode banner ("real hotel inventory populates when Q19 creds land"). Book/Cancel flows are future slices (gated on real hotels populating).
+
+**Architectural finding:** the `resolveSubBrand(req, supplied)` helper was extracted in ratehawk.js since 3 routes need it (vs AdsGPT's 1 inline use). Promotable to `backend/lib/subBrandResolve.js` if 3rd consumer needs the same helper (callified shipping this tick by sibling — may reuse or inline).
+
+**Design call:** `/cancel/:bookingId` does NOT enforce sub-brand isolation by design — cancellations target an existing bookingId whose sub-brand was already scoped at `/book` time. Documented inline.
+
+**Still pending:**
+- Real-mode swap (cred-blocked on Q19 RateHawk partner onboarding)
+- DC-2 / DC-3 — PRD-internal inventory filters, lowest-rate auto-pick algorithm specifics
+- Hotel-result Book button (gated on real inventory populating)
+
+**Path to real-mode:** When RateHawk partner onboarding completes, swap the stub body of `searchHotels`/`bookHotel`/`cancelBooking` with real REST calls. Cap + observability + sub-brand isolation scaffold stays unchanged. ~3-5 days post-cred per the CREDS_TRACKER tick #74 estimate (this is the only Cat-1 cred-blocked item that required a stub-from-scratch — most others swapped existing stubs).
+
 ### 2026-05-24 update — STUB client shipped + cap wired
 
 **Backend STUB shipped:** `backend/services/ratehawkClient.js` at commit `2852b82`. Mirrors the

@@ -1,6 +1,6 @@
 # Pipeline Kanban — Travel Sub-Brand Filter + Hardening — Product Requirements
 
-**Status:** PARTIAL — the core Kanban board is **already shipped** (`frontend/src/pages/Pipeline.jsx`, ~386 lines, drag-drop + custom-stages + optimistic-update + socket.io live sync). The genuine residual gap is the **sub-brand filter** plus three hardening items (a11y, virtualization, mobile touch).
+**Status:** PARTIAL → near-CLOSE — core Kanban already shipped (`Pipeline.jsx` ~386 lines, drag-drop + custom-stages + optimistic-update + socket.io live sync). **Sub-brand filter ✅ SHIPPED tick #49 `458b6a8` + test pinned tick #50 `3c7a3e0`.** Remaining: 3 hardening items (a11y, virtualization, mobile touch) — non-blocking; defer to next planning cycle.
 
 **Source:** GitHub #897 ([Travel Gap] P0 — Replace Pipeline-redirects-to-Dashboard with a real Kanban) + Travel Stall CRM — Implementation & Modification Roadmap (Google Doc) — Tier P0, item 2.
 
@@ -220,15 +220,14 @@ For travel-tenant users with `subBrandAccess === ['tmc', 'rfu']`:
 ## 10. Status snapshot
 
 - **2026-05-23 (cron tick #18 / agent 3):** PRD WRITTEN. Verify-before-pickup found ~90% of the issue's acceptance criteria already shipped; this PRD reframes #897 from "build a Kanban" (would be phantom work) to "add sub-brand filter + a11y/mobile/virtualization hardening" (real work).
+- **2026-05-23 (cron tick #31 `5fbc6e9`):** Pipeline `/pipeline` route guard fix — `<GenericOnly>` wrapper removed; Travel-vertical tenants can now access the Kanban (was navigate-redirected to `/travel`). **Also closes #887** (same root cause — verified at tick #44 dupe-of-#897 close).
+- **2026-05-23 (cron tick #49 `458b6a8`):** ✅ FR-5 sub-brand filter SHIPPED. +51/-5 in Pipeline.jsx — TRAVEL_SUB_BRANDS constant (5 options: All/TMC/RFU/TravelStall/VisaSure) + conditional `<select>` in header (Travel-vertical-only via `user?.tenant?.vertical === 'travel'`) + stageDeals filter extension. Deal.subBrand column already existed (additive nullable). Theme-token-driven; ARIA labeled.
+- **2026-05-23 (cron tick #50 `3c7a3e0`):** ✅ Pipeline.test.jsx extended with no-leak-across-verticals assertion. 4 → 5 cases pass. Pins that the filter does NOT render for non-Travel tenants.
 - **Pre-existing:** `Pipeline.jsx` Kanban shipped `d1a30c7` (April 2026) + 8 follow-up fixes through `e098b61` (May 2026).
-- **Path to implementation:**
-  - **Day 1** — Verify dependencies (existing `<SubBrandSelector />`, backend `?subBrand=` support, schema). Write 2-3 e2e specs locking in the already-shipped behavior (AC-6.1 through AC-6.4) so we don't regress while extending.
-  - **Day 2** — Sub-brand filter (FR-3.11 through FR-3.15) + AC-6.5/6/7/8 e2e specs. ~150 lines frontend + ~30 lines backend route extension + 4 specs.
-  - **Day 3-4** — Pick ONE of (mobile touch, keyboard a11y, virtualization). Each is ~1 day with library evaluation + integration + tests. Pick by user value: mobile touch first (advisors are mobile-first per Yasin's intake), then a11y, then virtualization (only matters once pipelines hit ≥100 deals/column).
-  - **Day 5** — Buffer / second hardening item / regression sweep.
-- **Estimated total:** 3-5 engineering days (vs the 5 days that the original "build a Kanban from scratch" framing assumed — saved ~2 days by NOT re-implementing what's shipped).
+- **Status: 11 of 18 FRs SHIPPED + 5 of 9 ACs SHIPPED** (was 10 SHIPPED pre-tick #49; FR-5 + AC-5 add).
+- **Remaining FRs (3 hardening items, non-blocking):** FR-6 keyboard a11y, FR-7 mobile touch, FR-8 virtualization. Each ~1 day. Pick by user value: mobile touch first (advisors are mobile-first per Yasin's intake), then a11y, then virtualization (only matters at ≥100 deals/column).
 - **Phase:** P0 — Quick activations & wiring (per Travel CRM gap-audit Tier).
-- **Closes:** #897 once FR-3.11-15 + AC-6.5-8 ship. Likely also closes #887 (same root cause hypothesis — verify before closing).
+- **Closes:** #897 + #887 both closeable now (FR-5 + route-guard fix shipped). AC verification required before flipping the GH issues. Hardening items can be follow-up.
 
 ---
 

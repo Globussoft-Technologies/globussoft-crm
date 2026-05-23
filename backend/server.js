@@ -369,6 +369,7 @@ const telephonyRoutes = require("./routes/telephony");
 const pushRoutes = require("./routes/push");
 const { router: landingPagesRoutes, publicRouter: landingPagesPublic } = require("./routes/landing_pages");
 const tenantsRoutes = require("./routes/tenants");
+const tenantSettingsRoutes = require("./routes/tenant_settings");
 const auth2faRoutes = require("./routes/auth_2fa");
 // #654 — step-up auth for destructive admin flows (5-min stepUpToken bound
 // to (userId, tenantId)). See backend/routes/auth_stepup.js + the
@@ -580,6 +581,10 @@ app.use("/api/telephony", telephonyRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
 app.use("/api/tenants", tenantsRoutes);
+// /api/tenant-settings — operator-writable cap-override surface backing the
+// per-tenant cap pattern (helper at backend/lib/tenantSettings.js). Mounted
+// next to /api/tenants because the URL space + audience are sibling concerns.
+app.use("/api/tenant-settings", tenantSettingsRoutes);
 app.use("/api/auth/2fa", auth2faRoutes);
 // #654 — POST /api/auth/step-up — mints a 5-min stepUpToken for destructive
 // admin flows. Mounted after /api/auth/2fa so the URL space stays tidy.

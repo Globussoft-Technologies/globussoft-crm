@@ -230,9 +230,15 @@ export default function OwnerDashboard() {
           {/* #636: greeting now derives from the user's local clock via the
               shared getGreeting helper (4 branches inc. "Good night" for
               22:00–04:59). Was inline IST-only with 3 branches and no
-              late-night case. */}
+              late-night case.
+              #833: previously used `user.name.split(' ')[0]` which truncated
+              two-word display labels — for the demo seed user `name="Demo Admin"`
+              the greeting rendered as "Good evening, Demo" and looked broken /
+              role-truncated. Use the full name; for genuine first-and-last
+              names ("Rishu Sharma" → "Good evening, Rishu Sharma") this still
+              reads cleanly. */}
           <h1 style={{ fontFamily: 'var(--font-family)', fontSize: '1.75rem', fontWeight: 600 }}>
-            {getGreeting()}{user?.name ? `, ${user.name.split(' ')[0]}` : ''}
+            {getGreeting()}{user?.name ? `, ${user.name}` : ''}
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
             Here's the snapshot for today — {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}

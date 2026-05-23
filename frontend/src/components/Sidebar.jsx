@@ -673,11 +673,16 @@ function renderWellnessNav({
           views over org-wide P&L / pending recommendation cards (#207/#216).
           Clinical staff (doctor/professional/telecaller/helper) should not see
           them in the nav. AdsGPT and Callified are external tools the whole
-          team uses, so they stay visible for everyone. */}
+          team uses, so they stay visible for everyone.
+          #833: the nav label was hard-coded "Owner Dashboard" for both ADMIN
+          and MANAGER, which read as a role-mismatch for Demo Admin (the avatar
+          said "Demo Admin" but the nav said "Owner"). Now label tracks the
+          role: ADMIN → "Admin Dashboard", MANAGER → "Manager Dashboard",
+          falls back to "Owner Dashboard" (true owner/superuser path). */}
       <Link
         to="/wellness"
         icon={LayoutDashboard}
-        label="Owner Dashboard"
+        label={isAdmin ? 'Admin Dashboard' : isManager ? 'Manager Dashboard' : 'Owner Dashboard'}
         managerOnly
       />
       <Link

@@ -589,7 +589,11 @@ export default function Invoices() {
                                 className="btn-secondary"
                                 style={{
                                   display: 'flex', alignItems: 'center', gap: '0.3rem',
-                                  background: '#3b82f6', color: '#fff', border: 'none',
+                                  // #880 — was hardcoded '#3b82f6' (blue); off-token on
+                                  // travel-vertical (warm gold + navy palette) AND in
+                                  // dark mode globally. var(--accent-color) resolves to
+                                  // the active theme's accent in both themes + verticals.
+                                  background: 'var(--accent-color)', color: 'var(--accent-text, #fff)', border: 'none',
                                   padding: '0.4rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px',
                                   cursor: 'pointer',
                                 }}

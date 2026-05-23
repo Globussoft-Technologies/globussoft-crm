@@ -14,7 +14,7 @@
 
 - ✅ SHIPPED: **80** (was 77 at last refresh `aacaa76`; +3 from V19 + TS18 + TS21 landing)
 - 🟡 PARTIAL: **36** (was 32; +4 from V7 + V8 + V9 + V10 graduating from NOT-STARTED to SHELL)
-- 🔴 NOT-STARTED: **4** (was 11; -7 — V7 / V8 / V9 / V10 → 🟡; V19 / TS18 / TS21 → ✅; remaining 4 = T22 microsite-preview + V16 / V17 / V18 visa analytics)
+- 🔴 NOT-STARTED: **1** (was 4 → -3 after tick #58 drift-flip: V16 / V17 / V18 visa analytics confirmed SHIPPED at `4d70d35` / `45dde56`; remaining 1 = T22 microsite-preview admin only)
 - ⏸️ BLOCKED: **12** (unchanged; PRDs landed for 7 of these but creds / vendor docs / product calls still gate)
 - 🏗️ MULTI-DAY: **2** (unchanged; O22 flight-plugin + O24 webcheckin-automation — both now have PRDs `d58c5a5` + `d79a7f7`)
 
@@ -166,9 +166,9 @@ The Travel CRM hosts **4 customer-facing sub-brands** on a single tenant (`Tenan
 | V13 | Document upload — structured checklist | P3 | 🟡 PARTIAL (schema + UI shell) | `VisaDocumentChecklistItem` model (`schema.prisma:4530`) + 4 seeded items (commit `78884e3`); UI shell page `frontend/src/pages/travel/visa/Checklists.jsx` (commit `875c082`) | Backend routes pending; cluster B3 |
 | V14 | Document upload — status tracking | P3 | 🟡 PARTIAL (schema only) | `VisaDocumentChecklistItem.status` enum exists | |
 | V15 | Rejection-recovery program workflow | P3 | 🟡 PARTIAL (schema only) | `VisaApplication.recoveryProgramId` placeholder | Cluster B3 |
-| V16 | Analytics — rejection recovery success rate | P3 | 🔴 NOT-STARTED | No `/reports/visa` route | |
-| V17 | Analytics — conversion by readiness level | P3 | 🔴 NOT-STARTED | Same | |
-| V18 | Analytics — lead source to application rate | P3 | 🔴 NOT-STARTED | Same | |
+| V16 | Analytics — rejection recovery success rate | P3 | ✅ SHIPPED | `frontend/src/pages/travel/visa/Reports.jsx:9-12` wires `GET /api/travel/visa/analytics/rejection-recovery` (3 KPI tiles + overall rate bar); backend route in `backend/routes/travel_visa_analytics.js` (commit `45dde56`); shell wired at `4d70d35` | Drift-flipped 2026-05-23 tick #58 (was: 🔴 NOT-STARTED → is: ✅ SHIPPED 7+ commits ago) |
+| V17 | Analytics — conversion by readiness level | P3 | ✅ SHIPPED | `Reports.jsx:14-17` wires `GET /api/travel/visa/analytics/conversion-by-readiness` → recharts BarChart by level_1..level_4/unknown; same commit chain as V16 | Drift-flipped 2026-05-23 tick #58 |
+| V18 | Analytics — lead source to application rate | P3 | ✅ SHIPPED | `Reports.jsx:19-21` wires `GET /api/travel/visa/analytics/lead-source-rate` → bySource bar chart; same commit chain as V16/V17 | Drift-flipped 2026-05-23 tick #58 |
 | V19 | Visa Sure landing route + sidebar nav | P3 | ✅ SHIPPED | `Sidebar.jsx:1041-1043` "Visa Sure" group under renderTravelNav (admin-only); 3 lazy imports + 3 routes under TravelOnly in `App.jsx` (`/travel/visa`, `/travel/visa/applications`, `/travel/visa/checklists`) — commit `875c082`; Dashboard.jsx + Applications.jsx + Checklists.jsx Coming-Soon shells | Plus AdvisorDashboard.jsx route added at `90b58fa` (`/travel/visa/applications/:applicationId`); PRD `28fbcf4` covers real implementation |
 
 ---

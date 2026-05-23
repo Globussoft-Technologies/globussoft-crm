@@ -431,7 +431,30 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining**
 - **Travel-vertical financial PRD pack complete:** 4 sibling PRDs cross-referenced — PRD_TRAVEL_GST_COMPLIANCE (tax math) + PRD_TRAVEL_QUOTE_BUILDER (quote→invoice path) + PRD_TRAVEL_BILLING (invoice lifecycle) + PRD_TRAVEL_SUPPLIER_MASTER (supplier payable). Single design-call package for product team.
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **19 PRDs total** (picker EXHAUSTED per Step 4):
+**Tick #21 (cron) — 3/3 SHIPPED, dual-PRD + helper-extraction (closes #930):**
+
+| SHA | Type | What |
+|---|---|---|
+| `1c3c53e` | New PRD (20th) | **`docs/PRD_TRAVEL_MULTICHANNEL_LEADS.md`** (407 lines, #904 P1). 24 FRs across 7 sub-sections (envelope / de-dup / routing / per-channel quirks / audit / visibility / settings); **5 DDs** (cross-channel merge, cooldown, routing priority, notification cadence, idempotency); 7 OQs; 9 ACs + 7 use cases. **16 channels enumerated** (whatsapp/voice/sms/email/web_form/meta_ad/google_ad/linkedin_ad/indiamart/justdial/tradeindia/voyagr/walk_in/referral/chat/other) — verified all 8 channel handlers exist (whatsapp, voice, email_inbound, marketplace_leads, voyagr, web_visitors, chatbots, sms). Cross-refs WHATSAPP/CALLIFIED/ADSGPT/cluster F. **Refs #904.** |
+| `ef7eba8` | New PRD (21st) | **`docs/PRD_TRAVEL_B2B_AGENT_PORTAL.md`** (275 lines, #905 P2). 7 FR groups (~31 FRs): sub-agent auth + commission + markup + corporate auth + policy enforcement + expense reporting + shared infra. **7 DDs** (frontend topology, tier model, settlement timing, policy editor, approval chain, expense format, traveler-profile sharing); 10 ACs; 7 OQs. **PatientPortal pattern findings:** phone+OTP at `wellness.js:5585-5800`, `portalVerifyOtpLimiter` 10/10min/IP, `verifyPatientToken` middleware shape — B2B mirrors as separate `verifySubAgentToken`/`verifyCorporateToken` + separate `B2B_PORTAL_JWT_SECRET`. Cross-refs Billing/Quote/Supplier + Tenant.subBrandConfigJson (tick #20 621aab7). **Refs #905.** |
+| `d784d3f` | Helper extraction | **`backend/lib/apiKeyAuth.js`** NEW + voyagrAuth.js + externalAuth.js refactored to `installSubBrandHelpers(req, apiKey)` import. **8 vitest cases** (all passing in 308/308 middleware-suite re-run, behavior parity confirmed) covering wire-from-subBrand, null tenant-wide, undefined coerce, match returns true, mismatch throws 403+SUB_BRAND_MISMATCH, OrSend-on-match no-call, OrSend-on-mismatch writes 403+returns false, OrSend-with-null accepts. Net -75 inline helper lines from middlewares + 6 import+call. **Closes #930.** |
+
+**Two cron-learning candidates surfaced:**
+
+1. **`git pull --rebase` can block on untracked .tmp files** (Agent 1's observation) — the standing-rule template should `rm .tmp-agent-XX-msg.txt` AFTER commit, OR use `git stash push --include-untracked` BEFORE rebase. Agent 1's commit succeeded only because it was a clean fast-forward (no actual rebase). A real concurrent push would have failed. Worth promoting to standing-rule one-liner.
+
+2. **PRD verbosity drift** (Agent 1's self-observation) — Agent 1's PRD came in at 407 lines vs the 250-400 target. Use-case tables + dependency enumerations push line counts. Future PRD agents could trim by reducing ACs (~6 instead of 9) or inlining the dependency list. Not actionable yet — wait for 2nd instance.
+
+**Cumulative session totals (21 ticks):**
+- **62 commits** (+3 this tick: 2 PRDs + 1 helper extraction)
+- **10 GitHub issues closed + 2 partials** (added #930)
+- 10 phantoms + 13 schema-or-spec gaps caught
+- Zero rebase conflicts, zero over-commits across all 62 commits
+- **21 PRDs shipped** (added PRD_TRAVEL_MULTICHANNEL_LEADS + PRD_TRAVEL_B2B_AGENT_PORTAL)
+- **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining**
+- **+8 vitest cases** added (apiKeyAuth.test.js)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **21 PRDs total** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

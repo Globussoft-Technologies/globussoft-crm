@@ -956,6 +956,26 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 
 **Test-time spies on module-exports object require `module.exports.fn(...)` invocation** (this tick) — initial `safeEmitEvent` called `emitEvent(...)` directly (local closure), bypassing the spy that monkey-patched `eventBus.emitEvent = vi.fn()` on the exports surface. Fix: `module.exports.emitEvent(...)`. Worth a one-liner standing rule if 2nd instance lands: "when extracting a helper that internally calls another module-exported function the test suite spies on, route the call through `module.exports.<fn>` not the local closure."
 
+**Tick #48 (cron) — TRIAGE TICK (gate transient-RED, no code defect):**
+
+| SHA | Type | What |
+|---|---|---|
+| (no commit) | Triage | **Deploy gate RED on `663c84b`** (tick #47 safeEmitEvent refactor). 6 of 7 jobs SUCCESS; only `migration_check` failed at the very first step (`Checkout (full history for HEAD~1 baseline)`) with `fatal: could not read Username for 'https://github.com': terminal prompts disabled`. **NOT A CODE DEFECT** — transient CI infrastructure auth issue on the runner. Triggered `gh run rerun --failed`; rerun in_progress. Single-agent triage tick per Step 0 protocol — no cluster work this tick. |
+
+**Cron-learning candidate (1st instance):**
+
+**Transient CI auth failure on migration_check first-step** — runner couldn't authenticate to GitHub to fetch HEAD~1 baseline. NOT a code defect; rerun typically clears it. Pattern: when migration_check fails at "Checkout (full history for HEAD~1 baseline)" step specifically, check the error for `fatal: could not read Username` — if present, transient auth issue → rerun; if a real Prisma migration violation, that's a different failure mode. Worth a one-liner standing rule on 2nd instance: "migration_check first-step `Checkout (HEAD~1 baseline)` auth failure ≠ migration violation; trigger `gh run rerun --failed` before touching code."
+
+**Cumulative session totals (48 ticks):**
+- **125 commits** (+1 verdict this tick)
+- **26 GitHub issues closed + 3 partials** (unchanged)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings + 2 dupe-or-PRD-covered closures + 1 in-flight bug fix + **1 transient-CI triage**
+- Zero rebase conflicts, zero over-commits, **0 real-gate-defect commits** (1 transient-CI gate fail this tick correctly identified as not-code)
+- **34 PRDs + 1 meta-doc + 1 synthesis + 1 JSDoc + 1 partner-doc**
+- **+36 vitest cases lifetime**
+
+**14 ticks total** (13 lean + 1 triage). The triage discipline (Step 0 RED-gate detection) correctly fired this tick — no cluster work attempted, just diagnosis + rerun trigger.
+
 **🎯 40-tick milestone reached.** Lean-mode pattern (`+1 small concrete win per tick`) is the sustainable cadence for the cron's mature phase. This session has produced:
 - **34 PRDs covering all multi-day work** (118+ pending product decisions consolidated)
 - **Complete Travel + Wellness lifecycle webhook surface** (5 new emissions + comprehensive JSDoc catalogue)

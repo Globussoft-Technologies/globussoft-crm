@@ -5,6 +5,7 @@ import React from 'react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { tenantLocale } from '../../utils/date';
+import Skeleton from '../../components/ui/Skeleton';
 
 // #615: default visible window is 9 AM → 7 PM, but visits scheduled outside
 // that window (early/late shifts, walk-ins booked for 8 AM) are NOT clamped
@@ -283,7 +284,52 @@ export default function CalendarGrid() {
         </div>
       </header>
 
-      {loading && <div>Loading…</div>}
+      {/* #825: first-load showed plain "Loading…" text for 5+ seconds, looked
+          like a hang. Render a skeleton that mirrors the eventual day-view
+          grid shape (1 hour-label column + 4 placeholder practitioner columns
+          × 6 hour rows) so the user can see the calendar's SHAPE is coming
+          while /staff + /visits + /services + /waitlist + /holidays resolve.
+          The Skeleton primitive's animation: pulse keyframes live in
+          index.css — same animation every other skeleton-using page uses. */}
+      {loading && (
+        <div
+          className="glass calendar-scroll"
+          role="status"
+          aria-label="Loading calendar"
+          data-testid="calendar-loading"
+          style={{ padding: '1rem', overflow: 'hidden' }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `80px repeat(4, minmax(0, 1fr))`,
+              gap: '4px',
+              minWidth: `${80 + 4 * 120}px`,
+            }}
+          >
+            {/* Header row — empty corner cell + 4 practitioner name skeletons */}
+            <div style={{ ...colHead, background: 'transparent' }}></div>
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={`head-${i}`} style={{ ...colHead }}>
+                <Skeleton variant="text" width="70%" />
+              </div>
+            ))}
+            {/* 6 hour rows × (1 hour-label + 4 cells) */}
+            {Array.from({ length: 6 }).map((_, hourIdx) => (
+              <React.Fragment key={`row-${hourIdx}`}>
+                <div style={hourLabel}>
+                  <Skeleton variant="text" width="60%" style={{ marginLeft: 'auto' }} />
+                </div>
+                {Array.from({ length: 4 }).map((_, colIdx) => (
+                  <div key={`cell-${hourIdx}-${colIdx}`} style={hourCell}>
+                    <Skeleton variant="block" height={hourIdx % 3 === 0 ? 32 : 0} />
+                  </div>
+                ))}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Wave 11 Agent GG: red banner when the selected day has any holidays.
           #807 (Zylu-Gap CAL-002): banner now exposes the holiday name list to

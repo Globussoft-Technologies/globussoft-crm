@@ -745,7 +745,21 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 
 **🛑 Lean-tick mode confirmed — cron is at diminishing-returns saturation point.** Future ticks should default to 1-agent + accept phantom-rejection as a normal outcome rather than a wasted dispatch. The verify-before-pickup discipline is doing its job (5 phantoms caught at step 1, ~2 min cost each vs ~30 min if dispatched blindly).
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
+**Tick #35 (cron) — 1/1 SHIPPED, CHANGELOG synthesis (main-thread, no agent):**
+
+| SHA | Type | What |
+|---|---|---|
+| `44004ef` | Synthesis | **`CHANGELOG.md` "Unreleased — Autonomous overnight cron 2026-05-23 (34-tick session)"** — 85-line synthesis entry. Quantitative deliverables (102 commits / 23 GH closed / 34 PRDs / 25 vitest cases / 1 shared component / 3 backend endpoints / 1 schema migration / 1 P0 unblock / 11 phantom catches); all 34 PRDs enumerated with link refs (4 financial sibling + 6 operator surfaces + 11 cred-blocked + 11 coordinating); notable non-PRD code deliverables enumerated; 5 cron-learning candidates listed. **User wakes up to one scannable file documenting the entire session.** Main-thread work (no agent dispatch — saves agent budget for genuinely-needed dispatches). |
+
+**Cumulative session totals (35 ticks):**
+- **103 commits** (+1 this tick: CHANGELOG synthesis; verdict pending makes +2)
+- **23 GitHub issues closed + 3 partials** (unchanged)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix
+- Zero rebase conflicts, zero over-commits across all 103 commits
+- **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry**
+- **Empty-tick counter RESET to 0** (genuine ship via synthesis, not phantom)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc + 1 synthesis** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

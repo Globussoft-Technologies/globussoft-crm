@@ -92,7 +92,10 @@ import {
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
 import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/adsgpt';
-import { launchCallifiedSSO } from '../utils/callified';
+// #832 — Callified link is now an internal NavLink to /wellness/callified
+// (the embedded iframe page). The launchCallifiedSSO util is still imported
+// by that page + by OwnerDashboard's "Open Callified" card (which now
+// navigates internally too), so the import is no longer needed in Sidebar.
 import { useNotify } from '../utils/notify';
 import { useActiveSubBrand } from '../utils/subBrand';
 
@@ -467,55 +470,18 @@ const Sidebar = ({
     );
   };
 
-  // SSO-authenticated Callified launcher — generates a signed JWT and opens
-  // the Callified dashboard. If SSO fails, shows an error notification.
-  const [callifiedLoading, setCallifiedLoading] = useState(false);
-  const CallifiedLink = ({ icon: Icon = PhoneCall, label = "Callified" }) => {
-    const handleClick = async (e) => {
-      e.preventDefault();
-      if (callifiedLoading) return;
-      setCallifiedLoading(true);
-      try {
-        await launchCallifiedSSO();
-      } catch (err) {
-        console.error("[Sidebar] Callified SSO error:", err.message);
-        const message = err.message?.includes("not yet available")
-          ? "Callified integration will be available soon. Please check back later."
-          : "Unable to open Callified. Please try again.";
-        alert(message);
-      } finally {
-        setCallifiedLoading(false);
-      }
-    };
-    return (
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={callifiedLoading}
-        className="nav-link"
-        aria-label="Open Callified dashboard"
-        title="Open Callified dashboard in a new tab"
-        style={{
-          ...navStyle,
-          background: "transparent",
-          border: "none",
-          width: "100%",
-          textAlign: "left",
-          cursor: callifiedLoading ? "wait" : "pointer",
-          fontFamily: "inherit",
-          fontSize: "inherit",
-        }}
-      >
-        {callifiedLoading ? (
-          <Loader2 size={20} className="spin" />
-        ) : (
-          <Icon size={20} />
-        )}
-        <span style={{ flex: 1 }}>{label}</span>
-        <ExternalLink size={14} style={{ opacity: 0.6 }} />
-      </button>
-    );
-  };
+  // #832 — Callified link now navigates to the embedded `/wellness/callified`
+  // panel (iframe inside the CRM shell) instead of opening a new browser tab
+  // via launchCallifiedSSO. The pen-test framing was "external-link icon +
+  // new-tab launch reads as second-class compared with Unified Inbox /
+  // WhatsApp Threads which render inline." Keeps the SSO contract — the
+  // embed page fetches the same auth URL we used to call here. The
+  // launchCallifiedSSO util stays available for anywhere a true new-tab
+  // launch is still needed (e.g. an "Open in new tab" fallback CTA inside
+  // the embed page itself when iframe load fails).
+  const CallifiedLink = ({ icon: Icon = PhoneCall, label = "Callified" }) => (
+    <Link to="/wellness/callified" icon={Icon} label={label} />
+  );
 
   // T2.1: when the drawer is open at <900px, the sidebar IS a modal dialog —
   // it's the focused, foregrounded layer over a backdrop and the rest of the

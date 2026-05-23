@@ -5,7 +5,9 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianG
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
 import { launchAdsGptAs, ADSGPT_DEMO_LOGIN } from '../../utils/adsgpt';
-import { launchCallifiedSSO } from '../../utils/callified';
+// #832 — launchCallifiedSSO is no longer imported here. The "Open Callified"
+// card now navigates internally to /wellness/callified (the embedded iframe
+// page). The util is still consumed by the embed page itself.
 import { getGreeting } from '../../utils/greeting';
 
 // #207/#214: clinical staff (doctor/professional/telecaller/helper) must not
@@ -48,7 +50,9 @@ export default function OwnerDashboard() {
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState('');
   const [adsGptStatus, setAdsGptStatus] = useState({ state: 'idle', msg: '' });
-  const [callifiedStatus, setCallifiedStatus] = useState({ state: 'idle', msg: '' });
+  // #832 — callifiedStatus removed. The "Open Callified" card now does an
+  // SPA navigate (instantaneous), so loading/error states aren't surfaced
+  // on the dashboard card — they live inside the embed page itself.
   // #831: AdsGPT card was hard-wired to ADSGPT_DEMO_LOGIN at build time
   // and never consulted real linked-account state. Pen-test framing on
   // staging: card reads "Linked account: Not configured" regardless of
@@ -117,15 +121,15 @@ export default function OwnerDashboard() {
     }
   };
 
-  const handleLaunchCallified = async () => {
-    setCallifiedStatus({ state: 'loading', msg: 'Signing you into Callified…' });
-    try {
-      await launchCallifiedSSO();
-      setCallifiedStatus({ state: 'ok', msg: 'Opened Callified dashboard' });
-      setTimeout(() => setCallifiedStatus({ state: 'idle', msg: '' }), 3000);
-    } catch (err) {
-      setCallifiedStatus({ state: 'error', msg: err.message || 'Callified launch failed' });
-    }
+  // #832 — "Open Callified" no longer pops a new browser tab. It now
+  // navigates the user to the embedded panel at /wellness/callified, where
+  // an iframe loads Callified inside the CRM shell. The SSO contract with
+  // Callified is unchanged — the embed page hits the same auth-url endpoint
+  // we used to call here. setCallifiedStatus stays for any future flow
+  // (e.g. a pre-flight check could set 'loading' before navigating) but is
+  // currently inert; SPA navigation is effectively instant.
+  const handleLaunchCallified = () => {
+    navigate('/wellness/callified');
   };
 
   useEffect(() => {
@@ -542,26 +546,13 @@ export default function OwnerDashboard() {
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }}>
                 Voice & WhatsApp integration
               </div>
-              {callifiedStatus.state !== 'idle' && (
-                <div
-                  role="status"
-                  style={{
-                    fontSize: '0.8rem',
-                    marginTop: 6,
-                    color: callifiedStatus.state === 'error' ? '#f87171'
-                      : callifiedStatus.state === 'ok' ? '#34d399'
-                      : 'var(--text-secondary)',
-                  }}
-                >
-                  {callifiedStatus.msg}
-                </div>
-              )}
+              {/* #832 — inline status row removed; loading/error are now
+                  surfaced on the embed page itself. */}
             </div>
           </div>
           <button
             type="button"
             onClick={handleLaunchCallified}
-            disabled={callifiedStatus.state === 'loading'}
             aria-label="Open Callified dashboard"
             style={{
               display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
@@ -570,13 +561,15 @@ export default function OwnerDashboard() {
               color: '#fff', border: 'none',
               fontSize: '0.9rem', fontWeight: 500,
               boxShadow: '0 8px 20px rgba(6, 182, 212, 0.3)',
-              cursor: callifiedStatus.state === 'loading' ? 'wait' : 'pointer',
-              opacity: callifiedStatus.state === 'loading' ? 0.7 : 1,
+              cursor: 'pointer',
               alignSelf: 'flex-start',
             }}
           >
-            {callifiedStatus.state === 'loading' ? 'Signing in…' : 'Open Callified'}
-            <ExternalLink size={14} />
+            {/* #832 — was <ExternalLink/> + "Open Callified" (new-tab launch).
+                Now <ArrowRight/> signals in-app navigation to the embedded
+                /wellness/callified panel; matches the other in-shell CTAs. */}
+            Open Callified
+            <ArrowRight size={14} />
           </button>
         </div>
       </div>

@@ -172,6 +172,11 @@ const WellnessGiftCards = lazy(() => import("./pages/wellness/GiftCards"));
 const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
+// #832 — embedded Callified panel (iframe inside CRM shell) replaces the
+// previous new-tab launch from Sidebar + OwnerDashboard. SSO contract with
+// Callified is unchanged; only the surface that renders the auth URL is
+// different (iframe in-shell vs window.open new tab).
+const WellnessCallifiedEmbed = lazy(() => import("./pages/wellness/CallifiedEmbed"));
 const WellnessReports = lazy(() => import("./pages/wellness/Reports"));
 const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
 const WellnessPublicBooking = lazy(
@@ -1054,6 +1059,13 @@ export default function App() {
                 </WellnessOnly>
               } />
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
+              {/* #832 — embedded Callified panel. Replaces the old window.open
+                  external-tab launch from the sidebar + Owner Dashboard card.
+                  Same SSO contract (signed JWT via /api/integrations/callified/
+                  auth-url); the page just renders that URL in an iframe so
+                  Callified lives inside the CRM shell like Unified Inbox /
+                  WhatsApp Threads do. */}
+              <Route path="wellness/callified" element={<WellnessOnly><WellnessCallifiedEmbed /></WellnessOnly>} />
               {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
               <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
               {/* Zylu-Gap #800 — Blocked Numbers admin (manages /opt-outs).

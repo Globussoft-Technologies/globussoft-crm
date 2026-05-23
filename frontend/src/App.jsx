@@ -96,6 +96,10 @@ const FieldPermissions = lazy(() => import("./pages/FieldPermissions"));
 // (backend commit 1542b8e). Completes the per-tenant cap pattern end-to-end:
 // helper + 4 consumers + backend CRUD + admin UI.
 const TenantSettings = lazy(() => import("./pages/admin/TenantSettings"));
+// Per-sub-brand BrandKit admin UI — consumes /api/brand-kits CRUD
+// (backend route commit e4783e0). Operator manages logo / colors / font /
+// tagline per (subBrand, version) with one-active-per-sub-brand semantics.
+const BrandKits = lazy(() => import("./pages/admin/BrandKits"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -888,6 +892,17 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Tenant Settings requires admin access.">
                           <TenantSettings />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Per-sub-brand BrandKit admin UI. ADMIN-only mirrors the
+                        backend gate (verifyRole(['ADMIN']) on POST/PUT/DELETE in
+                        backend/routes/brand_kits.js commit e4783e0). */}
+                    <Route
+                      path="admin/brand-kits"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Brand Kits requires admin access.">
+                          <BrandKits />
                         </RoleGuard>
                       }
                     />

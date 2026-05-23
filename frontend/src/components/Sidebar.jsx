@@ -88,6 +88,9 @@ import {
   // Phase 3 Visa Sure scaffolding (cluster B3) — admin-only sidebar group
   Stamp,
   BadgeCheck,
+  // Per-sub-brand BrandKit admin entry — consumes /api/brand-kits CRUD
+  // (backend commit e4783e0).
+  Palette,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -930,6 +933,15 @@ function renderWellnessNav({
             label="Tenant Settings"
             adminOnly
           />
+          {/* Per-sub-brand BrandKit admin UI. Surfaces /api/brand-kits CRUD
+              (backend commit e4783e0) so ADMINs can manage logo / colors /
+              font / tagline per sub-brand without DB access. */}
+          <Link
+            to="/admin/brand-kits"
+            icon={Palette}
+            label="Brand Kits"
+            adminOnly
+          />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </>
       )}
@@ -1268,6 +1280,15 @@ function renderGenericNav({
             to="/admin/tenant-settings"
             icon={DollarSign}
             label="Tenant Settings"
+            adminOnly
+          />
+          {/* Per-sub-brand BrandKit admin UI. Surfaces /api/brand-kits CRUD
+              (backend commit e4783e0) so ADMINs can manage logo / colors /
+              font / tagline per sub-brand without DB access. */}
+          <Link
+            to="/admin/brand-kits"
+            icon={Palette}
+            label="Brand Kits"
             adminOnly
           />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />

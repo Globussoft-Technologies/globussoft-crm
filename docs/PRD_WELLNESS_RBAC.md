@@ -131,12 +131,12 @@ The bugs share a single anti-pattern: **permission-as-empty-result instead of pe
 
 ### Design decisions (REQUIRE PRODUCT INPUT before implementation)
 
-- **DD-5.1** Cashier role: extend `wellnessRole` enum with `'cashier'` (cheaper, lives on existing column) OR introduce a separate `salesRole` column (cleaner, no enum conflation between clinical + sales semantics). **Recommended:** extend `wellnessRole` for v1 (single-column migration); revisit on Phase 2 if a tenant needs cashier-WITH-clinical role overlay.
+- **DD-5.1 [RESOLVED 2026-05-24]** Cashier role: extend `wellnessRole` enum with `'cashier'` (cheaper, lives on existing column) OR introduce a separate `salesRole` column (cleaner, no enum conflation between clinical + sales semantics). **Resolution:** extend `wellnessRole` — single-column migration adopted per product-call session 2026-05-24 (DECISIONS_TRACKER `a8f24ca`). Shipped: backend `8a9d6d9` (VALID_WELLNESS_ROLES enum widened in `backend/middleware/wellnessRole.js` + schema column comment in `prisma/schema.prisma` + phiReadGate exclusion invariant pinned by comment in `routes/wellness.js:212` + 2 vitest cases asserting cashier accepts at POS gate / rejects at phiReadGate). Frontend `bcb485d` exposes cashier in the `Staff.jsx` role-picker under a "Sales / POS" optgroup with tooltip "POS-only access; cannot view patient PHI". Phase 2 revisit reserved if a tenant needs cashier-WITH-clinical role overlay.
 - **DD-5.2** Owner singleton vs plural: today `Tenant.ownerId` is conceptually singular but not enforced. Multi-owner permits clinic-chain expansion but complicates billing access + audit-actor disambiguation. **Recommended:** keep singular for v1; revisit when Rishu requests multi-clinic ownership.
 - **DD-5.3** Per-tenant role customization (admin defines custom role labels + permission bitmaps): Phase 2 only — explicit out-of-scope here (FR-3.1.d).
 - **DD-5.4** Unauthorized-navigation handling: dedicated `/403?role=…&required=…` page OR redirect-to-role-landing OR `<RoleAccessDenied>` inline component? **Recommended:** inline component (FR-3.3.b, NFR-4.5) — clearer than a redirect chain, embeds the required-role explanation, no URL leak about which routes exist.
 - **DD-5.5** Data scoping enforcement layer: middleware-only (cleaner, single source) vs middleware + frontend-render-time guard (defense-in-depth, UI doesn't briefly flash unauthorized data). **Recommended:** middleware-only for v1 — the existing `verifyWellnessRole` / `phiReadGate` chain is the canonical enforcement point; frontend guards are advisory only.
-- **DD-5.6** USER-role × wellnessRole interaction: today `phiReadGate` whitelists `['doctor','professional','telecaller','admin','manager']` — a USER with NO wellnessRole is denied. If we extend wellnessRole with `'cashier'`, the cashier should NOT pass phiReadGate (cashier is a sales role, not clinical). Verify the gate already correctly omits `'cashier'`.
+- **DD-5.6 [INVARIANT LANDED 2026-05-24]** USER-role × wellnessRole interaction: today `phiReadGate` whitelists `['doctor','professional','telecaller','admin','manager']` — a USER with NO wellnessRole is denied. If we extend wellnessRole with `'cashier'`, the cashier should NOT pass phiReadGate (cashier is a sales role, not clinical). **Pinned:** code comment at `routes/wellness.js:212` documents the invariant ("cashier intentionally OMITTED — sales role, not clinical"); vitest case in `backend/test/middleware/wellnessRole.test.js` asserts cashier → 403 on phiReadGate. Future contributors who try to add cashier to the phiReadGate whitelist will red the gate on push. Companion vitest case asserts cashier → 200 on a POS-allowing gate so the role is genuinely usable.
 
 ### Cred chase
 
@@ -199,13 +199,35 @@ The bugs share a single anti-pattern: **permission-as-empty-result instead of pe
 
 ## §10 Status snapshot
 
+- **As of 2026-05-24 (refreshed tick #94 — DD-5.1 SHIPPED):** First acceptance criterion of this PRD — a working cashier `wellnessRole` users can be assigned — is now SHIPPED end-to-end. Remaining open items reduced from 3 RBAC bugs + 6 design decisions to 3 RBAC bugs + 5 design decisions; the role-taxonomy spine of the remediation is in place.
+  - **DD-5.1 RESOLVED 2026-05-24** — extend `wellnessRole` enum with `'cashier'`. Decision recorded in `DECISIONS_TRACKER` commit `a8f24ca`.
+  - **Backend `8a9d6d9`** — `VALID_WELLNESS_ROLES` in `backend/middleware/wellnessRole.js` widened to include `'cashier'`; `prisma/schema.prisma:351` column comment widened from `doctor/professional/telecaller/helper` → `doctor/professional/telecaller/helper/cashier`; `routes/wellness.js:212` `phiReadGate` carries an invariant comment ("cashier intentionally OMITTED — sales role, not clinical"); 2 new vitest cases in `backend/test/middleware/wellnessRole.test.js` pin (a) cashier accepts at a POS-allowing gate, (b) cashier rejects at `phiReadGate`.
+  - **Frontend `bcb485d`** — `Staff.jsx` role-picker exposes `cashier` under a new "Sales / POS" `<optgroup>` with tooltip "POS-only access; cannot view patient PHI". Existing clinical roles unchanged. Tenant admins can now assign cashier role at user-creation time (closes FR-3.6.b's underlying surface — though demo-seed update for `user@wellness.demo` is still pending).
+  - **DD-5.6 invariant LANDED 2026-05-24** — phiReadGate's cashier-exclusion is now pinned in code (comment + vitest cases). A future contributor attempting to add cashier to the phiReadGate whitelist will red the gate on push.
 - **As of 2026-05-23 (refreshed tick #53):** 3 OPEN RBAC bugs from the May 2026 Globussoft demo QA audit (#827, #829, #830). Underlying infrastructure (RBAC + wellnessRole + phiReadGate + sidebar role-gating) is already correctly written and shipped.
 - **FR-3.2 sidebar role-gating ALREADY PARTIALLY SHIPPED** at `d567ce2` (2026-05-15, pre-session) for the Calendar / Patients / Waitlist clinical-staff items — verified at autonomous cron tick #34 (phantom catch on #828 which was filed against pre-`d567ce2` build but landed in QA scope post-fix). Sidebar.jsx:673-675 now carries `wellnessRoles={["doctor", "professional", "telecaller"]}` on these items; Demo User (`role=USER, wellnessRole=null`) fails all 3 predicates → links structurally hidden. The remaining FR-3.2 work is adding `wellnessRoles` / `adminOnly` props to the OTHER unconditional items (Channels, Commission Profiles, Revenue Goals, POS, Privacy, Audit Log).
 - **This PRD:** WRITTEN 2026-05-23 (autonomous cron tick #29). Coordinates the role-scoping remediation across the three issues.
 - **Sibling PRD:** [PRD_WELLNESS_POS_HARDENING.md](PRD_WELLNESS_POS_HARDENING.md) — covers the POS Register-configuration half of #830. Both PRDs ship in lockstep to close #830 end-to-end.
-- **Path to remediation:** ~5–10 engineering days for FR-3.1 through FR-3.6, gated on product-call resolutions for DD-5.1, DD-5.2, OQ-9.3, OQ-9.4.
-- **Phase 1 (this PRD):** Demo seed alignment, sidebar surfacing per role, `<RoleAccessDenied>` component, page-level role gates, cashier-role extension, data scoping for clinical roles.
+- **Path to remediation:** ~3–7 engineering days remaining (revised down from 5–10) for FR-3.1 through FR-3.6 minus DD-5.1's now-shipped slice, still gated on product-call resolutions for DD-5.2, OQ-9.3, OQ-9.4.
+- **Phase 1 (this PRD):** Demo seed alignment, sidebar surfacing per role, `<RoleAccessDenied>` component, page-level role gates, cashier-role extension (DONE), data scoping for clinical roles.
 - **Phase 2 (deferred):** Per-tenant custom roles + bitmaps (FR-3.1.d), per-record write scoping (out-of-scope per `feedback_wellness_phi_policy`), multi-owner support.
+
+### §10.0 Remaining design decisions (pending product call)
+
+- **DD-5.2** — Owner singleton vs plural (still pending product call).
+- **DD-5.3** — Per-tenant custom role labels + bitmaps (Phase 2 explicitly; not blocking).
+- **DD-5.4** — Unauthorized-navigation handling: inline `<RoleAccessDenied>` vs `/403` route vs redirect (still pending product call).
+- **DD-5.5** — Data scoping enforcement layer: middleware-only vs middleware + frontend guard (still pending product call).
+- **DD-5.6** — INVARIANT LANDED 2026-05-24 (see above); no further product call needed unless a tenant explicitly requests cashier-WITH-PHI overlay (would re-open as a Phase 2 ticket).
+
+### §10.0.1 Path to implementation (revised 2026-05-24)
+
+- **AC-6.3 (cashier role HALF) — UNBLOCKED.** Cashier `wellnessRole` value exists, is assignable via `Staff.jsx`, is enforced in middleware, and is pinned to NOT pass `phiReadGate`. Demo-seed update for `user@wellness.demo` (FR-3.6.b) is the remaining hop to actually make the demo cashier flow functional. ETA ~30 min once sibling [PRD_WELLNESS_POS_HARDENING.md](PRD_WELLNESS_POS_HARDENING.md)'s Register-seed lands in lockstep.
+- **AC-6.1 (Owner ↔ Admin landing distinction)** — still pending FR-3.1.c implementation + DD-5.2 resolution.
+- **AC-6.2 (`<RoleAccessDenied>` component on `/wellness/patients`)** — still pending FR-3.3.c implementation + DD-5.4 resolution.
+- **AC-6.4 / AC-6.5 (per-record clinical scoping)** — still pending FR-3.4.a / FR-3.4.b implementation + DD-5.5 resolution.
+- **AC-6.7 (sidebar role-gating coverage extension)** — partial per FR-3.2 note above; remaining items (Channels, Commission Profiles, Revenue Goals, POS, Privacy, Audit Log) still need `wellnessRoles` / `adminOnly` props.
+- **AC-6.8 (per-role smoke spec)** — still pending; the cashier branch can land independently now that the role exists.
 
 ### §10.1 Implementation phasing (suggested order)
 

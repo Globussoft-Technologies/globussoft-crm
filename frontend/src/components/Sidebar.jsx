@@ -94,6 +94,10 @@ import {
   // RateHawk hotel-search admin entry — consumes /api/ratehawk (backend
   // commit be67789, tick #103).
   Hotel,
+  // Booking.com / Expedia hotel-search admin entry — consumes
+  // /api/booking-expedia (backend commit bb33cbe, tick #105). 4th and
+  // FINAL cap-consumer UI in the wrapper-route series.
+  BedDouble,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -975,6 +979,18 @@ function renderWellnessNav({
             label="Callified Calls"
             managerOnly
           />
+          {/* Booking.com / Expedia hotel-search admin UI. Surfaces
+              /api/booking-expedia (backend commit bb33cbe, tick #105) —
+              direct-API hotel inventory search + shared cap utilisation.
+              managerOnly so MANAGERs see it too (operator search, not
+              config). Phase 2 deferred-by-design: Expedia returns 503
+              EXPEDIA_NOT_YET_ENABLED until DC-4 flips + Q11 lands. */}
+          <Link
+            to="/admin/booking-expedia-search"
+            icon={BedDouble}
+            label="Booking / Expedia"
+            managerOnly
+          />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </>
       )}
@@ -1352,6 +1368,18 @@ function renderGenericNav({
             to="/admin/callified-calls"
             icon={PhoneCall}
             label="Callified Calls"
+            managerOnly
+          />
+          {/* Booking.com / Expedia hotel-search admin UI. Surfaces
+              /api/booking-expedia (backend commit bb33cbe, tick #105) —
+              direct-API hotel inventory search + shared cap utilisation.
+              managerOnly so MANAGERs see it too (operator search, not
+              config). Phase 2 deferred-by-design: Expedia returns 503
+              EXPEDIA_NOT_YET_ENABLED until DC-4 flips + Q11 lands. */}
+          <Link
+            to="/admin/booking-expedia-search"
+            icon={BedDouble}
+            label="Booking / Expedia"
             managerOnly
           />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />

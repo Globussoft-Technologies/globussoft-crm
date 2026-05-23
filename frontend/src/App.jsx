@@ -113,6 +113,14 @@ const RateHawkSearch = lazy(() => import("./pages/admin/RateHawkSearch"));
 // cap utilisation + feature-flag state; stub-mode banner surfaces while Q1
 // cred-blocked (Yasin's Callified.ai handover).
 const CallifiedCalls = lazy(() => import("./pages/admin/CallifiedCalls"));
+// Booking.com / Expedia hotel-search admin UI — consumes /api/booking-expedia
+// (backend route commit bb33cbe, tick #105). 4th and FINAL cap-consumer UI.
+// Phase 2 deferred-by-design: Expedia returns 503 EXPEDIA_NOT_YET_ENABLED
+// until DC-4 flips; Booking.com (Phase 1) is stub-mode until Q-cluster B6/C
+// cred swap lands. Page mounts in a Phase-2-pending state by default.
+const BookingExpediaSearch = lazy(() =>
+  import("./pages/admin/BookingExpediaSearch"),
+);
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -963,6 +971,26 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN", "MANAGER"]} message="Callified AI Calls requires admin or manager access.">
                           <CallifiedCalls />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Booking.com / Expedia hotel-search admin UI. ADMIN +
+                        MANAGER (operator search, not tenant-config). Consumes
+                        /api/booking-expedia (backend route commit bb33cbe,
+                        tick #105). Cap-status endpoint is ADMIN-only on the
+                        backend; MANAGER gets a 403 there which is swallowed
+                        silently (no pill renders). Phase 2 deferred-by-design:
+                        Expedia provider returns 503 EXPEDIA_NOT_YET_ENABLED
+                        until DC-4 flips the demand threshold + Q11 vendor
+                        handover lands. Booking.com (Phase 1) is itself
+                        stub-mode pending Q-cluster B6/C cred swap. The page
+                        renders a Phase-2-pending banner by default with a
+                        "Show form anyway" toggle for QA. */}
+                    <Route
+                      path="admin/booking-expedia-search"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Booking/Expedia Search requires admin or manager access.">
+                          <BookingExpediaSearch />
                         </RoleGuard>
                       }
                     />

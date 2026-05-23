@@ -94,6 +94,12 @@ function buildContactWhere(tenantId, filters) {
     const id = Number(filters.preferredLocationId);
     if (!Number.isNaN(id)) where.preferredLocationId = id;
   }
+  // #898 — Travel-vertical: sub-brand audience scoping.
+  // Contact.subBrand ∈ {tmc, rfu, travelstall, visasure} on travel tenants;
+  // null on generic/wellness. Empty string from the UI dropdown means "all".
+  if (filters.subBrand) {
+    where.subBrand = String(filters.subBrand);
+  }
   if (filters.patientCategory) {
     // Contact has no updatedAt column; use createdAt windows + status as a
     // best-effort proxy. "active" excludes the explicit Churned status; the

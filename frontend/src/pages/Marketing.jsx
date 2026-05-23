@@ -45,10 +45,23 @@
  * ({ formId, fields }). This keeps everything within existing routes and
  * the existing sanitize-helper coverage, with no new model required.
  */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useContext } from 'react';
 import { Copy, Code, Layout, Blocks, CheckCircle2, Megaphone, Plus, BarChart, Send, MousePointerClick, MessageSquare, X, Save, Trash2, Edit3, Calendar, FileText } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../App';
+
+// #898 — Travel-vertical sub-brand audience scoping. Mirrors the Pipeline.jsx
+// TRAVEL_SUB_BRANDS constant (kept duplicated rather than centralised: only 2
+// callers, both with subtly different empty-label semantics — "All sub-brands"
+// vs the audience-builder's "All sub-brands (no filter)" wording).
+const TRAVEL_SUB_BRANDS = [
+  { value: '', label: 'All sub-brands (no filter)' },
+  { value: 'tmc', label: 'TMC (School trips)' },
+  { value: 'rfu', label: 'RFU (Umrah)' },
+  { value: 'travelstall', label: 'Travel Stall (Family)' },
+  { value: 'visasure', label: 'Visa Sure' },
+];
 
 const NAME_MAX = 100;
 const SMS_BODY_MAX = 480; // 3 segments worth — provider chunks into 160-char SMSes
@@ -79,6 +92,10 @@ function looksLikeXss(str) {
 
 export default function Marketing() {
   const notify = useNotify();
+  // #898 — show sub-brand audience-filter dropdown only on travel-vertical
+  // tenants. On generic/wellness it has no Contact rows to filter against.
+  const { user } = useContext(AuthContext) || {};
+  const isTravelTenant = user?.tenant?.vertical === 'travel';
   const [activeTab, setActiveTab] = useState('campaigns'); // 'campaigns', 'sms', 'push', 'forms'
 
   // ───── Forms State ─────
@@ -719,6 +736,25 @@ ${fields.map(f => {
                   onChange={e => setEditingCampaign({ ...editingCampaign, scheduledAt: e.target.value })}
                 />
               </div>
+              {/* #898 — Travel sub-brand audience filter. Backend
+                  buildContactWhere(filters.subBrand) reads this verbatim. */}
+              {isTravelTenant && (
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={fieldLabelStyle}>Sub-brand audience</label>
+                  <select
+                    className="input-field"
+                    value={editingCampaign.audienceFilter?.subBrand || ''}
+                    onChange={e => setEditingCampaign({
+                      ...editingCampaign,
+                      audienceFilter: { ...(editingCampaign.audienceFilter || {}), subBrand: e.target.value },
+                    })}
+                  >
+                    {TRAVEL_SUB_BRANDS.map(b => (
+                      <option key={b.value || 'all'} value={b.value}>{b.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>

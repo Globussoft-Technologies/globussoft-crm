@@ -140,3 +140,26 @@ describe('buildContactWhere — wellness keys (#598)', () => {
     });
   });
 });
+
+describe('buildContactWhere — travel-vertical sub-brand audience scoping (#898)', () => {
+  test('subBrand=tmc scopes audience to TMC contacts only', () => {
+    const where = buildContactWhere(9, { subBrand: 'tmc' });
+    expect(where).toEqual({ tenantId: 9, subBrand: 'tmc' });
+  });
+
+  test('subBrand=rfu composes with status filter', () => {
+    const where = buildContactWhere(9, { subBrand: 'rfu', status: 'Lead' });
+    expect(where).toMatchObject({ tenantId: 9, subBrand: 'rfu', status: 'Lead' });
+  });
+
+  test('empty subBrand string is treated as "all" — no where.subBrand clause', () => {
+    const where = buildContactWhere(9, { subBrand: '', status: 'Customer' });
+    expect(where.subBrand).toBeUndefined();
+    expect(where.status).toBe('Customer');
+  });
+
+  test('subBrand coerces non-string values via String() — defends against numeric drift', () => {
+    const where = buildContactWhere(9, { subBrand: 42 });
+    expect(where.subBrand).toBe('42');
+  });
+});

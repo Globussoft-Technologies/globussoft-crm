@@ -14,8 +14,9 @@ const ROLE_CONFIG = {
 };
 
 // #236: wellness verticals don't want to see "USER" for every doctor — show
-// their wellnessRole (doctor / professional / stylist / helper / telecaller)
+// their wellnessRole (doctor / professional / stylist / helper / telecaller / cashier)
 // as the primary label. Falls through to RBAC role for generic tenants.
+// PRD_WELLNESS_RBAC DD-5.1 [RESOLVED 2026-05-24]: 'cashier' added — POS-only, no PHI per DD-5.6.
 function displayRole(member) {
   if (member.wellnessRole) {
     return member.wellnessRole.charAt(0).toUpperCase() + member.wellnessRole.slice(1);
@@ -649,6 +650,10 @@ export default function Staff() {
                   <option value="USER">USER</option>
                 </select>
               </label>
+              {/* PRD_WELLNESS_RBAC DD-5.1 [RESOLVED 2026-05-24]: cashier wellnessRole exposed in UI;
+                  backend shipped at 8a9d6d9. Per DD-5.6 invariant, cashier is POS-only and has NO
+                  PHI access — grouped separately under "Sales / POS" optgroup with a label suffix
+                  so operators can't confuse it with the clinical roles above. */}
               <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                 Wellness role <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(optional)</span>
                 <select
@@ -658,11 +663,16 @@ export default function Staff() {
                   style={{ width: '100%', marginTop: '0.25rem' }}
                 >
                   <option value="">— None —</option>
-                  <option value="doctor">Doctor</option>
-                  <option value="professional">Professional</option>
-                  <option value="telecaller">Telecaller</option>
-                  <option value="helper">Helper</option>
-                  <option value="stylist">Stylist</option>
+                  <optgroup label="Clinical">
+                    <option value="doctor">Doctor</option>
+                    <option value="professional">Professional</option>
+                    <option value="telecaller">Telecaller</option>
+                    <option value="helper">Helper</option>
+                    <option value="stylist">Stylist</option>
+                  </optgroup>
+                  <optgroup label="Sales / POS">
+                    <option value="cashier" title="POS sales role — no PHI access">Cashier — POS sales (no PHI)</option>
+                  </optgroup>
                 </select>
               </label>
               {/* PRD Gap §1.5 — assign a commission profile. Empty = no profile. */}

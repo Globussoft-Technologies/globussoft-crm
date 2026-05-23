@@ -203,6 +203,34 @@ Every surface below MUST resolve current sub-brand context (FR-3.4) and pull fro
 
 ## §10 Status snapshot
 
+### 2026-05-24 update — BrandKit model + CRUD routes shipped (or in-flight)
+
+**Backend schema shipped:** `BrandKit` Prisma model at commit `5060dda` (tick #95, ~52 LOC schema-prisma). Composite key `(tenantId, subBrand, version)` with `@@unique` constraint; `isActive` flag for "one active version per (tenantId, subBrand)" semantics; columns for logo/darkLogo/favicon/colors/font/tagline.
+
+**Backend routes shipping THIS TICK (in-flight by sibling agent):** `backend/routes/brand_kits.js` — CRUD operator surface. POST + PUT atomically demote any prior active row for the same (tenantId, subBrand) when activating a new version (via `prisma.$transaction`).
+
+**Decisions implemented:** DD-5.2 (new BrandKit Prisma model — chose proper-columns approach over JSON-blob extension per the version-history + WCAG-checking + audit-trail rationale).
+
+**What's now possible:**
+- Operators can store per-sub-brand brand kits (logos, colors, fonts) via the new model + routes
+- Version history retained per (tenantId, subBrand) — older versions kept for revert per DD-5.6
+- Cross-vertical helper: `frontend/src/utils/travelSubBrand.js` (commit `9310196`) is the centralised SUB_BRAND_BG color map ready to be swapped to BrandKit-driven once consumer code lands
+
+**Still pending:**
+- DD-5.1 (custom font support — Google Fonts only v1; revisit if Yasin's Q22 brand pack specifies paid font)
+- DD-5.3 (default brand kits at seed time — ship 4 starter kits via seed-travel.js)
+- DD-5.4 (logo placement on operator UI — sidebar header)
+- DD-5.5 (dark-mode handling — separate logoDarkUrl per sub-brand + auto-derive fallback)
+- DD-5.6 (version-history purge cron — keep last 10 versions; older hard-purged)
+- Brand-asset file upload (multer-based, future slice)
+- WCAG contrast checker (DD-5.5e: warn on save when colors fail AA)
+- Live preview UI consuming the BrandKit model
+- Q22 brand pack from Yasin (CREDS_TRACKER Cat 2 row — unblocks 4 PRDs simultaneously)
+
+**Path to next implementation slice:** Frontend BrandKit editor page (per-sub-brand color picker + logo upload + live preview). Depends on brand-asset file-upload (multer) backend support landing first. ~3-5 days for the editor + upload pipeline combined.
+
+---
+
 - **Current state** — `Tenant.subBrandConfigJson` slot exists and is consumed by `subBrandConfig.js` for 1 surface (WABA messaging — wabaId/phoneNumberId/legalEntityCode/gstin/driveRootFolderId). 9+ consumer surfaces NOT yet consuming any sub-brand-scoped branding (sidebar, operator UI, PDF templates, email templates, SMS/WhatsApp display name, customer portal, embed widget, landing pages, microsites). All currently render with tenant-wide branding only.
 - **This PRD** — WRITTEN 2026-05-23 (tick #23).
 - **Path to implementation** — 8-15 engineering days (depends on DD-5.2 schema choice; full `BrandKit` model with version history is the larger end). Phased rollout: phase 1 (schema + admin UI + sidebar/operator) ~4 days, phase 2 (PDF + email + portal) ~4 days, phase 3 (embed + microsites + landing pages + version history) ~4 days.

@@ -330,6 +330,31 @@ Once both partner-account onboardings clear + STUBs swap to real-mode:
 
 ## 10. Status snapshot
 
+### 2026-05-24 update — STUB client shipped + Phase-1/2 split enforced
+
+**Backend STUB shipped:** `backend/services/bookingExpediaClient.js` at commit `db06414` (~213 LOC). Mirrors the canonical STUB pattern (header marker + `// STUB:` warning + canned response shape + console.log observability + CJS self-mocking seam). 11/11 vitest cases pass.
+
+**Phase-1/2 split enforced at code level:** `assertProviderEnabled(provider)` throws `EXPEDIA_NOT_YET_ENABLED` when `provider === 'expedia'` per DC-1's "Booking first, Expedia Phase 2 (demand-driven)" resolution. The Booking code path is fully wired; Expedia code paths exist as placeholders. Flipping Phase 2 is a single-line code change (remove `'expedia'` from `PHASE_2_PROVIDERS` array).
+
+**Per-tenant cap wired:** Shared `booking_expedia` integration key in the cross-cutting TenantSetting cap pattern. Cap helper KEYS extension shipping this tick by a sibling agent (canonical `getBudgetCap('booking_expedia')` path). Operator-writable cap-override surface at `/api/tenant-settings` per commit `1542b8e` + admin UI at `0054a03`.
+
+**Decisions implemented:** DC-1 (Booking first, Expedia Phase 2).
+
+**Cred chase status:** docs/CREDS_TRACKER.md Cat 1 B6/C row. Booking partner account onboarding is the unblock; ~1-2 weeks per the cred chase. ~1 day post-cred to swap stub→real per the digilockerClient/googleDriveClient precedent.
+
+**What's now possible:**
+- Caller code can invoke `bookingExpediaClient.searchHotels({tenantId, provider: 'booking', ...})` and get a structured stub response
+- Per-tenant cap configurable via /api/tenant-settings (admin UI live)
+- Tests can spy on `module.exports.<fn>` per the CJS self-mocking seam
+
+**Still pending:**
+- DC-2 / DC-3 / DC-4 / DC-5 — PRD-internal details (cancellation policies, inventory filters, lowest-rate tiebreaker for Booking vs RateHawk, ToS counsel review)
+- Real-mode swap (cred-blocked on Booking partner onboarding)
+
+**Path to real-mode:** When Booking creds drop, swap the stub-mode body of `searchHotels` / `bookHotel` / `cancelBooking` with real REST/SOAP calls. Cap / observability / Phase-1/2 enforcement scaffold stays unchanged. Expedia stays disabled until DC-4 flip (demand-driven).
+
+---
+
 | Area | Status |
 |---|---|
 | **RateHawk client (foundation)** | ⏸️ PRD shipped (`f514028`); STUB-mode engineering blocked on RateHawk PRD Q19 design calls; real-mode swap blocked on Q19 cred drop |

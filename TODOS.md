@@ -904,6 +904,22 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 
 **9 lean ticks total** (1 GH-triage + 8 code/docs). The GH triage pattern is valid lean work — closes a real open issue by surfacing existing-coverage rather than implementing a fix that wouldn't be useful.
 
+**Tick #44 (cron) — 0 code, +1 dupe-close (#924 = #914):**
+
+| SHA | Type | What |
+|---|---|---|
+| (no commit) | Dupe triage | **#924 closed as duplicate of #914.** Side-by-side read: both describe identical architectural concern (JWT in localStorage + JS-attached `Authorization: Bearer` header on every API call → XSS = account takeover); same reporter; same date 2026-05-22; near-verbatim opening paragraphs. Filed twice in security audit. Single remediation path = **PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.1 auth model migration** (shipped tick #22): httpOnly+Secure+SameSite=Strict cookies + CSRF + per-tenant rollout + localStorage→cookie migration shim. Tracking under #914 + PRD; #924 closed as not-planned dupe. |
+
+**Cumulative session totals (44 ticks):**
+- **119 commits** (+1 verdict)
+- **26 GitHub issues closed + 3 partials** (added #924 dupe-close)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings + **2 issues closed as dupe-or-PRD-covered** (#923 + #924)
+- Zero rebase conflicts, zero over-commits
+- **34 PRDs + 1 meta-doc + 1 synthesis + 1 JSDoc + 1 partner-doc**
+- **+36 vitest cases lifetime**
+
+**10 lean ticks total** (2 GH-triage + 8 code/docs). GH triage continues to be productive — Travel Security audit had filed-twice + PRD-already-covered issues that cleanly close.
+
 **🎯 40-tick milestone reached.** Lean-mode pattern (`+1 small concrete win per tick`) is the sustainable cadence for the cron's mature phase. This session has produced:
 - **34 PRDs covering all multi-day work** (118+ pending product decisions consolidated)
 - **Complete Travel + Wellness lifecycle webhook surface** (5 new emissions + comprehensive JSDoc catalogue)

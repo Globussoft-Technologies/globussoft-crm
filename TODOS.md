@@ -777,6 +777,21 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry**
 - **4 backend endpoint additions lifetime** (+1 webhook emission today; previous: category upload POST/DELETE + branding logo stream)
 
+**Tick #37 (cron) — 1/1 SHIPPED (lean main-thread), #929 4/5 emission:**
+
+| SHA | Type | What |
+|---|---|---|
+| `ecc848b` | #929 Part 4/5 | **`quote.sent` webhook emission** in `routes/estimates.js` POST `/:id/email` handler. Captures `wasFirstSend` boolean BEFORE Draft → Sent status update; fires `eventBus.emitEvent('quote.sent', {id, estimateNumber, contactId, to, delivered, totalAmount, currency, validUntil, tenantId, sentAt})` ONLY on first send (avoids duplicate emissions on re-sends). Payload covers what subscribers need without polling. +32/-1. Mirror of canonical patterns from billing.js wave-6a (payment.collected) + travel_visa.js tick #36 (visa.status_changed). Fire-and-forget — subscriber failures NEVER 500 the email response. **#929 status:** 4/5 emissions now landed (invoice.created + payment.collected + visa.status_changed + quote.sent); `itinerary.accepted` remains as single-line follow-up. |
+
+**Cumulative session totals (37 ticks):**
+- **107 commits** (+2 this tick: 1 emission + verdict pending)
+- **23 GitHub issues closed + 3 partials** (#929 unchanged — 1 emission left)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings
+- Zero rebase conflicts, zero over-commits across all 107 commits
+- **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry**
+
+**Lean-mode tempo holding:** Tick #35 = CHANGELOG synthesis, tick #36 = visa.status_changed + #929 audit, tick #37 = quote.sent. Three consecutive 1-ship-per-tick lean ticks. Main-thread work pattern saves agent budget while incrementally advancing real codebase state.
+
 **PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc + 1 synthesis** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |

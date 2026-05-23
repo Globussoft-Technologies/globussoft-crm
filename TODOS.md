@@ -382,7 +382,31 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **Dark-mode cluster: 10 of 17 closed + #879 + #880 partials; 6 issues remaining**
 - **#897 sub-brand filter** is the only real gap; #887 likely dupe to verify+close together
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **15 PRDs total** (picker EXHAUSTED per Step 4):
+**Tick #19 (cron) — 3/3 SHIPPED, dual-PRD tick + #868 closed:**
+
+| SHA | Type | What |
+|---|---|---|
+| `673c6f5` | New PRD (16th) | **`docs/PRD_TRAVEL_GST_COMPLIANCE.md`** (275 lines, #902 P1 Travel Gap). 24 FRs across 6 sub-modules (tax-rate master / invoice tax-line gen / GSTIN validation / GSTR returns / place-of-supply / admin-audit); **6 Design Decisions** blocking impl; 8 OQs; 10 AC; 4 cred-chase items (Q-GST-1..4). **Schema findings:** Tenant.subBrandConfigJson (per-brand GSTIN slot exists, cred-blocked), Invoice.legalEntityCode, Patient.gst, ItineraryItem.gstAmount, Vendor.gstin — **missing:** HSN/SAC codes, tax-rate master table, place-of-supply routing, Tenant.stateCode, Contact.gstin/billingStateCode, GSTR endpoints, GSTIN format validation, RCM flag. PRD intersects 3 pre-existing product calls (Q9/Q21/Q14) — DD-5 section cross-references rather than re-asking. **Refs #902.** |
+| `73d49a6` | New PRD (17th) | **`docs/PRD_TRAVEL_QUOTE_BUILDER.md`** (327 lines, #900 P1 Travel Gap). 9 FR clusters (40+ FRs), 6 DDs, 12 AC, 8 OQs, 7 use cases, 3 cross-cutting findings. **Prompt-drift correction (4th instance):** `/quotes` actually maps to `QuotesComingSoon.jsx` (NOT Estimates.jsx as prompt assumed — drift from tick #18 finding); dormant `Quote` + `QuoteLineItem` Prisma models exist (schema.prisma:1009-1035, candidates for cleanup post fork); `POST /api/travel/pricing/quote` engine already composes single-line quotes. **Recommended:** DD-5.1 → fork (TravelQuote* models + routes); DD-5.3 → per-sub-brand tax defaults; DD-5.4 → RBI ref-rate FX. **Refs #900.** |
+| `f9bd2c3` | Dark-mode #868 | **/login renders Light flash FIXED** — 27-line inline `<script>` added BEFORE React mounts in `frontend/index.html`. Reads `localStorage.theme` (light/dark/system/null) + `prefers-color-scheme` fallback for system/null, sets `data-theme` on `<html>` at static-load time. Wrapped in try/catch for private-mode/CSP edge cases. Login.jsx already uses CSS vars correctly (0 inline literals breaking dark mode). Canonical FOUC-prevention pattern. Also covers /forgot-password + /reset-password (inline `showForgot` state in Login.jsx). vite build clean. **Closes #868.** Cluster: **11 of 17 closed + #879 + #880 partials; 5 issues remaining** (#862 #869 #870 #876 #877). |
+
+**Three cron-learning candidates surfaced:**
+
+1. **`git commit --only <untracked-file>` requires `git add` first** (both Agent 1 + Agent 2 confirmed). The `--only` flag matches against tracked-files index, not the working tree. For new-file PRD commits the two-step is: `git add <new-file>` then `git commit --only <new-file>`. Worth surfacing in dispatching-parallel-agent-wave skill.
+
+2. **Prompt-drift on PRD-writer dispatches** (Agent 2's finding) — 4th confirmed instance class of verify-before-pickup pattern. Agent prompts assuming code state that's been superseded. 30-second grep on `/<route>` mapping + sidebar wiring catches it. Worth promoting `verifying-issue-before-pickup` scope from "regression-coverage drift" to "any-dispatch drift."
+
+3. **FOUC-prevention canonical pattern** (Agent 3's finding) — for any value that affects initial paint (theme, locale-direction, density), seed via inline script in index.html — React effects run too late for first paint. Worth one-liner standing rule if locale-RTL / density-compact lands as 2nd instance.
+
+**Cumulative session totals (19 ticks):**
+- **56 commits** (+3 this tick: 2 PRDs + 1 #868 fix)
+- **9 GitHub issues closed + 2 partials** (added #868)
+- 10 phantoms + 12 schema-or-spec gaps caught
+- Zero rebase conflicts, zero over-commits across all 56 commits
+- **17 PRDs shipped** (added PRD_TRAVEL_GST_COMPLIANCE + PRD_TRAVEL_QUOTE_BUILDER)
+- **Dark-mode cluster: 11 of 17 closed + #879 + #880 partials; 5 issues remaining** (#862 #869 #870 #876 #877)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **17 PRDs total** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

@@ -108,6 +108,11 @@ const AdsGPTReports = lazy(() => import("./pages/admin/AdsGPTReports"));
 // commit be67789, tick #103). Operator searches RateHawk hotel inventory
 // + sees cap utilisation; stub-mode banner surfaces while Q19 cred-blocked.
 const RateHawkSearch = lazy(() => import("./pages/admin/RateHawkSearch"));
+// Callified AI calls admin UI — consumes /api/callified (backend route
+// commit cdad62d, tick #104). Operator initiates outbound AI calls + sees
+// cap utilisation + feature-flag state; stub-mode banner surfaces while Q1
+// cred-blocked (Yasin's Callified.ai handover).
+const CallifiedCalls = lazy(() => import("./pages/admin/CallifiedCalls"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -940,6 +945,24 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN", "MANAGER"]} message="RateHawk Search requires admin or manager access.">
                           <RateHawkSearch />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Callified AI Calls admin UI. ADMIN + MANAGER (outbound
+                        calls reach real customers + cost real money). Consumes
+                        /api/callified (backend route commit cdad62d). Cap-status
+                        endpoint is ADMIN-only on the backend; MANAGER gets a 403
+                        there which is swallowed silently (no pill renders).
+                        Initiate + result-fetch work for both roles. Stub-mode
+                        banner surfaces until Q1 (Yasin's Callified.ai handover)
+                        cred swap lands. Per-tenant feature flag (DC-7) — page
+                        renders a "disabled" state when GET /enabled returns
+                        { enabled: false }. */}
+                    <Route
+                      path="admin/callified-calls"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Callified AI Calls requires admin or manager access.">
+                          <CallifiedCalls />
                         </RoleGuard>
                       }
                     />

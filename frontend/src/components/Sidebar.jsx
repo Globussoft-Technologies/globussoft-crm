@@ -964,6 +964,17 @@ function renderWellnessNav({
             label="RateHawk Search"
             managerOnly
           />
+          {/* Callified AI calls admin UI. Surfaces /api/callified (backend
+              commit cdad62d) — outbound AI call initiation + cap utilisation
+              + feature-flag check. managerOnly so MANAGERs see it too
+              (operator action, not config). Stub-mode banner surfaces while
+              Q1 cred-blocked (Yasin's Callified.ai handover). */}
+          <Link
+            to="/admin/callified-calls"
+            icon={PhoneCall}
+            label="Callified Calls"
+            managerOnly
+          />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </>
       )}
@@ -1330,6 +1341,17 @@ function renderGenericNav({
             to="/admin/ratehawk-search"
             icon={Hotel}
             label="RateHawk Search"
+            managerOnly
+          />
+          {/* Callified AI calls admin UI. Surfaces /api/callified (backend
+              commit cdad62d) — outbound AI call initiation + cap utilisation
+              + feature-flag check. managerOnly so MANAGERs see it too
+              (operator action, not config). Stub-mode banner surfaces while
+              Q1 cred-blocked (Yasin's Callified.ai handover). */}
+          <Link
+            to="/admin/callified-calls"
+            icon={PhoneCall}
+            label="Callified Calls"
             managerOnly
           />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />

@@ -792,6 +792,31 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 
 **Lean-mode tempo holding:** Tick #35 = CHANGELOG synthesis, tick #36 = visa.status_changed + #929 audit, tick #37 = quote.sent. Three consecutive 1-ship-per-tick lean ticks. Main-thread work pattern saves agent budget while incrementally advancing real codebase state.
 
+**Tick #38 (cron) — 1/1 SHIPPED, #929 CLOSED (final 5/5 emission):**
+
+| SHA | Type | What |
+|---|---|---|
+| `3cbf75b` | #929 Part 5/5 — CLOSES | **`itinerary.accepted` webhook emission** in `routes/travel_itineraries.js` POST `/itineraries/:id/accept` handler. Fires after existing WebCheckin fan-out completes. Payload: {id, contactId, tripId, subBrand, totalAmount, currency, tenantId, acceptedAt} — subscribers (Callified.ai, partner SaaSes) trigger downstream booking workflows (supplier PO creation, payment-request issuance, arrival pre-checks) without polling. Mirror of canonical pattern from billing.js wave-6a + 3 prior session emissions. Fire-and-forget — subscriber failures NEVER 500 the response. +27 lines. **Closes #929** via trailer. |
+
+**🎯 #929 lifecycle webhook expansion COMPLETE:**
+- ✅ `invoice.created` — ALREADY emitted (billing.js wave-6a)
+- ✅ `payment.received` → canonical `payment.collected` — ALREADY emitted (billing.js wave-6a)
+- ✅ `visa.status_changed` — tick #36 (`94b3529`)
+- ✅ `quote.sent` — tick #37 (`ecc848b`)
+- ✅ `itinerary.accepted` — tick #38 (`3cbf75b`)
+
+All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook model (event filter supports glob `deal.*` / `invoice.*` etc.).
+
+**Cumulative session totals (38 ticks):**
+- **109 commits** (+2 this tick: 1 emission + verdict pending)
+- **24 GitHub issues closed + 3 partials** (added #929 via trailer close)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings
+- Zero rebase conflicts, zero over-commits across all 109 commits
+- **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry**
+- **🎯 #929 fully resolved** — 5/5 lifecycle webhook emissions covering invoice/payment/visa/quote/itinerary lifecycles
+
+**Lean-mode tempo holds — 4 consecutive 1-ship-per-tick main-thread lean ticks** (#35 synthesis + #36 visa.status_changed + #37 quote.sent + #38 itinerary.accepted). The pattern is sustainable for as long as the user keeps firing the cron prompt — each tick produces 1 small concrete win + audit findings.
+
 **PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc + 1 synthesis** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |

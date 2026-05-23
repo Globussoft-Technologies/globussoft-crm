@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Crown, Plus, Pencil, Trash2, X, Save, IndianRupee, Calendar, Package, AlertCircle, Clock } from 'lucide-react';
-import { fetchApi } from '../../utils/api';
+import { Crown, Plus, Pencil, Trash2, X, Save, IndianRupee, Calendar, Package, AlertCircle, Clock, Download, Upload } from 'lucide-react';
+import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { AuthContext } from '../../App';
@@ -25,6 +25,10 @@ export default function Memberships() {
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'MANAGER';
 
   const [plans, setPlans] = useState([]);
+  // #816 — Membership-plans CSV import/export. Backend at
+  // /api/csv/membership-plans/{export.csv,import.csv} (server.js:679).
+  // Mirrors the Services.jsx pattern landed at 41d15f8.
+  const [csvBusy, setCsvBusy] = useState(false);
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -98,6 +102,63 @@ export default function Memberships() {
     setForm({ ...form, entitlements: next });
   };
 
+  // #816 — Export membership plans as CSV. fetch+blob trick because plain
+  // <a href> can't set the Authorization header. Mirror of Services.jsx
+  // pattern (41d15f8).
+  const exportCsv = async () => {
+    setCsvBusy(true);
+    try {
+      const token = getAuthToken();
+      const res = await fetch('/api/csv/membership-plans/export.csv', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `membership-plans-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify.success(`Exported ${plans.length} plan${plans.length === 1 ? '' : 's'}.`);
+    } catch (e) {
+      notify.error(e.message || 'CSV export failed.');
+    } finally {
+      setCsvBusy(false);
+    }
+  };
+
+  const importCsv = async (file) => {
+    if (!file) return;
+    setCsvBusy(true);
+    try {
+      const token = getAuthToken();
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/csv/membership-plans/import.csv', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Import failed (${res.status})`);
+      const imported = data.imported || 0;
+      const skipped = data.skipped || 0;
+      const errCount = (data.errors || []).length;
+      let msg = `Imported ${imported} plan${imported === 1 ? '' : 's'}`;
+      if (skipped) msg += `; skipped ${skipped}`;
+      if (errCount) msg += `; ${errCount} row${errCount === 1 ? '' : 's'} with errors (see network response)`;
+      notify.success(msg);
+      load();
+    } catch (e) {
+      notify.error(e.message || 'CSV import failed.');
+    } finally {
+      setCsvBusy(false);
+    }
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     if (!form.name.trim()) {
@@ -166,12 +227,41 @@ export default function Memberships() {
           </p>
         </div>
         {isAdmin && (
-          <button
-            onClick={() => (showForm ? resetForm() : setShowForm(true))}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
-          >
-            <Plus size={16} /> {showForm ? 'Cancel' : 'New plan'}
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {/* #816 — CSV Import/Export (mirrors Services.jsx pattern, 41d15f8) */}
+            <button
+              type="button"
+              onClick={exportCsv}
+              disabled={csvBusy || plans.length === 0}
+              title="Download all membership plans as CSV"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy || plans.length === 0 ? 'not-allowed' : 'pointer', opacity: csvBusy || plans.length === 0 ? 0.6 : 1 }}
+            >
+              <Download size={16} /> Export CSV
+            </button>
+            <label
+              title="Upload membership plans from CSV (same columns as Export)"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy ? 'not-allowed' : 'pointer', opacity: csvBusy ? 0.6 : 1 }}
+            >
+              <Upload size={16} /> Import CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                disabled={csvBusy}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) importCsv(file);
+                  e.target.value = '';
+                }}
+                style={{ display: 'none' }}
+              />
+            </label>
+            <button
+              onClick={() => (showForm ? resetForm() : setShowForm(true))}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+            >
+              <Plus size={16} /> {showForm ? 'Cancel' : 'New plan'}
+            </button>
+          </div>
         )}
       </header>
 

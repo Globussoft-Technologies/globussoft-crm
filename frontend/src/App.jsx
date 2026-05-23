@@ -140,6 +140,7 @@ const TravelRfuCustomerProfile = lazy(() => import("./pages/travel/RfuCustomerPr
 const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
 const TravelSuppliersAdmin = lazy(() => import("./pages/travel/SuppliersAdmin"));
 const TravelQuotesAdmin = lazy(() => import("./pages/travel/QuotesAdmin"));
+const TravelInvoicesAdmin = lazy(() => import("./pages/travel/InvoicesAdmin"));
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
@@ -984,6 +985,7 @@ export default function App() {
               <Route path="travel/suppliers" element={<TravelOnly><TravelSuppliers /></TravelOnly>} />
               <Route path="travel/suppliers-admin" element={<TravelOnly><TravelSuppliersAdmin /></TravelOnly>} />
               <Route path="travel/quotes-admin" element={<TravelOnly><TravelQuotesAdmin /></TravelOnly>} />
+              <Route path="travel/invoices-admin" element={<TravelOnly><TravelInvoicesAdmin /></TravelOnly>} />
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
               <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
               <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />

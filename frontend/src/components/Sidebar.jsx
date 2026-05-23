@@ -1014,6 +1014,7 @@ function renderTravelNav({
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />
       <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" />
       <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" />
+      <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" />
       {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />}
       {isAdmin && <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" />}
 

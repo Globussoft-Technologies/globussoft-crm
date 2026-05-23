@@ -163,6 +163,12 @@ model Tenant {
   rfuLeadProfiles          RfuLeadProfile[]
   religiousGuidancePackets ReligiousGuidancePacket[]
   tripMicrosites           TripMicrosite[]
+  // Travel-vertical financial fork (PRD_TRAVEL_{QUOTE_BUILDER,BILLING,
+  // SUPPLIER_MASTER} DD-5.1 [RESOLVED 2026-05-24]) — fork models alongside
+  // the generic Quote / Invoice / Vendor. See model docs at bottom of file.
+  travelQuotes             TravelQuote[]
+  travelInvoices           TravelInvoice[]
+  travelSuppliers          TravelSupplier[]
   // Sub-brand config (Q9, Q14, Q21) — JSON keyed by sub-brand storing
   // per-brand WhatsApp number / Wati WABA id / legal entity / GSTIN /
   // Drive folder root / microsite domain. Nullable; sub-brands without
@@ -4669,4 +4675,83 @@ model TripMicrositeOtp {
   createdAt   DateTime      @default(now())
 
   @@index([micrositeId, phone, purpose])
+}
+
+// ── Travel-vertical financial fork (PRD_TRAVEL_{QUOTE_BUILDER,BILLING,SUPPLIER_MASTER} DD-5.1 [RESOLVED 2026-05-24]) ──
+//
+// Per the 2026-05-24 product-call session, the travel vertical forks its
+// financial models rather than extending Quote / Invoice / Vendor in place.
+// These 3 models live alongside the originals; generic CRM operator UI
+// continues using the originals; travel-vertical operator UI routes to these.
+//
+// Field set here is INTENTIONALLY MINIMAL — establishes the schema beachhead
+// + indexes. Real PRD §3 fields (TCS, supplier-payable, multi-stage
+// settlement, commission ledger) land in follow-up commits per PRD spec.
+//
+// Sub-brand scoping (Q25): every row carries .subBrand and is indexed by
+// (tenantId, subBrand). The voyagrAuth + apiKeyAuth.requireSubBrandMatch
+// helpers enforce sub-brand isolation at the route layer.
+model TravelQuote {
+  id          Int             @id @default(autoincrement())
+  tenantId    Int             @default(1)
+  subBrand    String
+  contactId   Int
+  status      String          @default("Draft") // Draft | Sent | Accepted | Rejected
+  totalAmount Decimal?        @db.Decimal(15, 2)
+  currency    String          @default("INR")
+  validUntil  DateTime?
+  invoices    TravelInvoice[]
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([tenantId, subBrand])
+  @@index([tenantId, subBrand, status])
+}
+
+model TravelInvoice {
+  id          Int          @id @default(autoincrement())
+  tenantId    Int          @default(1)
+  subBrand    String
+  contactId   Int
+  // Optional FK to TravelQuote — an invoice can be generated without a
+  // prior quote (direct billing, supplier-passthrough scenarios).
+  quoteId     Int?
+  // Tenant-scoped human-readable identifier (e.g. "TINV-2026-0001"). The
+  // route layer assigns sequentially per tenant + sub-brand at create time.
+  invoiceNum  String
+  status      String       @default("Draft") // Draft | Issued | Partial | Paid | Voided
+  totalAmount Decimal?     @db.Decimal(15, 2)
+  currency    String       @default("INR")
+  dueDate     DateTime?
+  paidAt      DateTime?
+  quote       TravelQuote? @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([tenantId, invoiceNum])
+  @@index([tenantId, subBrand])
+  @@index([tenantId, subBrand, status])
+}
+
+model TravelSupplier {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int      @default(1)
+  subBrand         String
+  name             String
+  contactPerson    String?
+  phone            String?
+  email            String?
+  gstin            String?
+  addressLine      String?
+  // hotel | flight | transport | visa-consul | other
+  supplierCategory String   @default("other")
+  isActive         Boolean  @default(true)
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([tenantId, subBrand])
+  @@index([tenantId, subBrand, supplierCategory])
 }

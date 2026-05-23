@@ -104,6 +104,10 @@ const BrandKits = lazy(() => import("./pages/admin/BrandKits"));
 // 0d66a74, tick #102). Operator views per-platform ad performance + cap
 // utilisation; stub-mode banner surfaces while Q1 cred-blocked.
 const AdsGPTReports = lazy(() => import("./pages/admin/AdsGPTReports"));
+// RateHawk hotel-search admin UI — consumes /api/ratehawk (backend route
+// commit be67789, tick #103). Operator searches RateHawk hotel inventory
+// + sees cap utilisation; stub-mode banner surfaces while Q19 cred-blocked.
+const RateHawkSearch = lazy(() => import("./pages/admin/RateHawkSearch"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -921,6 +925,21 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN", "MANAGER"]} message="AdsGPT Reports requires admin or manager access.">
                           <AdsGPTReports />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* RateHawk hotel-search admin UI. ADMIN + MANAGER (operator
+                        search, not tenant-config). Consumes /api/ratehawk
+                        (backend route commit be67789). Cap-status endpoint is
+                        ADMIN-only on the backend; MANAGER gets a 403 there which
+                        is swallowed silently (no pill renders). Search works
+                        for both roles. Stub-mode banner surfaces until Q19
+                        (RateHawk partner onboarding) cred swap lands. */}
+                    <Route
+                      path="admin/ratehawk-search"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="RateHawk Search requires admin or manager access.">
+                          <RateHawkSearch />
                         </RoleGuard>
                       }
                     />

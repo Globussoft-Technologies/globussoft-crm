@@ -91,6 +91,9 @@ import {
   // Per-sub-brand BrandKit admin entry — consumes /api/brand-kits CRUD
   // (backend commit e4783e0).
   Palette,
+  // RateHawk hotel-search admin entry — consumes /api/ratehawk (backend
+  // commit be67789, tick #103).
+  Hotel,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -951,6 +954,16 @@ function renderWellnessNav({
             label="AdsGPT Reports"
             managerOnly
           />
+          {/* RateHawk hotel-search admin UI. Surfaces /api/ratehawk (backend
+              commit be67789) — hotel inventory search + cap utilisation.
+              managerOnly so MANAGERs see it too (operator search, not config).
+              Stub-mode banner surfaces while Q19 cred-blocked. */}
+          <Link
+            to="/admin/ratehawk-search"
+            icon={Hotel}
+            label="RateHawk Search"
+            managerOnly
+          />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </>
       )}
@@ -1307,6 +1320,16 @@ function renderGenericNav({
             to="/admin/adsgpt-reports"
             icon={TrendingUp}
             label="AdsGPT Reports"
+            managerOnly
+          />
+          {/* RateHawk hotel-search admin UI. Surfaces /api/ratehawk (backend
+              commit be67789) — hotel inventory search + cap utilisation.
+              managerOnly so MANAGERs see it too (operator search, not config).
+              Stub-mode banner surfaces while Q19 cred-blocked. */}
+          <Link
+            to="/admin/ratehawk-search"
+            icon={Hotel}
+            label="RateHawk Search"
             managerOnly
           />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />

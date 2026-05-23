@@ -593,6 +593,27 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **+19 new vitest cases** (DateRangePicker)
 - **NEW SHARED COMPONENT: `<DateRangePicker>`** — Payments.jsx + InventoryReceipts.jsx adoption is follow-up scope
 
+**Tick #28 (cron) — 3/3 SHIPPED, DRY migration + 2 closures:**
+
+| SHA | Type | What |
+|---|---|---|
+| `5b3ed01` | DRY refactor | **Payments.jsx migrated to `<DateRangePicker>`** — first adoption of the tick #27 extraction. **Net -97 lines** (41 added / 138 removed). 11/11 tests pass; vite build clean. StatCard labels preserved per tick #24 lesson (Pending/Failed plain; Total Collected keeps `(${kpiWindowLabel})` parenthetical). KPI pill row + `kpiWindowLabel` untouched. Default table preset = `'all'` (preserves existing behavior — orthogonal to kpiWindow `'last30'`). |
+| `05da91c` | Small fix #832 | **Callified embedded in CRM shell** — NEW `frontend/src/pages/wellness/CallifiedEmbed.jsx` (170 lines, iframe with loading/error/ready states + "Open in new tab" fallback CTA + mic/camera/clipboard `allow`). Sidebar.jsx: `CallifiedLink` collapsed from SSO-launcher button to thin `<Link to="/wellness/callified">`. OwnerDashboard.jsx: `handleLaunchCallified` → `navigate('/wellness/callified')`. App.jsx: lazy import + `<WellnessOnly>`-wrapped route. Reused `/api/integrations/callified/auth-url` SSO endpoint (no backend changes). 26/26 tests pass. **Closes #832.** |
+| `7e9bcfd` | Small fix #840 | **Consolidated patient-record PDF download** — NEW `renderFullPatientReportPdf` in pdfRenderer.js (~280 LOC, 6 sections: visits / Rx / consents-with-inline-signature / treatment plans / photos / inventory consumed); NEW `GET /api/wellness/patients/:id/full-report.pdf` endpoint (phiReadGate, tenant-scoped, soft-delete-aware, `PATIENT_FULL_REPORT_DOWNLOAD` audit row with counts-only no PHI values). Frontend "Download full record (PDF)" button in patient header (fetch + Bearer + synthetic `<a download>` click). 14/14 PatientDetail tests + 45/45 pdfRenderer tests pass. **Closes #840.** |
+
+**One cron-learning candidate surfaced (mostly confirmation of existing rules):**
+
+**`git commit --only` standing rule held cleanly across heavy parallel-agent concurrency** — Agent 1 + Agent 2 + Agent 3 all encountered sibling-agent WIP in working tree during stash/rebase/pop sequences. **4th confirmed datapoint** for the 2026-05-23 `d0a4e36` learning. Agent 3 also explicitly used `git checkout HEAD -- frontend/src/pages/Payments.jsx` to discard sibling-WIP that came in via merge before committing. Rule is well-supported across 9+ instances — promoting to "absolute requirement" for parallel-agent dispatches.
+
+**Cumulative session totals (28 ticks):**
+- **85 commits** (+4 this tick: 1 refactor + 2 fixes + verdict pending)
+- **18 GitHub issues closed + 2 partials** (added #832 + #840)
+- 10 phantoms + 13 gaps + 1 self-regression caught
+- Zero rebase conflicts, zero over-commits across all 85 commits
+- **29 PRDs shipped + 1 meta-doc** (no new PRD this tick — 3-agent budget went to refactor + 2 ship-fixes)
+- **DateRangePicker adoption progress: 2 of 3 callers migrated** (PatientDetail + Payments; InventoryReceipts remains)
+- **NEW: CallifiedEmbed page + full-patient-PDF endpoint + 2 new vitest pass-points** (no new cases, validated against existing 14 + 45)
+
 **PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **29 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |

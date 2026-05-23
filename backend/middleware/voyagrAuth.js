@@ -25,20 +25,23 @@
  * docs/MANUAL_CODING_BACKLOG.md cluster F1 for the rationale (Option 1:
  * per-site API key minted by CRM admin; voyagr stores in env vars).
  *
- * Per-sub-brand key scoping (#899 Part A, shipped 2026-05-23):
+ * Per-sub-brand key scoping (#899 Part A, shipped 2026-05-23 commit
+ * 84efe0f; helper extracted to backend/lib/apiKeyAuth.js per #930 on
+ * 2026-05-23):
  *   ApiKey.subBrand is the additive nullable column scoping a key to ONE
  *   Travel sub-brand. null = tenant-wide key (legacy / generic); set =
- *   'tmc'|'rfu'|'travelstall'|'visasure'. This middleware exposes the
- *   resolved subBrand on `req.apiKeySubBrand` and installs a small helper
- *   `req.requireSubBrandMatch(targetSubBrand)` that route handlers call
- *   after parsing the body's subBrand to enforce isolation. A scoped key
- *   posting against a different sub-brand → 403 SUB_BRAND_MISMATCH; a
- *   tenant-wide key (subBrand=null) is accepted against any sub-brand
- *   so existing keys keep working (backward-compatible). Route handlers
- *   that don't have a sub-brand concept (e.g. /me, /health) simply never
- *   call the helper.
+ *   'tmc'|'rfu'|'travelstall'|'visasure'. installSubBrandHelpers() wires
+ *   `req.apiKeySubBrand` plus `req.requireSubBrandMatch(target)` /
+ *   `req.requireSubBrandMatchOrSend(target, res)` onto the request so
+ *   route handlers can enforce isolation after parsing the body's
+ *   subBrand. A scoped key posting against a different sub-brand → 403
+ *   SUB_BRAND_MISMATCH; a tenant-wide key (subBrand=null) is accepted
+ *   against any sub-brand so existing keys keep working
+ *   (backward-compatible). Route handlers that don't have a sub-brand
+ *   concept (e.g. /me, /health) simply never call the helpers.
  */
 const prisma = require("../lib/prisma");
+const { installSubBrandHelpers } = require("../lib/apiKeyAuth");
 
 module.exports = async function voyagrAuth(req, res, next) {
   try {
@@ -81,41 +84,10 @@ module.exports = async function voyagrAuth(req, res, next) {
     req.voyagrApiKey = apiKey; // alias for audit-log forensic attribution
     req.tenant = apiKey.tenant;
     req.tenantId = apiKey.tenantId;
-    // #899 Part A: expose the key's sub-brand scope (null = tenant-wide).
-    req.apiKeySubBrand = apiKey.subBrand || null;
-    // Install the sub-brand-match helper. Route handlers call this after
-    // parsing the body's subBrand to reject cross-sub-brand misuse:
-    //   - key.subBrand === null   → any target accepted (tenant-wide key)
-    //   - key.subBrand === target → accepted
-    //   - key.subBrand !== target → 403 SUB_BRAND_MISMATCH (throws here;
-    //     caller catches via try/catch OR uses requireSubBrandMatchOrSend
-    //     which writes the response directly). We expose both shapes so
-    //     handlers can pick whichever is cleaner in context.
-    req.requireSubBrandMatch = (target) => {
-      if (req.apiKeySubBrand !== null && req.apiKeySubBrand !== target) {
-        const err = new Error("API key sub-brand scope does not match request sub-brand");
-        err.status = 403;
-        err.code = "SUB_BRAND_MISMATCH";
-        err.expected = req.apiKeySubBrand;
-        err.actual = target;
-        throw err;
-      }
-      return true;
-    };
-    req.requireSubBrandMatchOrSend = (target, res) => {
-      try {
-        return req.requireSubBrandMatch(target);
-      } catch (e) {
-        if (e.code === "SUB_BRAND_MISMATCH") {
-          res.status(403).json({
-            error: `API key scoped to '${e.expected}' cannot post for sub-brand '${e.actual}'`,
-            code: "SUB_BRAND_MISMATCH",
-          });
-          return false;
-        }
-        throw e;
-      }
-    };
+    // #899 Part A: install req.apiKeySubBrand + req.requireSubBrandMatch
+    // + req.requireSubBrandMatchOrSend (extracted to backend/lib/apiKeyAuth.js
+    // per #930 — see that file's header for full semantics).
+    installSubBrandHelpers(req, apiKey);
     // Alias so route handlers written for internal JWT auth can reuse the
     // tenantWhere / req.user.tenantId pattern.
     req.user = {

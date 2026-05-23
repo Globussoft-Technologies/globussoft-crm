@@ -661,7 +661,32 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **32 PRDs shipped + 1 meta-doc** (added PRD_ZYLU_GAP_CONSOLIDATED + PRD_UNIFIED_GLOBAL_SEARCH)
 - **+6 new vitest cases** (PatientDetail #838 Prescriptions tab)
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **32 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
+**Tick #31 (cron) — 3/3 SHIPPED, Pipeline guard fix + 33rd PRD + #887 closed:**
+
+| SHA | Type | What |
+|---|---|---|
+| `9a11561` | New PRD (33rd) | **`docs/PRD_ADMIN_SETTINGS_DISCOVERY.md`** (209 lines) — **coordinating PRD for 6 admin-organization gaps** (#853 + #855 + #856 + #857 + #858 + #859 — all OPEN). 7 FR groups (~25 sub-FRs) covering settings consolidation / integrations hub / tags / segments / notifications history / AI conversation history / discovery patterns. 6 DDs, 6 OQs, 8 ACs. **§1.2 inventory:** Settings/Notification/NotificationPreference/LlmCallLog/WhatsAppConfig models exist; **NET NEW = Tag + Segment + EntityTag** + 5 pages. Cross-refs UNIFIED_GLOBAL_SEARCH, WELLNESS_RBAC, PER_SUBBRAND_BRANDING, MOBILE_RESPONSIVENESS. **Refs all 6.** |
+| `5fbc6e9` | Pipeline route fix | **`<GenericOnly>` guard removed from `/pipeline` route** (App.jsx:286-297, was wrapping route at 687-689). **Root cause of #887 + #897 redirect-to-Dashboard bug** — guard Navigate-redirected travel-vertical tenants to `/travel`, making sidebar Pipeline link a dead bounce. Pipeline.jsx is cross-vertical-safe (uses `/api/deals` + `/api/contacts` + `/api/pipeline_stages` — no vertical-only data). #887 closed via gh CLI as dupe of #897 with cross-link to PRD #15. 7/7 Pipeline tests pass. **Closes #887.** |
+| `edee41c` | Small fix #820 (P1) | **Patients page client-side pagination** — `PER_PAGE=25`, `Showing X-Y of T` indicator, Previous/Next with disabled-at-boundaries, page-reset on filter change. +79/-1. **Refs #820 (NOT Closes)** — Part 1 of 3 sub-issues shipped; tag-add + CSV/XLSX export filed as **#931 follow-up.** vite build clean. |
+
+**Three cron-learning candidates surfaced (notable):**
+
+1. **🎯 Route-guard ↔ sidebar audit on new-vertical onboarding** (Agent 3) — `<GenericOnly>` wrapper on `/pipeline` made sense when written (pre-Travel vertical) but became silently wrong once Travel sidebar exposed the link. Made a P0 "module missing" bug. **Recommended standing rule:** "when adding a new vertical, audit ALL `<GenericOnly>` / `<WellnessOnly>` / `<TravelOnly>` route wrappers in App.jsx against the new vertical's sidebar — if the sidebar exposes a link, the route MUST not bounce." This is a structural pattern; promotable immediately.
+
+2. **Stash-rebase-pop silently drops in-flight edits when rebase is a no-op** (Agent 2) — when `git pull --rebase` returns "Already up to date", subsequent `git stash pop` operated on sibling files but skipped the agent's own hunk on Patients.jsx (no conflict reported). Reinforces existing `git commit --only` standing rule.
+
+3. **Sibling-agent stash debris accumulates across tick** (Agent 3) — `agent-31-1-pre-rebase` stash + `.tmp-agent-31-1-msg.txt` appeared in working tree from sibling. Agent 3 had to make judgment call to leave 2 of own stashes orphaned rather than risk re-applying onto sibling's work. Worth a one-liner: "do NOT pop stashes you didn't create."
+
+**Cumulative session totals (31 ticks):**
+- **97 commits** (+4 this tick: 1 PRD + 1 routing fix + 1 small fix + verdict pending)
+- **21 GitHub issues closed + 3 partials** (added #887 closure + #820 partial)
+- **1 new follow-up issue filed** (#931 for #820 sub-issues 2+3)
+- 10 phantoms + 13 gaps + 1 self-regression caught
+- Zero rebase conflicts, zero over-commits across all 97 commits
+- **33 PRDs shipped + 1 meta-doc** (added PRD_ADMIN_SETTINGS_DISCOVERY)
+- **🎯 P0 Pipeline access bug FIXED** — Travel-vertical Pipeline now accessible (#897 PRD's #15 finding now actionable; sub-brand filter remains as scoped work)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **33 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

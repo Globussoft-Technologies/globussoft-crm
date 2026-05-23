@@ -960,7 +960,13 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 
 | SHA | Type | What |
 |---|---|---|
-| (no commit) | Triage | **Deploy gate RED on `663c84b`** (tick #47 safeEmitEvent refactor). 6 of 7 jobs SUCCESS; only `migration_check` failed at the very first step (`Checkout (full history for HEAD~1 baseline)`) with `fatal: could not read Username for 'https://github.com': terminal prompts disabled`. **NOT A CODE DEFECT** — transient CI infrastructure auth issue on the runner. Triggered `gh run rerun --failed`; rerun in_progress. Single-agent triage tick per Step 0 protocol — no cluster work this tick. |
+| (no commit) | Triage | **Deploy gate RED on `663c84b`** (tick #47 safeEmitEvent refactor). 6 of 7 jobs SUCCESS; only `migration_check` failed at the very first step (`Checkout (full history for HEAD~1 baseline)`) with `fatal: could not read Username for 'https://github.com': terminal prompts disabled`. **NOT A CODE DEFECT** — transient CI infrastructure auth issue on the runner. Triggered `gh run rerun --failed`; rerun SUCCESS confirmed at tick #49 start. Single-agent triage tick per Step 0 protocol — no cluster work this tick. |
+
+**Tick #49 (cron) — 1/1 SHIPPED, Pipeline sub-brand filter (#897 PRD FR-5 — only PRD-residual gap closes):**
+
+| SHA | Type | What |
+|---|---|---|
+| `458b6a8` | Pipeline FR-5 | **#897 PRD_TRAVEL_PIPELINE_KANBAN FR-5 sub-brand filter** shipped in Pipeline.jsx. +51/-5 lines. TRAVEL_SUB_BRANDS constant (5 options: All, TMC, RFU, TravelStall, VisaSure) + selectedSubBrand state + conditional `<select>` in header (only renders for Travel-vertical tenants via `user?.tenant?.vertical === 'travel'` check) + stageDeals filter extension. **Deal.subBrand column already existed (additive nullable from prior travel work) — no schema migration needed.** Theme-token-driven dropdown works under both light + dark. ARIA labeled. vite build PASS + 4/4 existing Pipeline tests PASS (filter is additive). **#897 PRD's only remaining gap now shipped** — the other 10 FRs were already-built per PRD §10 ("10 of 18 marked SHIPPED"). |
 
 **Cron-learning candidate (1st instance):**
 
@@ -975,6 +981,17 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 - **+36 vitest cases lifetime**
 
 **14 ticks total** (13 lean + 1 triage). The triage discipline (Step 0 RED-gate detection) correctly fired this tick — no cluster work attempted, just diagnosis + rerun trigger.
+
+**Cumulative session totals (49 ticks):**
+- **127 commits** (+2 this tick: 1 Pipeline filter + verdict pending)
+- **26 GitHub issues closed + 3 partials** (no new GH closes; #897 stays open as feature work continues)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings + 2 dupe-or-PRD-covered closures + 1 in-flight bug fix + 1 transient-CI triage
+- Zero rebase conflicts, zero over-commits
+- **34 PRDs + 1 meta-doc + 1 synthesis + 1 JSDoc + 1 partner-doc**
+- **+36 vitest cases lifetime**
+- **#897 PRD only-residual gap CLOSED in code** (PRD stays open as work-tracker — full close requires AC verification)
+
+**15 ticks total** (14 lean + 1 triage). Pipeline sub-brand filter shipping = the last genuine code-shippable item from the 34-PRD backlog without product-call dependency. Future ticks must either: (a) refresh PRD-tracker docs, (b) close dupes, or (c) wait for product calls on the 118 pending DDs.
 
 **🎯 40-tick milestone reached.** Lean-mode pattern (`+1 small concrete win per tick`) is the sustainable cadence for the cron's mature phase. This session has produced:
 - **34 PRDs covering all multi-day work** (118+ pending product decisions consolidated)

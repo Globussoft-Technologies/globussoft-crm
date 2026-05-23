@@ -452,6 +452,10 @@ const adsgptRoutes = require("./routes/adsgpt");
 // (stub today, real-mode post Q19 cred handover). Mounted at /api/ratehawk;
 // not under /api/travel because the cap applies tenant-wide (any vertical).
 const ratehawkRoutes = require("./routes/ratehawk");
+// Callified operator routes — thin wrapper around services/callifiedClient.js
+// (stub today, real-mode post Q1 cred handover from Yasin). Mounted at
+// /api/callified; AI calling cap + featureFlag gate live in the service.
+const callifiedRoutes = require("./routes/callified");
 const travelMicrositesRoutes = require("./routes/travel_microsites");
 const travelRfuProfilesRoutes = require("./routes/travel_rfu_profiles");
 const travelReligiousPacketsRoutes = require("./routes/travel_religious_packets");
@@ -682,6 +686,7 @@ app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);
+app.use("/api/callified", callifiedRoutes);
 app.use("/api/travel", travelMicrositesRoutes);
 app.use("/api/travel", travelRfuProfilesRoutes);
 app.use("/api/travel", travelReligiousPacketsRoutes);

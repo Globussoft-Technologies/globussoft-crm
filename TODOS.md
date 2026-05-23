@@ -852,6 +852,22 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 - **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry + 1 webhook catalogue JSDoc**
 - **+30 vitest cases lifetime**
 
+**Tick #41 (cron) — 1/1 SHIPPED, partner-facing event catalogue in EXTERNAL_API.md:**
+
+| SHA | Type | What |
+|---|---|---|
+| `b41286d` | Docs | **EXTERNAL_API.md §5.5 added** — canonical webhook event catalogue framed for **integrators** (partner products like Callified.ai, Globus Phone). +42 lines. Mirrors tick #40 JSDoc but with integrator-relevant context: payload shapes per event, delivery contract (fire-and-forget + subscriber failures don't roll back originator), HMAC plans, idempotency recommendation. §6 Roadmap updated — vague "Webhooks coming v1.1" replaced with concrete "self-serve webhook registration coming v1.1" (underlying infra already works; subscription is currently admin-UI-only). 5 sections enumerated: Sales pipeline / Invoicing+Payments / Wellness POS-Wallet-Memberships / Attendance / Travel-vertical lifecycle with full payload shapes for the 3 new Travel events. Discoverability win — partner onboarding can use single canonical doc instead of grepping route handlers. |
+
+**Cumulative session totals (41 ticks):**
+- **115 commits** (+2 this tick)
+- **24 GitHub issues closed + 3 partials** (unchanged)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings
+- Zero rebase conflicts, zero over-commits across all 115 commits
+- **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry + 1 webhook catalogue JSDoc + 1 partner-doc catalogue entry**
+- **+30 vitest cases lifetime**
+
+**7 consecutive lean main-thread ticks** (#35 synthesis + #36 visa + #37 quote + #38 itinerary + #39 test pins + #40 JSDoc + #41 partner-doc). Sustainable cadence: 1 small concrete win per tick.
+
 **🎯 40-tick milestone reached.** Lean-mode pattern (`+1 small concrete win per tick`) is the sustainable cadence for the cron's mature phase. This session has produced:
 - **34 PRDs covering all multi-day work** (118+ pending product decisions consolidated)
 - **Complete Travel + Wellness lifecycle webhook surface** (5 new emissions + comprehensive JSDoc catalogue)

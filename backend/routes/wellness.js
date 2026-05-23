@@ -209,6 +209,9 @@ function capLimit(raw, { def = 50, max = 200 } = {}) {
 //
 // Tenant.vertical check is inherited from verifyWellnessRole — non-wellness
 // tenants get 403 WELLNESS_TENANT_REQUIRED before the role check runs.
+// PRD_WELLNESS_RBAC DD-5.6 invariant: phiReadGate MUST stay cashier-free —
+// cashier is a sales-side wellnessRole (POS-only) without clinical context.
+// Tests pin this contract; adding 'cashier' here would leak PHI.
 const phiReadGate = verifyWellnessRole(["doctor", "professional", "telecaller", "admin", "manager"]);
 const phiWriteGate = verifyWellnessRole(["doctor", "professional", "admin", "manager"]);
 

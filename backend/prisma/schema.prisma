@@ -348,7 +348,10 @@ model User {
   ssoProvider String? // "google", "microsoft", null = local
 
   // Wellness sub-role (orthogonal to RBAC role)
-  wellnessRole String? // doctor, professional, telecaller, helper
+  // PRD_WELLNESS_RBAC DD-5.1 [RESOLVED 2026-05-24]: 'cashier' added for POS-only
+  // sales role. Cashier is NOT a clinical role — phiReadGate excludes it
+  // (routes/wellness.js:212).
+  wellnessRole String? // doctor, professional, telecaller, helper, stylist, cashier
 
   // Travel vertical sub-brand access (Q25 — single tenant + sub-brand
   // tagging). JSON array of sub-brand codes the user can see/act on,

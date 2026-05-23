@@ -222,6 +222,37 @@ describe('PATCH /:id — deactivate', () => {
   });
 });
 
+// ── PRD_WELLNESS_RBAC DD-5.1 [RESOLVED 2026-05-24] — cashier wellnessRole ──
+
+describe('PUT /:id — wellnessRole enum (PRD_WELLNESS_RBAC DD-5.1)', () => {
+  test('accepts "cashier" as a valid wellnessRole (POS sales role)', async () => {
+    prisma.user.findFirst.mockResolvedValue({
+      id: 22, tenantId: 1, email: 'cashier@x.com', name: 'C', role: 'USER', wellnessRole: null,
+    });
+    prisma.user.update.mockResolvedValue({
+      id: 22, email: 'cashier@x.com', name: 'C', role: 'USER', wellnessRole: 'cashier',
+      createdAt: new Date(), deactivatedAt: null,
+    });
+
+    const res = await request(makeApp()).put('/api/staff/22').send({ wellnessRole: 'cashier' });
+    expect(res.status).toBe(200);
+    expect(res.body.wellnessRole).toBe('cashier');
+
+    const updateArgs = prisma.user.update.mock.calls[0][0];
+    expect(updateArgs.data.wellnessRole).toBe('cashier');
+  });
+
+  test('rejects garbage wellnessRole with 400 + listed enum values', async () => {
+    prisma.user.findFirst.mockResolvedValue({
+      id: 22, tenantId: 1, email: 'x@x.com', name: 'X', role: 'USER', wellnessRole: null,
+    });
+
+    const res = await request(makeApp()).put('/api/staff/22').send({ wellnessRole: 'janitor' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('cashier'); // the new value should appear in the enum list
+  });
+});
+
 // ── POST /:id/reset-password (#618) ────────────────────────────────
 
 describe('POST /:id/reset-password', () => {

@@ -20,7 +20,12 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 
 const VALID_ROLES = ["ADMIN", "MANAGER", "USER"];
-const VALID_WELLNESS_ROLES = ["doctor", "professional", "telecaller", "helper", "stylist"];
+// PRD_WELLNESS_RBAC DD-5.1 [RESOLVED 2026-05-24]: extend the wellnessRole enum
+// with 'cashier' for the POS-only sales role. Cashier is a sales role, NOT
+// clinical — phiReadGate in routes/wellness.js:212 deliberately excludes
+// 'cashier' (DD-5.6 invariant). Verify phiReadGate stays cashier-free on
+// every future allowed-list extension.
+const VALID_WELLNESS_ROLES = ["doctor", "professional", "telecaller", "helper", "stylist", "cashier"];
 
 // Module-scoped reset / invite token stores. Mirrors the pattern in
 // routes/auth.js's `resetTokens` Map — in-memory, 1-hour TTL, hex-32 key.

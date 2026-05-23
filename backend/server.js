@@ -456,6 +456,12 @@ const ratehawkRoutes = require("./routes/ratehawk");
 // (stub today, real-mode post Q1 cred handover from Yasin). Mounted at
 // /api/callified; AI calling cap + featureFlag gate live in the service.
 const callifiedRoutes = require("./routes/callified");
+// BookingExpedia operator routes — thin wrapper around services/bookingExpediaClient.js
+// (stub today, real-mode post Q-cluster B6/C cred handover). Mounted at
+// /api/booking-expedia; Booking.com is Phase 1, Expedia code paths throw
+// 503 EXPEDIA_NOT_YET_ENABLED until DC-4 demand-threshold flips. FINAL
+// wrapper in the cred-stub series (4/4 — adsgpt, ratehawk, callified, this).
+const bookingExpediaRoutes = require("./routes/booking_expedia");
 const travelMicrositesRoutes = require("./routes/travel_microsites");
 const travelRfuProfilesRoutes = require("./routes/travel_rfu_profiles");
 const travelReligiousPacketsRoutes = require("./routes/travel_religious_packets");
@@ -687,6 +693,7 @@ app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);
 app.use("/api/callified", callifiedRoutes);
+app.use("/api/booking-expedia", bookingExpediaRoutes);
 app.use("/api/travel", travelMicrositesRoutes);
 app.use("/api/travel", travelRfuProfilesRoutes);
 app.use("/api/travel", travelReligiousPacketsRoutes);

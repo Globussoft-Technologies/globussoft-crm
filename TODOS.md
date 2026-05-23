@@ -686,7 +686,29 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **33 PRDs shipped + 1 meta-doc** (added PRD_ADMIN_SETTINGS_DISCOVERY)
 - **🎯 P0 Pipeline access bug FIXED** — Travel-vertical Pipeline now accessible (#897 PRD's #15 finding now actionable; sub-brand filter remains as scoped work)
 
-**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **33 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
+**Tick #32 (cron) — 2/2 SHIPPED (dropped to 2 agents per Step 4 — diminishing returns), 34th PRD + #845 closed:**
+
+| SHA | Type | What |
+|---|---|---|
+| `552599e` | New PRD (34th) | **`docs/PRD_PLANS_BILLING_SELF_SERVE.md`** (219 lines, #849 P-High). 6 FR groups + 24 sub-reqs (plan model / self-serve actions / billing history / payment methods / invoicing / usage metering); 6 DDs (notably DD-5.3 Stripe/Razorpay storage); 7 OQs; 9 ACs; 3 cred-chase (Q-PB-1..3). **§1.2 detailed inventory:** Tenant.plan exists (default "starter"), SubscriptionPlan + Subscription models exist, routes/subscriptions.js (274 LOC) + routes/billing.js (1033 LOC) shipped — **11 specific "DOES NOT EXIST" gaps enumerated** (settings pages, PaymentMethod model, planGate, usage counters, pro-ration, GST-compliant invoice fields). 4-phase rollout (A read-only + counters = 3-5d safely-pre-buildable). Anti-busywork warning in §10 — Phases B/C/D blocked on DDs + Q-PB creds. **Refs #849.** |
+| `e37f8d1` | Small fix #845 | **Category image upload — Path B** (schema column added). 3 files: `ProductCategory.imageUrl String? @db.VarChar(500)` additive nullable (no bless marker); `backend/routes/inventory.js` extended with multer disk-storage POST + DELETE upload endpoints (2MB JPG/PNG/WebP/SVG cap) + audit logging + best-effort unlink of replaced files; `ProductCategories.jsx` file input + FileReader preview + remove button + thumbnail column. prisma generate + node-check + eslint + vite build all pass. **Closes #845.** |
+
+**Two cron-learning candidates (Agent 2 findings, near-promotion):**
+
+1. **`fetchApi` cannot do multipart — 2nd instance** (Agent 2) — first was booking_pages flow; this is the 2nd. Pages doing file uploads must drop to bare `fetch` + manually attach the bearer token. **If 3rd instance lands, promote to shared `uploadFile(path, file)` helper in `frontend/src/utils/api.js`.**
+
+2. **Multer disk-storage pattern is mature copy-paste material — 3rd instance** (Agent 2) — booking_pages.js + landing_pages.js + now inventory.js use the same destination/filename/limits/fileFilter scaffold. **If 4th route adopts, factor out a `lib/createImageUploader(subdir, opts)` helper.**
+
+**Cumulative session totals (32 ticks):**
+- **🎯 100 commits** (+3 this tick: 1 PRD + 1 fix + verdict pending)
+- **22 GitHub issues closed + 3 partials** (added #845)
+- 10 phantoms + 13 gaps + 1 self-regression caught
+- Zero rebase conflicts, zero over-commits across all 100 commits
+- **34 PRDs shipped + 1 meta-doc** (added PRD_PLANS_BILLING_SELF_SERVE)
+- **1 new schema migration** (ProductCategory.imageUrl additive nullable)
+- **2 new backend endpoints** (POST + DELETE category upload)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

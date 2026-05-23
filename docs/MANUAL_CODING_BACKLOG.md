@@ -459,8 +459,11 @@ These don't need an engineer — they need a stakeholder decision. Once the deci
 
 These are RFU sub-brand-specific vendor integrations surfaced by the 2026-05-23 portal feature matrix audit (commit `08bc240`, see [docs/TRAVEL_CRM_PORTAL_FEATURE_MATRIX.md](TRAVEL_CRM_PORTAL_FEATURE_MATRIX.md) Open Questions section). All three are cred-dependent on Yasin onboarding the respective vendor — they are sister items to cluster C, but kept distinct because they were not in the initial PRD set and each maps to a single RFU operator workflow rather than a cross-vertical capability. Yasin's cred chase list grows to 10 items.
 
+**Consolidated PRD:** [docs/PRD_RFU_GROUND_SERVICES.md](PRD_RFU_GROUND_SERVICES.md) — single spec covers all 3 integrations under the "RFU unified Umrah quote" use case (operator quotes cab + hotel + HSR in one fan-out). Includes 10 open questions (Q-RFUG-1..10), §5 cred-chase breakdown (7 vendor onboardings under Yasin), §6 acceptance criteria per integration + unified flow, §10 implementation sequencing.
+
 ### G1. Zikr Cabs ground-transfer API (#926)
 **Labels:** `enhancement`, `travel-crm`, `rfu`, `cred-dependent`
+**PRD:** [docs/PRD_RFU_GROUND_SERVICES.md](PRD_RFU_GROUND_SERVICES.md) §3.1 (FR-3.1.a–h) + §5.1 cred chase + §9 Q-RFUG-2/3/4/5/9.
 
 **Why manual:** RFU's "Correctness Assured Umrah Program" includes ground transfers — Jeddah → Makkah (~80km), Madinah → Jeddah airport (~440km). Today operators manually quote from Zikr Cabs (Saudi-side ground-transfer vendor). Needs a fresh `services/zikrCabsClient.js` mirroring the RateHawk pattern + wire into the unified quote flow so the ground-transfer leg appears alongside hotel + flight. ~3-5 days post-cred.
 
@@ -476,6 +479,7 @@ These are RFU sub-brand-specific vendor integrations surfaced by the 2026-05-23 
 
 ### G2. 5-portal Saudi hotel-scraper orchestrator (#927)
 **Labels:** `enhancement`, `travel-crm`, `rfu`, `cred-dependent`
+**PRD:** [docs/PRD_RFU_GROUND_SERVICES.md](PRD_RFU_GROUND_SERVICES.md) §3.2 (FR-3.2.a–h) + §5.1 cred chase + §9 Q-RFUG-1/6/10.
 
 **Why manual:** Makkah/Madinah hotels list across multiple Saudi-side B2C portals (Almosafer, Tajawal, MyHoliday2, Pilgrims Choice, Reservation House) with varying rates. RateHawk's coverage is thin for Saudi inventory; operator manually scrapes for lowest rate today. Needs an orchestrator that hits N portals in parallel (per-portal scraper adapters), normalizes rates, dedups by property + city, presents lowest-rate-by-property to operator. ~10-15 days (sister pattern to cluster B4 Chrome plugin's per-airline adapter shape).
 
@@ -491,6 +495,7 @@ These are RFU sub-brand-specific vendor integrations surfaced by the 2026-05-23 
 
 ### G3. Haramain High-Speed Rail pricing API (#928)
 **Labels:** `enhancement`, `travel-crm`, `rfu`, `cred-dependent`
+**PRD:** [docs/PRD_RFU_GROUND_SERVICES.md](PRD_RFU_GROUND_SERVICES.md) §3.3 (FR-3.3.a–h) + §5.1 cred chase + §9 Q-RFUG-8 (program-existence blocker).
 
 **Why manual:** Saudi Arabia's Haramain High-Speed Rail (HHR) connects Makkah ↔ Madinah (~450km in 2.5h). Common alternative to the Madinah → Jeddah road transfer for RFU pilgrim groups. Pricing varies by class (economy/business) + group size + advance-booking window. Today's flow is manual lookup on HHR's public website. ~3-5 days post-cred (mirror RateHawk client pattern).
 

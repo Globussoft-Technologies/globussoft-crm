@@ -868,6 +868,23 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 
 **7 consecutive lean main-thread ticks** (#35 synthesis + #36 visa + #37 quote + #38 itinerary + #39 test pins + #40 JSDoc + #41 partner-doc). Sustainable cadence: 1 small concrete win per tick.
 
+**Tick #42 (cron) — 1/1 SHIPPED, visaRiskFlagEngine R11 + R12 (10 → 12 rules):**
+
+| SHA | Type | What |
+|---|---|---|
+| `e1626de` | Visa risk rules | **visaRiskFlagEngine R11 + R12 added** — 10 → 12 rules + 28 → 34 vitest cases (+6, 3 per rule covering fires/doesn't-fire/gate-closed). **R11 COMPLEX_STALE** (schema: `complexCase` + `updatedAt`): fires when `complexCase=true` AND `updatedAt > 5d` ago — tighter than R7's 14d threshold; co-fires with R2 for tier-1 sort. **R12 HIGH_REJECTION_HISTORY** (schema: `rejectionHistoryJson` String? Text): fires when parsed array length ≥ 2 — co-fires with R3, surfaces compounding-risk applicants. **R13 INTAKE_WITHOUT_RECOVERY_PROGRAM** correctly DROPPED — outcome='rejected' rows wouldn't satisfy the cron's status-IN-pending/intake/docs-pending filter (different cron path needed; out of scope). All 34 tests pass. |
+
+**Cumulative session totals (42 ticks):**
+- **117 commits** (+2 this tick)
+- **24 GitHub issues closed + 3 partials** (unchanged)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings
+- Zero rebase conflicts, zero over-commits across all 117 commits
+- **34 PRDs + 1 meta-doc + 1 synthesis CHANGELOG entry + 1 webhook catalogue JSDoc + 1 partner-doc catalogue entry**
+- **+36 vitest cases lifetime**
+- **visaRiskFlagEngine 12 rules / 34 tests** (was 10/28; PC-1 still gates APPROACHING_DEADLINE class)
+
+**8 consecutive lean ticks** — switching back to code-shipping (R11/R12 rules) after 6 consecutive docs ticks. Pattern: lean cadence accommodates either docs or focused code work as the work pool surfaces it.
+
 **🎯 40-tick milestone reached.** Lean-mode pattern (`+1 small concrete win per tick`) is the sustainable cadence for the cron's mature phase. This session has produced:
 - **34 PRDs covering all multi-day work** (118+ pending product decisions consolidated)
 - **Complete Travel + Wellness lifecycle webhook surface** (5 new emissions + comprehensive JSDoc catalogue)

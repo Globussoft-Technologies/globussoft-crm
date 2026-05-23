@@ -708,6 +708,24 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **1 new schema migration** (ProductCategory.imageUrl additive nullable)
 - **2 new backend endpoints** (POST + DELETE category upload)
 
+**Tick #33 (cron) — LEAN 1-agent tick, #884 High-severity tenant logo bug closed:**
+
+| SHA | Type | What |
+|---|---|---|
+| `be081fc` | High-fix #884 | **Tenant logo broken — routed through `/api/wellness/public/branding/:tenantId/logo`** instead of bare `/uploads/branding/...`. Root cause: Nginx demo config has `location /` (SPA fallback) + `location /api/` (backend proxy) but **no `location /uploads/`** — bare URLs fell through to SPA catch-all returning text/html for `<img>` requests. Fix routes through existing `/api/` proxy path (no Nginx change needed). 3 changes: POST /branding/logo now stores `/api/wellness/public/branding/:tenantId/logo` in DB; NEW public GET endpoint streams file with correct MIME (mirrors #743 visit-photos pattern); GET /branding **normalises legacy `/uploads/branding/...` URLs on read** so existing tenants (incl. tenant-58 Travel Stall) get working logos without re-upload. +84/-2 in `backend/routes/wellness.js`. node-check + eslint pass; no specs pin legacy shape. **Closes #884.** |
+
+**One cron-learning candidate (near-promotion):**
+
+**Disk-backed file uploads MUST serve through `/api/...` not `/uploads/...` directly** (Agent 1) — **2nd instance** (1st was #743 visit-photos). Nginx demo proxies `/api/` to backend but doesn't have a `location /uploads/` block, so direct `/uploads/*` URLs return SPA HTML. Fix pattern: route through `GET /api/<module>/public/<entity>/:id/<asset>` and stream from backend. **Worth promoting to standing rule on 3rd instance** — pattern is structural ("any disk-backed asset URL exposed to frontend goes through /api/").
+
+**Cumulative session totals (33 ticks):**
+- **102 commits** (+2 this tick: 1 fix + verdict pending)
+- **23 GitHub issues closed + 3 partials** (added #884)
+- 10 phantoms + 13 gaps + 1 self-regression + **1 routing fix landing 2nd #743-class instance**
+- Zero rebase conflicts, zero over-commits across all 102 commits
+- **34 PRDs + 1 meta-doc** (unchanged this tick)
+- **3 new backend endpoints lifetime** (+1: public branding logo stream)
+
 **PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** + **34 PRDs total + 1 meta-doc** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |

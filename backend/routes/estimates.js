@@ -575,7 +575,8 @@ router.post("/:id/email", async (req, res) => {
     }
 
     // Flip status from Draft → Sent on first email so the ledger reflects it.
-    if (estimate.status === "Draft") {
+    const wasFirstSend = estimate.status === "Draft";
+    if (wasFirstSend) {
       try {
         await prisma.estimate.update({ where: { id: estimate.id }, data: { status: "Sent" } });
       } catch (_e) { /* ignore */ }
@@ -584,6 +585,36 @@ router.post("/:id/email", async (req, res) => {
     await writeAudit('Estimate', 'EMAIL', estimate.id, req.user.userId, req.user.tenantId, {
       to, delivered, retainedMessage: !!emailRecord,
     }).catch(() => { /* audit non-critical */ });
+
+    // #929 Part B — fire-and-forget webhook emission for first-send.
+    // Subscribers (Callified.ai, partner SaaSes) can react to quote
+    // lifecycle without polling. Only fires on Draft → Sent transition
+    // (avoid duplicate emissions on re-sends). Mirror of the canonical
+    // payment.collected pattern (billing.js wave-6a) + visa.status_changed
+    // (travel_visa.js #929 part 3/5).
+    if (wasFirstSend) {
+      try {
+        const eventBus = require("../lib/eventBus");
+        eventBus.emitEvent(
+          "quote.sent",
+          {
+            id: estimate.id,
+            estimateNumber: estimate.estimateNum,
+            contactId: estimate.contactId || null,
+            to,
+            delivered,
+            totalAmount: estimate.totalAmount,
+            currency,
+            validUntil: estimate.validUntil,
+            tenantId: req.user.tenantId,
+            sentAt: new Date().toISOString(),
+          },
+          req.user.tenantId,
+        ).catch((err) => console.warn("[estimates/email] quote.sent emit failed:", err.message));
+      } catch (emitErr) {
+        console.warn("[estimates/email] quote.sent setup failed:", emitErr.message);
+      }
+    }
 
     res.json({
       success: true,

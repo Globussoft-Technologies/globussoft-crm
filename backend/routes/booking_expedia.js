@@ -25,38 +25,14 @@ const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const bookingExpediaClient = require("../services/bookingExpediaClient");
 const { writeAudit } = require("../lib/audit");
+const { resolveSubBrand } = require("../lib/subBrandResolve");
 
-/**
- * Sub-brand isolation guard — mirrors the /api/ratehawk pattern at commit
- * be67789. If the caller authenticated via a sub-brand-scoped API key
- * (req.apiKeySubBrand set by externalAuth/voyagrAuth), the body subBrand
- * is force-pinned to that value AND any mismatching body is rejected with
- * 403 SUB_BRAND_MISMATCH. Operator JWT auth (verifyToken-only) leaves
- * req.apiKeySubBrand undefined so cross-sub-brand operations are allowed
- * for operators.
- *
- * NOT yet promoted to backend/lib/subBrandResolve.js — fourth copy/paste
- * (adsgpt/ratehawk/callified/booking-expedia). Promotion deferred to a
- * dedicated tick to avoid file-overlap with the four wrapper-route ticks.
- *
- * Returns { ok: true, effectiveSubBrand } or { ok: false, status, body }.
- */
-function resolveSubBrand(req, suppliedSubBrand) {
-  if (req.apiKeySubBrand !== undefined && req.apiKeySubBrand !== null) {
-    if (suppliedSubBrand && suppliedSubBrand !== req.apiKeySubBrand) {
-      return {
-        ok: false,
-        status: 403,
-        body: {
-          error: `API key scoped to '${req.apiKeySubBrand}' cannot operate on sub-brand '${suppliedSubBrand}'`,
-          code: "SUB_BRAND_MISMATCH",
-        },
-      };
-    }
-    return { ok: true, effectiveSubBrand: req.apiKeySubBrand };
-  }
-  return { ok: true, effectiveSubBrand: suppliedSubBrand || null };
-}
+// Sub-brand isolation guard imported from ../lib/subBrandResolve (tick #106
+// rule-of-3 promotion — previously inlined here, in ratehawk.js, and in
+// callified.js byte-identically). Contract: API-key-scoped callers
+// (req.apiKeySubBrand set by externalAuth/voyagrAuth) get force-pinned to
+// their scope and mismatching body rejected as 403 SUB_BRAND_MISMATCH;
+// operator JWT callers pass body through. See lib for full JSDoc.
 
 /**
  * Map a thrown client error to the right HTTP response. Centralised so all

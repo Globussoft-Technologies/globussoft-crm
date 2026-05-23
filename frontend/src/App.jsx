@@ -684,9 +684,22 @@ export default function App() {
                     <Route
                       path="pipeline"
                       element={
-                        <GenericOnly>
-                          <Pipeline />
-                        </GenericOnly>
+                        /* #887/#897: Pipeline.jsx is a fully-built Kanban (~386
+                           lines, shipped April 2026, hardened across 8
+                           commits) that only depends on cross-vertical APIs
+                           (/api/deals, /api/contacts, /api/pipeline_stages) —
+                           none of which are vertical-gated. The original
+                           <GenericOnly> wrapper bounced travel-vertical
+                           tenants (and wellness) to their respective landing
+                           routes, which made the Pipeline sidebar link a dead
+                           link for Travel Stall + the other 3 travel sub-
+                           brands. Travel sidebar (Sidebar.jsx:1102) already
+                           exposes the Pipeline affordance; the guard removal
+                           lets it actually work. Wellness has its own clinic-
+                           focused landing and doesn't expose this link in its
+                           slim nav, so the guard removal is travel-only in
+                           practice. */
+                        <Pipeline />
                       }
                     />
                     <Route path="inbox" element={<Inbox />} />

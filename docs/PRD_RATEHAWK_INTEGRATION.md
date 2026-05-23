@@ -294,6 +294,16 @@ Q19 cred drop unblocks:
 
 ## 10. Status snapshot
 
+### 2026-05-24 update #4 — Cap-consumer wrapper series 4/4 complete + CapBanners rule-of-3 retrofit
+
+**Series complete:** the cap-consumer wrapper-route + admin-UI pattern landed across all 4 stubbed services (adsgpt + ratehawk + callified + booking_expedia) in SHA range `850391d` → `93acf61`. End-to-end cap-helper wiring (`TenantSetting` CRUD `1542b8e` + admin UI `0054a03` + `getBudgetCap` helper + 5 live consumers including llmRouter) is operator-reachable per tenant.
+
+**RateHawk-specific UI shape:** the production hotel-search form — destination + check-in/out + guests — is the live shape at commit `f4268c1`; stub-mode returns a placeholder result list (book/cancel flows gated on real inventory populating when Q19 creds drop).
+
+**Rule-of-3 promotion shipped from this PRD's wrapper:** the `resolveSubBrand(req, supplied)` helper hinted at in update #3 (originating in `ratehawk.js`) was promoted to shared `backend/lib/subBrandResolve.js` at commit `3236d35` once the callified + booking_expedia siblings each needed the same logic — 4 instances total, ~85 LOC inlined → 1 import.
+
+**CapBanners extraction (rule-of-3 retrofit):** shared `frontend/src/components/CapBanners.jsx` at commit `93acf61` consolidates the cap-pill / stub-mode banner / cap-exceeded banner across all 4 admin pages — net **−259 LOC** (466 deletions vs 207 insertions). All `data-testid`s preserved (`ratehawk-cap-pill` / `ratehawk-stub-banner` / `ratehawk-cap-exceeded-banner` unchanged).
+
 ### 2026-05-24 update #3 — Operator routes + admin UI
 
 **Backend wrapper routes shipped:** `backend/routes/ratehawk.js` at commit `be67789` (~308 LOC, 7/7 vitest pass first-try). Routes:

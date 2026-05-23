@@ -412,6 +412,14 @@ approval (DC-3 personas).
 
 ## 10. Status snapshot
 
+### 2026-05-24 update #3 — Cap-consumer wrapper series 4/4 complete + CapBanners rule-of-3 retrofit
+
+**Series complete:** the cap-consumer wrapper-route + admin-UI pattern landed across all 4 stubbed services (adsgpt + ratehawk + callified + booking_expedia) in SHA range `850391d` → `93acf61`. End-to-end cap-helper wiring (`TenantSetting` CRUD `1542b8e` + admin UI `0054a03` + `getBudgetCap` helper + 5 live consumers including llmRouter) is operator-reachable per tenant.
+
+**Callified-specific UI shape:** `frontend/src/pages/admin/CallifiedCalls.jsx` at commit `7c7b88b` checks `GET /api/callified/enabled` on mount (DC-7 feature-flag wiring) — when the toggle is OFF, the page renders a full-page disabled state ("AI calling is disabled for this tenant"); when ON, the operator gets the initiate-call form + cap-status pill + stub-mode banner.
+
+**CapBanners extraction (rule-of-3 retrofit):** shared `frontend/src/components/CapBanners.jsx` at commit `93acf61` consolidates the cap-pill / stub-mode banner / cap-exceeded banner across all 4 admin pages — net **−259 LOC** (466 deletions vs 207 insertions). All `data-testid`s preserved (`callified-cap-pill` / `callified-stub-banner` / `callified-cap-exceeded-banner` unchanged). Companion `backend/lib/subBrandResolve.js` extraction at `3236d35`.
+
 ### 2026-05-24 update #2 — Operator routes
 
 **Backend wrapper routes shipping THIS TICK (in-flight by sibling agent):** `backend/routes/callified.js` — fourth wrapper in cred-stub series (after AdsGPT + RateHawk + BookingExpedia stubs but third route-wrapper). Routes:

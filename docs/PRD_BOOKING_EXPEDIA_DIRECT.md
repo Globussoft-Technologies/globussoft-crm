@@ -330,6 +330,14 @@ Once both partner-account onboardings clear + STUBs swap to real-mode:
 
 ## 10. Status snapshot
 
+### 2026-05-24 update #4 — Cap-consumer wrapper series 4/4 complete + CapBanners rule-of-3 retrofit
+
+**Series complete:** the cap-consumer wrapper-route + admin-UI pattern landed across all 4 stubbed services (adsgpt + ratehawk + callified + booking_expedia) in SHA range `850391d` → `93acf61`. End-to-end cap-helper wiring (`TenantSetting` CRUD `1542b8e` + admin UI `0054a03` + `getBudgetCap` helper + 5 live consumers including llmRouter) is operator-reachable per tenant.
+
+**BookingExpedia-specific UI shape (Phase-2-pending state):** `frontend/src/pages/admin/BookingExpediaSearch.jsx` at commit `7a95d74` deliberately renders a **full-page "pending vendor handover (Q11)" state** rather than a working search form — Booking partner-account + Expedia EAN onboarding are both still outstanding (CREDS_TRACKER Cat 1 cluster B6/C). The cap-helper is pre-wired and the stub-mode client is reachable; when creds drop, no further frontend change is needed beyond enabling the form view (single-flag toggle).
+
+**CapBanners extraction (rule-of-3 retrofit):** shared `frontend/src/components/CapBanners.jsx` at commit `93acf61` consolidates the cap-pill / stub-mode banner / cap-exceeded banner across all 4 admin pages — net **−259 LOC** (466 deletions vs 207 insertions). All `data-testid`s preserved (`booking-expedia-cap-pill` / `booking-expedia-stub-banner` / `booking-expedia-cap-exceeded-banner` unchanged). Companion `backend/lib/subBrandResolve.js` extraction at `3236d35` (the architectural finding flagged in update #3 — rule-of-3 fired at tick #103, promoted at 4 instances).
+
 ### 2026-05-24 update #3 — Operator routes (FINAL wrapper in cred-stub series)
 
 **Backend wrapper routes shipping THIS TICK (in-flight by sibling agent):** `backend/routes/booking_expedia.js` at /api/booking-expedia — FOURTH and FINAL wrapper in the cred-stub series. Routes:

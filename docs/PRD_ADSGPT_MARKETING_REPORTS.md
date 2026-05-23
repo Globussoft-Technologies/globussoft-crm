@@ -321,6 +321,14 @@ GS owns the e2e validation; Travel Stall owns acknowledging acceptance.
 
 ## 10. Status snapshot
 
+### 2026-05-24 update #3 — Cap-consumer wrapper series 4/4 complete + CapBanners rule-of-3 retrofit
+
+**Series complete:** the cap-consumer wrapper-route + admin-UI pattern landed across all 4 stubbed services (adsgpt + ratehawk + callified + booking_expedia) in SHA range `850391d` → `93acf61`. End-to-end cap-helper wiring (`TenantSetting` CRUD `1542b8e` + admin UI `0054a03` + `getBudgetCap` helper + 5 live consumers including llmRouter) is operator-reachable per tenant.
+
+**AdsGPT-specific UI shape:** the simplest of the 4 — operator-facing reports surface with stub-mode banner + cap-status indicator only (no per-action stub flows; just date-range filter + platform selector + cap pill at `850391d`).
+
+**CapBanners extraction (rule-of-3 retrofit):** shared `frontend/src/components/CapBanners.jsx` at commit `93acf61` consolidates the cap-pill / stub-mode banner / cap-exceeded banner across all 4 admin pages — net **−259 LOC** (466 deletions vs 207 insertions). All `data-testid`s preserved (`adsgpt-cap-pill` / `adsgpt-stub-banner` / `adsgpt-cap-exceeded-banner` unchanged). Companion `backend/lib/subBrandResolve.js` extraction at `3236d35`.
+
 ### 2026-05-24 update #2 — Operator routes + admin UI
 
 **Backend wrapper routes shipped:** `backend/routes/adsgpt.js` at commit `0d66a74` (~154 LOC, 5/5 vitest pass). Routes:

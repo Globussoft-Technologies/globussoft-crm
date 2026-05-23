@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown } from 'lucide-react';
+import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown, CheckCircle, Clock, Pill } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
@@ -197,6 +197,12 @@ export default function PatientDetail() {
           horizontally when too many tabs survive the wrap. */}
       <div className="wellness-tab-strip" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <button style={tabStyle(tab === 'history')} onClick={() => setTab('history')}><Calendar size={14} /> Case history</button>
+        {/* #838 — dedicated Prescriptions list tab with Active/Past status
+            indicators + filter chips. Distinct from "New prescription"
+            (which is the capture surface). Clinicians need a one-click
+            way to see "what is this patient currently taking?" without
+            scrolling the merged case-history timeline. */}
+        <button data-testid="rx-list-tab" style={tabStyle(tab === 'rxlist')} onClick={() => setTab('rxlist')}><Pill size={14} /> Prescriptions</button>
         <button style={tabStyle(tab === 'prescribe')} onClick={() => setTab('prescribe')}><FileText size={14} /> New prescription</button>
         <button style={tabStyle(tab === 'consent')} onClick={() => setTab('consent')}><FileSignature size={14} /> Consent form</button>
         <button style={tabStyle(tab === 'plans')} onClick={() => setTab('plans')}><ClipboardList size={14} /> Treatment plans</button>
@@ -212,6 +218,7 @@ export default function PatientDetail() {
       </div>
 
       {tab === 'history' && <CaseHistoryTab patient={patient} />}
+      {tab === 'rxlist' && <PrescriptionsListTab patient={patient} />}
       {tab === 'prescribe' && <PrescribeTab patient={patient} onSaved={load} />}
       {tab === 'consent' && <ConsentTab patient={patient} services={services} onSaved={load} />}
       {tab === 'plans' && <PlansTab patient={patient} services={services} onSaved={load} />}
@@ -393,6 +400,201 @@ function WalletTab({ patient }) {
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+// ── Prescriptions list tab (#838) ─────────────────────────────────
+//
+// Dedicated list view for ALL prescriptions on the patient with a status
+// indicator (Active / Past) per row and Active/Past/All filter chips.
+// Derived client-side because the Prescription model lacks an explicit
+// status field — instead we parse the max `duration` token across the
+// drugs JSON array and compare (createdAt + maxDays) to today.
+//
+// Status derivation contract:
+//   - Active: createdAt + maxDurationDays >= today
+//   - Past:   createdAt + maxDurationDays <  today
+//   - Fallback when no parseable duration: treat as Active for the
+//     first 30 days, Past after — clinically safest default (better to
+//     show "current" than silently hide an Rx the doctor wants to see).
+//
+// Duration token format: free-text on each drug (e.g. "7 days", "2 weeks",
+// "1 month", "30d"). Parsed by parseDurationDays() below; unparseable
+// values are skipped and the fallback applies.
+//
+// TODO: when Prescription gets an explicit status enum + endDate (#838
+// follow-up), replace derivation with the schema field. Migration is
+// out-of-scope for this commit (needs bless-marker + backfill plan).
+
+const RX_FALLBACK_ACTIVE_DAYS = 30;
+
+// Parse a free-text duration like "7 days", "2 weeks", "1 month", "10d"
+// to an integer day count. Returns null if unparseable.
+function parseDurationDays(text) {
+  if (!text || typeof text !== 'string') return null;
+  const s = text.trim().toLowerCase();
+  // "7d", "10 d"
+  const dMatch = s.match(/^(\d+)\s*d(ays?)?$/);
+  if (dMatch) return parseInt(dMatch[1], 10);
+  // "2 weeks", "3 wk", "1w"
+  const wMatch = s.match(/^(\d+)\s*w(eeks?|k)?$/);
+  if (wMatch) return parseInt(wMatch[1], 10) * 7;
+  // "1 month", "3 months", "2 mo", "1m"
+  const moMatch = s.match(/^(\d+)\s*m(o(nths?)?)?$/);
+  if (moMatch) return parseInt(moMatch[1], 10) * 30;
+  // Plain integer — assume days (operator convention seen in seed data).
+  const intMatch = s.match(/^(\d+)$/);
+  if (intMatch) return parseInt(intMatch[1], 10);
+  return null;
+}
+
+// Given a Prescription row, return { active: boolean, expiresAt: Date|null,
+// maxDays: number|null }. expiresAt is the latest known end date across all
+// drugs in the Rx; null when no drug has a parseable duration (fallback path).
+export function derivePrescriptionStatus(rx, now = new Date()) {
+  let drugs = [];
+  try { drugs = typeof rx.drugs === 'string' ? JSON.parse(rx.drugs) : rx.drugs; } catch { drugs = []; }
+  if (!Array.isArray(drugs)) drugs = [];
+
+  const dayCounts = drugs
+    .map((d) => parseDurationDays(d?.duration))
+    .filter((n) => n != null && n > 0);
+
+  const createdAt = new Date(rx.createdAt);
+  const createdTs = createdAt.getTime();
+
+  if (dayCounts.length === 0) {
+    // Fallback: active for first 30 days post-creation.
+    const expiresAt = new Date(createdTs + RX_FALLBACK_ACTIVE_DAYS * 86400000);
+    return { active: now.getTime() <= expiresAt.getTime(), expiresAt, maxDays: null, fallback: true };
+  }
+
+  const maxDays = Math.max(...dayCounts);
+  const expiresAt = new Date(createdTs + maxDays * 86400000);
+  return { active: now.getTime() <= expiresAt.getTime(), expiresAt, maxDays, fallback: false };
+}
+
+function RxStatusBadge({ active, fallback }) {
+  // Active = teal (clinical positive), Past = neutral grey.
+  const cfg = active
+    ? { color: '#10b981', bg: 'rgba(16,185,129,0.15)', label: 'Active', Icon: CheckCircle }
+    : { color: '#6b7280', bg: 'rgba(107,114,128,0.15)', label: 'Past',   Icon: Clock };
+  const Icon = cfg.Icon;
+  return (
+    <span
+      data-testid={active ? 'rx-status-active' : 'rx-status-past'}
+      title={fallback ? 'Status derived from createdAt (no parseable duration on drugs)' : undefined}
+      style={{
+        padding: '0.2rem 0.55rem', borderRadius: 999, fontSize: '0.7rem', fontWeight: 600,
+        backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.color}33`,
+        display: 'inline-flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap',
+      }}
+    >
+      <Icon size={11} />
+      {cfg.label}
+    </span>
+  );
+}
+
+function PrescriptionsListTab({ patient }) {
+  const [filter, setFilter] = useState('active'); // 'active' | 'past' | 'all'
+  const [openRx, setOpenRx] = useState(null);
+
+  // Decorate each Rx with its derived status, sort newest-first, then filter.
+  const rxWithStatus = useMemo(() => {
+    const now = new Date();
+    return (patient.prescriptions || [])
+      .map((p) => ({ ...p, _status: derivePrescriptionStatus(p, now) }))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }, [patient.prescriptions]);
+
+  const counts = useMemo(() => ({
+    all: rxWithStatus.length,
+    active: rxWithStatus.filter((r) => r._status.active).length,
+    past: rxWithStatus.filter((r) => !r._status.active).length,
+  }), [rxWithStatus]);
+
+  const filtered = useMemo(() => {
+    if (filter === 'all') return rxWithStatus;
+    if (filter === 'active') return rxWithStatus.filter((r) => r._status.active);
+    return rxWithStatus.filter((r) => !r._status.active);
+  }, [rxWithStatus, filter]);
+
+  const chipStyle = (active) => ({
+    padding: '0.4rem 0.85rem', borderRadius: 999, border: '1px solid var(--border-color)',
+    background: active ? 'var(--primary-color, var(--accent-color))' : 'transparent',
+    color: active ? '#fff' : 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem',
+    fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+  });
+
+  if (rxWithStatus.length === 0) {
+    return (
+      <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+        No prescriptions yet. Use the <strong>New prescription</strong> tab to capture one.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      <div data-testid="rx-filter-chips" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <button type="button" data-testid="rx-chip-active" style={chipStyle(filter === 'active')} onClick={() => setFilter('active')}>
+          Active <span style={{ opacity: 0.75, fontWeight: 500 }}>({counts.active})</span>
+        </button>
+        <button type="button" data-testid="rx-chip-past" style={chipStyle(filter === 'past')} onClick={() => setFilter('past')}>
+          Past <span style={{ opacity: 0.75, fontWeight: 500 }}>({counts.past})</span>
+        </button>
+        <button type="button" data-testid="rx-chip-all" style={chipStyle(filter === 'all')} onClick={() => setFilter('all')}>
+          All <span style={{ opacity: 0.75, fontWeight: 500 }}>({counts.all})</span>
+        </button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="glass" style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          {filter === 'active' && 'No active prescriptions. The patient is not currently on any medication course.'}
+          {filter === 'past' && 'No past prescriptions in this list.'}
+        </div>
+      ) : (
+        filtered.map((rx) => (
+          <div
+            key={rx.id}
+            className="glass"
+            data-testid={`rx-row-${rx.id}`}
+            onClick={() => setOpenRx(rx)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setOpenRx(rx); } }}
+            style={{ padding: '1rem', display: 'flex', gap: '0.75rem', cursor: 'pointer' }}
+            title="Click to view full prescription details"
+          >
+            <div style={{ width: 8, background: '#a855f7', borderRadius: 4, flexShrink: 0 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.3rem', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                  <FileText size={14} />
+                  <strong>Prescription</strong>
+                  <RxStatusBadge active={rx._status.active} fallback={rx._status.fallback} />
+                  {rx._status.expiresAt && (
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      {rx._status.active ? 'Ends ' : 'Ended '}
+                      {rx._status.expiresAt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  {new Date(rx.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                </div>
+              </div>
+              <RxSummary drugs={rx.drugs} instructions={rx.instructions} />
+            </div>
+          </div>
+        ))
+      )}
+
+      {openRx && (
+        <RxDetailModal rx={openRx} patient={patient} onClose={() => setOpenRx(null)} />
       )}
     </div>
   );

@@ -454,4 +454,152 @@ describe('<PatientDetail />', () => {
       expect(body.textContent).toMatch(/DPDP/);
     });
   });
+
+  // #838 — dedicated Prescriptions list tab with Active/Past status
+  // indicators per row + filter chips. Distinct from "New prescription"
+  // (capture surface) and Case history (merged visits+rx+consents timeline).
+  // Status derived client-side from drug `duration` parsed to days +
+  // createdAt; fallback is 30-day active window when no parseable duration.
+  describe('Prescriptions list tab (#838)', () => {
+    // Helpers to build a Rx that's clearly active vs clearly past relative
+    // to the test clock. Drug duration uses canonical "N days" / "N weeks"
+    // tokens that parseDurationDays() understands.
+    const mkRx = (id, createdAtISO, durationToken) => ({
+      id,
+      createdAt: createdAtISO,
+      visitId: 11,
+      drugs: JSON.stringify([
+        { name: 'Minoxidil 5%', dosage: '1 ml', frequency: 'BID', duration: durationToken },
+      ]),
+      instructions: 'Apply to scalp morning and night.',
+      doctor: { id: 5, name: 'Dr. Mehta' },
+    });
+
+    const renderWithRx = (rxList) => {
+      const patientWithRx = { ...patient, prescriptions: rxList };
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patientWithRx);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+    };
+
+    it('renders the Prescriptions tab button (distinct from "New prescription")', async () => {
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('rx-list-tab')).toBeInTheDocument());
+      // Both surfaces co-exist: capture tab and list tab.
+      expect(screen.getByTestId('rx-list-tab')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /New prescription/i })).toBeInTheDocument();
+    });
+
+    it('empty-state copy when patient has no prescriptions', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('rx-list-tab')).toBeInTheDocument());
+      await user.click(screen.getByTestId('rx-list-tab'));
+      await waitFor(() => expect(screen.getByText(/No prescriptions yet/i)).toBeInTheDocument());
+    });
+
+    it('derives Active/Past status from drug duration + createdAt; default chip is Active', async () => {
+      // Active Rx: started 2 days ago, 30-day course → ends 28 days from now.
+      const recent = new Date(Date.now() - 2 * 86400000).toISOString();
+      // Past Rx: started 6 months ago, 7-day course → expired ~6 months back.
+      const old = new Date(Date.now() - 180 * 86400000).toISOString();
+      renderWithRx([
+        mkRx(1001, recent, '30 days'),
+        mkRx(1002, old, '7 days'),
+      ]);
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('rx-list-tab')).toBeInTheDocument());
+      await user.click(screen.getByTestId('rx-list-tab'));
+
+      // Default chip is Active — only the active Rx is shown initially.
+      await waitFor(() => expect(screen.getByTestId('rx-row-1001')).toBeInTheDocument());
+      expect(screen.queryByTestId('rx-row-1002')).not.toBeInTheDocument();
+
+      // Active badge present on the visible row, no Past badge.
+      const activeRow = screen.getByTestId('rx-row-1001');
+      expect(activeRow.querySelector('[data-testid="rx-status-active"]')).toBeTruthy();
+    });
+
+    it('chips toggle between Active / Past / All; counts reflect derivation', async () => {
+      const recent = new Date(Date.now() - 2 * 86400000).toISOString();
+      const old = new Date(Date.now() - 180 * 86400000).toISOString();
+      renderWithRx([
+        mkRx(2001, recent, '30 days'),
+        mkRx(2002, old, '7 days'),
+        mkRx(2003, old, '14 days'),
+      ]);
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('rx-list-tab')).toBeInTheDocument());
+      await user.click(screen.getByTestId('rx-list-tab'));
+
+      // Active chip shows count of 1, Past chip shows 2, All shows 3.
+      await waitFor(() => expect(screen.getByTestId('rx-chip-active').textContent).toMatch(/\(1\)/));
+      expect(screen.getByTestId('rx-chip-past').textContent).toMatch(/\(2\)/);
+      expect(screen.getByTestId('rx-chip-all').textContent).toMatch(/\(3\)/);
+
+      // Click Past chip — only old prescriptions appear.
+      await user.click(screen.getByTestId('rx-chip-past'));
+      await waitFor(() => expect(screen.queryByTestId('rx-row-2001')).not.toBeInTheDocument());
+      expect(screen.getByTestId('rx-row-2002')).toBeInTheDocument();
+      expect(screen.getByTestId('rx-row-2003')).toBeInTheDocument();
+
+      // Click All — every Rx is rendered.
+      await user.click(screen.getByTestId('rx-chip-all'));
+      await waitFor(() => expect(screen.getByTestId('rx-row-2001')).toBeInTheDocument());
+      expect(screen.getByTestId('rx-row-2002')).toBeInTheDocument();
+      expect(screen.getByTestId('rx-row-2003')).toBeInTheDocument();
+    });
+
+    it('fallback path: no parseable duration → active for first 30 days post-creation', async () => {
+      // Recent + unparseable duration → still active under the 30-day fallback.
+      const recent = new Date(Date.now() - 5 * 86400000).toISOString();
+      // Old + unparseable duration → past (createdAt > 30 days ago).
+      const old = new Date(Date.now() - 90 * 86400000).toISOString();
+      renderWithRx([
+        mkRx(3001, recent, 'as needed'),  // unparseable
+        mkRx(3002, old,    'until rash clears'),  // unparseable
+      ]);
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('rx-list-tab')).toBeInTheDocument());
+      await user.click(screen.getByTestId('rx-list-tab'));
+
+      // Active chip = 1 (recent fallback-active), Past = 1 (old fallback-past).
+      await waitFor(() => expect(screen.getByTestId('rx-chip-active').textContent).toMatch(/\(1\)/));
+      expect(screen.getByTestId('rx-chip-past').textContent).toMatch(/\(1\)/);
+    });
+
+    it('preserves newest-first sort across the list', async () => {
+      const t1 = new Date(Date.now() - 1 * 86400000).toISOString();
+      const t2 = new Date(Date.now() - 3 * 86400000).toISOString();
+      const t3 = new Date(Date.now() - 10 * 86400000).toISOString();
+      renderWithRx([
+        // intentionally out-of-order in input
+        mkRx(4002, t2, '30 days'),
+        mkRx(4001, t1, '30 days'),
+        mkRx(4003, t3, '30 days'),
+      ]);
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('rx-list-tab')).toBeInTheDocument());
+      await user.click(screen.getByTestId('rx-list-tab'));
+      await user.click(screen.getByTestId('rx-chip-all'));
+
+      await waitFor(() => expect(screen.getByTestId('rx-row-4001')).toBeInTheDocument());
+      const all = document.body.innerHTML;
+      // Newest (4001) appears before 4002 in the DOM order.
+      expect(all.indexOf('rx-row-4001')).toBeLessThan(all.indexOf('rx-row-4002'));
+      expect(all.indexOf('rx-row-4002')).toBeLessThan(all.indexOf('rx-row-4003'));
+    });
+  });
 });

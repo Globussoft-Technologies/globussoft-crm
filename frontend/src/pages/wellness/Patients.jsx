@@ -11,6 +11,11 @@ export default function Patients() {
   const formRef = useRef(null);
   const [patients, setPatients] = useState([]);
   const [total, setTotal] = useState(0);
+  // #829 — track 403 from /api/wellness/patients so the empty-state copy
+  // honestly says "Access restricted" instead of the misleading "No patients
+  // match." that pre-fix made permission-blocked users think their tenant
+  // was simply empty.
+  const [permissionDenied, setPermissionDenied] = useState(false);
   const [q, setQ] = useState("");
   // #820 Part 1 — client-side pagination. Demo has 51 patients today; rendering
   // them all as one continuous table is acceptable for that scale but breaks
@@ -88,11 +93,16 @@ export default function Patients() {
         if (myReqId !== reqIdRef.current) return;
         setPatients(d.patients);
         setTotal(d.total);
+        setPermissionDenied(false);
       })
-      .catch(() => {
+      .catch((err) => {
         if (myReqId !== reqIdRef.current) return;
         setPatients([]);
         setTotal(0);
+        // #829 — distinguish 403 (caller's role lacks PHI access) from
+        // genuine empty / network failure so the empty-state row can show
+        // honest copy. fetchApi already toasts the 403 string.
+        setPermissionDenied(err?.status === 403);
       })
       .finally(() => {
         if (myReqId !== reqIdRef.current) return;
@@ -567,10 +577,24 @@ export default function Patients() {
                     style={{
                       ...tdStyle,
                       textAlign: "center",
-                      color: "var(--text-secondary)",
+                      color: permissionDenied ? "var(--warning-color, #f59e0b)" : "var(--text-secondary)",
+                      padding: permissionDenied ? "2rem 1rem" : undefined,
                     }}
                   >
-                    No patients match.
+                    {/* #829 — honest empty-state when the API returned 403.
+                        Pre-fix the same "No patients match." copy rendered for
+                        both real-empty and permission-blocked, so a Demo User
+                        viewing a populated clinic saw a phantom empty list. */}
+                    {permissionDenied ? (
+                      <>
+                        <strong>Access restricted.</strong>
+                        <div style={{ fontSize: "0.85rem", marginTop: "0.5rem", color: "var(--text-secondary)" }}>
+                          Your role does not have permission to view patient records. Patient data is hidden — not absent. Ask an Admin to grant clinical access if you need it.
+                        </div>
+                      </>
+                    ) : (
+                      "No patients match."
+                    )}
                   </td>
                 </tr>
               )}

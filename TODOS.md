@@ -936,6 +936,26 @@ All 5 lifecycle webhook events now emit. Subscribers attach via existing Webhook
 
 **11 lean ticks total** (2 GH-triage + 9 code/docs). PRD §10 drift cleanup is a valid lean-tick shape — keeps coordinating-PRD reality in sync with shipped code so next product review session reads accurate state.
 
+**Tick #47 (cron) — 1/1 SHIPPED, safeEmitEvent DRY refactor (rule-of-3 extraction):**
+
+| SHA | Type | What |
+|---|---|---|
+| `663c84b` | DRY refactor | **`safeEmitEvent` helper extracted to `lib/eventBus.js`** + 3 callsites refactored (travel_visa.js + estimates.js + travel_itineraries.js). Rule-of-3 fire-and-forget emit pattern from ticks #36-#38 consolidated. Net -15 LOC (~45 boilerplate removed, ~30 added shared helper + JSDoc). **Implementation gotcha caught:** initial naive `emitEvent(...)` call broke 3 wave-6a tests because spies monkey-patch `module.exports.emitEvent`, not the local function closure. Fix: invoke via `module.exports.emitEvent` so test-time spies continue to intercept. All 14 wave-6a tests pass post-refactor. Future webhook emissions just `import { safeEmitEvent }` + call. |
+
+**Cumulative session totals (47 ticks):**
+- **124 commits** (+3 this tick: 1 wake-up refresh + 1 refactor + verdict pending)
+- **26 GitHub issues closed + 3 partials** (unchanged)
+- 11 phantoms + 13 gaps + 1 self-regression + 1 routing fix + 2 emission-already-shipped findings + 2 dupe-or-PRD-covered closures + **1 in-flight bug caught + fixed locally** (wave-6a spy compatibility)
+- Zero rebase conflicts, zero over-commits
+- **34 PRDs + 1 meta-doc + 1 synthesis + 1 JSDoc + 1 partner-doc**
+- **+36 vitest cases lifetime** (no new cases this tick; all 14 wave-6a tests verified post-refactor)
+
+**13 lean ticks total** (2 GH-triage + 10 code/docs + 1 refactor). The safeEmitEvent extraction completes the #929 lifecycle webhook arc: emit pattern → emissions → tests → JSDoc → partner doc → shared helper. Future emissions are 1-line additions.
+
+**Cron-learning candidate (1st instance):**
+
+**Test-time spies on module-exports object require `module.exports.fn(...)` invocation** (this tick) — initial `safeEmitEvent` called `emitEvent(...)` directly (local closure), bypassing the spy that monkey-patched `eventBus.emitEvent = vi.fn()` on the exports surface. Fix: `module.exports.emitEvent(...)`. Worth a one-liner standing rule if 2nd instance lands: "when extracting a helper that internally calls another module-exported function the test suite spies on, route the call through `module.exports.<fn>` not the local closure."
+
 **🎯 40-tick milestone reached.** Lean-mode pattern (`+1 small concrete win per tick`) is the sustainable cadence for the cron's mature phase. This session has produced:
 - **34 PRDs covering all multi-day work** (118+ pending product decisions consolidated)
 - **Complete Travel + Wellness lifecycle webhook surface** (5 new emissions + comprehensive JSDoc catalogue)

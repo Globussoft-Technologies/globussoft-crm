@@ -22,7 +22,7 @@ This cron MUST NOT collide with the programming cron's work. Hard rule for every
 - **STRICTLY FORBIDDEN** (agents AND parent): any source file under `backend/{routes,services,lib,middleware,cron,prisma,utils}/`, any source file under `frontend/src/{pages,components,utils,hooks}/`, `docs/**`, `CLAUDE.md`, `TODOS.md`, `README.md`, `CHANGELOG.md`
 - If a test reveals a real source-code bug, the agent **MUST** route the finding to a new GH issue (template below) AND mark the failing test `it.skip(...)` with a TODO comment referencing the issue number. NEVER fix source code.
 
-The programming cron writes test files when it ships new source code. This cron writes ADDITIONAL test cases for under-covered EXISTING code. Collision only happens if both crons pick the same test file in the same tick — mitigated by the "files not modified in last 24h" picker rule below.
+The programming cron writes test files when it ships new source code. This cron writes ADDITIONAL test cases for under-covered EXISTING code. Collision only happens if both crons pick the same test file in the same tick — mitigated by the "files not modified in last 1 hour" picker rule below (programming cron's tick cycle is 15 min, so 1h covers ~4 ticks of activity — plenty for mid-flight detection without being wastefully conservative).
 
 ## Step 0 — Sync + gate state (NEVER skip)
 
@@ -97,8 +97,8 @@ Each is a known coverage hole — a previous agent left a skip that should now b
 ### Pick discipline
 
 1. Run the T1 / T2 / T3 greps. Pool the candidates.
-2. For each candidate, run `git log --since="24 hours ago" --oneline -- <source-file>`. If non-empty, SKIP this candidate (programming cron may be actively working on it).
-3. Pick 3 candidates with NO 24h activity AND in different subsystems (e.g. one backend/lib, one backend/services, one frontend/src/__tests__/). This guarantees file-disjointness across the 3 parallel agents.
+2. For each candidate, run `git log --since="1 hour ago" --oneline -- <source-file>`. If non-empty, SKIP this candidate (programming cron is likely actively working on it — its ticks are 15 min apart, so 1h covers ~4 recent ticks).
+3. Pick 3 candidates with NO 1h activity AND in different subsystems (e.g. one backend/lib, one backend/services, one frontend/src/__tests__/). This guarantees file-disjointness across the 3 parallel agents.
 
 If fewer than 3 disjoint candidates → ship 1-2 agents. If 0 candidates → log "queue empty" and end tick (count as empty tick).
 
@@ -239,7 +239,7 @@ The programming cron's "Phase 1.5 — Phase 1.5 single-commit slices" priority w
 - NEVER touch source files — only test files
 - NEVER fix bugs — only file issues
 - File-disjoint discipline with parallel agents in same tick (different test files)
-- File-disjoint discipline with programming cron (skip files modified in last 24h)
+- File-disjoint discipline with programming cron (skip files modified in last 1h — programming cron's tick cycle is 15 min, so 1h covers ~4 recent ticks of activity)
 - `git commit --only` per file (no bare `git commit -F` sweeping the index)
 - NO `Co-Authored-By: Claude` trailer
 - Test files only run vitest (no live backend, no demo SSH, no playwright unless extending an existing spec)
@@ -248,7 +248,7 @@ The programming cron's "Phase 1.5 — Phase 1.5 single-commit slices" priority w
 ## Output (per tick, 6-10 lines)
 
 - **Tick:** ISO timestamp + HEAD before + tick counter (for the every-8th-tick coverage trigger)
-- **Picks:** 3 test targets + priority bucket (T1/T2/T3) + file paths (proves disjoint, proves no-24h-activity)
+- **Picks:** 3 test targets + priority bucket (T1/T2/T3) + file paths (proves disjoint, proves no-1h-activity)
 - **Dispatched:** 3 agent IDs OR fewer
 - **Returned:** SHAs that landed + any REJECTED reasons + any GH issues filed
 - **Bugs surfaced:** issue numbers filed this tick (with one-line summary each)

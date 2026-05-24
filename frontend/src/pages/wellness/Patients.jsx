@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Search, Plus, Users, Phone, Mail, Pencil, Download, Tag } from "lucide-react";
+import { Search, Plus, Users, Phone, Mail, Pencil, Download, Tag, FileSpreadsheet } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
@@ -47,6 +47,12 @@ export default function Patients() {
   // matching the current view). fetch+blob trick because plain <a href>
   // can't set the Authorization header.
   const [csvBusy, setCsvBusy] = useState(false);
+  // #820 (tick #188) — XLSX export, mirrors CSV semantics + filters.
+  // Backend endpoint `/api/wellness/patients.xlsx` (tick #187 ed00be9b)
+  // returns a binary XLSX buffer with the same phiReadGate + ?q & ?locationId
+  // filter shape. Both buttons disable while EITHER export is in flight to
+  // prevent double-fire / race-condition downloads of stale snapshots.
+  const [xlsxBusy, setXlsxBusy] = useState(false);
   // #931 — bulk-select + bulk-tag-add. Selected patient ids live in a Set so
   // toggle / clear is O(1). Modal stays open when the request errors so the
   // user can correct the tags input and retry without re-selecting rows.
@@ -168,6 +174,42 @@ export default function Patients() {
       notify.error(e.message || 'CSV export failed.');
     } finally {
       setCsvBusy(false);
+    }
+  };
+
+  // #820 (tick #188) — XLSX export. Mirrors exportCsv exactly except for
+  // the endpoint + file extension. Backend (`GET /api/wellness/patients.xlsx`,
+  // shipped tick #187 `ed00be9b`) emits a binary Open-XML spreadsheet buffer
+  // (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet) with
+  // the same row shape + masking + filter semantics as the CSV handler. The
+  // download mechanics are identical — fetch → .blob() → createObjectURL →
+  // anchor click → revoke — because the Authorization header forbids a plain
+  // <a href> approach.
+  const exportXlsx = async () => {
+    setXlsxBusy(true);
+    try {
+      const token = getAuthToken();
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const res = await fetch(`/api/wellness/patients.xlsx${qs}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `patients-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify.success(`Exported ${total.toLocaleString()} patient${total === 1 ? '' : 's'}.`);
+    } catch (e) {
+      notify.error(e.message || 'XLSX export failed.');
+    } finally {
+      setXlsxBusy(false);
     }
   };
 
@@ -490,16 +532,34 @@ export default function Patients() {
           {/* #931 + #816 Patients slice — CSV export honors the current search
               filter. Hidden when there's nothing to export OR when the role
               already saw the access-restricted state (avoids tempting the user
-              to try an export that will just toast 403). */}
+              to try an export that will just toast 403).
+              #820 (tick #188) — both CSV + XLSX buttons disable while EITHER
+              export is in flight so a slow XLSX download doesn't race with a
+              user-triggered CSV (and vice-versa) on the same filter snapshot. */}
           {!permissionDenied && (
             <button
               type="button"
               onClick={exportCsv}
-              disabled={csvBusy || total === 0}
+              disabled={csvBusy || xlsxBusy || total === 0}
               title={q ? `Download ${total} matching patient${total === 1 ? '' : 's'} as CSV` : `Download all ${total} patients as CSV`}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy || total === 0 ? 'not-allowed' : 'pointer', opacity: csvBusy || total === 0 ? 0.6 : 1 }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || total === 0) ? 0.6 : 1 }}
             >
               <Download size={16} /> Export CSV
+            </button>
+          )}
+          {/* #820 (tick #188) — XLSX export. Same chrome / styling as the CSV
+              button to keep the two surfaces visually paired; differentiated
+              only by the spreadsheet icon + label. Backend endpoint at
+              /api/wellness/patients.xlsx (tick #187 ed00be9b). */}
+          {!permissionDenied && (
+            <button
+              type="button"
+              onClick={exportXlsx}
+              disabled={csvBusy || xlsxBusy || total === 0}
+              title={q ? `Download ${total} matching patient${total === 1 ? '' : 's'} as XLSX` : `Download all ${total} patients as XLSX`}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || total === 0) ? 0.6 : 1 }}
+            >
+              <FileSpreadsheet size={16} /> Export XLSX
             </button>
           )}
           <button

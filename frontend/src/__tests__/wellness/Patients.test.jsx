@@ -36,6 +36,11 @@ import { MemoryRouter } from 'react-router-dom';
 const fetchApiMock = vi.fn();
 vi.mock('../../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
+  // tick #188 — XLSX export uses raw fetch + getAuthToken (separate from
+  // fetchApi). Mock the helper so the export click doesn't TypeError on
+  // `getAuthToken is not a function` under the module-mock that previously
+  // only exposed fetchApi.
+  getAuthToken: () => 'fake-token',
 }));
 
 const notifyError = vi.fn();
@@ -347,6 +352,108 @@ describe('<wellness/Patients /> — page surface', () => {
       // Modal stays open so the user can correct + retry.
       expect(screen.getByRole('dialog')).toBeInTheDocument();
       expect(notifySuccess).not.toHaveBeenCalled();
+    });
+  });
+
+  // #820 (tick #188) — XLSX export button. Mirrors the CSV button surface;
+  // pinned here because the backend xlsx endpoint shipped tick #187 (ed00be9b)
+  // and the chrome is the same fetch+blob mechanic as CSV. Three load-bearing
+  // invariants:
+  //   1. Button renders + is clickable when not permission-denied + total > 0.
+  //   2. Clicking issues fetch GET to /api/wellness/patients.xlsx and honors
+  //      the active ?q= search filter.
+  //   3. Both CSV + XLSX buttons disable while a download is in-flight so a
+  //      double-click can't issue two concurrent downloads of the same
+  //      snapshot.
+  describe('#820 XLSX export (tick #188)', () => {
+    let createObjectURLMock;
+    let revokeObjectURLMock;
+    let realFetch;
+    let fetchMock;
+
+    beforeEach(() => {
+      // jsdom doesn't implement URL.createObjectURL / revokeObjectURL — the
+      // page calls them on the blob response. Stub for the test run.
+      createObjectURLMock = vi.fn(() => 'blob:fake-url');
+      revokeObjectURLMock = vi.fn();
+      URL.createObjectURL = createObjectURLMock;
+      URL.revokeObjectURL = revokeObjectURLMock;
+      // Spy on the global fetch (the XLSX/CSV exports bypass fetchApi).
+      realFetch = global.fetch;
+      fetchMock = vi.fn();
+      global.fetch = fetchMock;
+    });
+
+    afterEach(() => {
+      global.fetch = realFetch;
+    });
+
+    it('renders an "Export XLSX" button that is enabled with data and not permission-denied', async () => {
+      renderPatients();
+      // Wait for the table to populate so total > 0.
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const xlsxBtn = screen.getByRole('button', { name: /Export XLSX/i });
+      expect(xlsxBtn).toBeInTheDocument();
+      expect(xlsxBtn).not.toBeDisabled();
+    });
+
+    it('clicking "Export XLSX" issues a fetch to /api/wellness/patients.xlsx honoring the current ?q= filter', async () => {
+      // Resolve the global fetch with a Response-like { ok, blob() }.
+      fetchMock.mockResolvedValue({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['fake-xlsx'])),
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      // Type a search query so the export call includes it.
+      const searchBox = screen.getByPlaceholderText(/Search by name, phone, or email/i);
+      fireEvent.change(searchBox, { target: { value: 'anita' } });
+
+      // Click the Export XLSX button.
+      fireEvent.click(screen.getByRole('button', { name: /Export XLSX/i }));
+
+      // Assert fetch was called for the xlsx URL with the q param.
+      await waitFor(() => {
+        const xlsxCall = fetchMock.mock.calls.find(([u]) =>
+          typeof u === 'string' && u.startsWith('/api/wellness/patients.xlsx')
+        );
+        expect(xlsxCall).toBeTruthy();
+        expect(xlsxCall[0]).toMatch(/q=anita/);
+      });
+      // Bearer header forwarded from the mocked getAuthToken.
+      const lastCall = fetchMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/wellness/patients.xlsx')
+      );
+      expect(lastCall[1].headers).toEqual(
+        expect.objectContaining({ Authorization: 'Bearer fake-token' }),
+      );
+      // The blob → object-url plumbing actually fired.
+      await waitFor(() => {
+        expect(createObjectURLMock).toHaveBeenCalled();
+      });
+    });
+
+    it('disables BOTH Export CSV and Export XLSX while a download is in flight', async () => {
+      // Never-resolving fetch — the click sets xlsxBusy=true and stays there.
+      fetchMock.mockReturnValue(new Promise(() => {}));
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      const csvBtn = screen.getByRole('button', { name: /Export CSV/i });
+      const xlsxBtn = screen.getByRole('button', { name: /Export XLSX/i });
+      // Pre-click: both enabled.
+      expect(csvBtn).not.toBeDisabled();
+      expect(xlsxBtn).not.toBeDisabled();
+
+      fireEvent.click(xlsxBtn);
+
+      // After the click, xlsxBusy=true; both buttons disabled until the
+      // (never-arriving) response settles.
+      await waitFor(() => {
+        expect(xlsxBtn).toBeDisabled();
+        expect(csvBtn).toBeDisabled();
+      });
     });
   });
 

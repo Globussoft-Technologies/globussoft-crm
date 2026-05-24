@@ -297,6 +297,11 @@ model Tenant {
   giftCards          GiftCard[]
   coupons            Coupon[]
   cashbackRules      CashbackRule[]
+  // D16 Wallet Top-up (PRD_WALLET_TOPUP §3 + DD-5.2 round-2 RESOLVED 2026-05-25):
+  // operator-configurable bonus rules + FIFO redemption-tracking credit
+  // batches. See WalletBonusRule + WalletCreditBatch models below.
+  walletBonusRules   WalletBonusRule[]
+  creditBatches      WalletCreditBatch[]
 
   // Wave 11 Agent GG — Resource availability (Resource / Holiday /
   // WorkingHours). Cascade-delete with the tenant.
@@ -3518,7 +3523,10 @@ model Wallet {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  transactions WalletTransaction[]
+  transactions  WalletTransaction[]
+  // D16 Wallet Top-up (PRD_WALLET_TOPUP §3) — FIFO credit batches for
+  // per-record sliding-30-day usage metering. See WalletCreditBatch.
+  creditBatches WalletCreditBatch[]
 
   @@index([tenantId, patientId])
 }
@@ -3542,6 +3550,62 @@ model WalletTransaction {
 
   @@index([tenantId, walletId, createdAt])
   @@index([tenantId, type])
+}
+
+// D16 Wallet Top-up — Arc 1 Slice 1 (PRD_WALLET_TOPUP §3 + DD-5.2 round-2
+// RESOLVED 2026-05-25). Operator-configurable rules that govern bonus credit
+// on wallet top-ups: when a patient tops up ≥ minAmountCents, a bonus batch
+// of `amount * bonusPercent / 100` is issued that expires after
+// validityMonths. `validFrom` / `validTo` window the rule's active dates
+// (null = always-on within `active=true`). Slice 5 (admin rules page) CRUDs
+// this; Slice 2 (top-up route) reads the highest-threshold matching active
+// rule to compute the bonus batch.
+model WalletBonusRule {
+  id             Int       @id @default(autoincrement())
+  tenantId       Int
+  name           String    @db.VarChar(100)
+  minAmountCents Int // threshold to trigger bonus
+  bonusPercent   Decimal   @db.Decimal(5, 2) // e.g. 10.00 for 10%
+  validityMonths Int // expiry window after top-up
+  active         Boolean   @default(true)
+  validFrom      DateTime?
+  validTo        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  tenant         Tenant    @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, active])
+}
+
+// D16 Wallet Top-up — Arc 1 Slice 1 (PRD_WALLET_TOPUP §3 + DD-5.2 round-2
+// RESOLVED 2026-05-25). FIFO redemption-tracking ledger sibling of Wallet.
+// Each top-up creates two batches: a PRINCIPAL batch (`expiresAt` null —
+// principal never expires) + an optional BONUS batch (`expiresAt` set per
+// the matching WalletBonusRule.validityMonths). On redemption (Slice 3),
+// batches deplete in FIFO order — soonest-expiry first, then oldest-issued.
+// `remainingCents` reaches 0 → status flips to EXHAUSTED; expiry cron
+// (Slice 4) sweeps `expiresAt < now()` for ACTIVE bonus batches and flips
+// them to EXPIRED. `sourceTransactionId` links the batch to the
+// WalletTransaction that minted it; `sourceRuleId` links bonus batches to
+// the rule that triggered them (audit + analytics).
+model WalletCreditBatch {
+  id                  Int       @id @default(autoincrement())
+  tenantId            Int
+  walletId            Int
+  batchType           String    @db.VarChar(20) // 'PRINCIPAL' | 'BONUS'
+  amountCents         Int
+  remainingCents      Int // depletes as redeemed
+  expiresAt           DateTime? // null for principal (never expires); set for bonus
+  sourceRuleId        Int? // FK to WalletBonusRule when batchType=BONUS
+  sourceTransactionId Int? // FK to WalletTransaction that created this batch
+  status              String    @default("ACTIVE") @db.VarChar(20) // 'ACTIVE' | 'EXHAUSTED' | 'EXPIRED'
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  tenant              Tenant    @relation(fields: [tenantId], references: [id])
+  wallet              Wallet    @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, status])
+  @@index([tenantId, expiresAt])
 }
 
 model GiftCard {

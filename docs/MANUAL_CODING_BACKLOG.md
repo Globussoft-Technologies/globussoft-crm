@@ -364,6 +364,15 @@ gh issue list --label "wellness" --state open --limit 20
 
 ---
 
+### D8. Purchase Orders module (#847) — PRD drafted, design call pending
+**Labels:** `wellness-session`, `backend`, `frontend`, `multi-day-feature`, `procurement`
+
+**Why manual:** entire procurement workflow missing — no PO model, no approval flow, no PO→Receipt linkage, no PO PDF/email dispatch. PRD drafted at `docs/PRD_PURCHASE_ORDERS.md` (tick #187, 2026-05-25 / Agent B). 8 design decisions + 10 open questions need product-call sign-off before implementation can start. Recommended first slice ships INVENTORY purpose only (wellness vendor POs with approval + receipt auto-link); slice 2 extends to TRAVEL purpose (per-Trip POs to TravelSupplier). Cross-references `PRD_TRAVEL_SUPPLIER_MASTER.md` (deferred PO workflow lands here) + `PRD_TRAVEL_BILLING.md` + `PRD_TRAVEL_GST_COMPLIANCE.md`. **Total estimated effort post-design: 5-8 engineering days** (slice 1 = 3-4d INVENTORY; slice 2 = 2-3d TRAVEL extension).
+
+**Blocks before backend impl can start:** DD-5.1 (single model vs fork) + DD-5.2 (multi-approver scope) + DD-5.6 (Tenant.poApprovalConfigJson placement) + OQ-9.1 (default threshold ladder per vertical) + OQ-9.10 (receipts auto-link in v1).
+
+---
+
 ## E. PRODUCT-CALL DEPENDENT (decision-first, then implementation)
 
 These don't need an engineer — they need a stakeholder decision. Once the decision arrives, the implementation is small.

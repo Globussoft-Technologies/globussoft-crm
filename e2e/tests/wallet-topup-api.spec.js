@@ -439,19 +439,29 @@ test.describe('POST /api/wallet/:patientId/topup', () => {
     expect(topupTx.reason).toContain(rule.name);
   });
 
-  test('11. highest-wins — 5% + 10% rules both eligible → 10% applied (DD-5.2)', async ({ request }) => {
+  test('11. highest-wins — 13% + 17% rules both eligible → 17% applied (DD-5.2)', async ({ request }) => {
     test.skip(!tokens.wellnessAdmin, 'wellness admin fixture not seeded');
-    // Seed both rules at minAmountCents=₹500. Engine picks higher pct.
+    // DD-5.2 highest-bonusPercent-wins. The route's tiebreaker on EQUAL pct
+    // is oldest-rule-wins (lowest id), so this test uses UNIQUE bonusPercent
+    // values that won't collide with pre-existing seeded rules on demo (which
+    // typically use round numbers 5/10/15/20). 13 + 17 are intentionally
+    // off-band so the test's just-created ruleHigh wins on the natural
+    // pct-comparison without needing a tiebreaker.
+    //
+    // Triaged 2026-05-25 — original 5+10 caused a tie with a pre-existing
+    // seed rule on demo (also pct=10, lower id) → route picked the seed rule
+    // → test's bonusRuleId === ruleHigh.id failed. Triple-RED cascade across
+    // 3 commits before the demo-state-aware pick fixed it.
     const ruleLow = await createRule(request, {
-      name: `${RUN_TAG} 5pct-low`,
+      name: `${RUN_TAG} 13pct-low`,
       minAmountCents: 50000,
-      bonusPercent: 5,
+      bonusPercent: 13,
       validityMonths: 3,
     });
     const ruleHigh = await createRule(request, {
-      name: `${RUN_TAG} 10pct-high`,
+      name: `${RUN_TAG} 17pct-high`,
       minAmountCents: 50000,
-      bonusPercent: 10,
+      bonusPercent: 17,
       validityMonths: 6,
     });
     expect(ruleLow.id).toBeGreaterThan(0);
@@ -466,8 +476,8 @@ test.describe('POST /api/wallet/:patientId/topup', () => {
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
-    // DD-5.2: highest bonusPercent wins. 10pct must be applied (not 5pct).
-    expect(body.bonusPercent).toBe(10);
+    // DD-5.2: highest bonusPercent wins. 17pct must be applied (not 13pct).
+    expect(body.bonusPercent).toBe(17);
     expect(body.bonusRuleId).toBe(ruleHigh.id);
   });
 

@@ -1033,6 +1033,224 @@ function renderTravelStallPersonalisedPdf(payload) {
   return bufPromise;
 }
 
+// ── Travel CRM — quote PDF (DD-5.6) ─────────────────────────────────
+//
+// Travel-quote PDF, customer-facing. Mirrors the shape of
+// renderBrandedInvoicePdf (page setup → branded header → bill-to → items
+// table → totals → footer) but is sub-brand-aware via SUB_BRAND_LABEL /
+// SUB_BRAND_ACCENT (same convention used by the diagnostic + itinerary
+// renderers above).
+//
+// DD-5.6 ("Extend pdfRenderer.js — single PDF lib path; operator
+// branding via shared theme tokens") resolved 2026-05-24. Three decisions
+// land in this function:
+//   - DD-5.6 — single PDFKit code path; no React-PDF, no Puppeteer.
+//   - DD-5.4 — currency is per-quote (`quote.currency`), operator-set
+//     per sub-brand. formatMoney handles INR / USD / GBP symbols; other
+//     ISO codes render as the bare 3-letter code prefix.
+//   - DD-5.3 — taxTreatment is one of 'inclusive' | 'exclusive'.
+//     Inclusive → an "Includes GST" footnote under the totals line.
+//     Exclusive → an explicit GST line item added after subtotal
+//     (using the provided gstAmount, or zero if absent).
+//
+// BrandKit integration is V1-placeholder: the function accepts an
+// optional `quote.brandKit` projection with `{ logoUrl, accent }` but
+// only renders a textual placeholder for the logo (per the strict
+// "do NOT fetch the file" rule). When BrandKit.logoUrl is present we
+// note that fact in the header band as "[Logo: <url>]"; the real image
+// substitution lands once tick #95's BrandKit asset-fetching is wired.
+//
+// `quote` shape:
+//   {
+//     id,                              // for invoice-style references
+//     quoteNumber,                     // tenant-scoped human ID (e.g. "TQ-2026-0042")
+//     subBrand,                        // 'tmc' | 'rfu' | 'travelstall' | 'visasure'
+//     customerName, customerEmail, customerPhone,
+//     status,                          // 'Draft' | 'Sent' | 'Accepted' | 'Rejected'
+//     issuedDate,                      // optional
+//     validUntil,                      // DD-5.6 validity-date footer
+//     items: [{ description, qty, unitPrice, totalPrice }],
+//     subtotal, gstAmount, totalAmount,
+//     currency,                        // DD-5.4 — 'INR' | 'USD' | 'GBP' | …
+//     taxTreatment,                    // DD-5.3 — 'inclusive' | 'exclusive'
+//     brandKit: { logoUrl, accent }    // optional, tick #95 placeholder
+//   }
+//
+// Currency rendering note (DD-5.4): renderTravelQuotePdf falls through
+// formatMoney for the 3 well-known glyphs (INR ₹, USD $, GBP £) and
+// otherwise prefixes the bare ISO code (e.g. "EUR 1234.50"); operators
+// rarely use exotic currencies in V1 and the bare code is unambiguous.
+//
+// @param {object} quote — see shape above
+// @returns {Promise<Buffer>}
+function renderTravelQuotePdf(quote) {
+  const q = quote || {};
+  const sub = q.subBrand;
+  const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
+  // BrandKit accent (when present) wins; otherwise fall back to the
+  // sub-brand default. Either way, a hex string usable as fillColor.
+  const accent = (q.brandKit && q.brandKit.accent) || SUB_BRAND_ACCENT[sub] || "#111111";
+  const currency = q.currency || "INR";
+  const items = Array.isArray(q.items) ? q.items : [];
+  const taxTreatment = q.taxTreatment === "inclusive" ? "inclusive" : "exclusive";
+
+  // Money helper that handles a wider currency set than the in-module
+  // helper (which only knows INR / USD). We keep the in-module helper
+  // unchanged to avoid churning the prescription / invoice renderers.
+  function fmt(n) {
+    const v = Number(n) || 0;
+    if (currency === "INR") return `₹${v.toFixed(2)}`;
+    if (currency === "USD") return `$${v.toFixed(2)}`;
+    if (currency === "GBP") return `£${v.toFixed(2)}`;
+    return `${currency} ${v.toFixed(2)}`;
+  }
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+
+  // ── Branded header band ────────────────────────────────────────────
+  doc.rect(0, 0, doc.page.width, 60).fill(accent);
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
+    .text(brandLabel, 50, 22, { align: "left" });
+  doc.fillColor("#fff").fontSize(10).text("Quote", 50, 42, { align: "left" });
+
+  // BrandKit logo placeholder — text marker only (no fetch per the
+  // tick-173 strict rule). Real image swap is a 1-line drop-in once
+  // BrandKit asset-fetching ships.
+  if (q.brandKit && q.brandKit.logoUrl) {
+    doc.font("Helvetica").fontSize(8).fillColor("#fff")
+      .text(`[Logo: ${q.brandKit.logoUrl}]`, doc.page.width - 250, 22, { width: 200, align: "right" });
+  }
+  doc.fillColor("#111").moveDown(2);
+
+  // ── Quote meta (right column) + customer block (left column) ──────
+  const metaTop = 80;
+  // Right column — quote number, dates, status
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#111")
+    .text("QUOTE", 380, metaTop, { width: 165, align: "right" });
+  doc.font("Helvetica").fontSize(10).fillColor("#333");
+  doc.text(`Quote #: ${q.quoteNumber || q.id || "—"}`, 380, metaTop + 26, { width: 165, align: "right" });
+  doc.text(`Issued: ${formatDate(q.issuedDate || new Date())}`, 380, metaTop + 40, { width: 165, align: "right" });
+  doc.text(`Valid until: ${formatDate(q.validUntil)}`, 380, metaTop + 54, { width: 165, align: "right" });
+  doc.text(`Status: ${q.status || "Draft"}`, 380, metaTop + 68, { width: 165, align: "right" });
+
+  // Left column — bill-to
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Quote For", 50, metaTop);
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  doc.text(q.customerName || "—", 50, metaTop + 18);
+  if (q.customerEmail) doc.text(q.customerEmail, 50, doc.y);
+  if (q.customerPhone) doc.text(q.customerPhone, 50, doc.y);
+
+  // Advance below both columns
+  doc.y = Math.max(doc.y, metaTop + 100);
+  doc.moveDown(0.6);
+  const divY = doc.y;
+  doc.moveTo(50, divY).lineTo(545, divY).lineWidth(0.7).strokeColor(accent).stroke();
+  doc.moveDown(0.8);
+
+  // ── Items table ───────────────────────────────────────────────────
+  const tableTop = doc.y;
+  const colX = { desc: 50, qty: 340, unit: 400, total: 470 };
+  doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
+  doc.text("Description", colX.desc, tableTop);
+  doc.text("Qty", colX.qty, tableTop, { width: 50, align: "right" });
+  doc.text("Unit", colX.unit, tableTop, { width: 60, align: "right" });
+  doc.text("Total", colX.total, tableTop, { width: 75, align: "right" });
+  doc.moveTo(50, tableTop + 14).lineTo(545, tableTop + 14).lineWidth(0.5).strokeColor("#bbb").stroke();
+
+  let rowY = tableTop + 22;
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  let computedSubtotal = 0;
+  if (items.length === 0) {
+    doc.fillColor("#777").text("(No line items on this quote yet.)", colX.desc, rowY, { width: 480 });
+    rowY += 18;
+  } else {
+    for (const it of items) {
+      if (rowY > 700) { doc.addPage(); rowY = 60; }
+      const qty = Number(it.qty) || 0;
+      const unit = Number(it.unitPrice) || 0;
+      const total = it.totalPrice != null ? Number(it.totalPrice) : qty * unit;
+      computedSubtotal += total;
+      doc.fillColor("#222");
+      doc.text(String(it.description || "—"), colX.desc, rowY, { width: 280 });
+      doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 50, align: "right" });
+      doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 60, align: "right" });
+      doc.text(fmt(total), colX.total, rowY, { width: 75, align: "right" });
+      rowY += 20;
+    }
+  }
+  doc.y = rowY + 4;
+
+  // ── Totals block ──────────────────────────────────────────────────
+  const subtotal = q.subtotal != null ? Number(q.subtotal) : computedSubtotal;
+  const gstAmount = q.gstAmount != null ? Number(q.gstAmount) : 0;
+  const grandTotal = q.totalAmount != null
+    ? Number(q.totalAmount)
+    : (taxTreatment === "exclusive" ? subtotal + gstAmount : subtotal);
+
+  doc.moveDown(0.5);
+  const totalsY = doc.y;
+  doc.moveTo(350, totalsY).lineTo(545, totalsY).lineWidth(0.5).strokeColor("#bbb").stroke();
+  let ty = totalsY + 8;
+  doc.font("Helvetica").fontSize(10).fillColor("#333");
+  doc.text("Subtotal", 350, ty, { width: 95, align: "right" });
+  doc.text(fmt(subtotal), 450, ty, { width: 95, align: "right" });
+  ty += 16;
+
+  if (taxTreatment === "exclusive") {
+    // DD-5.3 — explicit GST line item AFTER subtotal.
+    doc.text("GST", 350, ty, { width: 95, align: "right" });
+    doc.text(fmt(gstAmount), 450, ty, { width: 95, align: "right" });
+    ty += 16;
+  }
+
+  // Grand-total line (bold)
+  doc.moveTo(350, ty).lineTo(545, ty).lineWidth(0.5).strokeColor("#bbb").stroke();
+  ty += 6;
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111");
+  doc.text("Total", 350, ty, { width: 95, align: "right" });
+  doc.text(fmt(grandTotal), 450, ty, { width: 95, align: "right" });
+  ty += 18;
+
+  if (taxTreatment === "inclusive") {
+    // DD-5.3 — inclusive footnote sits directly under the total line.
+    doc.font("Helvetica-Oblique").fontSize(9).fillColor("#666");
+    doc.text("Includes GST", 350, ty, { width: 195, align: "right" });
+    ty += 14;
+  }
+  doc.y = ty + 8;
+
+  // ── Validity footer + signature placeholder ───────────────────────
+  doc.moveDown(1);
+  const validityY = doc.y;
+  doc.font("Helvetica").fontSize(10).fillColor("#333")
+    .text(`Valid until ${formatDate(q.validUntil)}`, 50, validityY, { width: 495 });
+  doc.moveDown(2.5);
+
+  // Signature block placeholder
+  const sigY = Math.max(doc.y, 700);
+  doc.moveTo(50, sigY).lineTo(250, sigY).lineWidth(0.5).strokeColor("#444").stroke();
+  doc.font("Helvetica").fontSize(9).fillColor("#555")
+    .text("Authorised signature", 50, sigY + 4);
+
+  // ── Footer band ───────────────────────────────────────────────────
+  const footerY = doc.page.height - doc.page.margins.bottom - 24;
+  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.4).strokeColor("#bbb").stroke();
+  doc.font("Helvetica").fontSize(8).fillColor("#777").text(
+    `${brandLabel} — Quote #${q.quoteNumber || q.id || "?"}. ` +
+      "Pricing valid until the date shown; subject to availability at booking.",
+    50, footerY + 6, { width: doc.page.width - 100, align: "center" },
+  );
+
+  doc.end();
+  return bufPromise;
+}
+
+// Back-compat alias — the tick-173 prompt + downstream callers reference
+// this as `generateTravelQuotePdf`; we expose both names to avoid forcing
+// a rename of the (yet-to-land) route caller.
+const generateTravelQuotePdf = renderTravelQuotePdf;
+
 module.exports = {
   renderPrescriptionPdf,
   renderConsentPdf,
@@ -1041,4 +1259,6 @@ module.exports = {
   renderTravelDiagnosticPdf,
   renderTravelItineraryPdf,
   renderTravelStallPersonalisedPdf,
+  renderTravelQuotePdf,
+  generateTravelQuotePdf,
 };

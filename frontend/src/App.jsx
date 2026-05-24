@@ -121,6 +121,11 @@ const CallifiedCalls = lazy(() => import("./pages/admin/CallifiedCalls"));
 const BookingExpediaSearch = lazy(() =>
   import("./pages/admin/BookingExpediaSearch"),
 );
+// Wallet bonus rule CRUD — Arc 1 D16 PRD_WALLET_TOPUP §3.6 (slice 5 PARTIAL,
+// scaffolds the operator UI ahead of Agent B's /api/wallet/rules route which
+// ships next tick at slice 3). Page is robust to the route's absence —
+// 404 surfaces as empty-state + a "backend not yet deployed" banner.
+const WalletRules = lazy(() => import("./pages/admin/WalletRules"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -1144,6 +1149,21 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN", "MANAGER"]} message="Booking/Expedia Search requires admin or manager access.">
                           <BookingExpediaSearch />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Wallet bonus rule CRUD admin UI. ADMIN-only mirrors the
+                        backend RBAC matrix from PRD_WALLET_TOPUP §3.9
+                        (MANAGER gets read on rules, ADMIN gets CRUD). Slice 5
+                        PARTIAL — frontend scaffolds ahead of Agent B's
+                        /api/wallet/rules route which lands next tick at slice
+                        3. Page handles route-not-deployed gracefully via 404
+                        → empty state + banner. */}
+                    <Route
+                      path="admin/wallet-rules"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} feature="Wallet Bonus Rules">
+                          <WalletRules />
                         </RoleGuard>
                       }
                     />

@@ -1002,6 +1002,15 @@ function renderWellnessNav({
             label="Booking / Expedia"
             managerOnly
           />
+          {/* Wallet bonus rule CRUD admin UI. Surfaces /api/wallet/rules
+              (Agent B ships next tick, slice 3 of PRD_WALLET_TOPUP). ADMIN-only
+              per PRD §3.9 RBAC matrix. Page is robust to backend absence. */}
+          <Link
+            to="/admin/wallet-rules"
+            icon={WalletIcon}
+            label="Wallet Bonus Rules"
+            adminOnly
+          />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </>
       )}
@@ -1403,6 +1412,15 @@ function renderGenericNav({
             icon={BedDouble}
             label="Booking / Expedia"
             managerOnly
+          />
+          {/* Wallet bonus rule CRUD admin UI. Surfaces /api/wallet/rules
+              (Agent B ships next tick, slice 3 of PRD_WALLET_TOPUP). ADMIN-only
+              per PRD §3.9 RBAC matrix. Page is robust to backend absence. */}
+          <Link
+            to="/admin/wallet-rules"
+            icon={WalletIcon}
+            label="Wallet Bonus Rules"
+            adminOnly
           />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
         </div>

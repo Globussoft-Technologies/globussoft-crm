@@ -672,6 +672,10 @@ function TimelineTab({ patientId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filterType, setFilterType] = useState('ALL');
+  // Tick #201 — Export CSV in-flight guard. Disables the button while a
+  // download is mid-fetch so a double-click doesn't fire two requests.
+  const [timelineCsvBusy, setTimelineCsvBusy] = useState(false);
+  const notify = useNotify();
 
   useEffect(() => {
     let cancelled = false;
@@ -699,6 +703,51 @@ function TimelineTab({ patientId }) {
     return () => { cancelled = true; };
   }, [patientId, filterType]);
 
+  // Tick #201 — Export the on-screen Timeline view as CSV. Mirrors the
+  // Patients.jsx XLSX/CSV button pattern from tick #188 (fetch with Auth
+  // header → .blob() → createObjectURL → anchor-click → revoke) because
+  // the Authorization header forbids a plain <a href> approach. Forwards
+  // the active type filter (and the same limit=200 cap) so the exported
+  // file matches the visible row set. Filename comes from the response
+  // Content-Disposition when the backend supplies one, else falls back
+  // to a per-patient default.
+  const exportCsv = async () => {
+    setTimelineCsvBusy(true);
+    try {
+      const token = getAuthToken();
+      const params = new URLSearchParams();
+      params.set('limit', '200');
+      if (filterType !== 'ALL') params.set('types', filterType);
+      const res = await fetch(
+        `/api/wellness/patients/${patientId}/timeline.csv?${params.toString()}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      // Parse filename out of the Content-Disposition header when present;
+      // accept both `filename="x.csv"` and bare `filename=x.csv` forms.
+      let filename = `patient-${patientId}-timeline.csv`;
+      const cd = res.headers.get('Content-Disposition') || res.headers.get('content-disposition') || '';
+      const m = /filename\*?=(?:UTF-8''|")?([^";]+)"?/i.exec(cd);
+      if (m && m[1]) filename = decodeURIComponent(m[1]).replace(/"/g, '');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify.success(`Exported ${events.length} event${events.length === 1 ? '' : 's'}.`);
+    } catch (e) {
+      notify.error(e.message || 'CSV export failed.');
+    } finally {
+      setTimelineCsvBusy(false);
+    }
+  };
+
+  const exportDisabled = timelineCsvBusy || events.length === 0 || loading;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -714,6 +763,29 @@ function TimelineTab({ patientId }) {
             <option key={t.value} value={t.value}>{t.label}</option>
           ))}
         </select>
+        <button
+          type="button"
+          data-testid="timeline-export-csv"
+          onClick={exportCsv}
+          disabled={exportDisabled}
+          title={events.length === 0 ? 'No events to export' : 'Export the on-screen timeline as CSV'}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.3rem',
+            padding: '0.35rem 0.7rem',
+            background: 'transparent',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 8,
+            cursor: exportDisabled ? 'not-allowed' : 'pointer',
+            opacity: exportDisabled ? 0.6 : 1,
+            fontSize: '0.85rem',
+            marginLeft: 'auto',
+          }}
+        >
+          <Download size={14} /> {timelineCsvBusy ? 'Exporting…' : 'Export CSV'}
+        </button>
       </div>
 
       {loading && (

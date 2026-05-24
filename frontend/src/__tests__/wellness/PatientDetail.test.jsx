@@ -163,6 +163,12 @@ describe('<wellness/PatientDetail /> — Timeline tab (tick #200)', () => {
     // tab state into it; clear between tests so each one starts on the
     // default 'history' tab (we click Timeline explicitly when we want it).
     try { sessionStorage.clear(); } catch { /* ignore */ }
+    // Tick #201 — jsdom doesn't implement URL.createObjectURL /
+    // revokeObjectURL. The Export CSV button uses the standard
+    // fetch → blob → createObjectURL → anchor-click → revoke trick
+    // (mirroring Patients.jsx XLSX), so stub both to no-ops here.
+    if (!URL.createObjectURL) URL.createObjectURL = vi.fn(() => 'blob:fake');
+    if (!URL.revokeObjectURL) URL.revokeObjectURL = vi.fn();
   });
 
   it('renders the Timeline tab button in the tab strip', async () => {
@@ -254,6 +260,76 @@ describe('<wellness/PatientDetail /> — Timeline tab (tick #200)', () => {
       expect(filteredCall).toBeTruthy();
       expect(filteredCall[0]).toContain('limit=200');
     });
+  });
+
+  // ── Tick #201 — Export CSV button ─────────────────────────────
+  //
+  // The Timeline tab adds a small "Export CSV" button next to the type-
+  // filter dropdown. It hits the backend `/timeline.csv` endpoint shipped
+  // tick #200 (`9188962e`) via raw `fetch` (not fetchApi) because the
+  // response is a binary blob that needs a Content-Disposition probe.
+  // We stub global.fetch for these two cases so the assertion is on the
+  // URL + Authorization header the button forms.
+  it('renders an Export CSV button next to the Timeline filter', async () => {
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fireEvent.click(screen.getByTestId('timeline-tab'));
+
+    // Wait for the timeline events to land so the button leaves its
+    // disabled (events.length === 0) state.
+    await screen.findByTestId('timeline-event-VISIT-101');
+    const btn = screen.getByTestId('timeline-export-csv');
+    expect(btn).toBeInTheDocument();
+    expect(btn).toHaveTextContent(/Export CSV/i);
+    expect(btn).not.toBeDisabled();
+  });
+
+  it('clicking Export CSV fetches /timeline.csv with the current type filter forwarded', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (k) => (k.toLowerCase() === 'content-disposition' ? 'attachment; filename="timeline.csv"' : null),
+        },
+        blob: () => Promise.resolve(new Blob(['Event Date,Event Type,Summary\n'], { type: 'text/csv' })),
+      })
+    );
+    const originalFetch = global.fetch;
+    global.fetch = fetchMock;
+    try {
+      renderPatientDetail();
+      await screen.findByRole('heading', { name: /Anita Sharma/i });
+      fireEvent.click(screen.getByTestId('timeline-tab'));
+      // Wait for the initial events fetch so the button activates.
+      await screen.findByTestId('timeline-event-VISIT-101');
+
+      // Set the type filter to Visits so we can prove the click forwards it.
+      fireEvent.change(screen.getByTestId('timeline-type-filter'), {
+        target: { value: 'VISIT' },
+      });
+      // Wait for the re-fetch (filterType change) to settle before clicking.
+      await waitFor(() => {
+        expect(
+          fetchApiMock.mock.calls.some(([u]) =>
+            typeof u === 'string' && u.includes('/timeline?') && u.includes('types=VISIT')
+          )
+        ).toBe(true);
+      });
+
+      fireEvent.click(screen.getByTestId('timeline-export-csv'));
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalled();
+        const [url, opts] = fetchMock.mock.calls[0];
+        expect(url).toContain(`/api/wellness/patients/${PATIENT_ID}/timeline.csv?`);
+        expect(url).toContain('limit=200');
+        expect(url).toContain('types=VISIT');
+        expect(opts?.headers?.Authorization).toBe('Bearer fake-token');
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 
   it('shows the empty-state message when the endpoint returns zero events', async () => {

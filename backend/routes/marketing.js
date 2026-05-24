@@ -125,6 +125,60 @@ function buildContactWhere(tenantId, filters) {
 
 // ── Shared send logic (used by route + cron) ──────────────────────
 
+// #932 — Campaign → Sequence linkage helper. After sendCampaign completes
+// successfully, this fans out enrollment into the campaign's linked
+// Sequence for every contact in the recipient batch. Idempotent: each
+// enrollment row is uniquely keyed by (sequenceId, contactId), so a
+// re-send of the same campaign no-ops on already-enrolled contacts
+// instead of creating duplicates. Best-effort — a per-contact failure
+// is logged and skipped; the campaign send itself is not failed.
+async function enrollRecipientsInSequence(campaign, contacts) {
+  if (!campaign.sequenceId || !Array.isArray(contacts) || contacts.length === 0) {
+    return { enrolled: 0, skipped: 0, failed: 0 };
+  }
+  const tenantId = campaign.tenantId;
+  // Validate the linked Sequence still exists in this tenant. If a marketer
+  // deleted the sequence between campaign-edit-save and campaign-send, the
+  // FK onDelete: SetNull already cleared Campaign.sequenceId at the DB
+  // layer — but a stale in-memory campaign object passed into sendCampaign
+  // could still carry the old sequenceId. Guard explicitly.
+  const sequence = await prisma.sequence.findFirst({
+    where: { id: campaign.sequenceId, tenantId },
+  });
+  if (!sequence) {
+    console.warn(`[CampaignEngine] Linked sequence ${campaign.sequenceId} not found for tenant ${tenantId} — skipping fan-out`);
+    return { enrolled: 0, skipped: contacts.length, failed: 0 };
+  }
+  let enrolled = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const contact of contacts) {
+    try {
+      const existing = await prisma.sequenceEnrollment.findFirst({
+        where: { sequenceId: sequence.id, contactId: contact.id },
+      });
+      if (existing) {
+        skipped++;
+        continue;
+      }
+      await prisma.sequenceEnrollment.create({
+        data: {
+          sequenceId: sequence.id,
+          contactId: contact.id,
+          status: 'Active',
+          tenantId,
+        },
+      });
+      enrolled++;
+    } catch (err) {
+      console.error(`[CampaignEngine] Failed to enroll contact ${contact.id} in sequence ${sequence.id}:`, err.message);
+      failed++;
+    }
+  }
+  console.log(`[CampaignEngine] Fan-out into sequence "${sequence.name}" — enrolled=${enrolled} skipped=${skipped} failed=${failed}`);
+  return { enrolled, skipped, failed };
+}
+
 async function sendCampaign(campaign, io) {
   const tenantId = campaign.tenantId;
   let filters = null;
@@ -253,6 +307,16 @@ async function sendCampaign(campaign, io) {
     data: { status: "Completed", sent: sentCount },
   });
 
+  // #932 — fan out into the linked Sequence (no-op if campaign.sequenceId
+  // is null). Best-effort; wrapped to make sure a sequence fan-out
+  // failure can never red the campaign send itself.
+  let enrollmentSummary = { enrolled: 0, skipped: 0, failed: 0 };
+  try {
+    enrollmentSummary = await module.exports.enrollRecipientsInSequence(campaign, contacts);
+  } catch (e) {
+    console.error("[CampaignEngine] Sequence fan-out error:", e.message);
+  }
+
   // Audit log
   try {
     await prisma.auditLog.create({
@@ -260,7 +324,16 @@ async function sendCampaign(campaign, io) {
         action: "UPDATE",
         entity: "Campaign",
         entityId: campaign.id,
-        details: JSON.stringify({ event: "campaign_sent", sent: sentCount, failed: failedCount, audience: contacts.length }),
+        details: JSON.stringify({
+          event: "campaign_sent",
+          sent: sentCount,
+          failed: failedCount,
+          audience: contacts.length,
+          // #932 — surface fan-out counts in the audit row when a sequence
+          // was linked, so the marketer can see the enrolment outcome
+          // alongside the send result.
+          ...(campaign.sequenceId ? { sequenceId: campaign.sequenceId, sequenceEnrolled: enrollmentSummary.enrolled } : {}),
+        }),
         tenantId,
         userId: campaign._userId || null,
       },
@@ -275,7 +348,7 @@ async function sendCampaign(campaign, io) {
   }
 
   console.log(`[CampaignEngine] Sent campaign "${campaign.name}" to ${sentCount} recipients (${failedCount} failed)`);
-  return { sent: sentCount, failed: failedCount };
+  return { sent: sentCount, failed: failedCount, enrollment: enrollmentSummary };
 }
 
 // (sendCampaign + helpers are re-exported via the bottom of the file — the
@@ -304,18 +377,37 @@ router.get("/campaigns", verifyToken, async (req, res) => {
 // POST /campaigns — create
 router.post("/campaigns", verifyToken, async (req, res) => {
   try {
-    const { name, channel, budget } = req.body;
+    const { name, channel, budget, sequenceId } = req.body;
     // v3.4.11 sanitization sweep (#398/#447 class) — Campaign.name is
     // rendered in the marketing admin UI cards. sanitizeText strips
     // HTML/JS while preserving merge-tags and the literal `& < > " '`
     // chars sanitize-html re-encodes by default.
     const cleanName = sanitizeText(name) || "Untitled Campaign";
+    // #932 — Campaign → Sequence linkage. sequenceId is nullable; if the
+    // caller supplied a non-null value, validate it belongs to the same
+    // tenant before storing (defensive; the FK itself wouldn't allow a
+    // cross-tenant id but the surface error would be ugly).
+    let linkedSequenceId = null;
+    if (sequenceId !== undefined && sequenceId !== null && sequenceId !== "") {
+      const id = parseInt(sequenceId);
+      if (Number.isNaN(id)) {
+        return res.status(400).json({ error: "Invalid sequenceId" });
+      }
+      const seq = await prisma.sequence.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+      });
+      if (!seq) {
+        return res.status(400).json({ error: "Sequence not found for this tenant" });
+      }
+      linkedSequenceId = id;
+    }
     const campaign = await prisma.campaign.create({
       data: {
         name: cleanName,
         channel: channel || "EMAIL",
         budget: parseFloat(budget || 0),
         tenantId: req.user.tenantId,
+        sequenceId: linkedSequenceId,
       },
     });
     res.status(201).json(campaign);
@@ -347,7 +439,28 @@ router.put("/campaigns/:id", verifyToken, async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: "Campaign not found" });
 
-    const { name, channel, budget, status } = req.body;
+    const { name, channel, budget, status, sequenceId } = req.body;
+    // #932 — sequenceId on PUT supports clearing (null/empty string maps to
+    // null) and re-linking. Validate tenant ownership when re-linking; let
+    // null pass through as "unlink".
+    let sequenceUpdate = {};
+    if (sequenceId !== undefined) {
+      if (sequenceId === null || sequenceId === "") {
+        sequenceUpdate = { sequenceId: null };
+      } else {
+        const id = parseInt(sequenceId);
+        if (Number.isNaN(id)) {
+          return res.status(400).json({ error: "Invalid sequenceId" });
+        }
+        const seq = await prisma.sequence.findFirst({
+          where: { id, tenantId: req.user.tenantId },
+        });
+        if (!seq) {
+          return res.status(400).json({ error: "Sequence not found for this tenant" });
+        }
+        sequenceUpdate = { sequenceId: id };
+      }
+    }
     const updated = await prisma.campaign.update({
       where: { id: existing.id },
       data: {
@@ -356,6 +469,7 @@ router.put("/campaigns/:id", verifyToken, async (req, res) => {
         ...(channel && { channel }),
         ...(budget != null && { budget: parseFloat(budget) }),
         ...(status && { status }),
+        ...sequenceUpdate,
       },
     });
     res.json(updated);
@@ -735,3 +849,8 @@ module.exports.sendCampaign = sendCampaign;
 // #598 — exposed for unit tests so the wellness audience-filter contract
 // can be pinned without standing up a full Express + Prisma stack.
 module.exports.__buildContactWhere = buildContactWhere;
+// #932 — exposed so sendCampaign's internal call site goes through the
+// `module.exports.enrollRecipientsInSequence(...)` indirection (the CJS
+// self-mocking seam), letting vitest spy on the helper to assert
+// fan-out invocations without standing up a Prisma client.
+module.exports.enrollRecipientsInSequence = enrollRecipientsInSequence;

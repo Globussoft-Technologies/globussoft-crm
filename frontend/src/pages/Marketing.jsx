@@ -123,11 +123,30 @@ export default function Marketing() {
   const [smsSending, setSmsSending] = useState(false);
   const [smsHistory, setSmsHistory] = useState([]); // recent SMS-channel campaigns
 
+  // ───── Sequence linkage (#932) ─────
+  // Loaded once when the Campaigns tab opens; surfaces as a dropdown in the
+  // campaign editor so a marketer can pick a follow-up drip. When set, the
+  // backend's sendCampaign auto-enrolls each recipient post-dispatch.
+  const [sequences, setSequences] = useState([]);
+
   useEffect(() => {
-    if (activeTab === 'campaigns') loadCampaigns();
+    if (activeTab === 'campaigns') {
+      loadCampaigns();
+      loadSequences();
+    }
     if (activeTab === 'sms') loadSmsHistory();
     if (activeTab === 'forms') loadSavedForms();
   }, [activeTab]);
+
+  const loadSequences = async () => {
+    try {
+      const data = await fetchApi('/api/sequences');
+      setSequences(Array.isArray(data) ? data : []);
+    } catch (err) {
+      // Non-fatal — the dropdown just shows "None" if /api/sequences errors.
+      console.error('[Marketing] Failed to load sequences:', err);
+    }
+  };
 
   const loadCampaigns = async () => {
     try {
@@ -210,6 +229,9 @@ export default function Marketing() {
       preheader: extra.preheader || '',
       body: extra.body || '',
       audienceFilter: extra.audienceFilter || { status: '' },
+      // #932 — preserve the saved Campaign → Sequence linkage. The empty
+      // string represents "no linkage" so the <select> binds cleanly.
+      sequenceId: camp.sequenceId != null ? String(camp.sequenceId) : '',
     });
   };
 
@@ -232,12 +254,19 @@ export default function Marketing() {
         body: editingCampaign.body || '',
         audienceFilter: editingCampaign.audienceFilter || {},
       };
+      // #932 — propagate the sequenceId linkage. Empty string → null so the
+      // backend clears the FK; a numeric string → parseInt'd server-side.
+      const sequenceIdToSend =
+        editingCampaign.sequenceId === '' || editingCampaign.sequenceId == null
+          ? null
+          : editingCampaign.sequenceId;
       await fetchApi(`/api/marketing/campaigns/${editingCampaign.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: trimmedName.slice(0, NAME_MAX),
           status: editingCampaign.status || 'Draft',
+          sequenceId: sequenceIdToSend,
         }),
       });
       // #610: preserve the saved scheduledAt when the user didn't touch the
@@ -589,6 +618,17 @@ ${fields.map(f => {
                   <Stat icon={BarChart} value={`${camp.opened}%`} label="Open Rate" />
                   <Stat icon={MousePointerClick} value={`${camp.clicked}%`} label="Click Rate" />
                 </div>
+                {/* #932 — surface the linked sequence so a marketer can see
+                    at a glance which campaigns will fan out into a drip. */}
+                {camp.sequenceId != null && (() => {
+                  const linked = sequences.find(s => s.id === camp.sequenceId);
+                  return (
+                    <div style={{ marginTop: '0.75rem', fontSize: '0.75rem', color: 'var(--primary-color, var(--accent-color))', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <span aria-hidden="true">→</span>
+                      <span>Linked to sequence: <strong>{linked ? linked.name : `#${camp.sequenceId}`}</strong></span>
+                    </div>
+                  );
+                })()}
                 <div style={{ marginTop: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                   <Edit3 size={12} /> Click to edit
                 </div>
@@ -735,6 +775,29 @@ ${fields.map(f => {
                   value={editingCampaign.scheduledAt ? new Date(editingCampaign.scheduledAt).toISOString().slice(0, 16) : ''}
                   onChange={e => setEditingCampaign({ ...editingCampaign, scheduledAt: e.target.value })}
                 />
+              </div>
+              {/* #932 — Campaign → Sequence linkage. When set, the backend
+                  auto-enrolls every recipient into the drip sequence after
+                  sendCampaign completes. */}
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={fieldLabelStyle}>Link to Sequence (optional)</label>
+                <select
+                  className="input-field"
+                  aria-label="Link to Sequence"
+                  value={editingCampaign.sequenceId || ''}
+                  onChange={e => setEditingCampaign({
+                    ...editingCampaign,
+                    sequenceId: e.target.value,
+                  })}
+                >
+                  <option value="">None — do not auto-enroll recipients</option>
+                  {sequences.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #64748b)', marginTop: '0.25rem' }}>
+                  Recipients are auto-enrolled into the linked sequence after the campaign sends. Already-enrolled contacts are skipped.
+                </div>
               </div>
               {/* #898 — Travel sub-brand audience filter. Backend
                   buildContactWhere(filters.subBrand) reads this verbatim. */}

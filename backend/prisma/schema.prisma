@@ -706,11 +706,21 @@ model Campaign {
   scheduleStatus  String?
   scheduleFilters String?   @db.Text
 
+  // #932 — Campaign → Sequence linkage (follow-up to #898 acceptance #4).
+  // When sequenceId is set, sendCampaign auto-enrolls every recipient into
+  // the linked Sequence after dispatch completes. Nullable so existing rows
+  // survive `prisma db push` without a backfill; onDelete: SetNull keeps
+  // the campaign row valid if the linked sequence is later removed.
+  sequenceId Int?
+  sequence   Sequence? @relation(fields: [sequenceId], references: [id], onDelete: SetNull)
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   smsMessages       SmsMessage[]
   pushNotifications PushNotification[]
+
+  @@index([sequenceId])
 }
 
 model AutomationRule {
@@ -954,6 +964,10 @@ model Sequence {
   // engine uses it instead of parsing nodes/edges, so legacy sequences keep
   // running unchanged.
   steps       SequenceStep[]
+  // #932 — campaigns that auto-enroll their recipients into this sequence
+  // after sendCampaign completes. Back-relation only; lookup is via
+  // Campaign.sequenceId (indexed there).
+  campaigns   Campaign[]
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 

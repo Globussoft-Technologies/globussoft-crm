@@ -98,7 +98,8 @@ Each is a known coverage hole — a previous agent left a skip that should now b
 
 1. Run the T1 / T2 / T3 greps. Pool the candidates.
 2. For each candidate, run `git log --since="1 hour ago" --oneline -- <source-file>`. If non-empty, SKIP this candidate (programming cron is likely actively working on it — its ticks are 15 min apart, so 1h covers ~4 recent ticks).
-3. Pick 3 candidates with NO 1h activity AND in different subsystems (e.g. one backend/lib, one backend/services, one frontend/src/__tests__/). This guarantees file-disjointness across the 3 parallel agents.
+3. **Cross-dir SUT-existence check** (per the 2026-05-25 phantom-carry-over learning — 8th instance): the T1 `comm -23` heuristic only checks the matching test subdirectory (e.g. `backend/lib/X.js` vs `backend/test/lib/X.test.js`). But tests sometimes live in a non-matching subdir (e.g. `backend/test/middleware/wellnessOwnership.test.js` covers `backend/lib/wellnessOwnership.js`). Before writing a new test file, run `ls backend/test/**/<SUT-basename>.test.* frontend/src/__tests__/**/<SUT-basename>.test.*` to confirm no test exists ANYWHERE in the test tree. Also grep the SUT's JSDoc for "Tested at:" / "Tests at:" / "@see backend/test/" annotations — source files often document their own test path. If a test exists at ANY location, treat as covered and pick a different SUT.
+4. Pick 3 candidates with NO 1h activity AND no cross-dir test AND in different subsystems (e.g. one backend/lib, one backend/services, one frontend/src/__tests__/). This guarantees file-disjointness across the 3 parallel agents.
 
 If fewer than 3 disjoint candidates → ship 1-2 agents. If 0 candidates → log "queue empty" and end tick (count as empty tick).
 

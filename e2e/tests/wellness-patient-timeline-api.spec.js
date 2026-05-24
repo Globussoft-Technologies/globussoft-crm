@@ -225,9 +225,17 @@ async function createVisit(request, patientId, overrides = {}) {
 
 async function createPrescription(request, patientId) {
   // Rx writes need clinical role — use drharsh (wellnessRole=doctor).
+  // Backend POST /prescriptions requires BOTH visitId + patientId (validated at
+  // routes/wellness.js:3074-3076) AND a non-empty drugs[] array (validated at
+  // :3084-3091 — empty array yields 400 DRUG_NAME_REQUIRED). The 2026-05-24
+  // CI red on tick #201 surfaced this: the helper was missing both. Fix-forward
+  // creates an inline Visit to anchor the Rx + sends a single named drug.
+  const visit = await createVisit(request, patientId);
   const body = {
+    visitId: visit.id,
     patientId,
     doctorId: drHarshUserId,
+    drugs: [{ name: 'Amoxicillin', dosage: '500mg', frequency: 'BD' }],
     instructions: `E2E ${RUN_TAG} Rx — twice daily after meals`,
     notes: `E2E ${RUN_TAG} Rx notes`,
   };
@@ -238,10 +246,15 @@ async function createPrescription(request, patientId) {
 
 async function createConsent(request, patientId) {
   // Consent capture needs clinical role — use drharsh.
+  // Backend POST /consents at routes/wellness.js:3216 requires patientId +
+  // templateName AND signatureSvg (NOT signatureData) ≥500 chars (#118 defense
+  // against blank/empty signatures). The spec's original signatureData field
+  // would have hit the same fix-forward cascade as the Rx helper. Synthesize
+  // a 600+ char synthetic SVG-path string to clear the minimum-length gate.
   const body = {
     patientId,
     templateName: `E2E ${RUN_TAG} template`,
-    signatureData: 'data:image/png;base64,iVBORw0KGgo=',
+    signatureSvg: 'M 10 10 L 20 20 C 30 30 40 30 50 20 S 70 10 80 20 ' + 'L 90 30 '.repeat(80),
   };
   const res = await authPost(request, '/api/wellness/consents', body, 'drharsh');
   expect(res.status(), `consent create: ${await res.text()}`).toBe(201);

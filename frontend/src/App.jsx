@@ -181,6 +181,10 @@ const TravelVisaApplications = lazy(() => import("./pages/travel/visa/Applicatio
 const TravelVisaChecklists = lazy(() => import("./pages/travel/visa/Checklists"));
 const TravelVisaAdvisorDashboard = lazy(() => import("./pages/travel/visa/AdvisorDashboard"));
 const TravelVisaReports = lazy(() => import("./pages/travel/visa/Reports"));
+// Phase 3 Visa Sure embassy-rules admin (tick #178, consumes /api/embassy-rules
+// from backend commit 05587ac7). ADMIN-only mutation gate; route wrapped in
+// RoleGuard allow=["ADMIN"] mirroring backend POST/PUT/DELETE RBAC.
+const TravelVisaEmbassyRulesAdmin = lazy(() => import("./pages/travel/visa/EmbassyRulesAdmin"));
 // Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
 const TravelStallDashboard = lazy(() => import("./pages/travel/TravelStallDashboard"));
 // Wellness vertical
@@ -1167,6 +1171,16 @@ export default function App() {
               {/* Phase 3 FR-7 analytics SHELL (V16-V18) — backend
                   /api/travel/reports/visa wiring pending (cluster B3). */}
               <Route path="travel/visa/reports" element={<TravelOnly><TravelVisaReports /></TravelOnly>} />
+              {/* Phase 3 Visa Sure embassy-rules admin (tick #178) — consumes
+                  /api/embassy-rules CRUD shipped tick #175 (commit 05587ac7).
+                  ADMIN-only per backend POST/PUT/DELETE gates. */}
+              <Route path="travel/visa/embassy-rules" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN"]} message="Embassy Rules admin requires admin access.">
+                    <TravelVisaEmbassyRulesAdmin />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
               {/* Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
                   Each card CTAs to an existing route filtered by ?subBrand=travelstall. */}
               <Route path="travel-stall" element={<TravelOnly><TravelStallDashboard /></TravelOnly>} />

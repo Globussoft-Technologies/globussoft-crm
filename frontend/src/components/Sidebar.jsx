@@ -1096,6 +1096,9 @@ function renderTravelNav({
           <Link to="/travel/visa" icon={Stamp} label="Dashboard" />
           <Link to="/travel/visa/applications" icon={BadgeCheck} label="Applications" />
           <Link to="/travel/visa/checklists" icon={ClipboardList} label="Checklists" />
+          {/* tick #178 — embassy-rules CRUD admin (consumes /api/embassy-rules).
+              ADMIN-only per backend RBAC + RoleGuard on the route element. */}
+          <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" />
         </>
       )}
 

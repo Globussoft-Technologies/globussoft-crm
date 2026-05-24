@@ -1103,6 +1103,142 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
   }
 });
 
+// #931 — bulk-tag-add endpoint. Wires the Patients-page bulk-select toolbar
+// "Add tags to N selected" CTA to a single tenant-scoped batch update.
+// Schema: Patient.tags is `String? @db.Text` storing a JSON-stringified
+// array (shipped at 5841d736). Idempotent — incoming tags merge with the
+// existing set; dedupe is case-insensitive (lowercase canonical form).
+// RBAC: any wellness-write role (phiWriteGate); excludes telecaller/USER
+// without PHI access. Limits: ≤200 patientIds and ≤20 addTags per call so
+// a UI-driven select-all-then-tag operation can't be turned into a
+// gigantic transactional update.
+router.patch("/patients/bulk-tags", phiWriteGate, async (req, res) => {
+  try {
+    const { patientIds, addTags } = req.body || {};
+
+    // Shape validation — patientIds must be a non-empty array of integers.
+    if (!Array.isArray(patientIds) || patientIds.length === 0) {
+      return res.status(400).json({
+        error: "patientIds must be a non-empty array of integers",
+        code: "INVALID_PATIENT_IDS",
+      });
+    }
+    if (patientIds.length > 200) {
+      return res.status(400).json({
+        error: "Cannot tag more than 200 patients in a single request",
+        code: "BULK_LIMIT_EXCEEDED",
+      });
+    }
+    const normalizedIds = [];
+    for (const raw of patientIds) {
+      const n = typeof raw === "number" ? raw : parseInt(raw, 10);
+      if (!Number.isInteger(n) || n <= 0) {
+        return res.status(400).json({
+          error: "patientIds entries must be positive integers",
+          code: "INVALID_PATIENT_IDS",
+        });
+      }
+      normalizedIds.push(n);
+    }
+
+    // Shape validation — addTags must be a non-empty array of trimmed,
+    // 1–50-char strings; max 20 tags per call.
+    if (!Array.isArray(addTags) || addTags.length === 0) {
+      return res.status(400).json({
+        error: "addTags must be a non-empty array of strings",
+        code: "INVALID_TAGS",
+      });
+    }
+    if (addTags.length > 20) {
+      return res.status(400).json({
+        error: "Cannot add more than 20 tags in a single request",
+        code: "BULK_LIMIT_EXCEEDED",
+      });
+    }
+    const cleanedIncoming = [];
+    const seen = new Set();
+    for (const raw of addTags) {
+      if (typeof raw !== "string") {
+        return res.status(400).json({
+          error: "addTags entries must be strings",
+          code: "INVALID_TAGS",
+        });
+      }
+      const trimmed = raw.trim();
+      if (trimmed.length < 1 || trimmed.length > 50) {
+        return res.status(400).json({
+          error: "addTags entries must be 1–50 characters after trim",
+          code: "INVALID_TAGS",
+        });
+      }
+      const lower = trimmed.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      cleanedIncoming.push(lower);
+    }
+    if (cleanedIncoming.length === 0) {
+      return res.status(400).json({
+        error: "addTags resolved to zero unique tags after dedupe",
+        code: "INVALID_TAGS",
+      });
+    }
+
+    // Tenant-scoped fetch — only rows belonging to req.user.tenantId enter
+    // the merge loop, so a forged patientId for another tenant is silently
+    // ignored (filtered at the query level, not inside the loop).
+    const rows = await prisma.patient.findMany({
+      where: tenantWhere(req, { id: { in: normalizedIds } }),
+      select: { id: true, tags: true },
+    });
+
+    let updated = 0;
+    for (const row of rows) {
+      let existing = [];
+      if (row.tags) {
+        try {
+          const parsed = JSON.parse(row.tags);
+          if (Array.isArray(parsed)) {
+            existing = parsed.filter((t) => typeof t === "string");
+          }
+        } catch (_e) {
+          // Corrupt stored JSON — treat as empty so the merge still yields
+          // a clean array, rather than 500-ing the whole batch.
+          existing = [];
+        }
+      }
+      const merged = [];
+      const mergedSeen = new Set();
+      for (const t of existing) {
+        const lower = String(t).trim().toLowerCase();
+        if (!lower || mergedSeen.has(lower)) continue;
+        mergedSeen.add(lower);
+        merged.push(lower);
+      }
+      for (const t of cleanedIncoming) {
+        if (mergedSeen.has(t)) continue;
+        mergedSeen.add(t);
+        merged.push(t);
+      }
+      await prisma.patient.update({
+        where: { id: row.id },
+        data: { tags: JSON.stringify(merged) },
+      });
+      updated += 1;
+    }
+
+    await writeAudit('Patient', 'BULK_TAG_ADD', null, req.user.userId, req.user.tenantId, {
+      patientIdsRequested: normalizedIds.length,
+      patientsUpdated: updated,
+      tagsAdded: cleanedIncoming,
+    });
+
+    res.json({ updated });
+  } catch (e) {
+    console.error("[wellness] bulk-tag-add error:", e.message);
+    res.status(500).json({ error: "Failed to bulk-add tags" });
+  }
+});
+
 // #539 (PT-02): DELETE /patients/:id was missing — pen-test reported HTML 404
 // on a route the demo-monitor scrub script + GDPR DSAR flow both want. This
 // is admin-only because deleting clinical records has compliance + legal

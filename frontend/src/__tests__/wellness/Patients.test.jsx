@@ -238,6 +238,101 @@ describe('<wellness/Patients /> — page surface', () => {
     expect(postCall).toBeUndefined();
   });
 
+  // #931 — bulk-tag-add UI. Pins the row-checkbox + "Add tags to N selected"
+  // CTA visibility + modal open + PATCH /api/wellness/patients/bulk-tags
+  // body shape + success / error notify branches.
+  describe('#931 bulk-tag-add', () => {
+    it('CTA is hidden when no rows are selected', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      expect(screen.queryByText(/Add tags to .* selected/i)).not.toBeInTheDocument();
+    });
+
+    it('checking a row reveals the "Add tags to N selected" CTA', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const anitaCheckbox = screen.getByRole('checkbox', { name: /Select Anita Sharma/i });
+      fireEvent.click(anitaCheckbox);
+      expect(screen.getByRole('button', { name: /Add tags to 1 selected/i })).toBeInTheDocument();
+    });
+
+    it('clicking the CTA opens the modal with a tags input', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Add tags to 1 selected/i }));
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(screen.getByLabelText(/Tags \(comma-separated\)/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Apply/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument();
+    });
+
+    it('Apply fires PATCH /api/wellness/patients/bulk-tags with patientIds + addTags, closes modal, notifies success', async () => {
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/wellness/patients/bulk-tags' && opts?.method === 'PATCH') {
+          return Promise.resolve({ updated: 1 });
+        }
+        return defaultFetchMock(url, opts);
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Add tags to 1 selected/i }));
+
+      // Type two tags with mixed case + leading/trailing whitespace + a dup
+      // so we also pin the client-side trim/lowercase/dedupe shape.
+      fireEvent.change(screen.getByLabelText(/Tags \(comma-separated\)/i), {
+        target: { value: 'VIP, dermatology , vip' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^Apply$/ }));
+
+      await waitFor(() => {
+        const call = fetchApiMock.mock.calls.find(
+          ([u, o]) => u === '/api/wellness/patients/bulk-tags' && o?.method === 'PATCH'
+        );
+        expect(call).toBeTruthy();
+        const body = JSON.parse(call[1].body);
+        expect(body.patientIds).toEqual([1]);
+        // Trim + lowercase + dedupe shape: VIP + vip collapse to "vip".
+        expect(body.addTags).toEqual(['vip', 'dermatology']);
+      });
+
+      // Modal closes + success toast fires.
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Added 2 tags to 1 patient/i),
+      );
+    });
+
+    it('error response keeps the modal open and fires notify.error', async () => {
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/wellness/patients/bulk-tags' && opts?.method === 'PATCH') {
+          return Promise.reject(new Error('Bulk-tag service unavailable'));
+        }
+        return defaultFetchMock(url, opts);
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Add tags to 1 selected/i }));
+      fireEvent.change(screen.getByLabelText(/Tags \(comma-separated\)/i), {
+        target: { value: 'vip' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^Apply$/ }));
+
+      await waitFor(() => {
+        expect(notifyError).toHaveBeenCalledWith(
+          expect.stringMatching(/Bulk-tag service unavailable/i),
+        );
+      });
+      // Modal stays open so the user can correct + retry.
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(notifySuccess).not.toHaveBeenCalled();
+    });
+  });
+
   it('shows "Loading…" before the initial fetch resolves', async () => {
     let resolvePatients;
     fetchApiMock.mockImplementation((url) => {

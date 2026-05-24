@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Search, Plus, Users, Phone, Mail, Pencil, Download } from "lucide-react";
+import { Search, Plus, Users, Phone, Mail, Pencil, Download, Tag } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
@@ -37,6 +37,13 @@ export default function Patients() {
   // matching the current view). fetch+blob trick because plain <a href>
   // can't set the Authorization header.
   const [csvBusy, setCsvBusy] = useState(false);
+  // #931 — bulk-select + bulk-tag-add. Selected patient ids live in a Set so
+  // toggle / clear is O(1). Modal stays open when the request errors so the
+  // user can correct the tags input and retry without re-selecting rows.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [tagModalOpen, setTagModalOpen] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+  const [tagBusy, setTagBusy] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [locations, setLocations] = useState([]);
   // #205: dob added so the form can capture it; gender already exists. Phone
@@ -149,6 +156,79 @@ export default function Patients() {
     }
   };
 
+  // #931 — bulk-select helpers. `toggleSelect` flips an individual row;
+  // `toggleSelectAllVisible` selects every patient on the current page if
+  // any are unselected, otherwise clears the whole selection. We deliberately
+  // operate on the CURRENT PAGE only — selecting all rows across pages would
+  // be a surprising side-effect since the user can't see what they're tagging.
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAllVisible = (visibleList) => {
+    setSelectedIds((prev) => {
+      const allSelected = visibleList.length > 0 && visibleList.every((p) => prev.has(p.id));
+      if (allSelected) {
+        const next = new Set(prev);
+        for (const p of visibleList) next.delete(p.id);
+        return next;
+      }
+      const next = new Set(prev);
+      for (const p of visibleList) next.add(p.id);
+      return next;
+    });
+  };
+
+  // #931 — submit the bulk-tag-add modal. Parses the comma-separated tag
+  // input, trims + lowercases + dedupes client-side (server also re-dedupes
+  // defensively). On success: clear modal state, clear selection, refresh
+  // list. On error: modal stays open so the user can correct the tag string.
+  const submitBulkTags = async () => {
+    const raw = tagInput || "";
+    const parsed = raw
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 0);
+    const deduped = Array.from(new Set(parsed));
+    if (deduped.length === 0) {
+      notify.error("Enter at least one tag (comma-separated).");
+      return;
+    }
+    if (deduped.length > 20) {
+      notify.error("Cannot add more than 20 tags in a single request.");
+      return;
+    }
+    const patientIds = Array.from(selectedIds);
+    if (patientIds.length === 0) {
+      notify.error("No patients selected.");
+      return;
+    }
+    setTagBusy(true);
+    try {
+      const res = await fetchApi("/api/wellness/patients/bulk-tags", {
+        method: "PATCH",
+        body: JSON.stringify({ patientIds, addTags: deduped }),
+      });
+      const updatedCount = res?.updated ?? patientIds.length;
+      notify.success(
+        `Added ${deduped.length} tag${deduped.length === 1 ? "" : "s"} to ${updatedCount} patient${updatedCount === 1 ? "" : "s"}.`,
+      );
+      setTagInput("");
+      setTagModalOpen(false);
+      setSelectedIds(new Set());
+      setReloadTick((t) => t + 1);
+    } catch (e) {
+      notify.error(e?.message || "Failed to add tags.");
+      // Modal stays open intentionally so the user can retry.
+    } finally {
+      setTagBusy(false);
+    }
+  };
+
   useEffect(() => {
     // First mount: do exactly one immediate load with empty q so the table
     // populates, but don't go through the debounced path that races with
@@ -182,6 +262,10 @@ export default function Patients() {
   // after they tighten the search.
   useEffect(() => {
     setPage(1);
+    // #931 — clear bulk-selection when the filter changes; previously-selected
+    // ids may no longer be visible, and silently bulk-tagging hidden rows
+    // would violate "what you see is what you tag" expectations.
+    setSelectedIds(new Set());
   }, [q]);
 
   // #820 Part 1 — compute the visible slice. `totalPages` falls back to 1 so
@@ -328,6 +412,19 @@ export default function Patients() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {/* #931 — bulk-tag-add CTA. Visible only when ≥1 row is selected so
+              it doesn't compete with the New-patient + Export CSV buttons in
+              the default chrome. Opens the comma-separated-tags modal which
+              POSTs to /api/wellness/patients/bulk-tags. */}
+          {selectedIds.size > 0 && (
+            <button
+              type="button"
+              onClick={() => setTagModalOpen(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+            >
+              <Tag size={16} /> Add tags to {selectedIds.size} selected
+            </button>
+          )}
           {/* #931 + #816 Patients slice — CSV export honors the current search
               filter. Hidden when there's nothing to export OR when the role
               already saw the access-restricted state (avoids tempting the user
@@ -557,13 +654,27 @@ export default function Patients() {
           >
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                <th style={{ ...thStyle, width: "20%" }}>Name</th>
-                <th style={{ ...thStyle, width: "14%" }}>Phone</th>
-                <th style={{ ...thStyle, width: "20%" }}>Email</th>
-                <th style={{ ...thStyle, width: "9%" }}>Gender</th>
-                <th style={{ ...thStyle, width: "13%" }}>Source</th>
-                <th style={{ ...thStyle, width: "14%" }}>Added</th>
-                <th style={{ ...thStyle, width: "10%", textAlign: "center" }}>
+                {/* #931 — bulk-select. Header checkbox selects/clears all
+                    currently-visible (current page) patients; per-row
+                    checkboxes toggle individual selection. */}
+                <th style={{ ...thStyle, width: "4%", textAlign: "center" }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all visible patients"
+                    checked={
+                      visiblePatients.length > 0 &&
+                      visiblePatients.every((p) => selectedIds.has(p.id))
+                    }
+                    onChange={() => toggleSelectAllVisible(visiblePatients)}
+                  />
+                </th>
+                <th style={{ ...thStyle, width: "18%" }}>Name</th>
+                <th style={{ ...thStyle, width: "13%" }}>Phone</th>
+                <th style={{ ...thStyle, width: "18%" }}>Email</th>
+                <th style={{ ...thStyle, width: "8%" }}>Gender</th>
+                <th style={{ ...thStyle, width: "12%" }}>Source</th>
+                <th style={{ ...thStyle, width: "13%" }}>Added</th>
+                <th style={{ ...thStyle, width: "9%", textAlign: "center" }}>
                   Actions
                 </th>
               </tr>
@@ -574,6 +685,15 @@ export default function Patients() {
                   key={p.id}
                   style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
                 >
+                  {/* #931 — per-row bulk-select checkbox. */}
+                  <td style={{ ...tdStyle, textAlign: "center" }}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${p.name}`}
+                      checked={selectedIds.has(p.id)}
+                      onChange={() => toggleSelect(p.id)}
+                    />
+                  </td>
                   <td style={nameTdStyle} title={p.name}>
                     <Link
                       to={`/wellness/patients/${p.id}`}
@@ -629,7 +749,7 @@ export default function Patients() {
               {patients.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     style={{
                       ...tdStyle,
                       textAlign: "center",
@@ -714,6 +834,98 @@ export default function Patients() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* #931 — bulk-tag-add modal. Comma-separated tag input; Apply fires
+          PATCH /api/wellness/patients/bulk-tags. On success: modal closes,
+          selection clears, list refreshes. On error: modal stays open. */}
+      {tagModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-tag-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          onClick={(e) => {
+            // Click on backdrop closes (unless mid-request).
+            if (e.target === e.currentTarget && !tagBusy) {
+              setTagModalOpen(false);
+            }
+          }}
+        >
+          <div
+            className="glass"
+            style={{
+              padding: '1.5rem',
+              borderRadius: 12,
+              minWidth: 360,
+              maxWidth: 480,
+              background: 'var(--bg-primary, #1a1a2e)',
+              border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+            }}
+          >
+            <h3 id="bulk-tag-modal-title" style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.1rem', fontWeight: 600 }}>
+              Add tags to {selectedIds.size} patient{selectedIds.size === 1 ? '' : 's'}
+            </h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+              Enter tags separated by commas. Tags are stored lowercased and deduped against existing tags.
+            </p>
+            <input
+              type="text"
+              aria-label="Tags (comma-separated)"
+              placeholder="vip, dermatology, follow-up"
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              disabled={tagBusy}
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (tagBusy) return;
+                  setTagModalOpen(false);
+                  setTagInput("");
+                }}
+                disabled={tagBusy}
+                style={{
+                  padding: '0.5rem 1rem',
+                  background: 'transparent',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+                  borderRadius: 8,
+                  cursor: tagBusy ? 'not-allowed' : 'pointer',
+                  opacity: tagBusy ? 0.6 : 1,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitBulkTags}
+                disabled={tagBusy || tagInput.trim().length === 0}
+                style={{
+                  padding: '0.5rem 1rem',
+                  background: 'var(--primary-color, var(--accent-color))',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  cursor: (tagBusy || tagInput.trim().length === 0) ? 'not-allowed' : 'pointer',
+                  opacity: (tagBusy || tagInput.trim().length === 0) ? 0.6 : 1,
+                }}
+              >
+                {tagBusy ? 'Applying…' : 'Apply'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

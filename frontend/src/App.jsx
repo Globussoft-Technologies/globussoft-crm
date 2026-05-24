@@ -495,6 +495,35 @@ export default function App() {
     }
   }, [token]);
 
+  // #870 — server-side theme hydration so the preference roams across
+  // browsers/devices. localStorage stays as a synchronous fast-path cache;
+  // the server value (when set) wins on login. Per DD-5.2: user pref wins
+  // over tenant default, so if the server returns 'system' that's the
+  // explicit "no choice yet" sentinel and we fall through to the existing
+  // OS-preference detection.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/user/theme", {
+          headers: { "Authorization": `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        if (data && typeof data.theme === "string" &&
+            ["light", "dark", "system"].includes(data.theme)) {
+          setTheme(data.theme);
+        }
+      } catch (err) {
+        // Server unavailable — keep whatever localStorage seeded us with.
+        console.warn("[Theme] Hydrate failed; falling back to localStorage cache:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
   useEffect(() => {
     let effectiveTheme = theme;
     if (theme === "system") {
@@ -504,8 +533,25 @@ export default function App() {
     }
     console.log('[Theme] Applying theme:', { selectedTheme: theme, effectiveTheme });
     document.documentElement.setAttribute("data-theme", effectiveTheme);
+    // localStorage stays as a synchronous boot cache so the next page-load
+    // doesn't flash the wrong theme before /api/user/theme resolves.
     localStorage.setItem("theme", theme);
-  }, [theme]);
+    // #870 — also persist server-side so the choice roams. Fire-and-forget;
+    // localStorage already covered the local UX in the line above. Skip when
+    // we have no token (pre-login: theme picker only writes localStorage).
+    if (token) {
+      fetch("/api/user/theme", {
+        method: "PUT",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ theme }),
+      }).catch((err) => {
+        console.warn("[Theme] Server persist failed (localStorage retained):", err);
+      });
+    }
+  }, [theme, token]);
 
   useEffect(() => {
     if (theme !== "system") return;

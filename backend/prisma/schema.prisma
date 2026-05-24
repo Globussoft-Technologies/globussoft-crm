@@ -364,6 +364,12 @@ model User {
   // (routes/wellness.js:212).
   wellnessRole String? // doctor, professional, telecaller, helper, stylist, cashier
 
+  // #870 — server-side theme persistence so user choice roams across browsers
+  // and devices. DD-5.2 RESOLVED 2026-05-24: user preference wins; tenant
+  // default applies only when this column is null. Permitted values:
+  // 'light' | 'dark' | 'system'. Read/written via GET/PUT /api/user/theme.
+  themePreference String? // 'light' | 'dark' | 'system' — null = use tenant default
+
   // Travel vertical sub-brand access (Q25 — single tenant + sub-brand
   // tagging). JSON array of sub-brand codes the user can see/act on,
   // e.g. ["tmc","rfu"] or ["travelstall","visasure"]. Empty/null = all

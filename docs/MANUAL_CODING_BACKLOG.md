@@ -373,6 +373,17 @@ gh issue list --label "wellness" --state open --limit 20
 
 ---
 
+### D9. Payment Gateway Configuration UI (#848) — PRD drafted, design call pending
+**Labels:** `wellness-session`, `travel-session`, `backend`, `frontend`, `multi-day-feature`, `payments`, `security`
+
+**Why manual:** Stripe/Razorpay keys live only in env vars today — every new tenant requires a backend restart + devops ticket. Multi-tenant isolation breaks at the gateway boundary (all tenants share one Stripe + one Razorpay account). PRD drafted at `docs/PRD_PAYMENT_GATEWAY_CONFIG.md` (tick #188, 2026-05-25 / Agent B). 8 design decisions + 10 open questions need product-call sign-off before implementation can start. Recommended slicing: slice 1 (~2d) = schema + routes + Stripe adapter + Stripe-only admin UI against the sandbox; slice 2 (~1.5d) = Razorpay adapter + Razorpay admin UI; slice 3 (~1.5d) = routing-rules table + per-currency resolution + per-tenant webhook lookup refactor; slice 4 (~1d) = grace-window logic + cleanup cron + operator docs. Reuses existing `lib/credentialMasking.js` + `lib/fieldEncryption.js` verbatim. Cross-references `PRD_PLANS_BILLING_SELF_SERVE.md` (DD-5.3 there delegates gateway-config scope here) + `PRD_TRAVEL_BILLING.md` (per-invoice Pay Now consumes the new resolver) + `PRD_PURCHASE_ORDERS.md` (Phase 2 supplier payouts). **Total estimated effort post-design: 4-6 engineering days** across backend + frontend.
+
+**Cred dependency:** GH #896 (P0 Activate Stripe + Razorpay — real keys onboarded for at least 1 tenant before "Done" can be declared). UI can ship in advance with empty-config state.
+
+**Blocks before backend impl can start:** DD-5.1 (BYOK vs Stripe Connect) + DD-5.2 (BYOK vs Razorpay Route) + DD-5.4 (new PaymentGatewayConfig model vs extend Integration) + DD-5.6 (routing-rules table placement) + OQ-9.4 (auto-create routing rules on first save) + OQ-9.5 (block-save-until-test default).
+
+---
+
 ## E. PRODUCT-CALL DEPENDENT (decision-first, then implementation)
 
 These don't need an engineer — they need a stakeholder decision. Once the decision arrives, the implementation is small.

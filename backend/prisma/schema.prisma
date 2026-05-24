@@ -2603,6 +2603,17 @@ model Patient {
   // upper-cases for canonicality). Surfaced on invoices for B2B billing
   // (corporate-account patients, salon-on-salon recharge, etc.).
   gst           String?   @db.VarChar(15)
+  /// Free-text tag list for patient segmentation. Used by #931 bulk-tag-add
+  /// UI + filter-by-tag in Patients page. Storage matches the canonical
+  /// JSON-string-column convention used elsewhere in this schema
+  /// (SequenceStep.conditionJson, AbTest.variantA/B, ReportSchedule.metrics,
+  /// Campaign.scheduleFilters, etc. — see CLAUDE.md "Standing rules" §
+  /// JSON-string columns): String? @db.Text holding a JSON-stringified
+  /// array of strings (e.g. '["vip","diabetic","new"]'). Contact has no
+  /// tags column today, so this also establishes the shape for a symmetric
+  /// Contact.tags field if/when bulk-tag-add ships for Contact too. Route
+  /// layer stringifies on write + JSON.parses on read. Null = no tags.
+  tags          String?   @db.Text
 
   // #413 — Restrict (not Cascade) on Tenant deletion. Patient is PHI
   // (medical history, allergies, photos, prescriptions cascade-from-here).

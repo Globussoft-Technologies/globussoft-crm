@@ -478,6 +478,11 @@ const travelTravelStallRoutes = require("./routes/travel_travelstall");
 // Mounted at /api/embassy-rules (not under /api/travel) because authorship
 // is tenant-wide ADMIN, not sub-brand-scoped. Backs the risk-flag engine.
 const embassyRulesRoutes = require("./routes/embassy_rules");
+// TMC (Travel) Phase 1 — TravelCurriculumMapping CRUD (PC-1 + PC-2/3/4/5
+// resolved 2026-05-24). Mounted at /api/travel-curriculum (sibling of
+// /api/embassy-rules) since authorship is tenant-wide ADMIN / advisor-head,
+// not sub-brand-scoped. Backs the diagnostic-engine destination scoring.
+const travelCurriculumRoutes = require("./routes/travel_curriculum");
 // Wellness vertical (Enhanced Wellness, future clinic clients)
 const wellnessRoutes = require("./routes/wellness");
 // Wave 11 Agent HH — Inventory backbone (categories, vendors, receipts,
@@ -710,6 +715,7 @@ app.use("/api/travel", travelTripBillingRoutes);
 app.use("/api/travel", travelWebcheckinRoutes);
 app.use("/api/travel", travelTravelStallRoutes);
 app.use("/api/embassy-rules", embassyRulesRoutes);
+app.use("/api/travel-curriculum", travelCurriculumRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
 // Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths

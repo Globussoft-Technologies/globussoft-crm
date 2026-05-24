@@ -2,10 +2,12 @@
 
 Consolidated index of every product/design decision flagged across the 22 PRDs in `docs/`. Use this to drive product-call agendas — each row is something the product team needs to settle before the corresponding PRD can move to (or finish) implementation.
 
-**Updated:** 2026-05-24 (bulk-resolve session — all PRD recommendations applied as default; 5 items flagged as ⚠️ NEEDS PRODUCT CALL for next session)
-**Total decisions:** 192 total decisions tracked. **RESOLVED: 187** (cumulative — 12 historical + 27 first 2026-05-24 session + 32 second 2026-05-24 session + 116 bulk-resolve session). **⚠️ NEEDS PRODUCT CALL: 5** (Plans & Billing DD-5.2/5.4/5.5 commercial/legal/architecture, AI Surfaces DD-5.6 EU residency, Zylu DD-5.6 biometric vendor + DD-5.8 per-location mini-site). The 2 PRDs without surfaced decisions remain WHATSAPP + DIGILOCKER_USE_CASE — pure cred-chase + use-case narrative.
+**Updated:** 2026-05-25 (interactive Q&A session — 24 decisions captured across 6 rounds; all 6 previously-flagged ⚠️ items now resolved or formally deferred)
+**Total decisions:** 216 tracked (192 prior + 24 new from 2026-05-25 Q&A). **RESOLVED: 215**. **DEFERRED: 1** (AI Surfaces DD-5.6 EU residency — formally deferred until first EU tenant signs). **NEEDS PRODUCT CALL: 0** — every previously-flagged item is settled.
 
-**Cron is unblocked**: all PRD-internal "settle-during-implementation" decisions resolved to PRD-recommended defaults. The 5 ⚠️ items don't gate immediate work and can be re-decided when commercial/legal/Yasin/Suresh availability aligns. Engineering can proceed on every PRD per its applied recommendations; any flip during implementation is a normal mid-flight call.
+**Previous header retained for context:** 2026-05-24 bulk-resolve session applied PRD recommendations as default for 116 decisions; flagged 5 items as ⚠️ NEEDS PRODUCT CALL. All 5 (plus a 6th uncounted) now resolved in the 2026-05-25 Q&A.
+
+**Cron is fully unblocked**: every PRD's design decisions are settled. Engineering can proceed on any PRD per its resolved-recommendations. The 2 PRDs without surfaced decisions remain WHATSAPP + DIGILOCKER_USE_CASE (pure cred-chase + use-case narrative).
 **Format note:** PRDs use three competing naming conventions for decisions — `DD-5.X` (newer Travel-vertical PRDs), `DC-N` (mid-cycle PRDs), `PC-N` / `D-N` (earliest PRDs). This tracker preserves the source ID so cross-references stay clickable; consider standardising to `DD-` in future PRDs.
 
 ---
@@ -17,6 +19,66 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 - **Link back to source PRD** — each entry references the source-PRD file. Open the PRD's §5 for full context (trade-off matrix, owner, blocking-relationships).
 - **Don't promote without a third datapoint** — when adding new decision rows from a new PRD, follow the source PRD's existing convention (don't rename DC- → DD-). Standardisation is a separate exercise.
 - **Cred-chase items are NOT in this tracker** — those are separate (e.g. Q9 WhatsApp creds, Q19 RateHawk key). This file is decisions-only. A sibling `docs/CREDS_TRACKER.md` could be authored if useful.
+
+---
+
+## 2026-05-25 — Interactive Q&A session (24 decisions captured)
+
+The user ran an interactive product-call session across 6 rounds, settling all 6 previously-flagged ⚠️ items + 18 newer decisions surfaced by the 2026-05-24/25 cron arc PRDs. All decisions below are RESOLVED unless explicitly DEFERRED.
+
+### Round 1 — Schema topology + AI residency + GST shape
+
+- **PRD_POS_POLYMORPHIC_INVOICE DD-5.2** [RESOLVED 2026-05-25: **Rename existing `Invoice` → `DealInvoice` (clean fork)**. Two distinct models: wellness POS gets first-class polymorphic Invoice + InvoiceLine + Payment; generic CRM's existing Deal-attached billing model renames to DealInvoice. Migration: ~30d back-compat adapter on routes/billing.js + routes/invoices.js + Billing.jsx + Invoices.jsx. Cleanest long-term.] Invoice model rename vs `kind` discriminator vs parallel `PosInvoice`. Rec: rename (this matches the user's call).
+- **PRD_BIOMETRIC_ATTENDANCE Q1 / Zylu DD-5.6** [RESOLVED 2026-05-25: **ESSL + Realtime multi-vendor matrix**. Adapter pattern from day 1; covers ~80% of Indian clinics. ~2x v1 engineering vs ESSL-only but no migration when a new tenant brings Realtime hardware. Yasin chases docs from both vendors.] Biometric device vendor. Rec: ESSL only (PRD); user picked multi-vendor.
+- **PRD_MINI_WEBSITE DD-5.5** [RESOLVED 2026-05-25: **React-SSR (Next.js-style or Vite SSR)**. Best DX (same React components for operator + public side) + best SEO. ~+2 days infrastructure work over CSR. Drives mini-site public render at /m/<slug>.] Public render layer for customer-facing mini-site. Rec: SSR (matches user pick).
+- **PRD_POS_POLYMORPHIC_INVOICE DD-5.4** [RESOLVED 2026-05-25: **CGST/SGST/IGST 3 nullable cents columns + total**. Each InvoiceLine gets cgstAmountCents, sgstAmountCents, igstAmountCents (all nullable), plus taxAmountCents as sum. India-default ON; non-India tenants leave the 3 split columns NULL. Future E-invoice GSTN-API compat is trivial.] Indian GST tax shape per InvoiceLine. Rec: split (matches user pick).
+
+### Round 2 — Plans & Billing trio + Void/Refund actor matrix
+
+- **PRD_PLANS_BILLING_SELF_SERVE DD-5.5** [RESOLVED 2026-05-25: **Per-Organization (NEW parent model can span multiple tenants)**. NEW Organization Prisma model parents N Tenants. Single Stripe customer/subscription per Org. Migration: every existing tenant gets a default 1-1 Organization. ~3-5 eng-days extra v1 scope.] Subscription scoping — per-Tenant vs per-Organization. Was ⚠️ NEEDS PRODUCT CALL; now resolved.
+- **PRD_PLANS_BILLING_SELF_SERVE DD-5.2** [RESOLVED 2026-05-25: **Cancel at period end + no refund + grace login until expiry**. Standard SaaS pattern. Tenant keeps full access until billing-period end; on expiry, login allowed but read-only for 30 days, then data archived. Industry default; least operational complexity.] Cancellation policy. Was ⚠️ NEEDS PRODUCT CALL; now resolved.
+- **PRD_PLANS_BILLING_SELF_SERVE DD-5.4** [RESOLVED 2026-05-25: **Per-record counting + sliding 30-day window + cap-only (no overage)**. Count Contacts/Leads/Patients/etc. as snapshot every API call. At cap, writes return 402 with upgrade prompt. No overage charges. Simplest billing reconciliation.] Usage metering granularity. Was ⚠️ NEEDS PRODUCT CALL; now resolved.
+- **PRD_POS_POLYMORPHIC_INVOICE DD-5.7** [RESOLVED 2026-05-25: **ADMIN-only void + ADMIN-only refund (strict)**. All voids and refunds require ADMIN role. Cashier mistakes route through ADMIN approval. Best for compliance-sensitive tenants. Slowest cashier UX accepted.] Void/refund actor matrix. Rec: cashier-window (PRD); user picked strict ADMIN.
+
+### Round 3 — Mini-Site scope + Biometric refactor + AI EU residency deferral
+
+- **PRD_AI_SURFACES DD-5.6** [DEFERRED 2026-05-25: **Cross EU bridge when first EU tenant signs**. No EU tenant in current pipeline; building the EU adapter pre-emptively is premature. Risk: salesperson loses an EU deal because we can't show GDPR compliance day 1 — accepted since pipeline is India-first.] EU LLM residency (OpenAI EU / Anthropic EU / Gemini EU). Was ⚠️ NEEDS PRODUCT CALL; now formally DEFERRED with explicit re-trigger condition.
+- **PRD_MINI_WEBSITE DD-5.2 / Zylu DD-5.8** [RESOLVED 2026-05-25: **Per-Location (chain clinic gets N mini-sites)**. Each clinic location has its own mini-site at /m/<slug>. MiniWebsiteConfig.locationId FK. Matches Zylu pattern; operators want per-location marketing.] Per-Location vs per-Tenant mini-site scope. Was ⚠️ NEEDS PRODUCT CALL; now resolved.
+- **PRD_MINI_WEBSITE DD-5.1** [RESOLVED 2026-05-25: **Extend existing BookingPage Wave-7D columns**. BookingPage already has logoUrl, heroImageUrl, heroHeadline from Wave-7D. Just add the missing fields (theme, service-ordering, contactInfo, customCss). No new model. Back-compat free.] Schema shape — extend BookingPage vs new MiniWebsiteConfig. Rec: extend (matches user pick).
+- **PRD_BIOMETRIC_ATTENDANCE DD-5.6** [RESOLVED 2026-05-25: **Full refactor — migrate existing rows to event-stream, single source of truth**. One-shot migration: each existing Attendance row becomes 1-2 AttendanceEvent rows. New code reads ONLY events. Cleanest long-term. ~+3 eng-days for migration + testing. Existing payroll/reporting needs rewiring.] Event-stream refactor scope. Rec: cohabit (PRD); user picked full refactor.
+
+### Round 4 — Strategic direction
+
+- **NEW-DD MOBILE STRATEGY** [RESOLVED 2026-05-25: **Native mobile app from scratch**. Biggest investment (3-6 months for v1). Best mobile UX but slowest path to value. Defers other work substantially. Mobile is THE growth lever per user direction.] Mobile reach approach. Drives a major resource shift.
+- **NEW-DD PAYMENTS ROLLOUT** [RESOLVED 2026-05-25: **Single tenant pilot first (Enhanced Wellness) — then expand**. Activate Stripe + Razorpay for Rishu's Enhanced Wellness tenant ONLY. Use real payments for 4-6 weeks to validate. If clean, generalize the per-tenant config UI (PRD_PAYMENT_GATEWAY_CONFIG) and roll to other tenants.] #896 Stripe/Razorpay activation rollout plan.
+- **NEW-DD TRAVEL SUB-BRAND PRIORITY** [RESOLVED 2026-05-25: **All 4 sub-brands as priority** (TMC + RFU + Travel Stall + Visa Sure). Engineering effort splits 4 ways simultaneously instead of focusing on one. Implication: each sub-brand gets ~25% of available capacity; longer time-to-completeness per brand vs depth-first model.] Travel vertical Phase 2 focus.
+- **NEW-DD NEXT VERTICAL** [RESOLVED 2026-05-25: **Stay in current 3 verticals — invest deeper in wellness + travel**. Don't dilute focus. Wellness has lots of headroom (POS, Memberships, Wallet, Biometric); Travel has 4 sub-brands to mature. Defer new verticals until current ones hit revenue inflection.] Future vertical roadmap.
+
+### Round 5 — Mobile stack + Wellness Phase 2 + Travel Security + Free tier
+
+- **NEW-DD MOBILE STACK** [RESOLVED 2026-05-25: **React Native (share types + business logic with existing web SPA)**. Same JS/TS ecosystem as the existing React SPA. Share API client + types + some utility code. Largest community + most CRM-suitable components. ~3-4 months for Phase 1 (login + leads + appointments + push).] Native mobile app framework choice (follow-up to Round-4 mobile strategy).
+- **NEW-DD WELLNESS PHASE 2 SEQUENCE** [RESOLVED 2026-05-25: **Wallet Top-up (D16) ships first — customer-facing impact, ~4-6 days**. Customers can top up wallet at clinic, get bonus credits, redeem at next visit. Operator pitches 'pre-paid loyalty.' Quick revenue lift. Smallest scope of the 4 PRDs (PO/Wallet/Memberships/Mini-Site).] Wellness Phase 2 first implementation pick.
+- **NEW-DD TRAVEL SECURITY PRIORITY** [RESOLVED 2026-05-25: **JWT storage + localStorage hardening (#914 + #915)** — first. Move JWT out of localStorage (httpOnly cookie or secure storage). XSS → account-takeover risk currently exists. Highest immediate threat. ~3-5 eng-days. Touches every authenticated request.] Travel Security cluster (#914-#921, 7 items) ordering.
+- **PRD_PLANS_BILLING_SELF_SERVE NEW-DD FREE TIER** [RESOLVED 2026-05-25: **Free tier with strict caps (≤50 contacts, ≤5 users)**. Lower friction for tenants to try the CRM. Hard caps prevent abuse. Conversion-funnel pitch: 'try free, upgrade when you grow.' Accepts free-tier abuse + support burden from low-value tenants.] Free-tier strategy for acquisition.
+
+### Round 6 — Commercial defaults
+
+- **PRD_PLANS_BILLING_SELF_SERVE NEW-DD PRICING TIERS** [RESOLVED 2026-05-25: **3 tiers — Free / Starter ₹1999/mo / Pro ₹4999/mo**. Classic SaaS triangle. Free for trial + small clinics; Starter for single-location; Pro for chains. Higher tiers = higher caps. Clear conversion ladder.] Pricing tier shape + price points (INR).
+- **NEW-DD MULTI-CURRENCY** [RESOLVED 2026-05-25: **INR-only for v1 — multi-currency v2**. All tenants invoice in INR. Existing Currency table + formatMoney() helper stay but no FX rate handling. Simplest. Fits India-first GTM. Some travel-tenant pain accepted (RFU bookings in SAR for hotels).] Multi-currency support priority.
+- **NEW-DD AUDIT RETENTION** [RESOLVED 2026-05-25: **Indefinite (current default — never delete)**. Audit rows stay forever. Best for compliance + forensics. Storage cost grows linearly with tenant activity (~5-50 MB/year per active tenant). No code changes needed.] Audit log retention default.
+- **NEW-DD NOTIFICATION DEFAULTS** [RESOLVED 2026-05-25: **In-app bell only (least noise)**. Default OFF for email + push + WhatsApp. User opts in to other channels per event-class. Lowest spam complaints. Risk accepted: critical events get missed if user isn't actively in the app.] Default channels when new event fires.
+
+---
+
+### Cascade implications surfaced by this Q&A
+
+Several decisions cascade across multiple subsystems; engineering should treat these as interlinked when scoping the next session:
+
+- **Per-Organization scoping (R2)** — adds NEW Organization Prisma model parent of Tenant. Affects: Plans & Billing UI, Stripe customer mapping, every multi-tenant query that joins on tenantId, the migration script that creates default 1-1 Organizations for existing tenants.
+- **DealInvoice rename (R1)** — touches routes/billing.js + routes/invoices.js + Billing.jsx + Invoices.jsx + 30d back-compat adapter. Cross-cutting; do as a single dedicated session per `executing-cross-route-shape-sweep` skill.
+- **AttendanceEvent full refactor (R3)** — migrates 793-LOC routes/attendance.js to event-stream. Existing payroll/reporting consumers must be rewired. Single-session focus.
+- **Native mobile (RN, R4+R5)** — 3-6 month investment that defers other work. Recommendation: dedicated branch/sub-team if available; otherwise sequenced as a 3-month focused commit.
+- **All 4 Travel sub-brands priority (R4)** — splits engineering 4 ways. Per-sub-brand velocity will be ~25%. Set expectations accordingly.
 
 ---
 

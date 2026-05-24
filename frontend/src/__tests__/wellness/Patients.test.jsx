@@ -679,6 +679,160 @@ describe('<wellness/Patients /> — page surface', () => {
     });
   });
 
+  // #820 (tick #194) — Import Patients button + modal + upload flow.
+  // Backend endpoint shipped tick #193 (`69ee75dc`) — POST /api/wellness/
+  // patients/import accepts multipart CSV via multer csvUpload.single('file');
+  // returns `{ summary: {totalRows, imported, duplicates, invalid},
+  // errors: [{row, errorCode, errorMessage}, ...], createdIds: [...] }`. Three
+  // load-bearing invariants here:
+  //   1. Button renders for the default (ADMIN-like) test role and is
+  //      enabled when not permissionDenied + no other download in flight.
+  //   2. Clicking opens the modal; picking a CSV file + clicking Upload
+  //      fires a POST with FormData carrying the `file` field (name matches
+  //      multer's expectation — load-bearing).
+  //   3. Success response renders the summary message; partial-failure
+  //      response renders the errors table.
+  describe('#820 Import Patients (tick #194)', () => {
+    let createObjectURLMock;
+    let revokeObjectURLMock;
+    let realFetch;
+    let fetchMock;
+
+    beforeEach(() => {
+      createObjectURLMock = vi.fn(() => 'blob:fake-url');
+      revokeObjectURLMock = vi.fn();
+      URL.createObjectURL = createObjectURLMock;
+      URL.revokeObjectURL = revokeObjectURLMock;
+      realFetch = global.fetch;
+      fetchMock = vi.fn();
+      global.fetch = fetchMock;
+    });
+
+    afterEach(() => {
+      global.fetch = realFetch;
+    });
+
+    it('renders an "Import Patients" button that is enabled', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const btn = screen.getByRole('button', { name: /Import Patients/i });
+      expect(btn).toBeInTheDocument();
+      expect(btn).not.toBeDisabled();
+    });
+
+    it('clicking Import opens the modal; selecting a file + Upload fires POST /api/wellness/patients/import with FormData', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          summary: { totalRows: 5, imported: 5, duplicates: 0, invalid: 0 },
+          errors: [],
+          createdIds: [101, 102, 103, 104, 105],
+        }),
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /Import Patients/i }));
+      // Modal opens — pin via the dialog role + file input.
+      expect(screen.getByRole('dialog', { name: /Import Patients/i })).toBeInTheDocument();
+      const fileInput = screen.getByLabelText(/CSV file/i);
+      expect(fileInput).toBeInTheDocument();
+
+      // Select a CSV file via the picker.
+      const file = new File(
+        ['name,phone\nAnita,+919876543210\n'],
+        'patients.csv',
+        { type: 'text/csv' },
+      );
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      // Click Upload — fires the POST with FormData.
+      fireEvent.click(screen.getByRole('button', { name: /^Upload$/ }));
+
+      await waitFor(() => {
+        const importCall = fetchMock.mock.calls.find(([u]) =>
+          typeof u === 'string' && u === '/api/wellness/patients/import'
+        );
+        expect(importCall).toBeTruthy();
+        const opts = importCall[1];
+        expect(opts.method).toBe('POST');
+        // Body is a FormData containing the `file` field.
+        expect(opts.body).toBeInstanceOf(FormData);
+        expect(opts.body.get('file')).toBe(file);
+        // Bearer header forwarded from the mocked getAuthToken.
+        expect(opts.headers).toEqual(
+          expect.objectContaining({ Authorization: 'Bearer fake-token' }),
+        );
+      });
+    });
+
+    it('mocked success response shows the summary message; partial-failure shows the errors table', async () => {
+      // First test: full-success response.
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          summary: { totalRows: 5, imported: 5, duplicates: 0, invalid: 0 },
+          errors: [],
+          createdIds: [101, 102, 103, 104, 105],
+        }),
+      });
+      const { unmount } = renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /Import Patients/i }));
+      const file1 = new File(['name,phone\nAnita,+919876543210\n'], 'good.csv', { type: 'text/csv' });
+      fireEvent.change(screen.getByLabelText(/CSV file/i), { target: { files: [file1] } });
+      fireEvent.click(screen.getByRole('button', { name: /^Upload$/ }));
+
+      // Summary text renders: "Imported 5 of 5 rows. 0 duplicates skipped. 0 rows failed validation."
+      await waitFor(() => {
+        const summary = screen.getByTestId('import-summary');
+        expect(summary.textContent).toMatch(/Imported\s*5\s*of\s*5\s*rows/i);
+        expect(summary.textContent).toMatch(/0 duplicates skipped/i);
+        expect(summary.textContent).toMatch(/0 rows failed validation/i);
+      });
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Imported 5 of 5 patients/i),
+      );
+      unmount();
+      notifySuccess.mockClear();
+      notifyError.mockClear();
+
+      // Second test: partial-failure response (3/5 imported, 2 invalid).
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          summary: { totalRows: 5, imported: 3, duplicates: 0, invalid: 2 },
+          errors: [
+            { row: 2, errorCode: 'INVALID_PHONE', errorMessage: 'Phone must be 10-15 digits' },
+            { row: 4, errorCode: 'INVALID_EMAIL', errorMessage: 'Email shape invalid' },
+          ],
+          createdIds: [201, 202, 203],
+        }),
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /Import Patients/i }));
+      const file2 = new File(['name,phone\nBad,abc\n'], 'partial.csv', { type: 'text/csv' });
+      fireEvent.change(screen.getByLabelText(/CSV file/i), { target: { files: [file2] } });
+      fireEvent.click(screen.getByRole('button', { name: /^Upload$/ }));
+
+      // Summary shows the 3/5 split + error codes/messages render in the table.
+      await waitFor(() => {
+        const summary = screen.getByTestId('import-summary');
+        expect(summary.textContent).toMatch(/Imported\s*3\s*of\s*5\s*rows/i);
+        expect(summary.textContent).toMatch(/2 rows failed validation/i);
+      });
+      expect(screen.getByText('INVALID_PHONE')).toBeInTheDocument();
+      expect(screen.getByText('Phone must be 10-15 digits')).toBeInTheDocument();
+      expect(screen.getByText('INVALID_EMAIL')).toBeInTheDocument();
+      expect(screen.getByText('Email shape invalid')).toBeInTheDocument();
+      // "Download full error CSV" affordance renders for the partial case.
+      expect(screen.getByRole('button', { name: /Download full error CSV/i })).toBeInTheDocument();
+    });
+  });
+
   it('shows "Loading…" before the initial fetch resolves', async () => {
     let resolvePatients;
     fetchApiMock.mockImplementation((url) => {

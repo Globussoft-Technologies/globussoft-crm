@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Search, Plus, Users, Phone, Mail, Pencil, Download, Tag, FileSpreadsheet, FileDown } from "lucide-react";
+import { Search, Plus, Users, Phone, Mail, Pencil, Download, Tag, FileSpreadsheet, FileDown, Upload } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
@@ -79,6 +79,20 @@ export default function Patients() {
   // XLSX / template is mid-download so a slow response can't race with a
   // user-triggered re-click.
   const [templateBusy, setTemplateBusy] = useState(false);
+  // #820 (tick #194) — Import Patients. Modal-driven CSV upload that POSTs to
+  // /api/wellness/patients/import (multipart/form-data; field name `file`;
+  // backend uses multer csvUpload.single('file') so the field name is
+  // load-bearing). Backend (tick #193 `69ee75dc`) returns
+  // `{ summary: {totalRows, imported, duplicates, invalid}, errors[], createdIds[] }`.
+  // The modal shows the summary message + a capped (50-row) errors table +
+  // a "Download full error CSV" affordance built client-side from errors[].
+  // Shares the combined busy gate with CSV / XLSX / template so a slow upload
+  // can't race with a user-triggered export. On success: list reloads so the
+  // new rows appear.
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importResult, setImportResult] = useState(null);
   // #931 — bulk-select + bulk-tag-add. Selected patient ids live in a Set so
   // toggle / clear is O(1). Modal stays open when the request errors so the
   // user can correct the tags input and retry without re-selecting rows.
@@ -285,6 +299,79 @@ export default function Patients() {
     } finally {
       setTemplateBusy(false);
     }
+  };
+
+  // #820 (tick #194) — Import Patients. Builds a FormData with the selected
+  // CSV file (field name `file` — matches multer's csvUpload.single('file')
+  // on the backend), POSTs it to /api/wellness/patients/import, and stashes
+  // the response envelope so the modal can render the summary + errors. On
+  // success-with-any-imports we also bump reloadTick so the freshly created
+  // rows appear in the list. Uses raw fetch (not fetchApi) so the multipart
+  // Content-Type boundary header is set automatically by the browser.
+  const submitImport = async () => {
+    if (!importFile) {
+      notify.error('Pick a CSV file to upload.');
+      return;
+    }
+    setImportBusy(true);
+    try {
+      const token = getAuthToken();
+      const formData = new FormData();
+      formData.append('file', importFile);
+      const res = await fetch('/api/wellness/patients/import', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          data?.error || data?.message || `Import failed (${res.status})`,
+        );
+      }
+      setImportResult(data);
+      const imported = data?.summary?.imported ?? 0;
+      const total = data?.summary?.totalRows ?? 0;
+      if (imported > 0) {
+        notify.success(`Imported ${imported} of ${total} patients.`);
+        // Reload the list so the newly created rows appear.
+        setReloadTick((t) => t + 1);
+      } else if (total > 0) {
+        notify.error(`No rows imported (${total} attempted).`);
+      }
+    } catch (e) {
+      notify.error(e?.message || 'Import failed.');
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  // #820 (tick #194) — Download a CSV of the per-row import errors so the
+  // operator can fix them in their source file and re-upload. Built client-
+  // side via Blob + URL.createObjectURL since the errors[] array already
+  // travels with the import response — no separate backend round-trip needed.
+  const downloadErrorCsv = () => {
+    const errors = importResult?.errors || [];
+    if (errors.length === 0) return;
+    const header = 'row,errorCode,errorMessage';
+    const escapeCsv = (v) => {
+      const s = String(v ?? '');
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const rows = errors.map((e) =>
+      [escapeCsv(e.row), escapeCsv(e.errorCode), escapeCsv(e.errorMessage)].join(','),
+    );
+    const csv = '﻿' + [header, ...rows].join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `patient-import-errors-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
 
   // #931 — bulk-select helpers. `toggleSelect` flips an individual row;
@@ -621,9 +708,9 @@ export default function Patients() {
             <button
               type="button"
               onClick={exportCsv}
-              disabled={csvBusy || xlsxBusy || templateBusy || total === 0}
+              disabled={csvBusy || xlsxBusy || templateBusy || importBusy || total === 0}
               title={q ? `Download ${total} matching patient${total === 1 ? '' : 's'} as CSV` : `Download all ${total} patients as CSV`}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || total === 0) ? 0.6 : 1 }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || importBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || importBusy || total === 0) ? 0.6 : 1 }}
             >
               <Download size={16} /> Export CSV
             </button>
@@ -636,9 +723,9 @@ export default function Patients() {
             <button
               type="button"
               onClick={exportXlsx}
-              disabled={csvBusy || xlsxBusy || templateBusy || total === 0}
+              disabled={csvBusy || xlsxBusy || templateBusy || importBusy || total === 0}
               title={q ? `Download ${total} matching patient${total === 1 ? '' : 's'} as XLSX` : `Download all ${total} patients as XLSX`}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || total === 0) ? 0.6 : 1 }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || importBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || importBusy || total === 0) ? 0.6 : 1 }}
             >
               <FileSpreadsheet size={16} /> Export XLSX
             </button>
@@ -655,12 +742,35 @@ export default function Patients() {
           <button
             type="button"
             onClick={downloadTemplate}
-            disabled={csvBusy || xlsxBusy || templateBusy}
+            disabled={csvBusy || xlsxBusy || templateBusy || importBusy}
             title="Download a CSV template (headers + example row) for bulk patient import"
-            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy) ? 0.6 : 1 }}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || importBusy) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || importBusy) ? 0.6 : 1 }}
           >
             <FileDown size={16} /> Download template
           </button>
+          {/* #820 (tick #194) — Import Patients. Opens a modal with a CSV
+              file picker; on submit POSTs multipart to /api/wellness/patients
+              /import (multer csvUpload.single('file') — field name `file` is
+              load-bearing). Backend (tick #193 `69ee75dc`) is gated by
+              phiWriteGate so a USER without write access will receive 403;
+              hide the button when permissionDenied so we don't tempt the user
+              into a guaranteed-403 click. Shares the combined busy gate with
+              the three export buttons. */}
+          {!permissionDenied && (
+            <button
+              type="button"
+              onClick={() => {
+                setImportModalOpen(true);
+                setImportFile(null);
+                setImportResult(null);
+              }}
+              disabled={csvBusy || xlsxBusy || templateBusy || importBusy}
+              title="Upload a CSV file to bulk-import patients (use the template above for the column layout)"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || importBusy) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || importBusy) ? 0.6 : 1 }}
+            >
+              <Upload size={16} /> Import Patients
+            </button>
+          )}
           <button
             onClick={() => {
               setShowAdd(!showAdd);
@@ -1356,6 +1466,207 @@ export default function Patients() {
                 {tagBusy ? 'Applying…' : 'Apply'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* #820 (tick #194) — Import Patients modal. Two visual states:
+          (a) pre-submit: file picker + helper text pointing at the template
+              download button + Upload + Cancel buttons.
+          (b) post-submit: summary message ("Imported X of Y rows. Z duplicates
+              skipped. W rows failed validation.") + errors[] table capped at
+              50 rows + "Download full error CSV" affordance. Close button
+              becomes the only action. */}
+      {importModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="import-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !importBusy) {
+              setImportModalOpen(false);
+              setImportFile(null);
+              setImportResult(null);
+            }
+          }}
+        >
+          <div
+            className="glass"
+            style={{
+              padding: '1.5rem',
+              borderRadius: 12,
+              minWidth: 420,
+              maxWidth: 720,
+              maxHeight: '85vh',
+              overflowY: 'auto',
+              background: 'var(--bg-primary, #1a1a2e)',
+              border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+            }}
+          >
+            <h3 id="import-modal-title" style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.1rem', fontWeight: 600 }}>
+              Import Patients
+            </h3>
+            {!importResult && (
+              <>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                  Upload a CSV file with patient rows. Download the template first if you haven&apos;t already — its column layout (name, phone, email, dob, gender, source, locationId, tags, notes) is what the import expects.
+                </p>
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  aria-label="CSV file"
+                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                  disabled={importBusy}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    padding: '0.55rem 0.75rem',
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: 8,
+                    color: 'var(--text-primary)',
+                    fontSize: '0.85rem',
+                    boxSizing: 'border-box',
+                  }}
+                />
+                {importFile && (
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: '0.4rem' }}>
+                    Selected: <strong>{importFile.name}</strong> ({Math.round(importFile.size / 1024)} KB)
+                  </p>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (importBusy) return;
+                      setImportModalOpen(false);
+                      setImportFile(null);
+                      setImportResult(null);
+                    }}
+                    disabled={importBusy}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      background: 'transparent',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+                      borderRadius: 8,
+                      cursor: importBusy ? 'not-allowed' : 'pointer',
+                      opacity: importBusy ? 0.6 : 1,
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitImport}
+                    disabled={importBusy || !importFile}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      background: 'var(--primary-color, var(--accent-color))',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 8,
+                      cursor: (importBusy || !importFile) ? 'not-allowed' : 'pointer',
+                      opacity: (importBusy || !importFile) ? 0.6 : 1,
+                    }}
+                  >
+                    {importBusy ? 'Uploading…' : 'Upload'}
+                  </button>
+                </div>
+              </>
+            )}
+            {importResult && (
+              <>
+                {(() => {
+                  const s = importResult.summary || {};
+                  const total = s.totalRows ?? 0;
+                  const imported = s.imported ?? 0;
+                  const duplicates = s.duplicates ?? 0;
+                  const invalid = s.invalid ?? 0;
+                  return (
+                    <p data-testid="import-summary" style={{ color: 'var(--text-primary)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+                      Imported <strong>{imported}</strong> of <strong>{total}</strong> rows. {duplicates} duplicate{duplicates === 1 ? '' : 's'} skipped. {invalid} row{invalid === 1 ? '' : 's'} failed validation.
+                    </p>
+                  );
+                })()}
+                {Array.isArray(importResult.errors) && importResult.errors.length > 0 && (
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                      <strong style={{ fontSize: '0.85rem' }}>
+                        Errors ({importResult.errors.length}){importResult.errors.length > 50 ? ' — showing first 50' : ''}
+                      </strong>
+                      <button
+                        type="button"
+                        onClick={downloadErrorCsv}
+                        style={{
+                          padding: '0.3rem 0.7rem',
+                          background: 'transparent',
+                          color: 'var(--text-primary)',
+                          border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                          fontSize: '0.78rem',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                        }}
+                      >
+                        <Download size={14} /> Download full error CSV
+                      </button>
+                    </div>
+                    <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6 }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)' }}>
+                            <th style={{ ...thStyle, padding: '0.4rem 0.75rem', width: '12%' }}>Row</th>
+                            <th style={{ ...thStyle, padding: '0.4rem 0.75rem', width: '28%' }}>Code</th>
+                            <th style={{ ...thStyle, padding: '0.4rem 0.75rem', width: '60%' }}>Message</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importResult.errors.slice(0, 50).map((er, i) => (
+                            <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                              <td style={{ ...tdStyle, padding: '0.35rem 0.75rem' }}>{er.row}</td>
+                              <td style={{ ...tdStyle, padding: '0.35rem 0.75rem' }}>{er.errorCode}</td>
+                              <td style={{ ...tdStyle, padding: '0.35rem 0.75rem', whiteSpace: 'normal' }}>{er.errorMessage}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportModalOpen(false);
+                      setImportFile(null);
+                      setImportResult(null);
+                    }}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      background: 'var(--primary-color, var(--accent-color))',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -170,6 +170,10 @@ model Tenant {
   travelQuotes             TravelQuote[]
   travelInvoices           TravelInvoice[]
   travelSuppliers          TravelSupplier[]
+  // TMC curriculum→destination mapping (PRD_TMC_CURRICULUM_MAPPING PC-1
+  // RESOLVED 2026-05-24). 100-200 starter rows seeded by GS; TMC academic
+  // team validates + extends over 6-week window.
+  curriculumMappings       TravelCurriculumMapping[]
   // Per-sub-brand brand kits (PRD_TRAVEL_PER_SUBBRAND_BRANDING DD-5.2
   // [RESOLVED 2026-05-24]) — versioned brand-asset storage forked out of
   // subBrandConfigJson. See BrandKit model at bottom of file.
@@ -446,6 +450,10 @@ model User {
 
   // Travel vertical — Visa Sure embassy-rule authorship (PC-3 RESOLVED 2026-05-24).
   embassyRulesCreated EmbassyRule[] @relation("EmbassyRuleCreator")
+
+  // Travel vertical — TMC curriculum-mapping advisor authorship
+  // (PRD_TMC_CURRICULUM_MAPPING PC-1 RESOLVED 2026-05-24).
+  curriculumMappingsCreated TravelCurriculumMapping[] @relation("CurriculumMappingCreator")
 }
 
 model Contact {
@@ -4844,5 +4852,66 @@ model BrandKit {
 
   @@unique([tenantId, subBrand, version])
   @@index([tenantId, subBrand, isActive])
+  @@index([tenantId, isActive])
+}
+
+/// TMC curriculum→destination mapping for Travel Stall's school-trip pitching.
+/// PC-1 RESOLVED 2026-05-24: GS drafts 100-200 starter rows + TMC academic team
+/// validates over 6 weeks. Referenced by /quotes builder + /diagnostics engine.
+///
+/// Fine-grain key (curriculum, grade, subject, learningOutcome) per PC-3 — one
+/// row represents "this learning outcome maps to this destination with this fit
+/// score". PC-2 scopes V1 to CBSE + ICSE; IB + Cambridge enabled but unseeded.
+/// PC-4 uses a 1-100 fitScore (human-judged for V1; rule-based pre-filter is
+/// Phase 2). PC-5 references TMC's existing trip catalogue via TmcTrip with a
+/// free-text destinationLabel fallback for advisor-suggested destinations not
+/// yet in the catalogue.
+model TravelCurriculumMapping {
+  id               Int     @id @default(autoincrement())
+  tenantId         Int
+  // Curriculum standard: 'CBSE' | 'ICSE' | 'IB' | 'Cambridge' (PC-2 — V1
+  // ships CBSE + ICSE only; IB + Cambridge enabled but rows unseeded).
+  curriculum       String
+  // Grade level — free-text since formats differ across curricula:
+  // CBSE/ICSE use 'Class 9', 'Class 10'; IB uses 'IB Year 1', 'IB Year 2';
+  // Cambridge uses 'IGCSE Year 10', etc.
+  grade            String
+  // Subject — e.g. 'Geography', 'History', 'Biology', 'Physics'.
+  subject          String
+  // Specific learning outcome the trip teaches (PC-3 — fine grain). Bounded
+  // VARCHAR (not Text) so it can participate in the composite @@unique below;
+  // 500 chars is enough for a concise outcome statement like "Plate tectonics
+  // + landform formation". Use fitRationale (@db.Text) for long-form notes.
+  learningOutcome  String? @db.VarChar(500)
+  // PC-5 — optional FK to TMC's TravelTrip catalogue (TmcTrip). When the
+  // recommended destination exists as a trip template, link to it. Otherwise
+  // leave null and use destinationLabel as a free-text fallback. FK omitted
+  // here (Int? only, no @relation) to keep the model unbound from cascade
+  // semantics — the route layer resolves TmcTrip on read.
+  destinationId    Int?
+  // PC-5 — free-text destination fallback (e.g. "Italy + Iceland", "Mussoorie
+  // + Dehradun"). Required when destinationId is null.
+  destinationLabel String?
+  // PC-4 — human-judged 1-100 fit score for V1 (50 = no opinion yet).
+  // Rule-based pre-filter scoring is Phase 2.
+  fitScore         Int?    @default(50)
+  // Advisor's free-text explanation of why this destination fits this outcome.
+  fitRationale     String? @db.Text
+  // Soft-disable a mapping without deleting (preserves history).
+  isActive         Boolean @default(true)
+  // Authoring advisor (academic-team member or GS template author).
+  createdById      Int?
+  createdBy        User?   @relation("CurriculumMappingCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Block duplicate rows for the same (tenant, curriculum, grade, subject,
+  // outcome) combination — advisors should edit existing rows, not duplicate.
+  @@unique([tenantId, curriculum, grade, subject, learningOutcome])
+  // Diagnostic-engine lookup path: "given a student's curriculum+grade+subject,
+  // surface candidate destinations sorted by fitScore."
+  @@index([curriculum, grade, subject])
   @@index([tenantId, isActive])
 }

@@ -183,6 +183,12 @@ model Tenant {
   // Drive folder root / microsite domain. Nullable; sub-brands without
   // an entry inherit tenant-level defaults.
   subBrandConfigJson       String?                        @db.Text
+  /// Per-sub-brand default theme. Resolved at runtime by chain:
+  /// user.themePreference → tenant.subBrandThemes[activeSubBrand] → 'system'.
+  /// Per #876 + DD-5.3 RESOLVED 2026-05-24. JSON-string column per
+  /// CLAUDE.md convention (call site stringifies; sanitizeJson preserves shape).
+  /// Shape: { "tmc": "light", "rfu": "dark", "travelstall": "system", "visasure": "light" }
+  subBrandThemes           String?                        @db.Text
 
   // Subscriptions
   subscriptions Subscription[]

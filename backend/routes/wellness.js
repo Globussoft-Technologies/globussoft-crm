@@ -1404,6 +1404,252 @@ router.get("/patients/:id/treatment-plans", phiReadGate, async (req, res) => {
   }
 });
 
+// GET /patients/:id/timeline — unified chronological feed merging Visits,
+// Prescriptions, ConsentForms, and TreatmentPlans for a single patient.
+//
+// Tick #198 (Agent A): the Patient detail SPA today fires 4 separate fetches
+// — /visits, /prescriptions, /consents, /treatment-plans — and stitches them
+// client-side into a chronological "patient history" feed. That's N+1 over
+// the wire AND each sub-resource ships its own audit row. This endpoint
+// merges them server-side into a single sorted feed with one audit emission
+// (PATIENT_TIMELINE_READ) and ONE round-trip from the SPA.
+//
+// Event shape is uniform across sources so the frontend doesn't need a
+// per-type renderer table:
+//   { eventType: 'VISIT' | 'PRESCRIPTION' | 'CONSENT' | 'TREATMENT_PLAN',
+//     eventId:   <int — the source row's id>,
+//     eventAt:   <ISO8601 — visit.visitDate / rx.createdAt / consent.signedAt / plan.startedAt>,
+//     summary:   <human-readable one-liner; masked under shouldMaskForViewer>,
+//     refType:   'Visit' | 'Prescription' | 'ConsentForm' | 'TreatmentPlan',
+//     refId:     <int — same as eventId, named to mirror audit-log refType/refId> }
+//
+// Sort order: eventAt DESC. Tie-breaker: eventType ASC, then eventId ASC
+// (deterministic — paginated callers see consistent order on identical
+// timestamps).
+//
+// Query params (all optional):
+//   ?from=<ISO>           — filter eventAt >= from
+//   ?to=<ISO>             — filter eventAt <= to
+//   ?types=VISIT,RX,...   — comma-separated subset filter (VISIT, PRESCRIPTION
+//                            or RX, CONSENT, TREATMENT_PLAN). Unknown tokens
+//                            silently dropped (forward-compat).
+//   ?limit=<int>          — caps the result count. Default 50, max 200.
+//
+// PHI / mask policy: if shouldMaskForViewer(req) is true (telecaller/helper
+// or USER on wellness tenant), each event's `summary` is replaced with the
+// generic placeholder "[masked]" — eventType / eventAt / refId still surface
+// so the timeline shape remains useful for non-clinical operators.
+router.get("/patients/:id/timeline", phiReadGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    if (!Number.isFinite(patientId) || patientId <= 0) {
+      return res.status(400).json({ error: "Invalid patient id" });
+    }
+
+    // Verify patient exists + belongs to tenant. 404 (not empty array) so
+    // a deleted patient or cross-tenant probe surfaces as a hard miss.
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    // ── Parse query params ──────────────────────────────────────────────
+    // limit: default 50, capped at 200. Anything non-numeric falls back to 50.
+    let limit = parseInt(req.query.limit, 10);
+    if (!Number.isFinite(limit) || limit <= 0) limit = 50;
+    if (limit > 200) limit = 200;
+
+    // types: subset filter. "RX" is an accepted alias for "PRESCRIPTION"
+    // because the frontend used it historically when consuming the flat
+    // /prescriptions endpoint. Unknown tokens are silently dropped so we
+    // don't 400 on forward-incompatible clients.
+    const ALL_TYPES = new Set(["VISIT", "PRESCRIPTION", "CONSENT", "TREATMENT_PLAN"]);
+    let wantTypes = null; // null = include all
+    if (typeof req.query.types === "string" && req.query.types.trim()) {
+      const raw = req.query.types.split(",").map((t) => t.trim().toUpperCase());
+      const expanded = raw.map((t) => (t === "RX" ? "PRESCRIPTION" : t));
+      wantTypes = new Set(expanded.filter((t) => ALL_TYPES.has(t)));
+      // If the caller passed `types=` but ALL tokens were unknown, treat as
+      // "no events match" rather than "include all" — that's the safer
+      // interpretation of an explicit filter.
+      if (wantTypes.size === 0) {
+        return res.json({ patientId, count: 0, events: [] });
+      }
+    }
+    const wants = (t) => wantTypes === null || wantTypes.has(t);
+
+    // from / to: ISO timestamps. Invalid values are silently dropped (don't
+    // 400 — pagination callers may pass back our own eventAt and we want it
+    // to round-trip cleanly).
+    let fromDate = null;
+    let toDate = null;
+    if (req.query.from) {
+      const d = new Date(req.query.from);
+      if (!Number.isNaN(d.getTime())) fromDate = d;
+    }
+    if (req.query.to) {
+      const d = new Date(req.query.to);
+      if (!Number.isNaN(d.getTime())) toDate = d;
+    }
+
+    // ── Parallel fan-out — one findMany per source table ────────────────
+    // Each source already has a (tenantId, patientId) composite index so the
+    // fan-out is 4 cheap index hits. Empty slots ([]) when the type is filtered
+    // out so the merge logic stays uniform.
+    const [visits, prescriptions, consents, treatmentPlans] = await Promise.all([
+      wants("VISIT")
+        ? prisma.visit.findMany({
+            where: tenantWhere(req, { patientId }),
+            select: {
+              id: true, visitDate: true, status: true,
+              service: { select: { id: true, name: true } },
+            },
+            orderBy: { visitDate: "desc" },
+          })
+        : Promise.resolve([]),
+      wants("PRESCRIPTION")
+        ? prisma.prescription.findMany({
+            where: tenantWhere(req, { patientId }),
+            select: {
+              id: true, createdAt: true, instructions: true,
+              doctor: { select: { id: true, name: true } },
+            },
+            orderBy: { createdAt: "desc" },
+          })
+        : Promise.resolve([]),
+      wants("CONSENT")
+        ? prisma.consentForm.findMany({
+            where: tenantWhere(req, { patientId }),
+            select: { id: true, signedAt: true, templateName: true },
+            orderBy: { signedAt: "desc" },
+          })
+        : Promise.resolve([]),
+      wants("TREATMENT_PLAN")
+        ? prisma.treatmentPlan.findMany({
+            where: tenantWhere(req, { patientId }),
+            select: {
+              id: true, startedAt: true, name: true, status: true,
+              completedSessions: true, totalSessions: true,
+            },
+            orderBy: { startedAt: "desc" },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    // ── Map to uniform event shape ──────────────────────────────────────
+    const events = [];
+    for (const v of visits) {
+      const svc = v.service ? v.service.name : null;
+      events.push({
+        eventType: "VISIT",
+        eventId: v.id,
+        eventAt: v.visitDate ? v.visitDate.toISOString() : null,
+        summary: svc
+          ? `Visit (${svc}) — ${v.status || "completed"}`
+          : `Visit — ${v.status || "completed"}`,
+        refType: "Visit",
+        refId: v.id,
+      });
+    }
+    for (const rx of prescriptions) {
+      const doc = rx.doctor ? rx.doctor.name : null;
+      events.push({
+        eventType: "PRESCRIPTION",
+        eventId: rx.id,
+        eventAt: rx.createdAt ? rx.createdAt.toISOString() : null,
+        summary: doc
+          ? `Prescription by Dr. ${doc}`
+          : "Prescription issued",
+        refType: "Prescription",
+        refId: rx.id,
+      });
+    }
+    for (const c of consents) {
+      events.push({
+        eventType: "CONSENT",
+        eventId: c.id,
+        eventAt: c.signedAt ? c.signedAt.toISOString() : null,
+        summary: `Consent signed: ${c.templateName || "general"}`,
+        refType: "ConsentForm",
+        refId: c.id,
+      });
+    }
+    for (const p of treatmentPlans) {
+      const progress = `${p.completedSessions || 0}/${p.totalSessions || 0}`;
+      events.push({
+        eventType: "TREATMENT_PLAN",
+        eventId: p.id,
+        eventAt: p.startedAt ? p.startedAt.toISOString() : null,
+        summary: `Treatment plan: ${p.name || "(unnamed)"} (${progress} sessions, ${p.status || "active"})`,
+        refType: "TreatmentPlan",
+        refId: p.id,
+      });
+    }
+
+    // ── from/to filter ──────────────────────────────────────────────────
+    let filtered = events;
+    if (fromDate || toDate) {
+      filtered = events.filter((e) => {
+        if (!e.eventAt) return false;
+        const t = new Date(e.eventAt).getTime();
+        if (fromDate && t < fromDate.getTime()) return false;
+        if (toDate && t > toDate.getTime()) return false;
+        return true;
+      });
+    }
+
+    // ── Sort: eventAt DESC, tiebreak by eventType ASC then eventId ASC ──
+    // The tiebreaker is load-bearing for paginated callers: two events on
+    // the same wall-clock instant must return in a stable order or the
+    // limit/offset paging window shifts under the caller's feet.
+    filtered.sort((a, b) => {
+      const ta = a.eventAt ? new Date(a.eventAt).getTime() : 0;
+      const tb = b.eventAt ? new Date(b.eventAt).getTime() : 0;
+      if (tb !== ta) return tb - ta;
+      if (a.eventType !== b.eventType) {
+        return a.eventType < b.eventType ? -1 : 1;
+      }
+      return a.eventId - b.eventId;
+    });
+
+    // ── Cap at limit ────────────────────────────────────────────────────
+    const capped = filtered.slice(0, limit);
+
+    // ── Mask summary for low-trust viewers ──────────────────────────────
+    // PRD §11 — HIPAA / DPDP. Telecallers / helpers see WHEN events
+    // happened (for scheduling) but NOT clinical detail. eventType, eventAt,
+    // refId still surface so they can build the patient-history shape; the
+    // free-text `summary` is replaced with the generic "[masked]" placeholder.
+    const mustMask = shouldMaskForViewer(req);
+    const outEvents = mustMask
+      ? capped.map((e) => ({ ...e, summary: "[masked]" }))
+      : capped;
+
+    // ── Audit (fire-and-forget) ─────────────────────────────────────────
+    // PRD §11 clinical-reads invariant — every PHI read row, including
+    // unified-feed reads, must emit an audit. PATIENT_TIMELINE_READ
+    // distinguishes from the per-sub-resource READ rows so audit reviewers
+    // can grep "which patients had timeline views requested" separately
+    // from "which had individual sub-resource views."
+    writeAudit(
+      "Patient",
+      "PATIENT_TIMELINE_READ",
+      patientId,
+      req.user.userId,
+      req.user.tenantId,
+      { patientId, eventCount: outEvents.length, masked: mustMask },
+    ).catch((auditErr) => {
+      console.warn("[wellness] audit PATIENT_TIMELINE_READ failed:", auditErr.message);
+    });
+
+    res.json({ patientId, count: outEvents.length, events: outEvents });
+  } catch (e) {
+    console.error("[wellness] patient timeline error:", e.message);
+    res.status(500).json({ error: "Failed to load patient timeline" });
+  }
+});
+
 // #108: a phone is optional, but if supplied must contain 10–15 digits after
 // stripping formatting (+, -, spaces, parens). Pre-fix the field accepted any
 // text like "abc123notaphone" which then broke dialer / WhatsApp integration.

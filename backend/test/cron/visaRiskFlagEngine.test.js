@@ -50,21 +50,27 @@ import prisma from '../../lib/prisma.js';
 import {
   runRiskFlaggingForTenant,
   evaluateRiskShell,
+  evaluateCooldownR13,
 } from '../../cron/visaRiskFlagEngine.js';
 
 beforeAll(() => {
-  prisma.visaApplication = { findMany: vi.fn() };
+  prisma.visaApplication = { findMany: vi.fn(), findUnique: vi.fn() };
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
+  prisma.embassyRule = { findFirst: vi.fn() };
 });
 
 beforeEach(() => {
   prisma.visaApplication.findMany.mockReset();
+  prisma.visaApplication.findUnique.mockReset();
   prisma.notification.findFirst.mockReset();
   prisma.notification.create.mockReset();
+  prisma.embassyRule.findFirst.mockReset();
 
   prisma.visaApplication.findMany.mockResolvedValue([]);
+  prisma.visaApplication.findUnique.mockResolvedValue(null);
   prisma.notification.findFirst.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
+  prisma.embassyRule.findFirst.mockResolvedValue(null);
 });
 
 describe('cron/visaRiskFlagEngine — runRiskFlaggingForTenant', () => {
@@ -729,5 +735,213 @@ describe('cron/visaRiskFlagEngine — evaluateRiskShell pure-function', () => {
     expect(flag).toBe(true);
     expect(reasons).toContain('rejection-history:3');
     expect(reasons).toContain('high-rejection-history:3');
+  });
+});
+
+// ── R13 rejection-recovery cooldown enforcement (PC-4 RESOLVED 2026-05-24) ─
+//
+// Async rule because it needs two prisma lookups (prior app + EmbassyRule
+// for the cooldown period). Tests pass a stub prismaClient directly to
+// `evaluateCooldownR13` so they don't depend on the module-level prisma
+// mock. Time-window assertions pin a fixed `now` Unix-ms value and a
+// fixed `priorApp.decidedAt` ISO string — no fake timers needed because
+// the function is pure aside from the injected prisma client.
+describe('cron/visaRiskFlagEngine — R13 evaluateCooldownR13 (cooldown)', () => {
+  const FIXED_NOW = new Date('2026-05-24T00:00:00Z').getTime();
+
+  function stubPrisma({ priorApp = null, rule = null } = {}) {
+    return {
+      visaApplication: {
+        findUnique: vi.fn().mockResolvedValue(priorApp),
+      },
+      embassyRule: {
+        findFirst: vi.fn().mockResolvedValue(rule),
+      },
+    };
+  }
+
+  test('R13 fires: prior rejected + cooldown not elapsed → cooldown reason with ISO date', async () => {
+    // priorApp decided 30 days before NOW; rule says 90-day cooldown →
+    // cooldownEnd is 60 days AFTER NOW → R13 fires.
+    const decidedAt = new Date('2026-04-24T00:00:00Z'); // 30d before NOW
+    const stub = stubPrisma({
+      priorApp: {
+        id: 50,
+        destinationCountry: 'US',
+        outcome: 'rejected',
+        status: 'rejected',
+        decidedAt,
+      },
+      rule: {
+        conditionJson: JSON.stringify({ days: 90 }),
+        severity: 'warning',
+      },
+    });
+
+    const result = await evaluateCooldownR13(
+      { id: 100, tenantId: 1, priorApplicationId: 50 },
+      FIXED_NOW,
+      stub,
+    );
+
+    // cooldownEnd = decidedAt + 90d = 2026-07-23
+    expect(result).toEqual({ reason: 'cooldown:until-2026-07-23' });
+    expect(stub.visaApplication.findUnique).toHaveBeenCalledWith({
+      where: { id: 50 },
+      select: expect.objectContaining({
+        id: true,
+        destinationCountry: true,
+        outcome: true,
+        status: true,
+        decidedAt: true,
+      }),
+    });
+    expect(stub.embassyRule.findFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: 1,
+        destinationCountry: 'US',
+        ruleType: 'cooldown_period',
+        isActive: true,
+      },
+      select: { conditionJson: true, severity: true },
+    });
+  });
+
+  test('R13 silent: prior rejected + cooldown elapsed → no flag', async () => {
+    // priorApp decided 120 days before NOW; rule says 90-day cooldown →
+    // cooldownEnd is 30 days BEFORE NOW → cooldown satisfied, no flag.
+    const decidedAt = new Date('2026-01-24T00:00:00Z'); // 120d before NOW
+    const stub = stubPrisma({
+      priorApp: {
+        id: 50,
+        destinationCountry: 'US',
+        outcome: 'rejected',
+        status: 'rejected',
+        decidedAt,
+      },
+      rule: {
+        conditionJson: JSON.stringify({ days: 90 }),
+        severity: 'warning',
+      },
+    });
+
+    const result = await evaluateCooldownR13(
+      { id: 100, tenantId: 1, priorApplicationId: 50 },
+      FIXED_NOW,
+      stub,
+    );
+
+    expect(result).toEqual({ reason: null });
+  });
+
+  test('R13 silent: no priorApplicationId on the app → no lookup, no flag', async () => {
+    const stub = stubPrisma();
+    const result = await evaluateCooldownR13(
+      { id: 100, tenantId: 1, priorApplicationId: null },
+      FIXED_NOW,
+      stub,
+    );
+    expect(result).toEqual({ reason: null });
+    expect(stub.visaApplication.findUnique).not.toHaveBeenCalled();
+    expect(stub.embassyRule.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('R13 silent: priorApp loaded but outcome ≠ rejected → no flag', async () => {
+    // App linked to a prior application but the prior was approved, not
+    // rejected — so cooldown enforcement is N/A.
+    const stub = stubPrisma({
+      priorApp: {
+        id: 50,
+        destinationCountry: 'US',
+        outcome: 'approved',
+        status: 'approved',
+        decidedAt: new Date('2026-04-24T00:00:00Z'),
+      },
+    });
+
+    const result = await evaluateCooldownR13(
+      { id: 100, tenantId: 1, priorApplicationId: 50 },
+      FIXED_NOW,
+      stub,
+    );
+
+    expect(result).toEqual({ reason: null });
+    expect(stub.embassyRule.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('R13 silent: no EmbassyRule for destination → no flag', async () => {
+    // Prior was rejected for a destination that has no configured
+    // cooldown rule — so we can't enforce a window. Silent skip.
+    const stub = stubPrisma({
+      priorApp: {
+        id: 50,
+        destinationCountry: 'PT', // no rule configured
+        outcome: 'rejected',
+        status: 'rejected',
+        decidedAt: new Date('2026-04-24T00:00:00Z'),
+      },
+      rule: null,
+    });
+
+    const result = await evaluateCooldownR13(
+      { id: 100, tenantId: 1, priorApplicationId: 50 },
+      FIXED_NOW,
+      stub,
+    );
+
+    expect(result).toEqual({ reason: null });
+  });
+
+  test('R13 silent: EmbassyRule conditionJson is malformed → no flag, no crash', async () => {
+    // Operator-side data quality issue: the rule row exists but the
+    // conditionJson can't be parsed. R13 silently degrades instead of
+    // throwing — the engine continues processing other rules / apps.
+    const stub = stubPrisma({
+      priorApp: {
+        id: 50,
+        destinationCountry: 'US',
+        outcome: 'rejected',
+        status: 'rejected',
+        decidedAt: new Date('2026-04-24T00:00:00Z'),
+      },
+      rule: {
+        conditionJson: '{ not valid json',
+        severity: 'warning',
+      },
+    });
+
+    const result = await evaluateCooldownR13(
+      { id: 100, tenantId: 1, priorApplicationId: 50 },
+      FIXED_NOW,
+      stub,
+    );
+
+    expect(result).toEqual({ reason: null });
+  });
+
+  test('R13 silent: conditionJson parses but days is not a positive number → no flag', async () => {
+    // Defensive against `{days: "ninety"}` or `{days: -5}` or `{days: 0}` —
+    // the cooldown logic requires a strictly-positive finite number.
+    const stub = stubPrisma({
+      priorApp: {
+        id: 50,
+        destinationCountry: 'US',
+        outcome: 'rejected',
+        status: 'rejected',
+        decidedAt: new Date('2026-04-24T00:00:00Z'),
+      },
+      rule: {
+        conditionJson: JSON.stringify({ days: 'ninety' }),
+        severity: 'warning',
+      },
+    });
+
+    const result = await evaluateCooldownR13(
+      { id: 100, tenantId: 1, priorApplicationId: 50 },
+      FIXED_NOW,
+      stub,
+    );
+
+    expect(result).toEqual({ reason: null });
   });
 });

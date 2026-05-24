@@ -47,6 +47,9 @@
 //   R10 FR-3.1(d) new-destination       — tenant has no prior filed app for this country
 //   R11 FR-3.1+3 complex-stale          — complexCase=true + updatedAt >5d (neglect risk)
 //   R12 FR-3.2   high-rejection-history — rejectionHistoryJson parsed length ≥2 (severity tier)
+//   R13 FR-3.1(b)+PC-4 cooldown — priorApplicationId → prior app rejected →
+//        EmbassyRule(cooldown_period) for destination → current time before
+//        priorApp.decidedAt + cooldown.days → flag with countdown
 //
 // Cadence: every 6 hours per the parallel-wave dispatch contract. PRD
 // §4 latency target is "< 15 min p95" which the production cron will hit
@@ -111,6 +114,18 @@ const COMPLEX_STALE_MS = COMPLEX_STALE_DAYS * 24 * 60 * 60 * 1000;
 // downstream priority mapping is a PC-3 design call; this is the
 // today-shippable proxy that surfaces the worst cases to advisors.
 const HIGH_REJECTION_HISTORY_THRESHOLD = 2;
+
+// R13 (FR-3.1(b) + PC-4 RESOLVED 2026-05-24) — rejection-recovery cooldown.
+// When an application carries a `priorApplicationId` self-FK pointing at a
+// previously-rejected app for the SAME destinationCountry, the embassy may
+// enforce a mandatory cooldown window before a reapplication is even
+// accepted. PC-4 resolved 2026-05-24: source the per-destination cooldown
+// period from the EmbassyRule(ruleType='cooldown_period') row whose
+// `conditionJson` carries `{days: N}`. If the current time is before
+// (priorApp.decidedAt + N days), surface the countdown to the advisor so
+// they don't waste an embassy slot filing prematurely. The check is silent
+// on every edge case (no prior, prior not rejected, no rule, malformed
+// conditionJson) — the engine never crashes on R13.
 
 // SHELL evaluation — returns { flag, reasons[] } for a VisaApplication
 // row. Real engine replaces this with a rule-engine + LLM narrative once
@@ -283,6 +298,103 @@ function evaluateRiskShell(app, now = Date.now(), context = {}) {
   return { flag: reasons.length > 0, reasons };
 }
 
+// R13 (FR-3.1(b) + PC-4 RESOLVED 2026-05-24) — rejection-recovery cooldown
+// enforcement. Async because it needs two prisma lookups (prior app + the
+// per-destination EmbassyRule). Silent skip on every edge case so the rule
+// never crashes the engine; advisors only see R13 when ALL preconditions
+// line up:
+//
+//   1. app.priorApplicationId is non-null (self-FK from tick #176 schema)
+//   2. priorApp loads + has outcome='rejected' OR status='rejected'
+//      (schema allows either as the rejection signal — outcome is the
+//      definitive field per `VisaApplication.outcome` enum doc-comment,
+//      but legacy rows may carry status='rejected' without outcome set)
+//   3. priorApp.decidedAt is non-null (needed for cooldown anchor)
+//   4. An active EmbassyRule(ruleType='cooldown_period') exists for the
+//      tenant + the prior app's destinationCountry
+//   5. conditionJson parses as `{days: number}` with days being a positive
+//      finite number
+//   6. now < priorApp.decidedAt + days * 86_400_000 (cooldown unsatisfied)
+//
+// On match, returns `cooldown:until-YYYY-MM-DD` so the advisor sees the
+// concrete date in the notification message.
+//
+// Test injection: pass a `prismaClient` arg to override the module-level
+// import. Defaults to `module.exports.__prisma` (resolved at call-time
+// through the exports surface per CLAUDE.md's CJS self-mocking seam
+// pattern — tests can `vi.spyOn(module.exports, '__prisma', 'get')` if
+// they need finer-grained control, but the simpler pattern is to just
+// pass a stub directly via the arg).
+async function evaluateCooldownR13(app, now, prismaClient) {
+  try {
+    if (!app || !app.priorApplicationId) return { reason: null };
+
+    const db = prismaClient || prisma;
+
+    const priorApp = await db.visaApplication.findUnique({
+      where: { id: app.priorApplicationId },
+      select: {
+        id: true,
+        destinationCountry: true,
+        outcome: true,
+        status: true,
+        decidedAt: true,
+      },
+    });
+
+    if (!priorApp) return { reason: null };
+
+    const isRejected =
+      priorApp.outcome === "rejected" || priorApp.status === "rejected";
+    if (!isRejected) return { reason: null };
+    if (!priorApp.decidedAt) return { reason: null };
+    if (!priorApp.destinationCountry) return { reason: null };
+
+    const rule = await db.embassyRule.findFirst({
+      where: {
+        tenantId: app.tenantId,
+        destinationCountry: priorApp.destinationCountry,
+        ruleType: "cooldown_period",
+        isActive: true,
+      },
+      select: { conditionJson: true, severity: true },
+    });
+
+    if (!rule || !rule.conditionJson) return { reason: null };
+
+    let days;
+    try {
+      const parsed = JSON.parse(rule.conditionJson);
+      if (!parsed || typeof parsed !== "object") return { reason: null };
+      days = parsed.days;
+    } catch {
+      // Malformed JSON — silent skip per the engine's reliability contract
+      return { reason: null };
+    }
+
+    if (typeof days !== "number" || !Number.isFinite(days) || days <= 0) {
+      return { reason: null };
+    }
+
+    const decidedMs = new Date(priorApp.decidedAt).getTime();
+    if (!Number.isFinite(decidedMs)) return { reason: null };
+
+    const cooldownEndMs = decidedMs + days * 86_400_000;
+    if (now >= cooldownEndMs) return { reason: null };
+
+    const untilIso = new Date(cooldownEndMs).toISOString().split("T")[0];
+    return { reason: `cooldown:until-${untilIso}` };
+  } catch (e) {
+    // Defensive: any prisma error or unexpected throw degrades to silent
+    // skip. R13 never crashes the engine; the other 12 rules continue.
+    console.warn(
+      `[VisaRiskFlag] R13 cooldown check failed for app ${app && app.id}:`,
+      e && e.message,
+    );
+    return { reason: null };
+  }
+}
+
 /**
  * @param {number} tenantId
  * @returns {Promise<{ evaluated: number, flagged: number }>}
@@ -307,6 +419,7 @@ async function runRiskFlaggingForTenant(tenantId) {
       decidedAt: true,
       createdAt: true,
       updatedAt: true,
+      priorApplicationId: true,
       documentChecklist: {
         select: { id: true, required: true, status: true },
       },
@@ -337,10 +450,25 @@ async function runRiskFlaggingForTenant(tenantId) {
 
   for (const app of applications) {
     evaluated++;
-    const { flag, reasons } = evaluateRiskShell(app, Date.now(), {
+    const now = Date.now();
+    const { reasons } = evaluateRiskShell(app, now, {
       knownDestinations,
     });
-    if (!flag) continue;
+
+    // R13 — async cooldown check. Tenant-scope is injected from the
+    // outer tenantId arg (not in the select). Uses module.exports
+    // indirection so vitest can spy on the helper if needed (CJS
+    // self-mocking seam, CLAUDE.md cron-learning 2026-05-24).
+    const r13 = await module.exports.evaluateCooldownR13(
+      { ...app, tenantId },
+      now,
+      prisma,
+    );
+    if (r13 && r13.reason) {
+      reasons.push(r13.reason);
+    }
+
+    if (reasons.length === 0) continue;
 
     // Dedup: existing warning notification for this application?
     const existing = await prisma.notification.findFirst({
@@ -423,4 +551,5 @@ module.exports = {
   runRiskFlaggingForAllTravelTenants,
   // Exported for unit-test introspection only.
   evaluateRiskShell,
+  evaluateCooldownR13,
 };

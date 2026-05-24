@@ -393,6 +393,15 @@ gh issue list --label "wellness" --state open --limit 20
 
 ---
 
+### D11. Unified Integrations Hub (#858) — PRD drafted, design call pending
+**Labels:** `wellness-session`, `backend`, `frontend`, `multi-day-feature`, `operator-ux`, `governance`
+
+**Why manual:** today's integration footprint is functional but scattered — channel-specific config lives on each module page (`Channels.jsx`, `WhatsAppConfig`, `SmsConfig`, `CalendarSync.jsx`, payment gateway page per `PRD_PAYMENT_GATEWAY_CONFIG.md`, marketplace-leads page, SSO/SCIM pages, Zapier page, sister-product API key surface on `Developer.jsx`, etc.). No single page where an Admin can see "what integrations are configured for this tenant right now?". New-tenant onboarding pays a 30-60 minute discovery tax navigating 8+ different pages; compliance audits can't get a one-shot snapshot; operators don't discover integrations they don't already know about. PRD drafted at `docs/PRD_INTEGRATIONS_HUB.md` (tick #190, 2026-05-25 / Agent B). 7 design decisions + 9 open questions need product-call sign-off before implementation can start. Recommended slicing: slice 1 (~2d) = static registry (25 entries) + 5 core status providers + 3 API endpoints + admin page with catalog + status badges + filters; slice 2 (~1.5d) = remaining 5+ status providers + Sister Products section with API key management + audit log integration + RBAC enforcement; slice 3 (~1d) = export/import config flow + provider logos + caching layer + URL-state for filters; slice 4 (~0.5-1d) = tests + CI gate-spec wiring + `docs/integration-registry-guide.md`. NO schema migration (pure aggregation over existing `Integration`/`ApiKey`/`Webhook`/`SmsConfig`/`WhatsAppConfig`/`TelephonyConfig`/`Chatbot`/`SsoConfig`/`ScimToken`/`MarketplaceConfig`/`CalendarIntegration` models). NO new cron engine. Pure backend aggregation + new frontend page. Cross-references `PRD_PAYMENT_GATEWAY_CONFIG.md` (deep-link target for payment cards) + `PRD_IMPORT_EXPORT_JOBS.md` (consumes integration credentials for email-on-completion notifications) + closes #651 credential-masking contract on every credential surface. **Total estimated effort post-design: 4-6 engineering days** across backend + frontend.
+
+**Blocks before frontend impl can start:** DD-5.1 (static curated registry vs auto-derived from models) + DD-5.2 (deep-link to existing config pages vs centralize all in hub) + DD-5.3 (live-polled vs cached status with manual refresh) + DD-5.4 (sister-product key management in same hub vs separate Developer surface) + DD-5.6 (synchronous Test button vs async with notify-on-completion) + Q1 (categorize by FUNCTION vs by VENDOR) + Q4 (Test button latency UX — 5s sync timeout acceptable?).
+
+---
+
 ## E. PRODUCT-CALL DEPENDENT (decision-first, then implementation)
 
 These don't need an engineer — they need a stakeholder decision. Once the decision arrives, the implementation is small.

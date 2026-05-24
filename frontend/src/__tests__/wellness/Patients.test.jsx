@@ -481,6 +481,91 @@ describe('<wellness/Patients /> — page surface', () => {
     });
   });
 
+  // #931 (tick #197) — bulk-tag-REMOVE UI. Mirrors the add-tags describe
+  // above; pins the sibling button visibility, modal open, PATCH body shape
+  // (now `removeTags` instead of `addTags`), and success toast referencing
+  // the backend's new `removed` count field (shipped tick #196, `5b610a56`).
+  describe('#931 bulk-tag-remove (tick #197)', () => {
+    it('checking a row reveals the "Remove tags from N selected" CTA and clicking opens the modal', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      // Pre-select: CTA hidden.
+      expect(screen.queryByText(/Remove tags from .* selected/i)).not.toBeInTheDocument();
+      // Check a row → both Add + Remove buttons appear together.
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      expect(screen.getByRole('button', { name: /Add tags to 1 selected/i })).toBeInTheDocument();
+      const removeBtn = screen.getByRole('button', { name: /Remove tags from 1 selected/i });
+      expect(removeBtn).toBeInTheDocument();
+      // Clicking the Remove CTA opens the remove modal (distinguished by its
+      // aria-label on the input — "Tags to remove (comma-separated)" — so it
+      // doesn't collide with the add modal's "Tags (comma-separated)" label).
+      fireEvent.click(removeBtn);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(screen.getByLabelText(/Tags to remove \(comma-separated\)/i)).toBeInTheDocument();
+    });
+
+    it('Apply fires PATCH /api/wellness/patients/bulk-tags with patientIds + removeTags', async () => {
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/wellness/patients/bulk-tags' && opts?.method === 'PATCH') {
+          return Promise.resolve({ removed: 1, updated: 1 });
+        }
+        return defaultFetchMock(url, opts);
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Remove tags from 1 selected/i }));
+      // Same client-side trim / lowercase / dedupe shape as add-tags.
+      fireEvent.change(screen.getByLabelText(/Tags to remove \(comma-separated\)/i), {
+        target: { value: 'VIP, dermatology , vip' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^Apply$/ }));
+
+      await waitFor(() => {
+        const call = fetchApiMock.mock.calls.find(
+          ([u, o]) => u === '/api/wellness/patients/bulk-tags' && o?.method === 'PATCH'
+        );
+        expect(call).toBeTruthy();
+        const body = JSON.parse(call[1].body);
+        expect(body.patientIds).toEqual([1]);
+        // Pinned shape: `removeTags` not `addTags`; same trim+lower+dedupe.
+        expect(body.removeTags).toEqual(['vip', 'dermatology']);
+        expect(body.addTags).toBeUndefined();
+      });
+    });
+
+    it('success toast references the server-reported `removed` count', async () => {
+      // Backend envelope per tick #196 (5b610a56): { removed: N, updated: M }
+      // where N = total tag-deletions across the selection and M = patients
+      // touched. Toast prefers `removed` over `updated` to give a more
+      // honest signal than just "we hit 3 patients".
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/wellness/patients/bulk-tags' && opts?.method === 'PATCH') {
+          return Promise.resolve({ removed: 5, updated: 3 });
+        }
+        return defaultFetchMock(url, opts);
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Remove tags from 1 selected/i }));
+      fireEvent.change(screen.getByLabelText(/Tags to remove \(comma-separated\)/i), {
+        target: { value: 'vip, dermatology' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^Apply$/ }));
+
+      await waitFor(() => {
+        expect(notifySuccess).toHaveBeenCalledWith(
+          expect.stringMatching(/Removed 5 tags from 3 patients/i),
+        );
+      });
+      // Modal closes on success.
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+    });
+  });
+
   // #820 (tick #188) — XLSX export button. Mirrors the CSV button surface;
   // pinned here because the backend xlsx endpoint shipped tick #187 (ed00be9b)
   // and the chrome is the same fetch+blob mechanic as CSV. Three load-bearing

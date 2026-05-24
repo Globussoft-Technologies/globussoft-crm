@@ -100,6 +100,16 @@ export default function Patients() {
   const [tagModalOpen, setTagModalOpen] = useState(false);
   const [tagInput, setTagInput] = useState("");
   const [tagBusy, setTagBusy] = useState(false);
+  // #931 (tick #197) — bulk-tag-REMOVE companion modal. Backend endpoint
+  // PATCH /api/wellness/patients/bulk-tags shipped tick #196 (`5b610a56`)
+  // accepts an optional `removeTags` array alongside the existing `addTags`.
+  // Kept as a sibling modal (Option A) rather than a mode-toggle inside the
+  // add-tags modal because the file's existing CTA pattern is one-label-one-
+  // action ("Add tags to N selected", "Export CSV", "Export XLSX") and a
+  // mode toggle would invert that for no operator-cognition gain.
+  const [removeTagModalOpen, setRemoveTagModalOpen] = useState(false);
+  const [removeTagInput, setRemoveTagInput] = useState("");
+  const [removeTagBusy, setRemoveTagBusy] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [locations, setLocations] = useState([]);
   // #205: dob added so the form can capture it; gender already exists. Phone
@@ -447,6 +457,56 @@ export default function Patients() {
     }
   };
 
+  // #931 (tick #197) — submit the bulk-tag-REMOVE modal. Same shape as
+  // submitBulkTags but passes `removeTags` instead of `addTags`. Backend
+  // returns `{ removed: N, updated: M }` per tick #196 (5b610a56); toast
+  // prefers the `removed` count when present, falling back to `updated`
+  // for old-server cases (defensive — both fields are populated post-tick
+  // #196). On success: clear modal state, clear selection, refresh list so
+  // chips disappear immediately. On error: modal stays open for retry.
+  const submitBulkRemoveTags = async () => {
+    const raw = removeTagInput || "";
+    const parsed = raw
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 0);
+    const deduped = Array.from(new Set(parsed));
+    if (deduped.length === 0) {
+      notify.error("Enter at least one tag (comma-separated).");
+      return;
+    }
+    if (deduped.length > 20) {
+      notify.error("Cannot remove more than 20 tags in a single request.");
+      return;
+    }
+    const patientIds = Array.from(selectedIds);
+    if (patientIds.length === 0) {
+      notify.error("No patients selected.");
+      return;
+    }
+    setRemoveTagBusy(true);
+    try {
+      const res = await fetchApi("/api/wellness/patients/bulk-tags", {
+        method: "PATCH",
+        body: JSON.stringify({ patientIds, removeTags: deduped }),
+      });
+      const updatedCount = res?.updated ?? patientIds.length;
+      const removedCount = res?.removed ?? deduped.length;
+      notify.success(
+        `Removed ${removedCount} tag${removedCount === 1 ? "" : "s"} from ${updatedCount} patient${updatedCount === 1 ? "" : "s"}.`,
+      );
+      setRemoveTagInput("");
+      setRemoveTagModalOpen(false);
+      setSelectedIds(new Set());
+      setReloadTick((t) => t + 1);
+    } catch (e) {
+      notify.error(e?.message || "Failed to remove tags.");
+      // Modal stays open intentionally so the user can retry.
+    } finally {
+      setRemoveTagBusy(false);
+    }
+  };
+
   useEffect(() => {
     // First mount: do exactly one immediate load with empty q so the table
     // populates, but don't go through the debounced path that races with
@@ -693,6 +753,23 @@ export default function Patients() {
               style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
             >
               <Tag size={16} /> Add tags to {selectedIds.size} selected
+            </button>
+          )}
+          {/* #931 (tick #197) — bulk-tag-REMOVE CTA. Mirrors the add-tags
+              button shape (visible only when ≥1 row selected) so the two
+              affordances appear together when the user has work to do; the
+              secondary "outlined" chrome differentiates it from the primary
+              Add-tags action so a stressed operator doesn't fat-finger the
+              destructive option. Opens the comma-separated-tags-to-remove
+              modal which PATCHes /api/wellness/patients/bulk-tags with
+              `removeTags` instead of `addTags`. */}
+          {selectedIds.size > 0 && (
+            <button
+              type="button"
+              onClick={() => setRemoveTagModalOpen(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer' }}
+            >
+              <Tag size={16} /> Remove tags from {selectedIds.size} selected
             </button>
           )}
           {/* #931 + #816 Patients slice — CSV export honors the current search
@@ -1464,6 +1541,101 @@ export default function Patients() {
                 }}
               >
                 {tagBusy ? 'Applying…' : 'Apply'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* #931 (tick #197) — bulk-tag-REMOVE modal. Companion to the add-tags
+          modal above; same comma-separated tag input + same Apply/Cancel
+          shape so muscle memory carries between the two. PATCHes
+          /api/wellness/patients/bulk-tags with `removeTags`. On success:
+          modal closes, selection clears, list refreshes so the now-removed
+          chips disappear immediately. On error: modal stays open. */}
+      {removeTagModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-remove-tag-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          onClick={(e) => {
+            // Click on backdrop closes (unless mid-request).
+            if (e.target === e.currentTarget && !removeTagBusy) {
+              setRemoveTagModalOpen(false);
+            }
+          }}
+        >
+          <div
+            className="glass"
+            style={{
+              padding: '1.5rem',
+              borderRadius: 12,
+              minWidth: 360,
+              maxWidth: 480,
+              background: 'var(--bg-primary, #1a1a2e)',
+              border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+            }}
+          >
+            <h3 id="bulk-remove-tag-modal-title" style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.1rem', fontWeight: 600 }}>
+              Remove tags from {selectedIds.size} patient{selectedIds.size === 1 ? '' : 's'}
+            </h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+              Enter tags separated by commas. Tags not present on a patient are silently skipped.
+            </p>
+            <input
+              type="text"
+              aria-label="Tags to remove (comma-separated)"
+              placeholder="vip, dermatology, follow-up"
+              value={removeTagInput}
+              onChange={(e) => setRemoveTagInput(e.target.value)}
+              disabled={removeTagBusy}
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (removeTagBusy) return;
+                  setRemoveTagModalOpen(false);
+                  setRemoveTagInput("");
+                }}
+                disabled={removeTagBusy}
+                style={{
+                  padding: '0.5rem 1rem',
+                  background: 'transparent',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+                  borderRadius: 8,
+                  cursor: removeTagBusy ? 'not-allowed' : 'pointer',
+                  opacity: removeTagBusy ? 0.6 : 1,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitBulkRemoveTags}
+                disabled={removeTagBusy || removeTagInput.trim().length === 0}
+                style={{
+                  padding: '0.5rem 1rem',
+                  background: 'var(--primary-color, var(--accent-color))',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  cursor: (removeTagBusy || removeTagInput.trim().length === 0) ? 'not-allowed' : 'pointer',
+                  opacity: (removeTagBusy || removeTagInput.trim().length === 0) ? 0.6 : 1,
+                }}
+              >
+                {removeTagBusy ? 'Applying…' : 'Apply'}
               </button>
             </div>
           </div>

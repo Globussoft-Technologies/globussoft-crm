@@ -186,6 +186,52 @@ function capLimit(raw, { def = 50, max = 200 } = {}) {
   return Math.min(n, max);
 }
 
+// #820 (tick #191) — shared filter mutator for the patient listing surface
+// (GET /patients + /patients.csv + /patients.xlsx). Reads the three new
+// query params and mutates `where` in-place so all three handlers stay
+// in lockstep without duplicating parsing logic.
+//
+// Contract:
+//   ?source=<string>      → where.source = source (verbatim — Patient.source
+//                           is a free-form text column; no enum constraint).
+//                           Empty string is a no-op.
+//   ?gender=<F|M|O>       → where.gender = gender (uppercase normalised).
+//                           Values outside {F, M, O} are silently ignored —
+//                           consistent with REST listing conventions
+//                           (no 400 on a bad filter; just returns unfiltered).
+//   ?createdFrom=<ISO>    → where.createdAt.gte = parsed Date.
+//                           Invalid date strings are silently ignored.
+//   ?createdTo=<ISO>      → where.createdAt.lte = parsed Date.
+//                           Invalid date strings are silently ignored.
+//
+// All four are additive — omitting them gives the pre-#820 behaviour.
+function applyPatientListFilters(where, query) {
+  const sourceVal = typeof query.source === "string" ? query.source.trim() : "";
+  if (sourceVal) {
+    where.source = sourceVal;
+  }
+  const genderRaw = typeof query.gender === "string" ? query.gender.trim().toUpperCase() : "";
+  if (genderRaw === "F" || genderRaw === "M" || genderRaw === "O") {
+    where.gender = genderRaw;
+  }
+  const createdAt = {};
+  if (query.createdFrom) {
+    const d = new Date(query.createdFrom);
+    if (Number.isFinite(d.getTime())) {
+      createdAt.gte = d;
+    }
+  }
+  if (query.createdTo) {
+    const d = new Date(query.createdTo);
+    if (Number.isFinite(d.getTime())) {
+      createdAt.lte = d;
+    }
+  }
+  if (Object.keys(createdAt).length > 0) {
+    where.createdAt = { ...(where.createdAt || {}), ...createdAt };
+  }
+}
+
 // #527 / #533 (CRIT-02 + HI-04): PHI access gates.
 //
 // Pre-fix the wellness clinical routes were tenant-scoped but had NO
@@ -425,6 +471,14 @@ router.get("/patients", phiReadGate, async (req, res) => {
     if (req.query.includeDeleted !== '1' && req.query.includeDeleted !== 'true') {
       where.deletedAt = null;
     }
+    // #820 (tick #191) — additive list filters: source / gender /
+    // createdFrom / createdTo. All optional + backward-compatible. Invalid
+    // shapes are silently ignored (no 400) consistent with REST listing
+    // conventions — a search with createdFrom='garbage' returns the same
+    // result as omitting the param. The same filter-application block is
+    // mirrored on /patients.csv + /patients.xlsx below so listing + export
+    // stay consistent.
+    applyPatientListFilters(where, req.query);
     const [patients, total] = await Promise.all([
       prisma.patient.findMany({
         where,
@@ -510,6 +564,8 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
     if (req.query.includeDeleted !== "1" && req.query.includeDeleted !== "true") {
       where.deletedAt = null;
     }
+    // #820 (tick #191) — same additive filters as GET /patients (above).
+    applyPatientListFilters(where, req.query);
     const patients = await prisma.patient.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -597,6 +653,8 @@ router.get("/patients.xlsx", phiReadGate, async (req, res) => {
     if (req.query.includeDeleted !== "1" && req.query.includeDeleted !== "true") {
       where.deletedAt = null;
     }
+    // #820 (tick #191) — same additive filters as GET /patients (above).
+    applyPatientListFilters(where, req.query);
     const patients = await prisma.patient.findMany({
       where,
       orderBy: { createdAt: "desc" },

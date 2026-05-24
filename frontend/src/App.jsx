@@ -21,7 +21,7 @@ import Layout from "./components/Layout";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import RoleGuard from "./components/RoleGuard";
 import { NotifyProvider } from "./utils/notify";
-import { ActiveSubBrandProvider } from "./utils/subBrand";
+import { ActiveSubBrandProvider, useActiveSubBrand } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
 import {
   setAuthToken,
@@ -291,6 +291,104 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
 
+// #876 — per-sub-brand theme resolver. Owns the `document.documentElement
+// .setAttribute("data-theme", ...)` write so the decision can consume the
+// active sub-brand from <ActiveSubBrandProvider> + the tenant's per-sub-brand
+// theme defaults from /api/tenant/sub-brand-themes. Resolution chain (DD-5.2):
+//   1. user.themePreference (explicit 'light'|'dark') — user wins.
+//   2. tenant.subBrandThemes[activeSubBrand] when user pref is 'system'
+//      AND there's an active sub-brand AND the tenant set a per-brand default.
+//   3. OS prefers-color-scheme as the final fallback.
+// Re-resolves on activeSubBrand switch (effect dep) so flipping the
+// "I'm working on TMC today" switcher repaints the chrome immediately.
+//
+// Defensive: the /api/tenant/sub-brand-themes fetch tolerates 404/401/network
+// errors as "no per-sub-brand override available" (empty {}). The backend
+// route lands as of tick #183 commit 9f6f561f; on older deploys the fetch
+// 404s and we silently degrade to the user-pref → OS-pref chain.
+function SubBrandThemeResolver() {
+  const { theme } = useContext(ThemeContext);
+  const { token } = useContext(AuthContext);
+  const { activeSubBrand } = useActiveSubBrand();
+  const [tenantSubBrandThemes, setTenantSubBrandThemes] = useState({});
+
+  // Fetch tenant's per-sub-brand defaults once per token. Re-fires on
+  // login/logout so a switched session doesn't carry over the prior tenant's
+  // overrides. Errors are swallowed — empty {} means "fall through to OS pref".
+  useEffect(() => {
+    if (!token) {
+      setTenantSubBrandThemes({});
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/tenant/sub-brand-themes", {
+          headers: { "Authorization": `Bearer ${token}` },
+        });
+        if (!res.ok) return; // 404 (pre-deploy) / 401 / 5xx — no override.
+        const data = await res.json();
+        if (cancelled) return;
+        const themes = data && typeof data.themes === "object" && data.themes !== null
+          ? data.themes
+          : {};
+        setTenantSubBrandThemes(themes);
+      } catch (err) {
+        // Network / parse error — silently degrade. The user-pref + OS-pref
+        // chain still works without per-sub-brand defaults.
+        console.warn("[Theme] sub-brand-themes fetch failed; no per-brand override:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  // Apply the effective theme to <html data-theme="..."> on every input change.
+  // Dependency array includes activeSubBrand so toggling the switcher repaints.
+  useEffect(() => {
+    let effectiveTheme = null;
+    // Step 1 — user pref wins when explicit (DD-5.2).
+    if (theme === "light" || theme === "dark") {
+      effectiveTheme = theme;
+    }
+    // Step 2 — user pref is 'system' (or unset): try the tenant's
+    // per-sub-brand default for the currently-active brand.
+    if (!effectiveTheme && activeSubBrand && tenantSubBrandThemes) {
+      const brandTheme = tenantSubBrandThemes[activeSubBrand];
+      if (brandTheme === "light" || brandTheme === "dark") {
+        effectiveTheme = brandTheme;
+      }
+      // brandTheme === "system" is treated as "no opinion" — fall through.
+    }
+    // Step 3 — OS prefers-color-scheme as the final fallback.
+    if (!effectiveTheme) {
+      effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    }
+    document.documentElement.setAttribute("data-theme", effectiveTheme);
+  }, [theme, token, activeSubBrand, tenantSubBrandThemes]);
+
+  // Live-react to the OS prefers-color-scheme flip only when we're actually
+  // bottoming out at Step 3 (no user pref, no sub-brand override). When
+  // effective is already "light" or "dark" via Step 1 or 2, the listener
+  // should NOT override.
+  useEffect(() => {
+    if (theme === "light" || theme === "dark") return undefined;
+    if (activeSubBrand && tenantSubBrandThemes) {
+      const brandTheme = tenantSubBrandThemes[activeSubBrand];
+      if (brandTheme === "light" || brandTheme === "dark") return undefined;
+    }
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (e) => {
+      document.documentElement.setAttribute("data-theme", e.matches ? "dark" : "light");
+    };
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, [theme, activeSubBrand, tenantSubBrandThemes]);
+
+  return null;
+}
+
 // Issue #207/#214/#216: wellness staff carry RBAC role=USER + an orthogonal
 // `wellnessRole` (doctor/professional/telecaller/helper/stylist). The Owner
 // Dashboard at /wellness exposes org-wide P&L (₹12L) and is for ADMIN/MANAGER
@@ -534,15 +632,14 @@ export default function App() {
     return () => { cancelled = true; };
   }, [token]);
 
+  // #876 — DOM `data-theme` application moved into <SubBrandThemeResolver>
+  // (below) so the effective-theme decision can consume `activeSubBrand` from
+  // <ActiveSubBrandProvider> and the tenant's per-sub-brand defaults. The
+  // user-pref localStorage cache + server-PUT roam stay here because they
+  // depend only on the explicit user choice (DD-5.2: user pref wins), NOT on
+  // the active sub-brand. PRE-#876 this effect also set the data-theme
+  // attribute; SubBrandThemeResolver now owns that write.
   useEffect(() => {
-    let effectiveTheme = theme;
-    if (theme === "system") {
-      effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light";
-    }
-    console.log('[Theme] Applying theme:', { selectedTheme: theme, effectiveTheme });
-    document.documentElement.setAttribute("data-theme", effectiveTheme);
     // localStorage stays as a synchronous boot cache so the next page-load
     // doesn't flash the wrong theme before /api/user/theme resolves.
     localStorage.setItem("theme", theme);
@@ -562,17 +659,6 @@ export default function App() {
       });
     }
   }, [theme, token]);
-
-  useEffect(() => {
-    if (theme !== "system") return;
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (e) => {
-      const effectiveTheme = e.matches ? "dark" : "light";
-      document.documentElement.setAttribute("data-theme", effectiveTheme);
-    };
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, [theme]);
 
   // Apply vertical-specific theme overrides (e.g. wellness gets Dr. Haror palette)
   useEffect(() => {
@@ -669,6 +755,7 @@ export default function App() {
       <AuthContext.Provider value={authValue}>
         <NotifyProvider>
           <ActiveSubBrandProvider>
+          <SubBrandThemeResolver />
           <BrowserRouter>
             <RouteErrorBoundary>
               <Suspense

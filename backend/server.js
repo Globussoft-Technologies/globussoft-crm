@@ -483,6 +483,12 @@ const embassyRulesRoutes = require("./routes/embassy_rules");
 // /api/embassy-rules) since authorship is tenant-wide ADMIN / advisor-head,
 // not sub-brand-scoped. Backs the diagnostic-engine destination scoring.
 const travelCurriculumRoutes = require("./routes/travel_curriculum");
+// TS18 Phase 2 SHELL — Travel Stall personalised destination recommender
+// (LLM consumer). Mounted at /api/travel-personalised-destinations so the
+// URL is sibling-flat with /api/embassy-rules / /api/travel-curriculum
+// (operator-tools that aren't sub-brand-scoped path-wise). STUB MODE
+// per Q11 cred-block until Travel Stall LLM keys land.
+const travelPersonalisedDestinationsRoutes = require("./routes/travel_personalised_destinations");
 // Tick #183 — Per-tenant per-sub-brand default theme map (#876 + DD-5.3
 // RESOLVED 2026-05-24). Backs the future frontend resolution chain
 // user.themePreference → tenant.subBrandThemes[activeSubBrand] → 'system'.
@@ -720,6 +726,7 @@ app.use("/api/travel", travelWebcheckinRoutes);
 app.use("/api/travel", travelTravelStallRoutes);
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
+app.use("/api/travel-personalised-destinations", travelPersonalisedDestinationsRoutes);
 app.use("/api/tenant/sub-brand-themes", subBrandThemesRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);

@@ -125,45 +125,190 @@ function getConsentBody(templateName) {
 }
 
 // ── 1. Prescription PDF ────────────────────────────────────────────
+//
+// #839 — Prescription PDF redesigned to a proper clinical-prescription
+// layout per the bug report's acceptance criteria. Pre-this-fix the
+// document had a thin clinic header, a 3-line patient block (Name /
+// Phone / Age+Gender / Date), a 4-column drug table (Medication /
+// Dosage / Frequency / Duration), an optional single Instructions
+// paragraph, and a single signature line. The output was technically
+// readable but pharmacies and patients rated it "not a clinical Rx".
+//
+// Post-fix layout (per the issue's "Expected Behavior" block):
+//   1. Clinic header (drawClinicHeader) — name + address + contact
+//   2. Doctor letterhead row — Dr. <name>, qualification, registration
+//      number, contact (right-aligned strip directly under the clinic
+//      header). All fields are optional and degrade gracefully.
+//   3. Patient block — Name, Patient ID, Age + Gender + Date (grid),
+//      Phone, Email. Includes Patient ID so pharmacies can cross-check.
+//   4. Vitals row — BP, Pulse, Weight, Height, Temp, SpO2. Only renders
+//      when at least one vital is supplied on the Rx.
+//   5. Symptoms / Diagnosis section — top-level Rx fields. Each renders
+//      only when present.
+//   6. Rx symbol + medications table — adds a 5th "Instructions" column
+//      (per-drug instructions like "with food", "at bedtime"); top-level
+//      `prescription.instructions` is rendered in the Advice block.
+//   7. Advice / Notes section — top-level instructions paragraph.
+//   8. Follow-up — "Next follow-up: <date>" line when supplied.
+//   9. Signature block — doctor name (bold), qualification, registration
+//      number stacked under the signature line on the right.
+//   10. Footer — clinic phone + email, centered, on the last page.
+//
+// All new fields are OPTIONAL on the input — old Rx rows with no extra
+// columns render identically to the pre-#839 layout (modulo the new
+// table column, which simply shows a "—" placeholder for legacy rows).
+//
+// `prescription` shape (all new fields optional):
+//   {
+//     drugs: string|array|object,    // existing
+//     instructions: string,          // existing — rendered in Advice
+//     createdAt: Date,               // existing
+//     symptoms: string,              // NEW — chief complaint
+//     diagnosis: string,             // NEW — clinical diagnosis
+//     vitals: {                      // NEW — vitals row
+//       bp: string,                  //   e.g. "120/80"
+//       pulse: string|number,
+//       weight: string|number,       //   kg
+//       height: string|number,       //   cm
+//       temperature: string|number,  //   F
+//       spo2: string|number,         //   %
+//     },
+//     followUpAt: Date,              // NEW — next follow-up date
+//   }
+//
+// `doctor` shape (all new fields optional):
+//   {
+//     name: string,                  // existing
+//     qualification: string,         // NEW — e.g. "MBBS, MD (Derm)"
+//     registrationNumber: string,    // NEW — e.g. "MCI-123456"
+//     phone: string,                 // NEW — direct contact
+//     email: string,                 // NEW
+//   }
+//
+// `patient.id` is the human-readable patient identifier shown in the
+// patient block (pharmacies cross-reference it against the dispensed
+// drug log). Falls back to "—" when missing.
+
+function drawDoctorLetterhead(doc, doctor) {
+  if (!doctor) return;
+  const parts = [];
+  if (doctor.qualification) parts.push(doctor.qualification);
+  if (doctor.registrationNumber) parts.push(`Reg. No. ${doctor.registrationNumber}`);
+  const contactParts = [];
+  if (doctor.phone) contactParts.push(doctor.phone);
+  if (doctor.email) contactParts.push(doctor.email);
+
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
+    .text(doctor.name ? `Dr. ${doctor.name}` : "Attending physician");
+  if (parts.length) {
+    doc.font("Helvetica").fontSize(9).fillColor("#555").text(parts.join("  ·  "));
+  }
+  if (contactParts.length) {
+    doc.font("Helvetica").fontSize(9).fillColor("#555").text(contactParts.join("  ·  "));
+  }
+  doc.moveDown(0.5);
+  // Divider beneath the doctor strip
+  const y = doc.y;
+  doc.moveTo(doc.page.margins.left, y)
+    .lineTo(doc.page.width - doc.page.margins.right, y)
+    .lineWidth(0.5).strokeColor("#bbb").stroke();
+  doc.moveDown(0.6);
+  doc.fillColor("#111");
+}
+
+function drawVitalsRow(doc, vitals) {
+  if (!vitals || typeof vitals !== "object") return false;
+  const entries = [
+    ["BP", vitals.bp],
+    ["Pulse", vitals.pulse],
+    ["Weight", vitals.weight ? `${vitals.weight} kg` : null],
+    ["Height", vitals.height ? `${vitals.height} cm` : null],
+    ["Temp", vitals.temperature ? `${vitals.temperature} °F` : null],
+    ["SpO2", vitals.spo2 ? `${vitals.spo2}%` : null],
+  ].filter(([, v]) => v != null && v !== "");
+  if (entries.length === 0) return false;
+
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Vitals");
+  doc.moveDown(0.2);
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  // Single-line "BP: 120/80  ·  Pulse: 72  ·  Weight: 65 kg  …"
+  const line = entries.map(([k, v]) => `${k}: ${v}`).join("  ·  ");
+  doc.text(line, { width: 495 });
+  doc.moveDown(0.6);
+  return true;
+}
 
 async function renderPrescriptionPdf(prescription, patient, clinic, doctor) {
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
+  // 1. Clinic header
   drawClinicHeader(doc, clinic);
+
+  // 2. Doctor letterhead (qualification, reg. number, contact)
+  drawDoctorLetterhead(doc, doctor);
 
   // Title
   doc.font("Helvetica-Bold").fontSize(14).text("Prescription", { align: "center" });
-  doc.moveDown(0.8);
+  doc.moveDown(0.6);
 
-  // Patient block
+  // 3. Patient block — two-column grid for compactness
   const age = computeAge(patient?.dob);
-  doc.font("Helvetica-Bold").fontSize(11).text("Patient", { continued: false });
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Patient");
+  doc.moveDown(0.2);
   doc.font("Helvetica").fontSize(10).fillColor("#222");
-  doc.text(`Name: ${patient?.name || "—"}`);
-  doc.text(`Phone: ${patient?.phone || "—"}`);
-  doc.text(`Age: ${age}    Gender: ${patient?.gender || "—"}`);
-  doc.text(`Date: ${formatDate(prescription?.createdAt || new Date())}`);
-  doc.moveDown(0.8);
 
-  // Drug table — #278: Rx label uses the unicode ℞ glyph (U+211E). pdfkit's
-  // built-in Helvetica covers the BMP enough for this symbol on every
-  // platform we target; if a future custom font drops it, fall back to "Rx".
+  const left = doc.page.margins.left;
+  const colWidth = (doc.page.width - left - doc.page.margins.right) / 2;
+  const pTop = doc.y;
+  // Left column
+  doc.text(`Name: ${patient?.name || "—"}`, left, pTop, { width: colWidth });
+  doc.text(`Patient ID: ${patient?.id != null ? String(patient.id) : "—"}`, left, doc.y, { width: colWidth });
+  doc.text(`Phone: ${patient?.phone || "—"}`, left, doc.y, { width: colWidth });
+  if (patient?.email) {
+    doc.text(`Email: ${patient.email}`, left, doc.y, { width: colWidth });
+  }
+  const leftEndY = doc.y;
+  // Right column
+  doc.text(`Date: ${formatDate(prescription?.createdAt || new Date())}`, left + colWidth, pTop, { width: colWidth });
+  doc.text(`Age: ${age}`, left + colWidth, doc.y, { width: colWidth });
+  doc.text(`Gender: ${patient?.gender || "—"}`, left + colWidth, doc.y, { width: colWidth });
+  doc.y = Math.max(leftEndY, doc.y);
+  doc.moveDown(0.6);
+
+  // 4. Vitals (optional)
+  drawVitalsRow(doc, prescription?.vitals);
+
+  // 5. Symptoms / Diagnosis (each optional)
+  if (prescription?.symptoms) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Symptoms");
+    doc.font("Helvetica").fontSize(10).fillColor("#222").text(prescription.symptoms, { width: 495 });
+    doc.moveDown(0.4);
+  }
+  if (prescription?.diagnosis) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Diagnosis");
+    doc.font("Helvetica").fontSize(10).fillColor("#222").text(prescription.diagnosis, { width: 495 });
+    doc.moveDown(0.4);
+  }
+
+  // 6. Rx symbol + medications table — #278: ℞ (U+211E) glyph survives in
+  // pdfkit's built-in Helvetica on every platform we target. Five columns
+  // now — added per-drug Instructions per the #839 acceptance criteria.
   doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text("℞");
   doc.moveDown(0.3);
 
   const drugs = parseDrugs(prescription?.drugs);
-  const tableTop = doc.y;
-  const colX = [50, 200, 310, 400]; // name, dosage, frequency, duration
-  const headers = ["Medication", "Dosage", "Frequency", "Duration"];
+  let tableTop = doc.y;
+  // Column layout: name 50-195, dosage 195-275, freq 275-355, duration 355-435, instructions 435-545
+  const colX = [50, 195, 275, 355, 435];
+  const colEnd = [195, 275, 355, 435, 545];
+  const headers = ["Medication", "Dosage", "Frequency", "Duration", "Instructions"];
 
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
-  headers.forEach((h, i) => doc.text(h, colX[i], tableTop));
+  headers.forEach((h, i) => doc.text(h, colX[i], tableTop, { width: colEnd[i] - colX[i] - 4 }));
   doc.moveTo(50, tableTop + 14)
     .lineTo(545, tableTop + 14)
-    .lineWidth(0.5)
-    .strokeColor("#bbb")
-    .stroke();
+    .lineWidth(0.5).strokeColor("#bbb").stroke();
 
   let rowY = tableTop + 20;
   doc.font("Helvetica").fontSize(10).fillColor("#222");
@@ -172,44 +317,85 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor) {
     rowY += 16;
   } else {
     for (const d of drugs) {
+      // Page-break headroom — re-render table headers on the new page so
+      // the medications table stays readable across pages (acceptance
+      // criterion: "page-break safety").
+      if (rowY > 720) {
+        doc.addPage();
+        tableTop = 60;
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
+        headers.forEach((h, i) => doc.text(h, colX[i], tableTop, { width: colEnd[i] - colX[i] - 4 }));
+        doc.moveTo(50, tableTop + 14)
+          .lineTo(545, tableTop + 14)
+          .lineWidth(0.5).strokeColor("#bbb").stroke();
+        rowY = tableTop + 20;
+        doc.font("Helvetica").fontSize(10).fillColor("#222");
+      }
       const cells = [
         d.name || d.drug || "—",
         d.dosage || "—",
         d.frequency || "—",
         d.duration || "—",
+        d.instructions || d.notes || "—",
       ];
       cells.forEach((val, i) => {
         doc.text(String(val), colX[i], rowY, {
-          width: (colX[i + 1] || 545) - colX[i] - 6,
+          width: colEnd[i] - colX[i] - 4,
         });
       });
-      rowY += 20;
-      if (rowY > 720) {
-        doc.addPage();
-        rowY = 60;
-      }
+      rowY += 22;
     }
   }
 
   doc.moveDown(1);
   doc.y = Math.max(doc.y, rowY + 10);
 
-  // Instructions
+  // 7. Advice / Notes (top-level instructions paragraph)
   if (prescription?.instructions) {
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Instructions");
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Advice / Notes");
     doc.font("Helvetica").fontSize(10).fillColor("#222").text(prescription.instructions, {
       width: 495,
     });
-    doc.moveDown(0.8);
+    doc.moveDown(0.6);
   }
 
-  // Signature line — #278: when the Rx has a tracked prescriber, name them
-  // under the line so the document reads as a proper doctor-attributed Rx.
-  const sigY = Math.max(doc.y + 40, 700);
+  // 8. Follow-up date
+  if (prescription?.followUpAt) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#111")
+      .text("Next follow-up: ", { continued: true });
+    doc.font("Helvetica").fontSize(10).fillColor("#222")
+      .text(formatDate(prescription.followUpAt));
+    doc.moveDown(0.6);
+  }
+
+  // 9. Signature block — doctor name + qualification + reg number stacked
+  // under the signature line on the right side of the page.
+  const sigY = Math.max(doc.y + 40, 680);
   doc.moveTo(360, sigY).lineTo(545, sigY).lineWidth(0.5).strokeColor("#444").stroke();
-  doc.font("Helvetica").fontSize(10).fillColor("#333").text("Doctor's signature", 360, sigY + 4);
+  doc.font("Helvetica").fontSize(9).fillColor("#555").text("Doctor's signature", 360, sigY + 4);
   if (doctor?.name) {
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#222").text(doctor.name, 360, sigY + 18);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#222")
+      .text(`Dr. ${doctor.name}`, 360, sigY + 16, { width: 185 });
+  }
+  if (doctor?.qualification) {
+    doc.font("Helvetica").fontSize(8).fillColor("#555")
+      .text(doctor.qualification, 360, doc.y, { width: 185 });
+  }
+  if (doctor?.registrationNumber) {
+    doc.font("Helvetica").fontSize(8).fillColor("#555")
+      .text(`Reg. No. ${doctor.registrationNumber}`, 360, doc.y, { width: 185 });
+  }
+
+  // 10. Footer — clinic contact strip on the last page. Drawn near the
+  // page bottom so it doesn't clash with the signature block above.
+  const c = safeClinic(clinic);
+  const footerLine = [c.phone, c.email].filter(Boolean).join("  |  ");
+  if (footerLine) {
+    const footerY = doc.page.height - doc.page.margins.bottom - 18;
+    doc.moveTo(50, footerY - 6).lineTo(doc.page.width - 50, footerY - 6)
+      .lineWidth(0.4).strokeColor("#bbb").stroke();
+    doc.font("Helvetica").fontSize(8).fillColor("#777")
+      .text(footerLine, 50, footerY, { width: doc.page.width - 100, align: "center" });
   }
 
   doc.end();

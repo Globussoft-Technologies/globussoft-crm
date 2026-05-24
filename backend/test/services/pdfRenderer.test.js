@@ -314,24 +314,31 @@ describe('renderPrescriptionPdf', () => {
   });
 
   test('renders instructions block when supplied', async () => {
+    // #839 — the top-level instructions paragraph now renders under the
+    // "Advice / Notes" header (renamed for clinician-Rx readability).
+    // "Instructions" remains the column header in the medications table.
     const buf = await renderPrescriptionPdf(
       { drugs: [], instructions: 'Avoid sun exposure for 7 days.' },
       patientFixture(),
       clinicFixture(),
     );
     const txt = extractPdfText(buf);
-    expect(txt).toContain('Instructions');
+    expect(txt).toContain('Advice');
     expect(txt).toContain('Avoid sun exposure');
   });
 
-  test('omits instructions block when none supplied', async () => {
+  test('omits Advice block when no top-level instructions supplied', async () => {
+    // #839 — "Advice / Notes" section is omitted when prescription.instructions
+    // is absent. The string "Instructions" still appears as the medications
+    // table column header (always present), so we check the section heading
+    // ("Advice") instead.
     const buf = await renderPrescriptionPdf(
       { drugs: [] },
       patientFixture(),
       clinicFixture(),
     );
     const txt = extractPdfText(buf);
-    expect(txt).not.toContain('Instructions');
+    expect(txt).not.toContain('Advice');
   });
 
   test('formats createdAt as en-IN long-form date in header', async () => {
@@ -342,6 +349,348 @@ describe('renderPrescriptionPdf', () => {
     );
     const txt = extractPdfText(buf);
     expect(txt).toContain('Apr 2026');
+  });
+
+  // ── #839 — redesigned clinical-prescription layout ────────────────
+  //
+  // The bug report rated the pre-fix PDF "unprofessional / not suitable
+  // to hand to a pharmacy". These tests pin the new layout's contract:
+  // patient ID, doctor letterhead (qualification + reg number + contact),
+  // vitals row, symptoms/diagnosis, per-drug Instructions column,
+  // Advice/Notes, follow-up date, signature block, and footer.
+
+  describe('#839 — redesigned clinical layout', () => {
+    test('renders Patient ID in the patient block', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture({ id: 8421 }),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Patient ID:');
+      expect(txt).toContain('8421');
+    });
+
+    test('renders patient email when supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture({ email: 'priya@example.com' }),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Email:');
+      expect(txt).toContain('priya@example.com');
+    });
+
+    test('renders doctor letterhead with qualification + registration number', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+        {
+          name: 'Harsh Mehta',
+          qualification: 'MBBS, MD (Derm)',
+          registrationNumber: 'MCI-123456',
+        },
+      );
+      const txt = extractPdfText(buf);
+      // Doctor letterhead near top
+      expect(txt).toContain('Dr. Harsh Mehta');
+      expect(txt).toContain('MBBS, MD');
+      expect(txt).toContain('MCI-123456');
+      expect(txt).toContain('Reg. No.');
+    });
+
+    test('renders doctor contact (phone + email) in letterhead when present', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+        {
+          name: 'Harsh Mehta',
+          phone: '+919999111122',
+          email: 'drharsh@enhancedwellness.in',
+        },
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('+919999111122');
+      expect(txt).toContain('drharsh@enhancedwellness.in');
+    });
+
+    test('renders Vitals row when at least one vital supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        {
+          drugs: [],
+          vitals: { bp: '120/80', pulse: 72, weight: 65, height: 170, temperature: 98.6, spo2: 98 },
+        },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Vitals');
+      expect(txt).toContain('BP:');
+      expect(txt).toContain('120/80');
+      expect(txt).toContain('Pulse:');
+      expect(txt).toContain('72');
+      expect(txt).toContain('Weight:');
+      expect(txt).toContain('65 kg');
+    });
+
+    test('omits Vitals section entirely when no vitals supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).not.toContain('Vitals');
+      expect(txt).not.toContain('BP:');
+    });
+
+    test('omits Vitals section when vitals object is empty', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [], vitals: {} },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).not.toContain('Vitals');
+    });
+
+    test('renders Symptoms section when supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [], symptoms: 'Hair thinning at crown for 6 months' },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Symptoms');
+      expect(txt).toContain('Hair thinning at crown');
+    });
+
+    test('renders Diagnosis section when supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [], diagnosis: 'Androgenetic alopecia, Norwood-Hamilton stage III' },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Diagnosis');
+      expect(txt).toContain('Androgenetic alopecia');
+    });
+
+    test('omits Symptoms + Diagnosis blocks when not supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).not.toContain('Symptoms');
+      expect(txt).not.toContain('Diagnosis');
+    });
+
+    test('medications table includes Instructions column header', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [{ name: 'Finasteride 1mg', dosage: '1 tab', frequency: 'OD', duration: '6 months' }] },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Medication');
+      expect(txt).toContain('Dosage');
+      expect(txt).toContain('Frequency');
+      expect(txt).toContain('Duration');
+      expect(txt).toContain('Instructions');
+    });
+
+    test('per-drug instructions render in the Instructions column', async () => {
+      const buf = await renderPrescriptionPdf(
+        {
+          drugs: [
+            {
+              name: 'Metformin 500mg',
+              dosage: '1 tab',
+              frequency: 'BID',
+              duration: '30 days',
+              instructions: 'with food',
+            },
+          ],
+        },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Metformin 500mg');
+      expect(txt).toContain('with food');
+    });
+
+    test('per-drug notes field is honoured as fallback for instructions', async () => {
+      const buf = await renderPrescriptionPdf(
+        {
+          drugs: [
+            { name: 'Vitamin D3', dosage: '60k IU', frequency: 'weekly', duration: '8 weeks', notes: 'after breakfast' },
+          ],
+        },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('after breakfast');
+    });
+
+    test('Advice / Notes section renders top-level instructions', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [], instructions: 'Avoid sun exposure for 7 days; report rash immediately' },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Advice');
+      expect(txt).toContain('Notes');
+      expect(txt).toContain('Avoid sun exposure');
+    });
+
+    test('Follow-up date renders when supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [], followUpAt: '2026-06-15' },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Next follow-up');
+      expect(txt).toContain('Jun 2026');
+    });
+
+    test('omits follow-up line when not supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).not.toContain('Next follow-up');
+    });
+
+    test('signature block stacks doctor name + qualification + registration', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+        {
+          name: 'Harsh Mehta',
+          qualification: 'MBBS, MD',
+          registrationNumber: 'MCI-789',
+        },
+      );
+      const txt = extractPdfText(buf);
+      // Doctor letterhead + signature both render "Dr. Harsh Mehta" + the
+      // qualification + the reg number — assert at least one occurrence
+      // each (extractor is order-preserving but doesn't track position).
+      expect(txt).toContain("Doctor's signature");
+      // Doctor name appears in BOTH the letterhead AND the signature
+      // block — verify it appears at least twice in the extracted text.
+      const drMatches = (txt.match(/Dr\. Harsh Mehta/g) || []).length;
+      expect(drMatches).toBeGreaterThanOrEqual(2);
+    });
+
+    test('footer renders clinic phone + email', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      // Clinic contact strip appears in BOTH the clinic header AND the
+      // page footer — verify both phone + email survive.
+      expect(txt).toContain('+919999000011');
+      expect(txt).toContain('hello@enhancedwellness.in');
+    });
+
+    test('long drug list paginates with re-rendered table headers on each page', async () => {
+      const drugs = [];
+      for (let i = 0; i < 60; i++) {
+        drugs.push({
+          name: `Drug-${i}`,
+          dosage: '5mg',
+          frequency: 'OD',
+          duration: '30 days',
+          instructions: 'with water',
+        });
+      }
+      const buf = await renderPrescriptionPdf(
+        { drugs },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      // First + last drugs both made it across the page break
+      expect(txt).toContain('Drug-0');
+      expect(txt).toContain('Drug-59');
+      // Multi-page output — /Count >= 2 in the Pages object
+      const raw = buf.toString('latin1');
+      expect(raw).toMatch(/\/Count\s+[2-9]/);
+      // Table header reappears on each page — "Medication" should occur
+      // at least twice when content spans 2+ pages.
+      const medMatches = (txt.match(/Medication/g) || []).length;
+      expect(medMatches).toBeGreaterThanOrEqual(2);
+    });
+
+    test('5+ medications scenario from acceptance criteria renders cleanly', async () => {
+      const buf = await renderPrescriptionPdf(
+        {
+          drugs: [
+            { name: 'Finasteride 1mg', dosage: '1 tab', frequency: 'OD', duration: '6 months', instructions: 'morning' },
+            { name: 'Minoxidil 5%', dosage: '1ml', frequency: 'BID', duration: '6 months', instructions: 'apply to scalp' },
+            { name: 'Biotin 10mg', dosage: '1 cap', frequency: 'OD', duration: '3 months' },
+            { name: 'Vitamin D3 60k', dosage: '1 sachet', frequency: 'weekly', duration: '8 weeks' },
+            { name: 'Zinc 50mg', dosage: '1 tab', frequency: 'OD', duration: '3 months' },
+            { name: 'Iron 100mg', dosage: '1 tab', frequency: 'OD', duration: '3 months', instructions: 'with vit C' },
+          ],
+          instructions: 'Follow scalp-care protocol; report any unusual shedding within 4 weeks.',
+          followUpAt: '2026-07-01',
+        },
+        patientFixture({ id: 1234, email: 'priya@example.com' }),
+        clinicFixture(),
+        { name: 'Harsh Mehta', qualification: 'MBBS, MD (Derm)', registrationNumber: 'MCI-789' },
+      );
+      const txt = extractPdfText(buf);
+      // Every medication present
+      expect(txt).toContain('Finasteride');
+      expect(txt).toContain('Minoxidil');
+      expect(txt).toContain('Biotin');
+      expect(txt).toContain('Vitamin D3');
+      expect(txt).toContain('Zinc');
+      expect(txt).toContain('Iron');
+      // Top-level fields all present
+      expect(txt).toContain('Patient ID:');
+      expect(txt).toContain('1234');
+      expect(txt).toContain('Advice');
+      expect(txt).toContain('Next follow-up');
+      expect(txt).toContain('MCI-789');
+    });
+
+    test('long advice notes from acceptance criteria render without breaking layout', async () => {
+      const longAdvice =
+        'Patient should follow a strict scalp-care regimen: gentle shampoo every other day, ' +
+        'avoid hot water, no chemical treatments for 12 weeks. Apply prescribed topicals as ' +
+        'directed; do not exceed dosage. Report any signs of allergic reaction including ' +
+        'redness, itching, swelling, or shortness of breath immediately. Avoid direct sun ' +
+        'exposure on treated areas for at least 14 days post-procedure. Maintain a balanced ' +
+        'diet rich in iron, zinc, and B-complex vitamins. Hydrate well — minimum 2L water/day. ' +
+        'Sleep on a clean pillowcase; rotate every 2 days. Stress management is critical — ' +
+        'consider meditation or yoga. Schedule the follow-up exactly as advised; missed ' +
+        'follow-ups may delay assessment of treatment efficacy.';
+      const buf = await renderPrescriptionPdf(
+        { drugs: [{ name: 'X', dosage: 'Y', frequency: 'Z', duration: 'W' }], instructions: longAdvice },
+        patientFixture(),
+        clinicFixture(),
+      );
+      expect(Buffer.isBuffer(buf)).toBe(true);
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('strict scalp-care regimen');
+      expect(txt).toContain('follow-ups may delay');
+    });
   });
 });
 

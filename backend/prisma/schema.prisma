@@ -4871,18 +4871,22 @@ model TravelCurriculumMapping {
   tenantId         Int
   // Curriculum standard: 'CBSE' | 'ICSE' | 'IB' | 'Cambridge' (PC-2 — V1
   // ships CBSE + ICSE only; IB + Cambridge enabled but rows unseeded).
-  curriculum       String
+  // VarChar(32) tightened from default(191) for MySQL key-byte budget — see
+  // @@unique key-budget note below.
+  curriculum       String  @db.VarChar(32)
   // Grade level — free-text since formats differ across curricula:
   // CBSE/ICSE use 'Class 9', 'Class 10'; IB uses 'IB Year 1', 'IB Year 2';
-  // Cambridge uses 'IGCSE Year 10', etc.
-  grade            String
+  // Cambridge uses 'IGCSE Year 10', etc. VarChar(32) for key-byte budget.
+  grade            String  @db.VarChar(32)
   // Subject — e.g. 'Geography', 'History', 'Biology', 'Physics'.
-  subject          String
+  // VarChar(64) for key-byte budget.
+  subject          String  @db.VarChar(64)
   // Specific learning outcome the trip teaches (PC-3 — fine grain). Bounded
   // VARCHAR (not Text) so it can participate in the composite @@unique below;
-  // 500 chars is enough for a concise outcome statement like "Plate tectonics
+  // 300 chars is enough for a concise outcome statement like "Plate tectonics
   // + landform formation". Use fitRationale (@db.Text) for long-form notes.
-  learningOutcome  String? @db.VarChar(500)
+  // Tightened from 500 → 300 for MySQL key-byte budget (see @@unique below).
+  learningOutcome  String? @db.VarChar(300)
   // PC-5 — optional FK to TMC's TravelTrip catalogue (TmcTrip). When the
   // recommended destination exists as a trip template, link to it. Otherwise
   // leave null and use destinationLabel as a free-text fallback. FK omitted
@@ -4909,6 +4913,9 @@ model TravelCurriculumMapping {
 
   // Block duplicate rows for the same (tenant, curriculum, grade, subject,
   // outcome) combination — advisors should edit existing rows, not duplicate.
+  // Key-byte budget: 8 (Int) + 32*4 + 32*4 + 64*4 + 300*4 = 1720 bytes,
+  // well under MySQL's 3072-byte utf8mb4 limit. Tick #178's 500-char
+  // learningOutcome overflowed the budget (4300 bytes) — tick #179 triage.
   @@unique([tenantId, curriculum, grade, subject, learningOutcome])
   // Diagnostic-engine lookup path: "given a student's curriculum+grade+subject,
   // surface candidate destinations sorted by fitScore."

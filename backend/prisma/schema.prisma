@@ -4553,6 +4553,10 @@ model VisaApplication {
   outcome              String? // null | approved | rejected
   outcomeReason        String?                     @db.Text
   recoveryProgramId    Int? // FK to a future RejectionRecoveryProgram model
+  /// Self-FK to a prior rejected application — used by visaRiskFlagEngine R13 cooldown rule (PC-4 RESOLVED 2026-05-24). Pure FK; full rejection-recovery diagnostic linkage is Phase 2 (PC-2 deferred until VisaDiagnostic model materializes).
+  priorApplicationId   Int?
+  priorApplication     VisaApplication?            @relation("PriorRejection", fields: [priorApplicationId], references: [id], onDelete: SetNull)
+  recoveryApplications VisaApplication[]           @relation("PriorRejection")
   documentChecklist    VisaDocumentChecklistItem[]
   tenant               Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt            DateTime                    @default(now())
@@ -4560,6 +4564,7 @@ model VisaApplication {
 
   @@index([tenantId, status, advisorRiskFlag])
   @@index([tenantId, contactId])
+  @@index([priorApplicationId])
 }
 
 model VisaDocumentChecklistItem {

@@ -1,0 +1,502 @@
+/**
+ * SuppliersAdmin.test.jsx — vitest + RTL coverage for the Travel-vertical
+ * suppliers master-list admin page (frontend/src/pages/travel/SuppliersAdmin.jsx,
+ * shipped tick #96 commit 08ebe5e — origin file of the admin trio).
+ *
+ * Scope — pins the page-surface invariants for the Travel-fork supplier
+ * MASTER-LIST admin page (sibling to QuotesAdmin / InvoicesAdmin):
+ *
+ *   1. Page chrome: heading "Travel Suppliers" + sub-brand filter + category
+ *      filter + include-inactive checkbox + "New Supplier" CTA (ADMIN/MANAGER
+ *      only — canWrite = role === "ADMIN" || role === "MANAGER").
+ *   2. Loading state: shows "Loading…" placeholder before first GET resolves
+ *      (await findByText per CLAUDE.md tick #108 cron-learning: sync getByText
+ *      for data-dependent text is a CI race trap).
+ *   3. GET on mount: hits /api/travel/suppliers (no query string when filters
+ *      are empty) and renders one row per supplier (table layout).
+ *   4. Empty state — no rows: renders "No suppliers match." card when API
+ *      returns an empty suppliers array.
+ *   5. Empty state — 403: renders "Access restricted." copy per #829
+ *      (permissionDenied distinguishes 403 from genuine empty).
+ *   6. Sub-brand filter: selecting "rfu" re-fetches with ?subBrand=rfu in the
+ *      query string (camelCase per SUT line 88-89).
+ *   7. Category filter: selecting "hotel" re-fetches with
+ *      ?supplierCategory=hotel.
+ *   8. Include-inactive checkbox: checking re-fetches with ?includeInactive=1.
+ *   9. Sub-brand badge per row: uses real SUB_BRAND_BG from
+ *      travelSubBrand.js (NOT mocked) so any drift in the placeholder palette
+ *      / new sub-brand ids is caught here.
+ *  10. Status badge per row: Active rows render "Active" with success rgba;
+ *      inactive rows render "Inactive" with danger rgba.
+ *  11. New-supplier modal: clicking "New Supplier" reveals the form;
+ *      submitting with required name POSTs /api/travel/suppliers with the
+ *      payload (gstin upper-cased; empty optional fields → null).
+ *  12. Validation: empty name surfaces notify.error("Name is required") and
+ *      does NOT fire POST.
+ *  13. Edit-supplier flow: clicking the Pencil icon opens the form
+ *      pre-filled with the row's fields. Submitting PUTs to
+ *      /api/travel/suppliers/:id. Non-sensitive fields ONLY — this surface
+ *      has zero credential fields (those live in Suppliers.jsx → the
+ *      separate /api/travel/supplier-credentials vault page).
+ *  14. RBAC: role=USER hides the "New Supplier" CTA, hides the Actions
+ *      column header, and does NOT render Edit/Delete icon buttons.
+ *  15. Delete flow: clicking Trash2 prompts via window.confirm;
+ *      confirm-yes → DELETE /api/travel/suppliers/:id; confirm-no → no DELETE.
+ *
+ * Backend contract pinned (per backend/routes/travel_suppliers.js lines
+ * 391-459, shipped commit 192b8c1):
+ *   GET    /api/travel/suppliers[?subBrand=&supplierCategory=&includeInactive=]
+ *          → 200 { suppliers, total, limit, offset }
+ *          | 403 SUB_BRAND_DENIED
+ *   POST   /api/travel/suppliers  body:{name (required), contactPerson?, phone?,
+ *                                       email?, gstin?, addressLine?,
+ *                                       supplierCategory, subBrand?}
+ *                                              → 201 created (ADMIN+MANAGER)
+ *                                                | 400 MISSING_FIELDS / INVALID_*
+ *                                                | 403 SUB_BRAND_DENIED
+ *   PUT    /api/travel/suppliers/:id           → 200 updated (ADMIN+MANAGER)
+ *   DELETE /api/travel/suppliers/:id           → 204 No Content (soft delete)
+ *
+ * Drift pinned around (prompt vs. actual code — per the tick #109+#111+#112+#113
+ * agents' prompt-drift discipline):
+ *   - Prompt mentioned "credential-vault interaction" + "credential-masked
+ *     rendering" + "edit form clears credential fields (re-entry required)" —
+ *     SuppliersAdmin.jsx has ZERO credential fields. The credential vault is
+ *     a separate page (Suppliers.jsx) backed by /api/travel/supplier-credentials.
+ *     This master-list page only handles non-sensitive metadata (name, GSTIN,
+ *     contact, sub-brand). Tests omit ALL credential-masking assertions.
+ *   - Prompt said "RBAC: ADMIN-only? MANAGER-allowed?" — actual gate is
+ *     canWrite = ADMIN OR MANAGER (SuppliersAdmin.jsx:64). Tests pin both
+ *     ADMIN happy-path and USER hidden-CTA.
+ *   - Prompt said "edit-supplier flow opens editor with pre-filled fields
+ *     (non-sensitive), clears credential fields (re-entry required, NOT
+ *     pre-fill the masked value)" — no credential fields here, edit form
+ *     simply pre-fills all 8 form fields verbatim from the row.
+ *   - Prompt mentioned "filter chrome (status filter)" — SuppliersAdmin has
+ *     no status filter; it has an includeInactive checkbox toggling between
+ *     "active only" (default) and "active+inactive" (query ?includeInactive=1).
+ *     Status is a row-level rendering, not a filter.
+ *   - Prompt mentioned "error handling: 500 → error banner" — SUT does NOT
+ *     render an explicit error banner on 5xx. List 500 falls through to the
+ *     same empty-state path as a benign empty (permissionDenied stays false
+ *     because err.status !== 403 → renders "No suppliers match."). Tests
+ *     pin the 403 → "Access restricted." path only, since that's the only
+ *     differentiated UI affordance.
+ *   - Prompt mentioned "loading spinner" — SUT renders literal "Loading…"
+ *     text (via &hellip; entity). Test asserts on findByText.
+ *
+ * Mocking discipline (per CLAUDE.md RTL standing rules):
+ *   - fetchApi mocked at ../utils/api (the page's dep, NOT global fetch).
+ *   - notifyObj is a STABLE module-level reference so useNotify identity
+ *     stays stable across renders (RTL standing rule: Wave 11 cfb5789 /
+ *     Wave 12 f59e91d — fresh per-call objects flap useCallback identity).
+ *   - travelSubBrand imported REAL (not mocked) so sub-brand-bg drift is
+ *     caught by the suite (per the rule-of-3 promotion at tick #99).
+ *   - AuthContext is consumed from the real App module via Provider in the
+ *     render wrapper (the SUT reads user.role to gate the New/Edit/Delete
+ *     buttons). Default user role = ADMIN; one test mounts with role=USER.
+ *   - window.confirm stubbed per-test for the delete flow.
+ *   - All data-dependent assertions use await findBy / waitFor (per
+ *     CLAUDE.md tick #108 cron-learning: sync getBy for data-dependent
+ *     text is a CI race trap).
+ *
+ * Path: flat __tests__/ — sibling Agent B owns TmcMicrositePreview.test.jsx
+ * in the same flat dir; no path collision.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+
+const fetchApiMock = vi.fn();
+vi.mock('../utils/api', () => ({
+  fetchApi: (...args) => fetchApiMock(...args),
+  getAuthToken: () => 'test-token',
+}));
+
+// Stable notify object — RTL standing rule (Wave 11 cfb5789 / Wave 12
+// f59e91d). The SUT closes over notify inside handleSubmit / handleDelete,
+// so a fresh object per render would flap state across re-renders.
+const notifyError = vi.fn();
+const notifySuccess = vi.fn();
+const notifyInfo = vi.fn();
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
+const notifyObj = {
+  error: notifyError,
+  info: notifyInfo,
+  success: notifySuccess,
+  confirm: notifyConfirm,
+};
+vi.mock('../utils/notify', () => ({
+  useNotify: () => notifyObj,
+}));
+
+import { AuthContext } from '../App';
+import SuppliersAdmin from '../pages/travel/SuppliersAdmin';
+
+const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
+const MANAGER_USER = { userId: 2, name: 'Mgr', email: 'm@x.com', role: 'MANAGER' };
+const USER_USER = { userId: 3, name: 'Plain User', email: 'u@x.com', role: 'USER' };
+
+// Canonical supplier rows — three sub-brands + mix of categories + isActive
+// states to exercise badge + status-pill render paths.
+function makeSupplier(overrides = {}) {
+  return {
+    id: 201,
+    tenantId: 1,
+    subBrand: 'tmc',
+    name: 'Acme Hotels',
+    contactPerson: 'Alice',
+    phone: '+91-9000000000',
+    email: 'alice@acme.test',
+    gstin: '07AAACA1234A1Z5',
+    addressLine: '12 Test Rd',
+    supplierCategory: 'hotel',
+    isActive: true,
+    createdAt: '2026-05-20T10:00:00.000Z',
+    updatedAt: '2026-05-20T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+const SUPPLIERS_DEFAULT = [
+  makeSupplier({ id: 201, subBrand: 'tmc', name: 'Acme Hotels', supplierCategory: 'hotel', isActive: true }),
+  makeSupplier({ id: 202, subBrand: 'rfu', name: 'Saudi Flights', supplierCategory: 'flight', isActive: true, contactPerson: null, phone: null, email: null, gstin: null, addressLine: null }),
+  makeSupplier({ id: 203, subBrand: 'visasure', name: 'Old Visa Consul', supplierCategory: 'visa-consul', isActive: false }),
+];
+
+// Install a fetchApi mock that routes by URL + method. Tests override
+// only the surface they care about.
+function installFetchMock({
+  list = { suppliers: SUPPLIERS_DEFAULT, total: SUPPLIERS_DEFAULT.length, limit: 100, offset: 0 },
+  create = null,
+  update = null,
+  del = null,
+} = {}) {
+  fetchApiMock.mockImplementation((url, opts) => {
+    const method = opts?.method || 'GET';
+    if (url.startsWith('/api/travel/suppliers') && method === 'GET') {
+      if (list instanceof Error) return Promise.reject(list);
+      return Promise.resolve(list);
+    }
+    if (url === '/api/travel/suppliers' && method === 'POST') {
+      if (create instanceof Error) return Promise.reject(create);
+      return Promise.resolve(create || makeSupplier({ id: 999 }));
+    }
+    if (/^\/api\/travel\/suppliers\/\d+$/.test(url) && method === 'PUT') {
+      if (update instanceof Error) return Promise.reject(update);
+      return Promise.resolve(update || makeSupplier({ id: 201 }));
+    }
+    if (/^\/api\/travel\/suppliers\/\d+$/.test(url) && method === 'DELETE') {
+      if (del instanceof Error) return Promise.reject(del);
+      return Promise.resolve(null);
+    }
+    return Promise.resolve(null);
+  });
+}
+
+function renderPage(user = ADMIN_USER) {
+  const value = { user, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false };
+  return render(
+    <AuthContext.Provider value={value}>
+      <SuppliersAdmin />
+    </AuthContext.Provider>,
+  );
+}
+
+beforeEach(() => {
+  fetchApiMock.mockReset();
+  notifyError.mockReset();
+  notifySuccess.mockReset();
+  notifyInfo.mockReset();
+  notifyConfirm.mockReset();
+  notifyConfirm.mockResolvedValue(true);
+  installFetchMock();
+});
+
+describe('<SuppliersAdmin /> — page chrome + RBAC', () => {
+  it('renders heading + filter bar + "New Supplier" CTA when role=ADMIN', async () => {
+    renderPage();
+    expect(
+      screen.getByRole('heading', { name: /Travel Suppliers/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Filter by category/i)).toBeInTheDocument();
+    // "Include inactive" checkbox.
+    expect(screen.getByText(/Include inactive/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /New Supplier/i })).toBeInTheDocument();
+    // Wait for mount-time GET to settle.
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls.filter(([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers'));
+      expect(calls.length).toBeGreaterThan(0);
+    });
+  });
+
+  it('MANAGER role also sees "New Supplier" CTA (canWrite = ADMIN || MANAGER)', async () => {
+    renderPage(MANAGER_USER);
+    expect(screen.getByRole('button', { name: /New Supplier/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalled();
+    });
+  });
+
+  it('hides "New Supplier" CTA + Actions column + Edit/Delete buttons for plain USER role', async () => {
+    renderPage(USER_USER);
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalled();
+    });
+    expect(screen.queryByRole('button', { name: /New Supplier/i })).toBeNull();
+    // Wait for rows so the column header set is rendered.
+    await screen.findByText('Acme Hotels');
+    expect(screen.queryByRole('columnheader', { name: /Actions/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Edit /i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Deactivate /i })).toBeNull();
+  });
+});
+
+describe('<SuppliersAdmin /> — load + render lifecycle', () => {
+  it('shows "Loading…" before first GET resolves', async () => {
+    let resolveList;
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/suppliers') && method === 'GET') {
+        return new Promise((res) => { resolveList = res; });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
+    resolveList({ suppliers: SUPPLIERS_DEFAULT, total: SUPPLIERS_DEFAULT.length });
+    // Once resolved, Loading disappears + rows render.
+    await screen.findByText('Acme Hotels');
+    expect(screen.queryByText('Loading…')).toBeNull();
+  });
+
+  it('GETs /api/travel/suppliers on mount with NO query string when filters are empty', async () => {
+    renderPage();
+    await waitFor(() => {
+      const listCall = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' && u.startsWith('/api/travel/suppliers') && (!o?.method || o.method === 'GET'),
+      );
+      expect(listCall).toBeTruthy();
+      expect(listCall[0]).toBe('/api/travel/suppliers');
+    });
+    // Renders one row per supplier.
+    expect(await screen.findByText('Acme Hotels')).toBeInTheDocument();
+    expect(screen.getByText('Saudi Flights')).toBeInTheDocument();
+    expect(screen.getByText('Old Visa Consul')).toBeInTheDocument();
+  });
+
+  it('renders empty state "No suppliers match." when API returns []', async () => {
+    installFetchMock({ list: { suppliers: [], total: 0 } });
+    renderPage();
+    expect(await screen.findByText(/No suppliers match\./i)).toBeInTheDocument();
+    // Access-restricted copy NOT shown on benign empty.
+    expect(screen.queryByText(/Access restricted/i)).toBeNull();
+  });
+
+  it('renders "Access restricted." copy per #829 when API rejects with status:403', async () => {
+    const err = new Error('Sub-brand access denied');
+    err.status = 403;
+    installFetchMock({ list: err });
+    renderPage();
+    expect(await screen.findByText(/Access restricted\./i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Your role does not have permission to view travel suppliers/i),
+    ).toBeInTheDocument();
+    // No-rows copy NOT shown on permission denial.
+    expect(screen.queryByText(/No suppliers match/i)).toBeNull();
+  });
+});
+
+describe('<SuppliersAdmin /> — filter behaviour', () => {
+  it('selecting sub-brand "rfu" re-fetches with ?subBrand=rfu in the URL', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fetchApiMock.mockClear();
+    installFetchMock({ list: { suppliers: [SUPPLIERS_DEFAULT[1]], total: 1 } });
+    fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), { target: { value: 'rfu' } });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' && u.includes('subBrand=rfu') && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('selecting category "hotel" re-fetches with ?supplierCategory=hotel', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fetchApiMock.mockClear();
+    installFetchMock({ list: { suppliers: [SUPPLIERS_DEFAULT[0]], total: 1 } });
+    fireEvent.change(screen.getByLabelText(/Filter by category/i), { target: { value: 'hotel' } });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' && u.includes('supplierCategory=hotel') && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('checking "Include inactive" re-fetches with ?includeInactive=1', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fetchApiMock.mockClear();
+    // The checkbox is the only checkbox-typed input on the page.
+    const checkbox = screen.getByLabelText(/Include inactive/i);
+    fireEvent.click(checkbox);
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' && u.includes('includeInactive=1') && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+});
+
+describe('<SuppliersAdmin /> — row rendering: badges + status', () => {
+  it('sub-brand badge per row uses real SUB_BRAND_BG (rgba palette from travelSubBrand.js)', async () => {
+    renderPage();
+    const acme = await screen.findByText('Acme Hotels');
+    const tr = acme.closest('tr');
+    // Badge cell contains the literal sub-brand id "tmc".
+    const badge = within(tr).getByText('tmc');
+    // Real SUB_BRAND_BG.tmc = "rgba(18, 38, 71, 0.18)" — assert the rgba(18, 38, 71 prefix.
+    expect(badge.style.background).toMatch(/rgba\(18,\s*38,\s*71/);
+  });
+
+  it('status badge: active row renders "Active", inactive row renders "Inactive"', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    // Acme Hotels (id 201, isActive=true) → row contains "Active".
+    const acmeRow = screen.getByText('Acme Hotels').closest('tr');
+    expect(within(acmeRow).getByText('Active')).toBeInTheDocument();
+    // Old Visa Consul (id 203, isActive=false) → row contains "Inactive".
+    const inactiveRow = screen.getByText('Old Visa Consul').closest('tr');
+    expect(within(inactiveRow).getByText('Inactive')).toBeInTheDocument();
+  });
+
+  it('renders em-dash "—" for null contact / phone / email / gstin on a sparse row', async () => {
+    renderPage();
+    // Saudi Flights (id 202) has all 4 optional fields null.
+    const sparseRow = (await screen.findByText('Saudi Flights')).closest('tr');
+    // At least 4 em-dashes in that row (contact, phone, email, gstin).
+    const dashes = within(sparseRow).getAllByText('—');
+    expect(dashes.length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe('<SuppliersAdmin /> — create + edit + delete', () => {
+  it('clicking "New Supplier" reveals the form; submitting POSTs with required name (gstin upper-cased)', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    // Form fields not present before clicking the CTA.
+    expect(screen.queryByLabelText(/^Supplier name$/i)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /New Supplier/i }));
+    // After click, form fields surface.
+    expect(screen.getByLabelText(/^Supplier name$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Contact person$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^GSTIN$/i)).toBeInTheDocument();
+    // Fill name + a gstin in lowercase to confirm submit-time uppercase.
+    fireEvent.change(screen.getByLabelText(/^Supplier name$/i), { target: { value: '  New Supplier Co  ' } });
+    fireEvent.change(screen.getByLabelText(/^Contact person$/i), { target: { value: 'Bob' } });
+    // Submit via the form (Save button).
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      // Name is trimmed by the SUT.
+      expect(body.name).toBe('New Supplier Co');
+      expect(body.contactPerson).toBe('Bob');
+      // Empty optional strings serialised as null.
+      expect(body.phone).toBeNull();
+      expect(body.email).toBeNull();
+      expect(body.gstin).toBeNull();
+      expect(body.addressLine).toBeNull();
+      // Defaults from EMPTY_FORM.
+      expect(body.supplierCategory).toBe('other');
+      expect(body.subBrand).toBe('tmc');
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/New Supplier Co/));
+  });
+
+  it('validation: empty name surfaces notify.error("Name is required") and does NOT fire POST', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /New Supplier/i }));
+    // Leave name blank; submit via direct form event to bypass HTML5
+    // required-attr (per the same pattern QuotesAdmin/InvoicesAdmin tests use).
+    fetchApiMock.mockClear();
+    const nameInput = screen.getByLabelText(/^Supplier name$/i);
+    const form = nameInput.closest('form');
+    expect(form).toBeTruthy();
+    fireEvent.submit(form);
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Name is required/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/suppliers' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('clicking Edit on a row opens the form pre-filled + PUTs to /api/travel/suppliers/:id', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    // Edit button has aria-label "Edit Acme Hotels".
+    fireEvent.click(screen.getByRole('button', { name: /^Edit Acme Hotels$/ }));
+    // Form prefilled with row 201 values.
+    expect(screen.getByLabelText(/^Supplier name$/i).value).toBe('Acme Hotels');
+    expect(screen.getByLabelText(/^Contact person$/i).value).toBe('Alice');
+    expect(screen.getByLabelText(/^Phone$/i).value).toBe('+91-9000000000');
+    expect(screen.getByLabelText(/^Email$/i).value).toBe('alice@acme.test');
+    expect(screen.getByLabelText(/^GSTIN$/i).value).toBe('07AAACA1234A1Z5');
+    expect(screen.getByLabelText(/^Address$/i).value).toBe('12 Test Rd');
+    // Save button reads "Save Changes" in edit mode.
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers/201' && o?.method === 'PUT',
+      );
+      expect(put).toBeTruthy();
+      const body = JSON.parse(put[1].body);
+      expect(body.name).toBe('Acme Hotels');
+      // gstin uppercased on submit.
+      expect(body.gstin).toBe('07AAACA1234A1Z5');
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Acme Hotels.*updated/));
+  });
+
+  it('delete flow: confirm-yes → DELETE /api/travel/suppliers/:id; confirm-no → no DELETE', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    // Confirm-no path first.
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
+    fireEvent.click(screen.getByRole('button', { name: /^Deactivate Acme Hotels$/ }));
+    // No DELETE fired.
+    await waitFor(() => {
+      const deletes = fetchApiMock.mock.calls.filter(([u, o]) =>
+        typeof u === 'string' && /^\/api\/travel\/suppliers\/\d+$/.test(u) && o?.method === 'DELETE',
+      );
+      expect(deletes.length).toBe(0);
+    });
+
+    // Confirm-yes path: stub confirm to true.
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
+    fireEvent.click(screen.getByRole('button', { name: /^Deactivate Acme Hotels$/ }));
+    await waitFor(() => {
+      const deletes = fetchApiMock.mock.calls.filter(([u, o]) =>
+        u === '/api/travel/suppliers/201' && o?.method === 'DELETE',
+      );
+      expect(deletes.length).toBe(1);
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Acme Hotels.*deactivated/));
+  });
+});

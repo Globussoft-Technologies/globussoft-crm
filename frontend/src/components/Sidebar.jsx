@@ -91,6 +91,10 @@ import {
   // Phase 1 TMC curriculum-mappings admin (tick #181) — consumes
   // /api/travel-curriculum CRUD shipped tick #180 (commit 6d5919a8).
   GraduationCap,
+  // Phase 2 SHELL for #908 Marketing Flyer Studio (tick #186) —
+  // designed in docs/PRD_TRAVEL_MARKETING_FLYER.md. Scaffold-only
+  // surface for now; MANAGER+ entry.
+  FileImage,
   // Per-sub-brand BrandKit admin entry — consumes /api/brand-kits CRUD
   // (backend commit e4783e0).
   Palette,
@@ -1094,6 +1098,10 @@ function renderTravelNav({
           /api/travel-curriculum). TMC vertical school-trip pitch deck.
           ADMIN-only per backend RBAC + RoleGuard on the route element. */}
       {isAdmin && <Link to="/travel/curriculum-mappings" icon={GraduationCap} label="Curriculum Mappings" />}
+      {/* tick #186 — Marketing Flyer Studio Phase 2 SHELL (#908).
+          MANAGER+ operator-facing surface; real impl per PRD §8 build
+          order in docs/PRD_TRAVEL_MARKETING_FLYER.md. */}
+      {isManager && <Link to="/travel/marketing/flyer-studio" icon={FileImage} label="Marketing Flyer Studio" />}
 
       {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells, admin-only.
           Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}

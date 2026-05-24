@@ -191,6 +191,11 @@ const TravelVisaEmbassyRulesAdmin = lazy(() => import("./pages/travel/visa/Embas
 // POST/PUT/DELETE RBAC. School-trip pitch-deck mappings (curriculum ×
 // grade × subject → destination) consumed by the diagnostic engine.
 const TravelCurriculumAdmin = lazy(() => import("./pages/travel/CurriculumAdmin"));
+// Phase 2 SHELL for #908 Marketing Flyer Studio (tick #186). Designed in
+// docs/PRD_TRAVEL_MARKETING_FLYER.md; this is a non-functional scaffold —
+// real implementation lands per PRD §8 dependency build order. ADMIN +
+// MANAGER only per RoleGuard on the route element.
+const TravelMarketingFlyerStudio = lazy(() => import("./pages/travel/MarketingFlyerStudio"));
 // Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
 const TravelStallDashboard = lazy(() => import("./pages/travel/TravelStallDashboard"));
 // Wellness vertical
@@ -1282,6 +1287,19 @@ export default function App() {
                 <TravelOnly>
                   <RoleGuard allow={["ADMIN"]} message="Curriculum Mappings admin requires admin access.">
                     <TravelCurriculumAdmin />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
+              {/* Phase 2 SHELL for #908 Marketing Flyer Studio (tick #186) —
+                  designed in docs/PRD_TRAVEL_MARKETING_FLYER.md. Non-
+                  functional scaffold; real impl per PRD §8 build order
+                  (canvas editor, asset library, AI copy/image, PDF/PNG
+                  export, WhatsApp share). MANAGER+ per operator-facing
+                  marketing surface. */}
+              <Route path="travel/marketing/flyer-studio" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} feature="Marketing Flyer Studio">
+                    <TravelMarketingFlyerStudio />
                   </RoleGuard>
                 </TravelOnly>
               } />

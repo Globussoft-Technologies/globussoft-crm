@@ -17,13 +17,23 @@ export default function Patients() {
   // was simply empty.
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [q, setQ] = useState("");
-  // #820 Part 1 — client-side pagination. Demo has 51 patients today; rendering
-  // them all as one continuous table is acceptable for that scale but breaks
-  // down once tenants accumulate hundreds. 25 per page matches the "Standard
-  // pagination (25 / 50 / 100 per page)" expectation in the issue. Server-side
-  // pagination is a deliberate follow-up (tracked in the #820 follow-up issue).
+  // #820 Part 1 — server-side pagination via ?limit&offset on
+  // GET /api/wellness/patients. Backend already supports it (route at
+  // backend/routes/wellness.js:405 reads `limit` / `offset` via capLimit,
+  // returns `{patients, total}`); previously we fetched the first 50 and
+  // paginated client-side, which broke once a tenant exceeded 50 rows
+  // because page 2+ would render the SAME first-50 set. Now we fetch
+  // exactly the current page and trust `total` for the total-count surface.
   const [page, setPage] = useState(1);
-  const PER_PAGE = 25;
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+  // #820 Part 2 — individual tag-add. Tracks which patient's inline tag-add
+  // input is open (id or null) and the in-progress new-tag input value +
+  // busy flag while the PATCH is in flight. The bulk-tags endpoint accepts
+  // a single-item patientIds array, so adding a tag to one patient is just
+  // a one-row invocation of that surface — no new backend route needed.
+  const [tagAddOpenId, setTagAddOpenId] = useState(null);
+  const [newTagInput, setNewTagInput] = useState("");
+  const [rowTagBusy, setRowTagBusy] = useState(false);
   // #331-bug fix: form-create flag added so handleCreate can request a refresh
   // without re-introducing a stale-state read. The previous direct `load()`
   // call inside handleCreate re-fetched with whatever `q` the closure had
@@ -92,12 +102,17 @@ export default function Patients() {
   const reqIdRef = useRef(0);
   const didMountRef = useRef(false);
 
-  const load = (currentQ) => {
+  const load = (currentQ, currentPage = page, currentRows = rowsPerPage) => {
     const myReqId = ++reqIdRef.current;
     setLoading(true);
-    const url = currentQ
-      ? `/api/wellness/patients?q=${encodeURIComponent(currentQ)}`
-      : "/api/wellness/patients";
+    // #820 Part 1 — server-side window. Pass limit + offset every call so
+    // the backend returns exactly the rows we'll render. `total` from the
+    // envelope drives the "Showing X-Y of Z" + totalPages indicators.
+    const params = new URLSearchParams();
+    if (currentQ) params.set("q", currentQ);
+    params.set("limit", String(currentRows));
+    params.set("offset", String((currentPage - 1) * currentRows));
+    const url = `/api/wellness/patients?${params.toString()}`;
     fetchApi(url)
       .then((d) => {
         // Drop stale responses — a slow empty-query fetch must not stomp
@@ -235,15 +250,18 @@ export default function Patients() {
     // the user's first keystroke.
     if (!didMountRef.current) {
       didMountRef.current = true;
-      load("");
+      load("", 1, rowsPerPage);
       return;
     }
     // #548: standardised on SEARCH_DEBOUNCE_MS (300ms) — was 250ms; pen-test
     // flagged drift between Patients (250) and Omnibar (300). One source of
     // truth in utils/timing.js.
-    const t = setTimeout(() => load(qRef.current), SEARCH_DEBOUNCE_MS);
+    // #820 Part 1 — page / rowsPerPage are now load() dependencies so paging
+    // and per-page changes issue fresh server-side fetches.
+    const t = setTimeout(() => load(qRef.current, page, rowsPerPage), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [q, reloadTick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, reloadTick, page, rowsPerPage]);
 
   useEffect(() => {
     fetchApi("/api/wellness/locations")
@@ -257,22 +275,66 @@ export default function Patients() {
     }
   }, [showAdd]);
 
-  // #820 Part 1 — reset to page 1 whenever the active filter changes, otherwise
-  // the user can be stranded on page 3 of a result set that only has 1 page
-  // after they tighten the search.
+  // #820 Part 1 — reset to page 1 whenever the active filter OR per-page
+  // size changes, otherwise the user can be stranded on page 3 of a result
+  // set that only has 1 page after they tighten the search or bump per-page
+  // from 25 to 100.
   useEffect(() => {
     setPage(1);
     // #931 — clear bulk-selection when the filter changes; previously-selected
     // ids may no longer be visible, and silently bulk-tagging hidden rows
     // would violate "what you see is what you tag" expectations.
     setSelectedIds(new Set());
-  }, [q]);
+  }, [q, rowsPerPage]);
 
-  // #820 Part 1 — compute the visible slice. `totalPages` falls back to 1 so
-  // the "Page 1 of 1" indicator still renders when the list is empty.
-  const totalPages = Math.max(1, Math.ceil(patients.length / PER_PAGE));
-  const startIdx = (page - 1) * PER_PAGE;
-  const visiblePatients = patients.slice(startIdx, startIdx + PER_PAGE);
+  // #820 Part 1 — server-side pagination: `patients` already contains
+  // exactly the rows for the current page. `totalPages` is computed from the
+  // backend's `total` (full population count), not the locally-fetched slice.
+  const totalPages = Math.max(1, Math.ceil(total / rowsPerPage));
+  const startIdx = (page - 1) * rowsPerPage;
+  const visiblePatients = patients;
+
+  // #820 Part 2 — defensive parse of `patient.tags` JSON-string column.
+  // Possible incoming shapes: null, "", malformed JSON, or a real array.
+  // Anything that doesn't parse to an array of strings yields `[]` so the
+  // table render is never thrown by polluted data.
+  const parseTags = (raw) => {
+    if (!raw) return [];
+    try {
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return [];
+      return arr.filter((t) => typeof t === "string" && t.trim().length > 0);
+    } catch {
+      return [];
+    }
+  };
+
+  // #820 Part 2 — add a single tag to a single patient via the bulk-tags
+  // endpoint (server already accepts patientIds: [oneId]). Re-fetches the
+  // current page on success so the new chip appears in the row. Validation
+  // mirrors the modal: trim, lower, length 1–50.
+  const submitRowTag = async (patientId) => {
+    const cleaned = (newTagInput || "").trim().toLowerCase();
+    if (cleaned.length < 1 || cleaned.length > 50) {
+      notify.error("Tag must be 1–50 characters.");
+      return;
+    }
+    setRowTagBusy(true);
+    try {
+      await fetchApi("/api/wellness/patients/bulk-tags", {
+        method: "PATCH",
+        body: JSON.stringify({ patientIds: [patientId], addTags: [cleaned] }),
+      });
+      notify.success(`Added "${cleaned}".`);
+      setNewTagInput("");
+      setTagAddOpenId(null);
+      setReloadTick((t) => t + 1);
+    } catch (e) {
+      notify.error(e?.message || "Failed to add tag.");
+    } finally {
+      setRowTagBusy(false);
+    }
+  };
 
   // #108: phone may be optional, but if present must look like a real phone number
   // (10–15 digits after stripping +, -, spaces, parens). Pre-fix the form accepted
@@ -668,13 +730,18 @@ export default function Patients() {
                     onChange={() => toggleSelectAllVisible(visiblePatients)}
                   />
                 </th>
-                <th style={{ ...thStyle, width: "18%" }}>Name</th>
-                <th style={{ ...thStyle, width: "13%" }}>Phone</th>
-                <th style={{ ...thStyle, width: "18%" }}>Email</th>
-                <th style={{ ...thStyle, width: "8%" }}>Gender</th>
-                <th style={{ ...thStyle, width: "12%" }}>Source</th>
-                <th style={{ ...thStyle, width: "13%" }}>Added</th>
-                <th style={{ ...thStyle, width: "9%", textAlign: "center" }}>
+                <th style={{ ...thStyle, width: "14%" }}>Name</th>
+                <th style={{ ...thStyle, width: "12%" }}>Phone</th>
+                <th style={{ ...thStyle, width: "14%" }}>Email</th>
+                <th style={{ ...thStyle, width: "7%" }}>Gender</th>
+                <th style={{ ...thStyle, width: "10%" }}>Source</th>
+                {/* #820 Part 2 — Tags column. Renders chips from
+                    patient.tags (JSON-string) + a `+` button per row that
+                    opens an inline input to attach a tag without leaving
+                    the list view. */}
+                <th style={{ ...thStyle, width: "16%" }}>Tags</th>
+                <th style={{ ...thStyle, width: "11%" }}>Added</th>
+                <th style={{ ...thStyle, width: "8%", textAlign: "center" }}>
                   Actions
                 </th>
               </tr>
@@ -724,6 +791,114 @@ export default function Patients() {
                   </td>
                   <td style={tdStyle}>{p.gender || "—"}</td>
                   <td style={tdStyle}>{p.source || "—"}</td>
+                  {/* #820 Part 2 — Tags column. Existing tags render as
+                      small chips; the `+` button opens an inline input
+                      (Enter to save, Escape to cancel). The PATCH call
+                      hits the bulk-tags endpoint with a single-item
+                      patientIds array — same write path the modal uses,
+                      so server-side validation + dedupe + audit stay
+                      consistent across both surfaces. */}
+                  <td style={tdStyle} data-testid={`tags-cell-${p.id}`}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', alignItems: 'center' }}>
+                      {parseTags(p.tags).map((t) => (
+                        <span
+                          key={t}
+                          data-testid={`tag-chip-${p.id}-${t}`}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.2rem',
+                            padding: '0.1rem 0.45rem',
+                            background: 'rgba(255,255,255,0.07)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            borderRadius: 999,
+                            fontSize: '0.72rem',
+                            color: 'var(--text-primary)',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {t}
+                        </span>
+                      ))}
+                      {tagAddOpenId === p.id ? (
+                        <span style={{ display: 'inline-flex', gap: '0.2rem', alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            autoFocus
+                            aria-label={`New tag for ${p.name}`}
+                            value={newTagInput}
+                            onChange={(e) => setNewTagInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                submitRowTag(p.id);
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setTagAddOpenId(null);
+                                setNewTagInput('');
+                              }
+                            }}
+                            disabled={rowTagBusy}
+                            placeholder="tag"
+                            style={{
+                              padding: '0.15rem 0.4rem',
+                              background: 'rgba(255,255,255,0.05)',
+                              border: '1px solid rgba(255,255,255,0.1)',
+                              borderRadius: 6,
+                              color: 'var(--text-primary)',
+                              fontSize: '0.75rem',
+                              outline: 'none',
+                              width: 80,
+                            }}
+                          />
+                          <button
+                            type="button"
+                            aria-label={`Save tag for ${p.name}`}
+                            onClick={() => submitRowTag(p.id)}
+                            disabled={rowTagBusy || newTagInput.trim().length === 0}
+                            style={{
+                              padding: '0.15rem 0.5rem',
+                              background: 'var(--primary-color, var(--accent-color))',
+                              color: '#fff',
+                              border: 'none',
+                              borderRadius: 6,
+                              fontSize: '0.7rem',
+                              cursor: (rowTagBusy || newTagInput.trim().length === 0) ? 'not-allowed' : 'pointer',
+                              opacity: (rowTagBusy || newTagInput.trim().length === 0) ? 0.6 : 1,
+                            }}
+                          >
+                            Add
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          aria-label={`Add tag to ${p.name}`}
+                          data-testid={`tag-add-${p.id}`}
+                          onClick={() => {
+                            setTagAddOpenId(p.id);
+                            setNewTagInput('');
+                          }}
+                          title="Add a tag"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: 22,
+                            height: 22,
+                            background: 'transparent',
+                            border: '1px dashed rgba(255,255,255,0.2)',
+                            borderRadius: 999,
+                            color: 'var(--primary-color, var(--accent-color))',
+                            cursor: 'pointer',
+                            padding: 0,
+                          }}
+                        >
+                          <Plus size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </td>
                   <td style={tdStyle}>
                     {formatDate(p.createdAt)}
                   </td>
@@ -749,7 +924,7 @@ export default function Patients() {
               {patients.length === 0 && (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     style={{
                       ...tdStyle,
                       textAlign: "center",
@@ -776,10 +951,14 @@ export default function Patients() {
               )}
             </tbody>
           </table>
-          {/* #820 Part 1 — pagination footer. Hidden when there's nothing to
-              paginate (0 patients) so the empty state stays uncluttered. */}
-          {patients.length > 0 && (
+          {/* #820 Part 1 — pagination footer with rows-per-page selector +
+              page-number indicator. Hidden when total is 0 (empty state)
+              so the empty-state row stays uncluttered. `total` is the
+              backend's full-population count from the {patients, total}
+              envelope; `patients.length` is just the current slice. */}
+          {total > 0 && (
             <div
+              data-testid="patients-pagination"
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -788,16 +967,41 @@ export default function Patients() {
                 borderTop: "1px solid rgba(255,255,255,0.06)",
                 color: "var(--text-secondary)",
                 fontSize: "0.85rem",
+                flexWrap: "wrap",
+                gap: "0.75rem",
               }}
             >
-              <span>
-                Showing {startIdx + 1}-
-                {Math.min(startIdx + PER_PAGE, patients.length)} of{" "}
-                {patients.length}
+              <span data-testid="patients-pagination-indicator">
+                Showing {startIdx + 1}-{Math.min(startIdx + rowsPerPage, total)} of {total}
               </span>
               <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  <span>Rows per page</span>
+                  <select
+                    aria-label="Rows per page"
+                    data-testid="rows-per-page-select"
+                    value={rowsPerPage}
+                    onChange={(e) => setRowsPerPage(parseInt(e.target.value, 10))}
+                    style={{
+                      background: "rgba(255,255,255,0.05)",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      borderRadius: 6,
+                      color: "var(--text-primary)",
+                      padding: "0.25rem 0.4rem",
+                      fontSize: "0.8rem",
+                      outline: "none",
+                    }}
+                  >
+                    {[25, 50, 100].map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   type="button"
+                  data-testid="patients-page-prev"
                   disabled={page <= 1}
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   style={{
@@ -812,11 +1016,12 @@ export default function Patients() {
                 >
                   Previous
                 </button>
-                <span style={{ color: "var(--text-primary)" }}>
+                <span style={{ color: "var(--text-primary)" }} data-testid="patients-page-indicator">
                   Page {page} of {totalPages}
                 </span>
                 <button
                   type="button"
+                  data-testid="patients-page-next"
                   disabled={page >= totalPages}
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                   style={{

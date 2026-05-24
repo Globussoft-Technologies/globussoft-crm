@@ -473,4 +473,265 @@ router.post("/:patientId/topup", topupGate, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// D16 Wallet Top-up — Arc 1 Slice 4 (PRD_WALLET_TOPUP §3.3 + DD-5.3).
+//
+// POST /api/wallet/:patientId/redeem
+//
+// Body: { amountCents: number, sourceType: 'VISIT'|'SALE', sourceId: number }
+//
+// Logic (single Prisma $transaction so debits + ledger + balance all
+// commit-or-roll together):
+//   1. Validate amountCents > 0; sourceType ∈ {VISIT, SALE}; sourceId is a
+//      positive integer.
+//   2. Validate patient exists in caller's tenant (tenantWhere) → 404 if not.
+//   3. Find the patient's wallet → 404 WALLET_NOT_FOUND if no row yet
+//      (impossible to redeem against a wallet that's never been topped up).
+//   4. Inside the tx, collect ACTIVE non-expired batches for this wallet
+//      ordered by redemption priority (DD-5.3 RESOLVED 2026-05-25):
+//        a. PRINCIPAL first (FIFO — oldest createdAt wins)
+//        b. BONUS second (soonest-expiry first — expiresAt ASC NULLS LAST)
+//      "Customer-fair pattern": principal spends before bonus so the
+//      customer's own money is consumed first and bonus credits stay
+//      live as long as possible.
+//   5. Sum the per-batch remainingCents — if total < amountCents, throw
+//      INSUFFICIENT_BALANCE with both fields so the caller can render
+//      "you have ₹X available, asked ₹Y" toast text.
+//   6. Walk batches in order; for each take `consumed = min(remaining, need)`,
+//      update batch.remainingCents -= consumed, set status='EXHAUSTED' when
+//      it hits zero, decrement `need` by `consumed`, stop on need === 0.
+//   7. Write ONE WalletTransaction(type='REDEEM', amount = -amountCents/100).
+//      visitId/invoiceId populated based on sourceType for cross-link UX.
+//   8. Update Wallet.balance -= amountCents/100.
+//   9. Audit WALLET_REDEEM with {patientId, amountCents, sourceType,
+//      sourceId, batchesUsed:[{batchId, consumedCents}, ...]}.
+//  10. Respond { success, transactionId, debitedFromBatches, remainingBalanceCents }.
+//
+// Error codes:
+//   400 INVALID_AMOUNT         amountCents ≤ 0 or non-integer
+//   400 INVALID_SOURCE_TYPE    sourceType ∉ {VISIT, SALE}
+//   400 INVALID_SOURCE_ID      sourceId not a positive integer
+//   400 INSUFFICIENT_BALANCE   total active < amountCents (+ available + requested fields)
+//   404 PATIENT_NOT_FOUND      patient missing in caller's tenant
+//   404 WALLET_NOT_FOUND       patient has never been topped up
+//   500 REDEEM_FAILED          unexpected DB / transaction error
+//
+// RBAC: clinical-write gate (same set as /topup — cashier/clerk at checkout).
+// ─────────────────────────────────────────────────────────────────────
+
+const ALLOWED_SOURCE_TYPES = new Set(["VISIT", "SALE"]);
+
+// Reuse the topupGate set — cashier-led redemption at the till mirrors
+// the top-up role surface exactly. (helper/telecaller intentionally
+// excluded — helpers don't handle money; telecallers are pre-clinical.)
+const redeemGate = topupGate;
+
+router.post("/:patientId/redeem", redeemGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.patientId, 10);
+    if (!Number.isFinite(patientId) || patientId <= 0) {
+      return res
+        .status(400)
+        .json({ error: "Invalid patientId", code: "INVALID_AMOUNT" });
+    }
+
+    const amountCents = parseInt(req.body?.amountCents, 10);
+    if (!Number.isFinite(amountCents) || amountCents <= 0) {
+      return res.status(400).json({
+        error: "amountCents must be a positive integer",
+        code: "INVALID_AMOUNT",
+      });
+    }
+
+    const sourceType = String(req.body?.sourceType || "").toUpperCase();
+    if (!ALLOWED_SOURCE_TYPES.has(sourceType)) {
+      return res.status(400).json({
+        error: "sourceType must be one of: VISIT, SALE",
+        code: "INVALID_SOURCE_TYPE",
+      });
+    }
+
+    const sourceId = parseInt(req.body?.sourceId, 10);
+    if (!Number.isFinite(sourceId) || sourceId <= 0) {
+      return res.status(400).json({
+        error: "sourceId must be a positive integer",
+        code: "INVALID_SOURCE_ID",
+      });
+    }
+
+    // Tenant-scoped existence guard. Cross-tenant patientId → 404 (never
+    // 403) so we don't leak whether the patient row exists in another
+    // tenant.
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) {
+      return res
+        .status(404)
+        .json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+    }
+
+    // Wallet existence check OUTSIDE the transaction so we can return a
+    // crisp 404 without rolling anything back.
+    const walletRow = await prisma.wallet.findFirst({
+      where: tenantWhere(req, { patientId }),
+      select: { id: true, balance: true },
+    });
+    if (!walletRow) {
+      return res
+        .status(404)
+        .json({ error: "Wallet not found", code: "WALLET_NOT_FOUND" });
+    }
+
+    const now = new Date();
+
+    // ── Atomic transaction: gather batches → check balance → walk debits
+    //    → write ledger → update wallet balance. Throwing inside the
+    //    callback rolls everything back so we never persist a partial
+    //    redemption.
+    let result;
+    try {
+      result = await prisma.$transaction(async (tx) => {
+        // Fetch ACTIVE non-expired batches in redemption order.
+        // We fetch PRINCIPAL and BONUS separately so we can apply the
+        // tier-specific orderBy clauses (FIFO for principal, soonest-
+        // expiry for bonus) without needing a multi-key sort that some
+        // Prisma backends don't honour as "PRINCIPAL first then BONUS".
+        const baseWhere = {
+          tenantId: req.user.tenantId,
+          walletId: walletRow.id,
+          status: "ACTIVE",
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        };
+
+        const [principalBatches, bonusBatches] = await Promise.all([
+          tx.walletCreditBatch.findMany({
+            where: { ...baseWhere, batchType: "PRINCIPAL" },
+            orderBy: { createdAt: "asc" }, // FIFO — oldest first
+          }),
+          tx.walletCreditBatch.findMany({
+            where: { ...baseWhere, batchType: "BONUS" },
+            // Prisma MySQL doesn't natively support "NULLS LAST" — but
+            // BONUS batches always have expiresAt populated (the topup
+            // route only sets it for bonus when bonusCents > 0). So a
+            // plain ASC on expiresAt is correct here.
+            orderBy: { expiresAt: "asc" },
+          }),
+        ]);
+
+        const orderedBatches = [...principalBatches, ...bonusBatches];
+
+        // Compute total available BEFORE we start mutating.
+        const availableCents = orderedBatches.reduce(
+          (sum, b) => sum + b.remainingCents,
+          0,
+        );
+        if (availableCents < amountCents) {
+          // Throw a structured object so the outer catch can map it to
+          // 400 INSUFFICIENT_BALANCE with the diagnostic fields.
+          const err = new Error("INSUFFICIENT_BALANCE");
+          err.code = "INSUFFICIENT_BALANCE";
+          err.requestedCents = amountCents;
+          err.availableCents = availableCents;
+          throw err;
+        }
+
+        // Walk the ordered batch list, debiting each in turn.
+        let remaining = amountCents;
+        const debitedFromBatches = [];
+        for (const batch of orderedBatches) {
+          if (remaining <= 0) break;
+          const consumed = Math.min(batch.remainingCents, remaining);
+          const newRemaining = batch.remainingCents - consumed;
+          await tx.walletCreditBatch.update({
+            where: { id: batch.id },
+            data: {
+              remainingCents: newRemaining,
+              status: newRemaining === 0 ? "EXHAUSTED" : "ACTIVE",
+            },
+          });
+          debitedFromBatches.push({
+            batchId: batch.id,
+            batchType: batch.batchType,
+            consumedCents: consumed,
+          });
+          remaining -= consumed;
+        }
+
+        // Compute new balance + write the ledger row.
+        const newBalance = +(walletRow.balance - amountCents / 100).toFixed(2);
+        const txnRow = await tx.walletTransaction.create({
+          data: {
+            tenantId: req.user.tenantId,
+            walletId: walletRow.id,
+            type: "REDEEM",
+            // Negative to indicate a debit — matches the convention used
+            // elsewhere in WalletTransaction-typed ledger writes (existing
+            // wellness REDEEM-like consumption rows are stored as negative
+            // amount-rupees so balance math is `SUM(amount)`).
+            amount: -amountCents / 100,
+            reason: `Redemption for ${sourceType} #${sourceId}`,
+            visitId: sourceType === "VISIT" ? sourceId : null,
+            invoiceId: sourceType === "SALE" ? sourceId : null,
+            balanceAfter: newBalance,
+            performedBy: req.user.userId,
+          },
+        });
+
+        await tx.wallet.update({
+          where: { id: walletRow.id },
+          data: { balance: newBalance },
+        });
+
+        return {
+          txnRow,
+          debitedFromBatches,
+          remainingBalanceCents: Math.round(newBalance * 100),
+        };
+      });
+    } catch (txErr) {
+      if (txErr.code === "INSUFFICIENT_BALANCE") {
+        return res.status(400).json({
+          error: "Insufficient wallet balance",
+          code: "INSUFFICIENT_BALANCE",
+          requestedCents: txErr.requestedCents,
+          availableCents: txErr.availableCents,
+        });
+      }
+      throw txErr;
+    }
+
+    // Fire-and-forget audit (matches the topup pattern above).
+    writeAudit(
+      "Wallet",
+      "WALLET_REDEEM",
+      walletRow.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        patientId,
+        amountCents,
+        sourceType,
+        sourceId,
+        batchesUsed: result.debitedFromBatches,
+      },
+    ).catch((auditErr) => {
+      console.warn("[wallet] audit WALLET_REDEEM failed:", auditErr.message);
+    });
+
+    return res.json({
+      success: true,
+      transactionId: result.txnRow.id,
+      debitedFromBatches: result.debitedFromBatches,
+      remainingBalanceCents: result.remainingBalanceCents,
+    });
+  } catch (e) {
+    console.error("[wallet] redeem error:", e.message);
+    return res
+      .status(500)
+      .json({ error: "Redemption failed", code: "REDEEM_FAILED" });
+  }
+});
+
 module.exports = router;

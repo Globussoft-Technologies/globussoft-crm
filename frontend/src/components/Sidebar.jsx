@@ -88,6 +88,9 @@ import {
   // Phase 3 Visa Sure scaffolding (cluster B3) — admin-only sidebar group
   Stamp,
   BadgeCheck,
+  // Phase 1 TMC curriculum-mappings admin (tick #181) — consumes
+  // /api/travel-curriculum CRUD shipped tick #180 (commit 6d5919a8).
+  GraduationCap,
   // Per-sub-brand BrandKit admin entry — consumes /api/brand-kits CRUD
   // (backend commit e4783e0).
   Palette,
@@ -1087,6 +1090,10 @@ function renderTravelNav({
       <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" />
       {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />}
       {isAdmin && <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" />}
+      {/* tick #181 — curriculum-mappings CRUD admin (consumes
+          /api/travel-curriculum). TMC vertical school-trip pitch deck.
+          ADMIN-only per backend RBAC + RoleGuard on the route element. */}
+      {isAdmin && <Link to="/travel/curriculum-mappings" icon={GraduationCap} label="Curriculum Mappings" />}
 
       {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells, admin-only.
           Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}

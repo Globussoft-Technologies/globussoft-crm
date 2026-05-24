@@ -185,6 +185,12 @@ const TravelVisaReports = lazy(() => import("./pages/travel/visa/Reports"));
 // from backend commit 05587ac7). ADMIN-only mutation gate; route wrapped in
 // RoleGuard allow=["ADMIN"] mirroring backend POST/PUT/DELETE RBAC.
 const TravelVisaEmbassyRulesAdmin = lazy(() => import("./pages/travel/visa/EmbassyRulesAdmin"));
+// Phase 1 TMC curriculum-mappings admin (tick #181, consumes /api/travel-curriculum
+// from backend commit 6d5919a8 — tick #180). ADMIN-only mutation gate;
+// route wrapped in RoleGuard allow=["ADMIN"] mirroring backend
+// POST/PUT/DELETE RBAC. School-trip pitch-deck mappings (curriculum ×
+// grade × subject → destination) consumed by the diagnostic engine.
+const TravelCurriculumAdmin = lazy(() => import("./pages/travel/CurriculumAdmin"));
 // Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
 const TravelStallDashboard = lazy(() => import("./pages/travel/TravelStallDashboard"));
 // Wellness vertical
@@ -1178,6 +1184,17 @@ export default function App() {
                 <TravelOnly>
                   <RoleGuard allow={["ADMIN"]} message="Embassy Rules admin requires admin access.">
                     <TravelVisaEmbassyRulesAdmin />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
+              {/* Phase 1 TMC curriculum-mappings admin (tick #181) — consumes
+                  /api/travel-curriculum CRUD shipped tick #180 (commit 6d5919a8).
+                  ADMIN-only per backend POST/PUT/DELETE gates. TMC vertical
+                  (school-trip pitch deck), NOT under Visa Sure. */}
+              <Route path="travel/curriculum-mappings" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN"]} message="Curriculum Mappings admin requires admin access.">
+                    <TravelCurriculumAdmin />
                   </RoleGuard>
                 </TravelOnly>
               } />

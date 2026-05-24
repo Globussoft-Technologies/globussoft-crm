@@ -150,15 +150,19 @@ describe('<Calendar /> — #615 layout regressions', () => {
   it('renders the calendar grid with minmax(0, 1fr) tracks (ellipsis-friendly)', async () => {
     setupFetch({ visits: [] });
     const { container } = renderCalendar();
-    await waitFor(() => expect(screen.getByText(/Day view by practitioner/i)).toBeInTheDocument());
-
-    const grid = container.querySelector('.calendar-grid');
-    expect(grid).toBeTruthy();
-    // The grid template uses minmax(0, 1fr) per the standing rule —
-    // hard 120px floor was removed so columns can shrink and the
-    // ellipsis chain on practitioner names actually clips.
-    const tpl = grid.style.gridTemplateColumns;
-    expect(tpl).toMatch(/minmax\(0,\s*1fr\)/);
+    // Wait for the staff fetch to resolve AND the grid to actually mount.
+    // The "Day view by practitioner" heading renders before `loading` flips
+    // off, so under CI load the grid can still be absent when the heading
+    // appears. Anchor on a practitioner name (rendered inside .calendar-grid)
+    // to guarantee the grid is in the DOM before we read its style. Then
+    // poll until the inline gridTemplateColumns is non-empty — CI runners
+    // sometimes commit the element before the style attribute resolves.
+    await screen.findByText('Dr. Anjali Mukherjee');
+    await waitFor(() => {
+      const g = container.querySelector('.calendar-grid');
+      expect(g).toBeTruthy();
+      expect(g.style.gridTemplateColumns).toMatch(/minmax\(0,\s*1fr\)/);
+    });
   });
 
   it('renders practitioner column headers with a tooltip + ellipsis chain', async () => {

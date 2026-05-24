@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Search, Plus, Users, Phone, Mail, Pencil, Download, Tag, FileSpreadsheet } from "lucide-react";
+import { Search, Plus, Users, Phone, Mail, Pencil, Download, Tag, FileSpreadsheet, FileDown } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
@@ -53,6 +53,17 @@ export default function Patients() {
   // filter shape. Both buttons disable while EITHER export is in flight to
   // prevent double-fire / race-condition downloads of stale snapshots.
   const [xlsxBusy, setXlsxBusy] = useState(false);
+  // #820 (tick #190) — "Download template" button. Fetches the CSV import
+  // template (9-column header `name/phone/email/dob/gender/source/locationId/
+  // tags/notes` + 1 fictional example row + UTF-8 BOM) so users have a
+  // pre-shaped CSV to fill in before uploading via the (forthcoming) bulk-
+  // import handler. Backend endpoint `GET /api/wellness/patients/import-
+  // template.csv` shipped tick #189 (`6b4831bb`). The template is invariant
+  // — no `?masked=1`, no filter forwarding — so the call is parameterless.
+  // Like the other two export buttons, this disables while ANY of CSV /
+  // XLSX / template is mid-download so a slow response can't race with a
+  // user-triggered re-click.
+  const [templateBusy, setTemplateBusy] = useState(false);
   // #931 — bulk-select + bulk-tag-add. Selected patient ids live in a Set so
   // toggle / clear is O(1). Modal stays open when the request errors so the
   // user can correct the tags input and retry without re-selecting rows.
@@ -210,6 +221,36 @@ export default function Patients() {
       notify.error(e.message || 'XLSX export failed.');
     } finally {
       setXlsxBusy(false);
+    }
+  };
+
+  // #820 (tick #190) — Download the CSV import template. Same fetch+blob+
+  // anchor-click mechanic as exportCsv / exportXlsx because the Authorization
+  // header forbids a plain <a href> approach. No query params on this one:
+  // the template is invariant (header row + 1 fictional example row + UTF-8
+  // BOM), independent of any filter state.
+  const downloadTemplate = async () => {
+    setTemplateBusy(true);
+    try {
+      const token = getAuthToken();
+      const res = await fetch('/api/wellness/patients/import-template.csv', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Template download failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'patients-import-template.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify.success('Import template downloaded.');
+    } catch (e) {
+      notify.error(e.message || 'Template download failed.');
+    } finally {
+      setTemplateBusy(false);
     }
   };
 
@@ -535,14 +576,16 @@ export default function Patients() {
               to try an export that will just toast 403).
               #820 (tick #188) — both CSV + XLSX buttons disable while EITHER
               export is in flight so a slow XLSX download doesn't race with a
-              user-triggered CSV (and vice-versa) on the same filter snapshot. */}
+              user-triggered CSV (and vice-versa) on the same filter snapshot.
+              #820 (tick #190) — also disable while the template download is
+              in-flight so all three buttons share a single busy gate. */}
           {!permissionDenied && (
             <button
               type="button"
               onClick={exportCsv}
-              disabled={csvBusy || xlsxBusy || total === 0}
+              disabled={csvBusy || xlsxBusy || templateBusy || total === 0}
               title={q ? `Download ${total} matching patient${total === 1 ? '' : 's'} as CSV` : `Download all ${total} patients as CSV`}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || total === 0) ? 0.6 : 1 }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || total === 0) ? 0.6 : 1 }}
             >
               <Download size={16} /> Export CSV
             </button>
@@ -555,13 +598,31 @@ export default function Patients() {
             <button
               type="button"
               onClick={exportXlsx}
-              disabled={csvBusy || xlsxBusy || total === 0}
+              disabled={csvBusy || xlsxBusy || templateBusy || total === 0}
               title={q ? `Download ${total} matching patient${total === 1 ? '' : 's'} as XLSX` : `Download all ${total} patients as XLSX`}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || total === 0) ? 0.6 : 1 }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || total === 0) ? 0.6 : 1 }}
             >
               <FileSpreadsheet size={16} /> Export XLSX
             </button>
           )}
+          {/* #820 (tick #190) — "Download template" button. Surfaces the
+              import-template CSV so users can fill in a pre-shaped file
+              before uploading via the bulk-import handler. Visible to ALL
+              roles (no permissionDenied gate) — the template itself contains
+              no PHI; it's just headers + one fictional example row. Always
+              enabled when no download is in-flight (no `total === 0` gate;
+              the template is invariant of the current view's row count).
+              Shares the combined busy gate with the two export buttons so a
+              slow template download disables the others (and vice-versa). */}
+          <button
+            type="button"
+            onClick={downloadTemplate}
+            disabled={csvBusy || xlsxBusy || templateBusy}
+            title="Download a CSV template (headers + example row) for bulk patient import"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy) ? 0.6 : 1 }}
+          >
+            <FileDown size={16} /> Download template
+          </button>
           <button
             onClick={() => {
               setShowAdd(!showAdd);

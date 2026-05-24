@@ -457,6 +457,102 @@ describe('<wellness/Patients /> — page surface', () => {
     });
   });
 
+  // #820 (tick #190) — "Download template" button. Surfaces the CSV import
+  // template (9-col header + 1 fictional example row + UTF-8 BOM) shipped at
+  // /api/wellness/patients/import-template.csv in tick #189 (6b4831bb). Pins:
+  //   1. Button renders + is clickable regardless of row count (template is
+  //      invariant — unlike Export CSV/XLSX which need total > 0).
+  //   2. Click issues fetch GET to /api/wellness/patients/import-template.csv
+  //      with NO query string (template ignores the active search filter).
+  //   3. All three export buttons (CSV / XLSX / template) disable while ANY
+  //      download is in-flight — preserves the existing combined-busy gate.
+  describe('#820 Download template (tick #190)', () => {
+    let createObjectURLMock;
+    let revokeObjectURLMock;
+    let realFetch;
+    let fetchMock;
+
+    beforeEach(() => {
+      createObjectURLMock = vi.fn(() => 'blob:fake-url');
+      revokeObjectURLMock = vi.fn();
+      URL.createObjectURL = createObjectURLMock;
+      URL.revokeObjectURL = revokeObjectURLMock;
+      realFetch = global.fetch;
+      fetchMock = vi.fn();
+      global.fetch = fetchMock;
+    });
+
+    afterEach(() => {
+      global.fetch = realFetch;
+    });
+
+    it('renders a "Download template" button that is enabled (template is invariant of row count)', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const tplBtn = screen.getByRole('button', { name: /Download template/i });
+      expect(tplBtn).toBeInTheDocument();
+      expect(tplBtn).not.toBeDisabled();
+    });
+
+    it('clicking "Download template" issues a fetch to /api/wellness/patients/import-template.csv with NO query params', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['name,phone,email\nAnita,+919876543210,a@x.in\n'])),
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      // Type a search query — proves the template URL ignores it.
+      const searchBox = screen.getByPlaceholderText(/Search by name, phone, or email/i);
+      fireEvent.change(searchBox, { target: { value: 'anita' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /Download template/i }));
+
+      await waitFor(() => {
+        const tplCall = fetchMock.mock.calls.find(([u]) =>
+          typeof u === 'string' && u.startsWith('/api/wellness/patients/import-template.csv')
+        );
+        expect(tplCall).toBeTruthy();
+        // No query string — template is invariant of the current search.
+        expect(tplCall[0]).toBe('/api/wellness/patients/import-template.csv');
+      });
+      // Bearer header forwarded from the mocked getAuthToken.
+      const tplCall = fetchMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/wellness/patients/import-template.csv')
+      );
+      expect(tplCall[1].headers).toEqual(
+        expect.objectContaining({ Authorization: 'Bearer fake-token' }),
+      );
+      await waitFor(() => {
+        expect(createObjectURLMock).toHaveBeenCalled();
+      });
+    });
+
+    it('disables CSV + XLSX + template buttons while a template download is in flight', async () => {
+      // Never-resolving fetch keeps templateBusy=true forever.
+      fetchMock.mockReturnValue(new Promise(() => {}));
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      const csvBtn = screen.getByRole('button', { name: /Export CSV/i });
+      const xlsxBtn = screen.getByRole('button', { name: /Export XLSX/i });
+      const tplBtn = screen.getByRole('button', { name: /Download template/i });
+      // Pre-click: all three enabled.
+      expect(csvBtn).not.toBeDisabled();
+      expect(xlsxBtn).not.toBeDisabled();
+      expect(tplBtn).not.toBeDisabled();
+
+      fireEvent.click(tplBtn);
+
+      // All three disabled while the template fetch hangs.
+      await waitFor(() => {
+        expect(tplBtn).toBeDisabled();
+        expect(csvBtn).toBeDisabled();
+        expect(xlsxBtn).toBeDisabled();
+      });
+    });
+  });
+
   it('shows "Loading…" before the initial fetch resolves', async () => {
     let resolvePatients;
     fetchApiMock.mockImplementation((url) => {

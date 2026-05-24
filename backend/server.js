@@ -472,6 +472,10 @@ const travelCsvIoRoutes = require("./routes/travel_csv_io");
 const travelDashboardRoutes = require("./routes/travel_dashboard");
 const travelReportsRoutes = require("./routes/travel_reports");
 const travelTravelStallRoutes = require("./routes/travel_travelstall");
+// Visa Sure Phase 3 — EmbassyRule CRUD (PC-3 + PC-7 resolved 2026-05-24).
+// Mounted at /api/embassy-rules (not under /api/travel) because authorship
+// is tenant-wide ADMIN, not sub-brand-scoped. Backs the risk-flag engine.
+const embassyRulesRoutes = require("./routes/embassy_rules");
 // Wellness vertical (Enhanced Wellness, future clinic clients)
 const wellnessRoutes = require("./routes/wellness");
 // Wave 11 Agent HH — Inventory backbone (categories, vendors, receipts,
@@ -701,6 +705,7 @@ app.use("/api/travel", travelPricingRoutes);
 app.use("/api/travel", travelTripBillingRoutes);
 app.use("/api/travel", travelWebcheckinRoutes);
 app.use("/api/travel", travelTravelStallRoutes);
+app.use("/api/embassy-rules", embassyRulesRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
 // Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths

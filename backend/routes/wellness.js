@@ -685,6 +685,74 @@ router.get("/patients.xlsx", phiReadGate, async (req, res) => {
   }
 });
 
+// #820 — patient bulk-import template (CSV scaffold).
+//
+// Emits a 2-line CSV (header row + one fictional example row) that an
+// operator downloads, fills with N real-patient rows in a spreadsheet, and
+// uploads via the future `POST /api/wellness/patients/import` endpoint
+// (separate slice). No PHI is disclosed — the example row is synthetic
+// sample data — so no audit row fires here.
+//
+// Column set MUST stay in lockstep with whatever the import endpoint
+// eventually accepts. Pinned here: name, phone, email, dob, gender,
+// source, locationId, tags, notes (the user-editable subset of the
+// Patient model).
+//
+// Auth uses phiReadGate (same as the patients.csv export) because the
+// operator who triggers an import flow is already PHI-write-authorized
+// by their RBAC role on this tenant. A USER role with no wellnessRole
+// can't trigger this, by design.
+router.get("/patients/import-template.csv", phiReadGate, async (req, res) => {
+  try {
+    // CSV cell escape: wrap in quotes when the value contains comma,
+    // quote, newline, or carriage return; double internal quotes.
+    const escape = (v) => {
+      const s = String(v ?? "");
+      if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const columns = [
+      "name",
+      "phone",
+      "email",
+      "dob",
+      "gender",
+      "source",
+      "locationId",
+      "tags",
+      "notes",
+    ];
+    const example = [
+      "Anita Sharma",
+      "+919876543210",
+      "anita.example@gmail.com",
+      "1990-03-15",
+      "F",
+      "walk-in",
+      "1",
+      "VIP;repeat",
+      "Sample notes — replace with real patient data",
+    ];
+    const csv =
+      columns.map(escape).join(",") +
+      "\r\n" +
+      example.map(escape).join(",") +
+      "\r\n";
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="patients-import-template.csv"`,
+    );
+    // BOM so Excel auto-detects UTF-8 on the operator's machine.
+    res.write("﻿");
+    res.end(csv);
+  } catch (e) {
+    console.error("[wellness] patients/import-template.csv error:", e.message);
+    res.status(500).json({ error: "Failed to emit import template" });
+  }
+});
+
 router.get("/patients/:id", phiReadGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);

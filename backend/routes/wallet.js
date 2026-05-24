@@ -211,4 +211,266 @@ router.get("/:patientId/transactions", phiReadGate, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// D16 Wallet Top-up — Arc 1 Slice 3 (PRD_WALLET_TOPUP §3.1 + §3.2).
+//
+// POST /api/wallet/:patientId/topup
+//
+// Body: { amountCents: number, paymentMethod: 'cash'|'card'|'upi'|'online' }
+//
+// Logic (single Prisma $transaction so balance + ledger + batches all
+// commit-or-roll together):
+//   1. Validate amount in (0, 10_000_000] (₹100K cap — defensive against
+//      operator typos; real-world maxima land via WalletBonusRule limits).
+//   2. Validate paymentMethod ∈ ALLOWED_PAYMENT_METHODS.
+//   3. Validate patient exists in caller's tenant (tenantWhere).
+//   4. Find-or-create the Wallet row (lazy; first top-up materialises it).
+//   5. Find ALL active WalletBonusRule rows for this tenant where
+//      minAmountCents ≤ amountCents AND (validFrom NULL OR ≤ now) AND
+//      (validTo NULL OR > now). Pick the row with the HIGHEST bonusPercent
+//      (DD-5.2 round-2 RESOLVED 2026-05-25 — highest-percent-wins).
+//      Ties broken by lowest id for determinism.
+//   6. bonusCents = floor(amountCents × bonusPercent / 100); zero if no
+//      rule matched.
+//   7. expiresAt = now + rule.validityMonths if bonus > 0; null otherwise.
+//   8. Write WalletTransaction(type='TOP_UP', amount=amountCents/100 as
+//      Float-rupees per existing schema; balanceAfter reflects principal
+//      + bonus combined).
+//   9. Write PRINCIPAL WalletCreditBatch (expiresAt=null —
+//      principal never expires; sourceRuleId=null).
+//  10. If bonus > 0, write a BONUS WalletCreditBatch (expiresAt set,
+//      sourceRuleId=rule.id, sourceTransactionId=tx.id).
+//  11. Update Wallet.balance += (principal + bonus) / 100.
+//  12. Audit WALLET_TOPUP event with {patientId, principalCents,
+//      bonusCents, ruleId|null}.
+//  13. Respond { success, walletId, transactionId, balanceCents,
+//      principalBatchId, bonusBatchId|null, bonusRuleId|null, bonusPercent }.
+//
+// Error codes (4xx are structured for SDK / frontend toast mapping):
+//   400 INVALID_AMOUNT          amountCents ≤ 0 or > 10_000_000
+//   400 INVALID_PAYMENT_METHOD  paymentMethod ∉ ALLOWED_PAYMENT_METHODS
+//   404 PATIENT_NOT_FOUND       patient missing in caller's tenant
+//   500 TOPUP_FAILED            unexpected DB / transaction error
+//
+// RBAC: clinical-role gate (verifyWellnessRole with cashier included —
+// counter cashier needs to top up at the till per PRD FR-3.1). Helper +
+// telecaller intentionally excluded — helpers don't handle money;
+// telecallers are pre-clinical lead routing only.
+// ─────────────────────────────────────────────────────────────────────
+
+const ALLOWED_PAYMENT_METHODS = new Set(["cash", "card", "upi", "online"]);
+const MAX_TOPUP_CENTS = 10_000_000; // ₹100,000 = ₹1L cap per single top-up
+
+// Clinical-write gate for top-up: cashier is the counter role that
+// actually books money; doctor/professional/manager/admin can also top
+// up (e.g. an admin reconciling an offline cash bundle). Helper and
+// telecaller are excluded — see route comment block above.
+const topupGate = verifyWellnessRole([
+  "doctor",
+  "professional",
+  "cashier",
+  "admin",
+  "manager",
+]);
+
+// Prisma Decimal → plain Number helper. WalletBonusRule.bonusPercent is
+// `Decimal @db.Decimal(5,2)` which Prisma returns as a Decimal.js
+// instance. We need a Number to do `Math.floor(amount * pct / 100)`.
+// Mock test runs may return plain JS numbers — handle both.
+function decimalToNumber(d) {
+  if (d == null) return 0;
+  if (typeof d === "number") return d;
+  if (typeof d.toNumber === "function") return d.toNumber();
+  // Strings + everything else: fall back to Number(); NaN guard.
+  const n = Number(d);
+  return Number.isFinite(n) ? n : 0;
+}
+
+router.post("/:patientId/topup", topupGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.patientId, 10);
+    if (!Number.isFinite(patientId) || patientId <= 0) {
+      return res
+        .status(400)
+        .json({ error: "Invalid patientId", code: "INVALID_AMOUNT" });
+    }
+
+    const amountCents = parseInt(req.body?.amountCents, 10);
+    if (!Number.isFinite(amountCents) || amountCents <= 0 || amountCents > MAX_TOPUP_CENTS) {
+      return res.status(400).json({
+        error: "amountCents must be a positive integer ≤ 10,000,000",
+        code: "INVALID_AMOUNT",
+      });
+    }
+
+    const paymentMethod = String(req.body?.paymentMethod || "").toLowerCase();
+    if (!ALLOWED_PAYMENT_METHODS.has(paymentMethod)) {
+      return res.status(400).json({
+        error: "paymentMethod must be one of: cash, card, upi, online",
+        code: "INVALID_PAYMENT_METHOD",
+      });
+    }
+
+    // Tenant-scoped existence guard. Cross-tenant patientId → 404 (never
+    // 403) so we don't leak whether the patient row exists in another
+    // tenant.
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) {
+      return res
+        .status(404)
+        .json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+    }
+
+    // Resolve the matching bonus rule BEFORE opening the transaction so
+    // we don't hold a row lock while iterating rules. Active + within
+    // validity window + minAmountCents ≤ amountCents.
+    const now = new Date();
+    const candidateRules = await prisma.walletBonusRule.findMany({
+      where: {
+        tenantId: req.user.tenantId,
+        active: true,
+        minAmountCents: { lte: amountCents },
+        AND: [
+          { OR: [{ validFrom: null }, { validFrom: { lte: now } }] },
+          { OR: [{ validTo: null }, { validTo: { gt: now } }] },
+        ],
+      },
+    });
+
+    // Pick highest bonusPercent (DD-5.2 round-2 RESOLVED 2026-05-25).
+    // Tiebreaker: lowest id (deterministic, oldest-rule-wins on a tie).
+    let chosenRule = null;
+    let chosenPct = 0;
+    for (const r of candidateRules) {
+      const pct = decimalToNumber(r.bonusPercent);
+      if (
+        pct > chosenPct ||
+        (pct === chosenPct && chosenRule && r.id < chosenRule.id)
+      ) {
+        chosenRule = r;
+        chosenPct = pct;
+      }
+    }
+
+    const bonusCents = chosenRule ? Math.floor((amountCents * chosenPct) / 100) : 0;
+    const expiresAt =
+      chosenRule && bonusCents > 0
+        ? new Date(now.getTime() + chosenRule.validityMonths * 30 * 24 * 60 * 60 * 1000)
+        : null;
+
+    // ── Atomic transaction: wallet upsert + tx row + 1-or-2 batches +
+    //    balance update. Throwing inside the callback rolls everything
+    //    back so we never observe a partial top-up.
+    const result = await prisma.$transaction(async (tx) => {
+      // Find-or-create wallet inside the tx so two concurrent first-
+      // top-ups for the same patient don't both insert.
+      let wallet = await tx.wallet.findFirst({
+        where: tenantWhere(req, { patientId }),
+      });
+      if (!wallet) {
+        const tenant = await tx.tenant.findUnique({
+          where: { id: req.user.tenantId },
+          select: { defaultCurrency: true },
+        });
+        wallet = await tx.wallet.create({
+          data: {
+            tenantId: req.user.tenantId,
+            patientId,
+            currency: tenant?.defaultCurrency || "INR",
+          },
+        });
+      }
+
+      const totalCredit = amountCents + bonusCents;
+      const newBalance = +(wallet.balance + totalCredit / 100).toFixed(2);
+
+      const txnRow = await tx.walletTransaction.create({
+        data: {
+          tenantId: req.user.tenantId,
+          walletId: wallet.id,
+          type: "TOP_UP",
+          amount: amountCents / 100, // float-rupees (existing schema)
+          reason: `Top-up via ${paymentMethod}${chosenRule ? ` (bonus: ${chosenRule.name})` : ""}`,
+          balanceAfter: newBalance,
+          performedBy: req.user.userId,
+        },
+      });
+
+      const principalBatch = await tx.walletCreditBatch.create({
+        data: {
+          tenantId: req.user.tenantId,
+          walletId: wallet.id,
+          batchType: "PRINCIPAL",
+          amountCents,
+          remainingCents: amountCents,
+          expiresAt: null,
+          sourceRuleId: null,
+          sourceTransactionId: txnRow.id,
+          status: "ACTIVE",
+        },
+      });
+
+      let bonusBatch = null;
+      if (bonusCents > 0) {
+        bonusBatch = await tx.walletCreditBatch.create({
+          data: {
+            tenantId: req.user.tenantId,
+            walletId: wallet.id,
+            batchType: "BONUS",
+            amountCents: bonusCents,
+            remainingCents: bonusCents,
+            expiresAt,
+            sourceRuleId: chosenRule.id,
+            sourceTransactionId: txnRow.id,
+            status: "ACTIVE",
+          },
+        });
+      }
+
+      await tx.wallet.update({
+        where: { id: wallet.id },
+        data: { balance: newBalance },
+      });
+
+      return { wallet, txnRow, principalBatch, bonusBatch, newBalance };
+    });
+
+    // Fire-and-forget audit (matches the pattern used by balance read
+    // above + Wave-11 Wallet+GiftCard surface in routes/wellness.js).
+    writeAudit(
+      "Wallet",
+      "WALLET_TOPUP",
+      result.wallet.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        patientId,
+        principalCents: amountCents,
+        bonusCents,
+        ruleId: chosenRule ? chosenRule.id : null,
+        paymentMethod,
+      },
+    ).catch((auditErr) => {
+      console.warn("[wallet] audit WALLET_TOPUP failed:", auditErr.message);
+    });
+
+    return res.json({
+      success: true,
+      walletId: result.wallet.id,
+      transactionId: result.txnRow.id,
+      balanceCents: Math.round(result.newBalance * 100),
+      principalBatchId: result.principalBatch.id,
+      bonusBatchId: result.bonusBatch ? result.bonusBatch.id : null,
+      bonusRuleId: chosenRule ? chosenRule.id : null,
+      bonusPercent: chosenPct,
+    });
+  } catch (e) {
+    console.error("[wallet] topup error:", e.message);
+    return res.status(500).json({ error: "Top-up failed", code: "TOPUP_FAILED" });
+  }
+});
+
 module.exports = router;

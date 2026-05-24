@@ -31,8 +31,8 @@
 //     reason; reason is logged into Sale.notes and AuditLog (server-side
 //     audit row written by routes/pos.js → writeAudit).
 
-import { useEffect, useMemo, useState, useContext } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState, useContext } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Calculator,
   Plus,
@@ -46,6 +46,8 @@ import {
   ShieldAlert,
   Wallet as WalletIcon,
   Gift,
+  CalendarCheck,
+  User as UserIcon,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -84,6 +86,56 @@ const PAYMENT_METHODS = [
 export default function PointOfSale() {
   const { user } = useContext(AuthContext) || {};
   const isAdminOrManager = user && (user.role === 'ADMIN' || user.role === 'MANAGER');
+
+  // D17 Arc 1 slice 1 (tick #N) — Booking | Walk-in tab switch.
+  // PRD_POS_NEW_SALE.md §3: the cashier may start a sale from an existing
+  // booking (pre-fill the basket from the booking's service) OR ring up a
+  // walk-in (the existing form, unchanged). DD-5.1 (Q&A round 2) picked
+  // URL-segment routing for shareability + back-button correctness — the
+  // tab is encoded as `?tab=booking` or `?tab=walkin` so refresh /
+  // bookmark / share-link / browser-back all land on the right tab.
+  //
+  // Default tab is "walkin" (existing behaviour — no URL param, no API
+  // contract change). Switching tabs does NOT reset basket / payment /
+  // discount / patient state so a cashier who started a walk-in can flip
+  // to Booking, pre-fill from a booking, and the in-progress sale lines
+  // are preserved + the booking's items append to whatever was already
+  // there. This matches the "switching tabs preserves data" PRD line.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const initialTab = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const t = params.get('tab');
+    return t === 'booking' ? 'booking' : 'walkin';
+  }, [location.search]);
+  const [tab, setTab] = useState(initialTab);
+  // Keep the local tab state in sync with the URL when the user navigates
+  // via back/forward (location.search changes). Direct user clicks update
+  // both setTab + the URL via switchTab below.
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
+  const switchTab = useCallback((next) => {
+    setTab(next);
+    const params = new URLSearchParams(location.search);
+    if (next === 'walkin') {
+      params.delete('tab');
+    } else {
+      params.set('tab', next);
+    }
+    const qs = params.toString();
+    navigate({ pathname: location.pathname, search: qs ? `?${qs}` : '' }, { replace: false });
+  }, [location.pathname, location.search, navigate]);
+
+  // Today's bookings feed. The Visit list endpoint already pages by date
+  // (?from=…&to=…) and includes patient + service. We re-use it as the
+  // booking source so this slice ships without a new backend endpoint —
+  // Visit IS the canonical "booked appointment" row in the wellness data
+  // model. Fetched lazily on first switch to the Booking tab so the
+  // walk-in default path doesn't pay for it.
+  const [bookings, setBookings] = useState([]);
+  const [bookingsBusy, setBookingsBusy] = useState(false);
+  const [bookingsLoaded, setBookingsLoaded] = useState(false);
 
   const [registers, setRegisters] = useState([]);
   const [currentShift, setCurrentShift] = useState(null);
@@ -156,6 +208,78 @@ export default function PointOfSale() {
     loadRegisters();
     loadCurrentShift();
   }, []);
+
+  // D17 Arc 1 slice 1 — load today's bookings the first time the cashier
+  // switches to the Booking tab. Re-fetches if they switch away + back so
+  // a stale list isn't shown when bookings get added/cancelled mid-shift.
+  const loadBookings = useCallback(async () => {
+    setBookingsBusy(true);
+    try {
+      // Today window: midnight today → midnight tomorrow (local TZ). The
+      // backend interprets `from`/`to` as Date.gte/Date.lte, so this gives
+      // us the calendar day "today" the cashier is staring at.
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      const fromIso = start.toISOString();
+      const toIso = end.toISOString();
+      const rows = await fetchApi(
+        `/api/wellness/visits?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}&limit=100`,
+      );
+      setBookings(Array.isArray(rows) ? rows : []);
+      setBookingsLoaded(true);
+    } catch (e) {
+      notify.error(e.message || 'Failed to load today’s bookings');
+    } finally {
+      setBookingsBusy(false);
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    if (tab === 'booking' && !bookingsBusy) {
+      loadBookings();
+    }
+    // We deliberately only re-fetch on tab transitions to "booking", not
+    // on every render. bookingsLoaded is the latch; clearing it elsewhere
+    // (future: after a sale completes) would re-fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // Pre-fill the basket from a booking row. Slice-1 keeps this simple:
+  // append ONE SERVICE line per booking (the booking's serviceId + name)
+  // at qty=1 and leave unitPrice blank so the cashier fills it from the
+  // visible service catalogue or the patient's package. Slice 2 (items
+  // picker autocomplete) will wire price-lookup; today we just stage the
+  // line. If the booking has no service we surface a notice rather than
+  // adding a blank row. We also remember the patientId so payment-method
+  // gates (Wallet / GiftCard) behave the same as in a manual entry.
+  const prefillFromBooking = (booking) => {
+    if (!booking) return;
+    if (booking.patient?.id) {
+      setPatientId(String(booking.patient.id));
+      setGuestCheckout(false);
+    }
+    if (booking.service?.id) {
+      const line = {
+        lineType: 'SERVICE',
+        refId: Number(booking.service.id),
+        name: booking.service.name || `SERVICE #${booking.service.id}`,
+        quantity: 1,
+        unitPrice: 0,
+        lineDiscount: 0,
+        lineTotal: 0,
+      };
+      setBasket((b) => [...b, line]);
+      notify.success(`Pre-filled ${line.name} from booking`);
+    } else {
+      notify.info('Booking has no linked service — patient pre-filled; add line items manually.');
+    }
+    // Switch to the Walk-in tab so the cashier sees the basket they just
+    // populated and can edit the unit price. Tab state preserves the
+    // newly-pre-filled basket per the slice-1 invariant.
+    switchTab('walkin');
+  };
 
   // ── Computed totals (denormalised on every render — small basket size) ──
   const subtotal = useMemo(
@@ -527,6 +651,103 @@ export default function PointOfSale() {
           Cash-and-carry checkout. Open a shift, ring up sales, close the shift to reconcile the cash drawer.
         </p>
       </header>
+
+      {/* D17 Arc 1 slice 1 — Booking | Walk-in tab strip. Tab pattern
+          mirrors PatientDetail.jsx's tabStyle: pill-button with the
+          active background coloured by --accent-color. URL-segment
+          routing via `?tab=booking`/`?tab=walkin` (DD-5.1). Walk-in is
+          default + omits the param so the existing URL stays clean. */}
+      <div
+        role="tablist"
+        aria-label="POS sale entry mode"
+        style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}
+      >
+        <button
+          role="tab"
+          aria-selected={tab === 'booking'}
+          data-testid="pos-tab-booking"
+          onClick={() => switchTab('booking')}
+          style={posTabStyle(tab === 'booking')}
+        >
+          <CalendarCheck size={14} /> Booking
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === 'walkin'}
+          data-testid="pos-tab-walkin"
+          onClick={() => switchTab('walkin')}
+          style={posTabStyle(tab === 'walkin')}
+        >
+          <UserIcon size={14} /> Walk-in
+        </button>
+      </div>
+
+      {/* Booking tab — today's appointments. Click a row to pre-fill the
+          basket + patient, then the cashier is dropped on the Walk-in tab
+          to finalise. Empty / loading / list states. */}
+      {tab === 'booking' && (
+        <div style={cardStyle} data-testid="pos-booking-panel">
+          <h2 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <CalendarCheck size={18} /> Today’s bookings
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: '0 0 0.75rem 0' }}>
+            Pick a booking to pre-fill the sale with the patient + service. You can edit the line items + price on the Walk-in tab before completing the sale.
+          </p>
+          {bookingsBusy ? (
+            <p style={{ color: 'var(--text-secondary)', margin: 0 }}>Loading bookings…</p>
+          ) : bookings.length === 0 && bookingsLoaded ? (
+            <p style={{ color: 'var(--text-secondary)', margin: 0 }}>No bookings today — switch to Walk-in to ring up an ad-hoc sale.</p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: 'var(--surface-2, #f7f7f8)' }}>
+                  <th style={thStyle}>Time</th>
+                  <th style={thStyle}>Patient</th>
+                  <th style={thStyle}>Service</th>
+                  <th style={thStyle}>Doctor</th>
+                  <th style={thStyle}>Status</th>
+                  <th style={thStyle}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {bookings.map((b) => (
+                  <tr key={b.id} style={{ borderTop: '1px solid var(--border-color)' }}>
+                    <td style={tdStyle}>
+                      {b.visitDate
+                        ? new Date(b.visitDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : '—'}
+                    </td>
+                    <td style={tdStyle}>{b.patient?.name || '—'}</td>
+                    <td style={tdStyle}>{b.service?.name || '—'}</td>
+                    <td style={tdStyle}>{b.doctor?.name || '—'}</td>
+                    <td style={tdStyle}>{b.status || '—'}</td>
+                    <td style={tdStyle}>
+                      <button
+                        onClick={() => prefillFromBooking(b)}
+                        style={{
+                          padding: '0.4rem 0.8rem',
+                          background: 'var(--primary-color, var(--accent-color))',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                          fontSize: '0.85rem',
+                        }}
+                        aria-label={`Pre-fill sale from booking for ${b.patient?.name || 'patient'}`}
+                      >
+                        Pre-fill sale
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* Walk-in tab (default) — existing shift + sale-builder flow. */}
+      {tab === 'walkin' && <>
 
       {/* Shift status banner */}
       {currentShift ? (
@@ -1148,9 +1369,27 @@ export default function PointOfSale() {
           </div>
         </>
       )}
+      </>}
     </div>
   );
 }
+
+// D17 Arc 1 slice 1 — POS tab strip style. Mirrors PatientDetail.jsx's
+// pill-button pattern (accent-color background when active, transparent
+// when inactive). Lives at module scope so the component closure stays
+// thin and the pattern can be lifted into a shared util in slice 6.
+const posTabStyle = (active) => ({
+  padding: '0.5rem 1rem',
+  border: 'none',
+  background: active ? 'var(--accent-color)' : 'transparent',
+  color: active ? '#fff' : 'var(--text-primary)',
+  cursor: 'pointer',
+  borderRadius: 8,
+  fontSize: '0.9rem',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.35rem',
+});
 
 const thStyle = {
   textAlign: 'left',

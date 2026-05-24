@@ -311,6 +311,7 @@ jobs:
           #   - channels-credentials-api.spec.js (10 tests: #651 SMS/WhatsApp/telephony credential masking + rotation + RBAC — orphan-wave 2026-05-18)
           #   - wellness-consent-archive-api.spec.js (10 tests: #564 consent captureMethod allowlist + BLOB archive idempotence + RBAC — orphan-wave 2026-05-18)
           #   - voyagr-lead-capture-api.spec.js (15 tests: routes/voyagr.js + middleware/voyagrAuth.js — cluster F1 voyagr/OJR CMS lead capture, locked 2026-05-23)
+          #   - wellness-patient-timeline-api.spec.js (13 tests: routes/wellness.js patient timeline JSON + CSV — ticks #198/#200)
           # Total: ~1725 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
@@ -452,6 +453,7 @@ jobs:
             tests/travel-travelstall-personalised-pdf-api.spec.js \
             tests/travel-visa-analytics-api.spec.js \
             tests/travel-visa-applications-api.spec.js \
+            tests/wellness-patient-timeline-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

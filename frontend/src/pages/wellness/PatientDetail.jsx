@@ -219,8 +219,9 @@ export default function PatientDetail() {
         <button style={tabStyle(tab === 'inventory')} onClick={() => setTab('inventory')}><Package size={14} /> Inventory used</button>
         {/* Agent B: telehealth tab */}
         <button style={tabStyle(tab === 'telehealth')} onClick={() => setTab('telehealth')}><Video size={14} /> Telehealth</button>
-        {/* Wave 11 Agent FF: wallet tab */}
-        <button style={tabStyle(tab === 'wallet')} onClick={() => setTab('wallet')}><WalletIcon size={14} /> Wallet</button>
+        {/* Wave 11 Agent FF: wallet tab. D16 Arc 1 slice 7 (this tick):
+            top-up modal + new endpoint integration. */}
+        <button data-testid="wallet-tab" style={tabStyle(tab === 'wallet')} onClick={() => setTab('wallet')}><WalletIcon size={14} /> Wallet</button>
         {/* Wave 11 Agent EE: Memberships tab — patient's purchased plans + balances */}
         <button style={tabStyle(tab === 'memberships')} onClick={() => setTab('memberships')}><Crown size={14} /> Memberships</button>
       </div>
@@ -310,25 +311,67 @@ function DownloadFullReportButton({ patientId, patientName }) {
   );
 }
 
-// ── Wallet tab — balance + recent transactions + redeem-giftcard ──
-// Wave 11 Agent FF. Read-only history; redeem flow lets staff paste a gift
-// code that the patient handed in (the credit lands in this patient's
-// wallet). For larger flows (admin manual credit/debit, full ledger view)
-// see /wellness/wallet at the admin sidebar entry.
+// ── Wallet tab — balance + recent transactions + top-up + redeem-giftcard ──
+//
+// Wave 11 Agent FF (gift-card redeem) + D16 Arc 1 slice 7 (this tick —
+// top-up modal + new-endpoint integration).
+//
+// Backend wiring (slice 7):
+//   - GET /api/wallet/:patientId/balance       → { balanceCents, currency, lastUpdated }
+//   - GET /api/wallet/:patientId/transactions  → { transactions, total }
+//   - POST /api/wallet/:patientId/topup        → { success, balanceCents, bonusBatchId?, bonusPercent }
+//
+// The legacy gift-card redeem flow (POST /api/wellness/giftcards/redeem)
+// stays in place — it's an orthogonal credit channel (customer hands a
+// gift code at the counter; not a top-up).
+//
+// 404 on /topup is handled gracefully — useful during a deploy gap where
+// the backend slice hasn't landed yet on the target environment.
+//
+// Validation: amount is constrained client-side to ₹100–₹100,000 (the
+// backend cap is ₹100K = 10_000_000 cents per single top-up per PRD
+// FR-3.2 MAX_TOPUP_CENTS; the floor of ₹100 prevents accidental ₹1 typos
+// that would otherwise create batch noise).
+const MIN_TOPUP_INR = 100;
+const MAX_TOPUP_INR = 100_000;
+const PAYMENT_METHODS = ['cash', 'card', 'upi', 'online'];
+
+function formatRelativeTime(iso) {
+  if (!iso) return '—';
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return '—';
+  const diffMs = Date.now() - then;
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.floor(months / 12);
+  return `${years}y ago`;
+}
+
 function WalletTab({ patient }) {
-  const [data, setData] = useState(null);
-  const [code, setCode] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [balance, setBalance] = useState(null); // {balanceCents, currency, lastUpdated}
+  const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [code, setCode] = useState('');
+  const [redeeming, setRedeeming] = useState(false);
+  const [topupOpen, setTopupOpen] = useState(false);
   const notify = useNotify();
 
   const load = async () => {
     setLoading(true);
     try {
-      const j = await fetchApi(`/api/wellness/patients/${patient.id}/wallet`);
-      setData(j);
-    } catch (e) {
-      notify.error(e.message || 'Failed to load wallet');
+      const [bal, txns] = await Promise.all([
+        fetchApi(`/api/wallet/${patient.id}/balance`).catch(() => null),
+        fetchApi(`/api/wallet/${patient.id}/transactions?limit=10`).catch(() => null),
+      ]);
+      setBalance(bal || { balanceCents: 0, currency: 'INR', lastUpdated: null });
+      setTransactions(Array.isArray(txns?.transactions) ? txns.transactions : []);
     } finally {
       setLoading(false);
     }
@@ -338,7 +381,7 @@ function WalletTab({ patient }) {
 
   const redeem = async () => {
     if (!code.trim()) return notify.error('Enter a gift card code.');
-    setSubmitting(true);
+    setRedeeming(true);
     try {
       await fetchApi('/api/wellness/giftcards/redeem', {
         method: 'POST',
@@ -350,66 +393,252 @@ function WalletTab({ patient }) {
     } catch (e) {
       notify.error(e.message || 'Failed to redeem gift card');
     } finally {
-      setSubmitting(false);
+      setRedeeming(false);
     }
   };
 
-  if (loading || !data) return <div>Loading wallet…</div>;
-  const { wallet, transactions } = data;
+  if (loading) return <div>Loading wallet…</div>;
+
+  const balanceRupees = balance ? (balance.balanceCents / 100) : 0;
+  const currency = balance?.currency || 'INR';
 
   return (
-    <div className="glass" style={{ padding: '1.25rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+    <div className="glass" style={{ padding: '1.25rem' }} data-testid="wallet-tab-panel">
+      {/* ── Balance card ─────────────────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Wallet balance</div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 600 }}>
-            {formatMoney(wallet.balance, { currency: wallet.currency })}
+          <div data-testid="wallet-balance" style={{ fontSize: '1.75rem', fontWeight: 600 }}>
+            {formatMoney(balanceRupees, { currency })}
+          </div>
+          <div data-testid="wallet-last-updated" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            {balance?.lastUpdated ? `Last updated ${formatRelativeTime(balance.lastUpdated)}` : 'No top-ups yet'}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-          <input
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="Gift card code"
-            style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', textTransform: 'uppercase' }}
-          />
-          <button
-            onClick={redeem}
-            disabled={submitting}
-            style={{ padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}
-          >
-            {submitting ? 'Redeeming…' : 'Redeem'}
-          </button>
-        </div>
+        <button
+          type="button"
+          data-testid="wallet-topup-btn"
+          onClick={() => setTopupOpen(true)}
+          style={{ padding: '0.55rem 1.1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600 }}
+        >
+          <Plus size={14} /> Top up
+        </button>
       </div>
 
-      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Recent transactions</h4>
+      {/* ── Recent transactions list ─────────────────────────── */}
+      <h4 style={{ marginTop: '0.5rem', marginBottom: '0.5rem' }}>Recent transactions</h4>
       {transactions.length === 0 ? (
-        <div style={{ color: 'var(--text-secondary)' }}>No transactions yet.</div>
+        <div data-testid="wallet-txn-empty" style={{ color: 'var(--text-secondary)', padding: '0.5rem 0' }}>No transactions yet.</div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <table data-testid="wallet-txn-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
               <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Date</th>
               <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Type</th>
               <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Amount</th>
-              <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Reason</th>
+              <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Method / reason</th>
             </tr>
           </thead>
           <tbody>
-            {transactions.map((tx) => (
-              <tr key={tx.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{formatDate(tx.createdAt)}</td>
-                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.type.replace('_', ' ')}</td>
-                <td style={{ padding: '0.5rem', fontSize: '0.85rem', color: tx.amount >= 0 ? 'var(--success-color, #10b981)' : 'var(--danger-color, #ef4444)' }}>
-                  {tx.amount >= 0 ? '+' : ''}{formatMoney(tx.amount, { currency: wallet.currency })}
-                </td>
-                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.reason || '—'}</td>
-              </tr>
-            ))}
+            {transactions.map((tx) => {
+              const isCredit = (tx.type === 'TOP_UP') || (tx.amount > 0 && tx.type !== 'REDEEM');
+              const signedRupees = isCredit ? Math.abs(tx.amount) : -Math.abs(tx.amount);
+              return (
+                <tr key={tx.id} data-testid={`wallet-txn-${tx.id}`} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                  <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{formatDate(tx.createdAt)}</td>
+                  <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{(tx.type || '').replace(/_/g, ' ')}</td>
+                  <td style={{ padding: '0.5rem', fontSize: '0.85rem', color: signedRupees >= 0 ? 'var(--success-color, #10b981)' : 'var(--danger-color, #ef4444)' }}>
+                    {signedRupees >= 0 ? '+' : '-'}{formatMoney(Math.abs(signedRupees), { currency })}
+                  </td>
+                  <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.reason || '—'}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
+
+      {/* ── Gift-card redeem strip (kept from Wave 11) ───────── */}
+      <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.5rem', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '0.85rem' }}>
+        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Redeem gift card:</span>
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder="Gift card code"
+          style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', textTransform: 'uppercase' }}
+        />
+        <button
+          type="button"
+          onClick={redeem}
+          disabled={redeeming}
+          style={{ padding: '0.5rem 1rem', background: 'transparent', color: 'var(--primary-color, var(--accent-color))', border: '1px solid var(--primary-color, var(--accent-color))', borderRadius: 6, cursor: redeeming ? 'wait' : 'pointer' }}
+        >
+          {redeeming ? 'Redeeming…' : 'Redeem'}
+        </button>
+      </div>
+
+      {topupOpen && (
+        <WalletTopupModal
+          patientId={patient.id}
+          currency={currency}
+          onClose={() => setTopupOpen(false)}
+          onSuccess={() => { setTopupOpen(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Top-up modal (D16 Arc 1 slice 7) ──────────────────────────────
+//
+// Captures (amountRupees, paymentMethod) and POSTs to
+// /api/wallet/:patientId/topup with `{amountCents, paymentMethod}`. On
+// success, shows the bonus credited (if any) and refreshes the parent
+// balance + transactions. Validation is client-side (₹100–₹100,000) plus
+// the backend's mirror validation; 400 / 403 / 404 are surfaced via
+// notify.error with friendly copy.
+function WalletTopupModal({ patientId, currency, onClose, onSuccess }) {
+  const [amount, setAmount] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [submitting, setSubmitting] = useState(false);
+  const notify = useNotify();
+
+  const amountNum = parseInt(amount, 10);
+  const amountValid = Number.isFinite(amountNum) && amountNum >= MIN_TOPUP_INR && amountNum <= MAX_TOPUP_INR;
+
+  const submit = async (e) => {
+    e?.preventDefault?.();
+    if (!amountValid) {
+      notify.error(`Amount must be between ₹${MIN_TOPUP_INR.toLocaleString()} and ₹${MAX_TOPUP_INR.toLocaleString()}.`);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetchApi(`/api/wallet/${patientId}/topup`, {
+        method: 'POST',
+        body: JSON.stringify({ amountCents: amountNum * 100, paymentMethod }),
+        silent: true, // We surface the toast ourselves so 404 gets the friendly "Backend not ready" copy.
+      });
+      const bonusPct = res?.bonusPercent || 0;
+      const msg = bonusPct > 0
+        ? `Top-up succeeded — ₹${amountNum.toLocaleString()} principal + ${bonusPct}% bonus credited.`
+        : `Top-up succeeded — ₹${amountNum.toLocaleString()} credited.`;
+      notify.success(msg);
+      onSuccess?.();
+    } catch (err) {
+      const status = err?.status;
+      if (status === 404) {
+        notify.error('Backend not ready — wallet top-up endpoint is being deployed. Try again in a few minutes.');
+      } else if (status === 403) {
+        notify.error(err.message || 'You don’t have permission to top up this wallet.');
+      } else if (status === 400) {
+        notify.error(err.message || 'Top-up rejected — check the amount and payment method.');
+      } else {
+        notify.error(err.message || 'Top-up failed.');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      data-testid="wallet-topup-modal"
+      role="dialog"
+      aria-label="Wallet top-up"
+      onClick={onClose}
+      style={{
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+        background: 'rgba(0,0,0,0.45)', zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '1rem',
+      }}
+    >
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="glass"
+        style={{
+          padding: '1.5rem', borderRadius: 12, maxWidth: 420, width: '100%',
+          background: 'var(--bg-color, #fff)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Top up wallet</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            data-testid="wallet-topup-close"
+            aria-label="Close"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <label style={{ display: 'block', marginBottom: '0.85rem' }}>
+          <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+            Amount ({currency === 'INR' ? '₹' : currency})
+          </span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={MIN_TOPUP_INR}
+            max={MAX_TOPUP_INR}
+            step={1}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder={`${MIN_TOPUP_INR}–${MAX_TOPUP_INR.toLocaleString()}`}
+            data-testid="wallet-topup-amount"
+            style={{ width: '100%', padding: '0.6rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: '1rem' }}
+            autoFocus
+          />
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+            Min ₹{MIN_TOPUP_INR.toLocaleString()} · Max ₹{MAX_TOPUP_INR.toLocaleString()} per top-up.
+          </span>
+        </label>
+
+        <label style={{ display: 'block', marginBottom: '1rem' }}>
+          <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+            Payment method
+          </span>
+          <select
+            value={paymentMethod}
+            onChange={(e) => setPaymentMethod(e.target.value)}
+            data-testid="wallet-topup-method"
+            style={{ width: '100%', padding: '0.6rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: '1rem' }}
+          >
+            {PAYMENT_METHODS.map((m) => (
+              <option key={m} value={m}>{m === 'upi' ? 'UPI' : m[0].toUpperCase() + m.slice(1)}</option>
+            ))}
+          </select>
+        </label>
+
+        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            style={{ padding: '0.55rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: 6, cursor: 'pointer' }}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            data-testid="wallet-topup-submit"
+            disabled={submitting || !amountValid}
+            style={{
+              padding: '0.55rem 1.1rem',
+              background: amountValid ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)',
+              color: '#fff', border: 'none', borderRadius: 6,
+              cursor: submitting ? 'wait' : (amountValid ? 'pointer' : 'not-allowed'),
+              fontWeight: 600,
+            }}
+          >
+            {submitting ? 'Submitting…' : 'Top up'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

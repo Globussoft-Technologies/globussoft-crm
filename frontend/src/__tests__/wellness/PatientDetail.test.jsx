@@ -112,6 +112,24 @@ const sampleTimeline = {
   ],
 };
 
+// D16 Arc 1 slice 7 — Wallet-tab default responses.
+//   - GET /api/wallet/:id/balance       → { balanceCents, currency, lastUpdated }
+//   - GET /api/wallet/:id/transactions  → { transactions, total }
+//   - POST /api/wallet/:id/topup        → { success, balanceCents, bonusPercent }
+const sampleWalletBalance = {
+  balanceCents: 250000,
+  currency: 'INR',
+  lastUpdated: '2026-05-24T10:00:00.000Z',
+};
+
+const sampleWalletTransactions = {
+  transactions: [
+    { id: 11, type: 'TOP_UP', amount: 2000, reason: 'Top-up via cash', createdAt: '2026-05-20T10:00:00.000Z' },
+    { id: 12, type: 'REDEEM', amount: -500, reason: 'Visit 101', createdAt: '2026-05-22T15:00:00.000Z' },
+  ],
+  total: 2,
+};
+
 function defaultFetchMock(url, _opts) {
   // The page loads patient core + wallet + services + staff on mount.
   if (url === `/api/wellness/patients/${PATIENT_ID}/wallet`) {
@@ -131,6 +149,16 @@ function defaultFetchMock(url, _opts) {
   }
   if (typeof url === 'string' && url.startsWith(`/api/wellness/patients/${PATIENT_ID}/timeline`)) {
     return Promise.resolve(sampleTimeline);
+  }
+  // D16 Arc 1 slice 7 — Wallet tab new endpoints.
+  if (url === `/api/wallet/${PATIENT_ID}/balance`) {
+    return Promise.resolve(sampleWalletBalance);
+  }
+  if (typeof url === 'string' && url.startsWith(`/api/wallet/${PATIENT_ID}/transactions`)) {
+    return Promise.resolve(sampleWalletTransactions);
+  }
+  if (url === `/api/wallet/${PATIENT_ID}/topup`) {
+    return Promise.resolve({ success: true, walletId: 1, transactionId: 99, balanceCents: 450000, bonusPercent: 0 });
   }
   // Default for any other URL the page may probe (download buttons,
   // etc.) — resolve to null so promises don't reject.
@@ -344,5 +372,107 @@ describe('<wellness/PatientDetail /> — Timeline tab (tick #200)', () => {
     fireEvent.click(screen.getByTestId('timeline-tab'));
 
     expect(await screen.findByText(/No events yet for this patient/i)).toBeInTheDocument();
+  });
+});
+
+// ── D16 Arc 1 slice 7 — Wallet tab + Top-up modal ──────────────────
+//
+// Pins the new endpoint wiring (`GET /api/wallet/:id/balance` +
+// `GET /api/wallet/:id/transactions?limit=10` + `POST /api/wallet/:id/topup`)
+// and the modal-driven top-up submission flow shipped this tick.
+//
+// Scope intentionally narrow — 3 cases per slice contract:
+//   1. Wallet tab is reachable from the tab strip.
+//   2. Activating Wallet fires the two new GET endpoints in parallel.
+//   3. Clicking "Top up" opens a modal; submitting POSTs
+//      `{amountCents, paymentMethod}` to the new endpoint.
+//
+// Existing 7 Timeline-tab tests above run uninterrupted; only the
+// `defaultFetchMock` was extended (additively) to resolve the new
+// endpoint paths.
+describe('<wellness/PatientDetail /> — Wallet tab (D16 Arc 1 slice 7)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+    notifyObj.error.mockReset?.();
+    notifyObj.info.mockReset?.();
+    notifyObj.success.mockReset?.();
+    if (!Element.prototype.scrollIntoView) {
+      Element.prototype.scrollIntoView = vi.fn();
+    }
+    try { sessionStorage.clear(); } catch { /* ignore */ }
+    if (!URL.createObjectURL) URL.createObjectURL = vi.fn(() => 'blob:fake');
+    if (!URL.revokeObjectURL) URL.revokeObjectURL = vi.fn();
+  });
+
+  it('renders the Wallet tab button in the tab strip', async () => {
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    const tabBtn = screen.getByTestId('wallet-tab');
+    expect(tabBtn).toBeInTheDocument();
+    expect(tabBtn).toHaveTextContent(/Wallet/i);
+  });
+
+  it('clicking Wallet fires GET /balance + GET /transactions?limit=10 in parallel', async () => {
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByTestId('wallet-tab'));
+
+    await waitFor(() => {
+      const balanceCall = fetchApiMock.mock.calls.find(
+        ([u]) => u === `/api/wallet/${PATIENT_ID}/balance`
+      );
+      const txnsCall = fetchApiMock.mock.calls.find(
+        ([u]) => typeof u === 'string' && u.startsWith(`/api/wallet/${PATIENT_ID}/transactions`)
+      );
+      expect(balanceCall).toBeTruthy();
+      expect(txnsCall).toBeTruthy();
+      // The transactions URL forwards the limit=10 the slice spec pinned.
+      expect(txnsCall[0]).toContain('limit=10');
+    });
+
+    // The rendered balance card shows the value from the mocked response
+    // (₹2,500 = 250000 cents). Pin both the card + the "+ Top up" button
+    // to prove the panel actually rendered, not just the network calls.
+    await screen.findByTestId('wallet-balance');
+    expect(screen.getByTestId('wallet-topup-btn')).toBeInTheDocument();
+  });
+
+  it('Top-up button opens the modal; submitting POSTs {amountCents, paymentMethod} to /topup', async () => {
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fireEvent.click(screen.getByTestId('wallet-tab'));
+
+    // Wait for the panel to land.
+    await screen.findByTestId('wallet-topup-btn');
+    fireEvent.click(screen.getByTestId('wallet-topup-btn'));
+
+    // Modal opens with amount input + method select + submit button.
+    const modal = await screen.findByTestId('wallet-topup-modal');
+    expect(modal).toBeInTheDocument();
+    const amountInput = screen.getByTestId('wallet-topup-amount');
+    const methodSelect = screen.getByTestId('wallet-topup-method');
+    const submitBtn = screen.getByTestId('wallet-topup-submit');
+
+    // Fill ₹1500 + UPI, submit.
+    fireEvent.change(amountInput, { target: { value: '1500' } });
+    fireEvent.change(methodSelect, { target: { value: 'upi' } });
+    fetchApiMock.mockClear();
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      const topupCall = fetchApiMock.mock.calls.find(
+        ([u]) => u === `/api/wallet/${PATIENT_ID}/topup`
+      );
+      expect(topupCall).toBeTruthy();
+      const [, opts] = topupCall;
+      expect(opts.method).toBe('POST');
+      const body = JSON.parse(opts.body);
+      // PRD FR-3.2 pins the contract: amountCents (integer cents) +
+      // paymentMethod (one of cash/card/upi/online).
+      expect(body).toEqual({ amountCents: 150000, paymentMethod: 'upi' });
+    });
   });
 });

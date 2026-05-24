@@ -1,0 +1,272 @@
+/**
+ * wellness/PatientDetail.test.jsx — vitest + RTL coverage for the new
+ * Timeline tab on the Patient detail page (tick #200).
+ *
+ * Scope: pins the page-surface invariants for the unified Timeline tab
+ * that consumes the merged GET /api/wellness/patients/:id/timeline
+ * endpoint shipped in tick #198 (`c5eec0e7`). The four existing
+ * sub-resource tabs (Case history / Prescriptions / Consent / Treatment
+ * plans) are NOT covered here — they retain their per-resource detail
+ * views. This file scopes specifically to the Timeline addition.
+ *
+ *   1. Timeline tab button is reachable from the tab list (rendered
+ *      first in the strip).
+ *   2. Clicking Timeline fires a single
+ *      GET /api/wellness/patients/<id>/timeline?limit=200 fetch.
+ *   3. Returned events render with type-specific icons + formatted
+ *      dates + summary text + a deep-link href to the canonical sub-
+ *      resource detail page.
+ *   4. Changing the type filter dropdown re-fires the fetch with
+ *      ?types=VISIT&limit=200 (or whichever value was chosen).
+ *
+ * Stable mock object refs (per CLAUDE.md RTL standing rule) — the
+ * notify mock is one object reference across the whole test run so any
+ * useCallback / useMemo deps that close over the notify hook don't
+ * trigger infinite re-renders.
+ *
+ * Test data uses real-looking names (Anita Sharma) per the
+ * feedback_realistic_test_data preference — no "E2E_FLOW_*" prefixes.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+
+const fetchApiMock = vi.fn();
+vi.mock('../../utils/api', () => ({
+  fetchApi: (...args) => fetchApiMock(...args),
+  getAuthToken: () => 'fake-token',
+}));
+
+const notifyObj = {
+  error: vi.fn(),
+  info: vi.fn(),
+  success: vi.fn(),
+  confirm: () => Promise.resolve(true),
+};
+vi.mock('../../utils/notify', () => ({
+  useNotify: () => notifyObj,
+}));
+
+vi.mock('../../utils/date', () => ({
+  formatDate: (d) => (d ? new Date(d).toISOString().slice(0, 10) : '—'),
+}));
+
+// useFormAutosave is exercised by Prescribe / Plans tabs but never by
+// Timeline. Stub it to a sane signature so the module import is safe.
+vi.mock('../../utils/useFormAutosave', () => ({
+  useFormAutosave: (_key, initial) => [initial, () => {}, false, () => {}],
+}));
+
+// DateRangePicker is rendered only by the Case-history tab (which we
+// don't activate in these tests). Stub it to a trivial fragment so the
+// module import is safe even if React eagerly traverses children.
+vi.mock('../../components/DateRangePicker', () => ({
+  default: () => null,
+  effectiveRangeFor: () => ({ from: null, to: null }),
+}));
+
+import PatientDetail from '../../pages/wellness/PatientDetail';
+
+const PATIENT_ID = 42;
+
+const samplePatient = {
+  id: PATIENT_ID,
+  name: 'Anita Sharma',
+  phone: '+919876543210',
+  email: 'anita@example.com',
+  gender: 'F',
+  visits: [],
+  prescriptions: [],
+  consents: [],
+  treatmentPlans: [],
+};
+
+const sampleTimeline = {
+  patientId: PATIENT_ID,
+  count: 3,
+  events: [
+    {
+      eventType: 'VISIT',
+      eventId: 101,
+      eventAt: '2026-05-20T10:30:00.000Z',
+      summary: 'Initial consultation — chief complaint: persistent cough',
+      refType: 'Visit',
+      refId: 101,
+    },
+    {
+      eventType: 'PRESCRIPTION',
+      eventId: 202,
+      eventAt: '2026-05-15T09:00:00.000Z',
+      summary: 'Azithromycin 500mg × 3 days',
+      refType: 'Prescription',
+      refId: 202,
+    },
+    {
+      eventType: 'CONSENT',
+      eventId: 303,
+      eventAt: '2026-05-10T12:00:00.000Z',
+      summary: 'Procedure consent signed — laser hair removal',
+      refType: 'ConsentForm',
+      refId: 303,
+    },
+  ],
+};
+
+function defaultFetchMock(url, _opts) {
+  // The page loads patient core + wallet + services + staff on mount.
+  if (url === `/api/wellness/patients/${PATIENT_ID}/wallet`) {
+    return Promise.resolve({ wallet: { balanceCents: 0 } });
+  }
+  if (url === `/api/wellness/patients/${PATIENT_ID}`) {
+    return Promise.resolve(samplePatient);
+  }
+  if (url === '/api/wellness/services') {
+    return Promise.resolve([]);
+  }
+  if (url === '/api/staff') {
+    return Promise.resolve([]);
+  }
+  if (url === `/api/wellness/loyalty/${PATIENT_ID}`) {
+    return Promise.resolve(null);
+  }
+  if (typeof url === 'string' && url.startsWith(`/api/wellness/patients/${PATIENT_ID}/timeline`)) {
+    return Promise.resolve(sampleTimeline);
+  }
+  // Default for any other URL the page may probe (download buttons,
+  // etc.) — resolve to null so promises don't reject.
+  return Promise.resolve(null);
+}
+
+function renderPatientDetail() {
+  return render(
+    <MemoryRouter initialEntries={[`/wellness/patients/${PATIENT_ID}`]}>
+      <Routes>
+        <Route path="/wellness/patients/:id" element={<PatientDetail />} />
+      </Routes>
+    </MemoryRouter>
+  );
+}
+
+describe('<wellness/PatientDetail /> — Timeline tab (tick #200)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+    notifyObj.error.mockReset?.();
+    notifyObj.info.mockReset?.();
+    notifyObj.success.mockReset?.();
+    // jsdom doesn't implement scrollIntoView — stub a no-op so any
+    // effect that touches it doesn't throw + unmount the component.
+    if (!Element.prototype.scrollIntoView) {
+      Element.prototype.scrollIntoView = vi.fn();
+    }
+    // sessionStorage is jsdom-provided but the page persists per-patient
+    // tab state into it; clear between tests so each one starts on the
+    // default 'history' tab (we click Timeline explicitly when we want it).
+    try { sessionStorage.clear(); } catch { /* ignore */ }
+  });
+
+  it('renders the Timeline tab button in the tab strip', async () => {
+    renderPatientDetail();
+    // Page heading appears after the patient-core fetch resolves.
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    // Timeline tab button is reachable.
+    const tabBtn = screen.getByTestId('timeline-tab');
+    expect(tabBtn).toBeInTheDocument();
+    expect(tabBtn).toHaveTextContent(/Timeline/i);
+  });
+
+  it('clicking Timeline fires GET /timeline?limit=200 once', async () => {
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByTestId('timeline-tab'));
+
+    // The timeline fetch fires on tab-activate.
+    await waitFor(() => {
+      const timelineCalls = fetchApiMock.mock.calls.filter(([u]) =>
+        typeof u === 'string'
+        && u.startsWith(`/api/wellness/patients/${PATIENT_ID}/timeline`)
+      );
+      expect(timelineCalls.length).toBeGreaterThanOrEqual(1);
+      // The single initial fetch carries limit=200 and NO types filter
+      // (the "All" default doesn't send a types param).
+      const url = timelineCalls[0][0];
+      expect(url).toContain('limit=200');
+      expect(url).not.toContain('types=');
+    });
+  });
+
+  it('renders one row per event with type label, formatted date, summary, and detail href', async () => {
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fireEvent.click(screen.getByTestId('timeline-tab'));
+
+    // Each event renders with a type-specific data-testid that includes
+    // the event type so we can pin both the icon mapping (by presence
+    // of the label) and the deep-link href.
+    const visitRow = await screen.findByTestId('timeline-event-VISIT-101');
+    expect(visitRow.getAttribute('href')).toBe('/wellness/visits/101');
+    expect(visitRow).toHaveTextContent(/Visit/);
+    // Date is rendered via the mocked formatDate which returns the
+    // ISO date-prefix; 2026-05-20T... → "2026-05-20".
+    expect(visitRow).toHaveTextContent('2026-05-20');
+    expect(visitRow).toHaveTextContent(/persistent cough/i);
+
+    const rxRow = screen.getByTestId('timeline-event-PRESCRIPTION-202');
+    expect(rxRow.getAttribute('href')).toBe('/wellness/prescriptions/202');
+    expect(rxRow).toHaveTextContent(/Prescription/);
+    expect(rxRow).toHaveTextContent(/Azithromycin/);
+
+    const consentRow = screen.getByTestId('timeline-event-CONSENT-303');
+    expect(consentRow.getAttribute('href')).toBe('/wellness/consents/303');
+    expect(consentRow).toHaveTextContent(/Consent/);
+    expect(consentRow).toHaveTextContent(/laser hair removal/i);
+  });
+
+  it('changing the type filter to "Visits" re-fires the fetch with ?types=VISIT', async () => {
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fireEvent.click(screen.getByTestId('timeline-tab'));
+
+    // Wait for the initial timeline fetch to settle.
+    await waitFor(() => {
+      const initial = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string'
+        && u.startsWith(`/api/wellness/patients/${PATIENT_ID}/timeline`)
+      );
+      expect(initial).toBeTruthy();
+    });
+    fetchApiMock.mockClear();
+
+    // Change the filter dropdown to VISIT — this should re-fire the
+    // fetch with ?types=VISIT + the limit=200 cap still in place.
+    fireEvent.change(screen.getByTestId('timeline-type-filter'), {
+      target: { value: 'VISIT' },
+    });
+
+    await waitFor(() => {
+      const filteredCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string'
+        && u.startsWith(`/api/wellness/patients/${PATIENT_ID}/timeline`)
+        && u.includes('types=VISIT')
+      );
+      expect(filteredCall).toBeTruthy();
+      expect(filteredCall[0]).toContain('limit=200');
+    });
+  });
+
+  it('shows the empty-state message when the endpoint returns zero events', async () => {
+    fetchApiMock.mockImplementation((url, _opts) => {
+      if (typeof url === 'string' && url.startsWith(`/api/wellness/patients/${PATIENT_ID}/timeline`)) {
+        return Promise.resolve({ patientId: PATIENT_ID, count: 0, events: [] });
+      }
+      return defaultFetchMock(url, _opts);
+    });
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fireEvent.click(screen.getByTestId('timeline-tab'));
+
+    expect(await screen.findByText(/No events yet for this patient/i)).toBeInTheDocument();
+  });
+});

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown, CheckCircle, Clock, Pill } from 'lucide-react';
+import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown, CheckCircle, Clock, Pill, Activity } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
@@ -196,6 +196,14 @@ export default function PatientDetail() {
           attribute selector). Mobile rule allows the strip to scroll
           horizontally when too many tabs survive the wrap. */}
       <div className="wellness-tab-strip" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        {/* Tick #200 — unified Timeline tab consumes the server-merged
+            /timeline endpoint (1 fetch instead of the 4 stitched fetches the
+            Case-history tab does client-side). Listed FIRST because it's the
+            "what happened with this patient in chronological order" summary
+            view operators most often want as the landing surface. The
+            existing 4 per-resource tabs stay — they serve detail editing /
+            new-capture surfaces, while Timeline is the unified read view. */}
+        <button data-testid="timeline-tab" style={tabStyle(tab === 'timeline')} onClick={() => setTab('timeline')}><Activity size={14} /> Timeline</button>
         <button style={tabStyle(tab === 'history')} onClick={() => setTab('history')}><Calendar size={14} /> Case history</button>
         {/* #838 — dedicated Prescriptions list tab with Active/Past status
             indicators + filter chips. Distinct from "New prescription"
@@ -217,6 +225,7 @@ export default function PatientDetail() {
         <button style={tabStyle(tab === 'memberships')} onClick={() => setTab('memberships')}><Crown size={14} /> Memberships</button>
       </div>
 
+      {tab === 'timeline' && <TimelineTab patientId={patient.id} />}
       {tab === 'history' && <CaseHistoryTab patient={patient} />}
       {tab === 'rxlist' && <PrescriptionsListTab patient={patient} />}
       {tab === 'prescribe' && <PrescribeTab patient={patient} onSaved={load} />}
@@ -595,6 +604,170 @@ function PrescriptionsListTab({ patient }) {
 
       {openRx && (
         <RxDetailModal rx={openRx} patient={patient} onClose={() => setOpenRx(null)} />
+      )}
+    </div>
+  );
+}
+
+// ── Timeline tab (tick #200) ──────────────────────────────────────
+//
+// Consumes the server-merged GET /api/wellness/patients/:id/timeline
+// endpoint shipped in tick #198 (`c5eec0e7`). Replaces 4 client-side
+// fetches + manual stitching with 1 round-trip + uniform event shape:
+//   { eventType, eventId, eventAt, summary, refType, refId }
+// where eventType ∈ {VISIT, PRESCRIPTION, CONSENT, TREATMENT_PLAN}.
+//
+// The endpoint sorts DESC server-side (with deterministic tie-breaker
+// on eventType ASC + eventId ASC) so this tab just iterates and renders.
+// Per-event detail navigation: each row links to the canonical sub-
+// resource view via Link to `/wellness/<sub-path>/<refId>` so an
+// operator scanning the timeline can drill in with one click.
+//
+// Filter dropdown supports the endpoint's ?types= comma-list filter
+// ("ALL" passes nothing, otherwise sends the single selected type).
+// Pagination is fixed at the endpoint's max (200) — sufficient for a
+// per-patient view; demand for "Load more" can come later if needed.
+
+const TIMELINE_TYPES = [
+  { value: 'ALL', label: 'All' },
+  { value: 'VISIT', label: 'Visits' },
+  { value: 'PRESCRIPTION', label: 'Prescriptions' },
+  { value: 'CONSENT', label: 'Consents' },
+  { value: 'TREATMENT_PLAN', label: 'Treatment plans' },
+];
+
+function timelineIcon(eventType) {
+  const size = 14;
+  if (eventType === 'VISIT') return <Stethoscope size={size} />;
+  if (eventType === 'PRESCRIPTION') return <Pill size={size} />;
+  if (eventType === 'CONSENT') return <FileSignature size={size} />;
+  if (eventType === 'TREATMENT_PLAN') return <ClipboardList size={size} />;
+  return <Activity size={size} />;
+}
+
+function timelineLabel(eventType) {
+  if (eventType === 'VISIT') return 'Visit';
+  if (eventType === 'PRESCRIPTION') return 'Prescription';
+  if (eventType === 'CONSENT') return 'Consent';
+  if (eventType === 'TREATMENT_PLAN') return 'Treatment plan';
+  return eventType;
+}
+
+// Build a deep-link path back into the sub-resource detail surface for
+// the event. The backend's refType uses Prisma model names; map them to
+// the SPA's routes. We deliberately fall through to the patient page
+// itself (current location) when no canonical detail route exists — the
+// link still works and the operator stays in context rather than
+// landing on a 404.
+function timelineHref(event, patientId) {
+  if (event.refType === 'Visit') return `/wellness/visits/${event.refId}`;
+  if (event.refType === 'Prescription') return `/wellness/prescriptions/${event.refId}`;
+  if (event.refType === 'ConsentForm') return `/wellness/consents/${event.refId}`;
+  if (event.refType === 'TreatmentPlan') return `/wellness/treatment-plans/${event.refId}`;
+  return `/wellness/patients/${patientId}`;
+}
+
+function TimelineTab({ patientId }) {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [filterType, setFilterType] = useState('ALL');
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    const params = new URLSearchParams();
+    params.set('limit', '200');
+    if (filterType !== 'ALL') params.set('types', filterType);
+    fetchApi(`/api/wellness/patients/${patientId}/timeline?${params.toString()}`)
+      .then((res) => {
+        if (cancelled) return;
+        // Endpoint returns { patientId, count, events: [...] }; tolerate
+        // a bare array too in case a future revision drops the envelope.
+        const list = Array.isArray(res) ? res : Array.isArray(res?.events) ? res.events : [];
+        setEvents(list);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err?.message || 'Failed to load timeline');
+        setEvents([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [patientId, filterType]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <label htmlFor="timeline-type-filter" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Filter:</label>
+        <select
+          id="timeline-type-filter"
+          data-testid="timeline-type-filter"
+          value={filterType}
+          onChange={(e) => setFilterType(e.target.value)}
+          style={{ padding: '0.35rem 0.6rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: '0.85rem' }}
+        >
+          {TIMELINE_TYPES.map((t) => (
+            <option key={t.value} value={t.value}>{t.label}</option>
+          ))}
+        </select>
+      </div>
+
+      {loading && (
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          Loading timeline…
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--error-color)' }}>
+          {error}
+        </div>
+      )}
+
+      {!loading && !error && events.length === 0 && (
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          No events yet for this patient.
+        </div>
+      )}
+
+      {!loading && !error && events.length > 0 && (
+        <div data-testid="timeline-events" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          {events.map((e) => (
+            <Link
+              key={`${e.eventType}-${e.eventId}`}
+              to={timelineHref(e, patientId)}
+              data-testid={`timeline-event-${e.eventType}-${e.eventId}`}
+              className="glass"
+              style={{
+                padding: '0.9rem 1rem',
+                display: 'flex',
+                gap: '0.75rem',
+                alignItems: 'flex-start',
+                textDecoration: 'none',
+                color: 'inherit',
+              }}
+            >
+              <div style={{ flexShrink: 0, paddingTop: 2, color: 'var(--text-secondary)' }}>
+                {timelineIcon(e.eventType)}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: '0.9rem' }}>{timelineLabel(e.eventType)}</strong>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    {e.eventAt ? formatDate(e.eventAt) : ''}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem', lineHeight: 1.4 }}>
+                  {e.summary || '—'}
+                </div>
+              </div>
+            </Link>
+          ))}
+        </div>
       )}
     </div>
   );

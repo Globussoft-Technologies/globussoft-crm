@@ -13,6 +13,12 @@ const multer = require("multer");
 const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 const { ipKeyGenerator } = require("express-rate-limit");
+// #820 — patients XLSX export. Mirrors the CSV exporter's shape exactly
+// (auth gate, masking policy, audit emission) but emits an Excel workbook
+// for operator workflows that consume .xlsx natively (Tally/Excel pivots,
+// pre-formatted finance reports). The CSV is kept as the canonical export;
+// XLSX is an alternate-format sibling.
+const XLSX = require("xlsx");
 const prisma = require("../lib/prisma");
 const { runForTenant, executeApproved } = require("../cron/orchestratorEngine");
 const {
@@ -554,6 +560,127 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
     res.end(csv);
   } catch (e) {
     console.error("[wellness] patients.csv export error:", e.message);
+    res.status(500).json({ error: "Failed to export patients" });
+  }
+});
+
+// #820 — patients XLSX export. Sibling to /patients.csv above; identical
+// auth, masking, filter, and audit policy, but emits a native Excel
+// workbook so operator-side flows that consume .xlsx (Tally pivots,
+// pre-formatted finance reports, partners that won't take CSV) get a
+// first-class shape instead of having to round-trip through Excel's
+// CSV import wizard.
+//
+// Audit shape: TWO rows on unmasked exports —
+//   (1) PATIENT_LIST_EXPORT with `{ format: 'xlsx', count, masked, query,
+//       locationId }` — always emitted; this is the export-trail row that
+//       lets compliance reviewers see WHEN exports happened regardless of
+//       whether PII was disclosed.
+//   (2) PII_DISCLOSED — only when masked=false. Same disclosure-trail row
+//       the CSV exporter emits; pairs with audit.findMany({
+//       action: 'PII_DISCLOSED' }) so disclosure dashboards stay
+//       format-agnostic.
+// On masked exports only (1) fires (no PII left the building).
+router.get("/patients.xlsx", phiReadGate, async (req, res) => {
+  try {
+    const { q, locationId } = req.query;
+    const wantMasked = req.query.masked === "1" || req.query.masked === "true";
+    const where = tenantWhere(req);
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { phone: { contains: q } },
+        { email: { contains: q } },
+      ];
+    }
+    if (locationId) where.locationId = parseInt(locationId);
+    if (req.query.includeDeleted !== "1" && req.query.includeDeleted !== "true") {
+      where.deletedAt = null;
+    }
+    const patients = await prisma.patient.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 5000,
+    });
+    // Decide mask: query flag wins; otherwise role-based.
+    const mustMask = wantMasked || shouldMaskForViewer(req);
+    const piiFields = ["name", "phone", "email", "dob"];
+    const rows = mustMask ? maskRows(patients, piiFields) : patients;
+
+    // Flatten to scalar columns before handing to json_to_sheet — Prisma
+    // rows can contain nested objects (location relation if included
+    // upstream) + Date instances. XLSX serializes Date as a numeric cell
+    // (Excel serial) which silently drifts under TZ-aware tooling; ISO
+    // strings render fine in Excel and avoid the drift.
+    const sheetRows = rows.map((p) => ({
+      ID: p.id,
+      Name: p.name || "",
+      Phone: p.phone || "",
+      Email: p.email || "",
+      DOB: p.dob
+        ? typeof p.dob === "string"
+          ? p.dob.slice(0, 10)
+          : new Date(p.dob).toISOString().slice(0, 10)
+        : "",
+      Gender: p.gender || "",
+      Created: p.createdAt ? new Date(p.createdAt).toISOString() : "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(sheetRows, {
+      header: ["ID", "Name", "Phone", "Email", "DOB", "Gender", "Created"],
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Patients");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    // Audit-row 1: PATIENT_LIST_EXPORT — always, format-tagged so the audit
+    // dashboard can split exports by output type.
+    writeAudit(
+      "Patient",
+      "PATIENT_LIST_EXPORT",
+      null,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        format: "xlsx",
+        count: patients.length,
+        masked: mustMask,
+        query: q || null,
+        locationId: locationId ? parseInt(locationId) : null,
+      },
+    ).catch((e) => console.warn("[wellness] audit PATIENT_LIST_EXPORT failed:", e.message));
+
+    // Audit-row 2: PII_DISCLOSED — only when masked=false. Mirrors the
+    // CSV exporter so disclosure dashboards stay format-agnostic.
+    if (!mustMask) {
+      writeAudit(
+        "Patient",
+        "PII_DISCLOSED",
+        null,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          ...auditDisclosureDetails(req, "patient_export_xlsx", patients, {
+            fields: piiFields,
+          }),
+          masked: false,
+          format: "xlsx",
+          query: q || null,
+          locationId: locationId ? parseInt(locationId) : null,
+        },
+      ).catch((e) => console.warn("[wellness] audit Patient PII_DISCLOSED (xlsx) failed:", e.message));
+    }
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="patients${mustMask ? "-masked" : ""}-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+    );
+    res.end(buf);
+  } catch (e) {
+    console.error("[wellness] patients.xlsx export error:", e.message);
     res.status(500).json({ error: "Failed to export patients" });
   }
 });

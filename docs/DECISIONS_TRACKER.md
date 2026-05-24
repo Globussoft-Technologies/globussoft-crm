@@ -2,8 +2,8 @@
 
 Consolidated index of every product/design decision flagged across the 22 PRDs in `docs/`. Use this to drive product-call agendas — each row is something the product team needs to settle before the corresponding PRD can move to (or finish) implementation.
 
-**Updated:** 2026-05-23 (tick #65, refresh covering 13 PRDs that landed after the tick-#22 snapshot)
-**Total decisions pending:** 192 across 33 of the 33 cron-tracked PRDs (113 from the tick-#22 snapshot + 79 new rows from 13 new sections added 2026-05-23 tick #65). The 2 PRDs without surfaced decisions remain WHATSAPP + DIGILOCKER_USE_CASE — pure cred-chase + use-case narrative; see "no decisions surfaced" section below for rationale. Two additional adjacent docs (`DIGILOCKER_INTEGRATION_SPEC.md`, `TRAVEL_CRM_PRD.md`) also surveyed and listed there.
+**Updated:** 2026-05-24 (session +32 resolutions across Travel-GST/Billing/Quote/Supplier + Visa Sure Phase 3 + TMC + B2B Portal + Multichannel + Pipeline Kanban)
+**Total decisions pending:** ~129 across 33 PRDs (was 192 at tick-#65; 27 resolved in earlier 2026-05-24 session + 32 in tick-#171 session = 59 cumulative; remainder are "settle-during-implementation" shape). The 2 PRDs without surfaced decisions remain WHATSAPP + DIGILOCKER_USE_CASE — pure cred-chase + use-case narrative; see "no decisions surfaced" section below for rationale.
 **Format note:** PRDs use three competing naming conventions for decisions — `DD-5.X` (newer Travel-vertical PRDs), `DC-N` (mid-cycle PRDs), `PC-N` / `D-N` (earliest PRDs). This tracker preserves the source ID so cross-references stay clickable; consider standardising to `DD-` in future PRDs.
 
 ---
@@ -21,55 +21,55 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 ## Decisions by PRD
 
 ### PRD_TRAVEL_GST_COMPLIANCE.md (6 pending)
-- DD-5.1 [PENDING] GSTN portal GSTIN reverse-check vendor (ClearTax / Masters India / GSTN direct / none-at-launch). Rec: Masters India low-volume.
+- DD-5.1 [RESOLVED 2026-05-24: Masters India — low-volume pricing + mature API + IRP-certified; best for v1 + occasional checks.] GSTN portal GSTIN reverse-check vendor (ClearTax / Masters India / GSTN direct / none-at-launch). Rec: Masters India low-volume.
 - DD-5.2 [RESOLVED 2026-05-24: Operator-maintained Admin UI — keeps tax rates editable in-app without code deploys; ClearTax SaaS revisited if multi-tenant rate drift accelerates.] Tax-rate maintenance UI vs hardcoded JSON vs ClearTax tax-engine SaaS. Rec: operator-maintained Admin UI.
-- DD-5.3 [PENDING] RCM auto-flag policy per service category. Rec: operator-toggled per-invoice, audit-logged.
+- DD-5.3 [RESOLVED 2026-05-24: Operator-toggled per-invoice, audit-logged — maximum operator flexibility given GST RCM rules change.] RCM auto-flag policy per service category. Rec: operator-toggled per-invoice, audit-logged.
 - DD-5.4 [RESOLVED 2026-05-24: Excel Software handover — couples to Q8 cred-chase; defer full GSTN/ClearTax connector until vendor spec lands.] GSTR-1/3B delivery: direct GSTN portal / ClearTax connector / Excel Software handover (Q21). Rec: Excel handover at launch.
-- DD-5.5 [PENDING] Backfill existing invoices without HSN/SAC. Rec: backfill via `ServiceCategory.defaultSacCode` where possible + default-18% for the rest.
-- DD-5.6 [PENDING] GSTR-1 cadence — monthly vs QRMP quarterly. Rec: per-sub-brand election, monthly default.
+- DD-5.5 [RESOLVED 2026-05-24: Backfill via `ServiceCategory.defaultSacCode` where possible + default 9985/18% for orphans. One-time backfill script.] Backfill existing invoices without HSN/SAC. Rec: backfill via `ServiceCategory.defaultSacCode` where possible + default-18% for the rest.
+- DD-5.6 [RESOLVED 2026-05-24: Per-sub-brand election, monthly default — matches CBIC's QRMP eligibility at sub-brand level.] GSTR-1 cadence — monthly vs QRMP quarterly. Rec: per-sub-brand election, monthly default.
 
 ### PRD_TRAVEL_BILLING.md (7 pending)
 - DD-5.1 [RESOLVED 2026-05-23: FORK — `TravelInvoice` as new Prisma model; isolated from generic Invoice. Decided as part of the Quote/Billing/Supplier symmetric fork call.] Fork `TravelInvoice` or extend in-place. Rec: FORK (sibling to Quote/Supplier fork decisions).
-- DD-5.2 [PENDING] Schedule-template ownership: free-form operator vs admin-curated. Rec: admin-curated + operator override.
+- DD-5.2 [RESOLVED 2026-05-24: Admin-curated + operator override — Globussoft admin seeds 5-10 canonical templates; operators override per-quote or save tenant-specific ones.] Schedule-template ownership: free-form operator vs admin-curated. Rec: admin-curated + operator override.
 - DD-5.3 [RESOLVED 2026-05-24: Sub-brand home currency + operator override — matches the per-sub-brand isolation pattern already shipped in `621aab7`.] Reporting currency basis: operator-preferred / sub-brand home / tenant-global. Rec: sub-brand home + operator override.
-- DD-5.4 [PENDING] TCS tax-filer verification source. Rec: manual + CSV bulk-import.
-- DD-5.5 [PENDING] Reminder cadence + channel — hard-coded T-7/T-3/T-1 vs operator-configurable; channels mix. Rec: hard-coded cadence, all-channels with opt-out.
-- DD-5.6 [PENDING] Cancellation-policy editor scope: admin-only / per-sub-brand-head / per-operator. Rec: admin-only (legal-contract risk).
+- DD-5.4 [RESOLVED 2026-05-24: DigiLocker PAN-fetch where available, manual fallback for non-DigiLocker customers — verified + free, opt-in.] TCS tax-filer verification source. Rec: manual + CSV bulk-import.
+- DD-5.5 [RESOLVED 2026-05-24: Operator-configurable cadence + channel mix — per-tenant settings for both; multiplies test surface but matches per-sub-brand autonomy theme.] Reminder cadence + channel — hard-coded T-7/T-3/T-1 vs operator-configurable; channels mix. Rec: hard-coded cadence, all-channels with opt-out.
+- DD-5.6 [RESOLVED 2026-05-24: Per-sub-brand-head — each sub-brand head can author own templates; reasonable autonomy bounded by role gate.] Cancellation-policy editor scope: admin-only / per-sub-brand-head / per-operator. Rec: admin-only (legal-contract risk).
 - DD-5.7 [PENDING] Per-sub-brand PDF branding (Yasin's brand handover, Q22). Rec: ship FR-3.8.d with placeholder branding now, swap later.
 
 ### PRD_TRAVEL_B2B_AGENT_PORTAL.md (7 pending)
 - DD-5.1 [RESOLVED 2026-05-24: New routes in existing app (Option B) for v1, fork plan documented — minimises surface for v1; fork to separate app available later if portal-specific bundle size becomes a problem.] Portal frontend topology — new React app vs new routes in existing app. Rec: Option B (new routes) for v1, fork plan documented.
 - DD-5.2 [RESOLVED 2026-05-24: Hybrid — rule-based default + operator override. Inherits the auto-with-override theme.] Sub-agent tier model — rule-based vs operator-curated vs hybrid. Rec: hybrid with rule-based default + operator override.
-- DD-5.3 [PENDING] Commission settlement timing — at-booking / at-payment / at-month-end. Rec: at-customer-payment with monthly statement cadence.
-- DD-5.4 [PENDING] Corporate policy editor — in-app form / JSON upload / spreadsheet. Rec: Option A (in-app form) v1; Option C (spreadsheet) v2.
-- DD-5.5 [PENDING] Approval workflow chain shape — linear / multi-stage / configurable. Rec: configurable, with linear default template.
+- DD-5.3 [RESOLVED 2026-05-24: At-customer-payment + monthly statement cadence — cash-flow matches reality + industry standard.] Commission settlement timing — at-booking / at-payment / at-month-end. Rec: at-customer-payment with monthly statement cadence.
+- DD-5.4 [RESOLVED 2026-05-24: In-app form v1, spreadsheet v2 — structured form for common policies; spreadsheet bulk-import Phase 2.] Corporate policy editor — in-app form / JSON upload / spreadsheet. Rec: Option A (in-app form) v1; Option C (spreadsheet) v2.
+- DD-5.5 [RESOLVED 2026-05-24: Configurable with linear default template — supports 90% with sane default; multi-stage available when needed.] Approval workflow chain shape — linear / multi-stage / configurable. Rec: configurable, with linear default template.
 - DD-5.6 [PENDING] Expense report format — per-corporate template vs canonical CSV. Rec: canonical CSV v1; per-template v2.
-- DD-5.7 [PENDING] Traveler-profile sharing scope — corp-scoped vs cross-corp shared. Rec: corp-scoped (privacy-safer).
+- DD-5.7 [RESOLVED 2026-05-24: Corp-scoped — each corporate has its own copy of traveler profile; privacy-safer + simpler RBAC.] Traveler-profile sharing scope — corp-scoped vs cross-corp shared. Rec: corp-scoped (privacy-safer).
 
 ### PRD_TRAVEL_MULTICHANNEL_LEADS.md (5 pending)
 - DD-5.1 [RESOLVED 2026-05-24: Auto-merge + notify operator — inherits the standardised auto-with-override UX theme.] Cross-channel merge auto vs prompt. Rec: auto-merge + notify operator.
-- DD-5.2 [PENDING] Within-channel cooldown duration (default 60min per FR-3.7.2). Per-channel override?
+- DD-5.2 [RESOLVED 2026-05-24: Default 60min with per-channel override allowed — admin can configure (e.g. WhatsApp 15min, IndiaMART 24h).] Within-channel cooldown duration (default 60min per FR-3.7.2). Per-channel override?
 - DD-5.3 [RESOLVED 2026-05-24: Most-specific wins — industry pattern; deterministic + predictable for operators authoring overlapping rules.] Routing-rule priority resolution — most-specific-wins vs last-created-wins. Rec: most-specific (industry pattern).
-- DD-5.4 [PENDING] Per-channel notification cadence — per-intake vs per-rule-match. Rec: per-rule-match + ops-overview channel.
-- DD-5.5 [PENDING] Idempotency window — 24h vs 7d. Rec: 24h covers vendor retries.
+- DD-5.4 [RESOLVED 2026-05-24: Per-rule-match + ops-overview channel — each routing-rule match notifies its target operator; tenant-wide ops channel gets digest.] Per-channel notification cadence — per-intake vs per-rule-match. Rec: per-rule-match + ops-overview channel.
+- DD-5.5 [RESOLVED 2026-05-24: 24h — covers vendor retries (IndiaMART/JustDial sometimes redeliver); same `external_lead_id` dedupe'd to existing within window.] Idempotency window — 24h vs 7d. Rec: 24h covers vendor retries.
 
 ### PRD_TRAVEL_QUOTE_BUILDER.md (6 pending)
 - DD-5.1 [RESOLVED 2026-05-23: FORK — `TravelQuote` as new Prisma model. Decided as part of the Quote/Billing/Supplier symmetric fork call.] Fork `TravelQuote` vs extend `Quote` vs extend `Estimate`. Rec: FORK (matches Billing + Supplier symmetric decisions).
-- DD-5.2 [PENDING] Pricing-engine UX — rule-based config vs formula-language. Rec: rule-based (config-driven). Formula-language as Phase 2 escape hatch.
-- DD-5.3 [PENDING] Tax treatment default per sub-brand — inclusive vs exclusive. Rec: TMC + Visa Sure exclusive; RFU + Travel Stall inclusive.
-- DD-5.4 [PENDING] FX-rate source + cadence — RBI / vendor (OXR/Fixer) / manual. Rec: RBI ref-rate, daily 09:00 IST cron.
-- DD-5.5 [PENDING] Counter-offer flow — simple delta+reason vs rich line-edit. Rec: simple v1; rich v2 if usage shows demand.
-- DD-5.6 [PENDING] PDF renderer ownership — extend `pdfRenderer.js` vs new `travelPdfRenderer.js`. Rec: extend existing.
+- DD-5.2 [RESOLVED 2026-05-24: Hybrid — rule-based config UI for common cases + formula-language escape hatch for power users. Best UX, doubles QA cost.] Pricing-engine UX — rule-based config vs formula-language. Rec: rule-based (config-driven). Formula-language as Phase 2 escape hatch.
+- DD-5.3 [RESOLVED 2026-05-24: TMC + Visa Sure exclusive (B2B + service-fee); RFU + Travel Stall inclusive (consumer-facing) — matches sub-brand commercial models.] Tax treatment default per sub-brand — inclusive vs exclusive. Rec: TMC + Visa Sure exclusive; RFU + Travel Stall inclusive.
+- DD-5.4 [RESOLVED 2026-05-24: Operator picks per sub-brand — RBI / Fixer.io / manual per sub-brand; multiplies test surface but matches sub-brand autonomy theme.] FX-rate source + cadence — RBI / vendor (OXR/Fixer) / manual. Rec: RBI ref-rate, daily 09:00 IST cron.
+- DD-5.5 [RESOLVED 2026-05-24: Rich line-edit + version-diff — operator can edit any line, customer sees track-changes; powerful but multi-week build.] Counter-offer flow — simple delta+reason vs rich line-edit. Rec: simple v1; rich v2 if usage shows demand.
+- DD-5.6 [RESOLVED 2026-05-24: Extend `pdfRenderer.js` — single PDF lib path; operator branding via shared theme tokens.] PDF renderer ownership — extend `pdfRenderer.js` vs new `travelPdfRenderer.js`. Rec: extend existing.
 
 ### PRD_TRAVEL_PIPELINE_KANBAN.md (4 pending)
 - DD-5.1 [RESOLVED 2026-05-24: `@dnd-kit/core` — smallest touch-capable bundle + actively maintained + best a11y story.] Drag-drop library — HTML5 native / `react-beautiful-dnd` / `@dnd-kit/core` / `react-dnd`. Rec: `@dnd-kit/core` (smallest touch-capable + actively maintained).
 - DD-5.2 [RESOLVED 2026-05-24: Socket happy-path + manual button (auto-with-override) — inherits the standardised auto-with-override UX theme.] Stale-data refresh policy — socket only / interval fallback / manual button. Rec: manual button + socket happy-path.
-- DD-5.3 [PENDING] Filter chip default for multi-brand users. Rec: all brands user has access to.
-- DD-5.4 [PENDING] Crowded-column UX (>100 cards) — virtualize / cap+modal / collapse old. Rec: virtualization (FR-3.18).
+- DD-5.3 [RESOLVED 2026-05-24: All brands user has access to — show everything; user filters manually.] Filter chip default for multi-brand users. Rec: all brands user has access to.
+- DD-5.4 [RESOLVED 2026-05-24: Virtualization (react-window) per FR-3.18 — smooth scroll at any count.] Crowded-column UX (>100 cards) — virtualize / cap+modal / collapse old. Rec: virtualization (FR-3.18).
 
 ### PRD_TRAVEL_SUPPLIER_MASTER.md (5 pending)
 - DD-5.1 [RESOLVED 2026-05-23: FORK — `TravelSupplier` as new Prisma model. Decided as part of the Quote/Billing/Supplier symmetric fork call.] Extend `Vendor` model or fork to `TravelSupplier`. Rec: FORK (cross-ref Billing DD-5.1 + Quote DD-5.1 — mirror).
-- DD-5.2 [PENDING] KYC document storage — S3-style / DigiLocker / Prisma `String?` paths.
+- DD-5.2 [RESOLVED 2026-05-24: Local Multer disk + Prisma String paths — same pattern as wellness PatientPhoto + travel itinerary uploads; S3 swap-point deferred to Phase 2.] KYC document storage — S3-style / DigiLocker / Prisma `String?` paths.
 - DD-5.3 [PENDING] Reconciliation tolerance scoping — global / per-tenant / per-supplier. Rec: per-tenant v1, per-supplier Phase 2.
 - DD-5.4 [PENDING] Dispute resolution flow — in-app only / with escalation hooks. Rec: in-app v1, hooks Phase 2.
 - DD-5.5 [PENDING] TDS auto-deduction ownership — which PRD's engine pushes downstream compliance reporting. Cross-ref GST DD-5.x to avoid double-counting.
@@ -162,21 +162,21 @@ Consolidated index of every product/design decision flagged across the 22 PRDs i
 - D-5.2.f [PENDING] Cancellation reconciliation policy — auto-cancel linked legs vs surface independently.
 
 ### PRD_TMC_CURRICULUM_MAPPING.md (5 pending)
-- PC-1 [PENDING] Source the V1 mapping data + timeline. **THE BLOCKER** — without content, feature ships as empty table. Rec: GS-drafted 100-200 starter rows + academic team validates, 6-week target.
+- PC-1 [RESOLVED 2026-05-24: GS drafts 100-200 starter rows + TMC academic team validates, 6-week target. Unblocks the "feature ships as empty table" THE BLOCKER risk.] Source the V1 mapping data + timeline.
 - PC-2 [PENDING] Curriculum scope for V1 — which boards seed on Day 1. Rec: CBSE + ICSE only v1; IB + Cambridge + state-board Phase 2.
 - PC-3 [PENDING] Mapping granularity — coarse `(curriculum, grade, subject)` vs fine with learningOutcome. Rec: fine grain.
 - PC-4 [PENDING] fitScore methodology — algorithmic vs human-judged. Rec: human-judged V1.
 - PC-5 [PENDING] Destination universe — referential vs free-text. Rec: referential with TMC's existing trip catalogue.
 
 ### PRD_VISA_SURE_PHASE_3.md (8 pending)
-- PC-1 [PENDING] "Complex case" definition for risk-flag engine FR-3.1. Rec: applicationType ∈ {work, student, business, hajj} OR priorRejectionCount ≥ 1 OR family/dependents OR high-rejection-rate destination.
-- PC-2 [PENDING] Rejection-recovery — new diagnostic or reuse original. Drives schema relation.
-- PC-3 [PENDING] Per-destination embassy-quirk modeling — Phase 3 in-scope or advisor-head-only. Heavy schema work if (b).
-- PC-4 [PENDING] Rejection-recovery time-window enforcement. Drives `createdAt > decidedAt + cool-down` check.
-- PC-5 [PENDING] Visa categories in scope for Phase 1 — tourist/business/family/student baseline; transit/work/dependent/medical/journalism/religious-pilgrimage open.
-- PC-6 [PENDING] Region focus — US-outbound only / India-outbound / any-to-any. Rec: India-outbound.
-- PC-7 [PENDING] Embassy-quirk catalogue maintainer post-ship (rules change quarterly).
-- PC-8 [PENDING] Family/dependents trigger source for FR-3.1(c) — VisaApplication column / Contact-level / drop from V1. Surfaced by tick #9 Agent 3. Risk-flag engine cannot ship faithful FR-3.1 until this resolves.
+- PC-1 [RESOLVED 2026-05-24: PRD rec OR-combined — applicationType ∈ {work, student, business, hajj} OR priorRejectionCount ≥ 1 OR family/dependents OR high-rejection-rate destination. Most aggressive flagging.] "Complex case" definition for risk-flag engine FR-3.1.
+- PC-2 [RESOLVED 2026-05-24: New fresh diagnostic linked to original via `priorDiagnosticId` FK — clean audit trail; supports pre/post-rejection answer diff.] Rejection-recovery — new diagnostic or reuse original. Drives schema relation.
+- PC-3 [RESOLVED 2026-05-24: Phase 3 in-scope as structured rules (`EmbassyRule` model with rule_type/destination/condition/action) — heavy build but advisor dashboard surfaces actionable warnings.] Per-destination embassy-quirk modeling — Phase 3 in-scope or advisor-head-only. Heavy schema work if (b).
+- PC-4 [RESOLVED 2026-05-24: Enforce per-destination cooldown via `createdAt > decidedAt + cooldown` check + show countdown to advisor; prevents wasted applications.] Rejection-recovery time-window enforcement. Drives `createdAt > decidedAt + cool-down` check.
+- PC-5 [RESOLVED 2026-05-24: Tourist + Business + Family + Student baseline (PRD rec) — ~70% of Indian outbound volume; transit/work/dependent/medical/journalism/religious-pilgrimage all Phase 2.] Visa categories in scope for Phase 1.
+- PC-6 [RESOLVED 2026-05-24: Any-to-any (truly global) — visa applications from any country to any country; maximum flexibility but explodes destination-rule maintenance + 10x QA burden.] Region focus — US-outbound only / India-outbound / any-to-any. Rec: India-outbound.
+- PC-7 [RESOLVED 2026-05-24: Visa Sure advisor-head + admin UI — dedicated person owns; admin UI for CRUD. Best signal-source (they see rejections daily).] Embassy-quirk catalogue maintainer post-ship.
+- PC-8 [RESOLVED 2026-05-24: New `VisaApplication.familySize Int?` column — additive nullable, no bless marker; per-application accuracy.] Family/dependents trigger source for FR-3.1(c) — VisaApplication column / Contact-level / drop from V1.
 
 ### PRD_ADMIN_SETTINGS_DISCOVERY.md (6 pending)
 - DD-5.1 [PENDING] Settings sub-tab structure — confirm 12-tab list (Profile/Appearance/Notifications/Branding/Integrations/Pipeline Stages/Email Messages/Quiet Hours/Audit Log/Privacy/Tax/Compliance), order + admin-only items.
@@ -415,7 +415,35 @@ Trigger: User cron-prompt directive after viewing DECISIONS_TRACKER.md. 7 AskUse
 - PRD_THEME_MANAGEMENT DD-5.2 — user preference wins on first-login conflict
 - PRD_AI_ERA_CRM_REBUILD D5 — teammate-name defaults user-renameable, vertical-appropriate
 
-**Still pending (~165 items):** PRD-internal implementation details — none gate immediate implementation work. Each PRD has 2-5 remaining DD-5.X rows that are settle-during-implementation shape.
+**Still pending (~129 items):** PRD-internal implementation details — none gate immediate implementation work. Each PRD has 2-5 remaining DD-5.X rows that are settle-during-implementation shape.
+
+### 2026-05-24 — Second product-call session (32 decisions resolved)
+
+Trigger: User redirect after 30+ empty cron ticks — "Let's do the product decisions first." 8 AskUserQuestion rounds × 4 decisions each.
+
+**Resolved (Travel-vertical schema + commercial):**
+- GST DD-5.1 (Masters India GSTIN check), DD-5.3 (RCM operator-toggled), DD-5.5 (HSN backfill via ServiceCategory + 9985/18% default), DD-5.6 (per-sub-brand GSTR-1 election)
+- Billing DD-5.2 (admin-curated templates + operator override), DD-5.4 (DigiLocker PAN-fetch + manual fallback), DD-5.5 (operator-configurable cadence + channel mix), DD-5.6 (per-sub-brand-head cancellation editor)
+- Quote DD-5.2 (hybrid pricing UX), DD-5.3 (TMC/Visa-Sure exclusive + RFU/Travel-Stall inclusive), DD-5.4 (operator picks FX per sub-brand), DD-5.5 (rich line-edit + version-diff counter-offer), DD-5.6 (extend pdfRenderer.js)
+- Supplier DD-5.2 (local Multer disk + Prisma paths)
+- Pipeline Kanban DD-5.3 (all brands user has access), DD-5.4 (virtualization)
+- Multichannel DD-5.2 (60min + per-channel override), DD-5.4 (per-rule + ops-overview), DD-5.5 (24h idempotency)
+- B2B Portal DD-5.3 (commission at-payment + monthly), DD-5.4 (in-app form v1), DD-5.5 (configurable approval + linear default), DD-5.7 (corp-scoped profile)
+
+**Resolved (Visa Sure Phase 3 deep-build — unblocks multi-week eng):**
+- PC-1 (PRD-rec OR-combined complex case), PC-2 (new diagnostic linked to original), PC-3 (Phase 3 in-scope structured EmbassyRule), PC-4 (per-destination cooldown enforced), PC-5 (Tourist+Business+Family+Student baseline), PC-6 (any-to-any region scope), PC-7 (advisor-head + admin UI maintainer), PC-8 (`VisaApplication.familySize Int?`)
+
+**Resolved (TMC blocker):**
+- TMC Curriculum PC-1 (GS drafts 100-200 starter rows + academic team validates, 6-week target — clears THE BLOCKER)
+
+**Still pending (~129 items):** Mostly AdsGPT/AI Calling/Booking Expedia/Excel Software/Airline/Flight Plugin/RateHawk/Theme/Mobile/POS/RBAC/Zylu/AI Surfaces/Admin Settings remaining DD-X / DC-N items — all "settle-during-implementation" shape per the urgency rating.
+
+**Next steps unblocked by this session:**
+- Visa Sure Phase 3 multi-week eng: schema scope settled (familySize column + EmbassyRule model + cooldown enforcement); risk-flag engine FR-3.1 can ship faithful
+- TMC Curriculum: content pipeline starts (6-week timeline, GS-drafted starter rows)
+- Travel-vertical Quote/Billing/Supplier: all remaining shape decisions settled — implementation can proceed end-to-end
+- B2B Agent Portal: commercial + workflow shape settled — Phase 1 eng can start
+- Multichannel + Pipeline Kanban: UX defaults settled — frontend polish work unblocked
 
 **Next steps unblocked by this session:**
 - Travel-vertical schema cluster: 3 new Prisma models (TravelQuote / TravelInvoice / TravelSupplier) can scaffold

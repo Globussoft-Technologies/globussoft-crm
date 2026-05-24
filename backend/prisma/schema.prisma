@@ -160,6 +160,7 @@ model Tenant {
   webCheckins              WebCheckin[]
   supplierCredentials      SupplierCredential[]
   visaApplications         VisaApplication[]
+  embassyRules             EmbassyRule[]
   rfuLeadProfiles          RfuLeadProfile[]
   religiousGuidancePackets ReligiousGuidancePacket[]
   tripMicrosites           TripMicrosite[]
@@ -436,6 +437,9 @@ model User {
 
   // Notification preferences
   notificationPreference NotificationPreference?
+
+  // Travel vertical — Visa Sure embassy-rule authorship (PC-3 RESOLVED 2026-05-24).
+  embassyRulesCreated EmbassyRule[] @relation("EmbassyRuleCreator")
 }
 
 model Contact {
@@ -4541,6 +4545,8 @@ model VisaApplication {
   readinessLevel       Int? // 1-4 from diagnostic
   complexCase          Boolean                     @default(false)
   rejectionHistoryJson String?                     @db.Text // [{country, date, reason}]
+  /// Family/dependents trigger for risk-flag engine FR-3.1(c) — PC-8 RESOLVED 2026-05-24.
+  familySize           Int?
   advisorRiskFlag      String? // null | low | medium | high | priority
   filedAt              DateTime?
   decidedAt            DateTime?
@@ -4569,6 +4575,28 @@ model VisaDocumentChecklistItem {
   updatedAt     DateTime        @updatedAt
 
   @@index([applicationId, status])
+}
+
+/// Per-destination embassy quirks for Visa Sure risk-flag engine. PRD §PC-3 resolved 2026-05-24: Phase 3 in-scope structured rules; advisor-head + admin UI maintainer (PC-7).
+model EmbassyRule {
+  id                 Int     @id @default(autoincrement())
+  tenantId           Int
+  ruleType           String // document_required | cooldown_period | interview_required | minimum_funds
+  destinationCountry String // ISO-3166-1 alpha-2 (e.g. US, AE)
+  applicationType    String? // null = all | tourist | business | family | student
+  conditionJson      String? @db.Text // rule logic JSON-stringified per sanitizeJson convention
+  actionLabel        String // human-readable advisor warning text
+  severity           String // info | warning | blocker
+  isActive           Boolean @default(true)
+  createdById        Int?
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdBy User?    @relation("EmbassyRuleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, destinationCountry, applicationType, ruleType])
+  @@index([tenantId])
 }
 
 // ── RFU customer profile extension ───────────────────────────────────

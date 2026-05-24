@@ -105,6 +105,8 @@ import {
   // /api/booking-expedia (backend commit bb33cbe, tick #105). 4th and
   // FINAL cap-consumer UI in the wrapper-route series.
   BedDouble,
+  // Zylu-Gap #933 — Products admin entry (precursor for #816 CSV slice).
+  Package,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -916,6 +918,8 @@ function renderWellnessNav({
               Categories + Vendors are config; Receipts/Adjustments are the
               operational ledger surfaces; Auto-consumption is the rules engine. */}
           <div style={labelStyle}>Inventory</div>
+          {/* Zylu-Gap #933 — Products admin list (precursor for #816 CSV slice). */}
+          <Link to="/wellness/products" icon={Package} label="Products" managerOnly />
           <Link to="/wellness/product-categories" icon={Layers} label="Categories" managerOnly />
           <Link to="/wellness/vendors" icon={Truck} label="Vendors" managerOnly />
           <Link to="/wellness/inventory-receipts" icon={ArrowDownToLine} label="Receipts" managerOnly />

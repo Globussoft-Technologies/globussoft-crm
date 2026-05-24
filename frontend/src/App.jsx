@@ -256,6 +256,11 @@ const WellnessInventory = lazy(() => import("./pages/wellness/Inventory"));
 // Wave 11 Agent HH — Inventory backbone admin pages (categories, vendors,
 // receipts, adjustments, auto-consumption rules). All ADMIN/MANAGER-only.
 const WellnessProductCategories = lazy(() => import("./pages/wellness/ProductCategories"));
+// Zylu-Gap #933 — Products admin list page. Precursor for #816 CSV Products
+// slice; backend GET /api/wellness/products exists in inventory.js but POST/
+// PUT/DELETE are not yet exposed at that mount, so create goes through
+// /api/cpq/products and bulk via /api/csv/products/{export,import}.csv.
+const WellnessProducts = lazy(() => import("./pages/wellness/Products"));
 const WellnessVendors = lazy(() => import("./pages/wellness/Vendors"));
 const WellnessInventoryReceipts = lazy(() => import("./pages/wellness/InventoryReceipts"));
 const WellnessInventoryAdjustments = lazy(() => import("./pages/wellness/InventoryAdjustments"));
@@ -1425,6 +1430,14 @@ export default function App() {
                 <WellnessOnly>
                   <RoleGuard allow={["ADMIN", "MANAGER"]} message="Product categories require manager access.">
                     <WellnessProductCategories />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              {/* Zylu-Gap #933 — Products admin list (precursor for #816). */}
+              <Route path="wellness/products" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Products require manager access.">
+                    <WellnessProducts />
                   </RoleGuard>
                 </WellnessOnly>
               } />

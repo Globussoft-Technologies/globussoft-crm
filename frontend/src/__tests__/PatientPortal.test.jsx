@@ -1,0 +1,511 @@
+/**
+ * PatientPortal.test.jsx — vitest + RTL coverage for the public-facing
+ * wellness Patient Portal (frontend/src/pages/wellness/PatientPortal.jsx).
+ *
+ * Scope: pins the page-surface invariants for the PUBLIC phone+OTP portal —
+ * a distinct surface from the staff CRM (no AuthContext, uses raw fetch with
+ * its own Bearer token persisted in localStorage under `patientPortalToken`).
+ * Two top-level states: pre-login (<Login/>) and authenticated (<Dashboard/>).
+ * Login is a two-stage phone → OTP flow gated on a `/portal/health` probe of
+ * the tenant's SMS provider configuration. The Dashboard loads `/portal/me`
+ * + `/portal/visits` + `/portal/prescriptions` in parallel and renders 4
+ * tabs (My Visits / Prescriptions / Treatment Plan / Consent Forms).
+ *
+ * Test cases (11):
+ *   1. Pre-login chrome: heading "Patient Portal" + intro copy + phone input
+ *      render when no portal token is in localStorage. Health probe to
+ *      /api/wellness/portal/health fires on mount.
+ *   2. SMS provider not configured (health returns smsConfigured:false) →
+ *      graceful-degrade alert renders, phone form is hidden.
+ *   3. Phone-stage validation: <10 digits → inline error, no request-otp
+ *      POST fires.
+ *   4. Valid phone → POST /portal/login/request-otp body {phone}, advances
+ *      to OTP stage which renders the 4-digit code input + the patient's
+ *      phone in the prompt.
+ *   5. OTP-stage validation: non-4-digit input → inline error, no verify
+ *      POST fires.
+ *   6. OTP verify success → POST /portal/login/verify-otp body {phone, otp},
+ *      stores returned token + patient name in localStorage, then transitions
+ *      to the Dashboard (renders "Welcome, <name>").
+ *   7. OTP verify with expired/invalid code → friendly "Invalid or expired"
+ *      error rendered, no token stored.
+ *   8. Dashboard parallel fetch: /portal/me + /portal/visits + /portal/
+ *      prescriptions all called with Bearer token; visits tab renders rows
+ *      with service name + doctor + status.
+ *   9. Empty visits list → "No visits on record yet." copy renders.
+ *  10. Prescriptions tab renders Rx rows with drug bullets (parsed from the
+ *      JSON-string `drugs` column) and the Download PDF button.
+ *  11. Logout button clears the token + name from localStorage and returns
+ *      the surface to the Login screen.
+ *
+ * Mocking discipline (per CLAUDE.md RTL standing rules):
+ *   - SUT uses raw `fetch` (NOT fetchApi from utils/api) — we stub
+ *     `globalThis.fetch` per-test rather than vi.mock the utils.
+ *   - notifyObj is STABLE module-level (Wave 11 cfb5789 / Wave 12 f59e91d) —
+ *     fresh-per-call objects flap useCallback / useEffect identity. Only the
+ *     Dashboard's `downloadRx` actually invokes notify; nothing in the
+ *     primary flows depends on it but we mock for safety.
+ *   - vi.mock path is `../utils/notify` + `../utils/date` relative to the
+ *     flat top-level `__tests__/` directory.
+ *   - localStorage is reset in beforeEach so each test sees the pre-login
+ *     state by default; the Dashboard-state tests pre-seed the token.
+ *   - Dates use fixed ISO strings (per CLAUDE.md cron-learning 2026-05-07
+ *     wave-9) so locale-rendered output stays stable.
+ *
+ * Drift pinned (prompt vs. actual SUT):
+ *   - Prompt anticipated a single POST `/portal/login`. REALITY: the flow
+ *     is split into TWO endpoints — `/portal/login/request-otp` (stage:
+ *     phone → otp) and `/portal/login/verify-otp` (issues the bearer token).
+ *     The legacy `/portal/login` endpoint exists on the backend but the SUT
+ *     does NOT call it; tests pin the request-otp + verify-otp pair.
+ *   - Prompt anticipated AuthContext consumption. REALITY: the portal is a
+ *     standalone public entry point — it uses its OWN bearer token stored
+ *     under `patientPortalToken` in localStorage, never touches AuthContext.
+ *     No `<AuthContext.Provider>` wrapper needed.
+ *   - Prompt anticipated `fetchApi` from utils/api. REALITY: SUT defines its
+ *     own `portalFetch` helper (inline at top of SUT) wrapping raw `fetch`.
+ *     Tests stub `globalThis.fetch` directly.
+ *   - Prompt anticipated invoice/treatment-plan/consent-form list endpoints.
+ *     REALITY: the SUT only fetches `/portal/me` + `/portal/visits` +
+ *     `/portal/prescriptions`. The Treatment Plan + Consent Forms tabs are
+ *     PLACEHOLDER pages ("Your treatment plan will appear here once your
+ *     doctor shares one." / "Consent forms you've signed at the clinic will
+ *     appear here.") — no backend endpoints, no data fetch. Tests verify
+ *     the placeholder copy renders but do NOT assert fetches the SUT never
+ *     makes.
+ *   - Prompt anticipated demo-OTP env-gated path. REALITY: that's a BACKEND
+ *     concern (WELLNESS_DEMO_OTP env var gates the backend's verify-otp
+ *     bypass); the frontend's OTP input + POST body shape is identical
+ *     regardless of which OTP value the user types. No frontend branch to
+ *     test — covered by the backend route gate spec.
+ *   - SUT validates phone as ">=10 digits" (digit-stripped), NOT strict
+ *     E.164. Test pins the actual SUT contract, not the prompt's hypothesis.
+ *   - SUT validates OTP as `/^\d{4}$/` — 4 digits (not 6); tests pin this.
+ *   - The Login component's smsConfigured probe is null-then-bool, so the
+ *     phone form renders ONLY after smsConfigured === true OR while still
+ *     null (the SUT shows `smsConfigured !== false && stage === 'phone'`).
+ *     Tests await the probe resolution before interacting.
+ *
+ * Path: flat `__tests__/PatientPortal.test.jsx` — matches the tick #133
+ * prompt path mandate. Sibling Agent B is authoring PublicBooking.test.jsx
+ * in the same directory (disjoint file).
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+
+// Stable notify object — RTL standing rule (Wave 11 cfb5789, Wave 12 f59e91d).
+const notifyError = vi.fn();
+const notifySuccess = vi.fn();
+const notifyInfo = vi.fn();
+const notifyObj = {
+  error: notifyError,
+  info: notifyInfo,
+  success: notifySuccess,
+  confirm: () => Promise.resolve(true),
+};
+vi.mock('../utils/notify', () => ({
+  useNotify: () => notifyObj,
+  NotifyProvider: ({ children }) => children,
+}));
+
+// Stable date formatter — tests use fixed ISO strings, render as YYYY-MM-DD.
+vi.mock('../utils/date', () => ({
+  formatDate: (d) => (d ? new Date(d).toISOString().slice(0, 10) : '—'),
+}));
+
+import PatientPortal from '../pages/wellness/PatientPortal';
+
+const PORTAL_TOKEN_KEY = 'patientPortalToken';
+const PORTAL_NAME_KEY = 'patientPortalName';
+
+const PATIENT_PROFILE = {
+  id: 501,
+  name: 'Priya Sharma',
+  phone: '9812345678',
+  email: 'priya@example.com',
+};
+
+const VISITS_PAYLOAD = [
+  {
+    id: 901,
+    visitDate: '2026-04-15T10:00:00.000Z',
+    status: 'COMPLETED',
+    notes: 'Follow-up on hairfall regimen.',
+    service: { name: 'Hair PRP' },
+    doctor: { name: 'Harsh' },
+  },
+  {
+    id: 902,
+    visitDate: '2026-05-01T11:30:00.000Z',
+    status: 'BOOKED',
+    notes: null,
+    service: { name: 'Skin Consult' },
+    doctor: { name: 'Harsh' },
+  },
+];
+
+const PRESCRIPTIONS_PAYLOAD = [
+  {
+    id: 7001,
+    createdAt: '2026-04-15T10:30:00.000Z',
+    instructions: 'Apply twice daily after wash.',
+    drugs: JSON.stringify([
+      { name: 'Minoxidil 5%', dosage: '1 ml', frequency: 'bd', duration: '3 months' },
+      { name: 'Finasteride', dosage: '1 mg', frequency: 'od', duration: '3 months' },
+    ]),
+    doctor: { name: 'Harsh' },
+    visit: { service: { name: 'Hair PRP' } },
+  },
+];
+
+/**
+ * Build a fetch stub keyed by URL pattern. Each test installs its own variant
+ * via `installFetchMock({ overrides })` to model failure modes.
+ */
+function installFetchMock({
+  smsConfigured = true,
+  requestOtpStatus = 200,
+  verifyOtpStatus = 200,
+  verifyOtpError = 'Invalid or expired OTP',
+  visits = VISITS_PAYLOAD,
+  prescriptions = PRESCRIPTIONS_PAYLOAD,
+} = {}) {
+  const fetchStub = vi.fn((url, opts = {}) => {
+    const method = opts.method || 'GET';
+    if (url === '/api/wellness/portal/health') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () => Promise.resolve({ smsConfigured }),
+      });
+    }
+    if (url === '/api/wellness/portal/login/request-otp' && method === 'POST') {
+      const ok = requestOtpStatus >= 200 && requestOtpStatus < 300;
+      return Promise.resolve({
+        ok,
+        status: requestOtpStatus,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () =>
+          Promise.resolve(ok ? { ok: true } : { error: 'Failed to send code' }),
+      });
+    }
+    if (url === '/api/wellness/portal/login/verify-otp' && method === 'POST') {
+      const ok = verifyOtpStatus >= 200 && verifyOtpStatus < 300;
+      return Promise.resolve({
+        ok,
+        status: verifyOtpStatus,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () =>
+          Promise.resolve(
+            ok
+              ? { token: 'patient-bearer-token-abc', patient: PATIENT_PROFILE }
+              : { error: verifyOtpError },
+          ),
+      });
+    }
+    if (url === '/api/wellness/portal/me' && method === 'GET') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () => Promise.resolve(PATIENT_PROFILE),
+      });
+    }
+    if (url === '/api/wellness/portal/visits' && method === 'GET') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () => Promise.resolve(visits),
+      });
+    }
+    if (url === '/api/wellness/portal/prescriptions' && method === 'GET') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () => Promise.resolve(prescriptions),
+      });
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Map([['content-type', 'application/json']]),
+      json: () => Promise.resolve({}),
+    });
+  });
+  globalThis.fetch = fetchStub;
+  return fetchStub;
+}
+
+beforeEach(() => {
+  notifyError.mockReset();
+  notifySuccess.mockReset();
+  notifyInfo.mockReset();
+  localStorage.clear();
+});
+
+afterEach(() => {
+  delete globalThis.fetch;
+});
+
+describe('<PatientPortal /> — pre-login chrome', () => {
+  it('renders the heading + phone input on initial mount; health probe fires', async () => {
+    const fetchStub = installFetchMock();
+    render(<PatientPortal />);
+    expect(
+      await screen.findByRole('heading', { name: /Patient Portal/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Access your visits, prescriptions, and treatment plans/i),
+    ).toBeInTheDocument();
+    // The smsConfigured probe fires on mount. SUT invokes raw fetch with
+    // NO second arg for this probe (the useEffect calls `fetch(url)` not
+    // `fetch(url, opts)`), so assert URL-only.
+    await waitFor(() => {
+      const healthCall = fetchStub.mock.calls.find(
+        ([u]) => u === '/api/wellness/portal/health',
+      );
+      expect(healthCall).toBeTruthy();
+    });
+    // Phone input renders once the probe resolves (smsConfigured === true).
+    expect(
+      await screen.findByPlaceholderText(/10-digit mobile number/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Send code/i })).toBeInTheDocument();
+  });
+
+  it('SMS provider unavailable → graceful-degrade alert, phone form hidden', async () => {
+    installFetchMock({ smsConfigured: false });
+    render(<PatientPortal />);
+    expect(
+      await screen.findByTestId('portal-sms-unavailable'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Phone-OTP login is temporarily unavailable/i),
+    ).toBeInTheDocument();
+    // Phone form should NOT render in this state.
+    expect(screen.queryByPlaceholderText(/10-digit mobile number/i)).toBeNull();
+  });
+});
+
+describe('<PatientPortal /> — phone stage', () => {
+  it('fewer than 10 digits → inline error, no request-otp POST fired', async () => {
+    const fetchStub = installFetchMock();
+    render(<PatientPortal />);
+    const phoneInput = await screen.findByPlaceholderText(/10-digit mobile number/i);
+    fireEvent.change(phoneInput, { target: { value: '98765' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+    expect(
+      await screen.findByText(/Enter a valid 10-digit phone number/i),
+    ).toBeInTheDocument();
+    // No POST to request-otp fired.
+    const postCall = fetchStub.mock.calls.find(
+      ([u, opts]) =>
+        u === '/api/wellness/portal/login/request-otp' && opts?.method === 'POST',
+    );
+    expect(postCall).toBeUndefined();
+  });
+
+  it('valid phone → POST request-otp body {phone}, advances to OTP stage', async () => {
+    const fetchStub = installFetchMock();
+    render(<PatientPortal />);
+    const phoneInput = await screen.findByPlaceholderText(/10-digit mobile number/i);
+    fireEvent.change(phoneInput, { target: { value: '9812345678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+    await waitFor(() => {
+      const postCall = fetchStub.mock.calls.find(
+        ([u, opts]) =>
+          u === '/api/wellness/portal/login/request-otp' && opts?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall[1].body)).toEqual({ phone: '9812345678' });
+    });
+    // Now on OTP stage — 4-digit input renders + phone shown in prompt.
+    expect(
+      await screen.findByPlaceholderText(/4-digit code/i),
+    ).toBeInTheDocument();
+    // The prompt copy contains the phone number — getAllByText to tolerate
+    // ancestor wrappers that aggregate the same text content.
+    expect(
+      screen.getAllByText((_t, el) => {
+        const text = el?.textContent || '';
+        return (
+          /Enter the 4-digit code we sent to/i.test(text) &&
+          /9812345678/.test(text)
+        );
+      }).length,
+    ).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('<PatientPortal /> — OTP stage', () => {
+  async function advanceToOtpStage() {
+    const phoneInput = await screen.findByPlaceholderText(/10-digit mobile number/i);
+    fireEvent.change(phoneInput, { target: { value: '9812345678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+    return screen.findByPlaceholderText(/4-digit code/i);
+  }
+
+  it('non-4-digit OTP → inline error, no verify POST fired', async () => {
+    const fetchStub = installFetchMock();
+    render(<PatientPortal />);
+    const otpInput = await advanceToOtpStage();
+    fireEvent.change(otpInput, { target: { value: '12' } });
+    fireEvent.click(screen.getByRole('button', { name: /Verify & enter/i }));
+    // The error message AND the prompt copy both contain "4-digit code" —
+    // findAllByText to disambiguate, then assert the error-style leaf renders
+    // (red `errStyle` div is a sibling of the input).
+    const matches = await screen.findAllByText(/Enter the 4-digit code/i);
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+    // No verify POST.
+    const verifyCall = fetchStub.mock.calls.find(
+      ([u, opts]) =>
+        u === '/api/wellness/portal/login/verify-otp' && opts?.method === 'POST',
+    );
+    expect(verifyCall).toBeUndefined();
+  });
+
+  it('successful OTP verify → token persisted, transitions to Dashboard', async () => {
+    const fetchStub = installFetchMock();
+    render(<PatientPortal />);
+    const otpInput = await advanceToOtpStage();
+    fireEvent.change(otpInput, { target: { value: '4321' } });
+    fireEvent.click(screen.getByRole('button', { name: /Verify & enter/i }));
+    // verify-otp POSTed with {phone, otp}.
+    await waitFor(() => {
+      const verifyCall = fetchStub.mock.calls.find(
+        ([u, opts]) =>
+          u === '/api/wellness/portal/login/verify-otp' && opts?.method === 'POST',
+      );
+      expect(verifyCall).toBeTruthy();
+      expect(JSON.parse(verifyCall[1].body)).toEqual({
+        phone: '9812345678',
+        otp: '4321',
+      });
+    });
+    // Token + name persisted to localStorage.
+    await waitFor(() => {
+      expect(localStorage.getItem(PORTAL_TOKEN_KEY)).toBe('patient-bearer-token-abc');
+    });
+    expect(localStorage.getItem(PORTAL_NAME_KEY)).toBe('Priya Sharma');
+    // Dashboard renders — Welcome message in header. findAllByText to
+    // tolerate ancestor wrappers that aggregate the same text content.
+    const welcomeNodes = await screen.findAllByText((_t, el) =>
+      /Welcome,\s*Priya Sharma/i.test(el?.textContent || ''),
+    );
+    expect(welcomeNodes.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('expired/invalid OTP → friendly "Invalid or expired" error, no token stored', async () => {
+    installFetchMock({ verifyOtpStatus: 401, verifyOtpError: 'OTP expired' });
+    render(<PatientPortal />);
+    const otpInput = await advanceToOtpStage();
+    fireEvent.change(otpInput, { target: { value: '9999' } });
+    fireEvent.click(screen.getByRole('button', { name: /Verify & enter/i }));
+    expect(
+      await screen.findByText(/Invalid or expired code\. Try resending\./i),
+    ).toBeInTheDocument();
+    // No token stored.
+    expect(localStorage.getItem(PORTAL_TOKEN_KEY)).toBeNull();
+  });
+});
+
+describe('<PatientPortal /> — authenticated dashboard', () => {
+  beforeEach(() => {
+    // Pre-seed an authenticated session so PatientPortal lands on Dashboard.
+    localStorage.setItem(PORTAL_TOKEN_KEY, 'seeded-token');
+    localStorage.setItem(PORTAL_NAME_KEY, 'Priya Sharma');
+  });
+
+  it('loads /portal/me + /visits + /prescriptions in parallel with Bearer token; visits render', async () => {
+    const fetchStub = installFetchMock();
+    render(<PatientPortal />);
+    // All three parallel fetches fire with the bearer token.
+    await waitFor(() => {
+      const meCall = fetchStub.mock.calls.find(
+        ([u]) => u === '/api/wellness/portal/me',
+      );
+      const visitsCall = fetchStub.mock.calls.find(
+        ([u]) => u === '/api/wellness/portal/visits',
+      );
+      const rxCall = fetchStub.mock.calls.find(
+        ([u]) => u === '/api/wellness/portal/prescriptions',
+      );
+      expect(meCall).toBeTruthy();
+      expect(visitsCall).toBeTruthy();
+      expect(rxCall).toBeTruthy();
+      expect(meCall[1].headers.Authorization).toBe('Bearer seeded-token');
+    });
+    // Default tab is Visits — both visits render with service + doctor.
+    expect(await screen.findByText('Hair PRP')).toBeInTheDocument();
+    expect(screen.getByText('Skin Consult')).toBeInTheDocument();
+    // Status chips render.
+    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+    expect(screen.getByText('BOOKED')).toBeInTheDocument();
+    // Visit-1 has notes copy.
+    expect(
+      screen.getByText(/Follow-up on hairfall regimen\./i),
+    ).toBeInTheDocument();
+  });
+
+  it('empty visits list → "No visits on record yet." copy renders', async () => {
+    installFetchMock({ visits: [] });
+    render(<PatientPortal />);
+    expect(
+      await screen.findByText(/No visits on record yet\./i),
+    ).toBeInTheDocument();
+  });
+
+  it('Prescriptions tab renders Rx rows with parsed drug bullets + Download PDF button', async () => {
+    installFetchMock();
+    render(<PatientPortal />);
+    // Wait for parallel fetches to settle (visits tab default).
+    await screen.findByText('Hair PRP');
+    // Switch to Prescriptions tab.
+    fireEvent.click(screen.getByRole('button', { name: /Prescriptions/i }));
+    // Rx header includes the id. findAllByText to tolerate ancestor
+    // wrappers that aggregate the same text content.
+    const rxHeaderNodes = await screen.findAllByText((_t, el) =>
+      /Prescription #7001/.test(el?.textContent || ''),
+    );
+    expect(rxHeaderNodes.length).toBeGreaterThanOrEqual(1);
+    // Drug bullets render (parsed from JSON-string `drugs` column).
+    expect(
+      screen.getAllByText((_t, el) => /Minoxidil 5%/.test(el?.textContent || ''))
+        .length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getAllByText((_t, el) => /Finasteride/.test(el?.textContent || ''))
+        .length,
+    ).toBeGreaterThanOrEqual(1);
+    // Download PDF button renders.
+    expect(screen.getByRole('button', { name: /PDF/i })).toBeInTheDocument();
+    // Instructions render.
+    expect(
+      screen.getByText(/Apply twice daily after wash\./i),
+    ).toBeInTheDocument();
+  });
+
+  it('logout clears localStorage + returns to Login screen', async () => {
+    installFetchMock();
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    // Verify token is currently stored.
+    expect(localStorage.getItem(PORTAL_TOKEN_KEY)).toBe('seeded-token');
+    // Click Log out (header button).
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: /Log out/i }));
+    });
+    // localStorage is cleared.
+    await waitFor(() => {
+      expect(localStorage.getItem(PORTAL_TOKEN_KEY)).toBeNull();
+    });
+    expect(localStorage.getItem(PORTAL_NAME_KEY)).toBeNull();
+    // Returns to Login screen — phone input is visible again (after health probe).
+    expect(
+      await screen.findByPlaceholderText(/10-digit mobile number/i),
+    ).toBeInTheDocument();
+  });
+});

@@ -502,6 +502,11 @@ const wellnessRoutes = require("./routes/wellness");
 const inventoryRoutes = require("./routes/inventory");
 // Wave 2 Agent II — POS / cash register / shift / sale backbone.
 const posRoutes = require("./routes/pos");
+// D16 Wallet Top-up Arc 1 slice 2-partial — read-only wallet endpoints
+// (GET balance + GET transactions). PRD: docs/PRD_WALLET_TOPUP.md §3.
+// Top-up/redeem/reverse/expiry routes land in subsequent slices once
+// Agent A's WalletBonusRule + WalletCreditBatch schema lands.
+const walletRoutes = require("./routes/wallet");
 // Wave 2 Agent JJ — Staff Attendance + Biometric webhook + Leave Management.
 const attendanceRoutes = require("./routes/attendance");
 const leaveRoutes = require("./routes/leave");
@@ -742,6 +747,9 @@ app.use("/api/csv", csvIoRoutes);
 // Wave 2 Agent II — POS / cash register / shift / sale backbone. Mounted at
 // /api/pos. Wellness-vertical-gated; generic tenants get a clean 403.
 app.use("/api/pos", posRoutes);
+// D16 Wallet Top-up Arc 1 slice 2-partial — GET /api/wallet/:patientId/balance
+// + GET /api/wallet/:patientId/transactions. phiReadGate-protected.
+app.use("/api/wallet", walletRoutes);
 // Wave 2 Agent JJ — Staff Attendance + Biometric webhook + Leave Management.
 // Cross-vertical (wellness AND generic). Mounted top-level. The biometric
 // webhook (POST /api/attendance/biometric/webhook) is in openPaths and

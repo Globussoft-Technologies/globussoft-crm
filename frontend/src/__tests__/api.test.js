@@ -10,7 +10,9 @@ import { fetchApi, setAuthToken, clearAuthToken } from '../utils/api';
  *     (post-#343 hardening — token MUST come from setAuthToken / sessionStorage,
  *     never localStorage)
  *   - DELETE / 204 short-circuit return true
- *   - 401 clears the token via clearAuthToken() + redirects to /login
+ *   - 401 clears the token via clearAuthToken() + redirects to /login (foreground)
+ *   - 401 with {silent:true} clears the token but does NOT redirect (#841 — keeps
+ *     background polls from booting the user mid-flow on transient 401s)
  *   - 5xx with a parseable error body surfaces server-supplied message
  *   - 5xx with an unparseable body falls back to the generic "Server error" copy
  *
@@ -176,5 +178,23 @@ describe('utils/api — fetchApi', () => {
     // clearAuthToken nukes both the in-memory holder and sessionStorage.
     expect(sessionStorage.getItem('token')).toBeNull();
     expect(capturedLocation).toBe('/login');
+  });
+
+  it('#841: silent:true 401 does NOT redirect (background polls fail quietly)', async () => {
+    // Pre-#841: ANY 401 — even from a background poll — force-redirected the
+    // user to /login. Symptom: user clicks a link mid-flow, but a sibling
+    // Sidebar/Dashboard poll 401s in the same tick → user ends up on /login
+    // instead of the link target. Fix: silent:true 401s clear the token but
+    // don't navigate. The next foreground (user-initiated) request will hit
+    // the regular 401 path and redirect properly.
+    setAuthToken('expired');
+    mockFetch({ status: 401, body: { message: 'nope' } });
+    await expect(
+      fetchApi('/api/contacts?status=Lead', { silent: true })
+    ).rejects.toMatchObject({ status: 401, silent: true });
+    // Token is still cleared (it's expired/invalid).
+    expect(sessionStorage.getItem('token')).toBeNull();
+    // BUT no navigation happened — the user stays on their current page.
+    expect(capturedLocation).toBeNull();
   });
 });

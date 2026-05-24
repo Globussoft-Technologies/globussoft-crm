@@ -115,6 +115,23 @@ const photoUpload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per photo
 });
 
+// #820 — multer for the patients-import CSV upload. Keep the body in RAM
+// (small files; no disk-spill needed) and cap at 2 MB / 1 file. The
+// fileFilter accepts text/csv OR a .csv suffix because Windows operators
+// often see browsers pick application/vnd.ms-excel for .csv files.
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const looksCsv =
+      file.mimetype === "text/csv" ||
+      file.mimetype === "application/vnd.ms-excel" ||
+      (file.originalname && file.originalname.toLowerCase().endsWith(".csv"));
+    if (looksCsv) return cb(null, true);
+    return cb(new Error("Only CSV files accepted"));
+  },
+});
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 // Reject non-numeric :id params with 400 instead of letting Prisma blow up
@@ -810,6 +827,387 @@ router.get("/patients/import-template.csv", phiReadGate, async (req, res) => {
     res.status(500).json({ error: "Failed to emit import template" });
   }
 });
+
+// #820 — POST /patients/import — CSV upload + per-row create with
+// validation + dedup + per-row error report. Closes the import flow that
+// /patients/import-template.csv (above) opens: operator downloads the 9-col
+// template, fills it in, uploads here.
+//
+// Contract:
+//   - multipart/form-data; field name `file`; max 2 MB; max 500 rows.
+//   - CSV columns: name, phone, email, dob, gender, source, locationId,
+//     tags (semicolon-separated), notes. Header row required (case-
+//     insensitive, BOM-tolerant).
+//   - Per-row validation: name (≤191), phone (10–15 digits / India shape),
+//     email (basic regex), dob (parseable date), gender (M/F/O after
+//     upper-case), source (≤50), locationId (own-tenant only), tags (split
+//     on `;`, ≤20 entries × ≤50 chars each), notes (≤1000).
+//   - Dedup: (tenantId, normalizedPhone) — uses Patient's unique constraint
+//     directly. Existing row → row marked `duplicate`, not inserted.
+//   - Auth: phiWriteGate (same as POST /patients).
+//   - Idempotency: re-submitting the same file ⇒ all rows return as
+//     `duplicate` on the second run. No special infra needed.
+//
+// Output envelope (200):
+//   { summary: { totalRows, imported, duplicates, invalid },
+//     errors: [{ row, errorCode, errorMessage }, ...],
+//     createdIds: [<int>, ...] }
+//
+// Error envelopes (400):
+//   - EMPTY_CSV          — no rows after header
+//   - TOO_MANY_ROWS      — > MAX_IMPORT_ROWS (500)
+//   - MISSING_HEADER     — first line not a recognisable header
+//   - NO_FILE            — multipart field `file` absent
+//   - INVALID_FILE_TYPE  — non-CSV (caught by multer fileFilter; we map
+//                          multer's MulterError too)
+const MAX_IMPORT_ROWS = 500;
+const EXPECTED_COLUMNS = [
+  "name", "phone", "email", "dob", "gender", "source", "locationId", "tags", "notes",
+];
+
+// In-file CSV line parser. Handles:
+//   - quote-wrapped cells:  "a,b","c"
+//   - escaped quotes in quoted cells:  "she said ""hi"""
+//   - mixed quoted + bare cells:  alice,"smith, jr",30
+// Returns array of string cells (un-quoted). No npm dep.
+function parseCsvLine(line) {
+  const out = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (ch === '"') {
+        inQ = false;
+      } else {
+        cur += ch;
+      }
+    } else {
+      if (ch === '"') inQ = true;
+      else if (ch === ",") {
+        out.push(cur);
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+router.post(
+  "/patients/import",
+  phiWriteGate,
+  // Wrap multer so the fileFilter error / oversize error / wrong-field error
+  // becomes a clean 400 instead of an uncaught throw.
+  (req, res, next) => {
+    csvUpload.single("file")(req, res, (err) => {
+      if (err) {
+        const code = err && err.code === "LIMIT_FILE_SIZE" ? "FILE_TOO_LARGE" : "INVALID_FILE_TYPE";
+        return res.status(400).json({
+          error: err.message || "CSV upload rejected",
+          code,
+        });
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+        return res.status(400).json({
+          error: "No CSV file uploaded (expected multipart field 'file')",
+          code: "NO_FILE",
+        });
+      }
+
+      // Decode UTF-8 and strip BOM if present (Excel-on-Windows emits BOM).
+      let raw = req.file.buffer.toString("utf8");
+      if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+
+      // Normalise line endings; split; drop trailing-empty lines (Excel
+      // commonly ends with a blank line).
+      const lines = raw.replace(/\r\n?/g, "\n").split("\n").filter((l) => l.length > 0);
+      if (lines.length === 0) {
+        return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
+      }
+      if (lines.length === 1) {
+        // Header only, no data rows.
+        return res.status(400).json({ error: "CSV has no data rows", code: "EMPTY_CSV" });
+      }
+      // Excel-friendly cap: enforce BEFORE per-row work so a 100k-row
+      // operator mis-upload doesn't spin the backend.
+      if (lines.length - 1 > MAX_IMPORT_ROWS) {
+        return res.status(400).json({
+          error: `Too many rows (${lines.length - 1}); max ${MAX_IMPORT_ROWS} per import`,
+          code: "TOO_MANY_ROWS",
+        });
+      }
+
+      // Header — accept case-insensitively. Map operator's column order to
+      // a canonical-index lookup so the row parser can fetch by name.
+      const headerCells = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
+      const colIdx = {};
+      for (const want of EXPECTED_COLUMNS) {
+        const idx = headerCells.indexOf(want.toLowerCase());
+        if (idx >= 0) colIdx[want] = idx;
+      }
+      if (colIdx.name === undefined || colIdx.phone === undefined) {
+        return res.status(400).json({
+          error: "CSV header missing required columns (name, phone)",
+          code: "MISSING_HEADER",
+        });
+      }
+
+      const { normalizePhone, toE164 } = require("../utils/deduplication");
+
+      // Pre-resolve the operator's valid locationIds so per-row location
+      // checks don't round-trip per row.
+      const validLocationIds = new Set();
+      try {
+        const locs = await prisma.location.findMany({
+          where: { tenantId: req.user.tenantId },
+          select: { id: true },
+        });
+        for (const l of locs) validLocationIds.add(l.id);
+      } catch (_locErr) {
+        // If listing locations fails, fall through — per-row locationId
+        // will be dropped to null with an INVALID_LOCATION error.
+      }
+
+      const errors = [];
+      const createdIds = [];
+      let duplicates = 0;
+      let invalid = 0;
+      let imported = 0;
+
+      const dataRows = lines.slice(1);
+      for (let i = 0; i < dataRows.length; i++) {
+        const rowNum = i + 2; // 1-based; +1 for header
+        const cells = parseCsvLine(dataRows[i]);
+
+        const get = (col) => {
+          const idx = colIdx[col];
+          if (idx === undefined) return "";
+          return (cells[idx] || "").trim();
+        };
+
+        const name = get("name");
+        const phone = get("phone");
+        const email = get("email");
+        const dob = get("dob");
+        let gender = get("gender");
+        const source = get("source");
+        const locationIdRaw = get("locationId");
+        const tagsRaw = get("tags");
+        const notes = get("notes");
+
+        // ── Per-row validation ───────────────────────────────────────────
+        if (!name) {
+          errors.push({ row: rowNum, errorCode: "NAME_REQUIRED", errorMessage: "name is required" });
+          invalid++;
+          continue;
+        }
+        if (name.length > 191) {
+          errors.push({ row: rowNum, errorCode: "NAME_TOO_LONG", errorMessage: "name exceeds 191 chars" });
+          invalid++;
+          continue;
+        }
+        if (!phone) {
+          errors.push({ row: rowNum, errorCode: "PHONE_REQUIRED", errorMessage: "phone is required" });
+          invalid++;
+          continue;
+        }
+        if (!isValidPhoneOrEmpty(phone)) {
+          errors.push({
+            row: rowNum,
+            errorCode: "INVALID_PHONE",
+            errorMessage: "phone must be 10–15 digits (India format)",
+          });
+          invalid++;
+          continue;
+        }
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          errors.push({ row: rowNum, errorCode: "INVALID_EMAIL", errorMessage: "email is not a valid address" });
+          invalid++;
+          continue;
+        }
+        let dobDate = null;
+        if (dob) {
+          const d = new Date(dob);
+          if (!Number.isFinite(d.getTime())) {
+            errors.push({ row: rowNum, errorCode: "INVALID_DOB", errorMessage: "dob is not a valid date" });
+            invalid++;
+            continue;
+          }
+          dobDate = d;
+        }
+        if (gender) {
+          gender = gender.toUpperCase();
+          if (!["F", "M", "O"].includes(gender)) {
+            errors.push({
+              row: rowNum,
+              errorCode: "INVALID_GENDER",
+              errorMessage: "gender must be one of F, M, O",
+            });
+            invalid++;
+            continue;
+          }
+        } else {
+          gender = null;
+        }
+        if (source && source.length > 50) {
+          errors.push({ row: rowNum, errorCode: "SOURCE_TOO_LONG", errorMessage: "source exceeds 50 chars" });
+          invalid++;
+          continue;
+        }
+        let locationId = null;
+        if (locationIdRaw) {
+          const parsed = parseInt(locationIdRaw, 10);
+          if (!Number.isFinite(parsed) || parsed < 1) {
+            errors.push({
+              row: rowNum,
+              errorCode: "INVALID_LOCATION",
+              errorMessage: "locationId must be a positive integer",
+            });
+            invalid++;
+            continue;
+          }
+          // Cross-tenant guard — operator MUST NOT be able to set a
+          // locationId that belongs to a different tenant.
+          if (!validLocationIds.has(parsed)) {
+            errors.push({
+              row: rowNum,
+              errorCode: "INVALID_LOCATION",
+              errorMessage: "locationId does not belong to this tenant",
+            });
+            invalid++;
+            continue;
+          }
+          locationId = parsed;
+        }
+        let tagsArr = null;
+        if (tagsRaw) {
+          const parts = tagsRaw.split(";").map((t) => t.trim()).filter(Boolean);
+          if (parts.length > 20) {
+            errors.push({
+              row: rowNum,
+              errorCode: "TOO_MANY_TAGS",
+              errorMessage: "max 20 tags per patient",
+            });
+            invalid++;
+            continue;
+          }
+          if (parts.some((t) => t.length > 50)) {
+            errors.push({
+              row: rowNum,
+              errorCode: "TAG_TOO_LONG",
+              errorMessage: "each tag must be ≤ 50 chars",
+            });
+            invalid++;
+            continue;
+          }
+          tagsArr = parts;
+        }
+        if (notes && notes.length > 1000) {
+          errors.push({ row: rowNum, errorCode: "NOTES_TOO_LONG", errorMessage: "notes exceeds 1000 chars" });
+          invalid++;
+          continue;
+        }
+
+        // ── Dedup against (tenantId, normalizedPhone) ────────────────────
+        const normalizedPhone = normalizePhone(phone);
+        if (normalizedPhone) {
+          const dup = await prisma.patient.findFirst({
+            where: {
+              tenantId: req.user.tenantId,
+              normalizedPhone,
+              deletedAt: null,
+            },
+            select: { id: true },
+          });
+          if (dup) {
+            errors.push({
+              row: rowNum,
+              errorCode: "DUPLICATE_PHONE",
+              errorMessage: "patient with this phone already exists",
+            });
+            duplicates++;
+            continue;
+          }
+        }
+
+        // ── Create ───────────────────────────────────────────────────────
+        try {
+          const e164Phone = phone ? toE164(phone) || phone : null;
+          const created = await prisma.patient.create({
+            data: {
+              name: scrubPlainText(name),
+              email: email || null,
+              phone: e164Phone,
+              normalizedPhone,
+              dob: dobDate,
+              gender,
+              source: source || null,
+              locationId,
+              tags: tagsArr ? JSON.stringify(tagsArr) : null,
+              notes: notes ? scrubPlainText(notes) : null,
+              tenantId: req.user.tenantId,
+            },
+          });
+          createdIds.push(created.id);
+          imported++;
+        } catch (createErr) {
+          // P2002 race — duplicate phone landed between our findFirst and
+          // create. Bucket as duplicate (matches the user-visible intent).
+          if (createErr && createErr.code === "P2002" && isNormalizedPhoneTarget(createErr.meta?.target)) {
+            errors.push({
+              row: rowNum,
+              errorCode: "DUPLICATE_PHONE",
+              errorMessage: "patient with this phone already exists",
+            });
+            duplicates++;
+            continue;
+          }
+          errors.push({
+            row: rowNum,
+            errorCode: "CREATE_FAILED",
+            errorMessage: createErr && createErr.message ? createErr.message : "create failed",
+          });
+          invalid++;
+        }
+      }
+
+      const summary = {
+        totalRows: dataRows.length,
+        imported,
+        duplicates,
+        invalid,
+      };
+
+      // Fire-and-forget audit. Don't block the response on it.
+      writeAudit(
+        "Patient",
+        "PATIENT_BULK_IMPORT",
+        null,
+        req.user.userId,
+        req.user.tenantId,
+        summary,
+      ).catch((auditErr) => {
+        console.warn("[wellness] audit PATIENT_BULK_IMPORT failed:", auditErr.message);
+      });
+
+      return res.status(200).json({ summary, errors, createdIds });
+    } catch (e) {
+      console.error("[wellness] patients/import error:", e.message);
+      return res.status(500).json({ error: "Failed to process patients import" });
+    }
+  },
+);
 
 router.get("/patients/:id", phiReadGate, async (req, res) => {
   try {

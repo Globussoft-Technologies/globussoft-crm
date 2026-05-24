@@ -752,6 +752,11 @@ app.use("/api/pos", posRoutes);
 // Slice 5b — admin bonus-rule CRUD at /api/wallet/rules. MUST mount BEFORE
 // the `/api/wallet` line below so the `:patientId` segment doesn't catch
 // '/rules' first.
+// D16 polish — POST /api/wallet/admin/run-expiry admin manual trigger for
+// walletExpiryEngine (mirror of /api/forecasting/snapshot/run pattern).
+// MUST mount BEFORE `/api/wallet/rules` AND `/api/wallet` for the same
+// `:patientId`-segment-shadowing reason.
+app.use("/api/wallet/admin", require("./routes/wallet_admin"));
 app.use("/api/wallet/rules", require("./routes/wallet_rules"));
 app.use("/api/wallet", walletRoutes);
 // Wave 2 Agent JJ — Staff Attendance + Biometric webhook + Leave Management.

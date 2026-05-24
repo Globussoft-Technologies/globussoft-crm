@@ -1754,18 +1754,40 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
   }
 });
 
-// #931 — bulk-tag-add endpoint. Wires the Patients-page bulk-select toolbar
-// "Add tags to N selected" CTA to a single tenant-scoped batch update.
+// #931 — bulk-tag mutation endpoint. Wires the Patients-page bulk-select
+// toolbar "Add tags to N selected" CTA to a single tenant-scoped batch
+// update. Tick #196: extended ADDITIVELY to also accept `removeTags` so
+// operators can drain tag-mistake pollution without per-patient surgery.
+//
+// Request shape (one or both of addTags/removeTags MUST be non-empty):
+//   { patientIds: number[], addTags?: string[], removeTags?: string[] }
+//
 // Schema: Patient.tags is `String? @db.Text` storing a JSON-stringified
-// array (shipped at 5841d736). Idempotent — incoming tags merge with the
-// existing set; dedupe is case-insensitive (lowercase canonical form).
+// array (shipped at 5841d736). Idempotent — incoming addTags merge with
+// the existing set; removeTags filter against the post-merge set; dedupe
+// is case-insensitive (lowercase canonical form). Rows whose effective
+// tag-set didn't change are skipped (no DB write).
+//
 // RBAC: any wellness-write role (phiWriteGate); excludes telecaller/USER
-// without PHI access. Limits: ≤200 patientIds and ≤20 addTags per call so
-// a UI-driven select-all-then-tag operation can't be turned into a
-// gigantic transactional update.
+// without PHI access. Limits: ≤200 patientIds AND ≤20 entries on EACH of
+// addTags/removeTags per call so a UI-driven select-all-then-mutate
+// operation can't be turned into a gigantic transactional update.
+//
+// Audit pattern: single `BULK_TAG_MUTATE` row carrying both tagsAdded and
+// tagsRemoved payloads (one row per call, regardless of which mutation
+// directions were exercised). Picked single-row over two-row (BULK_TAG_ADD
+// + BULK_TAG_REMOVE) so the audit chain stays one-action-per-API-call —
+// downstream audit-viewer + integrity-verify don't need a special "these
+// two rows came from the same request" join.
+//
+// Response envelope additive: `updated` (row-write count, unchanged) +
+// `removed` (count of patientIds whose effective tag-set lost ≥1 entry
+// from the removeTags step). Frontend Patients.jsx today only reads
+// `updated`; the additive `removed` is for the follow-up bulk-remove UI
+// tick.
 router.patch("/patients/bulk-tags", phiWriteGate, async (req, res) => {
   try {
-    const { patientIds, addTags } = req.body || {};
+    const { patientIds, addTags, removeTags } = req.body || {};
 
     // Shape validation — patientIds must be a non-empty array of integers.
     if (!Array.isArray(patientIds) || patientIds.length === 0) {
@@ -1792,45 +1814,69 @@ router.patch("/patients/bulk-tags", phiWriteGate, async (req, res) => {
       normalizedIds.push(n);
     }
 
-    // Shape validation — addTags must be a non-empty array of trimmed,
-    // 1–50-char strings; max 20 tags per call.
-    if (!Array.isArray(addTags) || addTags.length === 0) {
+    // Tick #196: both addTags and removeTags are now optional individually,
+    // but AT LEAST ONE must be a non-empty array. Default each to [] when
+    // absent so the rest of the handler doesn't need null-guards.
+    const addTagsInput = Array.isArray(addTags) ? addTags : [];
+    const removeTagsInput = Array.isArray(removeTags) ? removeTags : [];
+    if (addTagsInput.length === 0 && removeTagsInput.length === 0) {
       return res.status(400).json({
-        error: "addTags must be a non-empty array of strings",
-        code: "INVALID_TAGS",
+        error: "At least one of addTags or removeTags must be a non-empty array",
+        code: "EMPTY_TAG_LIST",
       });
     }
-    if (addTags.length > 20) {
+    if (addTagsInput.length > 20) {
       return res.status(400).json({
         error: "Cannot add more than 20 tags in a single request",
         code: "BULK_LIMIT_EXCEEDED",
       });
     }
-    const cleanedIncoming = [];
-    const seen = new Set();
-    for (const raw of addTags) {
-      if (typeof raw !== "string") {
-        return res.status(400).json({
-          error: "addTags entries must be strings",
-          code: "INVALID_TAGS",
-        });
-      }
-      const trimmed = raw.trim();
-      if (trimmed.length < 1 || trimmed.length > 50) {
-        return res.status(400).json({
-          error: "addTags entries must be 1–50 characters after trim",
-          code: "INVALID_TAGS",
-        });
-      }
-      const lower = trimmed.toLowerCase();
-      if (seen.has(lower)) continue;
-      seen.add(lower);
-      cleanedIncoming.push(lower);
-    }
-    if (cleanedIncoming.length === 0) {
+    if (removeTagsInput.length > 20) {
       return res.status(400).json({
-        error: "addTags resolved to zero unique tags after dedupe",
-        code: "INVALID_TAGS",
+        error: "Cannot remove more than 20 tags in a single request",
+        code: "BULK_LIMIT_EXCEEDED",
+      });
+    }
+
+    // Shared validator — entries must be trimmed, 1–50-char strings.
+    const normalizeTagList = (list, label) => {
+      const out = [];
+      const seen = new Set();
+      for (const raw of list) {
+        if (typeof raw !== "string") {
+          return { error: `${label} entries must be strings`, code: "INVALID_TAGS" };
+        }
+        const trimmed = raw.trim();
+        if (trimmed.length < 1 || trimmed.length > 50) {
+          return {
+            error: `${label} entries must be 1–50 characters after trim`,
+            code: "INVALID_TAGS",
+          };
+        }
+        const lower = trimmed.toLowerCase();
+        if (seen.has(lower)) continue;
+        seen.add(lower);
+        out.push(lower);
+      }
+      return { tags: out };
+    };
+
+    const addNorm = normalizeTagList(addTagsInput, "addTags");
+    if (addNorm.error) return res.status(400).json(addNorm);
+    const removeNorm = normalizeTagList(removeTagsInput, "removeTags");
+    if (removeNorm.error) return res.status(400).json(removeNorm);
+
+    const cleanedAdd = addNorm.tags;
+    const cleanedRemove = removeNorm.tags;
+    const removeSet = new Set(cleanedRemove);
+
+    // Re-check: if BOTH normalised lists are empty (e.g. only blanks/dupes
+    // came in), treat as EMPTY_TAG_LIST so the caller gets a deterministic
+    // error rather than a silent 200.
+    if (cleanedAdd.length === 0 && cleanedRemove.length === 0) {
+      return res.status(400).json({
+        error: "addTags/removeTags resolved to zero unique tags after dedupe",
+        code: "EMPTY_TAG_LIST",
       });
     }
 
@@ -1843,6 +1889,7 @@ router.patch("/patients/bulk-tags", phiWriteGate, async (req, res) => {
     });
 
     let updated = 0;
+    let removed = 0;
     for (const row of rows) {
       let existing = [];
       if (row.tags) {
@@ -1857,36 +1904,68 @@ router.patch("/patients/bulk-tags", phiWriteGate, async (req, res) => {
           existing = [];
         }
       }
-      const merged = [];
-      const mergedSeen = new Set();
+
+      // Phase 1: normalise existing into canonical lowercase + dedup.
+      const normalizedExisting = [];
+      const existingSeen = new Set();
       for (const t of existing) {
         const lower = String(t).trim().toLowerCase();
-        if (!lower || mergedSeen.has(lower)) continue;
-        mergedSeen.add(lower);
-        merged.push(lower);
+        if (!lower || existingSeen.has(lower)) continue;
+        existingSeen.add(lower);
+        normalizedExisting.push(lower);
       }
-      for (const t of cleanedIncoming) {
+
+      // Phase 2: union with addTags (preserves order: existing first, new
+      // additions appended in input order, dedup-aware).
+      const mergedSeen = new Set(existingSeen);
+      const merged = [...normalizedExisting];
+      for (const t of cleanedAdd) {
         if (mergedSeen.has(t)) continue;
         mergedSeen.add(t);
         merged.push(t);
       }
+
+      // Phase 3: set-difference against removeTags (after union, so a tag
+      // present in BOTH addTags and removeTags ends up removed — explicit
+      // remove wins; documented in the JSDoc above).
+      const finalTags = removeSet.size > 0
+        ? merged.filter((t) => !removeSet.has(t))
+        : merged;
+
+      // Count "removed" — rows whose tag-set shrunk vs the pre-add baseline.
+      // Compares against normalizedExisting (not merged) so the metric
+      // measures the visible operator-perceived removal, not the internal
+      // post-union state. A patient with no tags + removeTags=['X'] sees
+      // no change → not counted as removed.
+      const removedFromThisRow = normalizedExisting.filter((t) => removeSet.has(t)).length;
+      if (removedFromThisRow > 0) removed += 1;
+
+      // Idempotency: skip the write if the final tag-set is identical to
+      // the normalised-existing set. Same length AND same membership.
+      const sameLength = finalTags.length === normalizedExisting.length;
+      const sameMembership = sameLength
+        && finalTags.every((t, i) => t === normalizedExisting[i]);
+      if (sameMembership) continue;
+
       await prisma.patient.update({
         where: { id: row.id },
-        data: { tags: JSON.stringify(merged) },
+        data: { tags: JSON.stringify(finalTags) },
       });
       updated += 1;
     }
 
-    await writeAudit('Patient', 'BULK_TAG_ADD', null, req.user.userId, req.user.tenantId, {
+    await writeAudit('Patient', 'BULK_TAG_MUTATE', null, req.user.userId, req.user.tenantId, {
       patientIdsRequested: normalizedIds.length,
       patientsUpdated: updated,
-      tagsAdded: cleanedIncoming,
+      patientsRemovedFrom: removed,
+      tagsAdded: cleanedAdd,
+      tagsRemoved: cleanedRemove,
     });
 
-    res.json({ updated });
+    res.json({ updated, removed });
   } catch (e) {
-    console.error("[wellness] bulk-tag-add error:", e.message);
-    res.status(500).json({ error: "Failed to bulk-add tags" });
+    console.error("[wellness] bulk-tag-mutate error:", e.message);
+    res.status(500).json({ error: "Failed to bulk-mutate tags" });
   }
 });
 

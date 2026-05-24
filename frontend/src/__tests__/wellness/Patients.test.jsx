@@ -124,8 +124,17 @@ describe('<wellness/Patients /> — page surface', () => {
 
   it('initial mount fetches /api/wellness/patients with NO ?q= (full list)', async () => {
     renderPatients();
+    // #820 Part 1 (tick #185 dd67f1a0) — initial mount now passes limit + offset
+    // every call. Assert NO q= param but ALLOW limit/offset query string.
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/patients');
+      const initialCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string'
+        && u.startsWith('/api/wellness/patients?')
+        && !u.includes('q=')
+        && !u.includes('.csv')
+        && !u.includes('/bulk-tags')
+      );
+      expect(initialCall).toBeTruthy();
     });
   });
 
@@ -169,8 +178,16 @@ describe('<wellness/Patients /> — page surface', () => {
     try {
       renderPatients();
       // Wait for the initial mount fetch to settle.
+      // #820 Part 1 (tick #185 dd67f1a0) — initial mount passes limit + offset.
       await waitFor(() => {
-        expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/patients');
+        const initialCall = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/wellness/patients?')
+          && !u.includes('q=')
+          && !u.includes('.csv')
+          && !u.includes('/bulk-tags')
+        );
+        expect(initialCall).toBeTruthy();
       });
       fetchApiMock.mockClear();
 

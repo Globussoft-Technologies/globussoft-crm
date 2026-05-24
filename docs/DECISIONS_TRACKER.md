@@ -2,8 +2,8 @@
 
 Consolidated index of every product/design decision flagged across the 22 PRDs in `docs/`. Use this to drive product-call agendas — each row is something the product team needs to settle before the corresponding PRD can move to (or finish) implementation.
 
-**Updated:** 2026-05-25 (interactive Q&A session — 24 decisions captured across 6 rounds; all 6 previously-flagged ⚠️ items now resolved or formally deferred)
-**Total decisions:** 216 tracked (192 prior + 24 new from 2026-05-25 Q&A). **RESOLVED: 215**. **DEFERRED: 1** (AI Surfaces DD-5.6 EU residency — formally deferred until first EU tenant signs). **NEEDS PRODUCT CALL: 0** — every previously-flagged item is settled.
+**Updated:** 2026-05-25 (interactive Q&A across 6+1 rounds — 26 decisions captured; all previously-flagged ⚠️ items resolved or formally deferred; implementation sequencing for the 2 biggest multi-day clusters also locked in)
+**Total decisions:** 218 tracked (192 prior + 26 new from 2026-05-25 Q&A — 24 in rounds 1-6 + 2 in round 7 sequencing). **RESOLVED: 217**. **DEFERRED: 1** (AI Surfaces DD-5.6 EU residency — formally deferred until first EU tenant signs). **NEEDS PRODUCT CALL: 0** — every previously-flagged item is settled.
 
 **Previous header retained for context:** 2026-05-24 bulk-resolve session applied PRD recommendations as default for 116 decisions; flagged 5 items as ⚠️ NEEDS PRODUCT CALL. All 5 (plus a 6th uncounted) now resolved in the 2026-05-25 Q&A.
 
@@ -67,6 +67,15 @@ The user ran an interactive product-call session across 6 rounds, settling all 6
 - **NEW-DD MULTI-CURRENCY** [RESOLVED 2026-05-25: **INR-only for v1 — multi-currency v2**. All tenants invoice in INR. Existing Currency table + formatMoney() helper stay but no FX rate handling. Simplest. Fits India-first GTM. Some travel-tenant pain accepted (RFU bookings in SAR for hotels).] Multi-currency support priority.
 - **NEW-DD AUDIT RETENTION** [RESOLVED 2026-05-25: **Indefinite (current default — never delete)**. Audit rows stay forever. Best for compliance + forensics. Storage cost grows linearly with tenant activity (~5-50 MB/year per active tenant). No code changes needed.] Audit log retention default.
 - **NEW-DD NOTIFICATION DEFAULTS** [RESOLVED 2026-05-25: **In-app bell only (least noise)**. Default OFF for email + push + WhatsApp. User opts in to other channels per event-class. Lowest spam complaints. Risk accepted: critical events get missed if user isn't actively in the app.] Default channels when new event fires.
+
+---
+
+### Round 7 — Implementation sequencing (added 2026-05-25 follow-up after "why are issues open?" question)
+
+User clarified that the cron's PRD-shipping mode has settled all DECISIONS but the open-issue list reflects engineering-capacity constraints. Two sequencing decisions captured to direct future focused implementation sessions:
+
+- **NEW-DD TRAVEL-GAP IMPLEMENTATION ORDER** [RESOLVED 2026-05-25: **Spine-first sequencing**. #900 Quote Builder → #901 Travel-Grade Billing → #902 GST & Compliance → #903 Supplier Master → #904 Multi-channel lead capture → #905 B2B Agent Portal → #907 Itinerary upgrades → #908 Marketing flyer studio. Build the operator's daily workflow spine first (quote → invoice → tax) since all 4 sub-brands consume the same spine; cleanest schema; per-sub-brand value defers to implementation Phase 2 of each spine item.] Implementation order for Travel Gap P1-P2 issues (#900-#908). Cluster: previously "all 4 sub-brands as priority" (R4) reframed as "build spine first, layer sub-brand customization on top."
+- **NEW-DD TRAVEL-SECURITY IMPLEMENTATION ORDER** [RESOLVED 2026-05-25: **Risk-ranked sequencing**. After #914 JWT/localStorage hardening (R5 first pick): #919 IDOR audit → #918 sequential IDs (UUID migration) → #920 PII pagination → #917 CSP hardening → #921 dapp injection blocking. Highest-blast-radius risk (IDOR) tackled first via audit, then UUID migration to make IDOR structurally impossible, then narrow PII surface, then browser-defense items. Total ~6-8 eng-weeks across the 5 follow-on items.] Implementation order for Travel Security cluster #917/#918/#919/#920/#921 (after #914 ships).
 
 ---
 

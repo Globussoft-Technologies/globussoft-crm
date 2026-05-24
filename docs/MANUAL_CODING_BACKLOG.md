@@ -384,6 +384,15 @@ gh issue list --label "wellness" --state open --limit 20
 
 ---
 
+### D10. Import/Export Job History (#850) — PRD drafted, design call pending
+**Labels:** `wellness-session`, `backend`, `frontend`, `multi-day-feature`, `data-ops`, `compliance`
+
+**Why manual:** today's piecemeal CSV/XLSX endpoints (`/patients.csv`, `/patients.xlsx`, `/patients/import-template.csv` landed tick #189 + the generic `routes/csv_io.js` + `routes/travel_csv_io.js`) are stateless — request-in, work-happens, response-out, nothing persists. Breaks down at scale (50k-row exports hit HTTP timeout; 5k-row imports run silently for minutes with no row-level feedback; failed-row recovery requires bisect-by-hand; DSAR audit can't tell who exported what). PRD drafted at `docs/PRD_IMPORT_EXPORT_JOBS.md` (tick #189, 2026-05-25 / Agent B). 8 design decisions + 10 open questions need product-call sign-off before implementation can start. Recommended slicing: slice 1 (~3d) = schema + cron engine + storage shim + PATIENT handler + 8 API routes + admin page; slice 2 (~2d) = remaining 7 resource-type handlers (CONTACT, LEAD, PRODUCT, SERVICE, VENDOR, DEAL-export, INVOICE-export); slice 3 (~1.5d) = threshold-based migration of existing CSV/XLSX endpoints + retry-failed-rows + re-run flows; slice 4 (~1d) = S3 storage adapter + cleanup cron + retention-extension UI. New `ImportExportJob` Prisma model with handler-registry extensibility + 2 new cron engines (`importExportEngine.js` polling + `jobArtifactCleanupEngine.js` daily sweep) + per-row error report CSV with stable error codes. Cross-references `PRD_PURCHASE_ORDERS.md` §7 (Phase 2 PO-bulk-create consumer) + `PRD_TRAVEL_SUPPLIER_MASTER.md` (existing `travel_csv_io.js` migrates into the job system in slice 2) + `PRD_TRAVEL_BILLING.md` (bulk-invoice export consumer). **Total estimated effort post-design: 6-9 engineering days** across backend + frontend.
+
+**Blocks before backend impl can start:** DD-5.1 (single ImportExportJob table vs fork to ImportJob/ExportJob) + DD-5.2 (queue-and-notify vs SSE-progress) + DD-5.3 (migration strategy for existing CSV endpoints — threshold-based vs migrate-all vs migrate-none) + DD-5.5 (PHI gate semantics for patient exports — role-gate + operator-attest layering) + DD-5.6 (metadata-indefinite + files-finite retention split) + OQ-9.1 (S3 vs local-disk for v1) + OQ-9.2 (retention defaults) + OQ-9.3 (cancel-latency UX).
+
+---
+
 ## E. PRODUCT-CALL DEPENDENT (decision-first, then implementation)
 
 These don't need an engineer — they need a stakeholder decision. Once the decision arrives, the implementation is small.

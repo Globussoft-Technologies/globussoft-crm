@@ -220,6 +220,132 @@ describe('<wellness/Patients /> — page surface', () => {
     }
   });
 
+  // #820 (tick #192) — list-filter dropdowns. Pins the source / gender /
+  // createdFrom / createdTo controls and their fetch-forwarding contract.
+  // Backend filters shipped tick #191 (`4fa87b0a`, `applyPatientListFilters`
+  // helper at backend/routes/wellness.js:208). Four invariants here:
+  //   1. Source select renders with the vocab from the New-patient form
+  //      (single source of truth — `walk-in`, `referral`, `whatsapp`, etc.)
+  //      and changing it issues a fetch carrying `?source=…`.
+  //   2. Gender select renders with F / M / O options and changing it
+  //      issues a fetch carrying `?gender=F` (matches backend's case-
+  //      normalized accepted set).
+  //   3. Date-from + date-to inputs render with aria-labels "Created from"
+  //      and "Created to" and setting both fires a single fetch with both
+  //      params encoded.
+  //   4. Changing a filter resets the page to 1 (mirrors the existing
+  //      search-input + rowsPerPage reset shape). Verified by the offset=0
+  //      param on the post-change fetch.
+  describe('#820 list filters (tick #192)', () => {
+    it('Source select renders + changing fires a fetch with ?source=walk-in', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const sourceSel = screen.getByLabelText(/Filter by source/i);
+      // Vocab matches the New-patient form's <option> set.
+      expect(sourceSel).toBeInTheDocument();
+      const options = Array.from(sourceSel.querySelectorAll('option')).map((o) => o.value);
+      expect(options).toEqual([
+        '', 'walk-in', 'referral', 'website-form', 'whatsapp',
+        'instagram', 'meta-ad', 'google-ad', 'indiamart',
+      ]);
+
+      fetchApiMock.mockClear();
+      fireEvent.change(sourceSel, { target: { value: 'walk-in' } });
+
+      await waitFor(() => {
+        const filteredCall = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/wellness/patients?')
+          && u.includes('source=walk-in')
+        );
+        expect(filteredCall).toBeTruthy();
+      });
+    });
+
+    it('Gender select renders with F/M/O and changing fires a fetch with ?gender=F', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const genderSel = screen.getByLabelText(/Filter by gender/i);
+      const values = Array.from(genderSel.querySelectorAll('option')).map((o) => o.value);
+      expect(values).toEqual(['', 'F', 'M', 'O']);
+
+      fetchApiMock.mockClear();
+      fireEvent.change(genderSel, { target: { value: 'F' } });
+
+      await waitFor(() => {
+        const filteredCall = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/wellness/patients?')
+          && u.includes('gender=F')
+        );
+        expect(filteredCall).toBeTruthy();
+      });
+    });
+
+    it('Date-from + date-to render and setting both fires a fetch carrying both params', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      const fromInput = screen.getByLabelText(/Created from/i);
+      const toInput = screen.getByLabelText(/Created to/i);
+      expect(fromInput).toBeInTheDocument();
+      expect(toInput).toBeInTheDocument();
+
+      fetchApiMock.mockClear();
+      fireEvent.change(fromInput, { target: { value: '2026-01-01' } });
+      fireEvent.change(toInput, { target: { value: '2026-03-31' } });
+
+      // Both date filters share the SEARCH_DEBOUNCE_MS debounce, so the
+      // last-typed value's debounced fire must include both params (state
+      // for both has already been set by the time the timer runs).
+      await waitFor(() => {
+        const filteredCall = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/wellness/patients?')
+          && u.includes('createdFrom=2026-01-01')
+          && u.includes('createdTo=2026-03-31')
+        );
+        expect(filteredCall).toBeTruthy();
+      });
+    });
+
+    it('changing a filter resets pagination to page 1 (offset=0)', async () => {
+      // Seed a larger dataset so page-2 actually exists.
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url.startsWith('/api/wellness/patients') && (!opts || !opts.method || opts.method === 'GET')) {
+          return Promise.resolve({ patients: samplePatients, total: 200 });
+        }
+        if (url === '/api/wellness/locations') return Promise.resolve(sampleLocations);
+        return Promise.resolve(null);
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      // Click Next to land on page 2 — the next fetch carries offset=25.
+      fireEvent.click(screen.getByTestId('patients-page-next'));
+      await waitFor(() => {
+        const page2Call = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string' && u.includes('offset=25')
+        );
+        expect(page2Call).toBeTruthy();
+      });
+
+      // Now flip the gender filter — the post-change fetch MUST be offset=0.
+      fetchApiMock.mockClear();
+      fireEvent.change(screen.getByLabelText(/Filter by gender/i), { target: { value: 'M' } });
+
+      await waitFor(() => {
+        const resetCall = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/wellness/patients?')
+          && u.includes('gender=M')
+          && u.includes('offset=0')
+        );
+        expect(resetCall).toBeTruthy();
+      });
+    });
+  });
+
   it('clicking "New patient" toggles the create form open with Name + Phone inputs', async () => {
     renderPatients();
     await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());

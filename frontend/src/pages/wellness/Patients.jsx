@@ -17,6 +17,21 @@ export default function Patients() {
   // was simply empty.
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [q, setQ] = useState("");
+  // #820 (tick #192) — list-filter dropdowns wired to the additive backend
+  // filters shipped tick #191 (`4fa87b0a`, `applyPatientListFilters` helper
+  // in routes/wellness.js:208). Source vocab mirrors the New-patient form
+  // <option>s exactly (single source of truth — see the #317 comment at the
+  // form's source <select>) so a filter chip and the saved value can never
+  // disagree the way they did pre-#317. Empty string = filter inactive.
+  // Gender values match the backend's case-normalized accepted set {F,M,O};
+  // anything else is silently ignored server-side (see the helper's comment
+  // block at line 198). createdFrom / createdTo are ISO-date strings from
+  // <input type="date"> — backend parses with `new Date(value)` and ignores
+  // bad strings, so empty + clear-on-change reset is safe.
+  const [source, setSource] = useState("");
+  const [gender, setGender] = useState("");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
   // #820 Part 1 — server-side pagination via ?limit&offset on
   // GET /api/wellness/patients. Backend already supports it (route at
   // backend/routes/wellness.js:405 reads `limit` / `offset` via capLimit,
@@ -127,6 +142,12 @@ export default function Patients() {
     // envelope drives the "Showing X-Y of Z" + totalPages indicators.
     const params = new URLSearchParams();
     if (currentQ) params.set("q", currentQ);
+    // #820 (tick #192) — additive list filters. Each is appended only when
+    // set so the URL stays compact for the default unfiltered view.
+    if (source) params.set("source", source);
+    if (gender) params.set("gender", gender);
+    if (createdFrom) params.set("createdFrom", createdFrom);
+    if (createdTo) params.set("createdTo", createdTo);
     params.set("limit", String(currentRows));
     params.set("offset", String((currentPage - 1) * currentRows));
     const url = `/api/wellness/patients?${params.toString()}`;
@@ -166,6 +187,12 @@ export default function Patients() {
       const token = getAuthToken();
       const params = new URLSearchParams();
       if (q) params.set('q', q);
+      // #820 (tick #192) — forward the active filter snapshot to the CSV
+      // endpoint so the exported file matches the on-screen filtered view.
+      if (source) params.set('source', source);
+      if (gender) params.set('gender', gender);
+      if (createdFrom) params.set('createdFrom', createdFrom);
+      if (createdTo) params.set('createdTo', createdTo);
       const qs = params.toString() ? `?${params.toString()}` : '';
       const res = await fetch(`/api/wellness/patients.csv${qs}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -202,6 +229,12 @@ export default function Patients() {
       const token = getAuthToken();
       const params = new URLSearchParams();
       if (q) params.set('q', q);
+      // #820 (tick #192) — mirror exportCsv: forward the active filter
+      // snapshot so the XLSX export matches the filtered on-screen view.
+      if (source) params.set('source', source);
+      if (gender) params.set('gender', gender);
+      if (createdFrom) params.set('createdFrom', createdFrom);
+      if (createdTo) params.set('createdTo', createdTo);
       const qs = params.toString() ? `?${params.toString()}` : '';
       const res = await fetch(`/api/wellness/patients.xlsx${qs}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -341,10 +374,12 @@ export default function Patients() {
     // truth in utils/timing.js.
     // #820 Part 1 — page / rowsPerPage are now load() dependencies so paging
     // and per-page changes issue fresh server-side fetches.
+    // #820 (tick #192) — source / gender / createdFrom / createdTo added as
+    // deps so changing any filter triggers a (debounced) refetch.
     const t = setTimeout(() => load(qRef.current, page, rowsPerPage), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, reloadTick, page, rowsPerPage]);
+  }, [q, reloadTick, page, rowsPerPage, source, gender, createdFrom, createdTo]);
 
   useEffect(() => {
     fetchApi("/api/wellness/locations")
@@ -362,13 +397,16 @@ export default function Patients() {
   // size changes, otherwise the user can be stranded on page 3 of a result
   // set that only has 1 page after they tighten the search or bump per-page
   // from 25 to 100.
+  // #820 (tick #192) — source / gender / createdFrom / createdTo added so a
+  // user on page 4 of "all patients" who picks gender=F doesn't see an
+  // empty list because the new (smaller) result set has fewer pages.
   useEffect(() => {
     setPage(1);
     // #931 — clear bulk-selection when the filter changes; previously-selected
     // ids may no longer be visible, and silently bulk-tagging hidden rows
     // would violate "what you see is what you tag" expectations.
     setSelectedIds(new Set());
-  }, [q, rowsPerPage]);
+  }, [q, rowsPerPage, source, gender, createdFrom, createdTo]);
 
   // #820 Part 1 — server-side pagination: `patients` already contains
   // exactly the rows for the current page. `totalPages` is computed from the
@@ -796,6 +834,14 @@ export default function Patients() {
         </form>
       )}
 
+      {/* #820 (tick #192) — search + filters row. The search input keeps
+          its 1fr flex sizing; the four filter controls (source / gender /
+          createdFrom / createdTo) sit alongside it in the same glass card
+          so the user can compose them as one logical filter expression.
+          Wrapped with `flex-wrap: wrap` so narrow viewports stack the
+          controls instead of pushing them offscreen. Date inputs are NOT
+          wrapped in a <form>, so the HTML5 form-validation gotcha (per
+          tick #181 standing rule) does not apply here. */}
       <div
         className="glass"
         style={{
@@ -804,22 +850,81 @@ export default function Patients() {
           display: "flex",
           alignItems: "center",
           gap: "0.5rem",
+          flexWrap: "wrap",
         }}
       >
-        <Search size={16} color="var(--text-secondary)" />
-        <input
-          placeholder="Search by name, phone, or email…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          style={{
-            flex: 1,
-            background: "transparent",
-            border: "none",
-            outline: "none",
-            color: "var(--text-primary)",
-            fontSize: "0.9rem",
-          }}
-        />
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flex: "1 1 240px", minWidth: 200 }}>
+          <Search size={16} color="var(--text-secondary)" />
+          <input
+            placeholder="Search by name, phone, or email…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            style={{
+              flex: 1,
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              color: "var(--text-primary)",
+              fontSize: "0.9rem",
+            }}
+          />
+        </div>
+        {/* #820 (tick #192) — Source filter. Vocab mirrors the New-patient
+            form <option>s exactly (single source of truth — see #317
+            comment in the form). Empty default option = "All sources". */}
+        <select
+          aria-label="Filter by source"
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+          style={filterInputStyle(!!source)}
+        >
+          <option value="">All sources</option>
+          <option value="walk-in">Walk-in</option>
+          <option value="referral">Referral</option>
+          <option value="website-form">Website form</option>
+          <option value="whatsapp">WhatsApp</option>
+          <option value="instagram">Instagram</option>
+          <option value="meta-ad">Meta ad</option>
+          <option value="google-ad">Google ad</option>
+          <option value="indiamart">IndiaMART</option>
+        </select>
+        {/* #820 (tick #192) — Gender filter. Values match the backend's
+            case-normalised accepted set {F, M, O}; anything else is
+            silently ignored server-side. */}
+        <select
+          aria-label="Filter by gender"
+          value={gender}
+          onChange={(e) => setGender(e.target.value)}
+          style={filterInputStyle(!!gender)}
+        >
+          <option value="">All genders</option>
+          <option value="F">Female</option>
+          <option value="M">Male</option>
+          <option value="O">Other</option>
+        </select>
+        {/* #820 (tick #192) — Created-from / Created-to date filters.
+            Wired to backend ?createdFrom / ?createdTo which gate on
+            `Patient.createdAt`. Bad dates are silently ignored server-side. */}
+        <label style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+          <span>From</span>
+          <input
+            type="date"
+            aria-label="Created from"
+            value={createdFrom}
+            onChange={(e) => setCreatedFrom(e.target.value)}
+            style={filterInputStyle(!!createdFrom)}
+          />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+          <span>To</span>
+          <input
+            type="date"
+            aria-label="Created to"
+            value={createdTo}
+            onChange={(e) => setCreatedTo(e.target.value)}
+            style={filterInputStyle(!!createdTo)}
+          />
+        </label>
       </div>
 
       {loading && <div>Loading…</div>}
@@ -1285,3 +1390,19 @@ const inputStyle = {
   fontSize: "0.9rem",
   outline: "none",
 };
+// #820 (tick #192) — filter input style. Active filters (non-empty value)
+// get a primary-color border tint so the user sees at a glance which
+// dropdowns are narrowing the result set. Uses the wellness theme's
+// --primary-color (teal) with the generic theme's --accent-color (blue) as
+// fallback per the standing rule on primary CTA color tokens.
+const filterInputStyle = (active) => ({
+  padding: "0.4rem 0.6rem",
+  background: "rgba(255,255,255,0.05)",
+  border: active
+    ? "1px solid var(--primary-color, var(--accent-color))"
+    : "1px solid rgba(255,255,255,0.08)",
+  borderRadius: 6,
+  color: "var(--text-primary)",
+  fontSize: "0.82rem",
+  outline: "none",
+});

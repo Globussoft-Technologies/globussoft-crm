@@ -656,6 +656,80 @@ router.get("/shifts/:id/petty-cash", cashierGate, async (req, res) => {
   }
 });
 
+// ── POS sale context (D17 Arc 1 slice 2) ─────────────────────────────
+//
+// GET /api/pos/sale-context/:patientId — patient-scoped enrichment for the
+// POS "New Sale" form. The cashier picks a patient and the form needs:
+//
+//   - walletBalanceCents — drives the Wallet payment-method affordance in
+//     the payment splitter (PRD_POS_NEW_SALE §3.5). Same shape as
+//     GET /api/wallet/:patientId/balance (Math.round(balance*100), with
+//     a defensive Math.max(0, ...) since Wallet.balance is constrained
+//     > 0 by topup/redeem logic but better-safe-than-sorry at the wire).
+//   - currency — patient's wallet currency (defaults to INR).
+//   - activeMemberships — patient's active Membership rows for "redeem
+//     against credits" affordance. Stubbed to `[]` here; slice 3 will
+//     fill from prisma.membership.findMany once the Membership read
+//     contract is agreed.
+//   - pendingBookings — upcoming Booking rows that auto-bill at the
+//     register. Stubbed to `[]` here; subsequent slice will populate.
+//
+// Back-compat note: Wallet balance lives on its own endpoint already
+// (fdb0ec5c); this aggregator just saves the POS page one round-trip on
+// patient-pick. Stubbed sister arrays are intentionally empty arrays
+// (not omitted) so the frontend can render the empty state without a
+// shape-check.
+//
+// Same cashierGate as the rest of pos.js — the cashier needs the
+// affordance, telecallers don't ring up sales but DO see context on
+// outbound calls when transferring to billing.
+
+router.get("/sale-context/:patientId", cashierGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.patientId, 10);
+    if (!Number.isFinite(patientId) || patientId <= 0) {
+      return res.status(400).json({ error: "patientId must be a positive integer", code: "INVALID_PATIENT_ID" });
+    }
+
+    // Tenant-scoped patient existence check first — cross-tenant probe
+    // returns 404 (never 403) so we never reveal whether a row exists
+    // in another tenant. Same pattern as routes/wallet.js:108.
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) {
+      return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+    }
+
+    const wallet = await prisma.wallet.findFirst({
+      where: tenantWhere(req, { patientId }),
+      select: { balance: true, currency: true },
+    });
+    // Defensive Math.max(0, ...) — Wallet.balance is constrained > 0 by
+    // topup/redeem logic, but a corrupt row should never surface a
+    // negative number to the POS form (would imply "free money" to the
+    // cashier reading the affordance).
+    const walletBalanceCents = wallet
+      ? Math.max(0, Math.round(wallet.balance * 100))
+      : 0;
+    const currency = wallet?.currency || "INR";
+
+    return res.json({
+      patientId,
+      walletBalanceCents,
+      currency,
+      // Sister fields stubbed empty for slice-2; filled by subsequent
+      // slices once Membership / Booking read contracts agreed.
+      activeMemberships: [],
+      pendingBookings: [],
+    });
+  } catch (e) {
+    console.error("[pos] sale-context error:", e.message);
+    return res.status(500).json({ error: "Failed to load sale context" });
+  }
+});
+
 // ── Sale create / list / get / refund ────────────────────────────────
 
 const VALID_LINE_TYPES = ["SERVICE", "PRODUCT", "MEMBERSHIP", "GIFTCARD", "PACKAGE"];

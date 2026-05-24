@@ -749,6 +749,10 @@ app.use("/api/csv", csvIoRoutes);
 app.use("/api/pos", posRoutes);
 // D16 Wallet Top-up Arc 1 slice 2-partial — GET /api/wallet/:patientId/balance
 // + GET /api/wallet/:patientId/transactions. phiReadGate-protected.
+// Slice 5b — admin bonus-rule CRUD at /api/wallet/rules. MUST mount BEFORE
+// the `/api/wallet` line below so the `:patientId` segment doesn't catch
+// '/rules' first.
+app.use("/api/wallet/rules", require("./routes/wallet_rules"));
 app.use("/api/wallet", walletRoutes);
 // Wave 2 Agent JJ — Staff Attendance + Biometric webhook + Leave Management.
 // Cross-vertical (wellness AND generic). Mounted top-level. The biometric

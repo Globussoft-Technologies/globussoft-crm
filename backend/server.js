@@ -1123,6 +1123,14 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initLeavePolicyCron } = require('./cron/leavePolicyEngine');
   initLeavePolicyCron();
 
+  // D16 Wallet Top-up — Arc 1 Slice 6 (PRD_WALLET_TOPUP §3.5 Phase 2).
+  // Daily 03:30 IST sweep: flips ACTIVE WalletCreditBatch rows whose
+  // expiresAt has passed to EXPIRED, debits Wallet.balance, writes a
+  // signed-negative EXPIRY WalletTransaction row, audits WALLET_EXPIRY.
+  // Idempotent (status filter is the set-once gate).
+  const { initWalletExpiryCron } = require('./cron/walletExpiryEngine');
+  initWalletExpiryCron();
+
   // Initialize Notification Rules Engine — event-driven notifications for
   // business events (SLA breaches, approvals, expenses, leave requests).
   // Subscribes to eventBus events and creates notifications via notificationService.

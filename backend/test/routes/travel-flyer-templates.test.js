@@ -41,6 +41,15 @@
  *       MANAGER restricted, source.subBrand not in access set → 403 SUB_BRAND_DENIED
  *       USER role → 403 RBAC_DENIED (route is ADMIN/MANAGER)
  *       source.isActive=false still duplicates (no INVALID_STATE gate)
+ *   - templateHash virtual field (slice 9)
+ *       GET list rows carry templateHash matching hashTemplateShape({ palette, layout, assets })
+ *       GET one carries templateHash
+ *       POST create response carries templateHash
+ *       PUT update response carries templateHash
+ *       POST duplicate response carries templateHash (matches source — shape inherited verbatim)
+ *       row with corrupted paletteJson string folds to the same hash as the empty `{}` shape
+ *       templateHash is stable across iterations (same shape → same hash)
+ *       two semantically-different shapes hash differently
  *
  * Pattern mirrors backend/test/routes/travel-commission-profiles.test.js —
  * patch the prisma singleton with vi.fn() shapes BEFORE requiring the
@@ -685,5 +694,178 @@ describe('POST /api/travel/flyer-templates/:id/duplicate (slice 6)', () => {
     expect(res.body.isActive).toBe(true);
     const callArgs = prisma.travelFlyerTemplate.create.mock.calls[0][0];
     expect(callArgs.data.isActive).toBe(true);
+  });
+});
+
+describe('templateHash virtual field (slice 9)', () => {
+  // Direct helper import — pins the route's read-time hash against the
+  // same flyerExport.hashTemplateShape the frontend will use as a cache
+  // key. If the route's helper choice ever drifts (e.g. different field
+  // ordering, different hash function), these tests fail loudly.
+  const { hashTemplateShape } = requireCJS('../../lib/flyerExport');
+
+  const sampleRow = {
+    id: 5,
+    tenantId: 1,
+    name: 'Hash sample',
+    paletteJson: JSON.stringify(validPalette),
+    layoutJson: JSON.stringify(validLayout),
+    assetsJson: JSON.stringify(validAssets),
+    subBrand: 'rfu',
+    isActive: true,
+    notes: null,
+  };
+
+  const expectedHash = hashTemplateShape({
+    palette: validPalette,
+    layout: validLayout,
+    assets: validAssets,
+  });
+
+  test('GET list rows carry templateHash matching hashTemplateShape', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([sampleRow]);
+    prisma.travelFlyerTemplate.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.templates).toHaveLength(1);
+    expect(res.body.templates[0]).toMatchObject({ id: 5, templateHash: expectedHash });
+    // Hash must be 64-char hex SHA-256.
+    expect(res.body.templates[0].templateHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('GET one carries templateHash', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sampleRow);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/5')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 5, templateHash: expectedHash });
+  });
+
+  test('POST create response carries templateHash', async () => {
+    prisma.travelFlyerTemplate.create.mockResolvedValue(sampleRow);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Hash sample',
+        paletteJson: validPalette,
+        layoutJson: validLayout,
+        assetsJson: validAssets,
+        subBrand: 'rfu',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 5, templateHash: expectedHash });
+  });
+
+  test('PUT update response carries templateHash', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sampleRow);
+    prisma.travelFlyerTemplate.update.mockResolvedValue({
+      ...sampleRow,
+      name: 'Hash sample renamed',
+    });
+
+    const res = await request(makeApp())
+      .put('/api/travel/flyer-templates/5')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'Hash sample renamed' });
+
+    expect(res.status).toBe(200);
+    // Shape unchanged → hash unchanged.
+    expect(res.body).toMatchObject({
+      id: 5,
+      name: 'Hash sample renamed',
+      templateHash: expectedHash,
+    });
+  });
+
+  test('POST duplicate response carries templateHash (matches source — shape inherited verbatim)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sampleRow);
+    prisma.travelFlyerTemplate.create.mockImplementation(async (args) => ({
+      id: 999,
+      ...args.data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/5/duplicate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(201);
+    // Duplicate copies paletteJson / layoutJson / assetsJson verbatim
+    // from source, so the new row's hash MUST match the source's hash —
+    // this is the cache-key promise the frontend relies on (a duplicate
+    // can reuse a cached preview render).
+    expect(res.body).toMatchObject({ id: 999, templateHash: expectedHash });
+  });
+
+  test('row with corrupted paletteJson folds to the same hash as the empty {} envelope', async () => {
+    // The empty-shape baseline: { palette: null, layout: null, assets: null }
+    // is what hashTemplateShape produces for an unparseable row (see
+    // withTemplateHash + hashTemplateShape contracts).
+    const emptyEnvelopeHash = hashTemplateShape({});
+    const corruptedRow = {
+      ...sampleRow,
+      id: 6,
+      paletteJson: '{not-valid-json',
+      layoutJson: '[not-valid-json',
+      assetsJson: '{not-valid-json',
+    };
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(corruptedRow);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/6')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.templateHash).toBe(emptyEnvelopeHash);
+    // Degraded behaviour pin: corrupted rows do NOT throw 500; the
+    // response still ships the row + a stable (if useless) hash. Cache
+    // misses for these rows; renderer regenerates from whatever it can
+    // parse on its own.
+  });
+
+  test('templateHash is stable across iterations (same row → same hash)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sampleRow);
+
+    const r1 = await request(makeApp())
+      .get('/api/travel/flyer-templates/5')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    const r2 = await request(makeApp())
+      .get('/api/travel/flyer-templates/5')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect(r1.body.templateHash).toBe(r2.body.templateHash);
+    expect(r1.body.templateHash).toBe(expectedHash);
+  });
+
+  test('two semantically-different shapes hash differently', async () => {
+    const altPalette = { ...validPalette, primaryHex: '#000000' }; // differs in primaryHex
+    const altRow = {
+      ...sampleRow,
+      id: 7,
+      paletteJson: JSON.stringify(altPalette),
+    };
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(altRow);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/7')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.templateHash).not.toBe(expectedHash);
+    expect(res.body.templateHash).toBe(
+      hashTemplateShape({ palette: altPalette, layout: validLayout, assets: validAssets }),
+    );
   });
 });

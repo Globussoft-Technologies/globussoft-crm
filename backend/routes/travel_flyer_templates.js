@@ -45,6 +45,25 @@
  * template shouldn't fail because the saved layout no longer passes a
  * tightened validator — that's a separate migration concern.
  *
+ * Response envelope (slice 9): every row returned by list/get/create/
+ * update/duplicate carries a virtual `templateHash` field — the
+ * deterministic SHA-256 of the JSON-canonicalized { palette, layout,
+ * assets } shape (lib/flyerExport.js, slice 8 commit 2390069b). The
+ * field is computed on read, NOT stored on disk — Prisma schema is
+ * unchanged. Two reasons it's read-time only:
+ *   (1) Hash is a derivative of the stored columns; persisting it means
+ *       keeping it in sync on every write, and an out-of-sync stale hash
+ *       is worse than the recompute cost.
+ *   (2) The hash function lives in flyerExport.js next to the cache-key
+ *       builder; future changes to either side land as a single helper
+ *       edit + a route response that just re-reads.
+ * The frontend uses `templateHash` as a client-side cache-key for
+ * preview thumbnails + the future MarketingFlyer.outputUrls cache lookup
+ * (FR-3.4.5, AC-6.3). A row whose paletteJson or layoutJson is
+ * unparseable falls back to the same hash as the empty `{}` shape — the
+ * cache will simply miss + the renderer regenerates the asset, which is
+ * the right degraded behaviour for a corrupted-stored-shape row.
+ *
  * Sub-brand isolation: every list / get / write goes through
  * getSubBrandAccessSet + canAccessSubBrand. A MANAGER restricted to one
  * sub-brand cannot read or write templates attached to other sub-brands;
@@ -70,6 +89,7 @@ const {
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const { validateTemplate } = require("../lib/flyerTemplateValidator");
+const { hashTemplateShape } = require("../lib/flyerExport");
 
 /**
  * Parse a `@db.Text` column expected to contain JSON. Accepts:
@@ -133,6 +153,33 @@ function assertValidTemplateShape({ palette, layout, assets }) {
   }
 }
 
+/**
+ * Decorate a TravelFlyerTemplate row with the virtual `templateHash`
+ * field (slice 9). Computed at read-time from the row's stored JSON
+ * columns; never persisted (see file header rationale).
+ *
+ * A row whose paletteJson / layoutJson / assetsJson is unparseable
+ * folds into the same empty-envelope hash as `{}` — the renderer cache
+ * will simply miss + regenerate, which is the right degraded behaviour
+ * for a corrupted-stored-shape row.
+ */
+function withTemplateHash(row) {
+  if (!row || typeof row !== "object") return row;
+  let palette = null;
+  let layout = null;
+  let assets = null;
+  if (row.paletteJson) {
+    try { palette = JSON.parse(row.paletteJson); } catch (_e) { palette = null; }
+  }
+  if (row.layoutJson) {
+    try { layout = JSON.parse(row.layoutJson); } catch (_e) { layout = null; }
+  }
+  if (row.assetsJson) {
+    try { assets = JSON.parse(row.assetsJson); } catch (_e) { assets = null; }
+  }
+  return { ...row, templateHash: hashTemplateShape({ palette, layout, assets }) };
+}
+
 // GET /api/travel/flyer-templates
 // Honors ?subBrand=tmc, ?isActive=true/false.
 // Sub-brand-restricted callers see only their allowed sub-brands PLUS
@@ -182,7 +229,12 @@ router.get(
         }),
         prisma.travelFlyerTemplate.count({ where }),
       ]);
-      res.json({ templates, total, limit: take, offset: skip });
+      res.json({
+        templates: templates.map(withTemplateHash),
+        total,
+        limit: take,
+        offset: skip,
+      });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] list error:", e.message);
@@ -222,7 +274,7 @@ router.get(
           });
         }
       }
-      res.json(template);
+      res.json(withTemplateHash(template));
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] get error:", e.message);
@@ -307,7 +359,7 @@ router.post(
         },
       );
 
-      res.status(201).json(created);
+      res.status(201).json(withTemplateHash(created));
     } catch (e) {
       if (e.status) {
         const body = { error: e.message, code: e.code };
@@ -472,7 +524,7 @@ router.put(
         { fields: Object.keys(data) },
       );
 
-      res.json(updated);
+      res.json(withTemplateHash(updated));
     } catch (e) {
       if (e.status) {
         const body = { error: e.message, code: e.code };
@@ -594,7 +646,7 @@ router.post(
         },
       );
 
-      res.status(201).json(created);
+      res.status(201).json(withTemplateHash(created));
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] duplicate error:", e.message);

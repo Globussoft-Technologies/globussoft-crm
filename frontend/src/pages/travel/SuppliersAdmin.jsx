@@ -19,7 +19,7 @@
 // honors the #829 permission-denied vs no-rows distinction.
 
 import { useEffect, useState, useContext, Fragment } from "react";
-import { Building2, Plus, Pencil, Trash2, ChevronDown, ChevronRight, CheckCircle2, XCircle, Wallet, BarChart3 } from "lucide-react";
+import { Building2, Plus, Pencil, Trash2, ChevronDown, ChevronRight, CheckCircle2, XCircle, Wallet, BarChart3, AlertTriangle } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
@@ -124,6 +124,30 @@ const AGING_BUCKETS = [
   { key: "90+",     label: "90+ days",  bg: "rgba(127, 29, 29, 0.28)",  fg: "#dc2626" },                       // dark red
 ];
 
+// PRD_TRAVEL_SUPPLIER_MASTER #903 slice 12 — Credit Exposure panel.
+// Consumes the backend exposure endpoint shipped in commit 2a276137:
+//   GET /api/travel/suppliers/exposure[?subBrand=&supplierCategory=&nearLimitOnly=]
+//     → 200 { suppliers: [{ id, name, supplierCategory, subBrand,
+//                           creditLimit, creditCurrency, openExposure,
+//                           utilization, openPayableCount, status,
+//                           isActive }],
+//             total,
+//             summary: { overLimitCount, nearLimitCount, totalExposure } }
+// status enum: "ok" | "near-limit" | "over-limit" | "no-limit". Backend
+// rule: utilization > 1.0 → over-limit; utilization ≥ 0.8 → near-limit;
+// hasLimit + utilization < 0.8 → ok; creditLimit null/0 → no-limit.
+// Panel renders 3 summary tiles + per-supplier table + a "near-limit only"
+// filter chip. The exposure GET is fired on mount + whenever sub-brand /
+// category / nearLimitOnly toggles. The page-level sub-brand + category
+// filters drive this panel (same as the aging panel) so the operator sees
+// one consistent slice.
+const EXPOSURE_STATUS_STYLE = {
+  ok:           { bg: "rgba(34, 197, 94, 0.18)",  fg: "var(--success-color, #22c55e)", label: "OK" },
+  "near-limit": { bg: "rgba(245, 158, 11, 0.20)", fg: "var(--warning-color, #f59e0b)", label: "Near limit" },
+  "over-limit": { bg: "rgba(244, 63, 94, 0.20)",  fg: "var(--danger-color, #f43f5e)",  label: "Over limit" },
+  "no-limit":   { bg: "rgba(148, 163, 184, 0.18)",fg: "var(--text-secondary)",         label: "No limit" },
+};
+
 // Slice-4 add-payable form initial state. Empty strings normalise to null
 // on submit (description + amount required, the rest optional).
 const EMPTY_PAYABLE_FORM = {
@@ -195,6 +219,16 @@ export default function SuppliersAdmin() {
   const [agingLoading, setAgingLoading] = useState(true);
   const [agingError, setAgingError] = useState(false);
 
+  // Slice 12 (#903) — credit-exposure panel state. Loaded on mount + on
+  // sub-brand / category / nearLimitOnly changes via GET /api/travel/
+  // suppliers/exposure. `exposure` shape: { suppliers, total, summary };
+  // null until first response. 403 silently absorbed (the main suppliers
+  // list already surfaces the access-denied empty state).
+  const [exposure, setExposure] = useState(null);
+  const [exposureLoading, setExposureLoading] = useState(true);
+  const [exposureError, setExposureError] = useState(false);
+  const [exposureNearLimitOnly, setExposureNearLimitOnly] = useState(false);
+
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
@@ -248,6 +282,36 @@ export default function SuppliersAdmin() {
   };
 
   useEffect(loadAging, [subBrand, supplierCategory]);
+
+  // Slice 12 (#903) — load credit-exposure summary on mount + when the
+  // top-of-page filters or the near-limit toggle change. Single-fetch, no
+  // polling — operator refreshes the page when they want a re-read.
+  const loadExposure = () => {
+    setExposureLoading(true);
+    setExposureError(false);
+    const qs = new URLSearchParams();
+    if (subBrand) qs.set("subBrand", subBrand);
+    if (supplierCategory) qs.set("supplierCategory", supplierCategory);
+    if (exposureNearLimitOnly) qs.set("nearLimitOnly", "1");
+    const url = `/api/travel/suppliers/exposure${qs.toString() ? `?${qs.toString()}` : ""}`;
+    fetchApi(url)
+      .then((d) => {
+        setExposure(d || null);
+        setExposureError(false);
+      })
+      .catch((err) => {
+        setExposure(null);
+        setExposureError(true);
+        // 403 silently absorbed — the main suppliers-list permissionDenied
+        // empty state is the canonical surface for that case.
+        if (err?.status !== 403) {
+          notify.error(err?.body?.error || err?.message || "Failed to load credit exposure");
+        }
+      })
+      .finally(() => setExposureLoading(false));
+  };
+
+  useEffect(loadExposure, [subBrand, supplierCategory, exposureNearLimitOnly]);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -637,6 +701,227 @@ export default function SuppliersAdmin() {
                 {Number(aging?.excludedCount) || 0} excluded (paid/cancelled/missing dueDate)
               </span>
             </div>
+          </>
+        )}
+      </section>
+
+      {/* Slice 12 (#903) — Credit Exposure panel. Consumes
+          GET /api/travel/suppliers/exposure (commit 2a276137). Surfaces
+          per-supplier open exposure vs credit limit + utilisation % with
+          status pills (ok / near-limit / over-limit / no-limit). Three
+          summary tiles + a near-limit toggle chip + a per-supplier table. */}
+      <section
+        data-testid="exposure-panel"
+        aria-label="Supplier credit exposure"
+        className="glass"
+        style={{ padding: 16, marginBottom: 16 }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <AlertTriangle size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
+          <strong style={{ fontSize: 13 }}>Credit Exposure</strong>
+          <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+            Open A/P vs supplier credit limit.
+          </span>
+          <label
+            style={{
+              marginLeft: "auto",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              padding: "4px 8px",
+              borderRadius: 12,
+              background: exposureNearLimitOnly ? "rgba(245, 158, 11, 0.18)" : "var(--surface-color)",
+              border: "1px solid var(--border-color)",
+            }}
+            data-testid="exposure-near-limit-chip"
+          >
+            <input
+              type="checkbox"
+              checked={exposureNearLimitOnly}
+              onChange={(e) => setExposureNearLimitOnly(e.target.checked)}
+              aria-label="Show only near-limit and over-limit suppliers"
+            />
+            Near-limit only
+          </label>
+        </div>
+
+        {exposureLoading ? (
+          <div data-testid="exposure-loading" style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            Loading exposure&hellip;
+          </div>
+        ) : exposureError ? (
+          <div data-testid="exposure-error" style={{ fontSize: 13, color: "var(--danger-color, #f43f5e)" }}>
+            Failed to load credit exposure.
+          </div>
+        ) : (
+          <>
+            <div
+              data-testid="exposure-summary-tiles"
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
+                gap: 8,
+                marginBottom: 12,
+              }}
+            >
+              <div
+                data-testid="exposure-tile-over-limit"
+                style={{
+                  background: EXPOSURE_STATUS_STYLE["over-limit"].bg,
+                  color: EXPOSURE_STATUS_STYLE["over-limit"].fg,
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.04)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.85 }}>
+                  Over limit
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 700 }} data-testid="exposure-tile-over-limit-count">
+                  {Number(exposure?.summary?.overLimitCount) || 0}
+                </div>
+                <div style={{ fontSize: 11, opacity: 0.85 }}>supplier{(Number(exposure?.summary?.overLimitCount) || 0) === 1 ? "" : "s"}</div>
+              </div>
+              <div
+                data-testid="exposure-tile-near-limit"
+                style={{
+                  background: EXPOSURE_STATUS_STYLE["near-limit"].bg,
+                  color: EXPOSURE_STATUS_STYLE["near-limit"].fg,
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.04)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.85 }}>
+                  Near limit
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 700 }} data-testid="exposure-tile-near-limit-count">
+                  {Number(exposure?.summary?.nearLimitCount) || 0}
+                </div>
+                <div style={{ fontSize: 11, opacity: 0.85 }}>supplier{(Number(exposure?.summary?.nearLimitCount) || 0) === 1 ? "" : "s"}</div>
+              </div>
+              <div
+                data-testid="exposure-tile-total"
+                style={{
+                  background: "rgba(59, 130, 246, 0.16)",
+                  color: "#3b82f6",
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.04)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.85 }}>
+                  Total exposure
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 700 }} data-testid="exposure-tile-total-amount">
+                  ₹{(Number(exposure?.summary?.totalExposure) || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                </div>
+                <div style={{ fontSize: 11, opacity: 0.85 }}>open A/P</div>
+              </div>
+            </div>
+
+            {Array.isArray(exposure?.suppliers) && exposure.suppliers.length > 0 ? (
+              <table
+                data-testid="exposure-table"
+                style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
+              >
+                <thead>
+                  <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                    <th style={payableTh}>Supplier</th>
+                    <th style={payableTh}>Category</th>
+                    <th style={payableTh}>Credit limit</th>
+                    <th style={payableTh}>Open exposure</th>
+                    <th style={payableTh}>Utilisation</th>
+                    <th style={payableTh}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {exposure.suppliers.map((s) => {
+                    const statusKey = s.status || "no-limit";
+                    const style = EXPOSURE_STATUS_STYLE[statusKey] || EXPOSURE_STATUS_STYLE["no-limit"];
+                    const sym = CURRENCY_SYMBOL[s.creditCurrency] || "₹";
+                    const limitDisplay =
+                      s.creditLimit != null && Number.isFinite(Number(s.creditLimit))
+                        ? `${sym}${Number(s.creditLimit).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+                        : "—";
+                    const openDisplay = `${sym}${(Number(s.openExposure) || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+                    // Half-up rounding to 1 decimal place for utilisation %
+                    // (backend ships utilisation as a 4dp ratio; display as %).
+                    const utilPctRaw =
+                      s.utilization != null && Number.isFinite(Number(s.utilization))
+                        ? Number(s.utilization) * 100
+                        : null;
+                    const utilDisplay =
+                      utilPctRaw == null
+                        ? "—"
+                        : `${(Math.round((utilPctRaw + Number.EPSILON) * 10) / 10).toString()}%`;
+                    return (
+                      <tr
+                        key={s.id}
+                        data-testid={`exposure-row-${s.id}`}
+                        style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+                      >
+                        <td style={payableTd}>
+                          <strong>{s.name}</strong>
+                          {s.subBrand && (
+                            <span style={{ ...brandBadge, background: SUB_BRAND_BG[s.subBrand] || "rgba(255,255,255,0.08)", marginLeft: 6 }}>
+                              {s.subBrand}
+                            </span>
+                          )}
+                        </td>
+                        <td style={payableTd}>
+                          <span style={categoryBadge}>{s.supplierCategory || "—"}</span>
+                        </td>
+                        <td style={payableTd}>{limitDisplay}</td>
+                        <td style={payableTd}>{openDisplay}</td>
+                        <td style={payableTd} data-testid={`exposure-util-${s.id}`}>{utilDisplay}</td>
+                        <td style={payableTd}>
+                          <span
+                            data-testid={`exposure-status-${s.id}`}
+                            style={{
+                              ...statusBadge,
+                              background: style.bg,
+                              color: style.fg,
+                            }}
+                          >
+                            {style.label}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <div
+                data-testid="exposure-empty"
+                style={{ fontSize: 13, color: "var(--text-secondary)", fontStyle: "italic" }}
+              >
+                {exposureNearLimitOnly
+                  ? "No suppliers at or over credit limit."
+                  : "No suppliers with credit limits configured."}
+              </div>
+            )}
           </>
         )}
       </section>

@@ -208,6 +208,16 @@ const AGING_DEFAULT = {
   excludedReasons: {},
 };
 
+// Default exposure stub — installFetchMock returns this on every
+// /api/travel/suppliers/exposure GET (slice 12 #903, panel mount fetch).
+// Tests not focused on the exposure panel still get an empty-but-valid
+// response so the panel renders without tripping notify.error.
+const EXPOSURE_DEFAULT = {
+  suppliers: [],
+  total: 0,
+  summary: { overLimitCount: 0, nearLimitCount: 0, totalExposure: 0 },
+};
+
 // Install a fetchApi mock that routes by URL + method. Tests override
 // only the surface they care about.
 function installFetchMock({
@@ -216,6 +226,7 @@ function installFetchMock({
   update = null,
   del = null,
   aging = AGING_DEFAULT,
+  exposure = EXPOSURE_DEFAULT,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -223,6 +234,13 @@ function installFetchMock({
     if (url.startsWith('/api/travel/payables/aging') && method === 'GET') {
       if (aging instanceof Error) return Promise.reject(aging);
       return Promise.resolve(aging);
+    }
+    // Exposure endpoint match BEFORE the generic suppliers prefix (URL
+    // overlap: /api/travel/suppliers/exposure starts with /api/travel/
+    // suppliers). Slice 12 #903.
+    if (url.startsWith('/api/travel/suppliers/exposure') && method === 'GET') {
+      if (exposure instanceof Error) return Promise.reject(exposure);
+      return Promise.resolve(exposure);
     }
     if (url.startsWith('/api/travel/suppliers') && method === 'GET') {
       if (list instanceof Error) return Promise.reject(list);
@@ -308,7 +326,17 @@ describe('<SuppliersAdmin /> — load + render lifecycle', () => {
     let resolveList;
     fetchApiMock.mockImplementation((url, opts) => {
       const method = opts?.method || 'GET';
-      if (url.startsWith('/api/travel/suppliers') && method === 'GET') {
+      // Exposure / aging endpoints must resolve so the suppliers-list
+      // panel's "Loading…" placeholder is the one we're asserting on
+      // (slice 12 #903 added a sibling exposure GET that ALSO matches
+      // the /api/travel/suppliers prefix).
+      if (url.startsWith('/api/travel/payables/aging') && method === 'GET') {
+        return Promise.resolve(AGING_DEFAULT);
+      }
+      if (url.startsWith('/api/travel/suppliers/exposure') && method === 'GET') {
+        return Promise.resolve(EXPOSURE_DEFAULT);
+      }
+      if (url === '/api/travel/suppliers' && method === 'GET') {
         return new Promise((res) => { resolveList = res; });
       }
       return Promise.resolve(null);
@@ -852,6 +880,7 @@ function installFetchMockWithPayables({
   payablesUpdate = null,
   payablesDelete = null,
   aging = AGING_DEFAULT,
+  exposure = EXPOSURE_DEFAULT,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -859,6 +888,12 @@ function installFetchMockWithPayables({
     if (url.startsWith('/api/travel/payables/aging') && method === 'GET') {
       if (aging instanceof Error) return Promise.reject(aging);
       return Promise.resolve(aging);
+    }
+    // Exposure endpoint match BEFORE the generic suppliers prefix (URL
+    // overlap: /api/travel/suppliers/exposure). Slice 12 #903.
+    if (url.startsWith('/api/travel/suppliers/exposure') && method === 'GET') {
+      if (exposure instanceof Error) return Promise.reject(exposure);
+      return Promise.resolve(exposure);
     }
     // Nested payables match BEFORE the supplier-level patterns (URL prefix overlap).
     if (/^\/api\/travel\/suppliers\/\d+\/payables$/.test(url) && method === 'GET') {
@@ -1416,5 +1451,269 @@ describe('<SuppliersAdmin /> — slice 9 (#903) payables aging panel', () => {
       );
       expect(call).toBeTruthy();
     });
+  });
+});
+
+// PRD_TRAVEL_SUPPLIER_MASTER #903 slice 12 — Credit Exposure panel suite.
+// Consumes GET /api/travel/suppliers/exposure (shipped commit 2a276137).
+// Pins: panel chrome + 3 summary tiles + per-supplier table + near-limit
+// chip toggle + status-pill colour mapping + filter wiring + error/loading
+// states.
+describe('<SuppliersAdmin /> — slice 12 (#903) credit-exposure panel', () => {
+  // Canonical exposure payload covering all 4 status enums + sub-brand mix
+  // so per-status pill rendering + utilisation % rendering can be asserted
+  // in one render pass. Backend ships `utilization` as a 4dp ratio; UI
+  // converts to a 1dp percentage for display.
+  const EXPOSURE_MIXED = {
+    suppliers: [
+      {
+        id: 301,
+        name: 'Riyadh Hotels',
+        supplierCategory: 'hotel',
+        subBrand: 'rfu',
+        creditLimit: 100000,
+        creditCurrency: 'INR',
+        openExposure: 125000,
+        utilization: 1.25,
+        openPayableCount: 6,
+        status: 'over-limit',
+        isActive: true,
+      },
+      {
+        id: 302,
+        name: 'Saudi Air',
+        supplierCategory: 'flight',
+        subBrand: 'rfu',
+        creditLimit: 50000,
+        creditCurrency: 'INR',
+        openExposure: 42500,
+        utilization: 0.85,
+        openPayableCount: 3,
+        status: 'near-limit',
+        isActive: true,
+      },
+      {
+        id: 303,
+        name: 'Acme Hotels',
+        supplierCategory: 'hotel',
+        subBrand: 'tmc',
+        creditLimit: 200000,
+        creditCurrency: 'INR',
+        openExposure: 12000,
+        utilization: 0.06,
+        openPayableCount: 1,
+        status: 'ok',
+        isActive: true,
+      },
+      {
+        id: 304,
+        name: 'Nobudget Visa',
+        supplierCategory: 'visa-consul',
+        subBrand: 'visasure',
+        creditLimit: null,
+        creditCurrency: 'INR',
+        openExposure: 8000,
+        utilization: null,
+        openPayableCount: 2,
+        status: 'no-limit',
+        isActive: true,
+      },
+    ],
+    total: 4,
+    summary: { overLimitCount: 1, nearLimitCount: 1, totalExposure: 187500 },
+  };
+
+  it('renders summary tiles (over-limit / near-limit / total exposure)', async () => {
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    renderPage();
+    expect(await screen.findByTestId('exposure-panel')).toBeInTheDocument();
+    expect(await screen.findByTestId('exposure-tile-over-limit')).toBeInTheDocument();
+    expect(screen.getByTestId('exposure-tile-near-limit')).toBeInTheDocument();
+    expect(screen.getByTestId('exposure-tile-total')).toBeInTheDocument();
+    expect(screen.getByTestId('exposure-tile-over-limit-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('exposure-tile-near-limit-count')).toHaveTextContent('1');
+    // Total exposure rendered with INR en-IN grouping (1,87,500).
+    expect(screen.getByTestId('exposure-tile-total-amount').textContent).toMatch(/1,87,500/);
+  });
+
+  it('renders one per-supplier row per exposure entry with status + utilisation', async () => {
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    renderPage();
+    expect(await screen.findByTestId('exposure-table')).toBeInTheDocument();
+    expect(screen.getByTestId('exposure-row-301')).toBeInTheDocument();
+    expect(screen.getByTestId('exposure-row-302')).toBeInTheDocument();
+    expect(screen.getByTestId('exposure-row-303')).toBeInTheDocument();
+    expect(screen.getByTestId('exposure-row-304')).toBeInTheDocument();
+    expect(screen.getByTestId('exposure-status-301')).toHaveTextContent(/Over limit/i);
+    expect(screen.getByTestId('exposure-status-302')).toHaveTextContent(/Near limit/i);
+    expect(screen.getByTestId('exposure-status-303')).toHaveTextContent(/OK/);
+    expect(screen.getByTestId('exposure-status-304')).toHaveTextContent(/No limit/i);
+    expect(screen.getByTestId('exposure-util-301')).toHaveTextContent('125%');
+    expect(screen.getByTestId('exposure-util-302')).toHaveTextContent('85%');
+    expect(screen.getByTestId('exposure-util-303')).toHaveTextContent('6%');
+    expect(screen.getByTestId('exposure-util-304')).toHaveTextContent('—');
+  });
+
+  it('status pill colours: over-limit=danger rgba, near-limit=warning rgba, ok=success rgba', async () => {
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    renderPage();
+    await screen.findByTestId('exposure-table');
+    const overPill = screen.getByTestId('exposure-status-301');
+    expect(overPill.getAttribute('style') || '').toMatch(/var\(--danger-color/);
+    const nearPill = screen.getByTestId('exposure-status-302');
+    expect(nearPill.getAttribute('style') || '').toMatch(/var\(--warning-color/);
+    const okPill = screen.getByTestId('exposure-status-303');
+    expect(okPill.getAttribute('style') || '').toMatch(/var\(--success-color/);
+  });
+
+  it('fires GET /api/travel/suppliers/exposure on mount (no query string when filters empty)', async () => {
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    renderPage();
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' &&
+        u === '/api/travel/suppliers/exposure' &&
+        (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('passes ?subBrand= when the page-level sub-brand filter changes', async () => {
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    renderPage();
+    await screen.findByTestId('exposure-table');
+    fetchApiMock.mockClear();
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), { target: { value: 'rfu' } });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' &&
+        u.startsWith('/api/travel/suppliers/exposure') &&
+        u.includes('subBrand=rfu') &&
+        (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('passes ?supplierCategory= when the page-level category filter changes', async () => {
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    renderPage();
+    await screen.findByTestId('exposure-table');
+    fetchApiMock.mockClear();
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    fireEvent.change(screen.getByLabelText(/Filter by category/i), { target: { value: 'hotel' } });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' &&
+        u.startsWith('/api/travel/suppliers/exposure') &&
+        u.includes('supplierCategory=hotel') &&
+        (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('checking "Near-limit only" chip re-fetches with ?nearLimitOnly=1', async () => {
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    renderPage();
+    await screen.findByTestId('exposure-table');
+    fetchApiMock.mockClear();
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    const chip = screen.getByLabelText(/Show only near-limit and over-limit suppliers/i);
+    fireEvent.click(chip);
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' &&
+        u.startsWith('/api/travel/suppliers/exposure') &&
+        u.includes('nearLimitOnly=1') &&
+        (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('shows "Loading exposure…" placeholder before the GET resolves', async () => {
+    let resolveExposure;
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/payables/aging') && method === 'GET') {
+        return Promise.resolve(AGING_DEFAULT);
+      }
+      if (url.startsWith('/api/travel/suppliers/exposure') && method === 'GET') {
+        return new Promise((res) => { resolveExposure = res; });
+      }
+      if (url.startsWith('/api/travel/suppliers') && method === 'GET') {
+        return Promise.resolve({ suppliers: SUPPLIERS_DEFAULT, total: SUPPLIERS_DEFAULT.length });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    expect(await screen.findByTestId('exposure-loading')).toBeInTheDocument();
+    resolveExposure(EXPOSURE_MIXED);
+    expect(await screen.findByTestId('exposure-table')).toBeInTheDocument();
+    expect(screen.queryByTestId('exposure-loading')).toBeNull();
+  });
+
+  it('renders error placeholder on 5xx + fires notify.error', async () => {
+    const err = new Error('boom');
+    err.status = 500;
+    installFetchMock({ exposure: err });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('exposure-error')).toBeInTheDocument();
+    });
+    const exposureErrors = notifyError.mock.calls.filter(([m]) =>
+      typeof m === 'string' && /exposure|boom/i.test(m),
+    );
+    expect(exposureErrors.length).toBeGreaterThan(0);
+  });
+
+  it('403 failure is silent (suppliers list owns the permission-denied UX)', async () => {
+    const err = new Error('forbidden');
+    err.status = 403;
+    installFetchMock({ exposure: err });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    await waitFor(() => {
+      expect(screen.getByTestId('exposure-error')).toBeInTheDocument();
+    });
+    const exposureErrors = notifyError.mock.calls.filter(([m]) =>
+      typeof m === 'string' && /exposure/i.test(m),
+    );
+    expect(exposureErrors.length).toBe(0);
+  });
+
+  it('renders empty-state copy when no suppliers have credit limits configured', async () => {
+    installFetchMock({
+      exposure: {
+        suppliers: [],
+        total: 0,
+        summary: { overLimitCount: 0, nearLimitCount: 0, totalExposure: 0 },
+      },
+    });
+    renderPage();
+    expect(await screen.findByTestId('exposure-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('exposure-empty')).toHaveTextContent(/No suppliers with credit limits configured/i);
+  });
+
+  it('empty-state copy switches when near-limit-only chip is active', async () => {
+    installFetchMock({ exposure: EXPOSURE_MIXED });
+    renderPage();
+    await screen.findByTestId('exposure-table');
+    fetchApiMock.mockClear();
+    installFetchMock({
+      exposure: {
+        suppliers: [],
+        total: 0,
+        summary: { overLimitCount: 0, nearLimitCount: 0, totalExposure: 0 },
+      },
+    });
+    fireEvent.click(screen.getByLabelText(/Show only near-limit and over-limit suppliers/i));
+    await waitFor(() => {
+      expect(screen.getByTestId('exposure-empty')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('exposure-empty')).toHaveTextContent(/No suppliers at or over credit limit/i);
   });
 });

@@ -110,6 +110,20 @@ const VALID_APPLICATION_TYPES = [
 // string (normalized to null before write).
 const VALID_RISK_FLAGS = ["low", "medium", "high", "priority"];
 
+// Map status enum value → per-month rollup field name. Used by the
+// /applications/by-month endpoint to split monthly counts by status
+// across all 6 enum values. Mirrors STATUS_FIELD in
+// backend/routes/travel_visa_analytics.js (V19) verbatim — kept here
+// as a local copy so the operational route stays self-contained.
+const STATUS_FIELD = {
+  intake: "intakeCount",
+  "docs-pending": "docsPendingCount",
+  filed: "filedCount",
+  approved: "approvedCount",
+  rejected: "rejectedCount",
+  appeal: "appealCount",
+};
+
 // ─── GET /api/travel/visa/applications ──────────────────────────────
 //
 // Paginated list of Visa Sure applications scoped to the caller's tenant
@@ -443,6 +457,282 @@ router.get(
       console.error("[travel-visa/stats] error:", e.message);
       res.status(500).json({
         error: "Failed to summarise visa applications",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/visa/applications/by-month — tenant-wide monthly rollup
+// (PRD_TRAVEL_VISA Phase 3 — operational complement to V19 at
+// /api/travel/visa/analytics/by-month c66d63fd).
+//
+// SAME SHAPE as the V19 analytics endpoint, deliberately. The difference
+// is WHERE this lives: the analytics route file serves the V16-V19 reports
+// view; THIS route file (travel_visa.js) is the operational surface that
+// Visa-Sure operators hit alongside /applications, /applications/stats
+// (20d91295), /applications/:id, and /applications/:id/status-history
+// (f1741b6c). The Applications page header summary strip pulls /stats
+// for "live now" snapshot; the monthly time-series mini-chart on the same
+// page pulls /by-month for "how did we trend the last 12 months?" — both
+// belong on the operational route file so the page doesn't have to fan
+// out across two mount points.
+//
+// Sub-brand scoping (same rationale as the other endpoints in this file):
+//   VisaApplication itself has NO subBrand column on its row; visa-sure-ness
+//   is encoded via Contact.subBrand="visasure". Resolve visa-sure contact
+//   IDs first, then aggregate VisaApplication rows whose contactId is in
+//   that set. Non-visa applications (schema anomaly today) stay out.
+//
+// Bucket key: ISO YYYY-MM string (e.g. "2026-05") derived from
+// VisaApplication.createdAt's UTC year + month. UTC chosen deliberately so
+// bucket labels stay stable across operator timezones — visa reconciliation
+// works in calendar-month UTC for cross-border work.
+//
+// USER-readable: anodyne aggregate (counts only, no PII surface). Role
+// gate is verifyRole(['ADMIN','MANAGER','USER']) — same posture as
+// /applications/stats and consistent with the "anodyne aggregate" reads
+// in this CRM. The V19 analytics surface uses ADMIN/MANAGER; this slice
+// loosens it to USER because the Applications page itself is USER-
+// readable and the by-month tile renders alongside the /stats summary
+// strip.
+//
+// Query string:
+//   status    optional VisaApplication.status filter (intake / docs-pending
+//             / filed / approved / rejected / appeal); invalid → 400
+//             INVALID_STATUS.
+//   from      optional inclusive lower bound on bucket (YYYY-MM); invalid
+//             → 400 INVALID_MONTH_FORMAT.
+//   to        optional inclusive upper bound on bucket (YYYY-MM); invalid
+//             → 400 INVALID_MONTH_FORMAT.
+//   orderBy   default "month:asc" (chronological); also accepts
+//             "month:desc", "count:asc|desc", "approvedCount:asc|desc".
+//             Unknown tokens degrade silently to default.
+//   limit     default 12 (one year), max 60 (5 years).
+//   offset    default 0
+//
+// Response shape (mirrors V19):
+//   {
+//     months: [ {
+//       month: "2026-05",
+//       count,
+//       intakeCount, docsPendingCount, filedCount, approvedCount,
+//       rejectedCount, appealCount,
+//       complexCount, flaggedCount,
+//     } ],
+//     totalMonths,
+//     grandCount,
+//     grandApprovedCount,
+//     grandRejectedCount,
+//     limit, offset,
+//   }
+//
+// Defensive: null/invalid createdAt → "unknown" bucket (excluded when
+// from/to is set, kept otherwise so the count surface stays accurate).
+// Empty scoped-contact set → all-zeros envelope (NOT 404 / 500) so the
+// dashboard tile renders gracefully.
+//
+// Express path-precedence: literal-path /applications/by-month MUST be
+// declared BEFORE /applications/:id or the `:id="by-month"` shape would
+// 400 INVALID_ID before reaching this handler. Same constraint that
+// /applications/stats relies on.
+// ============================================================================
+router.get(
+  "/applications/by-month",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const statusFilter = req.query.status ? String(req.query.status) : null;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "month:asc";
+
+      // Status enum validation — mirrors /applications list + V19 analytics.
+      if (statusFilter && !VALID_STATUSES.includes(statusFilter)) {
+        return res.status(400).json({
+          error: `status must be one of: ${VALID_STATUSES.join(", ")}`,
+          code: "INVALID_STATUS",
+        });
+      }
+
+      // YYYY-MM validation — same regex V19 (slice 16) uses.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+        "approvedCount:asc",
+        "approvedCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Resolve visa-sure contact IDs first (mirrors the other handlers).
+      const visaContacts = await prisma.contact.findMany({
+        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        select: { id: true },
+      });
+
+      // Empty-shape baseline used by both no-contacts and no-applications
+      // short-circuits.
+      const emptyEnvelope = () => ({
+        months: [],
+        totalMonths: 0,
+        grandCount: 0,
+        grandApprovedCount: 0,
+        grandRejectedCount: 0,
+        limit: take,
+        offset: skip,
+      });
+
+      if (visaContacts.length === 0) {
+        return res.json(emptyEnvelope());
+      }
+
+      const contactIds = visaContacts.map((c) => c.id);
+
+      const where = { tenantId, contactId: { in: contactIds } };
+      if (statusFilter) where.status = statusFilter;
+
+      // Minimal projection — no PII surface. createdAt + status + the two
+      // flag columns are all the aggregation needs.
+      const applications = await prisma.visaApplication.findMany({
+        where,
+        select: {
+          id: true,
+          status: true,
+          complexCase: true,
+          advisorRiskFlag: true,
+          createdAt: true,
+        },
+      });
+
+      if (applications.length === 0) {
+        return res.json(emptyEnvelope());
+      }
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → row.
+      const makeEmptyRow = (monthKey) => ({
+        month: monthKey,
+        count: 0,
+        intakeCount: 0,
+        docsPendingCount: 0,
+        filedCount: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+        appealCount: 0,
+        complexCount: 0,
+        flaggedCount: 0,
+      });
+
+      const byMonth = new Map();
+      for (const a of applications) {
+        let monthKey = "unknown";
+        if (a.createdAt) {
+          const dt = new Date(a.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let row = byMonth.get(monthKey);
+        if (!row) {
+          row = makeEmptyRow(monthKey);
+          byMonth.set(monthKey, row);
+        }
+
+        row.count += 1;
+
+        // Status split — defensive: null/unknown status doesn't crash, just
+        // doesn't increment any sub-bucket (forward-compat for any future
+        // enum values added before this endpoint catches up).
+        if (a.status) {
+          const field = STATUS_FIELD[a.status];
+          if (field) row[field] += 1;
+        }
+
+        if (a.complexCase === true) row.complexCount += 1;
+        if (a.advisorRiskFlag) row.flaggedCount += 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set; kept otherwise. Mirrors V19 + slice 16.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
+      // "unknown" sorts last in asc / first in desc (lexicographically >
+      // "9999-12") — acceptable for a defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandCount = months.reduce((acc, r) => acc + (r.count || 0), 0);
+      const grandApprovedCount = months.reduce(
+        (acc, r) => acc + (r.approvedCount || 0),
+        0,
+      );
+      const grandRejectedCount = months.reduce(
+        (acc, r) => acc + (r.rejectedCount || 0),
+        0,
+      );
+
+      // Pagination applied AFTER aggregation + sort + filter.
+      const paged = months.slice(skip, skip + take);
+
+      // No audit row written: read-only meta surface (mirrors /stats +
+      // /status-history — meta reads don't audit-back themselves).
+
+      res.json({
+        months: paged,
+        totalMonths,
+        grandCount,
+        grandApprovedCount,
+        grandRejectedCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      console.error("[travel-visa/applications-by-month] error:", e.message);
+      res.status(500).json({
+        error: "Failed to compute by-month metrics",
         code: "INTERNAL_ERROR",
       });
     }

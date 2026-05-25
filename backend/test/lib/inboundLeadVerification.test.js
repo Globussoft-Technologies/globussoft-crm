@@ -21,6 +21,7 @@ const {
   verifyWebForm,
   isValidEmail,
   isValidPhone,
+  normalizePhoneForDedup,
   checkAntiSpam,
   verifyByChannel,
   SPAM_PATTERNS,
@@ -307,5 +308,54 @@ describe("verifyByChannel — dispatch matrix", () => {
       reason: "UNKNOWN_CHANNEL",
       channel: "telegram",
     });
+  });
+});
+
+// ─── Slice 9: normalizePhoneForDedup (PRD §3.2.1 dedup key) ───────────
+//
+// Contract: arbitrary surface forms collapse to the same digits-only
+// canonical key. Two inputs that should dedup MUST round-trip to the
+// same output here — this is what the route's tenant-scoped phone-match
+// loop compares against.
+
+describe("normalizePhoneForDedup — canonical dedup key", () => {
+  test("E.164-prefixed 12-digit Indian → digits-only 12", () => {
+    expect(normalizePhoneForDedup("+919876543210")).toBe("919876543210");
+  });
+
+  test("formatted '+91 98765-43210' → same canonical key as the +91 12-digit", () => {
+    expect(normalizePhoneForDedup("+91 98765-43210")).toBe("919876543210");
+  });
+
+  test("bare 10-digit Indian mobile auto-prepends '91'", () => {
+    expect(normalizePhoneForDedup("9876543210")).toBe("919876543210");
+  });
+
+  test("12-digit already-E.164 + 10-digit IN local + formatted +91 all collapse to same key", () => {
+    const key = "919876543210";
+    expect(normalizePhoneForDedup("919876543210")).toBe(key);
+    expect(normalizePhoneForDedup("9876543210")).toBe(key);
+    expect(normalizePhoneForDedup("+91 98765-43210")).toBe(key);
+    expect(normalizePhoneForDedup("+91-987-654-3210")).toBe(key);
+  });
+
+  test("11-digit US (1 + 10) does NOT get 91 prepended (only 10-digit triggers IN heuristic)", () => {
+    expect(normalizePhoneForDedup("+1 555-123-4567")).toBe("15551234567");
+  });
+
+  test("null / undefined / empty → null", () => {
+    expect(normalizePhoneForDedup(null)).toBeNull();
+    expect(normalizePhoneForDedup(undefined)).toBeNull();
+    expect(normalizePhoneForDedup("")).toBeNull();
+  });
+
+  test("non-string input → null", () => {
+    expect(normalizePhoneForDedup(919876543210)).toBeNull();
+    expect(normalizePhoneForDedup({})).toBeNull();
+  });
+
+  test("all-junk string (no digits) → null", () => {
+    expect(normalizePhoneForDedup("()-+ ")).toBeNull();
+    expect(normalizePhoneForDedup("not a phone")).toBeNull();
   });
 });

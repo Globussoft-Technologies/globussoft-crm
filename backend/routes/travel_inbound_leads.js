@@ -50,6 +50,7 @@ const {
   verifyByChannel,
   isValidEmail,
   isValidPhone,
+  normalizePhoneForDedup,
   checkAntiSpam,
 } = require("../lib/inboundLeadVerification");
 
@@ -230,6 +231,73 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     }
 
     const channel = req.params.channel;
+
+    // Slice 9 — dedup on ingest (PRD §3.2.1 + §3.2.2). Before creating a
+    // new Contact, scan tenant-scoped Contacts for a phone-canonical
+    // match (primary key) OR a compound (email, tenantId) match
+    // (secondary key). If matched, return the existing contactId with
+    // `action: 'merged'` so the caller can wire to the existing row.
+    //
+    // Primary key (phone): normalize the incoming phone digits-only
+    // ("+91 98765-43210" → "919876543210") and load all tenant Contacts
+    // with non-null phone + deletedAt=null, then compare normalized
+    // forms. This matches PRD §3.2.1's "E.164-normalized phone" rule
+    // while side-stepping the legacy utils/deduplication.js helper
+    // (which spawns its own PrismaClient — breaks the route-test mock
+    // surface).
+    //
+    // Secondary key (email): when phone absent or unmatched, look up
+    // by `email_tenantId` compound unique index. Skip when the email
+    // is the synthesized placeholder (`inbound-<channel>-<ts>@imported.local`)
+    // since that's a freshly-minted unique value with zero dedup signal.
+    //
+    // No match → fall through to create; touchpoint chain + AuditLog
+    // hand-off lives in the eventual slice that ships the Touchpoint
+    // model integration (PRD §3.5).
+    let existing = null;
+    if (phone) {
+      const normalizedIncoming = normalizePhoneForDedup(phone);
+      if (normalizedIncoming) {
+        const tenantContacts = await prisma.contact.findMany({
+          where: {
+            tenantId: tenant.id,
+            phone: { not: null },
+            deletedAt: null,
+          },
+          select: { id: true, phone: true, email: true, name: true },
+        });
+        for (const c of tenantContacts) {
+          if (normalizePhoneForDedup(c.phone) === normalizedIncoming) {
+            existing = c;
+            break;
+          }
+        }
+      }
+    }
+    if (!existing && email && String(email).trim()) {
+      // Only honor real, caller-supplied emails for the secondary key —
+      // never a synthesized placeholder.
+      existing = await prisma.contact.findUnique({
+        where: { email_tenantId: { email: String(email).trim(), tenantId: tenant.id } },
+        select: { id: true, phone: true, email: true, name: true },
+      });
+    }
+
+    if (existing) {
+      return res.status(200).json({
+        id: existing.id,
+        contactId: existing.id,
+        tenantId: tenant.id,
+        channel,
+        status: "received",
+        action: "merged",
+        // STUB (touchpoint slice): once Touchpoint chain lands, append a
+        // row here + return touchpointId. For now we signal the merge so
+        // operator-side UI can render "duplicate detected" badge.
+        routed: false,
+      });
+    }
+
     const created = await prisma.contact.create({
       data: {
         tenantId: tenant.id,
@@ -251,6 +319,7 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       tenantId: tenant.id,
       channel,
       status: "received",
+      action: "created",
       // STUB (slice 3 wire-in): lead-auto-router + Touchpoint chain pending.
       routed: false,
     });

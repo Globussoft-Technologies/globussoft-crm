@@ -56,6 +56,10 @@ prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.contact = prisma.contact || {};
 prisma.contact.create = vi.fn();
+// Slice 9 dedup surface — both calls default to "no existing Contact"
+// so legacy tests stay on the "created" branch unmodified.
+prisma.contact.findMany = vi.fn();
+prisma.contact.findUnique = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -84,6 +88,10 @@ beforeEach(() => {
     ...data,
     createdAt: new Date(),
   }));
+  // Slice 9 dedup defaults: no phone match, no email match → "created"
+  // branch is the default behavior for legacy tests.
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
+  prisma.contact.findUnique.mockReset().mockResolvedValue(null);
 });
 
 // ─── Channel-enum gate ────────────────────────────────────────────────
@@ -643,5 +651,158 @@ describe('POST /api/travel/inbound/leads/:channel — slice 4 verification', () 
     expect(res.status).toBe(201);
     expect(res.body.channel).toBe('whatsapp');
     expect(prisma.contact.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Slice 9: dedup-on-ingest (PRD §3.2.1 + §3.2.2) ──────────────────
+//
+// Contracts asserted (slice-9 additions):
+//   - Phone PRIMARY: incoming phone normalized digits-only ("+91 98765-43210"
+//     → "919876543210"); same canonical key as an existing tenant Contact →
+//     200 + action:'merged' + contactId set to the existing row. NO new
+//     Contact.create call.
+//   - Phone normalization: 10-digit incoming auto-prepends "91" so a 10-digit
+//     producer matches an existing 12-digit (+91) stored row.
+//   - Email SECONDARY (phone absent): exact (email, tenantId) compound match
+//     → 200 + action:'merged'. Synthesized inbound placeholders never
+//     trigger secondary lookup (the route only honors caller-supplied real
+//     emails for dedup).
+//   - No match (neither phone nor email) → 201 + action:'created' (legacy
+//     branch, preserves slice-1 behavior).
+//   - Cross-tenant safety: the tenant-scoped findMany predicate prevents
+//     cross-tenant phone bleed — verified by inspecting the findMany call
+//     args (tenantId=42 + phone:{not:null} + deletedAt:null).
+
+describe('POST /api/travel/inbound/leads/:channel — slice 9 dedup on ingest', () => {
+  test('phone match (existing tenant Contact) → 200 + action=merged + no new Contact.create', async () => {
+    // Existing Contact in tenant=42 with phone "+919876543210" (stored).
+    prisma.contact.findMany.mockResolvedValueOnce([
+      { id: 777, phone: '+919876543210', email: 'asha@example.com', name: 'Asha V' },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Asha V (re-arrival)',
+        // Same human, different surface form — normalize both to 919876543210.
+        phone: '+91 98765-43210',
+        email: 'asha@example.com',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 777,
+      contactId: 777,
+      tenantId: 42,
+      channel: 'voyagr',
+      action: 'merged',
+      status: 'received',
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('phone match: 10-digit incoming matches existing 12-digit stored (auto-prepend 91)', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([
+      { id: 778, phone: '919812345678', email: null, name: 'Priya M' },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/whatsapp')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Priya again',
+        phone: '9812345678', // 10 digits, IN local form
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('merged');
+    expect(res.body.contactId).toBe(778);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('email match (phone absent) → 200 + action=merged via secondary key', async () => {
+    // No phone-match candidates returned (findMany default is []).
+    prisma.contact.findUnique.mockResolvedValueOnce({
+      id: 779,
+      phone: null,
+      email: 'duplicate@example.com',
+      name: 'Email Dup',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/webform')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Email Dup retry',
+        email: 'duplicate@example.com',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('merged');
+    expect(res.body.contactId).toBe(779);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    // Verify the compound finder shape (PRD §3.2.2's email+tenantId key).
+    expect(prisma.contact.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { email_tenantId: { email: 'duplicate@example.com', tenantId: 42 } },
+      }),
+    );
+  });
+
+  test('no match → 201 + action=created (legacy branch preserved)', async () => {
+    // findMany returns no candidates, findUnique returns null — fallthrough.
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Brand New',
+        email: 'newlead@example.com',
+        phone: '+919900000123',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.action).toBe('created');
+    expect(prisma.contact.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('phone-only payload with no existing match → 201 + action=created (synthesized email NOT used for secondary lookup)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/whatsapp')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Phone Only New',
+        phone: '+919900000456',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.action).toBe('created');
+    // Email-secondary lookup MUST be skipped when no real email supplied
+    // (the route only triggers findUnique when caller-supplied email is
+    // truthy + trimmed — synthesized placeholders never flow here).
+    expect(prisma.contact.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('dedup scopes to tenant.id (cross-tenant phones do NOT merge)', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([]);
+
+    await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Cross Tenant Probe',
+        phone: '+919900000789',
+      });
+
+    // The phone-key scan MUST pass tenantId=42 + exclude soft-deleted rows.
+    expect(prisma.contact.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 42,
+          phone: { not: null },
+          deletedAt: null,
+        }),
+      }),
+    );
   });
 });

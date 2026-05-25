@@ -129,6 +129,42 @@ function isValidPhone(phone) {
   return digits.length >= 7 && digits.length <= 15;
 }
 
+/**
+ * Normalize an arbitrary phone string to its digits-only canonical form,
+ * used as the dedup key for tenant-scoped Contact lookups (PRD §3.2.1).
+ *
+ * Mirrors `utils/deduplication.js#normalizePhone` but is a pure local
+ * copy so this lib stays IO-free — the route layer's prisma singleton
+ * mock would otherwise leak through utils/deduplication's own
+ * PrismaClient instantiation.
+ *
+ * Rules (Indian-default — clinics + travel are India-first):
+ *   - empty / null / non-string → null
+ *   - all non-digit chars stripped
+ *   - 10-digit result → prepend "91" (Indian mobile assumption)
+ *   - otherwise return digits-only as-is (so already-E.164 12-digit
+ *     `919876543210` and 11-digit US `15551234567` both round-trip
+ *     intact)
+ *   - empty-after-strip → null
+ *
+ * Returns the digits-only canonical key — NOT the user-facing `+91…`
+ * display form. Two inputs that should dedup MUST produce the same
+ * output here:
+ *   "9876543210" → "919876543210"
+ *   "+91 98765-43210" → "919876543210"
+ *   "+919876543210" → "919876543210"
+ *
+ * @param {string} phone
+ * @returns {string|null}
+ */
+function normalizePhoneForDedup(phone) {
+  if (!phone || typeof phone !== "string") return null;
+  const digits = phone.replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.length === 10) return "91" + digits;
+  return digits;
+}
+
 // Anti-spam heuristics — see header for rationale. Each entry should
 // have a justifying observation when added.
 const SPAM_PATTERNS = [
@@ -201,6 +237,7 @@ module.exports = {
   verifyWebForm,
   isValidEmail,
   isValidPhone,
+  normalizePhoneForDedup,
   checkAntiSpam,
   verifyByChannel,
   SPAM_PATTERNS,

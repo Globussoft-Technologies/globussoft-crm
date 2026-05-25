@@ -1,0 +1,421 @@
+// @ts-check
+/**
+ * Arc 2 #903 slice 13 — GET /api/travel/suppliers/:id/credentials.
+ *
+ * Per-supplier "Supplier Portal Logins" sub-tab view (PRD AC-6.8). Pins the
+ * contract for the operator-facing endpoint that lists vault credentials
+ * (airline / hotel / GDS / visa-portal logins) scoped to a single
+ * TravelSupplier by name-match.
+ *
+ * What's pinned
+ * -------------
+ *   - Happy path:        returns supplier + credentials projection (200).
+ *   - Projection:        NO encrypted blobs (loginIdEncrypted /
+ *                        passwordEncrypted absent from every row).
+ *   - Field shape:       { id, type, label, lastUsedAt, lastRotatedAt,
+ *                          expiresAt, isExpired, ownerUserId, createdAt,
+ *                          updatedAt } — type=category, label=supplierName.
+ *   - Validation:        non-numeric :id → 400 INVALID_ID.
+ *   - Not found:         supplier doesn't exist → 404 NOT_FOUND.
+ *   - Sub-brand:         MANAGER scoped to ['tmc'] reading an RFU supplier
+ *                        → 403 SUB_BRAND_DENIED.
+ *   - Name match:        the supplierCredential.findMany WHERE pins
+ *                        supplierName = supplier.name + tenantId.
+ *   - Empty list:        supplier exists, no creds → 200 + empty array.
+ *   - lastRotatedAt:     derived from most-recent accessLog row with
+ *                        action="rotated"; null when no rotation events.
+ *   - expiresAt:         parsed from metadataJson.expiresAt; null when
+ *                        absent/malformed.
+ *   - isExpired:         true when expiresAt < now(); false otherwise.
+ *   - Access log:        EVERY cred returned writes one
+ *                        SupplierCredentialAccessLog row { action: "viewed",
+ *                        userId } per task brief.
+ *   - Access log fail:   a thrown access-log write does NOT fail the read
+ *                        (best-effort logging).
+ *   - Auth gate:         USER (not ADMIN/MANAGER) → 403.
+ *
+ * Test pattern mirrors travel-suppliers-search.test.js — patch the prisma
+ * singleton with vi.fn() shapes BEFORE requiring the router.
+ */
+
+import { describe, test, expect, beforeEach, vi } from 'vitest';
+import prisma from '../../lib/prisma.js';
+
+prisma.travelSupplier = prisma.travelSupplier || {};
+prisma.travelSupplier.findFirst = vi.fn();
+prisma.supplierCredential = prisma.supplierCredential || {};
+prisma.supplierCredential.findMany = vi.fn();
+prisma.supplierCredentialAccessLog = prisma.supplierCredentialAccessLog || {};
+prisma.supplierCredentialAccessLog.findFirst = vi.fn();
+prisma.supplierCredentialAccessLog.create = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn().mockResolvedValue({
+  id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
+});
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+prisma.auditLog = {
+  ...(prisma.auditLog || {}),
+  create: vi.fn().mockResolvedValue({ id: 1 }),
+  findFirst: vi.fn().mockResolvedValue(null),
+};
+prisma.revokedToken = prisma.revokedToken || {};
+prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+
+import express from 'express';
+import request from 'supertest';
+import jwt from 'jsonwebtoken';
+import { createRequire } from 'node:module';
+
+const requireCJS = createRequire(import.meta.url);
+const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
+const travelSuppliersRouter = requireCJS('../../routes/travel_suppliers');
+
+function makeApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/travel', travelSuppliersRouter);
+  return app;
+}
+
+function tokenFor(role = 'ADMIN', { userId = 7, tenantId = 1 } = {}) {
+  return jwt.sign(
+    { userId, tenantId, role, email: `${role.toLowerCase()}@test.local` },
+    JWT_SECRET,
+    { expiresIn: '1h' },
+  );
+}
+
+const SUPPLIER_TMC = {
+  id: 42,
+  name: 'Grand Hilton Mumbai',
+  supplierCategory: 'hotel',
+  subBrand: 'tmc',
+};
+const SUPPLIER_RFU = {
+  id: 99,
+  name: 'Al-Madinah Plaza',
+  supplierCategory: 'hotel',
+  subBrand: 'rfu',
+};
+
+beforeEach(() => {
+  prisma.travelSupplier.findFirst.mockReset();
+  prisma.supplierCredential.findMany.mockReset();
+  prisma.supplierCredentialAccessLog.findFirst.mockReset().mockResolvedValue(null);
+  prisma.supplierCredentialAccessLog.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({
+    id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
+  });
+  prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+  prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
+});
+
+describe('GET /api/travel/suppliers/:id/credentials', () => {
+  test('happy path: returns supplier + credentials projection (200)', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      {
+        id: 11,
+        category: 'hotel',
+        supplierName: 'Grand Hilton Mumbai',
+        metadataJson: null,
+        ownerUserId: 5,
+        lastUsedAt: new Date('2026-05-20T10:00:00Z'),
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        updatedAt: new Date('2026-05-20T10:00:00Z'),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.supplier).toEqual({
+      id: 42,
+      name: 'Grand Hilton Mumbai',
+      supplierCategory: 'hotel',
+      subBrand: 'tmc',
+    });
+    expect(res.body.total).toBe(1);
+    expect(res.body.credentials).toHaveLength(1);
+    expect(res.body.credentials[0]).toMatchObject({
+      id: 11,
+      type: 'hotel',
+      label: 'Grand Hilton Mumbai',
+      ownerUserId: 5,
+      expiresAt: null,
+      isExpired: false,
+      lastRotatedAt: null,
+    });
+  });
+
+  test('projection excludes encrypted blobs', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      {
+        id: 11,
+        category: 'hotel',
+        supplierName: 'Grand Hilton Mumbai',
+        metadataJson: null,
+        ownerUserId: 5,
+        lastUsedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.credentials[0]).not.toHaveProperty('loginIdEncrypted');
+    expect(res.body.credentials[0]).not.toHaveProperty('passwordEncrypted');
+    expect(res.body.credentials[0]).not.toHaveProperty('metadataJson');
+
+    // The findMany call MUST select only the safe metadata columns.
+    const calledSelect = prisma.supplierCredential.findMany.mock.calls[0][0].select;
+    expect(calledSelect).not.toHaveProperty('loginIdEncrypted');
+    expect(calledSelect).not.toHaveProperty('passwordEncrypted');
+  });
+
+  test('non-numeric :id returns 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/abc/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+    expect(prisma.travelSupplier.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('supplier not found returns 404 NOT_FOUND', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/9999/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+    expect(prisma.supplierCredential.findMany).not.toHaveBeenCalled();
+  });
+
+  test('sub-brand-restricted MANAGER reading other-brand supplier → 403 SUB_BRAND_DENIED', async () => {
+    // MANAGER scoped to only ['tmc'] — supplier 99 lives in RFU.
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['tmc']),
+    });
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_RFU);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/99/credentials')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'SUB_BRAND_DENIED' });
+    expect(prisma.supplierCredential.findMany).not.toHaveBeenCalled();
+  });
+
+  test('findMany WHERE pins supplierName + tenantId', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(prisma.supplierCredential.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 1,
+          supplierName: 'Grand Hilton Mumbai',
+        }),
+      }),
+    );
+  });
+
+  test('empty list: supplier with no credentials → 200 + empty array', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.credentials).toEqual([]);
+    expect(res.body.total).toBe(0);
+    // No access-log writes when there are no creds.
+    expect(prisma.supplierCredentialAccessLog.create).not.toHaveBeenCalled();
+  });
+
+  test('lastRotatedAt: derived from most-recent accessLog rotation row', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      {
+        id: 11, category: 'hotel', supplierName: 'Grand Hilton Mumbai',
+        metadataJson: null, ownerUserId: null, lastUsedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      },
+    ]);
+    const rotatedAt = new Date('2026-04-15T08:30:00Z');
+    prisma.supplierCredentialAccessLog.findFirst.mockResolvedValue({ at: rotatedAt });
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(new Date(res.body.credentials[0].lastRotatedAt).getTime()).toBe(rotatedAt.getTime());
+    // The findFirst query must filter by credentialId + action="rotated".
+    expect(prisma.supplierCredentialAccessLog.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { credentialId: 11, action: 'rotated' },
+        orderBy: { at: 'desc' },
+      }),
+    );
+  });
+
+  test('lastRotatedAt: null when no rotation events recorded', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      {
+        id: 11, category: 'hotel', supplierName: 'Grand Hilton Mumbai',
+        metadataJson: null, ownerUserId: null, lastUsedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      },
+    ]);
+    prisma.supplierCredentialAccessLog.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.body.credentials[0].lastRotatedAt).toBeNull();
+  });
+
+  test('expiresAt: parsed from metadataJson.expiresAt (future date → not expired)', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    const future = new Date(Date.now() + 86_400_000 * 30).toISOString(); // +30 days
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      {
+        id: 11, category: 'hotel', supplierName: 'Grand Hilton Mumbai',
+        metadataJson: JSON.stringify({ expiresAt: future, notes: 'irrelevant' }),
+        ownerUserId: null, lastUsedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.body.credentials[0].expiresAt).toBe(new Date(future).toISOString());
+    expect(res.body.credentials[0].isExpired).toBe(false);
+  });
+
+  test('expiresAt: past date → isExpired=true', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    const past = new Date(Date.now() - 86_400_000).toISOString(); // -1 day
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      {
+        id: 11, category: 'hotel', supplierName: 'Grand Hilton Mumbai',
+        metadataJson: JSON.stringify({ expiresAt: past }),
+        ownerUserId: null, lastUsedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.body.credentials[0].isExpired).toBe(true);
+  });
+
+  test('expiresAt: malformed metadataJson → null + isExpired=false (no throw)', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      {
+        id: 11, category: 'hotel', supplierName: 'Grand Hilton Mumbai',
+        metadataJson: 'not valid json {{{',
+        ownerUserId: null, lastUsedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.credentials[0].expiresAt).toBeNull();
+    expect(res.body.credentials[0].isExpired).toBe(false);
+  });
+
+  test('access log: writes one "viewed" row per credential returned', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      {
+        id: 11, category: 'hotel', supplierName: 'Grand Hilton Mumbai',
+        metadataJson: null, ownerUserId: null, lastUsedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      },
+      {
+        id: 12, category: 'airline', supplierName: 'Grand Hilton Mumbai',
+        metadataJson: null, ownerUserId: null, lastUsedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      },
+    ]);
+
+    await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    // 2 creds → 2 access-log writes, both action="viewed", carrying userId.
+    expect(prisma.supplierCredentialAccessLog.create).toHaveBeenCalledTimes(2);
+    expect(prisma.supplierCredentialAccessLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          credentialId: 11,
+          userId: 7,
+          action: 'viewed',
+        }),
+      }),
+    );
+    expect(prisma.supplierCredentialAccessLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          credentialId: 12,
+          userId: 7,
+          action: 'viewed',
+        }),
+      }),
+    );
+  });
+
+  test('access log: write failure does NOT fail the read (best-effort)', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      {
+        id: 11, category: 'hotel', supplierName: 'Grand Hilton Mumbai',
+        metadataJson: null, ownerUserId: null, lastUsedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      },
+    ]);
+    prisma.supplierCredentialAccessLog.create.mockRejectedValue(
+      new Error('simulated audit-write failure'),
+    );
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    // Read still succeeds (200) — the access-log write is non-blocking.
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+  });
+
+  test('USER role (not ADMIN/MANAGER) → 403', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/credentials')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(403);
+    expect(prisma.travelSupplier.findFirst).not.toHaveBeenCalled();
+  });
+});

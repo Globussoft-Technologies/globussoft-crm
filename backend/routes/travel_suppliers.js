@@ -855,6 +855,201 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/:id/credentials — per-supplier portal-logins view
+// (Arc 2 #903 slice 13 — PRD_TRAVEL_SUPPLIER_MASTER AC-6.8 "Supplier Portal
+// Logins" sub-tab under the SupplierMaster detail page).
+//
+// Operator-facing list of vault credentials (airline / hotel / GDS / visa
+// portal logins) scoped to a single TravelSupplier. The `SupplierCredential`
+// model has NO direct FK to `TravelSupplier`; the link is by-name (the vault
+// stores supplierName as a free-form string). This endpoint matches on
+// `supplierName === supplier.name` after sub-brand-access-checking the parent.
+//
+// MUST be registered BEFORE `GET /suppliers/:id` — Express matches in
+// declaration order and the sub-path `:id/credentials` should win the
+// `/suppliers/42/credentials` shape. (Routes with different segment counts
+// don't actually collide in Express's matcher, but the standing rule is
+// "sub-paths first" so the ordering decision stays uniform across slices.)
+//
+// Auth: ADMIN or MANAGER. Same level the existing `/supplier-credentials`
+// metadata-list endpoint uses — the response NEVER contains decrypted
+// secret material, so MANAGER is acceptable.
+//
+// Access log: per the slice 13 task brief, EVERY read writes one
+// `SupplierCredentialAccessLog` row { action: "viewed", userId } per
+// credential returned. (The pre-existing top-level `/supplier-credentials`
+// list does NOT log; this surface does, because it's the operator-visible
+// sub-tab where audit-coverage matters most — operators are clicking into a
+// specific supplier and need a paper trail.)
+//
+// Response shape (per PRD slice 13 brief — no secret material):
+//   {
+//     supplier: { id, name, supplierCategory, subBrand },
+//     credentials: [
+//       {
+//         id, type (= category), label (= supplierName),
+//         lastUsedAt,            // from SupplierCredential.lastUsedAt
+//         lastRotatedAt,         // most-recent accessLog row with action="rotated"
+//         expiresAt,             // parsed from metadataJson.expiresAt (ISO), or null
+//         isExpired,             // expiresAt != null && expiresAt < now()
+//         ownerUserId,
+//         createdAt, updatedAt,
+//       },
+//     ],
+//     total: <int>,
+//   }
+//
+// Schema-drift note:
+//   The slice 13 task brief asks for `lastRotatedAt` and `expiresAt` fields
+//   that are NOT direct columns on the SupplierCredential model. The
+//   schema-freeze rule of this slice means we derive them at the route
+//   boundary:
+//     - lastRotatedAt: most-recent SupplierCredentialAccessLog row with
+//       action="rotated" for this credential. The PATCH /:id endpoint
+//       already writes such rows on rotation, so the data exists.
+//     - expiresAt: parsed from the existing metadataJson field. Operators
+//       can set `metadataJson = '{"expiresAt": "2026-12-31T00:00:00Z"}'`;
+//       missing or unparseable JSON yields expiresAt:null + isExpired:false.
+//   When a future schema-bump lands first-class columns, this derivation
+//   can be replaced with direct field reads.
+//
+// Decisions:
+//   - Match-by-name is a string equality (not contains) — the picker UI
+//     creates SupplierCredential rows with the supplier's exact name, and
+//     this lookup must NOT bleed across suppliers whose names share a
+//     prefix. Same tenantId scoping the rest of the vault uses.
+//   - Returns empty `credentials:[]` rather than 404 when the supplier has
+//     no credentials — the supplier itself exists, just no portal logins
+//     yet. 404 is reserved for "supplier does not exist".
+//   - No pagination params yet — a single supplier rarely has >20 portal
+//     logins (one per airline / GDS / portal). If we hit that ceiling
+//     a follow-up slice will add limit/offset.
+//   - Error codes: INVALID_ID, NOT_FOUND, SUB_BRAND_DENIED.
+// ============================================================================
+
+router.get(
+  "/suppliers/:id/credentials",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const supplier = await prisma.travelSupplier.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true, name: true, supplierCategory: true, subBrand: true },
+      });
+      if (!supplier) {
+        return res.status(404).json({ error: "Supplier not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, supplier.subBrand)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      // Vault lookup: tenant + exact-supplier-name match. The credentials
+      // surface does NOT carry sub-brand directly, so the parent's
+      // sub-brand check (above) is the only access gate.
+      const creds = await prisma.supplierCredential.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierName: supplier.name,
+        },
+        select: {
+          id: true,
+          category: true,
+          supplierName: true,
+          metadataJson: true,
+          ownerUserId: true,
+          lastUsedAt: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: [{ category: "asc" }, { id: "asc" }],
+      });
+
+      // Per-cred: find lastRotatedAt + parse expiresAt from metadataJson +
+      // write an access-log row { action: "viewed" }.
+      const nowMs = Date.now();
+      const credentials = [];
+      for (const c of creds) {
+        // lastRotatedAt — most-recent rotation event.
+        const lastRotation = await prisma.supplierCredentialAccessLog.findFirst({
+          where: { credentialId: c.id, action: "rotated" },
+          orderBy: { at: "desc" },
+          select: { at: true },
+        });
+
+        // expiresAt — try to parse from metadataJson { expiresAt: ISO }.
+        // Malformed JSON or missing key yields null (no throw).
+        let expiresAt = null;
+        if (c.metadataJson) {
+          try {
+            const meta = JSON.parse(c.metadataJson);
+            if (meta && typeof meta.expiresAt === "string") {
+              const d = new Date(meta.expiresAt);
+              if (!Number.isNaN(d.getTime())) expiresAt = d.toISOString();
+            }
+          } catch (_e) {
+            // Unparseable metadata — leave expiresAt null. Not an error;
+            // operators can store free-form notes in metadataJson and we
+            // don't want to fail the whole read.
+          }
+        }
+        const isExpired = expiresAt != null && new Date(expiresAt).getTime() < nowMs;
+
+        // Access log: write a "viewed" row for audit (per task brief).
+        // Best-effort — a write failure does NOT fail the read. The cred
+        // metadata is the load-bearing return value.
+        try {
+          await prisma.supplierCredentialAccessLog.create({
+            data: {
+              credentialId: c.id,
+              userId: req.user.userId,
+              action: "viewed",
+              ip: req.ip || null,
+            },
+          });
+        } catch (_e) {
+          // swallow — access-log write is non-blocking.
+        }
+
+        credentials.push({
+          id: c.id,
+          type: c.category,
+          label: c.supplierName,
+          lastUsedAt: c.lastUsedAt,
+          lastRotatedAt: lastRotation ? lastRotation.at : null,
+          expiresAt,
+          isExpired,
+          ownerUserId: c.ownerUserId,
+          createdAt: c.createdAt,
+          updatedAt: c.updatedAt,
+        });
+      }
+
+      res.json({
+        supplier,
+        credentials,
+        total: credentials.length,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] per-supplier credentials error:", e.message);
+      res.status(500).json({ error: "Failed to list supplier credentials" });
+    }
+  },
+);
+
 // GET /api/travel/suppliers/:id
 router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

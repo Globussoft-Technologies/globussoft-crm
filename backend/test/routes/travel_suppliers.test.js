@@ -165,6 +165,148 @@ describe('POST /api/travel/suppliers', () => {
   });
 });
 
+// PRD_TRAVEL_SUPPLIER_MASTER slice 1 (#903) — payment terms + credit + GSTIN.
+//
+// Pins:
+//   - GSTIN format validation (15-char Indian regex; 400 INVALID_GSTIN on bad).
+//   - paymentTermsDays: non-negative int (400 INVALID_PAYMENT_TERMS on negative).
+//   - creditLimit:      non-negative number  (400 INVALID_CREDIT_LIMIT on negative).
+//   - PUT update path accepts the new fields with same validation gates.
+describe('POST /api/travel/suppliers — slice 1 (#903) payment + credit + GSTIN', () => {
+  test('valid GSTIN persists through to prisma.create data', async () => {
+    prisma.travelSupplier.create.mockResolvedValue({
+      id: 50, tenantId: 1, subBrand: 'tmc', name: 'GST Holder', supplierCategory: 'hotel',
+      isActive: true, gstin: '27ABCDE1234F1Z5',
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'GST Holder', subBrand: 'tmc', gstin: '27ABCDE1234F1Z5' });
+    expect(res.status).toBe(201);
+    expect(prisma.travelSupplier.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ gstin: '27ABCDE1234F1Z5' }),
+      }),
+    );
+  });
+
+  test('invalid GSTIN format returns 400 INVALID_GSTIN (no create call)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'Bad GSTIN Co', subBrand: 'tmc', gstin: 'NOT-A-VALID-GSTIN' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_GSTIN' });
+    expect(prisma.travelSupplier.create).not.toHaveBeenCalled();
+  });
+
+  test('lowercase GSTIN is rejected as INVALID_GSTIN (regex is case-strict)', async () => {
+    // GSTIN canonical form is upper-case only; lower-case is invalid in slice 1.
+    // (Future slices may auto-uppercase — explicitly NOT in scope here.)
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'lcase Co', subBrand: 'tmc', gstin: '27abcde1234f1z5' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_GSTIN' });
+    expect(prisma.travelSupplier.create).not.toHaveBeenCalled();
+  });
+
+  test('paymentTermsDays=30 persists to prisma.create as int', async () => {
+    prisma.travelSupplier.create.mockResolvedValue({
+      id: 51, tenantId: 1, subBrand: 'tmc', name: 'NET30 Co',
+      supplierCategory: 'other', isActive: true, paymentTermsDays: 30,
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'NET30 Co', subBrand: 'tmc', paymentTermsDays: 30 });
+    expect(res.status).toBe(201);
+    expect(prisma.travelSupplier.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ paymentTermsDays: 30 }),
+      }),
+    );
+  });
+
+  test('negative paymentTermsDays returns 400 INVALID_PAYMENT_TERMS', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'BadTerms Co', subBrand: 'tmc', paymentTermsDays: -5 });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_PAYMENT_TERMS' });
+    expect(prisma.travelSupplier.create).not.toHaveBeenCalled();
+  });
+
+  test('creditLimit=50000 persists to prisma.create as Decimal-stringable', async () => {
+    prisma.travelSupplier.create.mockResolvedValue({
+      id: 52, tenantId: 1, subBrand: 'tmc', name: 'Credit Co',
+      supplierCategory: 'other', isActive: true, creditLimit: '50000',
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'Credit Co', subBrand: 'tmc', creditLimit: 50000 });
+    expect(res.status).toBe(201);
+    expect(prisma.travelSupplier.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ creditLimit: '50000' }),
+      }),
+    );
+  });
+
+  test('negative creditLimit returns 400 INVALID_CREDIT_LIMIT', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'BadCredit Co', subBrand: 'tmc', creditLimit: -1 });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_CREDIT_LIMIT' });
+    expect(prisma.travelSupplier.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/travel/suppliers/:id — slice 1 (#903) update validation', () => {
+  // The router uses PUT (not PATCH) for partial updates — sibling agents
+  // and downstream consumers already mounted against PUT. Slice 1 validation
+  // applies to the SAME update path.
+  test('adding paymentTermsDays updates the row (200)', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue({
+      id: 60, tenantId: 1, subBrand: 'tmc', name: 'PutTest', isActive: true,
+    });
+    prisma.travelSupplier.update.mockResolvedValue({
+      id: 60, tenantId: 1, subBrand: 'tmc', name: 'PutTest', isActive: true,
+      paymentTermsDays: 45,
+    });
+    const res = await request(makeApp())
+      .put('/api/travel/suppliers/60')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ paymentTermsDays: 45 });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 60, paymentTermsDays: 45 });
+    expect(prisma.travelSupplier.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 60 },
+        data: expect.objectContaining({ paymentTermsDays: 45 }),
+      }),
+    );
+  });
+
+  test('invalid GSTIN on PUT returns 400 INVALID_GSTIN (no update call)', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue({
+      id: 61, tenantId: 1, subBrand: 'tmc', name: 'PutGstin', isActive: true,
+    });
+    const res = await request(makeApp())
+      .put('/api/travel/suppliers/61')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ gstin: 'BAD-FORMAT' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_GSTIN' });
+    expect(prisma.travelSupplier.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /api/travel/suppliers', () => {
   test('returns tenant-scoped list with default isActive=true filter', async () => {
     prisma.travelSupplier.findMany.mockResolvedValue([

@@ -388,6 +388,51 @@ function assertValidSupplierCategory(c) {
   }
 }
 
+// PRD_TRAVEL_SUPPLIER_MASTER #903 slice 1 — Indian GSTIN format validator.
+// 15-char layout: 2-digit state code, 5 letters (PAN holder), 4 digits (PAN
+// holder), 1 letter (PAN entity), 1 char [1-9A-Z] (entity-code), 'Z' literal,
+// 1 alphanumeric (checksum). Strict format — no Luhn-style checksum verification
+// (FR-3.1.a accepts format validation as sufficient for slice 1; deeper
+// state-code-table + checksum validation deferred to PRD_TRAVEL_GST_COMPLIANCE).
+const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z][Z][0-9A-Z]$/;
+
+function assertValidGstin(g) {
+  if (g == null || g === "") return;
+  if (!GSTIN_REGEX.test(String(g))) {
+    const err = new Error(
+      "gstin must be a 15-character Indian GSTIN (e.g. 27AAACR4849R1ZW)",
+    );
+    err.status = 400;
+    err.code = "INVALID_GSTIN";
+    throw err;
+  }
+}
+
+function assertValidPaymentTerms(n) {
+  if (n == null) return;
+  // Accept numeric strings too — route boundary is JSON, but defensive.
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isInteger(v) || v < 0) {
+    const err = new Error("paymentTermsDays must be a non-negative integer");
+    err.status = 400;
+    err.code = "INVALID_PAYMENT_TERMS";
+    throw err;
+  }
+}
+
+function assertValidCreditLimit(c) {
+  if (c == null) return;
+  // Prisma Decimal accepts string or number on the way in; we just need
+  // to verify "finite, >= 0" at the route boundary.
+  const v = typeof c === "number" ? c : Number(c);
+  if (!Number.isFinite(v) || v < 0) {
+    const err = new Error("creditLimit must be a non-negative number");
+    err.status = 400;
+    err.code = "INVALID_CREDIT_LIMIT";
+    throw err;
+  }
+}
+
 // GET /api/travel/suppliers
 // Honors ?subBrand=tmc (filter to that sub-brand) and ?includeInactive=1.
 router.get("/suppliers", verifyToken, requireTravelTenant, async (req, res) => {
@@ -471,6 +516,9 @@ router.post(
       const {
         name, contactPerson, phone, email, gstin,
         addressLine, supplierCategory, subBrand,
+        // Slice 1 (#903) — payment terms + credit-tracking + metadata.
+        paymentTermsDays, creditLimit, creditCurrency, taxRegimeCode,
+        primaryContactRole, notes,
       } = req.body || {};
 
       if (!name || !String(name).trim()) {
@@ -480,6 +528,9 @@ router.post(
         });
       }
       assertValidSupplierCategory(supplierCategory);
+      assertValidGstin(gstin);
+      assertValidPaymentTerms(paymentTermsDays);
+      assertValidCreditLimit(creditLimit);
       if (subBrand) assertValidSubBrand(subBrand);
 
       // Sub-brand isolation: reject create that targets a sub-brand the
@@ -502,6 +553,12 @@ router.post(
           addressLine: addressLine ? String(addressLine) : null,
           supplierCategory: supplierCategory || "other",
           isActive: true,
+          paymentTermsDays: paymentTermsDays != null ? parseInt(paymentTermsDays, 10) : null,
+          creditLimit: creditLimit != null ? String(creditLimit) : null,
+          creditCurrency: creditCurrency ? String(creditCurrency) : undefined,
+          taxRegimeCode: taxRegimeCode ? String(taxRegimeCode) : null,
+          primaryContactRole: primaryContactRole ? String(primaryContactRole) : null,
+          notes: notes ? String(notes) : null,
         },
       });
 
@@ -551,6 +608,9 @@ router.put(
       const {
         name, contactPerson, phone, email, gstin,
         addressLine, supplierCategory, subBrand, isActive,
+        // Slice 1 (#903) — payment terms + credit-tracking + metadata.
+        paymentTermsDays, creditLimit, creditCurrency, taxRegimeCode,
+        primaryContactRole, notes,
       } = req.body || {};
 
       if (name !== undefined) {
@@ -562,7 +622,10 @@ router.put(
       if (contactPerson !== undefined) data.contactPerson = contactPerson ? String(contactPerson) : null;
       if (phone !== undefined) data.phone = phone ? String(phone) : null;
       if (email !== undefined) data.email = email ? String(email) : null;
-      if (gstin !== undefined) data.gstin = gstin ? String(gstin) : null;
+      if (gstin !== undefined) {
+        assertValidGstin(gstin);
+        data.gstin = gstin ? String(gstin) : null;
+      }
       if (addressLine !== undefined) data.addressLine = addressLine ? String(addressLine) : null;
       if (supplierCategory !== undefined) {
         assertValidSupplierCategory(supplierCategory);
@@ -577,6 +640,28 @@ router.put(
         data.subBrand = subBrand;
       }
       if (isActive !== undefined) data.isActive = Boolean(isActive);
+
+      // Slice 1 (#903) — payment terms + credit-tracking patch fields.
+      if (paymentTermsDays !== undefined) {
+        assertValidPaymentTerms(paymentTermsDays);
+        data.paymentTermsDays = paymentTermsDays != null ? parseInt(paymentTermsDays, 10) : null;
+      }
+      if (creditLimit !== undefined) {
+        assertValidCreditLimit(creditLimit);
+        data.creditLimit = creditLimit != null ? String(creditLimit) : null;
+      }
+      if (creditCurrency !== undefined) {
+        data.creditCurrency = creditCurrency ? String(creditCurrency) : null;
+      }
+      if (taxRegimeCode !== undefined) {
+        data.taxRegimeCode = taxRegimeCode ? String(taxRegimeCode) : null;
+      }
+      if (primaryContactRole !== undefined) {
+        data.primaryContactRole = primaryContactRole ? String(primaryContactRole) : null;
+      }
+      if (notes !== undefined) {
+        data.notes = notes ? String(notes) : null;
+      }
 
       if (Object.keys(data).length === 0) {
         return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });

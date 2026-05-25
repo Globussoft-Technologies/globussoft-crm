@@ -4967,21 +4967,35 @@ model TravelInvoiceLine {
 }
 
 model TravelSupplier {
-  id               Int      @id @default(autoincrement())
-  tenantId         Int      @default(1)
-  subBrand         String
-  name             String
-  contactPerson    String?
-  phone            String?
-  email            String?
-  gstin            String?
-  addressLine      String?
+  id                 Int      @id @default(autoincrement())
+  tenantId           Int      @default(1)
+  subBrand           String
+  name               String
+  contactPerson      String?
+  phone              String?
+  email              String?
+  gstin              String?
+  addressLine        String?
   // hotel | flight | transport | visa-consul | other
-  supplierCategory String   @default("other")
-  isActive         Boolean  @default(true)
-  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  supplierCategory   String   @default("other")
+  isActive           Boolean  @default(true)
+  // PRD_TRAVEL_SUPPLIER_MASTER slice 1 (#903) — payment terms + credit tracking.
+  // All NULLABLE — additive safe migration (no bless marker needed).
+  // paymentTermsDays: free-form NET-N day count (e.g. 30 for NET-30, 45 for NET-45).
+  // creditLimit:      max outstanding payable before booking-confirm guard fires (FR-3.1.c).
+  // creditCurrency:   ISO-4217 code, defaults to INR.
+  // taxRegimeCode:    "regular" | "composite" | "exempt" (free-form; will tighten in Phase 2).
+  // primaryContactRole: e.g. "Accounts payable" | "Sales rep" — distinct from contactPerson name.
+  // notes:            unstructured operator notes blob.
+  paymentTermsDays   Int?
+  creditLimit        Decimal? @db.Decimal(15, 2)
+  creditCurrency     String?  @default("INR")
+  taxRegimeCode      String?
+  primaryContactRole String?
+  notes              String?  @db.Text
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, supplierCategory])

@@ -54,13 +54,16 @@ const {
   checkAntiSpam,
   classifyInboundJunk,
   normalizeMetaLeadPayload,
+  normalizeIndiamartLeadPayload,
+  normalizeJustdialLeadPayload,
+  normalizeTradeindiaLeadPayload,
 } = require("../lib/inboundLeadVerification");
 
 // Slice-1 channel enum — narrower than the full PRD §3.1.2 16-value enum
-// because slice 1 only ships the four launch-critical Travel-Stall channels
+// because slice 1 only shipped the four launch-critical Travel-Stall channels
 // (web_form + WhatsApp + Meta + Voyagr) + the scaffolding-bypass surfaces
 // (ads / adsgpt / manual). Marketplace channels (indiamart / justdial /
-// tradeindia) stay on their existing route until the cron refactor in slice 3.
+// tradeindia) joined in slice 16 with their slice 13/14/15 normalizers.
 const VALID_CHANNELS = [
   "voyagr",
   "webform",
@@ -69,6 +72,9 @@ const VALID_CHANNELS = [
   "adsgpt",
   "metaads",
   "manual",
+  "indiamart",
+  "justdial",
+  "tradeindia",
 ];
 
 // Slice 10 — clamp the date-range window inputs so a misconfigured caller
@@ -131,8 +137,21 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     // channels) pass through untouched — the helper is a no-op when
     // field_data is absent. See lib/inboundLeadVerification.js
     // normalizeMetaLeadPayload for the mapping.
+    //
+    // Slice 16 — same pattern for the 3 marketplace channels: each
+    // upstream feed (IndiaMART CRM webhook, JustDial lead feed,
+    // TradeIndia leads API) ships a vendor-specific dict shape that
+    // gets mapped into the route's canonical flat body. Helpers are
+    // no-ops when the vendor-shape markers are absent, so pre-normalized
+    // callers keep working.
     if (req.params.channel === "metaads") {
       req.body = normalizeMetaLeadPayload(req.body);
+    } else if (req.params.channel === "indiamart") {
+      req.body = normalizeIndiamartLeadPayload(req.body);
+    } else if (req.params.channel === "justdial") {
+      req.body = normalizeJustdialLeadPayload(req.body);
+    } else if (req.params.channel === "tradeindia") {
+      req.body = normalizeTradeindiaLeadPayload(req.body);
     }
 
     const {
@@ -221,7 +240,24 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       // (Meta lead-ads webhook signature spec). Keeps the route's external
       // channel taxonomy stable while the helper's internal STUB set
       // collapses Meta + adsgpt + native ads together pending Q1 drop.
-      const helperChannel = channelParam === "metaads" ? "ads" : channelParam;
+      //
+      // Slice 16 — the 3 marketplace channels (indiamart / justdial /
+      // tradeindia) also collapse onto the helper's `ads` STUB-trusted
+      // branch. Marketplace POSTs are trusted today via source-URL +
+      // API-key (existing marketplace_leads.js pattern); a future slice
+      // will swap to per-vendor payload-signature verification when the
+      // vendor docs land. Keeping them mapped to `ads` (rather than a
+      // dedicated `marketplace` helper key) avoids churning the helper's
+      // enum until that future slice promotes them.
+      const MARKETPLACE_CHANNELS = new Set([
+        "indiamart",
+        "justdial",
+        "tradeindia",
+      ]);
+      const helperChannel =
+        channelParam === "metaads" || MARKETPLACE_CHANNELS.has(channelParam)
+          ? "ads"
+          : channelParam;
       const args = {
         payload: JSON.stringify(req.body || {}),
         signature: req.headers["x-voyagr-signature"] || null,

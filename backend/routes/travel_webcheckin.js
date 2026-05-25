@@ -17,6 +17,7 @@
 // Endpoints:
 //   GET    /api/travel/webcheckins                            — list
 //   GET    /api/travel/webcheckins/upcoming                   — window opens ≤48h
+//   GET    /api/travel/webcheckins/stats                      — tenant-wide rollup
 //   GET    /api/travel/webcheckins/:id                        — fetch one
 //   POST   /api/travel/webcheckins                            — admin manual create
 //   PATCH  /api/travel/webcheckins/:id                        — amend
@@ -24,9 +25,9 @@
 //   POST   /api/travel/webcheckins/:id/deliver                — mark delivered (stub WA)
 //   DELETE /api/travel/webcheckins/:id                        — ADMIN only
 //
-// Route-precedence note: /upcoming MUST mount before /:id so the
-// parseInt("upcoming") → NaN trap doesn't capture it (CLAUDE.md
-// standing rule).
+// Route-precedence note: /upcoming AND /stats MUST mount before /:id
+// so the parseInt("upcoming"|"stats") → NaN trap doesn't capture them
+// (CLAUDE.md standing rule).
 //
 // WhatsApp dispatch on /deliver is stub-mode (console.log) pending
 // Wati BSP creds (Q9) — mirrors backend/cron/contactGreetingsEngine.js
@@ -40,7 +41,10 @@ const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
-const { requireTravelTenant } = require("../middleware/travelGuards");
+const {
+  requireTravelTenant,
+  getSubBrandAccessSet,
+} = require("../middleware/travelGuards");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
@@ -162,6 +166,222 @@ router.get("/webcheckins/upcoming", verifyToken, requireTravelTenant, async (req
     res.status(500).json({ error: "Failed to list upcoming check-ins" });
   }
 });
+
+// ─── Tenant-wide stats rollup ────────────────────────────────────────
+//
+// GET /api/travel/webcheckins/stats — tenant-wide WebCheckin rollup.
+// Mirrors #903 slice 23 /suppliers/stats + #905 slice 18
+// /commission-profiles/stats + #908 slice 19 /flyer-templates/global-stats.
+// USER-readable anodyne aggregate that powers a WebCheckin operations
+// dashboard tile strip ("47 total · 12 delivered · 35 pending · 8 windows
+// opening ≤48h · by-airline split · last delivered 2h ago"). Without
+// this, the dashboard would have to fan out N count queries per airline
+// and per sub-brand — N+1 round-trips for one visual surface.
+//
+// Behaviour:
+//   - Tenant-scoped: WHERE tenantId = req.travelTenant.id.
+//   - Sub-brand narrowing: WebCheckin has NO direct subBrand column —
+//     the sub-brand lives on the parent Itinerary. When a MANAGER's
+//     subBrandAccess set is restrictive, we resolve the visible
+//     Itinerary id-set first, then narrow the WebCheckin query by
+//     itineraryId IN. Defensive: WebCheckin rows whose itineraryId is
+//     null (manual-create path) are KEPT when the caller is unrestricted
+//     and DROPPED for a sub-brand-restricted MANAGER (no parent
+//     itinerary → no sub-brand attribution → cannot prove access).
+//   - Counts:
+//       total                 — count of all matching rows
+//       delivered             — count where deliveredAt IS NOT NULL
+//       pending               — count where deliveredAt IS NULL
+//       upcomingWindow        — count where windowOpenAt < now + 48h
+//                               AND deliveredAt IS NULL (i.e. coming due
+//                               but not yet handled)
+//   - Bucketed maps:
+//       byAirline: { [airlineCode]: { count } }    — defensive: missing
+//                                                    airlineCode → "_unknown"
+//       bySubBrand: { [sb]: { count }, _tenant: { count } }
+//                                — derived via the WebCheckin's parent
+//                                  Itinerary (one batched findMany on
+//                                  Itinerary id-set). WebCheckins with
+//                                  null itineraryId land in `_tenant`.
+//   - lastDeliveredAt          — ISO max(deliveredAt) across delivered
+//                                rows, or null when none are delivered.
+//   - ?from / ?to (ISO date bounds) filter WebCheckin.createdAt BEFORE
+//     aggregation. Invalid → 400 INVALID_DATE.
+//
+// Safety cap: process at most 2000 rows per call; if total > cap, return
+// counts but mark aggregateExceedsCap=true (byAirline/bySubBrand splits
+// would be incomplete past the cap).
+//
+// USER-readable: anodyne aggregate (counts + timestamps); same contract
+// as sibling /stats endpoints. No audit row.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE
+// the /:id family or `:id="stats"` would 400 INVALID_ID before reaching
+// this handler — same trap as /upcoming above.
+const WEBCHECKIN_STATS_CAP = 2000;
+
+router.get(
+  "/webcheckins/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      const where = { tenantId };
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+      }
+
+      // Sub-brand narrowing — WebCheckin lacks a subBrand column, so we
+      // resolve the visible Itinerary id-set up front. Unrestricted callers
+      // (allowed === null) skip this fetch entirely.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size === 0) {
+          // Empty allowed set = deny everything; force-empty query.
+          where.itineraryId = -1;
+        } else {
+          const visibleItins = await prisma.itinerary.findMany({
+            where: { tenantId, subBrand: { in: [...allowed] } },
+            select: { id: true },
+            take: WEBCHECKIN_STATS_CAP,
+          });
+          if (visibleItins.length === 0) {
+            where.itineraryId = -1;
+          } else {
+            where.itineraryId = { in: visibleItins.map((i) => i.id) };
+          }
+        }
+      }
+
+      const rows = await prisma.webCheckin.findMany({
+        where,
+        select: {
+          id: true,
+          airlineCode: true,
+          itineraryId: true,
+          deliveredAt: true,
+          windowOpenAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+        take: WEBCHECKIN_STATS_CAP,
+      });
+
+      const totalMatching = await prisma.webCheckin.count({ where });
+      const aggregateExceedsCap = totalMatching > WEBCHECKIN_STATS_CAP;
+
+      if (rows.length === 0) {
+        return res.json({
+          total: 0,
+          delivered: 0,
+          pending: 0,
+          upcomingWindow: 0,
+          byAirline: {},
+          bySubBrand: {},
+          lastDeliveredAt: null,
+          aggregateExceedsCap: false,
+        });
+      }
+
+      // Resolve sub-brand for the matched WebCheckin rows. One batched
+      // Itinerary findMany over the distinct itineraryIds; rows with null
+      // itineraryId land in the `_tenant` bucket.
+      const itinIds = Array.from(
+        new Set(rows.map((r) => r.itineraryId).filter((x) => Number.isFinite(x))),
+      );
+      const itinSubBrandById = new Map();
+      if (itinIds.length > 0) {
+        const itins = await prisma.itinerary.findMany({
+          where: { tenantId, id: { in: itinIds } },
+          select: { id: true, subBrand: true },
+        });
+        for (const it of itins) {
+          itinSubBrandById.set(it.id, it.subBrand || null);
+        }
+      }
+
+      const now = new Date();
+      const horizon = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+
+      let delivered = 0;
+      let pending = 0;
+      let upcomingWindow = 0;
+      let lastDeliveredAt = null;
+      const byAirline = {};
+      const bySubBrand = {};
+
+      for (const r of rows) {
+        const isDelivered = r.deliveredAt != null;
+        if (isDelivered) {
+          delivered += 1;
+          const ts =
+            r.deliveredAt instanceof Date
+              ? r.deliveredAt
+              : new Date(r.deliveredAt);
+          if (!Number.isNaN(ts.getTime())) {
+            if (!lastDeliveredAt || ts > lastDeliveredAt) lastDeliveredAt = ts;
+          }
+        } else {
+          pending += 1;
+          const w =
+            r.windowOpenAt instanceof Date
+              ? r.windowOpenAt
+              : new Date(r.windowOpenAt);
+          if (!Number.isNaN(w.getTime()) && w < horizon) {
+            upcomingWindow += 1;
+          }
+        }
+
+        const aKey = r.airlineCode ? String(r.airlineCode) : "_unknown";
+        if (!byAirline[aKey]) byAirline[aKey] = { count: 0 };
+        byAirline[aKey].count += 1;
+
+        let sbKey = "_tenant";
+        if (r.itineraryId != null) {
+          const sb = itinSubBrandById.get(r.itineraryId);
+          if (sb) sbKey = sb;
+        }
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+        bySubBrand[sbKey].count += 1;
+      }
+
+      res.json({
+        total: rows.length,
+        delivered,
+        pending,
+        upcomingWindow,
+        byAirline,
+        bySubBrand,
+        lastDeliveredAt: lastDeliveredAt ? lastDeliveredAt.toISOString() : null,
+        aggregateExceedsCap,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-webcheckin] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise web check-ins" });
+    }
+  },
+);
 
 // ─── Get / create / patch / delete ───────────────────────────────────
 

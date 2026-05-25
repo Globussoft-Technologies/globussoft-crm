@@ -139,6 +139,166 @@ router.get("/", verifyToken, async (req, res) => {
   }
 });
 
+// ============================================================================
+// GET /api/travel-curriculum/stats — tenant-wide curriculum-mapping rollup.
+//
+// PRD_TRAVEL_TMC §3 — surfaces the academic-team's authoring progress
+// (how many rows per curriculum / per grade / per subject, active vs
+// archived, latest authorship timestamp). Powers a small header strip on
+// the Curriculum admin page so the academic-team can see at-a-glance which
+// (curriculum, grade, subject) combinations still need coverage.
+//
+// Sibling pattern: mirrors /suppliers/stats (#903 slice 23) +
+// /commission-profiles/stats (#905 slice 18) +
+// /diagnostics/stats (PRD_TRAVEL_RFU_DIAGNOSTIC §3). USER-readable
+// anodyne aggregate — counts + bucket maps + latest-timestamp, no PII,
+// no fitRationale text. Same contract as sibling /stats endpoints.
+//
+// Query params (all optional):
+//   ?from / ?to — ISO date bounds on TravelCurriculumMapping.createdAt
+//                 (gte / lte). Invalid → 400 INVALID_DATE.
+//
+// Response shape:
+//   {
+//     total,                         // count of matching rows (true count
+//                                    //   even when aggregateExceedsCap)
+//     active,                        // count where isActive=true
+//     archived,                      // count where isActive=false
+//     byCurriculum: { [curriculum]: { count, active } },
+//     byGrade:      { [grade]:      { count } },
+//     bySubject:    { [subject]:    { count } },
+//     lastUpdatedAt,                 // ISO string of max(updatedAt) or null
+//     aggregateExceedsCap,           // true when total > CAP (bounded fetch)
+//   }
+//
+// Safety cap: process at most 2000 mappings per call; if matching total >
+// 2000, return counts but mark aggregateExceedsCap=true. (Per-tenant
+// authoring volume is realistically <500 rows for V1 — the 2000 cap is
+// future-proofing for Phase-2 rule-based scoring expansion.)
+//
+// Tenant scoping: req.user.tenantId on every WHERE — no sub-brand narrowing
+// because curriculum authoring is tenant-wide-ADMIN (route file header
+// L13-15). Authoring is NOT split per sub-brand.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family or `:id="stats"` would 400 INVALID_ID before reaching this
+// handler.
+// ============================================================================
+const CURRICULUM_STATS_CAP = 2000;
+
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // Optional ISO date bounds on createdAt.
+    const where = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Bounded fetch to keep in-process aggregation safe.
+    const mappings = await prisma.travelCurriculumMapping.findMany({
+      where,
+      select: {
+        id: true,
+        curriculum: true,
+        grade: true,
+        subject: true,
+        isActive: true,
+        updatedAt: true,
+      },
+      orderBy: [{ id: "asc" }],
+      take: CURRICULUM_STATS_CAP,
+    });
+
+    // True total so callers know if aggregation is bounded.
+    const totalMatching = await prisma.travelCurriculumMapping.count({ where });
+    const aggregateExceedsCap = totalMatching > CURRICULUM_STATS_CAP;
+
+    // Empty short-circuit — return zeroed envelope (bucket maps are {}, NOT
+    // undefined; lastUpdatedAt is null, NOT missing).
+    if (mappings.length === 0) {
+      return res.json({
+        total: 0,
+        active: 0,
+        archived: 0,
+        byCurriculum: {},
+        byGrade: {},
+        bySubject: {},
+        lastUpdatedAt: null,
+        aggregateExceedsCap: false,
+      });
+    }
+
+    let active = 0;
+    let archived = 0;
+    let lastUpdatedAt = null;
+    const byCurriculum = {};
+    const byGrade = {};
+    const bySubject = {};
+
+    for (const m of mappings) {
+      if (m.isActive) active += 1;
+      else archived += 1;
+
+      const ts = m.updatedAt instanceof Date ? m.updatedAt : new Date(m.updatedAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+      }
+
+      // Coalesce falsy curriculum/grade/subject defensively (schema says
+      // non-nullable but a future migration could relax — forward-compat).
+      const cKey = m.curriculum && String(m.curriculum).trim() ? m.curriculum : "_unknown";
+      const gKey = m.grade && String(m.grade).trim() ? m.grade : "_unknown";
+      const sKey = m.subject && String(m.subject).trim() ? m.subject : "_unknown";
+
+      if (!byCurriculum[cKey]) byCurriculum[cKey] = { count: 0, active: 0 };
+      byCurriculum[cKey].count += 1;
+      if (m.isActive) byCurriculum[cKey].active += 1;
+
+      if (!byGrade[gKey]) byGrade[gKey] = { count: 0 };
+      byGrade[gKey].count += 1;
+
+      if (!bySubject[sKey]) bySubject[sKey] = { count: 0 };
+      bySubject[sKey].count += 1;
+    }
+
+    res.json({
+      total: totalMatching,
+      active,
+      archived,
+      byCurriculum,
+      byGrade,
+      bySubject,
+      lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
+      aggregateExceedsCap,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-curriculum] stats error:", e.message);
+    res.status(500).json({ error: "Failed to compute curriculum stats" });
+  }
+});
+
 // GET /api/travel-curriculum/:id — single mapping (tenant-scoped).
 router.get("/:id", verifyToken, async (req, res) => {
   try {

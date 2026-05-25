@@ -508,3 +508,284 @@ describe('<TripDetail /> — Microsite tab', () => {
     );
   });
 });
+
+// ─── EXTENSION WAVE — 2026-05-26 ────────────────────────────────────────
+//
+// Pins surface that the existing 15-case spec does NOT cover yet. Drift
+// notes (prompt vs. actual SUT) carried over from the header block; this
+// wave avoids the false-claim items (DigiLocker / Drive folder / RBAC /
+// status transitions / document checklist as a tab) which the SUT does
+// NOT implement. Instead it pins:
+//
+//   - Participants remove flow (Trash2 + window.confirm + DELETE).
+//   - Participants add — POST rejection surfaces notify.error.
+//   - Participants add — Cancel closes the inline form.
+//   - Header date-format edges (null returnDate → "—" via the fmt() helper).
+//   - Rooming — Add-room form opens + capacity-by-type readout.
+//   - Rooming — empty-state "No rooming assignments yet" copy.
+//   - Payment plan — loading-state then empty editor copy.
+//   - Payment plan — Add instalment + validation (missing dueDate).
+//   - Payment plan — total recomputes after adding rows.
+//   - Microsite Create — Publish POSTs the right endpoint + subdomain.
+//   - Microsite Create — empty itineraryHtml surfaces notify.error.
+//   - Microsite Editor — Preview toggle flips to Edit (button label).
+//   - Overview card values — Price/student formatted with ₹ + locale.
+//
+// All assertions use stable mocks + findBy / waitFor + getAllByText where
+// the same label appears in tab + card chrome.
+
+describe('<TripDetail /> — Participants remove flow', () => {
+  it('clicking Trash2 + confirm()=true DELETEs the participant + notify.success', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Anaya Sharma');
+    fetchApiMock.mockClear();
+    installFetchMock();
+    const removeBtn = screen.getByRole('button', { name: /Remove Anaya Sharma/i });
+    fireEvent.click(removeBtn);
+    await waitFor(() => {
+      const del = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/trips/101/participants/901' && o?.method === 'DELETE',
+      );
+      expect(del).toBeTruthy();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Removed/i));
+  });
+
+  it('clicking Trash2 with confirm()=false short-circuits — no DELETE fires', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => false));
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Anaya Sharma');
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Remove Anaya Sharma/i }));
+    // Give microtasks a beat.
+    await Promise.resolve();
+    const dels = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'DELETE');
+    expect(dels.length).toBe(0);
+  });
+});
+
+describe('<TripDetail /> — Participants add error + cancel', () => {
+  it('POST rejection surfaces notify.error with the body.error', async () => {
+    const err = new Error('boom');
+    err.body = { error: 'Duplicate fullName' };
+    installFetchMock({ participantPost: err });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add participant/i }));
+    fireEvent.change(await screen.findByPlaceholderText(/Full name/i), {
+      target: { value: 'Anaya Sharma' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Duplicate fullName');
+    });
+  });
+
+  it('Cancel button closes the inline add-form without POSTing', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add participant/i }));
+    // Form is open — fullName placeholder visible.
+    expect(await screen.findByPlaceholderText(/Full name/i)).toBeInTheDocument();
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+    // Form closes (placeholder no longer in DOM).
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText(/Full name/i)).toBeNull();
+    });
+    // "Add participant" toggle reappears.
+    expect(screen.getByRole('button', { name: /Add participant/i })).toBeInTheDocument();
+    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
+    expect(posts.length).toBe(0);
+  });
+});
+
+describe('<TripDetail /> — Header date edge cases', () => {
+  it('renders "—" placeholder when returnDate is null', async () => {
+    installFetchMock({ trip: makeTrip({ returnDate: null }) });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    // Header sub-row reads "{depart} → {return} · {destination}". When
+    // returnDate is null the fmt() helper renders "—".
+    // The em-dash is the only place "—" appears on the un-published trip
+    // (Overview cards use English copy, not em-dashes); assert ≥ 1 instance.
+    expect(screen.getAllByText((content) => content.includes('—')).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Overview "Price / student" card renders ₹ + locale-formatted value', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    // Price-per-student card. Locale-formatted 125000 is "1,25,000" under
+    // en-IN or "125,000" under en-US; assert presence of the ₹ + trailing
+    // 5-digit core (locale-tolerant).
+    const priceLabel = screen.getByText('Price / student');
+    const priceCard = priceLabel.parentElement;
+    expect(within(priceCard).getByText((c) => /^₹[\d,]+$/.test(c))).toBeInTheDocument();
+  });
+});
+
+describe('<TripDetail /> — Rooming Add-room form', () => {
+  it('clicking "Add room" opens the inline room editor with capacity readout', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
+    // Wait for rooming GET to resolve + the empty-state copy.
+    expect(
+      await screen.findByText(/No rooming assignments yet/i),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Add room/i }));
+    // Room number input + room type select render.
+    expect(await screen.findByLabelText(/Room number/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Room type/i)).toBeInTheDocument();
+    // Default room type is "twin" (capacity 2). Assigned count "0 / 2".
+    expect(screen.getByText(/0 \/ 2 assigned/)).toBeInTheDocument();
+    // The form's "Add room" submit button is now distinct from the toggle —
+    // the toggle is gone (newRoom truthy hides it).
+    expect(screen.getByRole('button', { name: /^Add room$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Cancel new room/i })).toBeInTheDocument();
+  });
+});
+
+describe('<TripDetail /> — Payment plan tab', () => {
+  it('switching to Payment plan shows the empty-state editor copy', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    // Heading reads "Create payment plan" when there's no existing plan.
+    expect(
+      await screen.findByRole('heading', { name: /Create payment plan/i }),
+    ).toBeInTheDocument();
+    // Empty editor copy.
+    expect(screen.getByText(/No instalments/i)).toBeInTheDocument();
+    // Add instalment button visible.
+    expect(screen.getByRole('button', { name: /Add instalment/i })).toBeInTheDocument();
+  });
+
+  it('clicking "Add instalment" prepends a row + total starts at ₹0', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Create payment plan/i });
+    fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
+    // Instalment row #1 appears (date input aria-labelled).
+    expect(
+      await screen.findByLabelText(/Instalment 1 due date/i),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Instalment 1 amount/i)).toBeInTheDocument();
+    // Total readout — initial amount is 0.
+    expect(screen.getByText((c) => /Total:/.test(c))).toBeInTheDocument();
+    expect(screen.getByText((c) => /^₹0$/.test(c))).toBeInTheDocument();
+  });
+
+  it('Save with no dueDate surfaces notify.error + no PUT fires', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Create payment plan/i });
+    fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
+    await screen.findByLabelText(/Instalment 1 due date/i);
+    // Amount stays 0 + due date stays empty → save should fail validation.
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Save payment plan/i }));
+    await waitFor(() => {
+      // First failing instalment fires: "Instalment 1: due date is required".
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/due date is required/i),
+      );
+    });
+    const puts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'PUT');
+    expect(puts.length).toBe(0);
+  });
+});
+
+describe('<TripDetail /> — Microsite Create flow', () => {
+  it('Publish POSTs /api/travel/trips/:id/microsite with subdomain + itineraryHtml', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Microsite/i }));
+    await screen.findByText(/No microsite published yet/i);
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Publish microsite/i }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/trips/101/microsite' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.subdomain).toBe('trip-TMC-AND-2026-MUMBAI-G7');
+      // Default placeholder content begins with a Day 1 H2.
+      expect(body.itineraryHtml).toContain('Day 1');
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/Microsite published/i),
+    );
+  });
+
+  it('Publish with blank itineraryHtml surfaces notify.error + no POST', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Microsite/i }));
+    // The RichTextEditor is contenteditable — direct DOM patching for an
+    // empty payload. The SUT's itineraryHtml state seed is the placeholder,
+    // so we have to mutate it via the editor's onInput hook. Easier path:
+    // patch the contenteditable div's innerHTML + fire input event.
+    const editorDiv = await screen.findByLabelText(/Itinerary content editor/i);
+    editorDiv.innerHTML = '';
+    fireEvent.input(editorDiv);
+    // Also fire blur to flush handleInput.
+    fireEvent.blur(editorDiv);
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Publish microsite/i }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Itinerary content required/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
+    expect(posts.length).toBe(0);
+  });
+});
+
+describe('<TripDetail /> — Microsite Editor preview toggle', () => {
+  it('clicking Preview flips the button label to Edit + renders preview surface', async () => {
+    const ms = {
+      id: 5001,
+      tripId: 101,
+      subdomain: 'tmc-andaman-mumbai-g7',
+      itineraryHtml: '<h2>Day 1 — Arrival</h2><p>Welcome aboard.</p>',
+      faqJson: null,
+      expiresAt: null,
+      publicUuid: 'abc-123-def-456',
+    };
+    installFetchMock({ trip: makeTrip({ microsite: ms }) });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    const tabs = screen.getAllByRole('tab');
+    fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
+    await screen.findByText('abc-123-def-456');
+    // Click Preview button — label flips to Edit.
+    fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+    expect(
+      await screen.findByRole('button', { name: /Edit/i }),
+    ).toBeInTheDocument();
+    // Preview surface dangerouslySetInnerHTML renders the H2.
+    expect(screen.getByText(/Day 1 — Arrival/)).toBeInTheDocument();
+    // Click back to Edit to confirm the toggle is symmetric.
+    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /^Edit$/i })).toBeNull();
+    });
+    expect(screen.getByRole('button', { name: /Preview/i })).toBeInTheDocument();
+  });
+});

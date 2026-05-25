@@ -764,6 +764,210 @@ router.get(
   },
 );
 
+// ─── /pricing/by-year ────────────────────────────────────────────────
+
+// GET /api/travel/pricing/by-year — tenant-wide annual rollup.
+//
+// Calendar-year complement to /pricing/by-month. Pricing config tends
+// to move on a yearly cadence (season calendars are re-published per
+// trip year; markup-rule cohorts get refreshed annually), so this
+// surface is the natural unit for the "last decade of pricing changes"
+// trend the dashboard renders alongside the monthly view.
+//
+// Buckets BOTH TravelSeasonCalendar AND TravelMarkupRule rows by
+// createdAt UTC calendar year. Each row carries seasonCount +
+// markupCount + totalCount, plus grand-totals for the page header.
+//
+// Pairs with /pricing/by-month (same commit family) — identical
+// bucketing template, identical pagination + sort + sub-brand semantics,
+// just swap YYYY-MM → YYYY.
+//
+// PRD anchors:
+//   - PRD_TRAVEL_PRICING §3 — operator-facing pricing-config dashboard
+//     surfaces "year-over-year pricing-config churn" via this endpoint.
+//
+// Query params:
+//   - ?from / ?to     — optional inclusive YYYY bounds; invalid →
+//                       400 INVALID_YEAR_FORMAT
+//   - ?orderBy        — default year:asc; accepts year:{asc|desc},
+//                       seasonCount:{asc|desc}, markupCount:{asc|desc};
+//                       unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 10 / 0; limit caps at 30 (≈3 decades)
+//
+// Behaviour:
+//   - Sub-brand-scoped: MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' rows in the rollup. Same gate as
+//     /pricing/by-month + /pricing/stats. Empty access set → all-zeros
+//     envelope (not 403) so the dashboard tile renders cleanly for
+//     not-yet-onboarded operators.
+//   - JS-side aggregation over light findMany projections
+//     ({ createdAt }) — population is bounded by tenant scale.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so
+//     the count surface stays accurate. Excluded when ?from / ?to is
+//     set; included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter.
+//
+// No audit row written — read-only meta surface.
+router.get(
+  "/pricing/by-year",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+      // YYYY validation — 4-digit calendar year.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "seasonCount:asc",
+        "seasonCount:desc",
+        "markupCount:asc",
+        "markupCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      // Sub-brand narrowing — mirrors /pricing/by-month.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json({
+          years: [],
+          totalYears: 0,
+          grandSeasonCount: 0,
+          grandMarkupCount: 0,
+          grandTotalCount: 0,
+          limit: take,
+          offset: skip,
+        });
+      }
+
+      const seasonWhere = { tenantId: req.travelTenant.id };
+      const ruleWhere = { tenantId: req.travelTenant.id };
+      if (allowed instanceof Set) {
+        const brandList = [...allowed];
+        seasonWhere.subBrand = { in: brandList };
+        ruleWhere.subBrand = { in: brandList };
+      }
+
+      const [seasons, rules] = await Promise.all([
+        prisma.travelSeasonCalendar.findMany({
+          where: seasonWhere,
+          select: { createdAt: true },
+        }),
+        prisma.travelMarkupRule.findMany({
+          where: ruleWhere,
+          select: { createdAt: true },
+        }),
+      ]);
+
+      // Aggregate per-UTC-year. Map "YYYY" → bucket. Null/invalid
+      // createdAt → "unknown" bucket (kept unless ?from / ?to set).
+      const byYear = new Map();
+
+      function bucketFor(yearKey) {
+        let b = byYear.get(yearKey);
+        if (!b) {
+          b = {
+            year: yearKey,
+            seasonCount: 0,
+            markupCount: 0,
+            totalCount: 0,
+          };
+          byYear.set(yearKey, b);
+        }
+        return b;
+      }
+
+      function yearKeyFor(createdAt) {
+        if (!createdAt) return "unknown";
+        const dt = createdAt instanceof Date ? createdAt : new Date(createdAt);
+        if (Number.isNaN(dt.getTime())) return "unknown";
+        return String(dt.getUTCFullYear());
+      }
+
+      for (const s of seasons) {
+        const b = bucketFor(yearKeyFor(s.createdAt));
+        b.seasonCount += 1;
+        b.totalCount += 1;
+      }
+      for (const r of rules) {
+        const b = bucketFor(yearKeyFor(r.createdAt));
+        b.markupCount += 1;
+        b.totalCount += 1;
+      }
+
+      let years = [...byYear.values()];
+
+      // ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token).
+      if (fromRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+      }
+      if (toRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY (chronological).
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalYears = years.length;
+      const grandSeasonCount = years.reduce(
+        (acc, r) => acc + (Number(r.seasonCount) || 0),
+        0,
+      );
+      const grandMarkupCount = years.reduce(
+        (acc, r) => acc + (Number(r.markupCount) || 0),
+        0,
+      );
+      const grandTotalCount = grandSeasonCount + grandMarkupCount;
+
+      // Pagination AFTER aggregation + sort + filter.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        years: paged,
+        totalYears,
+        grandSeasonCount,
+        grandMarkupCount,
+        grandTotalCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-pricing] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute annual rollup" });
+    }
+  },
+);
+
 // ─── /pricing/quote ──────────────────────────────────────────────────
 
 // POST /api/travel/pricing/quote

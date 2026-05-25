@@ -133,4 +133,83 @@ describe('validateDateRange', () => {
     });
     expect(r.error.code).toBe('INVERTED_DATE_RANGE');
   });
+
+  // ---- Coverage extension: under-pinned surface ----
+
+  test('whitespace-only from is treated as absent (trim path)', () => {
+    // isPresent() calls String(v).trim() — non-empty whitespace collapses to ''
+    const r = validateDateRange({ from: '   ', to: '2026-12-31' });
+    expect(r.ok).toBe(true);
+    expect(r.fromDate).toBeNull();
+    expect(r.toDate).toBeInstanceOf(Date);
+  });
+
+  test('maxYears as stringified number coerces via Number() (e.g. "3" trips at >3y)', () => {
+    // opts.maxYears = "3" → Number("3") === 3 → strict-> guard at >3y
+    const r = validateDateRange(
+      { from: '2020-01-01', to: '2024-01-01' }, // ~4y span
+      { maxYears: '3' }
+    );
+    expect(r.error.code).toBe('DATE_RANGE_TOO_WIDE');
+    expect(r.error.error).toMatch(/3 years/);
+  });
+
+  test('maxYears as NaN disables the wide-range guard (NaN > 0 === false)', () => {
+    // Number("garbage") → NaN; NaN > 0 is false → wide guard skipped.
+    const r = validateDateRange(
+      { from: '1925-01-01', to: '2025-01-01' }, // 100y span
+      { maxYears: 'garbage' }
+    );
+    expect(r.ok).toBe(true);
+    expect(r.fromDate).toBeInstanceOf(Date);
+    expect(r.toDate).toBeInstanceOf(Date);
+  });
+
+  test('negative maxYears disables the wide-range guard (-1 > 0 === false)', () => {
+    const r = validateDateRange(
+      { from: '2016-01-01', to: '2026-01-01' }, // 10y span
+      { maxYears: -1 }
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  test('error priority: when both from AND to are invalid, INVALID_DATE on from fires first', () => {
+    // Source checks from-validity (lines 55-66) before to-validity (lines 67-78).
+    const r = validateDateRange({ from: 'notadate', to: 'alsogarbage' });
+    expect(r.error.code).toBe('INVALID_DATE');
+    expect(r.error.error).toMatch(/'from'/);
+    expect(r.error.error).not.toMatch(/'to'/);
+  });
+
+  test('error priority: inverted+too-wide together yields INVERTED_DATE_RANGE (inverted checked first)', () => {
+    // from=2030, to=2020 is inverted AND would be too wide (10y) if unwrapped.
+    // Source checks inverted at line 80 BEFORE wide-range at line 90.
+    const r = validateDateRange({ from: '2030-01-01', to: '2020-01-01' });
+    expect(r.error.code).toBe('INVERTED_DATE_RANGE');
+  });
+
+  test('no-args invocation succeeds via default {} destructure', () => {
+    // function signature: validateDateRange({ from, to } = {}, opts = {})
+    // Calling with NO args should NOT throw, both undefined → both absent → ok.
+    expect(() => validateDateRange()).not.toThrow();
+    const r = validateDateRange();
+    expect(r.ok).toBe(true);
+    expect(r.fromDate).toBeNull();
+    expect(r.toDate).toBeNull();
+  });
+
+  test('custom maxYears=10 accepts 9y span and rejects 11y span with "10 years" in message', () => {
+    const ok = validateDateRange(
+      { from: '2017-01-01', to: '2026-01-01' }, // ~9y span
+      { maxYears: 10 }
+    );
+    expect(ok.ok).toBe(true);
+
+    const tooWide = validateDateRange(
+      { from: '2015-01-01', to: '2026-06-01' }, // ~11.4y span
+      { maxYears: 10 }
+    );
+    expect(tooWide.error.code).toBe('DATE_RANGE_TOO_WIDE');
+    expect(tooWide.error.error).toMatch(/10 years/);
+  });
 });

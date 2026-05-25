@@ -1437,6 +1437,214 @@ function renderTravelQuotePdf(quote) {
 // a rename of the (yet-to-land) route caller.
 const generateTravelQuotePdf = renderTravelQuotePdf;
 
+// ── POS Receipt PDF (D17 slice 6) ──────────────────────────────────
+//
+// Wellness POS issues a paper / PDF receipt after each Sale is finalized.
+// PRD §3.7 (receipt) + §6.4 (PDF format) call out:
+//
+//   • Top-of-receipt: tenant name + tenant address + invoice number
+//     "INV-{sale.id}" + sale.completedAt formatted
+//   • Patient block: patient name + phone (when available)
+//   • Line items table: Description / Qty / Unit Price / Line Total
+//   • Totals: Subtotal / Discount / Tax / Grand Total (₹ formatted)
+//   • Payments section: each payment "Method ... ₹Amount"
+//   • Footer: "Thank you for your visit" + "Powered by Globussoft CRM"
+//
+// Input shape (all fields are optional unless noted):
+//
+//   sale     { id (required), completedAt, subtotal, discount, tax,
+//              grandTotal, currency }
+//   lines    [{ description, qty, unitPrice, lineTotal }]
+//   payments [{ method, amount }]
+//   patient  { name, phone }
+//   tenant   { name, addressLine, city, state, pincode, phone, email }
+//
+// Returns a Promise<Buffer> — the caller (route handler) is responsible
+// for streaming to res or writing to disk.
+//
+// The helper is pure: caller fetches tenant-scoped rows via prisma, we
+// just turn plain objects into PDF bytes. Mirrors the layout primitives
+// already used by renderTravelQuotePdf (A4, 50pt margins, pdfkit fonts).
+
+function generatePosReceiptPdf(opts) {
+  const {
+    sale = {},
+    lines = [],
+    payments = [],
+    patient = null,
+    tenant = null,
+  } = opts || {};
+
+  const currency = sale.currency || "INR";
+  function fmt(n) {
+    const v = Number(n) || 0;
+    if (currency === "INR") return `₹${v.toFixed(2)}`;
+    if (currency === "USD") return `$${v.toFixed(2)}`;
+    if (currency === "GBP") return `£${v.toFixed(2)}`;
+    return `${currency} ${v.toFixed(2)}`;
+  }
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+
+  // ── Top header: tenant name + address + invoice meta ──────────────
+  const tenantName = (tenant && tenant.name) || "Clinic";
+  const addrParts = tenant
+    ? [
+        tenant.addressLine,
+        [tenant.city, tenant.state, tenant.pincode].filter(Boolean).join(", "),
+      ].filter(Boolean)
+    : [];
+  const tenantContact = tenant
+    ? [tenant.phone, tenant.email].filter(Boolean).join("  |  ")
+    : "";
+
+  doc.font("Helvetica-Bold").fontSize(16).fillColor("#111").text(tenantName, 50, 50);
+  doc.font("Helvetica").fontSize(10).fillColor("#555");
+  if (addrParts.length > 0) doc.text(addrParts.join("\n"), 50, doc.y);
+  if (tenantContact) doc.text(tenantContact, 50, doc.y);
+
+  // Right-column: invoice number + completedAt
+  const invoiceNumber = `INV-${sale.id != null ? sale.id : "?"}`;
+  doc.font("Helvetica-Bold").fontSize(14).fillColor("#111")
+    .text("RECEIPT", 380, 50, { width: 165, align: "right" });
+  doc.font("Helvetica").fontSize(10).fillColor("#333");
+  doc.text(invoiceNumber, 380, 70, { width: 165, align: "right" });
+  doc.text(formatDate(sale.completedAt || new Date()), 380, 84, {
+    width: 165,
+    align: "right",
+  });
+
+  // Advance below both columns
+  doc.y = Math.max(doc.y, 110);
+  doc.moveDown(0.6);
+  const divY = doc.y;
+  doc.moveTo(50, divY).lineTo(545, divY).lineWidth(0.7).strokeColor("#999").stroke();
+  doc.moveDown(0.8);
+  doc.fillColor("#111");
+
+  // ── Patient block ─────────────────────────────────────────────────
+  if (patient) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Customer", 50, doc.y);
+    doc.font("Helvetica").fontSize(10).fillColor("#222");
+    if (patient.name) doc.text(patient.name, 50, doc.y);
+    if (patient.phone) doc.text(patient.phone, 50, doc.y);
+    doc.moveDown(0.6);
+  }
+
+  // ── Line items table ──────────────────────────────────────────────
+  const tableTop = doc.y;
+  const colX = { desc: 50, qty: 300, unit: 370, total: 460 };
+  doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
+  doc.text("Description", colX.desc, tableTop);
+  doc.text("Qty", colX.qty, tableTop, { width: 50, align: "right" });
+  doc.text("Unit Price", colX.unit, tableTop, { width: 80, align: "right" });
+  doc.text("Line Total", colX.total, tableTop, { width: 85, align: "right" });
+  doc.moveTo(50, tableTop + 14)
+    .lineTo(545, tableTop + 14)
+    .lineWidth(0.5)
+    .strokeColor("#bbb")
+    .stroke();
+
+  let rowY = tableTop + 22;
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  if (!Array.isArray(lines) || lines.length === 0) {
+    doc.fillColor("#777").text("(No line items.)", colX.desc, rowY, { width: 480 });
+    rowY += 18;
+  } else {
+    for (const ln of lines) {
+      if (rowY > 700) {
+        doc.addPage();
+        rowY = 60;
+      }
+      const qty = Number(ln.qty) || 0;
+      const unit = Number(ln.unitPrice) || 0;
+      const total = ln.lineTotal != null ? Number(ln.lineTotal) : qty * unit;
+      doc.fillColor("#222");
+      doc.text(String(ln.description || "—"), colX.desc, rowY, { width: 240 });
+      doc.text(String(qty), colX.qty, rowY, { width: 50, align: "right" });
+      doc.text(fmt(unit), colX.unit, rowY, { width: 80, align: "right" });
+      doc.text(fmt(total), colX.total, rowY, { width: 85, align: "right" });
+      rowY += 20;
+    }
+  }
+  doc.y = rowY + 4;
+
+  // ── Totals block (right-aligned) ──────────────────────────────────
+  const subtotal = Number(sale.subtotal) || 0;
+  const discount = Number(sale.discount) || 0;
+  const tax = Number(sale.tax) || 0;
+  const grandTotal =
+    sale.grandTotal != null
+      ? Number(sale.grandTotal)
+      : subtotal - discount + tax;
+
+  doc.moveDown(0.5);
+  const totalsY = doc.y;
+  doc.moveTo(350, totalsY).lineTo(545, totalsY).lineWidth(0.5).strokeColor("#bbb").stroke();
+  let ty = totalsY + 8;
+  doc.font("Helvetica").fontSize(10).fillColor("#333");
+  doc.text("Subtotal", 350, ty, { width: 95, align: "right" });
+  doc.text(fmt(subtotal), 450, ty, { width: 95, align: "right" });
+  ty += 16;
+
+  // Discount + Tax rows only render when non-zero (PRD §6.4: hide-or-zero
+  // is acceptable; we hide to keep the receipt visually tight).
+  if (discount > 0) {
+    doc.text("Discount", 350, ty, { width: 95, align: "right" });
+    doc.text(`-${fmt(discount)}`, 450, ty, { width: 95, align: "right" });
+    ty += 16;
+  }
+  if (tax > 0) {
+    doc.text("Tax", 350, ty, { width: 95, align: "right" });
+    doc.text(fmt(tax), 450, ty, { width: 95, align: "right" });
+    ty += 16;
+  }
+
+  // Grand-total line (bold)
+  doc.moveTo(350, ty).lineTo(545, ty).lineWidth(0.5).strokeColor("#bbb").stroke();
+  ty += 6;
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111");
+  doc.text("Grand Total", 350, ty, { width: 95, align: "right" });
+  doc.text(fmt(grandTotal), 450, ty, { width: 95, align: "right" });
+  ty += 22;
+
+  doc.y = ty + 8;
+
+  // ── Payments section (split-tender shows every row) ───────────────
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Payments", 50, doc.y);
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  if (!Array.isArray(payments) || payments.length === 0) {
+    doc.fillColor("#777").text("(No payments recorded.)", 50, doc.y, { width: 480 });
+  } else {
+    for (const p of payments) {
+      const method = String(p.method || "—");
+      const amount = Number(p.amount) || 0;
+      doc.fillColor("#222").text(`${method} ... ${fmt(amount)}`, 50, doc.y);
+    }
+  }
+  doc.moveDown(1.2);
+
+  // ── Footer: thank-you + powered-by ────────────────────────────────
+  const footerY = doc.page.height - doc.page.margins.bottom - 36;
+  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.4).strokeColor("#bbb").stroke();
+  doc.font("Helvetica").fontSize(10).fillColor("#333").text(
+    "Thank you for your visit",
+    50,
+    footerY + 8,
+    { width: doc.page.width - 100, align: "center" },
+  );
+  doc.font("Helvetica-Oblique").fontSize(8).fillColor("#888").text(
+    "Powered by Globussoft CRM",
+    50,
+    footerY + 22,
+    { width: doc.page.width - 100, align: "center" },
+  );
+
+  doc.end();
+  return bufPromise;
+}
+
 module.exports = {
   renderPrescriptionPdf,
   renderConsentPdf,
@@ -1447,4 +1655,5 @@ module.exports = {
   renderTravelStallPersonalisedPdf,
   renderTravelQuotePdf,
   generateTravelQuotePdf,
+  generatePosReceiptPdf,
 };

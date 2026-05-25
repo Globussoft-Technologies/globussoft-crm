@@ -352,10 +352,10 @@ test.describe('POST /api/pos/sales/finalize', () => {
       shiftId: sharedShiftId,
       patientId: patient.id,
       items: [
-        { lineType: 'SERVICE', refId: 1, name: 'Consultation', quantity: 1, unitPrice: 1000 },
+        { type: 'service', refId: 1, name: 'Consultation', qty: 1, unitPriceCents: 100000 },
       ],
       payments: [
-        { method: 'CASH', amount: 1000 },
+        { method: 'cash', amountCents: 100000 },
       ],
     });
     expect(res.status(), `body: ${await res.text()}`).toBe(200);
@@ -375,11 +375,11 @@ test.describe('POST /api/pos/sales/finalize', () => {
       shiftId: sharedShiftId,
       patientId: patient.id,
       items: [
-        { lineType: 'SERVICE', refId: 1, name: 'Premium Consult', quantity: 1, unitPrice: 1500 },
+        { type: 'service', refId: 1, name: 'Premium Consult', qty: 1, unitPriceCents: 150000 },
       ],
       payments: [
-        { method: 'CASH', amount: 500 },
-        { method: 'CARD', amount: 1000 },
+        { method: 'cash', amountCents: 50000 },
+        { method: 'card', amountCents: 100000 },
       ],
     });
     expect(res.status(), `body: ${await res.text()}`).toBe(200);
@@ -406,11 +406,11 @@ test.describe('POST /api/pos/sales/finalize', () => {
       shiftId: sharedShiftId,
       patientId: patient.id,
       items: [
-        { lineType: 'SERVICE', refId: 1, name: 'Massage', quantity: 1, unitPrice: 1000 },
+        { type: 'service', refId: 1, name: 'Massage', qty: 1, unitPriceCents: 100000 },
       ],
       payments: [
-        { method: 'WALLET', amount: 500 },
-        { method: 'CASH', amount: 500 },
+        { method: 'wallet', amountCents: 50000 },
+        { method: 'cash', amountCents: 50000 },
       ],
     });
     expect(res.status(), `body: ${await res.text()}`).toBe(200);
@@ -438,10 +438,10 @@ test.describe('POST /api/pos/sales/finalize', () => {
       shiftId: sharedShiftId,
       patientId: patient.id,
       items: [
-        { lineType: 'SERVICE', refId: 1, name: 'Big Service', quantity: 1, unitPrice: 2000 },
+        { type: 'service', refId: 1, name: 'Big Service', qty: 1, unitPriceCents: 200000 },
       ],
       payments: [
-        { method: 'WALLET', amount: 2000 },
+        { method: 'wallet', amountCents: 200000 },
       ],
     });
     expect(res.status(), `body: ${await res.text()}`).toBe(400);
@@ -459,10 +459,10 @@ test.describe('POST /api/pos/sales/finalize', () => {
       shiftId: sharedShiftId,
       patientId: patient.id,
       items: [
-        { lineType: 'SERVICE', refId: 1, name: 'Test', quantity: 1, unitPrice: 1000 },
+        { type: 'service', refId: 1, name: 'Test', qty: 1, unitPriceCents: 100000 },
       ],
       payments: [
-        { method: 'CASH', amount: 900 },
+        { method: 'cash', amountCents: 90000 },
       ],
     });
     expect(res.status()).toBe(400);
@@ -481,7 +481,7 @@ test.describe('POST /api/pos/sales/finalize', () => {
       patientId: patient.id,
       items: [],
       payments: [
-        { method: 'CASH', amount: 100 },
+        { method: 'cash', amountCents: 10000 },
       ],
     });
     expect(res.status()).toBe(400);
@@ -499,7 +499,7 @@ test.describe('POST /api/pos/sales/finalize', () => {
       shiftId: sharedShiftId,
       patientId: patient.id,
       items: [
-        { lineType: 'SERVICE', refId: 1, name: 'Test', quantity: 1, unitPrice: 500 },
+        { type: 'service', refId: 1, name: 'Test', qty: 1, unitPriceCents: 50000 },
       ],
       payments: [],
     });
@@ -524,10 +524,10 @@ test.describe('POST /api/pos/sales/finalize', () => {
       shiftId: sharedShiftId,
       patientId: patient.id,
       items: [
-        { lineType: 'SERVICE', refId: 1, name: 'Test', quantity: 1, unitPrice: 100 },
+        { type: 'service', refId: 1, name: 'Test', qty: 1, unitPriceCents: 10000 },
       ],
       payments: [
-        { method: 'CASH', amount: 100 },
+        { method: 'cash', amountCents: 10000 },
       ],
     });
     expect([403, 404]).toContain(res.status());
@@ -544,10 +544,10 @@ test.describe('POST /api/pos/sales/finalize', () => {
       shiftId: sharedShiftId,
       patientId: patient.id,
       items: [
-        { lineType: 'SERVICE', refId: 1, name: 'Test', quantity: 1, unitPrice: 100 },
+        { type: 'service', refId: 1, name: 'Test', qty: 1, unitPriceCents: 10000 },
       ],
       payments: [
-        { method: 'CASH', amount: 100 },
+        { method: 'cash', amountCents: 10000 },
       ],
     });
     expect(res.status()).toBe(403);

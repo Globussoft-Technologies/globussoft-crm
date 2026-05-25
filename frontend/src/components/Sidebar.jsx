@@ -1108,6 +1108,13 @@ function renderTravelNav({
           one table; complements the per-supplier expand on SuppliersAdmin.
           Sits directly under Suppliers since payables are supplier-adjacent. */}
       <Link to="/travel/payables" icon={CreditCard} label="Payables" />
+      {/* #905 slice 3 — TravelCommissionProfile CRUD admin. Sits with the
+          supplier-financial cluster (Suppliers / Payables) because commission
+          profiles drive supplier-payable calculation. GET is verifyToken-only
+          so the link is visible to every role; canWrite + Delete gates live
+          inside the page. Award icon picked over BadgePercent (taken by
+          Pricing Rules) and TicketPercent (taken by wellness Coupons). */}
+      <Link to="/travel/commission-profiles" icon={Award} label="Commission Profiles" />
       <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" />
       {/* Arc 2 #900 slice 2 — operator-facing Quote Builder (line items +
           totals + action cluster). Distinct from the CRUD list above.
@@ -1129,6 +1136,14 @@ function renderTravelNav({
           MANAGER+ operator-facing surface; real impl per PRD §8 build
           order in docs/PRD_TRAVEL_MARKETING_FLYER.md. */}
       {isManager && <Link to="/travel/marketing/flyer-studio" icon={FileImage} label="Marketing Flyer Studio" />}
+      {/* #908 slice 2 — FlyerTemplates library list (companion to the live
+          composer above). Operator-saved templates with palette-swatch
+          preview; "Use as starting point" handoff into the Studio. Same
+          isManager gate as the Studio — the two are paired surfaces.
+          Palette icon picked for the page's 5-hex palette swatch preview
+          and to read as a "template library" (not the FileImage active
+          composer). */}
+      {isManager && <Link to="/travel/flyer-templates" icon={Palette} label="Flyer Templates" />}
 
       {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells, admin-only.
           Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}

@@ -193,6 +193,19 @@ const TravelMilestoneTracker = lazy(() => import("./pages/travel/MilestoneTracke
 // will swap to GET /api/travel/payables once slice 6 ships the consolidating
 // endpoint (shipped page commit 2a0b00ab).
 const TravelPayables = lazy(() => import("./pages/travel/Payables"));
+// #905 slice 3 frontend consumer — TravelCommissionProfile CRUD admin.
+// Consumes /api/travel/commission-profiles (backend slice 2 b5042743). GET
+// is verifyToken-only (any role can view); POST/PUT gated to ADMIN+MANAGER
+// and DELETE gated to ADMIN — mirrored client-side via canWrite + Delete
+// button gates inside the page. Shipped page commit 6c2805f9.
+const TravelCommissionProfilesAdmin = lazy(() => import("./pages/travel/CommissionProfilesAdmin"));
+// #908 slice 2 frontend consumer — TravelFlyerTemplate list page; companion
+// to MarketingFlyerStudio (the live composer). Lists operator-saved templates
+// with sub-brand filter, name search, palette-swatch preview, and a "Use as
+// starting point" handoff to the Studio. Backend slice 3 (TravelFlyerTemplate
+// CRUD at /api/travel/flyer-templates) shipped 5c2dd474. Shipped page commit
+// a64c1058.
+const TravelFlyerTemplates = lazy(() => import("./pages/travel/FlyerTemplates"));
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
@@ -1309,6 +1322,17 @@ export default function App() {
                   on SuppliersAdmin). Placeholder client-side fan-out fetch
                   until slice 6 consolidating endpoint ships. */}
               <Route path="travel/payables" element={<TravelOnly><TravelPayables /></TravelOnly>} />
+              {/* #905 slice 3 — TravelCommissionProfile CRUD admin. Backend
+                  GET is verifyToken-only (any role can view); write gates are
+                  enforced client-side via canWrite (ADMIN/MANAGER) and the
+                  Delete button (ADMIN-only) inside the page. No RoleGuard
+                  wrap mirrors the MilestoneTracker / Payables pattern. */}
+              <Route path="travel/commission-profiles" element={<TravelOnly><TravelCommissionProfilesAdmin /></TravelOnly>} />
+              {/* #908 slice 2 — FlyerTemplates list page. Backend GET is
+                  verifyToken-only; write gates (canWrite) live inside the
+                  page. Same no-RoleGuard convention as the other view-by-
+                  default travel admin pages. */}
+              <Route path="travel/flyer-templates" element={<TravelOnly><TravelFlyerTemplates /></TravelOnly>} />
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
               <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
               <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />

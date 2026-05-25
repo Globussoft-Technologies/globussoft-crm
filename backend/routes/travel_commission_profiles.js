@@ -23,6 +23,7 @@
  *   GET    /api/travel/commission-profiles/:id/summary/by-contact — per-contact aggregation (slice 14)
  *   GET    /api/travel/commission-profiles/:id/summary/by-month — monthly time-series rollup (slice 15)
  *   GET    /api/travel/commission-profiles/:id/summary/by-quarter — quarterly time-series rollup (slice 16)
+ *   GET    /api/travel/commission-profiles/:id/summary/by-year — annual time-series rollup (slice 17)
  *
  * Validation strictness (slice 2):
  *   - name required, non-empty trim                       → 400 MISSING_FIELDS

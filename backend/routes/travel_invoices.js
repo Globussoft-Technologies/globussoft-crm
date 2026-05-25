@@ -29,6 +29,7 @@ const {
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const pdfRenderer = require("../services/pdfRenderer");
+const { invoicePrefixFor } = require("../lib/travelFiscalYear");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
 
@@ -232,6 +233,39 @@ async function nextInvoiceNum(tenantId) {
       : 0;
     const next = String(latestSerial + 1).padStart(4, "0");
     return `TINV-${year}-${next}`;
+  });
+}
+
+/**
+ * #901 slice 5 — Per-sub-brand per-fiscal-year invoice serial helper.
+ *
+ * Coexists with nextInvoiceNum (which keeps the create-time TINV-YYYY-NNNN
+ * scheme intact for back-compat with all existing tests and the frontend
+ * InvoicesAdmin list view). This helper is invoked ONLY by the operator-
+ * triggered Draft -> Issued transition at POST /:id/issue, where the
+ * customer-facing invoice number is committed.
+ *
+ * Format: "<PREFIX>/<NNNN>" where <PREFIX> is produced by
+ * invoicePrefixFor(subBrand, date) (e.g. "TMC/26-27", "RFU/26-27",
+ * "TS/26-27", "VS/26-27"). Serial pads to 4 digits and resets per
+ * (tenantId, subBrand, fiscal year).
+ *
+ * Race-safe via $transaction, same shape as nextInvoiceNum. The
+ * @@unique([tenantId, invoiceNum]) on TravelInvoice is the second-line
+ * backstop if the transaction's isolation level permits a phantom read.
+ */
+async function nextSubBrandInvoiceNum(tenantId, subBrand, date = new Date()) {
+  const prefix = invoicePrefixFor(subBrand, date); // e.g. "TMC/26-27"
+  return await prisma.$transaction(async (tx) => {
+    const latest = await tx.travelInvoice.findFirst({
+      where: { tenantId, invoiceNum: { startsWith: `${prefix}/` } },
+      orderBy: { invoiceNum: "desc" },
+      select: { invoiceNum: true },
+    });
+    const lastSerial = latest
+      ? parseInt(latest.invoiceNum.split("/").pop(), 10) || 0
+      : 0;
+    return `${prefix}/${String(lastSerial + 1).padStart(4, "0")}`;
   });
 }
 
@@ -684,6 +718,109 @@ router.delete(
       }
       console.error("[travel-invoices] delete error:", e.message);
       res.status(500).json({ error: "Failed to delete invoice" });
+    }
+  },
+);
+
+// ============================================================================
+// POST /api/travel/invoices/:id/issue — Arc 2 #901 slice 5.
+//
+// Operator-action state transition: Draft -> Issued. Replaces the
+// create-time TINV-YYYY-NNNN serial with a per-sub-brand per-fiscal-year
+// customer-facing number (e.g. "TMC/26-27/0001"). PRD_TRAVEL_BILLING UC-2.5.
+//
+// Auth: ADMIN/MANAGER only.
+// Pre-conditions: invoice exists, tenant-scoped, sub-brand-accessible,
+//   status === 'Draft'.
+// Side effects: invoiceNum reassigned via nextSubBrandInvoiceNum,
+//   status -> 'Issued', audit row stamped action='TRAVEL_INVOICE_ISSUED'
+//   with details { oldInvoiceNum, newInvoiceNum, subBrand }.
+//
+// Returns: 200 + updated invoice row (NOT 201 — this is a state
+// transition, not a resource creation).
+//
+// Error codes: INVALID_ID (400), INVOICE_NOT_FOUND (404),
+//   SUB_BRAND_DENIED (403), INVALID_STATE (400 — not in Draft).
+//
+// NOTE on schema: TravelInvoice has no issuedAt column today. The
+// existing updatedAt @updatedAt timestamp captures the transition moment
+// transparently; if Q-future surfaces a need for a dedicated issuedAt
+// column for reporting, that's an additive schema change in a later
+// slice (out of scope here per the slice-5 file budget).
+// ============================================================================
+router.post(
+  "/invoices/:id/issue",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const invoice = await prisma.travelInvoice.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!invoice) {
+        return res.status(404).json({
+          error: "Invoice not found",
+          code: "INVOICE_NOT_FOUND",
+        });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, invoice.subBrand)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      if (invoice.status !== "Draft") {
+        return res.status(400).json({
+          error: `Only Draft invoices may be issued (current status: ${invoice.status})`,
+          code: "INVALID_STATE",
+        });
+      }
+
+      const oldInvoiceNum = invoice.invoiceNum;
+      const newInvoiceNum = await nextSubBrandInvoiceNum(
+        req.travelTenant.id,
+        invoice.subBrand,
+      );
+
+      const updated = await prisma.travelInvoice.update({
+        where: { id },
+        data: {
+          invoiceNum: newInvoiceNum,
+          status: "Issued",
+        },
+      });
+
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_ISSUED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          oldInvoiceNum,
+          newInvoiceNum,
+          subBrand: updated.subBrand,
+        },
+      );
+
+      res.status(200).json(updated);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] issue error:", e.message);
+      res.status(500).json({ error: "Failed to issue invoice" });
     }
   },
 );

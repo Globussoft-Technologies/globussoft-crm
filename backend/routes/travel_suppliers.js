@@ -1620,6 +1620,357 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/compare — multi-supplier side-by-side scorecard
+//                                      (Arc 2 #903 slice 19)
+//
+// PRD §3.7.b sortable suppliers index + §3.7.a per-supplier dashboard +
+// OQ-9.5 quality-score: operators picking between two or three suppliers
+// for the same route/category need a compact "Hilton Mumbai vs Marriott
+// Mumbai vs Taj Mumbai" comparison. Same metrics as slice-16 scorecard
+// (bookingVolume, onTimeDeliveryRate, cancelRate, totalAmountPaid, paid /
+// pending / scheduled / cancelled counts), computed in one batched query
+// per supplier window, then the response also picks a "best" / "worst"
+// summary across the requested set.
+//
+// MUST be registered BEFORE `GET /suppliers/:id` — the literal "compare"
+// token would otherwise be consumed by the :id param (yielding 400
+// INVALID_ID since parseInt("compare") is NaN). Same hazard as slice-10
+// search + slice-11 exposure.
+//
+// Query params:
+//   ids   required, comma-separated supplier ids  — 2..10 items
+//   from  optional ISO date / parseable date string (default: now - 365d)
+//   to    optional ISO date / parseable date string (default: now)
+//
+// Response shape:
+//   {
+//     window: { from, to },
+//     suppliers: [
+//       {
+//         id, name, supplierCategory, subBrand,
+//         metrics: {
+//           bookingVolume, paidCount, cancelledCount, pendingCount,
+//           scheduledCount, onTimeCount, lateCount, onTimeDeliveryRate,
+//           cancelRate, totalAmountPaid,
+//         },
+//       },
+//       ...
+//     ],
+//     summary: {
+//       bestOnTimeSupplierId,    // null if all rates null
+//       worstOnTimeSupplierId,   // null if all rates null
+//       lowestCancelSupplierId,  // null if all rates null
+//       highestVolumeSupplierId, // null if all 0 volume
+//     },
+//   }
+//
+// Decisions:
+//   - 2..10 ids: 1 id makes no sense (use scorecard); >10 is operator
+//     fat-finger / loop sink. Hard cap at 10 keeps the response payload
+//     small (UI table is the realistic consumer; 10 rows fits a viewport
+//     before scrolling).
+//   - Each supplier's metrics are computed via the same shape as slice-16
+//     scorecard so the front-end can re-use that renderer. Reuses
+//     round4Scorecard + round2Scorecard helpers + SCORECARD_DEFAULT_WINDOW_MS
+//     + SCORECARD_MAX_ROWS already declared above.
+//   - Sub-brand access: ALL ids must be in the operator's allowed set. If
+//     ANY id is denied, the whole request returns 403 SUB_BRAND_DENIED with
+//     the offending supplierId — partial responses would create confusing
+//     UX where an operator sees scorecard rows for some suppliers and not
+//     others without knowing why.
+//   - 404: if ANY id is missing, return 404 NOT_FOUND with missingIds[].
+//     Same all-or-nothing principle as sub-brand denial above.
+//   - One batched groupBy across the ids covers payable aggregation cheaply
+//     in the common case (≤10 suppliers, ≤500 payables each). For on-time
+//     metrics we still need the slim row projection (status + dueDate +
+//     paidAt + amount) — done via a single findMany scoped to all ids.
+//   - Error codes: INVALID_IDS, TOO_FEW_IDS, TOO_MANY_IDS, INVALID_ID,
+//     INVALID_DATE, INVALID_DATE_RANGE, NOT_FOUND, SUB_BRAND_DENIED.
+// ============================================================================
+
+const COMPARE_MIN_IDS = 2;
+const COMPARE_MAX_IDS = 10;
+
+function parseCompareIdsOrThrow(input) {
+  if (input == null || String(input).trim() === "") {
+    const err = new Error(
+      "ids query param is required (comma-separated supplier ids)",
+    );
+    err.status = 400;
+    err.code = "INVALID_IDS";
+    throw err;
+  }
+  const parts = String(input)
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+  if (parts.length < COMPARE_MIN_IDS) {
+    const err = new Error(
+      `ids must contain at least ${COMPARE_MIN_IDS} supplier ids`,
+    );
+    err.status = 400;
+    err.code = "TOO_FEW_IDS";
+    throw err;
+  }
+  if (parts.length > COMPARE_MAX_IDS) {
+    const err = new Error(
+      `ids must contain at most ${COMPARE_MAX_IDS} supplier ids`,
+    );
+    err.status = 400;
+    err.code = "TOO_MANY_IDS";
+    throw err;
+  }
+  const ids = [];
+  const seen = new Set();
+  for (const p of parts) {
+    const n = parseInt(p, 10);
+    if (!Number.isFinite(n) || String(n) !== p) {
+      const err = new Error(`ids must all be numeric (offender: "${p}")`);
+      err.status = 400;
+      err.code = "INVALID_ID";
+      throw err;
+    }
+    if (!seen.has(n)) {
+      seen.add(n);
+      ids.push(n);
+    }
+  }
+  if (ids.length < COMPARE_MIN_IDS) {
+    const err = new Error(
+      `ids must contain at least ${COMPARE_MIN_IDS} distinct supplier ids`,
+    );
+    err.status = 400;
+    err.code = "TOO_FEW_IDS";
+    throw err;
+  }
+  return ids;
+}
+
+router.get(
+  "/suppliers/compare",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const ids = parseCompareIdsOrThrow(req.query.ids);
+
+      // Window parsing — mirrors scorecard (same default + same error codes).
+      const now = new Date();
+      let from = null;
+      let to = null;
+      if (req.query.from != null && req.query.from !== "") {
+        const dt = new Date(String(req.query.from));
+        if (Number.isNaN(dt.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date / parseable date string",
+            code: "INVALID_DATE",
+          });
+        }
+        from = dt;
+      }
+      if (req.query.to != null && req.query.to !== "") {
+        const dt = new Date(String(req.query.to));
+        if (Number.isNaN(dt.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date / parseable date string",
+            code: "INVALID_DATE",
+          });
+        }
+        to = dt;
+      }
+      if (from && to && from.getTime() > to.getTime()) {
+        return res.status(400).json({
+          error: "from must not be after to",
+          code: "INVALID_DATE_RANGE",
+        });
+      }
+      if (!from && !to) {
+        to = now;
+        from = new Date(now.getTime() - SCORECARD_DEFAULT_WINDOW_MS);
+      } else if (!from) {
+        from = new Date(to.getTime() - SCORECARD_DEFAULT_WINDOW_MS);
+      } else if (!to) {
+        to = now;
+      }
+
+      const suppliers = await prisma.travelSupplier.findMany({
+        where: { id: { in: ids }, tenantId: req.travelTenant.id },
+        select: { id: true, name: true, supplierCategory: true, subBrand: true },
+      });
+
+      // 404 if ANY requested id is missing — all-or-nothing semantics.
+      if (suppliers.length !== ids.length) {
+        const foundIds = new Set(suppliers.map((s) => s.id));
+        const missingIds = ids.filter((id) => !foundIds.has(id));
+        return res.status(404).json({
+          error: "One or more suppliers not found",
+          code: "NOT_FOUND",
+          missingIds,
+        });
+      }
+
+      // Sub-brand gate: if ANY supplier's subBrand is denied, 403.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const deniedIds = [];
+      for (const s of suppliers) {
+        if (!canAccessSubBrand(allowed, s.subBrand)) deniedIds.push(s.id);
+      }
+      if (deniedIds.length > 0) {
+        return res.status(403).json({
+          error: "Sub-brand access denied for one or more suppliers",
+          code: "SUB_BRAND_DENIED",
+          deniedIds,
+        });
+      }
+
+      const rows = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierId: { in: ids },
+          createdAt: { gte: from, lte: to },
+        },
+        select: {
+          supplierId: true,
+          status: true,
+          dueDate: true,
+          paidAt: true,
+          amount: true,
+        },
+        take: SCORECARD_MAX_ROWS,
+      });
+
+      // Group rows by supplierId, then run the same metric reducer used by
+      // scorecard (slice 16). Each supplier's reducer state stored in a Map
+      // so we can iterate the supplier list in input order at the end.
+      const stateById = new Map();
+      for (const id of ids) {
+        stateById.set(id, {
+          bookingVolume: 0,
+          paidCount: 0,
+          cancelledCount: 0,
+          pendingCount: 0,
+          scheduledCount: 0,
+          onTimeCount: 0,
+          lateCount: 0,
+          totalAmountPaid: 0,
+        });
+      }
+      for (const r of rows) {
+        const st = stateById.get(r.supplierId);
+        if (!st) continue;
+        st.bookingVolume++;
+        if (r.status === "paid") {
+          st.paidCount++;
+          st.totalAmountPaid += Number(r.amount || 0);
+          if (r.dueDate && r.paidAt) {
+            const due = r.dueDate instanceof Date
+              ? r.dueDate.getTime()
+              : new Date(r.dueDate).getTime();
+            const paid = r.paidAt instanceof Date
+              ? r.paidAt.getTime()
+              : new Date(r.paidAt).getTime();
+            if (Number.isFinite(due) && Number.isFinite(paid)) {
+              if (paid <= due) st.onTimeCount++;
+              else st.lateCount++;
+            }
+          }
+        } else if (r.status === "cancelled") {
+          st.cancelledCount++;
+        } else if (r.status === "pending") {
+          st.pendingCount++;
+        } else if (r.status === "scheduled") {
+          st.scheduledCount++;
+        }
+      }
+
+      // Build the suppliers[] array in the ORDER requested by the operator
+      // so the comparison columns line up with their query.
+      const supplierById = new Map(suppliers.map((s) => [s.id, s]));
+      const resultSuppliers = ids.map((id) => {
+        const s = supplierById.get(id);
+        const st = stateById.get(id);
+        const onTimeDenom = st.onTimeCount + st.lateCount;
+        const onTimeDeliveryRate = onTimeDenom > 0
+          ? round4Scorecard(st.onTimeCount / onTimeDenom)
+          : null;
+        const cancelRate = st.bookingVolume > 0
+          ? round4Scorecard(st.cancelledCount / st.bookingVolume)
+          : null;
+        return {
+          id: s.id,
+          name: s.name,
+          supplierCategory: s.supplierCategory,
+          subBrand: s.subBrand,
+          metrics: {
+            bookingVolume: st.bookingVolume,
+            paidCount: st.paidCount,
+            cancelledCount: st.cancelledCount,
+            pendingCount: st.pendingCount,
+            scheduledCount: st.scheduledCount,
+            onTimeCount: st.onTimeCount,
+            lateCount: st.lateCount,
+            onTimeDeliveryRate,
+            cancelRate,
+            totalAmountPaid: round2Scorecard(st.totalAmountPaid),
+          },
+        };
+      });
+
+      // Cross-supplier summary — pick best/worst across the comparison set.
+      // Nulls are excluded from best/worst picks; if every supplier has a
+      // null rate (no on-time-eligible rows), the corresponding pick is null.
+      let bestOnTimeSupplierId = null;
+      let worstOnTimeSupplierId = null;
+      let lowestCancelSupplierId = null;
+      let highestVolumeSupplierId = null;
+      let bestOnTimeVal = -Infinity;
+      let worstOnTimeVal = Infinity;
+      let lowestCancelVal = Infinity;
+      let highestVolumeVal = -Infinity;
+      for (const r of resultSuppliers) {
+        if (r.metrics.onTimeDeliveryRate != null) {
+          if (r.metrics.onTimeDeliveryRate > bestOnTimeVal) {
+            bestOnTimeVal = r.metrics.onTimeDeliveryRate;
+            bestOnTimeSupplierId = r.id;
+          }
+          if (r.metrics.onTimeDeliveryRate < worstOnTimeVal) {
+            worstOnTimeVal = r.metrics.onTimeDeliveryRate;
+            worstOnTimeSupplierId = r.id;
+          }
+        }
+        if (r.metrics.cancelRate != null) {
+          if (r.metrics.cancelRate < lowestCancelVal) {
+            lowestCancelVal = r.metrics.cancelRate;
+            lowestCancelSupplierId = r.id;
+          }
+        }
+        if (r.metrics.bookingVolume > 0 && r.metrics.bookingVolume > highestVolumeVal) {
+          highestVolumeVal = r.metrics.bookingVolume;
+          highestVolumeSupplierId = r.id;
+        }
+      }
+
+      res.json({
+        window: { from: from.toISOString(), to: to.toISOString() },
+        suppliers: resultSuppliers,
+        summary: {
+          bestOnTimeSupplierId,
+          worstOnTimeSupplierId,
+          lowestCancelSupplierId,
+          highestVolumeSupplierId,
+        },
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] compare error:", e.message);
+      res.status(500).json({ error: "Failed to compare suppliers" });
+    }
+  },
+);
+
 // GET /api/travel/suppliers/:id
 router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

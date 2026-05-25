@@ -9,6 +9,7 @@
 //   POST   /api/travel/itineraries/:id/items/bulk-reorder   — atomic bulk reposition (#907 slice 8)
 //   POST   /api/travel/itineraries/:id/items/bulk-delete    — atomic bulk delete (#907 slice 11)
 //   GET    /api/travel/itineraries/:id/items/search         — item notes search/filter (#907 slice 10)
+//   GET    /api/travel/itineraries/:id/totals               — itinerary aggregation rollup (#907 slice 14)
 //   PATCH  /api/travel/itineraries/:id/items/:itemId        — amend an item
 //   DELETE /api/travel/itineraries/:id/items/:itemId        — remove an item
 //   POST   /api/travel/itineraries/:id/items/:itemId/duplicate — clone one item in place (#907 slice 12)
@@ -2417,5 +2418,151 @@ router.get(
     }
   },
 );
+
+// ─── Aggregation rollup (#907 slice 14) ─────────────────────────────
+//
+// GET /api/travel/itineraries/:id/totals
+//
+// Pure read-only aggregation over ItineraryItem rows for one itinerary.
+// Returns counts + money sums bucketed by itemType plus grand totals.
+// Sibling to the day-costs (#907 slice 2) + supplier-rollup (#907
+// slice 7) endpoints — those slice the same row set by day and by
+// supplier respectively; this one slices by itemType.
+//
+// Query params:
+//   - itemType (optional) — restrict aggregation to a single itemType.
+//     Unknown values return 400 INVALID_ITEM_TYPE. The byItemType
+//     envelope STILL contains all 6 keys (the non-matching ones stay
+//     zero-filled) so the consumer-side rendering shape is stable.
+//
+// Tenant + sub-brand guard via loadItineraryWithGuard (same as the
+// other item-level endpoints — inherits the 401 / 403 SUB_BRAND_DENIED
+// / 404 NOT_FOUND envelope shape).
+//
+// Money rounding: half-up to 2dp via Number.EPSILON (idiom shared
+// across the rest of the file).
+//
+// Response shape (stable):
+//   {
+//     itineraryId,
+//     totalItems,
+//     grand: { totalUnitCost, totalMarkup, totalGstAmount, totalPrice },
+//     byItemType: {
+//       flight:    { count, totalUnitCost, totalMarkup, totalGstAmount, totalPrice },
+//       hotel:     { ... },
+//       transfer:  { ... },
+//       activity:  { ... },
+//       visa:      { ... },
+//       insurance: { ... }
+//     }
+//   }
+//
+// Refs docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3.
+router.get("/itineraries/:id/totals", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+
+    // Optional itemType filter — unknown values reject up front.
+    let typeFilter = null;
+    if (req.query.itemType !== undefined) {
+      const t = String(req.query.itemType);
+      if (!VALID_ITEM_TYPES.includes(t)) {
+        return res.status(400).json({
+          error: `itemType must be one of: ${VALID_ITEM_TYPES.join(", ")}`,
+          code: "INVALID_ITEM_TYPE",
+        });
+      }
+      typeFilter = t;
+    }
+
+    const where = { itineraryId: itin.id };
+    if (typeFilter) where.itemType = typeFilter;
+
+    const items = await prisma.itineraryItem.findMany({
+      where,
+      select: {
+        itemType: true,
+        unitCost: true,
+        markup: true,
+        gstAmount: true,
+        totalPrice: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const toNum = (v) => (v == null ? 0 : Number(v));
+
+    // Zero-fill all 6 buckets up-front so the response shape is stable
+    // even when an itinerary has zero items of a given type.
+    const byItemType = {};
+    for (const t of VALID_ITEM_TYPES) {
+      byItemType[t] = {
+        count: 0,
+        totalUnitCost: 0,
+        totalMarkup: 0,
+        totalGstAmount: 0,
+        totalPrice: 0,
+      };
+    }
+
+    let totalUnitCost = 0;
+    let totalMarkup = 0;
+    let totalGstAmount = 0;
+    let totalPrice = 0;
+
+    for (const row of items) {
+      const u = toNum(row.unitCost);
+      const m = toNum(row.markup);
+      const g = toNum(row.gstAmount);
+      const p = toNum(row.totalPrice);
+      const bucket = byItemType[row.itemType];
+      // Defensive — if a row somehow carries an itemType outside
+      // VALID_ITEM_TYPES (schema enum widened later, mock drift, etc.)
+      // skip it rather than spread money into a non-existent bucket.
+      if (!bucket) continue;
+      bucket.count += 1;
+      bucket.totalUnitCost += u;
+      bucket.totalMarkup += m;
+      bucket.totalGstAmount += g;
+      bucket.totalPrice += p;
+      totalUnitCost += u;
+      totalMarkup += m;
+      totalGstAmount += g;
+      totalPrice += p;
+    }
+
+    // Round all money fields half-up to 2dp; counts stay integer.
+    for (const t of VALID_ITEM_TYPES) {
+      const b = byItemType[t];
+      b.totalUnitCost = round2(b.totalUnitCost);
+      b.totalMarkup = round2(b.totalMarkup);
+      b.totalGstAmount = round2(b.totalGstAmount);
+      b.totalPrice = round2(b.totalPrice);
+    }
+
+    res.json({
+      itineraryId: itin.id,
+      totalItems: items.length,
+      grand: {
+        totalUnitCost: round2(totalUnitCost),
+        totalMarkup: round2(totalMarkup),
+        totalGstAmount: round2(totalGstAmount),
+        totalPrice: round2(totalPrice),
+      },
+      byItemType,
+    });
+  } catch (e) {
+    if (e.status) {
+      if (e.code === "NOT_FOUND") {
+        return res
+          .status(404)
+          .json({ error: "Itinerary not found", code: "ITINERARY_NOT_FOUND" });
+      }
+      return res.status(e.status).json({ error: e.message, code: e.code });
+    }
+    console.error("[travel-itin] totals error:", e.message);
+    res.status(500).json({ error: "Failed to compute itinerary totals" });
+  }
+});
 
 module.exports = router;

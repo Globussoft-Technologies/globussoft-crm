@@ -44,6 +44,7 @@ const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 const llmRouter = require("../lib/llmRouter");
+const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 
 const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
 // Phase 2 (PRD §4.7) extends the enum with advance_paid / fully_paid for
@@ -1163,6 +1164,99 @@ router.post("/itineraries/public/:shareToken/record-advance-payment", async (req
   } catch (e) {
     console.error("[travel-itin-public] record-advance error:", e.message);
     res.status(500).json({ error: "Failed to record advance" });
+  }
+});
+
+// ─── Per-day cost aggregation (#907 slice 2) ────────────────────────
+//
+// GET /api/travel/itineraries/:id/day-costs
+//
+// Consumes lib/itineraryDayCostCalculator.js (slice 1, commit 3072e5bf).
+// Loads the parent itinerary tenant-scoped + sub-brand-scoped, fetches its
+// items, maps each ItineraryItem to the helper's expected shape
+// ({ cost, itemType, dayOffset|dayNumber|date }) and returns the
+// helper's `{ days, grandTotal, totalDays, averageDailyCost }` envelope.
+//
+// Day-source mapping (no native column on ItineraryItem — the source
+// fields live inside the operator-supplied detailsJson payload):
+//   - detailsJson.dayOffset  preferred (0-indexed from trip start)
+//   - detailsJson.dayNumber  alternate (1-indexed)
+//   - detailsJson.date       alternate (ISO; resolved against tripStart)
+//
+// tripStart precedence:
+//   1. ?tripStart=ISODate query param (operator override)
+//   2. itinerary.startDate
+//   3. today UTC (helper default)
+//
+// Cost source per item: `totalPrice` preferred, falls back to `unitCost`.
+// Items with neither resolved-day-source nor cost are still PASSED to the
+// helper which skips them per its precedence rules (keeps the contract
+// auditable from the helper side).
+router.get("/itineraries/:id/day-costs", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+    const full = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+      select: { id: true, startDate: true },
+    });
+    if (!full) {
+      return res.status(404).json({ error: "Itinerary not found", code: "ITINERARY_NOT_FOUND" });
+    }
+
+    const items = await prisma.itineraryItem.findMany({
+      where: { itineraryId: full.id },
+      orderBy: { position: "asc" },
+    });
+
+    // Resolve tripStart per precedence rules above.
+    let tripStart;
+    if (req.query.tripStart) {
+      const overrideDate = new Date(String(req.query.tripStart));
+      if (Number.isFinite(overrideDate.getTime())) {
+        tripStart = overrideDate;
+      }
+    }
+    if (!tripStart && full.startDate) tripStart = new Date(full.startDate);
+
+    // Map ItineraryItem rows → helper input shape. Day source comes from
+    // detailsJson (parsed); cost comes from totalPrice or unitCost.
+    const helperItems = items.map((row) => {
+      let details = {};
+      if (row.detailsJson) {
+        try { details = JSON.parse(row.detailsJson); } catch { /* malformed → fall through */ }
+      }
+      const cost = row.totalPrice != null
+        ? Number(row.totalPrice)
+        : row.unitCost != null ? Number(row.unitCost) : 0;
+      const mapped = {
+        id: row.id,
+        itemType: row.itemType,
+        description: row.description,
+        cost,
+      };
+      if (typeof details.dayOffset === "number") mapped.dayOffset = details.dayOffset;
+      else if (typeof details.dayNumber === "number") mapped.dayNumber = details.dayNumber;
+      else if (details.date) mapped.date = details.date;
+      return mapped;
+    });
+
+    const result = computeDayCosts(helperItems, tripStart ? { tripStart } : {});
+
+    res.json({
+      itineraryId: full.id,
+      ...result,
+    });
+  } catch (e) {
+    if (e.status) {
+      // loadItineraryWithGuard surfaces NOT_FOUND for cross-tenant; rename
+      // to ITINERARY_NOT_FOUND for this endpoint's contract.
+      if (e.code === "NOT_FOUND") {
+        return res.status(404).json({ error: "Itinerary not found", code: "ITINERARY_NOT_FOUND" });
+      }
+      return res.status(e.status).json({ error: e.message, code: e.code });
+    }
+    console.error("[travel-itin] day-costs error:", e.message);
+    res.status(500).json({ error: "Failed to compute per-day costs" });
   }
 });
 

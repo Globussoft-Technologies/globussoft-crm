@@ -210,6 +210,14 @@ const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPacket
 const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
 const TravelLeadDetail = lazy(() => import("./pages/travel/LeadDetail"));
+// Arc 2 #904 slice — InboundLeads admin page (STUB consumer). Operator-facing
+// list of inbound leads ingested via POST /api/travel/inbound/leads/:channel
+// (slice 1 webhook scaffold 8b562b0b + slice 4 HMAC/spam verification
+// 5bd46b2e). The dedicated GET listing endpoint is deferred to a future
+// slice — page currently fetches /api/contacts?limit=100 and filters
+// client-side for `source.startsWith('inbound:')`. Convert-to-Lead button
+// hands off to /leads/:contactId. Shipped page commit 56f549f7.
+const TravelInboundLeads = lazy(() => import("./pages/travel/InboundLeads"));
 // Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells only.
 // Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9.
 const TravelVisaDashboard = lazy(() => import("./pages/travel/visa/Dashboard"));
@@ -1337,6 +1345,13 @@ export default function App() {
               <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
               <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />
               <Route path="travel/leads/:contactId" element={<TravelOnly><TravelLeadDetail /></TravelOnly>} />
+              {/* Arc 2 #904 slice — InboundLeads admin (STUB client-side
+                  filter pending dedicated GET endpoint). Operator surface
+                  for inbound webhook-ingested leads (Voyagr / web form /
+                  WhatsApp / ads / adsgpt / metaads / manual). No RoleGuard
+                  wrap — page is view-by-default and Convert-to-Lead routes
+                  to /leads/:contactId which carries its own gates. */}
+              <Route path="travel/inbound-leads" element={<TravelOnly><TravelInboundLeads /></TravelOnly>} />
               {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells.
                   Real implementation gated on product calls in
                   docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}

@@ -1095,6 +1095,13 @@ function renderTravelNav({
       )}
       <Link to="/travel" icon={Compass} label="Dashboard" />
       <Link to="/travel/leads" icon={UserPlus} label="Leads" />
+      {/* Arc 2 #904 slice — InboundLeads admin (operator surface for inbound
+          webhook-ingested leads). Sits directly under Leads since this is
+          the upstream ingestion view — operator drills from "what just
+          arrived via webhook?" → "convert to Lead" handoff into the main
+          Leads page. InboxIcon (alias for Inbox) is already imported in
+          the lucide-react block; matches the page's own icon choice. */}
+      <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" />
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
       <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />

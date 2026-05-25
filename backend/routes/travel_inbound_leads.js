@@ -584,4 +584,228 @@ router.get("/inbound/leads/by-channel", async (req, res) => {
   }
 });
 
+// ─── Slice 18 — tenant-wide inbound-leads stats rollup ─────────────────
+//
+// GET /inbound/leads/stats?tenantSlug=<slug>&from=<ISO>&to=<ISO>
+//
+// Higher-level summary surface above slice-10 /by-channel. Where /by-channel
+// returns one row per channel for a single window, /stats returns the
+// full operator KPI tile-strip in one call: total inbound count + per-channel
+// breakdown (every VALID_CHANNEL pre-seeded to 0) + per-source breakdown
+// (top-10 free-text sources + _other) + per-subBrand breakdown +
+// today/week/month counts + lastReceivedAt.
+//
+// Closes the structural-correctness gap flagged in CLAUDE.md (client-side
+// aggregation over a paginated endpoint): without this, the operator dashboard
+// has to fetch /api/contacts?limit=N and reduce() to render the inbound-leads
+// KPI strip — broken once N exceeds the page size.
+//
+// USER-readable (anodyne — counts + timestamps only; no payload contents).
+//
+// Query params:
+//   tenantSlug  REQUIRED — resolves to a travel tenant; 404 / 400 on miss.
+//   from        OPTIONAL — ISO8601 lower bound on Contact.createdAt (inclusive).
+//   to          OPTIONAL — ISO8601 upper bound on Contact.createdAt (inclusive).
+//
+// Response shape (200):
+//   {
+//     tenantId, tenantSlug,
+//     total,                          // count of all matching inbound contacts
+//     byChannel: {                    // every VALID_CHANNEL pre-seeded to 0
+//       voyagr, webform, whatsapp, ads, adsgpt, metaads, manual,
+//       indiamart, justdial, tradeindia,
+//     },
+//     bySource: { <source>: count },  // top-10 distinct free-text sources;
+//                                     // surplus collapses into _other.
+//     bySubBrand: { <subBrand|_none>: count },
+//     todayCount,                     // createdAt >= startOfDay(now)
+//     thisWeekCount,                  // createdAt >= now - 7d
+//     thisMonthCount,                 // createdAt >= now - 30d
+//     lastReceivedAt,                 // ISO string or null
+//   }
+//
+// Defensive: unknown channels (source prefix doesn't decode to a
+// VALID_CHANNEL suffix) are skipped — byChannel stays at exactly 10 keys.
+// Empty tenant → all zeros + lastReceivedAt:null.
+//
+// Errors:
+//   400 MISSING_TENANT_SLUG / INVALID_DATE / WRONG_VERTICAL
+//   404 TENANT_NOT_FOUND
+//   500 generic envelope
+const STATS_TOP_SOURCES = 10;
+
+router.get("/inbound/leads/stats", async (req, res) => {
+  try {
+    const { tenantSlug, from, to } = req.query || {};
+
+    if (!tenantSlug) {
+      return res.status(400).json({
+        error: "tenantSlug is required",
+        code: "MISSING_TENANT_SLUG",
+      });
+    }
+
+    // Optional ISO from/to bounds on Contact.createdAt. Both inclusive.
+    const createdAtWindow = {};
+    if (from) {
+      const d = new Date(String(from));
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      createdAtWindow.gte = d;
+    }
+    if (to) {
+      const d = new Date(String(to));
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      createdAtWindow.lte = d;
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true, vertical: true },
+    });
+    if (!tenant) {
+      return res.status(404).json({
+        error: "Tenant not found",
+        code: "TENANT_NOT_FOUND",
+      });
+    }
+    if (tenant.vertical !== "travel") {
+      return res.status(400).json({
+        error: "Tenant is not a travel tenant",
+        code: "WRONG_VERTICAL",
+      });
+    }
+
+    // Base predicate — tenant-scoped, soft-delete-aware, inbound-source-only.
+    // Each window-derived count re-applies the base predicate and tacks on its
+    // own createdAt floor so we don't double-filter the user-supplied window
+    // against the rolling today/week/month windows (which would always return 0
+    // if the user passed a from/to slice that excluded "now").
+    const baseWhere = {
+      tenantId: tenant.id,
+      deletedAt: null,
+      source: { startsWith: "inbound:" },
+    };
+    const windowedWhere = { ...baseWhere };
+    if (Object.keys(createdAtWindow).length > 0) {
+      windowedWhere.createdAt = createdAtWindow;
+    }
+
+    // Pull the full windowed inbound-contact roster. Selects only the columns
+    // we aggregate against to keep the payload tight even on large tenants.
+    const rows = await prisma.contact.findMany({
+      where: windowedWhere,
+      select: {
+        source: true,
+        subBrand: true,
+        createdAt: true,
+      },
+    });
+
+    // Pre-seed byChannel with every VALID_CHANNEL at 0 — stable response
+    // shape for the frontend chart code.
+    const byChannel = Object.create(null);
+    for (const c of VALID_CHANNELS) byChannel[c] = 0;
+    const bySourceRaw = Object.create(null);
+    const bySubBrand = Object.create(null);
+    let lastReceivedAt = null;
+    let total = 0;
+
+    for (const row of rows) {
+      total += 1;
+      const src = row.source || "";
+      // Bucket into byChannel when the source decodes to a known channel.
+      if (src.startsWith("inbound:")) {
+        const suffix = src.slice("inbound:".length);
+        if (Object.prototype.hasOwnProperty.call(byChannel, suffix)) {
+          byChannel[suffix] += 1;
+        }
+        // Defensive: unknown channels (source prefix present, suffix
+        // outside VALID_CHANNELS) silently drop from byChannel — keeps the
+        // key set at exactly 10 per the slice contract.
+      }
+      // Raw source breakdown — keep full literal source string; collapse
+      // to top-10 + _other after the scan.
+      bySourceRaw[src] = (bySourceRaw[src] || 0) + 1;
+
+      const sbKey = row.subBrand ? String(row.subBrand) : "_none";
+      bySubBrand[sbKey] = (bySubBrand[sbKey] || 0) + 1;
+
+      if (row.createdAt) {
+        const ts = row.createdAt instanceof Date
+          ? row.createdAt
+          : new Date(row.createdAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastReceivedAt || ts > lastReceivedAt) lastReceivedAt = ts;
+        }
+      }
+    }
+
+    // Collapse bySource to top-STATS_TOP_SOURCES + _other.
+    const sortedSources = Object.entries(bySourceRaw).sort(
+      (a, b) => b[1] - a[1],
+    );
+    const bySource = Object.create(null);
+    let otherCount = 0;
+    for (let i = 0; i < sortedSources.length; i++) {
+      if (i < STATS_TOP_SOURCES) {
+        bySource[sortedSources[i][0]] = sortedSources[i][1];
+      } else {
+        otherCount += sortedSources[i][1];
+      }
+    }
+    if (otherCount > 0) bySource._other = otherCount;
+
+    // Rolling day/week/month counts — each re-fires a tenant-scoped count
+    // with its own createdAt floor. Cheaper than scanning the full table
+    // three more times because Prisma .count uses the indexed createdAt
+    // path. Background-cron writes during the call are tolerated (they'd
+    // show up in a refetch within seconds).
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    const weekFloor = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const monthFloor = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const [todayCount, thisWeekCount, thisMonthCount] = await Promise.all([
+      prisma.contact.count({
+        where: { ...baseWhere, createdAt: { gte: startOfDay } },
+      }),
+      prisma.contact.count({
+        where: { ...baseWhere, createdAt: { gte: weekFloor } },
+      }),
+      prisma.contact.count({
+        where: { ...baseWhere, createdAt: { gte: monthFloor } },
+      }),
+    ]);
+
+    return res.status(200).json({
+      tenantId: tenant.id,
+      tenantSlug,
+      total,
+      byChannel,
+      bySource,
+      bySubBrand,
+      todayCount,
+      thisWeekCount,
+      thisMonthCount,
+      lastReceivedAt: lastReceivedAt ? lastReceivedAt.toISOString() : null,
+    });
+  } catch (e) {
+    console.error("[travel-inbound-leads] stats error:", e.message);
+    return res
+      .status(500)
+      .json({ error: "Failed to summarise inbound leads" });
+  }
+});
+
 module.exports = router;

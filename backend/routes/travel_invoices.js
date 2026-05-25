@@ -1331,6 +1331,80 @@ router.post(
         },
       });
 
+      // Arc 2 #901 slice 17 — auto-create default 25/50/25 PaymentSchedule.
+      // Per PRD_TRAVEL_BILLING UC-2.1 (Umrah staged settlement). The operator
+      // can pre-populate a custom schedule BEFORE calling /issue — in that
+      // case we skip auto-create so the operator's intent isn't clobbered.
+      // After issue, operator can still freely edit milestones via the
+      // CRUD endpoints from slice 6.
+      //
+      // Rounding semantics: round each milestone independently to 2 decimal
+      // places (paise / cent). The last milestone (25%) absorbs any 1-paise
+      // residual from rounding so the three rows always sum exactly to
+      // totalAmount. This matters because dashboards aggregate the schedule
+      // to derive "outstanding" and a 1-paise drift would surface forever.
+      let scheduleAutoCreated = false;
+      let autoCreatedCount = 0;
+      try {
+        const existingSchedule = await prisma.travelPaymentSchedule.findFirst({
+          where: { invoiceId: updated.id, tenantId: req.travelTenant.id },
+        });
+        if (!existingSchedule) {
+          const total = Number(updated.totalAmount);
+          if (Number.isFinite(total) && total > 0) {
+            const round2 = (n) => Math.round(n * 100) / 100;
+            const m1 = round2(total * 0.25);
+            const m2 = round2(total * 0.5);
+            // Last milestone absorbs rounding residual so the sum is exact.
+            const m3 = round2(total - m1 - m2);
+            const now = new Date();
+            const addDays = (d, days) =>
+              new Date(d.getTime() + days * 86_400_000);
+            await prisma.travelPaymentSchedule.createMany({
+              data: [
+                {
+                  tenantId: req.travelTenant.id,
+                  invoiceId: updated.id,
+                  milestoneOrder: 1,
+                  dueDate: now,
+                  expectedAmount: String(m1),
+                  expectedCurrency: updated.currency,
+                  status: "pending",
+                },
+                {
+                  tenantId: req.travelTenant.id,
+                  invoiceId: updated.id,
+                  milestoneOrder: 2,
+                  dueDate: addDays(now, 21),
+                  expectedAmount: String(m2),
+                  expectedCurrency: updated.currency,
+                  status: "pending",
+                },
+                {
+                  tenantId: req.travelTenant.id,
+                  invoiceId: updated.id,
+                  milestoneOrder: 3,
+                  dueDate: addDays(now, 90),
+                  expectedAmount: String(m3),
+                  expectedCurrency: updated.currency,
+                  status: "pending",
+                },
+              ],
+            });
+            scheduleAutoCreated = true;
+            autoCreatedCount = 3;
+          }
+        }
+      } catch (scheduleErr) {
+        // Don't fail the /issue transition just because the auto-create
+        // failed (e.g. transient DB hiccup). The operator can manually
+        // create the schedule via slice 6's POST endpoint. Log + continue.
+        console.error(
+          "[travel-invoices] schedule auto-create failed:",
+          scheduleErr.message,
+        );
+      }
+
       await writeAudit(
         "TravelInvoice",
         "TRAVEL_INVOICE_ISSUED",
@@ -1341,6 +1415,8 @@ router.post(
           oldInvoiceNum,
           newInvoiceNum,
           subBrand: updated.subBrand,
+          scheduleAutoCreated,
+          ...(scheduleAutoCreated ? { milestoneCount: autoCreatedCount } : {}),
         },
       );
 

@@ -31,6 +31,8 @@ const { writeAudit } = require("../lib/audit");
 const pdfRenderer = require("../services/pdfRenderer");
 const { invoicePrefixFor, fiscalYearStart } = require("../lib/travelFiscalYear");
 const { computeTcs, isOverseasDestination } = require("../lib/tcsCalculation");
+// Arc 2 #901 slice 21 — TDS withholding sum from lines (lineType==='tds').
+const { computeTdsFromLines } = require("../lib/tdsCalculation");
 // Arc 2 #902 slice 7 — GST tax-preview pipeline (CGST/SGST/IGST math +
 // state-code resolver + SAC codes + GSTR-1 HSN-summary grouping). The
 // invoice tax-preview endpoint mirrors backend/routes/travel_quotes.js
@@ -1420,7 +1422,60 @@ router.post(
         },
       );
 
-      res.status(200).json(updated);
+      // Arc 2 #901 slice 21 — TDS withholding envelope (PRD_TRAVEL_BILLING §3).
+      // Sum amounts on lineType==='tds' rows; compute payableAfterTds =
+      // totalAmount - totalTds. Both go on the response envelope ALONGSIDE
+      // the top-level invoice fields so existing slice-5 / slice-17 callers
+      // (which destructure body.status / body.invoiceNum at top-level) keep
+      // working. Additive-envelope pattern — see standing rule "API response
+      // shape change → prefer additive envelope with back-compat top-level
+      // fields" in CLAUDE.md.
+      //
+      // Defensive against test mocks where findMany isn't stubbed: either
+      // returning null/undefined or throwing both yield empty arrays so the
+      // envelope still ships with totalTds=0 (the back-compat case for
+      // invoices with no TDS line, which is the majority pre-slice-21).
+      let lines = [];
+      let paymentSchedule = [];
+      try {
+        const rawLines = await prisma.travelInvoiceLine.findMany({
+          where: { invoiceId: updated.id, tenantId: req.travelTenant.id },
+          orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+        });
+        lines = Array.isArray(rawLines) ? rawLines : [];
+      } catch (linesErr) {
+        console.error("[travel-invoices] /issue lines fetch failed:", linesErr.message);
+      }
+      try {
+        const rawSchedule = await prisma.travelPaymentSchedule.findMany({
+          where: { invoiceId: updated.id, tenantId: req.travelTenant.id },
+          orderBy: [{ milestoneOrder: "asc" }, { id: "asc" }],
+        });
+        paymentSchedule = Array.isArray(rawSchedule) ? rawSchedule : [];
+      } catch (scheduleListErr) {
+        console.error(
+          "[travel-invoices] /issue schedule fetch failed:",
+          scheduleListErr.message,
+        );
+      }
+
+      const { totalTds, perLineTds } = computeTdsFromLines(lines);
+      const totalAmountNum = Number(updated.totalAmount);
+      const payableAfterTds = Number.isFinite(totalAmountNum)
+        ? round2(totalAmountNum - totalTds)
+        : null;
+
+      res.status(200).json({
+        // Spread the invoice row at top-level for back-compat with existing
+        // callers (slice-5 + slice-17 tests destructure body.status etc.).
+        ...updated,
+        // Additive envelope fields (slice 21):
+        invoice: updated,
+        paymentSchedule,
+        totalTds,
+        perLineTds,
+        payableAfterTds,
+      });
     } catch (e) {
       if (e.status) {
         return res.status(e.status).json({ error: e.message, code: e.code });

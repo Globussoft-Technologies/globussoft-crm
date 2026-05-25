@@ -1,6 +1,36 @@
 // @ts-check
 /**
- * Cross-tenant IDOR probe — GH #919 slices 1 + 2 + 3 + 4.
+ * Cross-tenant IDOR probe — GH #919 slices 1 + 2 + 3 + 4 + 5.
+ *
+ * Issue #919's remediation: "Add a CI test suite: for every /api/* route,
+ * seed two tenants A and B with one record each, then call the route with
+ * A's JWT and B's ID and assert non-2xx." Slice 5 (this commit) pins
+ * enumeration-shape PARITY: for several routes, probe the cross-tenant
+ * attacker on id=1 (likely exists in some tenant) vs id=999999999
+ * (almost certainly does not), and assert the response body shapes are
+ * IDENTICAL (excluding any timestamp / request-id fields). A divergence
+ * — status, error code, or error message — would be a SIDE-CHANNEL leak
+ * about whether the row exists at all. Cross-vertical Travel routes
+ * already had a shape-parity pin in slice 2 (the 403 WRONG_VERTICAL
+ * sentinel pair); slice 5 extends the contract to the canonical
+ * tenant-filter 404 surfaces (Contact + Deal) PLUS the staff routes
+ * (PUT /:id, DELETE /:id) where the 404 body is `{ error: "User not
+ * found." }` regardless of whether the user exists in a sibling tenant
+ * or doesn't exist at all.
+ *
+ * Slice 5 drift note (per .claude/skills/verifying-gap-card-claims/):
+ * the slice-5 prompt named `/api/admin/users/:id` and `/api/tenants/:id`
+ * as targets. Reality check: `routes/admin.js` has only `/backup/*` +
+ * `/llm-spend` (no `:id` route at all) and `routes/tenants.js` has only
+ * `/current` + `/users` (no `:id` route at all). The real "user admin"
+ * /:id surface lives at `/api/staff/:id` (routes/staff.js — PUT /:id,
+ * PATCH /:id, PUT /:id/role, POST /:id/reset-password, POST
+ * /:id/resend-invite, DELETE /:id, all with `prisma.user.findFirst({
+ * where: { id, tenantId: req.user.tenantId } })` + `404 { error: "User
+ * not found." }`). We PIN REALITY and probe /api/staff/:id for the
+ * enumeration-parity contract; the prompt's verbatim claim is
+ * documented here so a future regression-coverage author doesn't re-
+ * audit the same wrong endpoints.
  *
  * Issue #919's remediation: "Add a CI test suite: for every /api/* route,
  * seed two tenants A and B with one record each, then call the route with
@@ -862,6 +892,271 @@ test.describe("IDOR #919 slice 4 — non-Travel cross-tenant (Deal + Contact mut
     expect(readBack.status()).toBe(200);
     const dealAfter = await readBack.json();
     expect(dealAfter.deletedAt).toBeFalsy();
+  });
+});
+
+// ─── Slice 5 — Enumeration-shape PARITY probes ───────────────────────
+// The slice 1-4 sweep pins that cross-tenant attempts surface 403/404
+// (no 2xx leak). Slice 5 tightens the contract one notch: for the same
+// attacker token, the response shape for id=1 (a sentinel that LIKELY
+// exists in some tenant) MUST be IDENTICAL to the response shape for
+// id=999999999 (a sentinel that DEFINITELY does not exist anywhere).
+// If they differ — by status, by error code, by error message text —
+// the response is a SIDE-CHANNEL leak about row existence. That is a
+// classic IDOR enumeration vector: even when reads are blocked, the
+// attacker learns "id=X exists; id=Y doesn't" from the divergence.
+//
+// Helper — strip timestamp / request-id / nonce fields from a parsed
+// JSON body before equality comparison. The route handlers MAY include
+// a timestamp or request id in the envelope; that's not a leak, it's a
+// legitimate observability field. Anything else MUST be byte-identical
+// across the low-id vs high-id probe.
+function stripVolatileFields(body) {
+  if (body == null || typeof body !== "object") return body;
+  const out = { ...body };
+  for (const k of [
+    "timestamp",
+    "ts",
+    "requestId",
+    "requestID",
+    "request_id",
+    "traceId",
+    "trace_id",
+    "nonce",
+    "id", // some envelopes echo back the supplied id; that itself is the diverging field
+  ]) {
+    delete out[k];
+  }
+  return out;
+}
+
+test.describe("IDOR #919 slice 5 — enumeration-shape parity (no side-channel leak)", () => {
+  // PROBE A — /api/contacts/:id (canonical tenant-filter 404). For the
+  // wellness-admin attacker, the response for a generic-tenant Contact id
+  // MUST match the response for a definitely-non-existent id. Both are
+  // 404 with the same body shape — the attacker cannot tell which is
+  // which.
+  test("contacts/:id — wellness attacker on (real generic id) vs (fake id) → IDENTICAL 404 shape", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    const realVictimId = await createContact(request, generic, "enum-parity-contacts");
+
+    const realRes = await get(request, wellness, `/api/contacts/${realVictimId}`);
+    const fakeRes = await get(request, wellness, `/api/contacts/${FAKE_ID}`);
+
+    expect(realRes.status(), "real cross-tenant id should 404").toBe(404);
+    expect(fakeRes.status(), "fake id should 404").toBe(404);
+    expect(
+      realRes.status(),
+      `enumeration leak: status diverges (real=${realRes.status()} vs fake=${fakeRes.status()})`,
+    ).toBe(fakeRes.status());
+
+    const realBody = stripVolatileFields(await realRes.json());
+    const fakeBody = stripVolatileFields(await fakeRes.json());
+    expect(
+      realBody,
+      `enumeration leak: body diverges across (real=${JSON.stringify(realBody)}) vs (fake=${JSON.stringify(fakeBody)})`,
+    ).toEqual(fakeBody);
+  });
+
+  // PROBE B — /api/deals/:id (canonical tenant-filter 404). Same shape-
+  // parity contract on the Deal model. Wellness-admin attacker on a
+  // real generic deal id vs a fake id — both 404, identical bodies.
+  test("deals/:id — wellness attacker on (real generic id) vs (fake id) → IDENTICAL 404 shape", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    const realVictimId = await createDeal(request, generic, "enum-parity-deals");
+
+    const realRes = await get(request, wellness, `/api/deals/${realVictimId}`);
+    const fakeRes = await get(request, wellness, `/api/deals/${FAKE_ID}`);
+
+    expect(realRes.status()).toBe(404);
+    expect(fakeRes.status()).toBe(404);
+    expect(
+      realRes.status(),
+      `enumeration leak: status diverges (real=${realRes.status()} vs fake=${fakeRes.status()})`,
+    ).toBe(fakeRes.status());
+
+    const realBody = stripVolatileFields(await realRes.json());
+    const fakeBody = stripVolatileFields(await fakeRes.json());
+    expect(
+      realBody,
+      `enumeration leak: deals 404 body diverges`,
+    ).toEqual(fakeBody);
+  });
+
+  // PROBE C — /api/staff/:id PUT (the prompt's "admin/users :id" — pinned
+  // to reality at /api/staff/:id; see drift note in header). The 404 body
+  // is `{ error: "User not found." }` regardless of whether the target
+  // user exists in a sibling tenant or doesn't exist anywhere. We probe
+  // with a known-good name change so a regression that bypassed the
+  // tenant filter would CORRUPT a sibling-tenant user (caught by 404
+  // assertion + shape-parity assertion together).
+  test("staff/:id PUT — wellness attacker on (real generic user id) vs (fake id) → IDENTICAL 404 shape", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    // The generic seed includes admin@globussoft.com as the tenant's
+    // ADMIN user. We don't know its numeric id without a list call, so
+    // probe via /api/staff (GET list) to discover a real generic user
+    // id. Falls back to id=1 if discovery fails — id=1 always exists
+    // in the seed on at least one tenant, so the probe still tests the
+    // cross-tenant-404 contract even if we can't pinpoint generic's row.
+    let realGenericUserId = 1;
+    try {
+      const list = await get(request, generic, "/api/staff");
+      if (list.ok()) {
+        const rows = await list.json();
+        const arr = Array.isArray(rows) ? rows : Array.isArray(rows?.data) ? rows.data : [];
+        if (arr.length > 0 && Number.isInteger(arr[0].id)) {
+          realGenericUserId = arr[0].id;
+        }
+      }
+    } catch (_e) {
+      // ignore; fall back to id=1
+    }
+
+    const body = { name: "IDOR-ENUM-PROBE-must-never-land" };
+    const realRes = await put(request, wellness, `/api/staff/${realGenericUserId}`, body);
+    const fakeRes = await put(request, wellness, `/api/staff/${FAKE_ID}`, body);
+
+    expect(realRes.status(), `real generic user id ${realGenericUserId} cross-tenant PUT must 404`).toBe(404);
+    expect(fakeRes.status()).toBe(404);
+    expect(
+      realRes.status(),
+      `enumeration leak: status diverges (real=${realRes.status()} vs fake=${fakeRes.status()})`,
+    ).toBe(fakeRes.status());
+
+    const realBody = stripVolatileFields(await realRes.json());
+    const fakeBody = stripVolatileFields(await fakeRes.json());
+    expect(
+      realBody,
+      `enumeration leak: staff 404 body diverges across real vs fake id`,
+    ).toEqual(fakeBody);
+    // Bonus pin: the body shape is the documented `{ error: "User not found." }`
+    expect(realBody.error).toBe("User not found.");
+    expect(fakeBody.error).toBe("User not found.");
+  });
+
+  // PROBE D — /api/staff/:id DELETE shape parity. DELETE is the highest
+  // -severity vector (a missed tenant filter would DELETE a sibling
+  // tenant's user). Both real and fake ids must 404 with identical
+  // bodies. (The DELETE handler returns 204 on success and 404 with
+  // `{ error: "User not found." }` on tenant-miss; we only ever see the
+  // 404 path here, which is the contract.)
+  test("staff/:id DELETE — wellness attacker on (real generic user id) vs (fake id) → IDENTICAL 404 shape", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    let realGenericUserId = 1;
+    try {
+      const list = await get(request, generic, "/api/staff");
+      if (list.ok()) {
+        const rows = await list.json();
+        const arr = Array.isArray(rows) ? rows : Array.isArray(rows?.data) ? rows.data : [];
+        if (arr.length > 0 && Number.isInteger(arr[0].id)) {
+          realGenericUserId = arr[0].id;
+        }
+      }
+    } catch (_e) {
+      // ignore
+    }
+
+    const realRes = await del(request, wellness, `/api/staff/${realGenericUserId}`);
+    const fakeRes = await del(request, wellness, `/api/staff/${FAKE_ID}`);
+
+    expect(realRes.status(), `real cross-tenant DELETE must 404`).toBe(404);
+    expect(fakeRes.status()).toBe(404);
+    expect(
+      realRes.status(),
+      `enumeration leak: status diverges (real=${realRes.status()} vs fake=${fakeRes.status()})`,
+    ).toBe(fakeRes.status());
+
+    // Both should be JSON 404 envelopes (DELETE handler only returns 204
+    // on the happy path; the 404 path returns JSON `{ error: ... }`).
+    const realBody = stripVolatileFields(await realRes.json());
+    const fakeBody = stripVolatileFields(await fakeRes.json());
+    expect(
+      realBody,
+      `enumeration leak: staff DELETE 404 body diverges`,
+    ).toEqual(fakeBody);
+    expect(realBody.error).toBe("User not found.");
+  });
+
+  // PROBE E — /api/travel/diagnostics/:id cross-vertical shape parity.
+  // Slice 2 already pinned status parity (both 403) but did NOT pin
+  // BODY parity. A regression that started embedding "tenant X owns
+  // id=Y" diagnostic info in the 403 body (well-intentioned debug-log
+  // exposure) would silently re-introduce the side-channel. This probe
+  // strengthens slice 2's contract to full body equality.
+  test("travel/diagnostics/:id — wellness attacker on (id=1) vs (fake id) → IDENTICAL 403 BODY (not just status)", async ({
+    request,
+  }) => {
+    const wellness = await getWellnessAdmin(request);
+    if (!wellness) test.skip(true, "wellness admin token required");
+    const realRes = await get(request, wellness, `/api/travel/diagnostics/1`);
+    const fakeRes = await get(request, wellness, `/api/travel/diagnostics/${FAKE_ID}`);
+
+    expect(realRes.status()).toBe(403);
+    expect(fakeRes.status()).toBe(403);
+    expect(realRes.status()).toBe(fakeRes.status());
+
+    const realBody = stripVolatileFields(await realRes.json());
+    const fakeBody = stripVolatileFields(await fakeRes.json());
+    expect(
+      realBody,
+      `enumeration leak: travel cross-vertical 403 body diverges (real=${JSON.stringify(realBody)} vs fake=${JSON.stringify(fakeBody)})`,
+    ).toEqual(fakeBody);
+    // Both must carry WRONG_VERTICAL — same shape.
+    expect(realBody.code).toBe("WRONG_VERTICAL");
+    expect(fakeBody.code).toBe("WRONG_VERTICAL");
+  });
+
+  // PROBE F — reverse-direction shape parity on /api/deals/:id. Generic
+  // attacker on a real wellness deal id vs a fake id. Pins that the
+  // tenant-filter 404 is symmetric in both directions (slice 4 pinned
+  // status; slice 5 pins body shape parity).
+  test("deals/:id — generic attacker on (real wellness id) vs (fake id) → IDENTICAL 404 shape (reverse direction)", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    const realVictimId = await createDeal(request, wellness, "enum-parity-deals-reverse");
+
+    const realRes = await get(request, generic, `/api/deals/${realVictimId}`);
+    const fakeRes = await get(request, generic, `/api/deals/${FAKE_ID}`);
+
+    expect(realRes.status()).toBe(404);
+    expect(fakeRes.status()).toBe(404);
+    expect(realRes.status()).toBe(fakeRes.status());
+
+    const realBody = stripVolatileFields(await realRes.json());
+    const fakeBody = stripVolatileFields(await fakeRes.json());
+    expect(
+      realBody,
+      `enumeration leak: reverse-direction deals 404 body diverges`,
+    ).toEqual(fakeBody);
   });
 });
 

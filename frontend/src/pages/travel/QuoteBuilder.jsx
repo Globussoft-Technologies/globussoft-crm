@@ -1,48 +1,66 @@
 // Travel CRM — Quote Builder (operator-facing single-quote-detail page).
 //
 // Mounts at /travel/quotes/builder/:id?  (id optional)
-//   - no :id     → "new quote" mode, empty draft
-//   - :id        → "edit quote" mode, hydrates from GET /api/travel/quotes/:id
+//   - no :id     → "new quote" mode, empty draft (lines table inert until save)
+//   - :id        → "edit quote" mode, hydrates header + lines from backend
 //
 // Distinct from QuotesAdmin (/travel/quotes-admin) — that page is the CRUD
 // list; THIS page is the line-items builder a sales op uses to compose a
 // single quote with multiple lines + supplier/pricing-rule context +
 // header-action surface (save / send / duplicate / download PDF).
 //
-// PRD: docs/PRD_TRAVEL_QUOTE_BUILDER.md §3 functional requirements (Arc 2
-// #900 slice 2). Backend slice 1 (Agent A) lands new endpoints same tick:
-//   POST   /api/travel/quotes/:id/duplicate    → 201 cloned quote
-//   GET    /api/travel/quotes/:id/pdf          → PDF stream
-// Cascade tolerance: the buttons gracefully degrade on 404 if Agent A's
-// commit hasn't merged yet at the time this page loads on demo.
+// PRD: docs/PRD_TRAVEL_QUOTE_BUILDER.md §3 functional requirements.
+//   - Slice 2 (commit 92b1682c): page chrome + local-only lines + actions.
+//   - Slice 3 (commit f7203b8e): backend TravelQuoteLine model + line CRUD
+//     endpoints + supplier picker query surface.
+//   - Slice 4 (THIS commit): wire QuoteBuilder to the persistent line
+//     endpoints + add a per-line supplier picker fed by
+//     GET /api/travel/suppliers?subBrand=<sub>.
 //
-// Backend contracts already live (commit b02c091, QuotesAdmin shipped):
-//   GET    /api/travel/quotes/:id          → 200 { id, contactId, status,
-//                                            totalAmount, currency, ... }
-//                                          | 404 NOT_FOUND
-//   POST   /api/travel/quotes              → 201 created
-//   PUT    /api/travel/quotes/:id          → 200 updated
+// Backend contracts (all live as of f7203b8e):
+//   GET    /api/travel/quotes/:id                    → 200 { id, contactId, ... }
+//   POST   /api/travel/quotes                        → 201 created
+//   PUT    /api/travel/quotes/:id                    → 200 updated
+//   POST   /api/travel/quotes/:id/duplicate          → 201 cloned quote
+//   GET    /api/travel/quotes/:id/pdf                → PDF stream
+//   GET    /api/travel/quotes/:id/lines              → 200 { lines: [...], total }
+//   POST   /api/travel/quotes/:id/lines              → 201 { id, lineType, ... }
+//   PUT    /api/travel/quotes/:id/lines/:lineId      → 200 updated
+//   DELETE /api/travel/quotes/:id/lines/:lineId      → 204
+//   GET    /api/travel/suppliers?subBrand=<sub>      → 200 { suppliers: [...], total }
 //
-// RBAC: ADMIN/MANAGER write (same as QuotesAdmin). USER role sees the
-// RoleGuard locked-panel (#768 canonical denial). The route in App.jsx
-// wraps the page in RoleGuard allow={["ADMIN","MANAGER"]} so USER never
-// reaches the page body.
+// Line CRUD body shape for POST (per backend slice 3):
+//   { lineType?: "hotel"|"flight"|"transport"|"visa"|"service"|"other",
+//     description: string (required),
+//     quantity?: int>=1,
+//     unitPrice: number>=0,
+//     currency?, supplierId?, sortOrder?, notes? }
+// Server computes `amount = quantity * unitPrice`. Parent quote's
+// totalAmount is auto-recomputed after every line write — we re-fetch the
+// parent quote after each line mutation so the UI totals stay consistent
+// with what the backend will persist on next save.
 //
-// Initial slice scope (intentionally limited — additive to QuotesAdmin):
-//   - Header (quote # + status badge + contact-id picker)
-//   - Line-items table with add/inline-edit/remove rows
-//   - Totals panel (subtotal / discount / tax / grand total)
-//   - Action cluster (Save Draft, Send, Duplicate, Download PDF)
+// RBAC: ADMIN/MANAGER write (App.jsx route wraps in RoleGuard
+// allow=["ADMIN","MANAGER"]). USER role sees the locked panel and never
+// reaches this page body. We still gate write-bound buttons on canWrite
+// for defence-in-depth.
 //
-// Future slices (NOT in this commit):
-//   - Supplier-picker per line (Agent A backend contract pending)
-//   - Pricing-rules preview pane (per-rule discount surface)
-//   - PDF preview iframe
-//   - Send-to-customer email composition
+// State design (slice 4):
+//   - Header fields (contactId/currency/subBrand/validUntil/discount/tax)
+//     stay local-only — they're only persisted via Save Draft / Send.
+//   - Line items are split into TWO arrays:
+//       persistedLines    — backend-sourced (id from server)
+//       draftLines        — local-only rows added while the quote is brand
+//                           new (no quoteId yet) OR while the operator is
+//                           composing a row before it has been committed
+//                           to the backend. A draft is "committed" on save.
+//     A row with `.id` is persisted; without `.id` it's a draft.
+//   - Supplier list is fetched on subBrand-change and re-used across all
+//     row pickers in the table (single fetch, not per-row).
 
-import { useEffect, useState, useContext } from "react";
+import { useEffect, useState, useContext, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { Calculator, Plus, Trash2, Save, Send, Copy, Download } from "lucide-react";
+import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
@@ -67,17 +85,21 @@ const SUB_BRANDS = [
   { value: "visasure", label: "Visa Sure" },
 ];
 
-const EMPTY_LINE = () => ({
-  // Stable React key for the row — Date.now() + counter avoids React
-  // remount churn when an inline edit re-renders.
-  key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+const LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
+
+const EMPTY_DRAFT = () => ({
+  // Stable React key for the row. Drafts have no `.id`; persisted rows do.
+  key: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  lineType: "other",
   description: "",
-  qty: 1,
+  quantity: 1,
   unitPrice: 0,
+  supplierId: "",
+  notes: "",
 });
 
-function lineTotal(line) {
-  const qty = Number(line.qty) || 0;
+function lineAmount(line) {
+  const qty = Number(line.quantity) || 0;
   const unit = Number(line.unitPrice) || 0;
   return qty * unit;
 }
@@ -102,16 +124,73 @@ export default function QuoteBuilder() {
   const [currency, setCurrency] = useState("INR");
   const [subBrand, setSubBrand] = useState("tmc");
   const [validUntil, setValidUntil] = useState("");
-  const [items, setItems] = useState([]);
   const [discountPct, setDiscountPct] = useState(0);
   const [taxPct, setTaxPct] = useState(0);
 
-  // Edit-mode hydration from GET /api/travel/quotes/:id.
+  // Backend-sourced lines (each has `.id` from the server).
+  const [persistedLines, setPersistedLines] = useState([]);
+  // Local-only draft rows (no `.id` yet — POST converts to persisted).
+  const [draftLines, setDraftLines] = useState([]);
+  // Per-line saving flags (keyed by line key or id) for inline busy state.
+  const [busyLineKey, setBusyLineKey] = useState(null);
+  // Supplier list for the current subBrand (refetched on subBrand change).
+  const [suppliers, setSuppliers] = useState([]);
+  const [suppliersLoading, setSuppliersLoading] = useState(false);
+  // Delete-confirm modal target.
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  // Re-fetch the parent quote (used after line writes — server recomputes
+  // totalAmount and we don't want the UI to drift from what's persisted).
+  const refreshParentQuote = useCallback(async (id) => {
+    if (!id) return;
+    try {
+      const q = await fetchApi(`/api/travel/quotes/${id}`);
+      if (q && typeof q === "object") {
+        setStatus(q.status || "Draft");
+        if (q.contactId != null) setContactId(String(q.contactId));
+        if (q.currency) setCurrency(q.currency);
+        if (q.subBrand) setSubBrand(q.subBrand);
+      }
+    } catch {
+      // Non-fatal — the line write itself already succeeded; we just
+      // couldn't refresh the parent. The next render will reconcile.
+    }
+  }, []);
+
+  // Re-fetch the persisted line list.
+  const refreshLines = useCallback(async (id) => {
+    if (!id) return;
+    try {
+      const resp = await fetchApi(`/api/travel/quotes/${id}/lines`);
+      const rows = Array.isArray(resp?.lines) ? resp.lines : [];
+      setPersistedLines(
+        rows.map((r) => ({
+          key: `srv-${r.id}`,
+          id: r.id,
+          lineType: r.lineType || "other",
+          description: r.description || "",
+          quantity: Number(r.quantity) || 1,
+          unitPrice: Number(r.unitPrice) || 0,
+          amount: Number(r.amount) || 0,
+          supplierId: r.supplierId == null ? "" : String(r.supplierId),
+          notes: r.notes || "",
+          currency: r.currency || null,
+          sortOrder: r.sortOrder || 0,
+        })),
+      );
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to load lines");
+    }
+    // notify is stable per RTL standing rule (single object ref).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Edit-mode hydration from GET /api/travel/quotes/:id + lines.
   useEffect(() => {
     if (!isEdit) return;
     setLoading(true);
     fetchApi(`/api/travel/quotes/${routeId}`)
-      .then((q) => {
+      .then(async (q) => {
         if (!q || typeof q !== "object") return;
         setQuoteId(q.id);
         setStatus(q.status || "Draft");
@@ -119,19 +198,8 @@ export default function QuoteBuilder() {
         setCurrency(q.currency || "INR");
         setSubBrand(q.subBrand || "tmc");
         setValidUntil(q.validUntil ? String(q.validUntil).slice(0, 10) : "");
-        // Future slice: hydrate q.items[] when backend ships line-items
-        // persistence. For now the items table starts empty in edit mode
-        // and operators rebuild the lines from the rolled-up totalAmount.
-        if (Array.isArray(q.items)) {
-          setItems(
-            q.items.map((it, i) => ({
-              key: `srv-${i}-${Date.now()}`,
-              description: it.description || "",
-              qty: Number(it.qty) || 1,
-              unitPrice: Number(it.unitPrice) || 0,
-            })),
-          );
-        }
+        // Slice 4 hydration: pull persisted lines from the dedicated endpoint.
+        await refreshLines(q.id);
       })
       .catch((err) => {
         notify.error(err?.body?.error || err?.message || "Failed to load quote");
@@ -141,16 +209,148 @@ export default function QuoteBuilder() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeId]);
 
-  const subtotal = items.reduce((acc, it) => acc + lineTotal(it), 0);
+  // Fetch the supplier list when subBrand changes (or on initial load
+  // when a subBrand has been selected). Each line's supplier picker reads
+  // from this single list — no per-row fetch.
+  useEffect(() => {
+    if (!subBrand) {
+      setSuppliers([]);
+      return;
+    }
+    let cancelled = false;
+    setSuppliersLoading(true);
+    fetchApi(`/api/travel/suppliers?subBrand=${encodeURIComponent(subBrand)}`)
+      .then((resp) => {
+        if (cancelled) return;
+        const rows = Array.isArray(resp?.suppliers) ? resp.suppliers : [];
+        setSuppliers(rows);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        notify.error(err?.body?.error || err?.message || "Failed to load suppliers");
+        setSuppliers([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSuppliersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subBrand]);
+
+  // Visible lines = persisted (sorted by sortOrder) + drafts (appended).
+  const sortedPersisted = [...persistedLines].sort(
+    (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || (a.id || 0) - (b.id || 0),
+  );
+  const visibleLines = [...sortedPersisted, ...draftLines];
+
+  const subtotal = visibleLines.reduce((acc, it) => acc + lineAmount(it), 0);
   const discountAmount = subtotal * (Number(discountPct) || 0) / 100;
   const taxable = subtotal - discountAmount;
   const taxAmount = taxable * (Number(taxPct) || 0) / 100;
   const grandTotal = taxable + taxAmount;
 
-  const addLine = () => setItems([...items, EMPTY_LINE()]);
-  const removeLine = (key) => setItems(items.filter((it) => it.key !== key));
-  const updateLine = (key, patch) =>
-    setItems(items.map((it) => (it.key === key ? { ...it, ...patch } : it)));
+  const addLine = () => setDraftLines([...draftLines, EMPTY_DRAFT()]);
+
+  // Update a draft row in-place (no backend call).
+  const updateDraft = (key, patch) =>
+    setDraftLines(draftLines.map((it) => (it.key === key ? { ...it, ...patch } : it)));
+
+  // Remove a draft row (no backend call needed — it was never persisted).
+  const removeDraft = (key) => setDraftLines(draftLines.filter((it) => it.key !== key));
+
+  // Update a persisted row's local copy (for inline edit before save).
+  const updatePersistedLocal = (key, patch) =>
+    setPersistedLines(
+      persistedLines.map((it) => (it.key === key ? { ...it, ...patch } : it)),
+    );
+
+  // POST a draft row to the backend, then refresh the persisted list.
+  const commitDraft = async (draft) => {
+    if (!quoteId) {
+      notify.error("Save the quote first before adding lines");
+      return;
+    }
+    if (!draft.description || !draft.description.trim()) {
+      notify.error("Description is required");
+      return;
+    }
+    const unit = Number(draft.unitPrice);
+    if (!Number.isFinite(unit) || unit < 0) {
+      notify.error("Unit price must be a non-negative number");
+      return;
+    }
+    setBusyLineKey(draft.key);
+    try {
+      const body = {
+        lineType: draft.lineType || "other",
+        description: draft.description.trim(),
+        quantity: Math.max(1, parseInt(draft.quantity, 10) || 1),
+        unitPrice: unit,
+      };
+      if (draft.supplierId !== "" && draft.supplierId != null) {
+        body.supplierId = parseInt(draft.supplierId, 10);
+      }
+      if (draft.notes) body.notes = String(draft.notes);
+      await fetchApi(`/api/travel/quotes/${quoteId}/lines`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      // Server recomputed totals; re-pull both lines and parent.
+      await refreshLines(quoteId);
+      await refreshParentQuote(quoteId);
+      // Drop the draft now that it's persisted.
+      setDraftLines((prev) => prev.filter((d) => d.key !== draft.key));
+      notify.success("Line added");
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to save line");
+    } finally {
+      setBusyLineKey(null);
+    }
+  };
+
+  // PUT a persisted row's changed fields.
+  const updatePersistedRow = async (row, patch) => {
+    if (!quoteId || !row.id) return;
+    setBusyLineKey(row.key);
+    try {
+      await fetchApi(`/api/travel/quotes/${quoteId}/lines/${row.id}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+      await refreshLines(quoteId);
+      await refreshParentQuote(quoteId);
+      notify.success(`Line #${row.id} updated`);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to update line");
+    } finally {
+      setBusyLineKey(null);
+    }
+  };
+
+  // DELETE a persisted line via the confirm modal.
+  const confirmDeleteLine = async () => {
+    if (!deleteTarget || !quoteId) {
+      setDeleteTarget(null);
+      return;
+    }
+    const row = deleteTarget;
+    setBusyLineKey(row.key);
+    try {
+      await fetchApi(`/api/travel/quotes/${quoteId}/lines/${row.id}`, {
+        method: "DELETE",
+      });
+      await refreshLines(quoteId);
+      await refreshParentQuote(quoteId);
+      notify.success(`Line #${row.id} deleted`);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to delete line");
+    } finally {
+      setBusyLineKey(null);
+      setDeleteTarget(null);
+    }
+  };
 
   const buildPayload = () => {
     const contactIdInt = parseInt(contactId, 10);
@@ -184,7 +384,12 @@ export default function QuoteBuilder() {
           method: "POST",
           body: JSON.stringify(payload),
         });
-        if (created?.id) setQuoteId(created.id);
+        if (created?.id) {
+          setQuoteId(created.id);
+          // After creating the quote, any draft lines the operator had
+          // composed pre-save can now be committed against the new id.
+          // We don't auto-commit them — operator clicks Save on each row.
+        }
         notify.success(`Quote created (#${created?.id ?? "new"})`);
       }
     } catch (err) {
@@ -217,8 +422,6 @@ export default function QuoteBuilder() {
       return;
     }
     try {
-      // Agent A's endpoint, same-tick. Graceful-degrade on 404 if the
-      // backend slice hasn't deployed yet.
       const dup = await fetchApi(`/api/travel/quotes/${quoteId}/duplicate`, {
         method: "POST",
       });
@@ -238,7 +441,6 @@ export default function QuoteBuilder() {
       return;
     }
     try {
-      // Cascade-tolerant. Agent A ships GET /pdf same tick.
       await fetchApi(`/api/travel/quotes/${quoteId}/pdf`);
       notify.success(`PDF download triggered for quote #${quoteId}`);
     } catch (err) {
@@ -424,87 +626,196 @@ export default function QuoteBuilder() {
             justifyContent: "space-between",
             alignItems: "center",
             borderBottom: "1px solid var(--border-color)",
+            flexWrap: "wrap",
+            gap: 8,
           }}
         >
           <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 600 }}>Line Items</h2>
-          {canWrite && (
-            <button type="button" onClick={addLine} style={primaryBtn} aria-label="Add line">
-              <Plus size={14} /> Add line
-            </button>
-          )}
-        </div>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
-              <th style={th}>Description</th>
-              <th style={{ ...th, width: 100 }}>Qty</th>
-              <th style={{ ...th, width: 140 }}>Unit Price</th>
-              <th style={{ ...th, width: 140 }}>Total</th>
-              {canWrite && <th style={{ ...th, width: 60, textAlign: "center" }}>—</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 && (
-              <tr>
-                <td
-                  colSpan={canWrite ? 5 : 4}
-                  style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}
-                >
-                  No line items yet. Click <strong>Add line</strong> to start.
-                </td>
-              </tr>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              {suppliersLoading
+                ? "Loading suppliers…"
+                : suppliers.length === 0 && subBrand
+                  ? `No suppliers for ${subBrand}`
+                  : `${suppliers.length} supplier${suppliers.length === 1 ? "" : "s"} available`}
+            </span>
+            {canWrite && (
+              <button
+                type="button"
+                onClick={addLine}
+                style={primaryBtn}
+                aria-label="Add line"
+                disabled={!quoteId}
+                title={!quoteId ? "Save the quote first before adding lines" : "Add line"}
+              >
+                <Plus size={14} /> Add line
+              </button>
             )}
-            {items.map((it) => (
-              <tr key={it.key} style={{ borderTop: "1px solid var(--border-color)" }}>
-                <td style={td}>
-                  <input
-                    type="text"
-                    value={it.description}
-                    onChange={(e) => updateLine(it.key, { description: e.target.value })}
-                    placeholder="Service / package description"
-                    style={{ ...inputStyle, width: "100%" }}
-                    aria-label={`Line ${it.key} description`}
-                  />
-                </td>
-                <td style={td}>
-                  <input
-                    type="number"
-                    min={0}
-                    value={it.qty}
-                    onChange={(e) => updateLine(it.key, { qty: e.target.value })}
-                    style={{ ...inputStyle, width: "100%" }}
-                    aria-label={`Line ${it.key} quantity`}
-                  />
-                </td>
-                <td style={td}>
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={it.unitPrice}
-                    onChange={(e) => updateLine(it.key, { unitPrice: e.target.value })}
-                    style={{ ...inputStyle, width: "100%" }}
-                    aria-label={`Line ${it.key} unit price`}
-                  />
-                </td>
-                <td style={{ ...td, fontWeight: 600 }}>{fmt(lineTotal(it))}</td>
-                {canWrite && (
-                  <td style={{ ...td, textAlign: "center" }}>
-                    <button
-                      type="button"
-                      onClick={() => removeLine(it.key)}
-                      style={iconBtn}
-                      aria-label={`Remove line ${it.key}`}
-                      title="Remove line"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </td>
-                )}
+          </div>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 880 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                <th style={{ ...th, width: 110 }}>Type</th>
+                <th style={th}>Description</th>
+                <th style={{ ...th, width: 80 }}>Qty</th>
+                <th style={{ ...th, width: 120 }}>Unit Price</th>
+                <th style={{ ...th, width: 180 }}>Supplier</th>
+                <th style={{ ...th, width: 120 }}>Amount</th>
+                {canWrite && <th style={{ ...th, width: 90, textAlign: "center" }}>—</th>}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {visibleLines.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={canWrite ? 7 : 6}
+                    style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}
+                  >
+                    {quoteId ? (
+                      <>No line items yet. Click <strong>Add line</strong> to start.</>
+                    ) : (
+                      <>Save the quote first to start adding lines.</>
+                    )}
+                  </td>
+                </tr>
+              )}
+              {visibleLines.map((it) => {
+                const isDraft = !it.id;
+                const isBusy = busyLineKey === it.key;
+                const onChange = isDraft ? updateDraft : updatePersistedLocal;
+                return (
+                  <tr key={it.key} style={{ borderTop: "1px solid var(--border-color)" }}>
+                    <td style={td}>
+                      <select
+                        value={it.lineType || "other"}
+                        onChange={(e) => onChange(it.key, { lineType: e.target.value })}
+                        style={{ ...inputStyle, width: "100%" }}
+                        aria-label={`Line ${it.key} type`}
+                        disabled={!canWrite || isBusy}
+                      >
+                        {LINE_TYPES.map((t) => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={td}>
+                      <input
+                        type="text"
+                        value={it.description}
+                        onChange={(e) => onChange(it.key, { description: e.target.value })}
+                        placeholder="Service / package description"
+                        style={{ ...inputStyle, width: "100%" }}
+                        aria-label={`Line ${it.key} description`}
+                        disabled={!canWrite || isBusy}
+                      />
+                    </td>
+                    <td style={td}>
+                      <input
+                        type="number"
+                        min={1}
+                        value={it.quantity}
+                        onChange={(e) => onChange(it.key, { quantity: e.target.value })}
+                        style={{ ...inputStyle, width: "100%" }}
+                        aria-label={`Line ${it.key} quantity`}
+                        disabled={!canWrite || isBusy}
+                      />
+                    </td>
+                    <td style={td}>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={it.unitPrice}
+                        onChange={(e) => onChange(it.key, { unitPrice: e.target.value })}
+                        style={{ ...inputStyle, width: "100%" }}
+                        aria-label={`Line ${it.key} unit price`}
+                        disabled={!canWrite || isBusy}
+                      />
+                    </td>
+                    <td style={td}>
+                      <select
+                        value={it.supplierId == null ? "" : String(it.supplierId)}
+                        onChange={(e) => onChange(it.key, { supplierId: e.target.value })}
+                        style={{ ...inputStyle, width: "100%" }}
+                        aria-label={`Line ${it.key} supplier`}
+                        disabled={!canWrite || isBusy || suppliers.length === 0}
+                      >
+                        <option value="">
+                          {suppliers.length === 0 ? "— no suppliers —" : "— none —"}
+                        </option>
+                        {suppliers.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}{s.supplierCategory ? ` (${s.supplierCategory})` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={{ ...td, fontWeight: 600 }}>{fmt(lineAmount(it))}</td>
+                    {canWrite && (
+                      <td style={{ ...td, textAlign: "center" }}>
+                        {isDraft ? (
+                          <div style={{ display: "inline-flex", gap: 4 }}>
+                            <button
+                              type="button"
+                              onClick={() => commitDraft(it)}
+                              style={iconBtnPrimary}
+                              aria-label={`Save line ${it.key}`}
+                              title="Save line"
+                              disabled={isBusy}
+                            >
+                              <Check size={16} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeDraft(it.key)}
+                              style={iconBtn}
+                              aria-label={`Cancel line ${it.key}`}
+                              title="Cancel"
+                              disabled={isBusy}
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: "inline-flex", gap: 4 }}>
+                            <button
+                              type="button"
+                              onClick={() => updatePersistedRow(it, {
+                                lineType: it.lineType,
+                                description: it.description,
+                                quantity: Math.max(1, parseInt(it.quantity, 10) || 1),
+                                unitPrice: Number(it.unitPrice) || 0,
+                                supplierId: it.supplierId === "" ? null : parseInt(it.supplierId, 10),
+                              })}
+                              style={iconBtnPrimary}
+                              aria-label={`Save line ${it.id}`}
+                              title="Save changes"
+                              disabled={isBusy}
+                            >
+                              <Check size={16} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteTarget(it)}
+                              style={iconBtn}
+                              aria-label={`Remove line ${it.id}`}
+                              title="Remove line"
+                              disabled={isBusy}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section
@@ -587,6 +898,55 @@ export default function QuoteBuilder() {
           </div>
         </div>
       </section>
+
+      {deleteTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm delete line"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            className="glass"
+            style={{
+              padding: 24,
+              minWidth: 320,
+              maxWidth: 480,
+              borderRadius: 8,
+            }}
+          >
+            <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>Remove line?</h3>
+            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
+              {`Permanently remove line #${deleteTarget.id} "${deleteTarget.description}"? This cannot be undone.`}
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                style={secondaryBtn}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteLine}
+                style={{ ...primaryBtn, background: "var(--danger-color, #f43f5e)" }}
+                aria-label="Confirm delete line"
+              >
+                <Trash2 size={14} /> Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -655,6 +1015,14 @@ const iconBtn = {
   borderRadius: 4,
   background: "transparent",
   color: "var(--danger-color, #f43f5e)",
+  border: "none",
+  cursor: "pointer",
+};
+const iconBtnPrimary = {
+  padding: 6,
+  borderRadius: 4,
+  background: "transparent",
+  color: "var(--primary-color, var(--accent-color))",
   border: "none",
   cursor: "pointer",
 };

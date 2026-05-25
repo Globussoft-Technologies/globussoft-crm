@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Cross-tenant IDOR probe — GH #919 slices 1 + 2 + 3 + 4 + 5.
+ * Cross-tenant IDOR probe — GH #919 slices 1 + 2 + 3 + 4 + 5 + 6.
  *
  * Issue #919's remediation: "Add a CI test suite: for every /api/* route,
  * seed two tenants A and B with one record each, then call the route with
@@ -1160,6 +1160,231 @@ test.describe("IDOR #919 slice 5 — enumeration-shape parity (no side-channel l
   });
 });
 
+// ─── Slice 6 — Wellness-vertical IDOR probes (403 WELLNESS_TENANT_REQUIRED) ───
+// The slice 1-5 sweep covered the Travel namespace (vertical-guard path: 403
+// WRONG_VERTICAL) + Contact/Deal/Staff cross-tenant 404 contracts. Slice 6
+// broadens the audit to the THIRD vertical surface — wellness — for full
+// vertical-symmetry. Wellness routes mount verifyWellnessRole (backend/
+// middleware/wellnessRole.js:71) which fires BEFORE the handler body and
+// returns:
+//   • 403 WELLNESS_TENANT_REQUIRED when caller's tenant.vertical !== "wellness"
+//   • 403 WELLNESS_ROLE_FORBIDDEN when caller's wellnessRole is wrong
+//
+// From an IDOR-prevention standpoint WELLNESS_TENANT_REQUIRED is the same
+// flavour of stricter-than-404 protection that WRONG_VERTICAL provides on
+// Travel routes — the guard never even reaches Prisma, so no id-enumeration
+// surface exists for cross-vertical attackers. We pin the 403 + code shape
+// so a future refactor that demotes the gate to a 404 (post-vertical-check)
+// doesn't silently weaken isolation.
+//
+// Drift note (per .claude/skills/verifying-gap-card-claims/): the slice-6
+// prompt suggested either "more wellness routes" OR "public unauthenticated
+// routes" OR "wellness-admin vs USER on the same route". We pick door #1
+// (wellness GET/PUT/POST/DELETE :id endpoints) because (a) it's symmetric
+// with the travel-vertical sweep already in place, (b) it pins a third
+// distinct guard code (WELLNESS_TENANT_REQUIRED) the rest of the spec
+// doesn't touch, and (c) wellness has the highest sensitivity surface (PHI
+// data — patients, visits, prescriptions) where a cross-vertical leak would
+// be a HIPAA-class incident, not just a CRM data leak.
+//
+// Wellness-vertical /:id routes probed (verified mounts in
+// backend/routes/wellness.js + server.js):
+//   • GET    /api/wellness/patients/:id        — phiReadGate (PHI read)
+//   • GET    /api/wellness/visits/:id          — phiReadGate (PHI read)
+//   • GET    /api/wellness/patients/:id/visits — phiReadGate (PHI fan-out)
+//   • PUT    /api/wellness/services/:id        — verifyWellnessRole(admin/manager)
+//   • PUT    /api/wellness/patients/:id        — phiWriteGate (PHI write)
+//   • DELETE /api/wellness/patients/:id        — verifyRole(ADMIN) + tenant scope
+//
+// Each route is probed with BOTH a generic admin AND a travel admin attacker
+// token. The generic-admin probe is the classic cross-vertical attacker; the
+// travel-admin probe pins that wellness rejects EVERY non-wellness vertical
+// (not just generic), so a future regression that special-cased generic-vs-
+// wellness while letting travel through is caught.
+
+test.describe("IDOR #919 slice 6 — /api/wellness/* cross-vertical (403 WELLNESS_TENANT_REQUIRED)", () => {
+  const WELLNESS_READ_ROUTES = [
+    { path: `/api/wellness/patients/${FAKE_ID}`, label: "patients/:id (PHI read)" },
+    { path: `/api/wellness/visits/${FAKE_ID}`, label: "visits/:id (PHI read)" },
+    { path: `/api/wellness/patients/${FAKE_ID}/visits`, label: "patients/:id/visits (PHI fan-out)" },
+  ];
+
+  for (const { path, label } of WELLNESS_READ_ROUTES) {
+    test(`generic admin GET ${path} → 403 WELLNESS_TENANT_REQUIRED (${label})`, async ({
+      request,
+    }) => {
+      const token = await getGenericAdmin(request);
+      if (!token) test.skip(true, "generic admin token required");
+      const res = await get(request, token, path);
+      expect(
+        res.status(),
+        `generic admin must not reach ${path}: got ${res.status()} (${await res.text()})`,
+      ).toBe(403);
+      const body = await res.json();
+      expect(
+        body.code,
+        `${path}: expected code=WELLNESS_TENANT_REQUIRED`,
+      ).toBe("WELLNESS_TENANT_REQUIRED");
+    });
+
+    test(`travel admin GET ${path} → 403 WELLNESS_TENANT_REQUIRED (${label})`, async ({
+      request,
+    }) => {
+      const token = await getTravelAdmin(request);
+      if (!token) test.skip(true, "travel admin token required");
+      const res = await get(request, token, path);
+      expect(
+        res.status(),
+        `travel admin must not reach ${path}: got ${res.status()} (${await res.text()})`,
+      ).toBe(403);
+      const body = await res.json();
+      expect(
+        body.code,
+        `${path}: expected code=WELLNESS_TENANT_REQUIRED`,
+      ).toBe("WELLNESS_TENANT_REQUIRED");
+    });
+  }
+
+  // Mutation probes — these are the worst-case IDOR vectors (corruption +
+  // deletion of PHI data). A wellness PUT /services/:id from a generic
+  // admin would CORRUPT a wellness tenant's service catalog if the guard
+  // were missing; PUT /patients/:id would CORRUPT a wellness patient's
+  // PHI fields; DELETE /patients/:id would soft-delete a PHI row. Pin
+  // the guard-fires-first contract for each — the body is irrelevant
+  // (guard runs before body parse) but a minimal valid-shape body avoids
+  // confusing a future regression with a separate 400.
+  const WELLNESS_MUTATION_PROBES = [
+    {
+      method: "PUT",
+      path: `/api/wellness/services/${FAKE_ID}`,
+      body: { name: "IDOR-WELLNESS-SERVICES-must-never-land", basePrice: 1 },
+      label: "PUT services/:id (catalog corruption vector)",
+    },
+    {
+      method: "PUT",
+      path: `/api/wellness/patients/${FAKE_ID}`,
+      body: { name: "IDOR-WELLNESS-PATIENT-must-never-land" },
+      label: "PUT patients/:id (PHI corruption vector)",
+    },
+    {
+      method: "DELETE",
+      path: `/api/wellness/patients/${FAKE_ID}`,
+      body: null,
+      label: "DELETE patients/:id (PHI deletion vector)",
+    },
+  ];
+
+  async function doMutation(request, token, method, path, body) {
+    switch (method) {
+      case "PUT":
+        return put(request, token, path, body);
+      case "DELETE":
+        return del(request, token, path);
+      default:
+        throw new Error(`unsupported method ${method}`);
+    }
+  }
+
+  for (const { method, path, body, label } of WELLNESS_MUTATION_PROBES) {
+    test(`generic admin ${method} ${path} → 403 WELLNESS_TENANT_REQUIRED (${label})`, async ({
+      request,
+    }) => {
+      const token = await getGenericAdmin(request);
+      if (!token) test.skip(true, "generic admin token required");
+      const res = await doMutation(request, token, method, path, body);
+      expect(
+        res.status(),
+        `generic admin must not reach ${method} ${path}: got ${res.status()} (${await res.text()})`,
+      ).toBe(403);
+      const respBody = await res.json();
+      expect(
+        respBody.code,
+        `${method} ${path}: expected code=WELLNESS_TENANT_REQUIRED`,
+      ).toBe("WELLNESS_TENANT_REQUIRED");
+    });
+
+    test(`travel admin ${method} ${path} → 403 WELLNESS_TENANT_REQUIRED (${label})`, async ({
+      request,
+    }) => {
+      const token = await getTravelAdmin(request);
+      if (!token) test.skip(true, "travel admin token required");
+      const res = await doMutation(request, token, method, path, body);
+      expect(
+        res.status(),
+        `travel admin must not reach ${method} ${path}: got ${res.status()} (${await res.text()})`,
+      ).toBe(403);
+      const respBody = await res.json();
+      expect(
+        respBody.code,
+        `${method} ${path}: expected code=WELLNESS_TENANT_REQUIRED`,
+      ).toBe("WELLNESS_TENANT_REQUIRED");
+    });
+  }
+
+  // Enumeration-prevention pin for wellness vertical. Same shape as the
+  // slice-2 travel-diagnostics enumeration pin: id=1 (likely exists in
+  // the seed) vs id=999999999 (definitely does not). Cross-vertical
+  // attacker must see IDENTICAL 403 shape — if status diverged, that
+  // would leak id existence across the vertical boundary.
+  test("enumeration-prevention: wellness 403 shape is identical for id=1 and id=999999999", async ({
+    request,
+  }) => {
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const lowIdRes = await get(request, token, `/api/wellness/visits/1`);
+    const highIdRes = await get(request, token, `/api/wellness/visits/${FAKE_ID}`);
+    expect(lowIdRes.status(), "id=1 must 403 (not 404)").toBe(403);
+    expect(highIdRes.status(), `id=${FAKE_ID} must 403 (not 404)`).toBe(403);
+    const lowBody = stripVolatileFields(await lowIdRes.json());
+    const highBody = stripVolatileFields(await highIdRes.json());
+    expect(lowBody.code).toBe("WELLNESS_TENANT_REQUIRED");
+    expect(highBody.code).toBe("WELLNESS_TENANT_REQUIRED");
+    expect(
+      lowBody,
+      `enumeration leak: wellness 403 body diverges for id=1 vs id=${FAKE_ID}`,
+    ).toEqual(highBody);
+  });
+
+  // Guard-before-body-parse pin for wellness PUT. A deliberately malformed
+  // body must STILL surface 403 WELLNESS_TENANT_REQUIRED, not 400 from
+  // body validation. If validation moved before the wellness gate, the
+  // route would leak the field-validation error envelope (an enumeration
+  // surface revealing endpoint shape) to cross-vertical attackers.
+  test("guard-before-body-parse: malformed PUT /services body still surfaces 403 WELLNESS_TENANT_REQUIRED", async ({
+    request,
+  }) => {
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await put(request, token, `/api/wellness/services/${FAKE_ID}`, {
+      basePrice: "not-a-number",
+      durationMin: -999,
+    });
+    expect(
+      res.status(),
+      `malformed wellness body must STILL 403 (not 400): got ${res.status()} (${await res.text()})`,
+    ).toBe(403);
+    const respBody = await res.json();
+    expect(respBody.code).toBe("WELLNESS_TENANT_REQUIRED");
+  });
+
+  // Sanity canary — same pattern as the slice-2 travel-vertical canary.
+  // Proves the WELLNESS_TENANT_REQUIRED responses above are tenant-
+  // vertical-specific, not just "everyone gets 403". A wellness-tenant
+  // admin should reach the handler and surface a normal 404 for the
+  // fake patient id (the handler returns `{ error: "Patient not found" }`).
+  test("wellness admin GET on a NON-EXISTENT patient id → 404 (sanity — guard is not 403-forever)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/wellness/patients/${FAKE_ID}`);
+    expect(
+      res.status(),
+      `wellness admin should reach lookup + get 404 on fake id: got ${res.status()} (${await res.text()})`,
+    ).toBe(404);
+  });
+});
+
 // ─── Auth gate ───────────────────────────────────────────────────────
 // Defense-in-depth: probes without ANY token should never 200, regardless
 // of vertical. The global auth guard 401/403s before requireTravelTenant.
@@ -1271,6 +1496,42 @@ test.describe("IDOR #919 — auth gate (no token never 200s)", () => {
 
   test("DELETE /api/contacts/1 without token → 401/403", async ({ request }) => {
     const res = await request.delete(`${BASE_URL}/api/contacts/1`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  // Slice 6 — auth-gate sweep for wellness-vertical /:id endpoints. Same
+  // contract as the travel-vertical auth-gate sweep above: no token must
+  // never 200, regardless of vertical. Parametric to keep the spec compact.
+  const NO_TOKEN_WELLNESS_ROUTES = [
+    `/api/wellness/patients/1`,
+    `/api/wellness/visits/1`,
+    `/api/wellness/services/1`,
+  ];
+  for (const path of NO_TOKEN_WELLNESS_ROUTES) {
+    test(`GET ${path} without token → 401/403`, async ({ request }) => {
+      const res = await request.get(`${BASE_URL}${path}`, {
+        timeout: REQUEST_TIMEOUT,
+      });
+      expect(
+        [401, 403],
+        `auth gate on ${path}: got ${res.status()} (${await res.text()})`,
+      ).toContain(res.status());
+    });
+  }
+
+  test("PUT /api/wellness/patients/1 without token → 401/403", async ({ request }) => {
+    const res = await request.put(`${BASE_URL}/api/wellness/patients/1`, {
+      data: { name: "no-token-probe" },
+      headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test("DELETE /api/wellness/patients/1 without token → 401/403", async ({ request }) => {
+    const res = await request.delete(`${BASE_URL}/api/wellness/patients/1`, {
       timeout: REQUEST_TIMEOUT,
     });
     expect([401, 403]).toContain(res.status());

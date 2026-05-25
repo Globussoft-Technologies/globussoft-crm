@@ -1971,6 +1971,180 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/:id/timeline — unified supplier-event feed
+// (Arc 2 #903 slice 21 — PRD_TRAVEL_SUPPLIER_MASTER §3.7.a per-supplier
+// dashboard "activity stream"; sibling to §3.1.g dispute-history surface).
+//
+// Composes events from existing data sources (NO schema edit):
+//   - SUPPLIER_CREATED / SUPPLIER_UPDATED (from TravelSupplier.createdAt /
+//     updatedAt, with a 1s delta guard so the auto-stamped same-txn mirror
+//     doesn't appear as a phantom update).
+//   - PAYABLE_CREATED / PAYABLE_PAID / PAYABLE_CANCELLED (from
+//     TravelSupplierPayable rows — paidAt fires the PAID event; status=
+//     cancelled with updatedAt fires the CANCELLED event since there's no
+//     dedicated cancelledAt column).
+//   - CREDENTIAL_CREATED (from SupplierCredential rows joined by
+//     name-match against supplier.name within tenant — same join used by
+//     slice 13 /credentials and slice 15 /access-trail).
+//   - CREDENTIAL_<ACTION> (from SupplierCredentialAccessLog rows: ROTATED,
+//     VIEWED, USED_IN_CHECKIN, DELETED, ...).
+//
+// Merge + sort done in the pure backend/lib/supplierTimeline.js helper so
+// the route stays IO-only. Helper handles `?since=<ISODate>` and
+// `?limit=<N>` (default 100, capped at 500).
+//
+// Auth: any verified token; tenant + sub-brand access enforced via
+// loadParentSupplier (returns SUPPLIER_NOT_FOUND / SUB_BRAND_DENIED).
+//
+// Query params (all optional):
+//   ?limit=N           — max events returned (default 100, cap 500;
+//                        invalid → silent fallback to 100, mirroring
+//                        access-trail's parseAccessTrailLimit defensive shape).
+//   ?since=<ISODate>   — only events strictly later than this. Invalid
+//                        parseable date → 400 INVALID_SINCE.
+//
+// Response shape:
+//   {
+//     supplier: { id, name, supplierCategory, subBrand },
+//     events: [ { kind, at, id, ...payload }, ... ],   // newest-first
+//     count: <events.length>,
+//     limit: <effectiveLimit>
+//   }
+//
+// Decisions:
+//   - Reuse loadParentSupplier so the 400/404/403 contract for the parent
+//     supplier matches sibling /payables, /scorecard, /access-trail routes.
+//   - Per-source findMany takes 500 each (matches MAX_LIMIT) so a high-
+//     traffic supplier with many recent payables doesn't starve the
+//     credential/access-log streams. Total event payload bounded by limit.
+//   - Helper returns events with payload fields (amount/currency/poNumber
+//     for payables; category for credentials; userId/credentialId for
+//     access-log) so the timeline UI can render meaningful entries without
+//     a follow-up lookup per event.
+//   - Route ordering: registered BEFORE /suppliers/:id (sub-paths-before-:id
+//     standing rule) so `timeline` cannot be captured as an `id`.
+// ============================================================================
+
+const {
+  composeSupplierTimeline,
+  TIMELINE_DEFAULT_LIMIT,
+  TIMELINE_MAX_LIMIT,
+} = require("../lib/supplierTimeline");
+const TIMELINE_PER_SOURCE_TAKE = TIMELINE_MAX_LIMIT;
+
+router.get(
+  "/suppliers/:id/timeline",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // Parse limit defensively — invalid values fall back to default
+      // rather than 400 (mirrors access-trail parseAccessTrailOffset shape
+      // for non-numeric / negative inputs).
+      let limit = TIMELINE_DEFAULT_LIMIT;
+      if (req.query.limit != null && req.query.limit !== "") {
+        const v = Number(req.query.limit);
+        if (Number.isInteger(v) && v >= 1) {
+          limit = Math.min(v, TIMELINE_MAX_LIMIT);
+        }
+      }
+
+      // ?since parsing — surface INVALID_SINCE (distinct from INVALID_DATE
+      // used by scorecard so the caller can distinguish a cursor parse
+      // failure from a window-bound parse failure).
+      let since = null;
+      if (req.query.since != null && req.query.since !== "") {
+        const parsed = new Date(String(req.query.since));
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "since must be a valid ISO date / parseable date string",
+            code: "INVALID_SINCE",
+          });
+        }
+        since = parsed;
+      }
+
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const [payables, credentials] = await Promise.all([
+        prisma.travelSupplierPayable.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            supplierId: supplier.id,
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            updatedAt: true,
+            paidAt: true,
+            status: true,
+            amount: true,
+            currency: true,
+            poNumber: true,
+          },
+          orderBy: { createdAt: "desc" },
+          take: TIMELINE_PER_SOURCE_TAKE,
+        }),
+        prisma.supplierCredential.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            supplierName: supplier.name,
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            category: true,
+          },
+          take: TIMELINE_PER_SOURCE_TAKE,
+        }),
+      ]);
+
+      // Access log is keyed by credentialId — short-circuit if no creds.
+      let accessLog = [];
+      if (credentials.length > 0) {
+        const credIds = credentials.map((c) => c.id);
+        accessLog = await prisma.supplierCredentialAccessLog.findMany({
+          where: { credentialId: { in: credIds } },
+          select: {
+            id: true,
+            credentialId: true,
+            userId: true,
+            action: true,
+            at: true,
+          },
+          orderBy: { at: "desc" },
+          take: TIMELINE_PER_SOURCE_TAKE,
+        });
+      }
+
+      const events = composeSupplierTimeline(
+        { supplier, payables, credentials, accessLog },
+        { limit, since },
+      );
+
+      res.json({
+        supplier: {
+          id: supplier.id,
+          name: supplier.name,
+          supplierCategory: supplier.supplierCategory,
+          subBrand: supplier.subBrand,
+        },
+        events,
+        count: events.length,
+        limit,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] timeline error:", e.message);
+      res.status(500).json({ error: "Failed to build supplier timeline" });
+    }
+  },
+);
+
 // GET /api/travel/suppliers/:id
 router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

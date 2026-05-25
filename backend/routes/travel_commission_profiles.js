@@ -742,6 +742,295 @@ router.get(
   },
 );
 
+// GET /api/travel/commission-profiles/by-quarter — tenant-wide commission
+// analytics rolled up by UTC YYYY-Qn across ALL TravelCommissionProfile
+// rows visible to the caller.
+//
+// Slice 20 of #905 (PRD_TRAVEL_B2B_AGENT_PORTAL §3 — operator-facing
+// commission analytics surface). Quarterly sibling of slice 19
+// (/by-month tenant-wide) for the coarser-bucket trend chart. Same
+// aggregation pattern lifted to UTC calendar quarters: Q1 = Jan-Mar,
+// Q2 = Apr-Jun, Q3 = Jul-Sep, Q4 = Oct-Dec — NOT Indian-FY April-March
+// quarters. FY tooling is a future overlay on top of this primitive.
+//
+// NOT to be confused with /:id/summary/by-quarter (slice 16) — that's
+// the per-profile quarterly time series; this is the tenant-wide rollup
+// across every visible profile. Both coexist: per-profile drills into
+// one chosen profile; this endpoint feeds the cross-profile quarterly
+// trend chart on the library page.
+//
+// Bucket key shape: "YYYY-Qn" (e.g. "2026-Q2") derived from Deal.createdAt's
+// UTC year + (Math.floor(month/3) + 1). UTC chosen deliberately so labels
+// stay stable across operator timezones.
+//
+// Scope rules: identical to slice 19 — tenant on profile + deal,
+// sub-brand narrowed for MANAGER, soft-deleted deals excluded, any
+// verified token (no RBAC narrowing — anodyne aggregate).
+//
+// Query string:
+//   from      optional inclusive lower bound (YYYY-Qn)
+//   to        optional inclusive upper bound (YYYY-Qn)
+//   orderBy   default "quarter:asc"; also accepts "quarter:desc",
+//             "totalCommission:asc|desc", "profileCount:asc|desc",
+//             "dealCount:asc|desc". Unknown tokens degrade silently to default.
+//   limit     default 12 (3 years of quarters), max 40 (10 years).
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     quarters: [ {
+//       quarter: "2026-Q2",
+//       profileCount, dealCount,
+//       totalSale, totalCommission
+//     } ],
+//     totalQuarters,
+//     grandProfileCount, grandDealCount, grandTotalSale, grandTotalCommission,
+//     limit, offset,
+//     aggregateExceedsCap,
+//   }
+//
+// Safety cap (PROFILES_AGGREGATE_CAP=1000): process at most 1000 profiles
+// per call; aggregateExceedsCap=true if more match the filter. Mirrors slice 19.
+//
+// Defensive: malformed stored profileJson on a profile → that profile
+// contributes 0 commission but its deals still register in count + totalSale.
+// Null/invalid Deal.amount or createdAt → 0 / "unknown" bucket; "unknown"
+// is excluded when ?from / ?to is set.
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-quarter" as a numeric :id (INVALID_ID).
+router.get(
+  "/commission-profiles/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+      // YYYY-Qn validation — same regex slice 16 uses.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "totalCommission:asc",
+        "totalCommission:desc",
+        "profileCount:asc",
+        "profileCount:desc",
+        "dealCount:asc",
+        "dealCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+      // Sub-brand narrowing — same gate as /stats endpoint. MANAGER sees
+      // their allowed sub-brands PLUS tenant-wide (subBrand IS NULL).
+      const profileWhere = { tenantId };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        profileWhere.OR = [
+          { subBrand: { in: [...allowed] } },
+          { subBrand: null },
+        ];
+      }
+
+      // Bounded fetch.
+      const profiles = await prisma.travelCommissionProfile.findMany({
+        where: profileWhere,
+        orderBy: [{ id: "asc" }],
+        take: PROFILES_AGGREGATE_CAP,
+      });
+
+      const totalMatching = await prisma.travelCommissionProfile.count({
+        where: profileWhere,
+      });
+      const aggregateExceedsCap = totalMatching > PROFILES_AGGREGATE_CAP;
+
+      if (profiles.length === 0) {
+        return res.json({
+          quarters: [],
+          totalQuarters: 0,
+          grandProfileCount: 0,
+          grandDealCount: 0,
+          grandTotalSale: 0,
+          grandTotalCommission: 0,
+          limit: take,
+          offset: skip,
+          aggregateExceedsCap,
+        });
+      }
+
+      // Pre-parse all profileJson once. Malformed profile → null → its
+      // deals contribute 0 commission but still register in count + totalSale.
+      const parsedById = new Map();
+      for (const p of profiles) {
+        try {
+          parsedById.set(p.id, JSON.parse(p.profileJson));
+        } catch (_e) {
+          parsedById.set(p.id, null);
+        }
+      }
+
+      const profileIds = profiles.map((p) => p.id);
+      const deals = await prisma.deal.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          contact: {
+            commissionProfileId: { in: profileIds },
+            tenantId,
+          },
+        },
+        select: {
+          id: true,
+          amount: true,
+          createdAt: true,
+          contact: { select: { commissionProfileId: true } },
+        },
+      });
+
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      // Aggregate per-UTC-quarter. Calendar quarters: Q1=Jan-Mar, Q2=Apr-Jun,
+      // Q3=Jul-Sep, Q4=Oct-Dec via Math.floor(UTCMonth/3) + 1.
+      const byQuarter = new Map();
+      for (const d of deals) {
+        const pid = d.contact && d.contact.commissionProfileId;
+        if (!pid) continue;
+        const parsed = parsedById.get(pid);
+        if (parsed === undefined) continue;
+
+        let quarterKey = "unknown";
+        if (d.createdAt) {
+          const dt = new Date(d.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${q}`;
+          }
+        }
+
+        let row = byQuarter.get(quarterKey);
+        if (!row) {
+          row = {
+            quarter: quarterKey,
+            profileIds: new Set(),
+            dealCount: 0,
+            totalSale: 0,
+            totalCommission: 0,
+          };
+          byQuarter.set(quarterKey, row);
+        }
+        row.profileIds.add(pid);
+        row.dealCount += 1;
+        const safeAmt = Number(d.amount) || 0;
+        row.totalSale += safeAmt;
+
+        let commission = 0;
+        if (parsed !== null) {
+          const result = computeCommission({
+            saleAmount: safeAmt,
+            paxCount: 1,
+            profile: parsed,
+          });
+          commission = Number(result && result.commission) || 0;
+        }
+        row.totalCommission += commission;
+      }
+
+      // Materialise rows from the byQuarter Map.
+      let quarters = [...byQuarter.values()].map((r) => ({
+        quarter: r.quarter,
+        profileCount: r.profileIds.size,
+        dealCount: r.dealCount,
+        totalSale: round2(r.totalSale),
+        totalCommission: round2(r.totalCommission),
+      }));
+
+      // Apply ?from / ?to filter. "unknown" rows excluded when either
+      // bound is set (no comparable token); kept otherwise. Mirrors slice 19.
+      if (fromRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+      // chronological (Q1..Q4 single-digit).
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalQuarters = quarters.length;
+
+      // Distinct profiles across the filtered population — compute BEFORE
+      // pagination so the grand total reflects the full filtered set.
+      const grandProfileSet = new Set();
+      for (const r of byQuarter.values()) {
+        if (fromRaw !== null && (r.quarter === "unknown" || r.quarter < fromRaw)) continue;
+        if (toRaw !== null && (r.quarter === "unknown" || r.quarter > toRaw)) continue;
+        for (const pid of r.profileIds) grandProfileSet.add(pid);
+      }
+      const grandProfileCount = grandProfileSet.size;
+
+      const grandDealCount = quarters.reduce(
+        (acc, r) => acc + (Number(r.dealCount) || 0),
+        0,
+      );
+      const grandTotalSale = round2(
+        quarters.reduce((acc, r) => acc + (Number(r.totalSale) || 0), 0),
+      );
+      const grandTotalCommission = round2(
+        quarters.reduce((acc, r) => acc + (Number(r.totalCommission) || 0), 0),
+      );
+
+      // Paginate AFTER aggregation + sort + filter.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        quarters: paged,
+        totalQuarters,
+        grandProfileCount,
+        grandDealCount,
+        grandTotalSale,
+        grandTotalCommission,
+        limit: take,
+        offset: skip,
+        aggregateExceedsCap,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly commission rollup" });
+    }
+  },
+);
+
 // GET /api/travel/commission-profiles/:id
 router.get(
   "/commission-profiles/:id",

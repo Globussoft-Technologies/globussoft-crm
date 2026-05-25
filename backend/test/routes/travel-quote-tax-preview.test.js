@@ -69,6 +69,8 @@ prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
 });
+prisma.contact = prisma.contact || {};
+prisma.contact.findUnique = vi.fn().mockResolvedValue(null);
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
 prisma.auditLog = {
@@ -139,12 +141,25 @@ function makeLine(overrides = {}) {
   };
 }
 
+// Default tenant.findUnique implementation discriminates by the `select`
+// shape so the middleware (requireTravelTenant, selects vertical+name+slug)
+// and the slice-4 resolver (resolveStateCodes, selects gstStateCode) can
+// both hit the same Prisma surface without interfering. Individual tests
+// override by stacking mockResolvedValueOnce or replacing the implementation.
+function defaultTenantFindUniqueImpl({ select } = {}) {
+  if (select && select.gstStateCode) {
+    return Promise.resolve(null); // no DB value populated by default
+  }
+  return Promise.resolve({
+    id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
+  });
+}
+
 beforeEach(() => {
   prisma.travelQuote.findFirst.mockReset();
   prisma.travelQuoteLine.findMany.mockReset().mockResolvedValue([]);
-  prisma.tenant.findUnique.mockReset().mockResolvedValue({
-    id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
-  });
+  prisma.tenant.findUnique.mockReset().mockImplementation(defaultTenantFindUniqueImpl);
+  prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'USER', subBrandAccess: null });
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
@@ -392,5 +407,176 @@ describe('GET /api/travel/quotes/:id/tax-preview — auth / scoping', () => {
   test('no auth header → 401', async () => {
     const res = await request(makeApp()).get('/api/travel/quotes/100/tax-preview');
     expect(res.status).toBe(401);
+  });
+});
+
+// Slice 4 of #902 — wiring lib/gstStateCodeResolver.js (commit ef7573e7).
+// Source-of-truth chain (per FR-3.x):
+//   1. Truthy query-param override wins.
+//   2. DB column — Tenant.gstStateCode for operator, Contact.stateCode
+//      for customer (both nullable additive columns from slice 3).
+//   3. Hard-coded "IN-MH" fallback (preserves slice 2 back-compat).
+// Customer-side fallback: when override + DB are both null, mirror the
+// operator (intra-state default) — resolver-internal.
+describe('GET /api/travel/quotes/:id/tax-preview — slice 4 resolver wiring', () => {
+  /** Helper: stub tenant.findUnique to return distinct payloads for
+   * the middleware select-shape vs the resolver select-shape. */
+  function stubTenantWithGstCode(gstStateCode) {
+    prisma.tenant.findUnique.mockImplementation(({ select } = {}) => {
+      if (select && select.gstStateCode) {
+        return Promise.resolve({ gstStateCode });
+      }
+      return Promise.resolve({
+        id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
+      });
+    });
+  }
+
+  test('no query params + Tenant.gstStateCode=IN-MH + Contact.stateCode=IN-KA → operator=IN-MH, customer=IN-KA (DB inter-state)', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ contactId: 999 }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'hotel', amount: '1000.00' }),
+    ]);
+    stubTenantWithGstCode('IN-MH');
+    prisma.contact.findUnique.mockResolvedValue({ stateCode: 'IN-KA' });
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.operatorStateCode).toBe('IN-MH');
+    expect(res.body.customerStateCode).toBe('IN-KA');
+    expect(res.body.isInterstate).toBe(true);
+    // Inter-state hotel ₹1000 @ 12% → igst=120, cgst=sgst=0
+    expect(res.body.lines[0]).toMatchObject({ cgst: 0, sgst: 0, igst: 120 });
+  });
+
+  test('no query params + Tenant.gstStateCode set + Contact.stateCode null → customer mirrors operator (DB intra-state)', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ contactId: 999 }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'hotel', amount: '1000.00' }),
+    ]);
+    stubTenantWithGstCode('IN-DL');
+    prisma.contact.findUnique.mockResolvedValue(null); // Contact missing / no stateCode
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.operatorStateCode).toBe('IN-DL');
+    expect(res.body.customerStateCode).toBe('IN-DL'); // mirrored
+    expect(res.body.isInterstate).toBe(false);
+    expect(res.body.lines[0]).toMatchObject({ cgst: 60, sgst: 60, igst: 0 });
+  });
+
+  test('no query params + both DB nulls → both default to "IN-MH" (legacy fallback preserved)', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ contactId: 999 }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'hotel', amount: '1000.00' }),
+    ]);
+    // Default impl already returns null for the gstStateCode-select call;
+    // default contact.findUnique mock already returns null.
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.operatorStateCode).toBe('IN-MH');
+    expect(res.body.customerStateCode).toBe('IN-MH');
+    expect(res.body.isInterstate).toBe(false);
+  });
+
+  test('?operatorStateCode=IN-RJ override + Tenant.gstStateCode=IN-MH → override wins (response shows IN-RJ)', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ contactId: 999 }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'hotel', amount: '1000.00' }),
+    ]);
+    stubTenantWithGstCode('IN-MH'); // DB says IN-MH
+    prisma.contact.findUnique.mockResolvedValue({ stateCode: 'IN-KA' });
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview?operatorStateCode=IN-RJ')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.operatorStateCode).toBe('IN-RJ'); // override won
+    expect(res.body.customerStateCode).toBe('IN-KA'); // DB
+    expect(res.body.isInterstate).toBe(true);
+  });
+
+  test('?customerStateCode=IN-GJ override + Contact.stateCode=IN-KA → override wins', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ contactId: 999 }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'hotel', amount: '1000.00' }),
+    ]);
+    stubTenantWithGstCode('IN-MH');
+    prisma.contact.findUnique.mockResolvedValue({ stateCode: 'IN-KA' }); // DB says IN-KA
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview?customerStateCode=IN-GJ')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.operatorStateCode).toBe('IN-MH'); // DB
+    expect(res.body.customerStateCode).toBe('IN-GJ'); // override won
+    expect(res.body.isInterstate).toBe(true);
+  });
+
+  test('no operator override → prisma.tenant.findUnique called with select: { gstStateCode: true }', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ contactId: 999 }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([]);
+    stubTenantWithGstCode('IN-MH');
+
+    await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    // At least one call should target gstStateCode select shape.
+    const gstSelectCalls = prisma.tenant.findUnique.mock.calls.filter(
+      ([arg]) => arg && arg.select && arg.select.gstStateCode === true,
+    );
+    expect(gstSelectCalls.length).toBeGreaterThanOrEqual(1);
+    expect(gstSelectCalls[0][0]).toMatchObject({
+      where: { id: 1 },
+      select: { gstStateCode: true },
+    });
+  });
+
+  test('no customer override → prisma.contact.findUnique called with select: { stateCode: true } and where.id = quote.contactId', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ contactId: 999 }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([]);
+    stubTenantWithGstCode('IN-MH');
+    prisma.contact.findUnique.mockResolvedValue({ stateCode: 'IN-KA' });
+
+    await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(prisma.contact.findUnique).toHaveBeenCalledWith({
+      where: { id: 999 },
+      select: { stateCode: true },
+    });
+  });
+
+  test('operator override present → prisma.tenant.findUnique NOT called with gstStateCode-select shape', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ contactId: 999 }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([]);
+    stubTenantWithGstCode('IN-MH');
+
+    await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview?operatorStateCode=IN-RJ&customerStateCode=IN-GJ')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    // Middleware still does a tenant.findUnique (vertical check), but
+    // resolver should be short-circuited — no gstStateCode-select call.
+    const gstSelectCalls = prisma.tenant.findUnique.mock.calls.filter(
+      ([arg]) => arg && arg.select && arg.select.gstStateCode === true,
+    );
+    expect(gstSelectCalls).toHaveLength(0);
+    // Same short-circuit for contact when customer override present.
+    expect(prisma.contact.findUnique).not.toHaveBeenCalled();
   });
 });

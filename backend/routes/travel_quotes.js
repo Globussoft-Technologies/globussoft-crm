@@ -35,6 +35,7 @@ const {
   isInterstateSupply,
   gstRateForCategory,
 } = require("../lib/gstCalculation");
+const { resolveStateCodes } = require("../lib/gstStateCodeResolver");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
@@ -1070,12 +1071,24 @@ router.get(
       const quote = await loadParentQuote(req, res, quoteId);
       if (!quote) return;
 
-      // Place-of-supply state-code resolution. Default operator=IN-MH;
-      // default customer = operator (intra-state). Empty string for an
-      // explicitly-provided param is rejected as INVALID_STATE_CODE so
-      // callers can't silently fall through to defaults by sending a
-      // blank value (defense-in-depth on top of isInterstateSupply's
-      // own empty-string throw).
+      // Place-of-supply state-code resolution (slice 4 — consumes
+      // lib/gstStateCodeResolver.js, commit ef7573e7). Source-of-truth
+      // chain per FR-3.x:
+      //   1. Truthy override (query param) wins.
+      //   2. DB column — Tenant.gstStateCode for operator,
+      //      Contact.stateCode for customer (slice 3 schema adds).
+      //   3. Hard-coded "IN-MH" — preserves slice 2 back-compat
+      //      when both override + DB are absent.
+      // Customer-side fallback when both override + DB are null:
+      // mirror the operator (intra-state default) — handled inside
+      // the helper, see lib/gstStateCodeResolver.js docs.
+      //
+      // Empty-string for an explicitly-provided param is still a 400
+      // INVALID_STATE_CODE (defense-in-depth — keeps slice 2's spec
+      // contract, prevents silent fall-through to defaults by sending
+      // a blank value). The resolver's "empty-string == no override"
+      // semantics handle the resolver-internal layer; this 400 is the
+      // user-facing API-shape guarantee that explicit-blank is rejected.
       const rawOp = req.query.operatorStateCode;
       const rawCu = req.query.customerStateCode;
       if (rawOp != null && String(rawOp).trim() === "") {
@@ -1090,10 +1103,13 @@ router.get(
           code: "INVALID_STATE_CODE",
         });
       }
-      const operatorStateCode =
-        rawOp != null ? String(rawOp).trim() : "IN-MH";
-      const customerStateCode =
-        rawCu != null ? String(rawCu).trim() : operatorStateCode;
+      const { operatorStateCode, customerStateCode } = await resolveStateCodes({
+        prisma,
+        tenantId: req.travelTenant.id,
+        contactId: quote.contactId,
+        operatorOverride: rawOp != null ? String(rawOp).trim() : null,
+        customerOverride: rawCu != null ? String(rawCu).trim() : null,
+      });
 
       let isInterstate;
       try {

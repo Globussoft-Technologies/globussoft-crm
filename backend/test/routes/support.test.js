@@ -93,6 +93,21 @@ prisma.slaPolicy.findFirst = vi.fn();
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 
+// ── eventBus.emitEvent mock — BEFORE the router is required ───────────
+//
+// The route fires `require('../lib/eventBus').emitEvent('ticket.created', ...)`
+// inside a synchronous try/catch on POST /. The emitEvent call returns a
+// Promise that synchronously starts `prisma.automationRule.findMany()` —
+// the sync try/catch does NOT trap the resulting async rejection. Under
+// the CI unit-tests gate there's no DATABASE_URL, so the prisma call
+// rejects asynchronously with PrismaClientInitializationError, which
+// surfaces as an unhandled rejection and exits the vitest process with
+// a non-zero status even though every test passed (the canonical #937
+// pattern from CLAUDE.md cron-learnings). Stub the emit to a no-op
+// resolved promise so the route's side-effect is inert under unit tests.
+const eb = requireCJS('../../lib/eventBus');
+eb.emitEvent = vi.fn().mockResolvedValue(undefined);
+
 // ── Auth middleware swap — BEFORE the router is required ───────────────
 //
 // The router does `const { verifyToken } = require('../middleware/auth')`

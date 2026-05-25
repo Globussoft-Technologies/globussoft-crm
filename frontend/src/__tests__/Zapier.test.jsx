@@ -29,7 +29,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../utils/api', () => ({
@@ -161,7 +161,7 @@ describe('Zapier page — initial load fetches all three resources', () => {
     render(<Zapier />);
     expect(await screen.findByText(/no triggers available\./i)).toBeInTheDocument();
     expect(screen.getByText('create_contact')).toBeInTheDocument();
-    expect(screen.getByText('sub_1' === 'sub_1' ? /new_contact/i : '')).toBeInTheDocument();
+    expect(screen.getByText(/new_contact/i)).toBeInTheDocument();
   });
 });
 

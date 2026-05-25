@@ -22,6 +22,10 @@
  *  10. Validation: profileType=flat_percent percent=0 is ALLOWED (operator may want 0% profile).
  *  11. Edit pre-fills form from row's profileJson (parse-back round-trip).
  *  12. Delete fires notify.confirm + DELETE on confirm-yes.
+ *  13. (slice 8) Preview button opens the preview-calculator panel for a row.
+ *  14. (slice 8) Preview submit POSTs to /:id/preview with saleAmount + paxCount
+ *      and renders the returned commission + breakdown.
+ *  15. (slice 8) Preview validation: empty saleAmount → notify.error + no POST.
  *
  * Mocking discipline (per CLAUDE.md RTL standing rules):
  *   - fetchApi mocked at ../utils/api (the page's dep).
@@ -109,10 +113,26 @@ function installFetchMock({
   create = null,
   update = null,
   del = null,
+  preview = null,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
     if (typeof url === 'string' && url.startsWith('/api/travel/commission-profiles')) {
+      // /preview suffix routes first (POST /:id/preview)
+      if (method === 'POST' && /\/\d+\/preview$/.test(url)) {
+        if (preview instanceof Error) return Promise.reject(preview);
+        return Promise.resolve(
+          preview || {
+            profileId: 901,
+            profileName: 'Flat 5% TMC',
+            profileType: 'flat_percent',
+            saleAmount: 100000,
+            paxCount: 1,
+            commission: 5000,
+            breakdown: 'flat_percent 5% of 100000 = 5000',
+          },
+        );
+      }
       if (method === 'GET') {
         if (list instanceof Error) return Promise.reject(list);
         return Promise.resolve(list);
@@ -386,5 +406,73 @@ describe('<CommissionProfilesAdmin /> — edit + delete', () => {
       expect(del).toBeTruthy();
     });
     expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/deleted/i));
+  });
+});
+
+describe('<CommissionProfilesAdmin /> — preview calculator (slice 8)', () => {
+  it('clicking the Preview icon opens the preview-calculator panel for that row', async () => {
+    renderPage();
+    await screen.findByText('Flat 5% TMC');
+    expect(screen.queryByTestId('commission-profile-preview-panel')).toBeNull();
+    fireEvent.click(screen.getByTestId('commission-profile-preview-901'));
+    const panel = screen.getByTestId('commission-profile-preview-panel');
+    expect(panel).toBeInTheDocument();
+    // Panel surfaces the profile name + type so the operator knows what
+    // they're previewing. Use within() to disambiguate from the row-strong.
+    expect(within(panel).getByText(/Flat 5% TMC/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Sale amount$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Pax count$/i)).toBeInTheDocument();
+  });
+
+  it('Calculate POSTs to /:id/preview and renders the returned commission + breakdown', async () => {
+    renderPage();
+    await screen.findByText('Flat 5% TMC');
+    fireEvent.click(screen.getByTestId('commission-profile-preview-901'));
+    fireEvent.change(screen.getByLabelText(/^Sale amount$/i), { target: { value: '100000' } });
+    fireEvent.change(screen.getByLabelText(/^Pax count$/i), { target: { value: '3' } });
+    fetchApiMock.mockClear();
+    installFetchMock({
+      preview: {
+        profileId: 901,
+        profileName: 'Flat 5% TMC',
+        profileType: 'flat_percent',
+        saleAmount: 100000,
+        paxCount: 3,
+        commission: 5000,
+        breakdown: 'flat_percent 5% of 100000 = 5000',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Calculate$/ }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/commission-profiles/901/preview' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.saleAmount).toBe(100000);
+      expect(body.paxCount).toBe(3);
+    });
+    // Result panel surfaces with commission + breakdown.
+    const result = await screen.findByTestId('commission-profile-preview-result');
+    expect(within(result).getByTestId('commission-profile-preview-amount')).toHaveTextContent(/5,000\.00/);
+    expect(within(result).getByTestId('commission-profile-preview-breakdown'))
+      .toHaveTextContent(/flat_percent 5% of 100000 = 5000/);
+  });
+
+  it('validation: empty saleAmount → notify.error + NO preview POST fires', async () => {
+    renderPage();
+    await screen.findByText('Flat 5% TMC');
+    fireEvent.click(screen.getByTestId('commission-profile-preview-901'));
+    fetchApiMock.mockClear();
+    // Click Calculate with saleAmount left blank — handlePreview's Number("")
+    // → NaN check fires notify.error and short-circuits before POST.
+    fireEvent.click(screen.getByRole('button', { name: /^Calculate$/ }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/Sale amount must be/i));
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => /\/preview$/.test(u) && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
   });
 });

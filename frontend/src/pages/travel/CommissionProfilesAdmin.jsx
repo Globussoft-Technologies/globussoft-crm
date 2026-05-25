@@ -30,10 +30,21 @@
 //
 // Sidebar wire-in is a SEPARATE slice (deferred per slice-prompt).
 //
+// Slice 8 extension — Preview Calculator panel:
+//   Each row gains a Calculator-icon button next to Edit. Clicking opens a
+//   what-if panel above the table: operator enters sale amount + pax count,
+//   hits "Calculate", and the panel POSTs to /commission-profiles/:id/preview
+//   (slice 7, commit 52f4d53d). The server response carries
+//   { commission, breakdown, ... } which we render inline — commission as
+//   the large success-coloured number, breakdown as a monospace diagnostic
+//   line. Lets operators sanity-check "if I sell this Umrah package at ₹2.5L,
+//   what does the agent earn?" before committing to a profile assignment
+//   (slice 6) or persisting a real invoice line item.
+//
 // Template: pattern-matched against SuppliersAdmin / FlyerTemplates / QuotesAdmin.
 
 import { useEffect, useState, useContext } from "react";
-import { Percent, Plus, Pencil, Trash2 } from "lucide-react";
+import { Percent, Plus, Pencil, Trash2, Calculator } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
@@ -218,6 +229,16 @@ export default function CommissionProfilesAdmin() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
+  // Preview-calculator panel state (slice 8). Open when previewingProfile is
+  // non-null. `previewForm` captures the operator-entered sale amount + pax
+  // count; `previewResult` holds the server's calculated commission +
+  // breakdown after a successful POST /:id/preview. `previewLoading` gates
+  // the button so the operator can't double-fire.
+  const [previewingProfile, setPreviewingProfile] = useState(null);
+  const [previewForm, setPreviewForm] = useState({ saleAmount: "", paxCount: "1" });
+  const [previewResult, setPreviewResult] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
@@ -315,6 +336,61 @@ export default function CommissionProfilesAdmin() {
       load();
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Delete failed");
+    }
+  };
+
+  // Open the preview-calculator panel for a row. Resets any prior result so
+  // the operator doesn't see stale numbers from a different profile.
+  const openPreview = (p) => {
+    setPreviewingProfile(p);
+    setPreviewForm({ saleAmount: "", paxCount: "1" });
+    setPreviewResult(null);
+  };
+
+  const closePreview = () => {
+    setPreviewingProfile(null);
+    setPreviewResult(null);
+  };
+
+  // Hit POST /api/travel/commission-profiles/:id/preview with the operator-
+  // entered sale amount + paxCount. The backend returns { commission, breakdown,
+  // ... } — we render both. paxCount defaults to 1 server-side if omitted, but
+  // we always send it so the wire shape is deterministic.
+  const handlePreview = async (e) => {
+    if (e?.preventDefault) e.preventDefault();
+    if (!previewingProfile) return;
+    // Reject blank explicitly — Number("") coerces to 0 which would pass the
+    // numeric guard but the operator clearly meant "no value entered".
+    const rawSale = String(previewForm.saleAmount).trim();
+    if (rawSale === "") {
+      notify.error("Sale amount must be a non-negative number");
+      return;
+    }
+    const saleNum = Number(rawSale);
+    if (!Number.isFinite(saleNum) || saleNum < 0) {
+      notify.error("Sale amount must be a non-negative number");
+      return;
+    }
+    const paxNum = Number(previewForm.paxCount);
+    if (!Number.isFinite(paxNum) || paxNum < 0 || !Number.isInteger(paxNum)) {
+      notify.error("Pax count must be a non-negative integer");
+      return;
+    }
+    setPreviewLoading(true);
+    try {
+      const result = await fetchApi(
+        `/api/travel/commission-profiles/${previewingProfile.id}/preview`,
+        {
+          method: "POST",
+          body: JSON.stringify({ saleAmount: saleNum, paxCount: paxNum }),
+        },
+      );
+      setPreviewResult(result);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Preview failed");
+      setPreviewResult(null);
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -647,6 +723,106 @@ export default function CommissionProfilesAdmin() {
         </form>
       )}
 
+      {previewingProfile && (
+        <form
+          onSubmit={handlePreview}
+          data-testid="commission-profile-preview-panel"
+          className="glass"
+          style={{
+            padding: 16,
+            marginBottom: 16,
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))",
+            gap: 10,
+            alignItems: "end",
+          }}
+        >
+          <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8 }}>
+            <Calculator size={18} aria-hidden />
+            <strong>Preview commission</strong>
+            <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+              — {previewingProfile.name} ({previewingProfile.profileType})
+            </span>
+          </div>
+          <label style={fieldLabel}>
+            <span>Sale amount *</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={previewForm.saleAmount}
+              onChange={(e) => setPreviewForm({ ...previewForm, saleAmount: e.target.value })}
+              style={inputStyle}
+              aria-label="Sale amount"
+            />
+          </label>
+          <label style={fieldLabel}>
+            <span>Pax count</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={previewForm.paxCount}
+              onChange={(e) => setPreviewForm({ ...previewForm, paxCount: e.target.value })}
+              style={inputStyle}
+              aria-label="Pax count"
+            />
+          </label>
+          <div style={{ display: "flex", gap: 8, gridColumn: "1 / -1" }}>
+            <button
+              type="submit"
+              disabled={previewLoading}
+              style={{ ...primaryBtn, background: "var(--primary-color, var(--accent-color))" }}
+            >
+              {previewLoading ? "Calculating…" : "Calculate"}
+            </button>
+            <button
+              type="button"
+              onClick={closePreview}
+              style={secondaryBtn}
+            >
+              Close
+            </button>
+          </div>
+          {previewResult && (
+            <div
+              data-testid="commission-profile-preview-result"
+              style={{
+                gridColumn: "1 / -1",
+                padding: 12,
+                borderRadius: 6,
+                background: "var(--subtle-bg, rgba(255,255,255,0.04))",
+                border: "1px solid var(--border-color)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+              }}
+            >
+              <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+                Calculated commission
+              </div>
+              <div
+                data-testid="commission-profile-preview-amount"
+                style={{ fontSize: 22, fontWeight: 700, color: "var(--success-color, #22c55e)" }}
+              >
+                {Number(previewResult.commission || 0).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </div>
+              {previewResult.breakdown && (
+                <div
+                  data-testid="commission-profile-preview-breakdown"
+                  style={{ fontSize: 12, color: "var(--text-secondary)", fontFamily: "monospace" }}
+                >
+                  {previewResult.breakdown}
+                </div>
+              )}
+            </div>
+          )}
+        </form>
+      )}
+
       <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
@@ -719,6 +895,16 @@ export default function CommissionProfilesAdmin() {
                   </td>
                   {canWrite && (
                     <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
+                      <button
+                        type="button"
+                        onClick={() => openPreview(p)}
+                        title={`Preview commission for ${p.name}`}
+                        aria-label={`Preview ${p.name}`}
+                        style={iconBtn}
+                        data-testid={`commission-profile-preview-${p.id}`}
+                      >
+                        <Calculator size={16} />
+                      </button>
                       <button
                         type="button"
                         onClick={() => openEdit(p)}

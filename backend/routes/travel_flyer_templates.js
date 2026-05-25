@@ -30,6 +30,7 @@
  *   POST   /api/travel/flyer-templates/:id/export     — ADMIN/MANAGER queue render (slice 10)
  *   GET    /api/travel/flyer-templates/:id/preview.pdf — USER+ inline PDF preview (slice 12)
  *   GET    /api/travel/flyer-templates/:id/usage-stats — USER+ per-template AuditLog rollup (slice 17)
+ *   GET    /api/travel/flyer-templates/:id/audit-trail  — USER+ ordered per-template audit list (slice 18)
  *   PUT    /api/travel/flyer-templates/:id            — ADMIN/MANAGER partial update
  *   DELETE /api/travel/flyer-templates/:id            — ADMIN-only hard delete
  *
@@ -1675,6 +1676,166 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] usage-stats error:", e.message);
       res.status(500).json({ error: "Failed to read flyer template usage stats" });
+    }
+  },
+);
+
+// GET /api/travel/flyer-templates/:id/audit-trail — ordered per-template audit history
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 18).
+//
+// Read-only AuditLog list surface. Complements slice 17 /usage-stats
+// (which returns counts + timestamps rollup) by surfacing the actual
+// ordered rows — who did what, when — so the FlyerTemplates library
+// page can render a per-template "Recent activity" drawer without
+// paging the generic /api/audit feed and filtering client-side
+// (heavy + leaks other entities + cross-tenant risk).
+//
+// PRD anchors:
+//   - §3.7.2 — per-template metadata feeds the marketplace list +
+//              future conversion-rate column (audit-trail is the
+//              source-of-truth list backing the rollup in slice 17)
+//   - §3.6.4 — performance hint engine consumes per-template events
+//              (the trail is the time-series the engine reads from;
+//              stats are the summary, trail is the detail)
+//   - §3.8 — compliance / record-of-record for marketing assets
+//
+// Behaviour:
+//   - Tenant + sub-brand scoped — the template id is resolved first
+//     via the same findFirst gate as GET /:id and /usage-stats,
+//     returning 404 for cross-tenant and 403 for cross-sub-brand
+//     BEFORE any AuditLog read fires. Stops the fishing-rod attack
+//     where the audit-trail surface would otherwise leak the
+//     existence of a template id via a 200-with-empty-rows reply.
+//   - Returns the ordered rows for this { tenantId, entity:
+//     'TravelFlyerTemplate', entityId } tuple. Default order is
+//     newest-first (createdAt desc) so the UI's "Recent activity"
+//     drawer renders top-to-bottom chronologically.
+//   - Pagination: ?limit (default 50, max 200) + ?offset (default 0).
+//     The 200 cap mirrors the /api/audit list endpoint convention
+//     and keeps a single round-trip bounded — operators paging
+//     deeper than 200 rows on a single template are an edge case
+//     (heavy templates hit ~50-100 lifetime events).
+//   - Optional ?action= narrows to a single verb (CREATE / UPDATE /
+//     TRAVEL_FLYER_TEMPLATE_EXPORTED / etc.). Unknown verbs return
+//     200 with an empty array — silent narrowing rather than 400
+//     because future verb additions shouldn't break the UI.
+//
+// Per-row shape (returned in the response envelope):
+//   { id, action, createdAt (ISO), userId, details }
+//   - `details` is the row's stored JSON string parsed back into the
+//     live shape so consumers don't re-parse. Parse failure folds to
+//     null (the row is still surfaced — the row's existence + verb
+//     is the load-bearing signal; the payload is auxiliary).
+//   - `userId` is surfaced verbatim (no user join). Frontend resolves
+//     the display-name from the existing /api/users feed by id —
+//     keeps this endpoint's prisma surface narrow.
+//
+// USER-readable: matches the read-only-aid rationale on /usage-stats
+// (slice 17) and /preview.pdf (slice 12). Library page is a USER
+// surface; audit verbs + timestamps + actor ids are anodyne (the
+// payload details column does NOT carry PHI for this entity).
+//
+// No audit row: read-only meta surface. Mirrors slice 12 / 13 / 17.
+router.get(
+  "/flyer-templates/:id/audit-trail",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      // Resolve + gate the template first so cross-tenant / cross-sub-brand
+      // callers can't enumerate audit-event existence via this surface.
+      const template = await prisma.travelFlyerTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!template) {
+        return res.status(404).json({
+          error: "Flyer template not found",
+          code: "TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      if (template.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, template.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      // Pagination — 200 cap matches the /api/audit list convention.
+      const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+      const skip = parseInt(req.query.offset, 10) || 0;
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        entity: "TravelFlyerTemplate",
+        entityId: id,
+      };
+
+      // Optional action filter — silent narrowing on unknown verbs
+      // (200 + empty rows). Routes adding new verbs later shouldn't
+      // need to update an allow-list here.
+      if (req.query.action !== undefined && req.query.action !== "") {
+        where.action = String(req.query.action);
+      }
+
+      const [rows, total] = await Promise.all([
+        prisma.auditLog.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          take,
+          skip,
+          select: {
+            id: true,
+            action: true,
+            createdAt: true,
+            userId: true,
+            details: true,
+          },
+        }),
+        prisma.auditLog.count({ where }),
+      ]);
+
+      const entries = rows.map((row) => {
+        let details = null;
+        if (row.details != null) {
+          if (typeof row.details === "string") {
+            try { details = JSON.parse(row.details); }
+            catch (_e) { details = null; }
+          } else {
+            details = row.details;
+          }
+        }
+        const ts = row.createdAt instanceof Date
+          ? row.createdAt
+          : new Date(row.createdAt);
+        return {
+          id: row.id,
+          action: row.action,
+          createdAt: ts.toISOString(),
+          userId: row.userId ?? null,
+          details,
+        };
+      });
+
+      res.json({
+        templateId: id,
+        entries,
+        total,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] audit-trail error:", e.message);
+      res.status(500).json({ error: "Failed to read flyer template audit trail" });
     }
   },
 );

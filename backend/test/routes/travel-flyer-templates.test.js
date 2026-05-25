@@ -2347,3 +2347,226 @@ describe('GET /api/travel/flyer-templates/:id/usage-stats (slice 17)', () => {
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /api/travel/flyer-templates/:id/audit-trail (slice 18)', () => {
+  const baseTemplate = {
+    id: 701,
+    tenantId: 1,
+    name: 'Diwali Family Combo',
+    subBrand: null, // tenant-wide
+    paletteJson: JSON.stringify(validPalette),
+    layoutJson: JSON.stringify(validLayout),
+    assetsJson: null,
+    isActive: true,
+    notes: null,
+    createdAt: new Date('2026-05-01T00:00:00Z'),
+    updatedAt: new Date('2026-05-01T00:00:00Z'),
+  };
+
+  beforeEach(() => {
+    prisma.auditLog.findMany = vi.fn().mockResolvedValue([]);
+    prisma.auditLog.count = vi.fn().mockResolvedValue(0);
+  });
+
+  test('happy path: returns ordered rows (desc) + total + parsed details JSON', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(baseTemplate);
+    prisma.auditLog.findMany.mockResolvedValue([
+      { id: 33, action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED', createdAt: new Date('2026-05-10T12:30:00Z'), userId: 9, details: JSON.stringify({ format: 'pdf', aspect: 'a4' }) },
+      { id: 22, action: 'UPDATE', createdAt: new Date('2026-05-05T11:00:00Z'), userId: 9, details: JSON.stringify({ fields: ['name'] }) },
+      { id: 11, action: 'CREATE', createdAt: new Date('2026-05-01T08:00:00Z'), userId: 7, details: JSON.stringify({ name: 'Diwali Family Combo', subBrand: null }) },
+    ]);
+    prisma.auditLog.count.mockResolvedValue(3);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/701/audit-trail')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.templateId).toBe(701);
+    expect(res.body.total).toBe(3);
+    expect(res.body.limit).toBe(50);
+    expect(res.body.offset).toBe(0);
+    expect(res.body.entries).toHaveLength(3);
+
+    // Newest first (route asks orderBy createdAt desc; mock returns
+    // already-ordered, but assert the verb at position 0 is the export).
+    expect(res.body.entries[0]).toMatchObject({
+      id: 33,
+      action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED',
+      userId: 9,
+      createdAt: '2026-05-10T12:30:00.000Z',
+    });
+    // details JSON parsed back into shape (not a string)
+    expect(res.body.entries[0].details).toEqual({ format: 'pdf', aspect: 'a4' });
+    expect(res.body.entries[2].details).toEqual({ name: 'Diwali Family Combo', subBrand: null });
+
+    // Prisma call inspection — tenant + entity + entityId pinned; orderBy desc.
+    expect(prisma.auditLog.findMany).toHaveBeenCalledTimes(1);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({
+      tenantId: 1,
+      entity: 'TravelFlyerTemplate',
+      entityId: 701,
+    });
+    expect(call.orderBy).toEqual({ createdAt: 'desc' });
+    expect(call.take).toBe(50);
+    expect(call.skip).toBe(0);
+  });
+
+  test('empty history → 200 with entries=[] and total=0 (not 404)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(baseTemplate);
+    prisma.auditLog.findMany.mockResolvedValue([]);
+    prisma.auditLog.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/701/audit-trail')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toEqual([]);
+    expect(res.body.total).toBe(0);
+  });
+
+  test('cross-tenant id → 404 TEMPLATE_NOT_FOUND BEFORE auditLog.findMany fires', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/9999/audit-trail')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('TEMPLATE_NOT_FOUND');
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+    expect(prisma.auditLog.count).not.toHaveBeenCalled();
+  });
+
+  test('MANAGER restricted away from template sub-brand → 403 SUB_BRAND_DENIED, no audit read', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue({
+      ...baseTemplate,
+      subBrand: 'tmc',
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/701/audit-trail')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('SUB_BRAND_DENIED');
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+  });
+
+  test('USER role is allowed (mirrors slice 17 read-only-aid contract)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(baseTemplate);
+    prisma.auditLog.findMany.mockResolvedValue([
+      { id: 1, action: 'CREATE', createdAt: new Date('2026-05-01T08:00:00Z'), userId: 7, details: null },
+    ]);
+    prisma.auditLog.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/701/audit-trail')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toHaveLength(1);
+    expect(res.body.entries[0].action).toBe('CREATE');
+  });
+
+  test('?action=TRAVEL_FLYER_TEMPLATE_EXPORTED narrows the where clause', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(baseTemplate);
+    prisma.auditLog.findMany.mockResolvedValue([
+      { id: 33, action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED', createdAt: new Date('2026-05-10T12:30:00Z'), userId: 9, details: null },
+    ]);
+    prisma.auditLog.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/701/audit-trail?action=TRAVEL_FLYER_TEMPLATE_EXPORTED')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    expect(call.where.action).toBe('TRAVEL_FLYER_TEMPLATE_EXPORTED');
+    expect(call.where.entity).toBe('TravelFlyerTemplate');
+    expect(call.where.entityId).toBe(701);
+  });
+
+  test('?limit + ?offset thread into prisma + response envelope; >200 limit capped at 200', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(baseTemplate);
+    prisma.auditLog.findMany.mockResolvedValue([]);
+    prisma.auditLog.count.mockResolvedValue(500);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/701/audit-trail?limit=999&offset=50')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.limit).toBe(200); // cap
+    expect(res.body.offset).toBe(50);
+    expect(res.body.total).toBe(500);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    expect(call.take).toBe(200);
+    expect(call.skip).toBe(50);
+  });
+
+  test('row with malformed details JSON folds to details=null (row still surfaced)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(baseTemplate);
+    prisma.auditLog.findMany.mockResolvedValue([
+      { id: 50, action: 'UPDATE', createdAt: new Date('2026-05-05T11:00:00Z'), userId: 9, details: '{ this is not json' },
+    ]);
+    prisma.auditLog.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/701/audit-trail')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toHaveLength(1);
+    expect(res.body.entries[0].id).toBe(50);
+    expect(res.body.entries[0].action).toBe('UPDATE');
+    expect(res.body.entries[0].details).toBeNull();
+  });
+
+  test('row with null userId surfaces userId=null in the response', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(baseTemplate);
+    prisma.auditLog.findMany.mockResolvedValue([
+      { id: 60, action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED', createdAt: new Date('2026-05-05T11:00:00Z'), userId: null, details: null },
+    ]);
+    prisma.auditLog.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/701/audit-trail')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.entries[0].userId).toBeNull();
+  });
+
+  test('non-numeric id → 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/not-a-number/audit-trail')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ID');
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+  });
+
+  test('NO audit row written by this read-only endpoint (mirrors slice 12 / 17)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(baseTemplate);
+    prisma.auditLog.findMany.mockResolvedValue([
+      { id: 1, action: 'CREATE', createdAt: new Date('2026-05-01T08:00:00Z'), userId: 7, details: null },
+    ]);
+    prisma.auditLog.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/701/audit-trail')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+});

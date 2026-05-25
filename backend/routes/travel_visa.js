@@ -235,6 +235,220 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/visa/applications/stats — tenant-wide visa rollup
+// (PRD_TRAVEL_VISA Phase 3 — mirrors #905 slice 18 /commission-profiles/stats
+// + #903 slice 23 /suppliers/stats + #908 slice 19 /flyer-templates/global-stats).
+//
+// USER-readable anodyne aggregate. Powers the Visa Sure Applications page's
+// header summary strip ("142 applications · 28 intake · 45 docs-pending ·
+// 35 filed · 30 approved · 4 rejected · 12 complex · 7 risk-flagged ·
+// last activity 6h ago"). Without this, the frontend has to fire {list,
+// count by status×6, count by applicationType×6, count by destination×N,
+// count where complexCase=true, count where advisorRiskFlag != null} —
+// N+1 round-trips for a single visual surface.
+//
+// Sub-brand scoping — same rationale as the analytics surface and the
+// /applications list endpoint above:
+//   VisaApplication itself has NO subBrand column on its row; visa-sure-ness
+//   is encoded via Contact.subBrand="visasure" — the Contact is the upstream
+//   owner of the visa pipeline. This stats endpoint resolves visa-sure
+//   contact IDs first, then aggregates VisaApplication rows whose contactId
+//   is in that set. Non-visa applications (schema anomaly today) stay out.
+//
+// Behaviour:
+//   - Tenant-scoped count of ALL VisaApplication rows joined via
+//     Contact.subBrand='visasure'.
+//   - Counts by status, applicationType, destinationCountry (capped to
+//     top-10 most-common; the rest aggregate into a `_other` bucket).
+//   - complexCount = count where complexCase=true.
+//   - flaggedCount = count where advisorRiskFlag IS NOT NULL (any non-null
+//     value — low/medium/high/priority all qualify).
+//   - lastActivityAt = max(updatedAt) across all matching rows; null when
+//     zero rows.
+//   - ?from / ?to (ISO date bounds) filter VisaApplication.createdAt before
+//     aggregation. Both optional. 400 INVALID_DATE on garbage.
+//
+// USER-readable: anodyne aggregate (counts + timestamps); safe. No audit
+// row: read-only meta surface, mirrors /suppliers/stats + /commission-
+// profiles/stats. Role gate is verifyRole(['ADMIN','MANAGER','USER'])
+// explicitly — a level looser than the /applications list (ADMIN/MANAGER)
+// because aggregate counters are anodyne. This is the same posture
+// /suppliers/stats and /commission-profiles/stats use.
+//
+// Express path-precedence: literal-path /applications/stats MUST be declared
+// BEFORE /applications/:id or the `:id="stats"` shape would 400 INVALID_ID
+// before reaching this handler.
+// ============================================================================
+router.get(
+  "/applications/stats",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Optional ISO date bounds on VisaApplication.createdAt — same shape
+      // as /suppliers/stats. Both bounds optional; invalid date → 400.
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      const createdAtFilter = {};
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        createdAtFilter.gte = d;
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        createdAtFilter.lte = d;
+      }
+
+      // Empty-shape baseline used by both the no-contacts and no-applications
+      // short-circuits. byStatus pre-seeded with all enum values at zero so
+      // the frontend can render every status tile without missing-key
+      // defensiveness.
+      const emptyShape = () => ({
+        total: 0,
+        byStatus: VALID_STATUSES.reduce((acc, s) => {
+          acc[s] = { count: 0 };
+          return acc;
+        }, {}),
+        byApplicationType: {},
+        byDestinationCountry: {},
+        complexCount: 0,
+        flaggedCount: 0,
+        lastActivityAt: null,
+      });
+
+      // Resolve visa-sure contact IDs first (mirrors /applications list).
+      const visaContacts = await prisma.contact.findMany({
+        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        select: { id: true },
+      });
+
+      if (visaContacts.length === 0) {
+        return res.json(emptyShape());
+      }
+
+      const contactIds = visaContacts.map((c) => c.id);
+
+      const where = {
+        tenantId,
+        contactId: { in: contactIds },
+      };
+      if (createdAtFilter.gte || createdAtFilter.lte) {
+        where.createdAt = createdAtFilter;
+      }
+
+      // Fetch the projection needed for in-process aggregation. We pick the
+      // minimal set of columns (status / applicationType / destinationCountry
+      // / complexCase / advisorRiskFlag / updatedAt) — no PII surface,
+      // anodyne row data only.
+      const applications = await prisma.visaApplication.findMany({
+        where,
+        select: {
+          id: true,
+          status: true,
+          applicationType: true,
+          destinationCountry: true,
+          complexCase: true,
+          advisorRiskFlag: true,
+          updatedAt: true,
+        },
+      });
+
+      if (applications.length === 0) {
+        return res.json(emptyShape());
+      }
+
+      const result = emptyShape();
+      result.total = applications.length;
+
+      // Provisional destination tally — will be capped to top-10 after the
+      // loop completes (smaller-than-cap stays as-is; larger-than-cap moves
+      // overflow into `_other`).
+      const destinationTally = {};
+
+      let lastActivityAt = null;
+      for (const a of applications) {
+        // byStatus — defensive: null / unknown status doesn't crash, just
+        // creates a new bucket (forward-compat for any future status enum
+        // values added before this endpoint catches up).
+        if (a.status) {
+          const sKey = String(a.status);
+          if (!result.byStatus[sKey]) result.byStatus[sKey] = { count: 0 };
+          result.byStatus[sKey].count += 1;
+        }
+
+        // byApplicationType — null/missing skips the bucket per the brief.
+        if (a.applicationType) {
+          const tKey = String(a.applicationType);
+          if (!result.byApplicationType[tKey]) {
+            result.byApplicationType[tKey] = { count: 0 };
+          }
+          result.byApplicationType[tKey].count += 1;
+        }
+
+        // byDestinationCountry — null/missing/empty skips the bucket.
+        if (a.destinationCountry) {
+          const dKey = String(a.destinationCountry);
+          if (!destinationTally[dKey]) destinationTally[dKey] = 0;
+          destinationTally[dKey] += 1;
+        }
+
+        if (a.complexCase === true) result.complexCount += 1;
+        if (a.advisorRiskFlag) result.flaggedCount += 1;
+
+        const ts =
+          a.updatedAt instanceof Date ? a.updatedAt : new Date(a.updatedAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastActivityAt || ts > lastActivityAt) lastActivityAt = ts;
+        }
+      }
+
+      // Cap byDestinationCountry to top-10; everything beyond aggregates
+      // into `_other`. Keeps response shape bounded even when a tenant has
+      // 50+ unique destinations.
+      const DEST_CAP = 10;
+      const sortedDest = Object.entries(destinationTally).sort(
+        (a, b) => b[1] - a[1],
+      );
+      const top = sortedDest.slice(0, DEST_CAP);
+      const rest = sortedDest.slice(DEST_CAP);
+      for (const [k, count] of top) {
+        result.byDestinationCountry[k] = { count };
+      }
+      if (rest.length > 0) {
+        const otherCount = rest.reduce((sum, [, c]) => sum + c, 0);
+        result.byDestinationCountry._other = { count: otherCount };
+      }
+
+      result.lastActivityAt = lastActivityAt
+        ? lastActivityAt.toISOString()
+        : null;
+
+      res.json(result);
+    } catch (e) {
+      console.error("[travel-visa/stats] error:", e.message);
+      res.status(500).json({
+        error: "Failed to summarise visa applications",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
 // ─── GET /api/travel/visa/applications/:id ─────────────────────────
 //
 // Full detail for a single visa application. Drives the AdvisorDashboard

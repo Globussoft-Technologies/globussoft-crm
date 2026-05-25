@@ -1909,3 +1909,316 @@ describe("normalizeFacebookLeadAdsPayload — FB Lead Ads Graph webhook → cano
     expect(out.field_data).toBeDefined();
   });
 });
+
+// ─── Slice 19 — normalizeLinkedinLeadGenPayload (LinkedIn Lead Gen Forms) ────
+//
+// Pins the LinkedIn Lead Gen Forms webhook → canonical-body transform. 6th
+// channel normalizer in the cluster (Meta field_data, IndiaMART, JustDial,
+// TradeIndia, FB Lead Ads envelope, now LinkedIn). Slice 19 ships the lib
+// only; route wire-in lands in a future slice once LinkedIn Marketing
+// Developer Platform creds are scoped (separate cred drop from Q1 FB/Meta).
+//
+// LinkedIn distinctives vs the other channels:
+//   - Flat camelCase shape (no field_data indirection, no SCREAMING_SNAKE)
+//   - firstName/lastName are passthrough (no name-split logic)
+//   - emailAddress → email + phoneNumber → phone (remap, NOT alias)
+//   - URN-bearing values (`urn:li:...`) preserved verbatim on metaJson
+//   - Always sets source='linkedin-leadgen' + subBrand=null + sourceUrl=null
+//     per slice contract (caller-supplied values WIN if explicitly populated)
+
+const { normalizeLinkedinLeadGenPayload } = await import(
+  "../../lib/inboundLeadVerification.js"
+);
+
+describe("normalizeLinkedinLeadGenPayload — LinkedIn Lead Gen Forms → canonical body (slice 19)", () => {
+  test("happy path: LinkedIn shape → flat canonical fields + metaJson", () => {
+    const li = {
+      firstName: "Asha",
+      lastName: "Verma",
+      emailAddress: "asha@example.com",
+      phoneNumber: "+919876543210",
+      companyName: "Acme Travels",
+      jobTitle: "Travel Director",
+      country: "IN",
+      formId: "987654321",
+      leadgenFormId: "987654321",
+      leadType: "SPONSORED",
+      campaignId: "urn:li:sponsoredCampaign:123",
+      creativeId: "urn:li:sponsoredCreative:456",
+      leadUrn: "urn:li:lead:9988776655",
+      submittedAt: "2026-05-26T10:00:00Z",
+    };
+
+    const out = normalizeLinkedinLeadGenPayload(li);
+
+    // Canonical fields populated from LinkedIn payload.
+    expect(out.firstName).toBe("Asha");
+    expect(out.lastName).toBe("Verma");
+    expect(out.email).toBe("asha@example.com");
+    expect(out.phone).toBe("+919876543210");
+
+    // Slice contract defaults.
+    expect(out.subBrand).toBeNull();
+    expect(out.source).toBe("linkedin-leadgen");
+    expect(out.sourceUrl).toBeNull();
+
+    // Remapped-source keys stripped (route won't ingest stale duplicates).
+    expect(out.emailAddress).toBeUndefined();
+    expect(out.phoneNumber).toBeUndefined();
+    expect(out.companyName).toBeUndefined();
+    expect(out.jobTitle).toBeUndefined();
+    expect(out.formId).toBeUndefined();
+    expect(out.leadgenFormId).toBeUndefined();
+    expect(out.leadUrn).toBeUndefined();
+
+    // metaJson preserves the B2B + attribution + URN tokens.
+    expect(out.metaJson).toMatchObject({
+      companyName: "Acme Travels",
+      jobTitle: "Travel Director",
+      country: "IN",
+      formId: "987654321",
+      leadgenFormId: "987654321",
+      leadType: "SPONSORED",
+      campaignId: "urn:li:sponsoredCampaign:123",
+      creativeId: "urn:li:sponsoredCreative:456",
+      leadUrn: "urn:li:lead:9988776655",
+      submittedAt: "2026-05-26T10:00:00Z",
+    });
+  });
+
+  test("empty / non-object body returns body unchanged", () => {
+    expect(normalizeLinkedinLeadGenPayload(null)).toBeNull();
+    expect(normalizeLinkedinLeadGenPayload(undefined)).toBeUndefined();
+    expect(normalizeLinkedinLeadGenPayload("string")).toBe("string");
+    expect(normalizeLinkedinLeadGenPayload(42)).toBe(42);
+    expect(normalizeLinkedinLeadGenPayload(false)).toBe(false);
+  });
+
+  test("body without LinkedIn signature keys returns unchanged (no false-positive remap)", () => {
+    // Bare firstName + email + phone is the route's own canonical shape — a
+    // pre-normalized caller. No LinkedIn-specific signature keys → must pass
+    // through untouched.
+    const body = {
+      firstName: "Plain",
+      lastName: "Caller",
+      email: "plain@example.com",
+      phone: "+919876543210",
+      tenantSlug: "travel-stall",
+      subBrand: "rfu",
+    };
+    const out = normalizeLinkedinLeadGenPayload(body);
+    expect(out).toBe(body);
+    // No source / sourceUrl synthesis on non-LinkedIn passthrough.
+    expect(out.source).toBeUndefined();
+    expect(out.sourceUrl).toBeUndefined();
+  });
+
+  test("companyName + jobTitle B2B-pair triggers normalization (signature variant)", () => {
+    // Some LinkedIn payloads (older lead-feed integrations) ship only the B2B
+    // pair without the email/phone-specific keys. The pair must be sufficient
+    // signature to trigger normalization.
+    const body = {
+      firstName: "Pat",
+      lastName: "Lead",
+      companyName: "Big Travels Co",
+      jobTitle: "VP Operations",
+    };
+    const out = normalizeLinkedinLeadGenPayload(body);
+    expect(out.firstName).toBe("Pat");
+    expect(out.lastName).toBe("Lead");
+    expect(out.source).toBe("linkedin-leadgen");
+    expect(out.metaJson).toMatchObject({
+      companyName: "Big Travels Co",
+      jobTitle: "VP Operations",
+    });
+    // Stripped from top-level.
+    expect(out.companyName).toBeUndefined();
+    expect(out.jobTitle).toBeUndefined();
+  });
+
+  test("metaJson preserves companyName / jobTitle / formId / URN tokens", () => {
+    const out = normalizeLinkedinLeadGenPayload({
+      emailAddress: "lead@biz.example",
+      companyName: "Acme",
+      jobTitle: "CTO",
+      formId: "FORM-123",
+      leadgenFormId: "FORM-123",
+      leadUrn: "urn:li:lead:99999",
+      campaignId: "urn:li:sponsoredCampaign:555",
+    });
+    expect(out.metaJson.companyName).toBe("Acme");
+    expect(out.metaJson.jobTitle).toBe("CTO");
+    expect(out.metaJson.formId).toBe("FORM-123");
+    expect(out.metaJson.leadgenFormId).toBe("FORM-123");
+    expect(out.metaJson.leadUrn).toBe("urn:li:lead:99999");
+    expect(out.metaJson.campaignId).toBe("urn:li:sponsoredCampaign:555");
+  });
+
+  test("single-word name handling: firstName alone (no lastName) is preserved", () => {
+    // LinkedIn allows users to submit single-name profiles (some locales / org
+    // names). The normalizer must NOT synthesize a placeholder lastName.
+    const out = normalizeLinkedinLeadGenPayload({
+      firstName: "Sukarno",
+      emailAddress: "sukarno@example.com",
+      companyName: "Solo Co",
+      jobTitle: "Owner",
+    });
+    expect(out.firstName).toBe("Sukarno");
+    expect(out.lastName).toBeUndefined();
+    expect(out.email).toBe("sukarno@example.com");
+    expect(out.source).toBe("linkedin-leadgen");
+  });
+
+  test("phone-format passthrough: vendor format kept verbatim (normalization is downstream)", () => {
+    // The normalizer must not coerce the phone format — the route's
+    // normalizePhoneForDedup helper handles canonicalization downstream.
+    const out = normalizeLinkedinLeadGenPayload({
+      emailAddress: "ph@example.com",
+      phoneNumber: "+44 20 7946 0958", // UK landline with internal spaces
+    });
+    expect(out.phone).toBe("+44 20 7946 0958");
+    // emailAddress remapped + stripped from top-level.
+    expect(out.email).toBe("ph@example.com");
+    expect(out.phoneNumber).toBeUndefined();
+    expect(out.emailAddress).toBeUndefined();
+  });
+
+  test("caller-supplied flat field WINS over LinkedIn extraction", () => {
+    // Defensive producer that ships both shapes keeps the explicit values.
+    const out = normalizeLinkedinLeadGenPayload({
+      firstName: "Asha",
+      email: "explicit-caller@example.com", // caller's explicit email
+      phone: "+91-explicit-phone", // caller's explicit phone
+      emailAddress: "linkedin-payload@example.com",
+      phoneNumber: "+91-linkedin-payload",
+      companyName: "Acme",
+      jobTitle: "Director",
+    });
+    expect(out.email).toBe("explicit-caller@example.com");
+    expect(out.phone).toBe("+91-explicit-phone");
+    // LinkedIn payload values absent on top-level (stripped).
+    expect(out.emailAddress).toBeUndefined();
+    expect(out.phoneNumber).toBeUndefined();
+  });
+
+  test("caller-supplied source / subBrand WINS over slice defaults", () => {
+    // Slice contract defaults: source='linkedin-leadgen', subBrand=null. But
+    // a caller that pre-populates either value should keep it.
+    const out = normalizeLinkedinLeadGenPayload({
+      emailAddress: "lead@example.com",
+      companyName: "Acme",
+      jobTitle: "CFO",
+      source: "operator-override", // caller's source wins
+      subBrand: "rfu", // caller's subBrand wins
+      sourceUrl: "https://lp.example.com/q4", // caller's URL wins
+    });
+    expect(out.source).toBe("operator-override");
+    expect(out.subBrand).toBe("rfu");
+    expect(out.sourceUrl).toBe("https://lp.example.com/q4");
+  });
+
+  test("merges into existing metaJson without clobbering caller-supplied tokens", () => {
+    const out = normalizeLinkedinLeadGenPayload({
+      metaJson: {
+        utm_source: "linkedin-organic",
+        companyName: "Caller-Set-Co", // caller's company wins over our extraction
+      },
+      emailAddress: "lead@example.com",
+      companyName: "LinkedIn-Reported-Co",
+      jobTitle: "VP",
+      leadUrn: "urn:li:lead:111",
+    });
+    // Existing metaJson keys are preserved (caller wins).
+    expect(out.metaJson.utm_source).toBe("linkedin-organic");
+    expect(out.metaJson.companyName).toBe("Caller-Set-Co");
+    // New tokens still land.
+    expect(out.metaJson.jobTitle).toBe("VP");
+    expect(out.metaJson.leadUrn).toBe("urn:li:lead:111");
+  });
+
+  test("null / undefined / empty-string field values are skipped on metaJson", () => {
+    const out = normalizeLinkedinLeadGenPayload({
+      emailAddress: "lead@example.com",
+      companyName: "Acme",
+      jobTitle: null,
+      formId: undefined,
+      leadgenFormId: "",
+      country: "IN",
+    });
+    expect(out.metaJson.companyName).toBe("Acme");
+    expect(out.metaJson.country).toBe("IN");
+    expect(out.metaJson.jobTitle).toBeUndefined();
+    expect(out.metaJson.formId).toBeUndefined();
+    expect(out.metaJson.leadgenFormId).toBeUndefined();
+  });
+
+  test("does not mutate the input body", () => {
+    const body = {
+      firstName: "Asha",
+      lastName: "Verma",
+      emailAddress: "asha@example.com",
+      phoneNumber: "+919876543210",
+      companyName: "Acme",
+      jobTitle: "Director",
+      leadUrn: "urn:li:lead:1",
+    };
+    const snapshot = JSON.parse(JSON.stringify(body));
+    normalizeLinkedinLeadGenPayload(body);
+    expect(body).toEqual(snapshot);
+  });
+
+  test("URN-bearing custom keys are preserved on metaJson verbatim", () => {
+    // Any value starting with `urn:li:` is preserved on metaJson regardless of
+    // which key holds it — LinkedIn's canonical identifiers are URN-shaped and
+    // downstream attribution rollups consume them directly.
+    const out = normalizeLinkedinLeadGenPayload({
+      emailAddress: "lead@example.com",
+      socialActorUrn: "urn:li:person:abc123",
+      referrerUrn: "urn:li:organization:xyz789",
+      somePlainKey: "not-a-urn", // not promoted to metaJson
+    });
+    expect(out.metaJson.socialActorUrn).toBe("urn:li:person:abc123");
+    expect(out.metaJson.referrerUrn).toBe("urn:li:organization:xyz789");
+    // Stripped from top-level (URN keys we shoveled into metaJson).
+    expect(out.socialActorUrn).toBeUndefined();
+    expect(out.referrerUrn).toBeUndefined();
+    // Plain keys stay where they are (conservative — collision risk).
+    expect(out.somePlainKey).toBe("not-a-urn");
+  });
+
+  test("plain non-LinkedIn keys (tenantSlug) survive untouched alongside extraction", () => {
+    const out = normalizeLinkedinLeadGenPayload({
+      tenantSlug: "travel-stall",
+      emailAddress: "lead@example.com",
+      companyName: "Acme",
+      jobTitle: "Director",
+    });
+    expect(out.tenantSlug).toBe("travel-stall");
+    expect(out.email).toBe("lead@example.com");
+    expect(out.source).toBe("linkedin-leadgen");
+  });
+
+  test("signature detection: lone leadUrn triggers normalization", () => {
+    // Per the header: `leadUrn` is a direct LinkedIn signature key.
+    const out = normalizeLinkedinLeadGenPayload({
+      firstName: "Lone",
+      leadUrn: "urn:li:lead:solo",
+    });
+    expect(out.firstName).toBe("Lone");
+    expect(out.metaJson.leadUrn).toBe("urn:li:lead:solo");
+    expect(out.source).toBe("linkedin-leadgen");
+    expect(out.subBrand).toBeNull();
+    expect(out.sourceUrl).toBeNull();
+  });
+
+  test("signature detection: lone phoneNumber triggers normalization", () => {
+    // phoneNumber alone is sufficient (it's LinkedIn-distinctive vs the
+    // route's canonical `phone`).
+    const out = normalizeLinkedinLeadGenPayload({
+      phoneNumber: "+919999988888",
+    });
+    expect(out.phone).toBe("+919999988888");
+    expect(out.phoneNumber).toBeUndefined();
+    expect(out.source).toBe("linkedin-leadgen");
+  });
+});

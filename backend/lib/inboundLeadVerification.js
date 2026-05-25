@@ -1235,6 +1235,221 @@ function normalizeFacebookLeadAdsPayload(body) {
   return out;
 }
 
+/**
+ * Slice 19 — Normalize a LinkedIn Lead Gen Forms webhook payload into the route's
+ * canonical body shape (PRD §3.4.3 paid-social channel cluster). Sister to the
+ * slice-12 Meta `field_data` normalizer, the slice-13/14/15 marketplace
+ * normalizers, and the slice-17 FB Lead Ads envelope normalizer — 6th channel.
+ *
+ * LinkedIn delivers each Lead Gen Forms submission as a flat camelCase payload
+ * from the LinkedIn Marketing Developer Platform (`https://api.linkedin.com/v2/
+ * leadFormResponses/...` — webhook fan-out OR poll-pull):
+ *
+ *   {
+ *     "firstName": "Asha",
+ *     "lastName": "Verma",
+ *     "emailAddress": "asha@example.com",
+ *     "phoneNumber": "+919876543210",
+ *     "companyName": "Acme Travels",
+ *     "jobTitle": "Travel Director",
+ *     "country": "IN",
+ *     "formId": "987654321",
+ *     "leadgenFormId": "987654321",
+ *     "leadType": "SPONSORED",
+ *     "campaignId": "urn:li:sponsoredCampaign:123",
+ *     "creativeId": "urn:li:sponsoredCreative:456",
+ *     "leadUrn": "urn:li:lead:9988776655",
+ *     "submittedAt": "2026-05-26T10:00:00Z"
+ *   }
+ *
+ * Unlike Meta's `field_data: [{name, values}]` indirection, LinkedIn ships
+ * flat top-level keys. The catch: those keys collide with the route's canonical
+ * shape on a few names (`firstName`, `lastName`) and need remapping on the
+ * rest (`emailAddress` → `email`, `phoneNumber` → `phone`). Detection has to be
+ * LinkedIn-distinctive to avoid false-positive remap of pre-normalized callers.
+ *
+ * The route expects flat `{ firstName?, lastName?, name?, email?, phone?,
+ * subBrand?, source?, sourceUrl?, metaJson? }` (see slice 1 docstring; slices
+ * 12-17 established the bridge pattern). This helper plugs LinkedIn into the
+ * same contract.
+ *
+ * Behavior (mirrors normalizeMetaLeadPayload's discipline):
+ *   - Detection: looks for LinkedIn signature keys (`emailAddress` OR
+ *     `phoneNumber` OR `leadgenFormId` OR `leadUrn` OR `companyName` +
+ *     `jobTitle` pair). The bare `firstName` / `lastName` / `formId` keys are
+ *     NOT signature keys because they overlap with the route's own canonical
+ *     shape AND with other vendors (Meta's `first_name` aliases, IndiaMART's
+ *     pre-normalized passthrough). We require at least one LinkedIn-specific
+ *     key (`emailAddress`, `phoneNumber`, `leadgenFormId`, `leadUrn`) or the
+ *     `companyName` + `jobTitle` B2B-pair fingerprint to switch into
+ *     normalization mode. Without it, the helper returns the body untouched
+ *     (pre-normalized callers + non-LinkedIn payloads pass through).
+ *   - Maps LinkedIn field names → canonical route fields:
+ *       firstName                       → firstName (passthrough, same name)
+ *       lastName                        → lastName  (passthrough, same name)
+ *       emailAddress                    → email
+ *       phoneNumber                     → phone
+ *   - subBrand is forced to `null` — LinkedIn doesn't carry a sub-brand hint;
+ *     the route resolves subBrand from form-mapping downstream.
+ *   - source is forced to `'linkedin-leadgen'` for downstream attribution. If
+ *     the caller pre-populated source, the explicit value WINS (defensive
+ *     producer that ships both shapes keeps the explicit attribution).
+ *   - sourceUrl is forced to `null` — LinkedIn doesn't ship a landing-URL hint
+ *     in the lead payload (the form lives on LinkedIn's domain).
+ *   - Caller-supplied flat fields WIN over LinkedIn extraction (defensive
+ *     producer that ships both shapes keeps the explicit values — same
+ *     precedence as slices 12-17).
+ *   - Preserves LinkedIn attribution + B2B context tokens under metaJson:
+ *       companyName / jobTitle            (B2B identity)
+ *       formId / leadgenFormId            (lead form identity)
+ *       leadType / campaignId /
+ *         creativeId                      (paid-social attribution)
+ *       leadUrn                           (LinkedIn URN canonical id)
+ *       country                           (geo)
+ *       submittedAt                       (lead timestamp)
+ *   - Any LinkedIn-specific URN token (any value starting with `urn:li:`) is
+ *     preserved verbatim on metaJson — these are LinkedIn's canonical
+ *     identifiers and downstream attribution rollups consume them directly.
+ *   - The original LinkedIn keys we DID consume (firstName/lastName stay; the
+ *     emailAddress/phoneNumber/companyName/jobTitle/formId/leadgenFormId/etc.
+ *     get stripped from the output so the route handler doesn't ingest stale
+ *     duplicates).
+ *
+ * subBrand → null + source → 'linkedin-leadgen' + sourceUrl → null are the
+ * explicit slice-contract defaults per the dispatcher prompt's slice
+ * description.
+ *
+ * Pure helper — IO-free, no Prisma. Returns a NEW object; does not mutate the
+ * input body.
+ *
+ * @param {object} body  raw request body (LinkedIn Lead Gen Forms payload OR
+ *                       pre-normalized flat shape)
+ * @returns {object}     canonical flat body the route handler expects
+ */
+function normalizeLinkedinLeadGenPayload(body) {
+  if (!body || typeof body !== "object") return body;
+
+  // Detection — LinkedIn-distinctive keys. We intentionally do NOT use bare
+  // `firstName` / `lastName` / `formId` because they collide with the route's
+  // own canonical shape AND with other vendors' aliases. Either one of the
+  // direct LinkedIn-specific keys OR the B2B-pair (companyName + jobTitle)
+  // is required.
+  const DIRECT_SIGNATURE_KEYS = [
+    "emailAddress",
+    "phoneNumber",
+    "leadgenFormId",
+    "leadUrn",
+  ];
+  const hasDirectSignature = DIRECT_SIGNATURE_KEYS.some((k) =>
+    Object.prototype.hasOwnProperty.call(body, k),
+  );
+  const hasB2BPair =
+    Object.prototype.hasOwnProperty.call(body, "companyName") &&
+    Object.prototype.hasOwnProperty.call(body, "jobTitle");
+  const isLinkedinShape = hasDirectSignature || hasB2BPair;
+  if (!isLinkedinShape) return body;
+
+  // Map LinkedIn field names → canonical route fields. `firstName` /
+  // `lastName` are passthrough (same name); `emailAddress` / `phoneNumber`
+  // get remapped to `email` / `phone`.
+  const FIELD_MAP = {
+    firstName: "firstName",
+    lastName: "lastName",
+    emailAddress: "email",
+    phoneNumber: "phone",
+  };
+
+  // LinkedIn attribution + B2B context tokens that downstream attribution
+  // rollups need to read without re-querying LinkedIn.
+  const META_TOKENS = [
+    "companyName",
+    "jobTitle",
+    "formId",
+    "leadgenFormId",
+    "leadType",
+    "campaignId",
+    "creativeId",
+    "leadUrn",
+    "country",
+    "submittedAt",
+  ];
+
+  const extracted = {};
+  const metaTokens = {};
+
+  for (const [k, v] of Object.entries(body)) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === "string" && v.trim() === "") continue;
+
+    const canonical = FIELD_MAP[k];
+    if (canonical) {
+      if (extracted[canonical] === undefined) {
+        extracted[canonical] = v;
+      }
+      continue;
+    }
+    if (META_TOKENS.includes(k)) {
+      metaTokens[k] = v;
+      continue;
+    }
+    // Any value carrying a LinkedIn URN token (urn:li:...) is preserved on
+    // metaJson verbatim, regardless of which key holds it — these are the
+    // canonical identifiers for downstream attribution. The key name is
+    // preserved so downstream code can disambiguate (e.g. socialActorUrn vs
+    // referrerUrn).
+    if (typeof v === "string" && v.startsWith("urn:li:")) {
+      if (metaTokens[k] === undefined) metaTokens[k] = v;
+    }
+    // Other unknown keys are LEFT on the body untouched — same conservative
+    // discipline as the JustDial normalizer (collision risk with the route's
+    // own canonical shape).
+  }
+
+  const hasMetaTokens = Object.keys(metaTokens).length > 0;
+
+  // Shallow-clone the body, strip the LinkedIn-shaped keys we consumed (so
+  // the route handler doesn't ingest emailAddress / phoneNumber / etc. as
+  // Contact-shaped fields), then layer extracted-canonical fields BEHIND
+  // caller-supplied flat fields (caller wins).
+  const out = { ...body };
+  // Strip remapped-source keys (emailAddress / phoneNumber); leave firstName /
+  // lastName because they're passthrough.
+  delete out.emailAddress;
+  delete out.phoneNumber;
+  for (const k of META_TOKENS) delete out[k];
+  // Also strip any URN-bearing keys we shoveled into metaJson.
+  for (const k of Object.keys(metaTokens)) {
+    if (!META_TOKENS.includes(k)) delete out[k];
+  }
+
+  for (const [k, v] of Object.entries(extracted)) {
+    if (out[k] === undefined || out[k] === null || out[k] === "") {
+      out[k] = v;
+    }
+  }
+
+  // Slice contract: subBrand → null + source → 'linkedin-leadgen' +
+  // sourceUrl → null. Caller-supplied non-null values WIN (defensive
+  // producer keeps explicit values).
+  if (out.subBrand === undefined) out.subBrand = null;
+  if (out.source === undefined || out.source === null || out.source === "") {
+    out.source = "linkedin-leadgen";
+  }
+  if (out.sourceUrl === undefined) out.sourceUrl = null;
+
+  if (hasMetaTokens) {
+    const existingMeta =
+      out.metaJson && typeof out.metaJson === "object" ? out.metaJson : {};
+    const mergedMeta = { ...existingMeta };
+    for (const [k, v] of Object.entries(metaTokens)) {
+      if (mergedMeta[k] === undefined) mergedMeta[k] = v;
+    }
+    out.metaJson = mergedMeta;
+  }
+
+  return out;
+}
+
 module.exports = {
   verifyVoyagrHmac,
   verifyWebForm,
@@ -1249,5 +1464,6 @@ module.exports = {
   normalizeJustdialLeadPayload,
   normalizeTradeindiaLeadPayload,
   normalizeFacebookLeadAdsPayload,
+  normalizeLinkedinLeadGenPayload,
   SPAM_PATTERNS,
 };

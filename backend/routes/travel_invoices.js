@@ -2355,6 +2355,155 @@ router.post(
 );
 
 // ============================================================================
+// POST /api/travel/invoices/:id/credit-note — Arc 2 #901 slice 14.
+//
+// PRD_TRAVEL_BILLING UC-2.7 (cancellation + refund flow). Operator-action
+// "Issue Credit Note" against an existing invoice: creates a NEW
+// TravelInvoice row with docType='CreditNote', linked to the original
+// via parentInvoiceId (self-relation added in the slice-14 schema bump).
+// The credit note's totalAmount is stored NEGATIVE — the operator UI +
+// AR reports render it as a subtraction against the parent invoice's
+// receivable.
+//
+// invoiceNum format: "CN-<parent.invoiceNum>". Leverages parent's
+// tenant-scoped uniqueness (the @@unique([tenantId, invoiceNum]) backstop
+// on the schema). Concise + grep-friendly. A multi-credit-note scenario
+// (rare — typically one credit per parent for partial refunds) would
+// collide on the second issuance; future slice will add a sequence
+// suffix if/when that comes up.
+//
+// Auth: ADMIN/MANAGER only.
+//
+// Body:
+//   - amount (required, positive number > 0)
+//   - reason (optional, string)
+//   - lineDescription (optional, short description for narrative)
+//
+// Pre-conditions:
+//   1. Parent invoice exists, tenant-scoped, sub-brand-accessible.
+//   2. Parent status in [Issued, Partial, Paid] — Draft cannot be credited
+//      (issue it first), Voided cannot be credited (nothing to refund).
+//   3. amount <= parent.totalAmount — can't refund more than was billed.
+//   4. Parent is NOT itself a CreditNote — no nested credit-of-credit.
+//
+// Side effects:
+//   - New TravelInvoice row created with docType='CreditNote',
+//     totalAmount = -amount, parentInvoiceId set, status = 'Issued'.
+//   - Audit row stamped action='TRAVEL_INVOICE_CREDIT_NOTE_ISSUED'
+//     with details { parentId, parentInvoiceNum, amount, reason,
+//     lineDescription }.
+//
+// Returns: 201 + the new CreditNote row.
+//
+// Error codes: INVALID_ID (400), INVOICE_NOT_FOUND (404),
+//   SUB_BRAND_DENIED (403), MISSING_FIELDS (400 — amount absent),
+//   INVALID_AMOUNT (400 — amount <= 0 or non-numeric),
+//   AMOUNT_EXCEEDS_PARENT (400 — amount > parent.totalAmount),
+//   CANNOT_CREDIT_CREDIT_NOTE (400 — parent.docType === 'CreditNote'),
+//   INVALID_PARENT_STATE (400 — parent.status not in creditable set).
+// ============================================================================
+const CREDITABLE_PARENT_STATUSES = ["Issued", "Partial", "Paid"];
+
+router.post(
+  "/invoices/:id/credit-note",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const parent = await loadParentInvoice(req, res, invoiceId);
+      if (!parent) return;
+
+      // Parent must not itself be a CreditNote. NULL docType is treated as
+      // "TaxInvoice" (per slice-11 back-compat convention) — only explicit
+      // CreditNote rows are blocked.
+      if (parent.docType === "CreditNote") {
+        return res.status(400).json({
+          error: "Cannot issue a credit note against an existing credit note",
+          code: "CANNOT_CREDIT_CREDIT_NOTE",
+        });
+      }
+
+      // Parent must be in a creditable state.
+      if (!CREDITABLE_PARENT_STATUSES.includes(parent.status)) {
+        return res.status(400).json({
+          error: `Parent invoice must be in one of [${CREDITABLE_PARENT_STATUSES.join(", ")}] to issue a credit note (current: ${parent.status})`,
+          code: "INVALID_PARENT_STATE",
+        });
+      }
+
+      const { amount, reason, lineDescription } = req.body || {};
+
+      // amount required + numeric. parsePositiveDecimal returns 0 for "0",
+      // but a zero-amount credit note has no business meaning — add an
+      // explicit > 0 gate after the basic parse.
+      if (amount == null || amount === "") {
+        return res.status(400).json({
+          error: "amount is required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      const amt = Number(amount);
+      if (!Number.isFinite(amt) || amt <= 0) {
+        return res.status(400).json({
+          error: "amount must be a positive number",
+          code: "INVALID_AMOUNT",
+        });
+      }
+
+      const parentTotal = Number(parent.totalAmount || 0);
+      if (amt > parentTotal) {
+        return res.status(400).json({
+          error: `Credit amount (${amt}) exceeds parent invoice total (${parentTotal})`,
+          code: "AMOUNT_EXCEEDS_PARENT",
+        });
+      }
+
+      const creditInvoiceNum = `CN-${parent.invoiceNum}`;
+
+      const created = await prisma.travelInvoice.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          subBrand: parent.subBrand,
+          contactId: parent.contactId,
+          invoiceNum: creditInvoiceNum,
+          docType: "CreditNote",
+          status: "Issued",
+          totalAmount: -amt,
+          currency: parent.currency,
+          parentInvoiceId: parent.id,
+        },
+      });
+
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_CREDIT_NOTE_ISSUED",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          parentId: parent.id,
+          parentInvoiceNum: parent.invoiceNum,
+          amount: amt,
+          reason: reason ? String(reason) : null,
+          lineDescription: lineDescription ? String(lineDescription) : null,
+          subBrand: parent.subBrand,
+        },
+      );
+
+      return res.status(201).json(created);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] credit-note error:", e.message);
+      res.status(500).json({ error: "Failed to issue credit note" });
+    }
+  },
+);
+
+// ============================================================================
 // GET /api/travel/invoices/:id/tax-preview — any verified token.
 // ============================================================================
 //

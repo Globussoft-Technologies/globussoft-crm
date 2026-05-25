@@ -4951,6 +4951,16 @@ model TravelInvoice {
   // Separate CreditNote/DebitNote workflows deferred to slice 12; this slice
   // ships the field + validation + filter only.
   docType            String?                 @default("TaxInvoice")
+  // Arc 2 #901 slice 14 — CreditNote workflow (PRD_TRAVEL_BILLING UC-2.7).
+  // Self-relation linking a CreditNote (or DebitNote) row back to the
+  // original invoice it adjusts. Nullable + onDelete SetNull — if the parent
+  // is hard-deleted the credit-note row remains as an orphan financial
+  // record (audit-trail preservation; deletion of a parent in Issued/Paid
+  // state is already prevented at the route layer). Existing rows get NULL
+  // (additive safe — no bless marker needed).
+  parentInvoiceId    Int?
+  parentInvoice      TravelInvoice?          @relation("InvoiceCreditNotes", fields: [parentInvoiceId], references: [id], onDelete: SetNull)
+  creditNotes        TravelInvoice[]         @relation("InvoiceCreditNotes")
   lines              TravelInvoiceLine[]
   schedule           TravelPaymentSchedule[]
   quote              TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
@@ -4961,6 +4971,7 @@ model TravelInvoice {
   @@unique([tenantId, invoiceNum])
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
+  @@index([tenantId, parentInvoiceId])
 }
 
 // PRD_TRAVEL_BILLING FR-3.1.a — line-item composition under TravelInvoice.

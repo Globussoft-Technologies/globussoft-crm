@@ -455,6 +455,7 @@ jobs:
             tests/travel-visa-applications-api.spec.js \
             tests/wellness-patient-timeline-api.spec.js \
             tests/wallet-topup-api.spec.js \
+            tests/pos-sale-finalize-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

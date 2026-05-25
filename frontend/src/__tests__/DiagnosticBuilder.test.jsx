@@ -265,4 +265,277 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
       expect(msg).toMatch(/Export failed/i);
     });
   });
+
+  // ─── Extension cases (2026-05-26) ──────────────────────────────────
+  // Cover the Visual editor's per-question and per-band edit/reorder/
+  // option surfaces, scoring-method validation, save-state UX, generic
+  // error fallback, and the Import-CSV happy + per-row error paths.
+
+  it('Editing a question text via the Visual editor mutates the qJson string', () => {
+    renderPage();
+    // The pre-seeded first question's text is "How many trips do you organize per year?"
+    // The first matching <input> with that value is the question-text field.
+    const inputs = screen.getAllByRole('textbox');
+    const qTextInput = inputs.find((el) => el.value === 'How many trips do you organize per year?');
+    expect(qTextInput).toBeTruthy();
+    fireEvent.change(qTextInput, { target: { value: 'How many trips do you organize per quarter?' } });
+    // Swap to JSON tab and confirm the new text rode through into qJson.
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const qTextarea = screen.getByLabelText(/Questions JSON/i);
+    expect(qTextarea.value).toMatch(/How many trips do you organize per quarter/);
+  });
+
+  it('Add option button appends a new option row to a question card', () => {
+    renderPage();
+    // First question has 3 seeded options ("Options (3)" header).
+    const optionsHeaders = screen.getAllByText(/Options \(3\)/i);
+    expect(optionsHeaders.length).toBeGreaterThanOrEqual(1);
+    // Click the first "Add option" button (Q1's).
+    const addOptionBtns = screen.getAllByRole('button', { name: /Add option/i });
+    fireEvent.click(addOptionBtns[0]);
+    expect(screen.getAllByText(/Options \(4\)/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Editing an option weight propagates into the qJson', () => {
+    renderPage();
+    // Both Q1 and Q2 have an "Option 1 weight" aria-label — disambiguate
+    // by taking the first match (Q1's first option).
+    const weightInputs = screen.getAllByLabelText(/Option 1 weight$/i);
+    fireEvent.change(weightInputs[0], { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const qTextarea = screen.getByLabelText(/Questions JSON/i);
+    expect(qTextarea.value).toMatch(/"weight": 42/);
+  });
+
+  it('Remove option button drops the matching option row from a question', () => {
+    renderPage();
+    // Confirm 3 options on Q1 to start (Q2 also has 3, hence the dup-text check).
+    expect(screen.getAllByText(/Options \(3\)/i).length).toBeGreaterThanOrEqual(1);
+    // "Remove option 1" matches the first option's aria-label on Q1 AND Q2 —
+    // disambiguate by taking the first match (Q1's).
+    const removeOpt1Buttons = screen.getAllByLabelText(/Remove option 1$/i);
+    fireEvent.click(removeOpt1Buttons[0]);
+    expect(screen.getAllByText(/Options \(2\)/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Move-question-down reorders questions in the JSON', () => {
+    renderPage();
+    // Find Q1's "Move question down" — the first such button is Q1's.
+    const moveDownBtns = screen.getAllByRole('button', { name: /Move question down/i });
+    fireEvent.click(moveDownBtns[0]);
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const qTextarea = screen.getByLabelText(/Questions JSON/i);
+    // After moving Q1 down, "Average group size?" (originally Q2) should
+    // serialize before "How many trips do you organize per year?".
+    const groupIdx = qTextarea.value.indexOf('Average group size');
+    const tripsIdx = qTextarea.value.indexOf('How many trips do you organize per year');
+    expect(groupIdx).toBeGreaterThan(0);
+    expect(tripsIdx).toBeGreaterThan(groupIdx);
+  });
+
+  it('Editing a band classification propagates into rJson', () => {
+    renderPage();
+    // The first band has classification "level_1" pre-seeded — find that input.
+    const inputs = screen.getAllByRole('textbox');
+    const classificationInput = inputs.find((el) => el.value === 'level_1');
+    expect(classificationInput).toBeTruthy();
+    fireEvent.change(classificationInput, { target: { value: 'tier_alpha' } });
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
+    expect(rTextarea.value).toMatch(/"classification": "tier_alpha"/);
+  });
+
+  it('Editing a band maxScore propagates into rJson', () => {
+    renderPage();
+    // Band 1's maxScore is 4. Find the first number input whose value is 4
+    // — that's Band 1's maxScore (minScore is 0).
+    const allInputs = Array.from(document.querySelectorAll('input[type="number"]'));
+    const maxScore1 = allInputs.find((el) => el.value === '4');
+    expect(maxScore1).toBeTruthy();
+    fireEvent.change(maxScore1, { target: { value: '6' } });
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
+    expect(rTextarea.value).toMatch(/"maxScore": 6/);
+  });
+
+  it('Move-band-down reorders bands in rJson', () => {
+    renderPage();
+    const moveDownBtns = screen.getAllByRole('button', { name: /Move band down/i });
+    fireEvent.click(moveDownBtns[0]);
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
+    const starterIdx = rTextarea.value.indexOf('"Starter"');
+    const establishedIdx = rTextarea.value.indexOf('"Established"');
+    expect(establishedIdx).toBeGreaterThan(0);
+    expect(starterIdx).toBeGreaterThan(establishedIdx);
+  });
+
+  it('Remove band drops a band from the rJson', () => {
+    renderPage();
+    expect(screen.getByRole('heading', { name: /Scoring bands \(3\)/i })).toBeTruthy();
+    const removeBandBtns = screen.getAllByRole('button', { name: /Remove band/i });
+    fireEvent.click(removeBandBtns[0]);
+    expect(screen.getByRole('heading', { name: /Scoring bands \(2\)/i })).toBeTruthy();
+  });
+
+  it('Validate flags scoring-method other than weighted-sum', () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
+    const broken = JSON.stringify({ method: 'sum', bands: [{ minScore: 0, maxScore: 5 }] });
+    fireEvent.change(rTextarea, { target: { value: broken } });
+    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/method must be "weighted-sum"/i);
+  });
+
+  it('Validate flags an empty bands array', () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
+    fireEvent.change(rTextarea, { target: { value: JSON.stringify({ method: 'weighted-sum', bands: [] }) } });
+    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/non-empty "bands" array/i);
+  });
+
+  it('Validate flags an empty questions array', () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const qTextarea = screen.getByLabelText(/Questions JSON/i);
+    fireEvent.change(qTextarea, { target: { value: JSON.stringify({ questions: [] }) } });
+    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/non-empty "questions" array/i);
+  });
+
+  it('Create uses the currently-selected sub-brand in the POST + uppercased success', async () => {
+    fetchApiMock.mockResolvedValueOnce({ id: 7, version: 2, subBrand: 'rfu' });
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /RFU \(Umrah\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
+    await waitFor(() => {
+      const createCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/diagnostic-banks' && o?.method === 'POST',
+      );
+      expect(createCall).toBeTruthy();
+      const body = JSON.parse(createCall[1].body);
+      expect(body.subBrand).toBe('rfu');
+    });
+    await waitFor(() => {
+      expect(notifyObj.success).toHaveBeenCalled();
+      const msg = notifyObj.success.mock.calls[0][0];
+      expect(msg).toMatch(/v2 created for RFU/);
+    });
+  });
+
+  it('Create swallows a rejection lacking body.error with a generic fallback message', async () => {
+    fetchApiMock.mockRejectedValueOnce({ status: 500 });
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalled();
+      const msg = notifyObj.error.mock.calls[0][0];
+      expect(msg).toMatch(/Failed to create bank/i);
+    });
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('Create blocks when validation fails (broken JSON) and surfaces a fix-first notify', async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const qTextarea = screen.getByLabelText(/Questions JSON/i);
+    fireEvent.change(qTextarea, { target: { value: 'not json' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalled();
+      const msg = notifyObj.error.mock.calls[0][0];
+      expect(msg).toMatch(/Fix validation errors/i);
+    });
+    expect(fetchApiMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('Create button shows "Creating…" + disabled state while the POST is in-flight', async () => {
+    let resolveCreate;
+    fetchApiMock.mockReturnValueOnce(new Promise((resolve) => { resolveCreate = resolve; }));
+    renderPage();
+    const createBtn = screen.getByRole('button', { name: /Create bank/i });
+    fireEvent.click(createBtn);
+    // While in-flight, the button text flips to "Creating…" and aria-disabled propagates via disabled prop.
+    await waitFor(() => {
+      const live = screen.getByRole('button', { name: /Create bank/i });
+      expect(live.textContent).toMatch(/Creating…/);
+      expect(live.disabled).toBe(true);
+    });
+    // Resolve the pending POST so the test cleanly tears down.
+    resolveCreate({ id: 1, version: 1, subBrand: 'tmc' });
+    await waitFor(() => expect(navigateMock).toHaveBeenCalled());
+  });
+
+  it('Import CSV POSTs to /import.csv and reports the imported/updated/skipped summary', async () => {
+    const summary = { imported: 5, updated: 2, skipped: 1, errors: [] };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(summary),
+    });
+    global.fetch = fetchMock;
+    renderPage();
+    // Programmatically populate the hidden file input.
+    const fileInput = screen.getByLabelText(/Upload diagnostic-banks CSV/i);
+    const file = new File(['subBrand,version\ntmc,1\n'], 'banks.csv', { type: 'text/csv' });
+    Object.defineProperty(fileInput, 'files', { value: [file] });
+    fireEvent.change(fileInput);
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+      const [url, opts] = fetchMock.mock.calls[0];
+      expect(url).toBe('/api/travel/diagnostic-banks/import.csv');
+      expect(opts.method).toBe('POST');
+      expect(opts.headers.Authorization).toBe('Bearer test-token');
+      expect(opts.headers['Content-Type']).toBe('text/csv');
+    });
+    await waitFor(() => {
+      expect(notifyObj.success).toHaveBeenCalled();
+      const msg = notifyObj.success.mock.calls[0][0];
+      expect(msg).toMatch(/Imported 5, updated 2, skipped 1/);
+    });
+  });
+
+  it('Import CSV surfaces the first per-row error when the response includes errors[]', async () => {
+    const summary = {
+      imported: 2,
+      updated: 0,
+      skipped: 1,
+      errors: [{ rowNumber: 3, reason: 'questionsJson is not valid JSON' }],
+    };
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(summary) });
+    renderPage();
+    const fileInput = screen.getByLabelText(/Upload diagnostic-banks CSV/i);
+    const file = new File(['bad,row\n'], 'banks.csv', { type: 'text/csv' });
+    Object.defineProperty(fileInput, 'files', { value: [file] });
+    fireEvent.change(fileInput);
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalled();
+      const msg = notifyObj.error.mock.calls[0][0];
+      expect(msg).toMatch(/Row 3: questionsJson is not valid JSON/);
+    });
+  });
+
+  it('Import CSV surfaces the backend error string when response is non-ok', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: () => Promise.resolve({ error: 'CSV missing required column: subBrand' }),
+    });
+    renderPage();
+    const fileInput = screen.getByLabelText(/Upload diagnostic-banks CSV/i);
+    const file = new File(['oops\n'], 'banks.csv', { type: 'text/csv' });
+    Object.defineProperty(fileInput, 'files', { value: [file] });
+    fireEvent.change(fileInput);
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalled();
+      const msg = notifyObj.error.mock.calls[0][0];
+      expect(msg).toMatch(/CSV missing required column/);
+    });
+  });
 });

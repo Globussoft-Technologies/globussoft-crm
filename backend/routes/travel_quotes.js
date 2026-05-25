@@ -380,6 +380,265 @@ router.get("/quotes/analytics", verifyToken, requireTravelTenant, async (req, re
   }
 });
 
+// GET /api/travel/quotes/by-month — any verified token (tenant + sub-brand scoped).
+//
+// Slice 16 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — tenant-wide quote
+// analytics rolled up by calendar month). Mirrors #905 slice 15
+// (/commission-profiles/:id/summary/by-month) + #903 slice 18
+// (by-monthly) — same UTC YYYY-MM bucketing template, same defensive
+// math, same orderBy semantics. One row per UTC-month present in the
+// scoped quote set, summarising the count + status splits + value
+// sums for that month. Read-only; consumed by the operator-facing
+// "quotes trend" chart on the dashboard and the per-month picker for
+// drill-downs into the underlying /quotes list.
+//
+// Why a separate endpoint instead of extending /quotes/analytics:
+//   - Different aggregation granularity (per-month, not single-rollup).
+//   - Different natural sort (chronological time-series, not single row).
+//   - Pre-fills a different UI surface (line/bar chart vs KPI tile).
+//
+// Bucket key shape: ISO YYYY-MM string (e.g. "2026-05") derived from
+// TravelQuote.createdAt's UTC year + month. UTC chosen deliberately
+// so bucket labels stay stable across operator timezones — finance
+// reconciliation works in calendar-month UTC for cross-border volume.
+//
+// Scope rules:
+//   - Tenant-scoped on TravelQuote.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   status    optional Quote.status filter (Draft/Sent/Accepted/Rejected)
+//   from      optional inclusive lower bound on bucket (YYYY-MM); rows
+//             with month < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY-MM); rows
+//             with month > to are excluded
+//   orderBy   default "month:asc" (chronological); also accepts
+//             "month:desc", "totalValue:asc|desc", "quoteCount:asc|desc",
+//             "acceptedCount:asc|desc". Unknown tokens degrade silently
+//             to default (same graceful posture as slice 15).
+//   limit     default 12 (one year of months), max 60 (5 years).
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     months: [ {
+//       month: "2026-05",
+//       quoteCount, totalValue,
+//       draftCount, sentCount, acceptedCount, rejectedCount,
+//       acceptedValue
+//     } ],
+//     totalMonths,
+//     grandQuoteCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Defensive behaviour: null/invalid TravelQuote.totalAmount contributes
+// 0 (no NaN poisoning); null/invalid createdAt → "unknown" bucket
+// (excluded when ?from / ?to is set, kept otherwise so the count surface
+// stays accurate). Half-up 2dp rounding via Number.EPSILON, matching
+// the canonical round2 used in slice 15.
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-month" as a numeric :id (which would 400 INVALID_ID).
+router.get("/quotes/by-month", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    if (statusFilter) {
+      try {
+        assertValidStatus(statusFilter);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+    }
+
+    // YYYY-MM validation — same regex slice 15 uses. Bucket labels we
+    // emit follow this exact shape so callers passing month-tokens to
+    // from/to should already be using it.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+      "quoteCount:asc",
+      "quoteCount:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /quotes list handler — empty access set → all-zeros rollup (not
+    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+    // operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        months: [],
+        totalMonths: 0,
+        grandQuoteCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-MM. Input size bound is the same as
+    // /quotes/analytics (low thousands at platinum scale).
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts/sums }.
+    // Quotes with null/invalid createdAt go into "unknown" so counts
+    // stay accurate. Null/invalid totalAmount contributes 0.
+    const byMonth = new Map();
+    for (const q of quotes) {
+      let monthKey = "unknown";
+      if (q.createdAt) {
+        const dt = new Date(q.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let row = byMonth.get(monthKey);
+      if (!row) {
+        row = {
+          month: monthKey,
+          quoteCount: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          acceptedValue: 0,
+        };
+        byMonth.set(monthKey, row);
+      }
+
+      row.quoteCount += 1;
+      const amt = Number(q.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (q.status) {
+        case "Draft": row.draftCount += 1; break;
+        case "Sent": row.sentCount += 1; break;
+        case "Accepted":
+          row.acceptedCount += 1;
+          row.acceptedValue += safeAmt;
+          break;
+        case "Rejected": row.rejectedCount += 1; break;
+        default: break;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let months = [...byMonth.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable month token); when
+    // no bounds are set, "unknown" stays so the count surface remains
+    // complete. Mirrors slice 15's posture.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM which is also
+    // chronological. "unknown" sorts last in asc / first in desc by
+    // virtue of being lexicographically > "9999-12" — acceptable for
+    // a defensive fallback bucket that should rarely appear.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalMonths = months.length;
+    const grandQuoteCount = months.reduce(
+      (acc, r) => acc + (Number(r.quoteCount) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as slice 15.
+    const paged = months.slice(skip, skip + take);
+
+    res.json({
+      months: paged,
+      totalMonths,
+      grandQuoteCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] by-month error:", e.message);
+    res.status(500).json({ error: "Failed to compute monthly rollup" });
+  }
+});
+
 // POST /api/travel/quotes/bulk-decline-expired — ADMIN | MANAGER.
 //
 // Slice 14 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — bulk operations on

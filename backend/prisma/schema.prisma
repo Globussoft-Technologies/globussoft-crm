@@ -179,6 +179,11 @@ model Tenant {
   travelPaymentSchedules   TravelPaymentSchedule[]
   travelSuppliers          TravelSupplier[]
   travelSupplierPayables   TravelSupplierPayable[]
+  // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles
+  // (additive; consumes lib/agentCommissionCalculator.js from slice 1
+  // commit cb284098). Each row is one named operator-facing pricing
+  // profile (flat_percent | tiered | per_pax_flat | hybrid).
+  travelCommissionProfiles TravelCommissionProfile[]
   // TMC curriculum→destination mapping (PRD_TMC_CURRICULUM_MAPPING PC-1
   // RESOLVED 2026-05-24). 100-200 starter rows seeded by GS; TMC academic
   // team validates + extends over 6-week window.
@@ -5248,5 +5253,48 @@ model TravelCurriculumMapping {
   // Diagnostic-engine lookup path: "given a student's curriculum+grade+subject,
   // surface candidate destinations sorted by fitScore."
   @@index([curriculum, grade, subject])
+  @@index([tenantId, isActive])
+}
+
+// PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles.
+//
+// Each profile is a JSON blob matching one of the 4 shapes consumed by
+// lib/agentCommissionCalculator.js (flat_percent | tiered | per_pax_flat |
+// hybrid). Stored as a JSON String column (@db.Text) so the calculator
+// can be swapped or extended without schema migrations as more profile
+// types ship in future slices.
+//
+// Sub-brand isolation (Q25): profiles MAY be restricted to one sub-brand
+// (tmc / rfu / travelstall / visasure). NULL subBrand means the profile
+// applies tenant-wide and any agent in any sub-brand can be assigned it.
+// Operator-side guards in routes/travel_commission_profiles.js enforce
+// sub-brand access via getSubBrandAccessSet (mirrors travel_quotes.js).
+//
+// profileType validation is enforced at the route layer (whitelist match
+// against the 4 calculator types). profileJson is JSON.parse-validated
+// at the route boundary; deep-shape validation against profileType is
+// deferred to a future slice — the calculator itself returns
+// commission=0 with a "unknown profile type" breakdown if the shape is
+// malformed (defensive 200-with-zero, not a runtime throw).
+//
+// Future slices (not in this commit): mount in server.js, assignment of
+// profiles to specific User / TravelAgent rows (currently a profile is
+// a standalone catalog row), audit-trail of profile edits, computed
+// commission ledger.
+model TravelCommissionProfile {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int      @default(1)
+  name        String // operator-facing label, e.g. "Standard 5%"
+  subBrand    String? // optional sub-brand restriction (tmc/rfu/travelstall/visasure)
+  profileType String // flat_percent | tiered | per_pax_flat | hybrid
+  profileJson String   @db.Text // JSON serialization of profile shape
+  isActive    Boolean  @default(true)
+  notes       String?  @db.Text
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, subBrand])
   @@index([tenantId, isActive])
 }

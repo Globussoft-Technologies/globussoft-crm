@@ -38,6 +38,16 @@
  *      button; Issued/Partial/Paid/Voided rows have it disabled with the
  *      audit-trail tooltip. (Backend is the source of truth — 422
  *      INVOICE_DELETE_FORBIDDEN — but the UI affordance must match.)
+ *  13. Per-row PDF download (#901 slice 3, this tick) — every visible row
+ *      exposes a "Download PDF for invoice <num>" button. Click fires raw
+ *      fetch (NOT fetchApi — the helper JSON-parses; PDFs are binary so we
+ *      need the Response object's .blob()) at
+ *      GET /api/travel/invoices/:id/pdf with the Bearer auth header,
+ *      blobs the response, anchors the result with download=`invoice-:id.pdf`,
+ *      then revokes the object URL. Failed responses (4xx / 5xx) fire
+ *      notify.error('Failed to download PDF'). Loading state flips the button
+ *      to "Downloading…" while in flight + disables the button so a double-
+ *      click can't trigger two browser saves of the same blob.
  *
  * Backend contract pinned (per backend/routes/travel_invoices.js, 913 LOC,
  * 10 vitest cases tick #97):
@@ -88,7 +98,7 @@
  *
  * Path: flat __tests__/ — DO NOT add a __tests__/travel/ subdir.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const fetchApiMock = vi.fn();
@@ -464,5 +474,196 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
       ([url, opts]) => url === '/api/travel/invoices' && opts?.method === 'POST',
     );
     expect(posts.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #901 slice 3 — per-row PDF download tests
+// ---------------------------------------------------------------------------
+//
+// The SUT routes PDF downloads through raw global `fetch` (NOT the shared
+// fetchApi helper) because fetchApi JSON-parses every 2xx body — a binary
+// PDF blob has to flow through the Response object directly so we can call
+// .blob() on it. The test mocks:
+//   - global fetch (for the PDF endpoint) — returns a Response-shaped object
+//     with { ok, status, blob() }.
+//   - URL.createObjectURL + URL.revokeObjectURL — vitest spies on the
+//     globalThis.URL namespace.
+//   - HTMLAnchorElement.prototype.click — vitest spy that swallows the click
+//     so jsdom doesn't actually attempt a navigation.
+// fetchApi stays mocked for the list GET; the PDF call deliberately bypasses
+// it so we can pin the auth header + Response.blob() pattern explicitly.
+describe('<InvoicesAdmin /> — per-row PDF download (#901 slice 3)', () => {
+  let originalFetch;
+  let originalCreateObjectURL;
+  let originalRevokeObjectURL;
+  let originalAnchorClick;
+  let fetchSpy;
+  let createObjectURLSpy;
+  let revokeObjectURLSpy;
+  let anchorClickSpy;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    originalCreateObjectURL = globalThis.URL.createObjectURL;
+    originalRevokeObjectURL = globalThis.URL.revokeObjectURL;
+    originalAnchorClick = HTMLAnchorElement.prototype.click;
+    fetchSpy = vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob(['%PDF-1.4 mock'], { type: 'application/pdf' })),
+    }));
+    createObjectURLSpy = vi.fn(() => 'blob:mock-invoice-url');
+    revokeObjectURLSpy = vi.fn();
+    anchorClickSpy = vi.fn();
+    globalThis.fetch = fetchSpy;
+    globalThis.URL.createObjectURL = createObjectURLSpy;
+    globalThis.URL.revokeObjectURL = revokeObjectURLSpy;
+    HTMLAnchorElement.prototype.click = anchorClickSpy;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    globalThis.URL.createObjectURL = originalCreateObjectURL;
+    globalThis.URL.revokeObjectURL = originalRevokeObjectURL;
+    HTMLAnchorElement.prototype.click = originalAnchorClick;
+  });
+
+  it('renders a "Download PDF for invoice <num>" button on each row', async () => {
+    installFetchMock({
+      list: {
+        invoices: [
+          makeInvoice({ id: 401, invoiceNum: 'TINV-2026-0401' }),
+          makeInvoice({ id: 402, invoiceNum: 'TINV-2026-0402' }),
+        ],
+        total: 2,
+      },
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0401');
+    expect(
+      screen.getByRole('button', { name: /Download PDF for invoice TINV-2026-0401/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Download PDF for invoice TINV-2026-0402/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking PDF fires GET /api/travel/invoices/:id/pdf with the Bearer auth header', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    const pdfBtn = screen.getByRole('button', { name: /Download PDF for invoice TINV-2026-0001/i });
+    fireEvent.click(pdfBtn);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled();
+    });
+    const [url, opts] = fetchSpy.mock.calls[0];
+    expect(url).toMatch(/\/api\/travel\/invoices\/101\/pdf$/);
+    expect(opts?.headers?.Authorization).toBe('Bearer test-token');
+  });
+
+  it('on a successful response, calls URL.createObjectURL(blob) + anchor.click() + URL.revokeObjectURL()', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Download PDF for invoice TINV-2026-0001/i }));
+    await waitFor(() => {
+      expect(createObjectURLSpy).toHaveBeenCalled();
+    });
+    // The blob handed to createObjectURL must be a Blob with the PDF mime
+    // type — pinning the type catches the day someone "optimises" the SUT
+    // by passing the raw Response (which createObjectURL won't accept).
+    const blobArg = createObjectURLSpy.mock.calls[0][0];
+    expect(blobArg).toBeInstanceOf(Blob);
+    expect(blobArg.type).toBe('application/pdf');
+    // Anchor click fired exactly once for the single download path.
+    expect(anchorClickSpy).toHaveBeenCalledTimes(1);
+    // Cleanup ran with the same object URL we created.
+    await waitFor(() => {
+      expect(revokeObjectURLSpy).toHaveBeenCalledWith('blob:mock-invoice-url');
+    });
+  });
+
+  it('uses download="invoice-<id>.pdf" filename on the anchor (per backend Content-Disposition contract)', async () => {
+    // Spy on createElement('a') so we can inspect the anchor's .download attr
+    // before the SUT triggers the click.
+    const realCreate = document.createElement.bind(document);
+    const createSpy = vi.spyOn(document, 'createElement').mockImplementation((tag) => {
+      return realCreate(tag);
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Download PDF for invoice TINV-2026-0001/i }));
+    await waitFor(() => {
+      expect(anchorClickSpy).toHaveBeenCalled();
+    });
+    // Find the anchor element that was created for the download flow.
+    const anchorCalls = createSpy.mock.results.filter(
+      (r, i) => createSpy.mock.calls[i][0] === 'a',
+    );
+    expect(anchorCalls.length).toBeGreaterThan(0);
+    const downloadAnchor = anchorCalls.find((r) => r.value?.download === 'invoice-101.pdf');
+    expect(downloadAnchor).toBeTruthy();
+    createSpy.mockRestore();
+  });
+
+  it('failed response (4xx / 5xx) fires notify.error("Failed to download PDF") and does NOT createObjectURL', async () => {
+    fetchSpy.mockImplementationOnce(() => Promise.resolve({
+      ok: false,
+      status: 500,
+      blob: () => Promise.resolve(new Blob([], { type: 'application/json' })),
+    }));
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Download PDF for invoice TINV-2026-0001/i }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Failed to download PDF');
+    });
+    // No download surface created on failure — guard against partial-success
+    // states like creating an orphan blob URL.
+    expect(createObjectURLSpy).not.toHaveBeenCalled();
+    expect(anchorClickSpy).not.toHaveBeenCalled();
+  });
+
+  it('404 response surfaces the same generic error (no leaking of backend INVOICE_NOT_FOUND code)', async () => {
+    fetchSpy.mockImplementationOnce(() => Promise.resolve({
+      ok: false,
+      status: 404,
+      blob: () => Promise.resolve(new Blob([], { type: 'application/json' })),
+    }));
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Download PDF for invoice TINV-2026-0001/i }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Failed to download PDF');
+    });
+  });
+
+  it('button shows "Downloading…" + is disabled while the in-flight fetch is pending', async () => {
+    let releasePdf;
+    const pending = new Promise((resolve) => { releasePdf = resolve; });
+    fetchSpy.mockImplementationOnce(() => pending);
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    const pdfBtn = screen.getByRole('button', { name: /Download PDF for invoice TINV-2026-0001/i });
+    fireEvent.click(pdfBtn);
+    // Mid-flight: copy + disabled.
+    expect(await screen.findByText(/Downloading/i)).toBeInTheDocument();
+    expect(pdfBtn).toBeDisabled();
+    // Release the fetch so the test doesn't leak the promise.
+    releasePdf({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob(['%PDF-1.4 mock'], { type: 'application/pdf' })),
+    });
+    await waitFor(() => {
+      expect(pdfBtn).not.toBeDisabled();
+    });
+  });
+
+  it('hidden when role=USER (PDF download is gated on canWrite alongside Edit/Delete)', async () => {
+    renderPage({ role: 'USER' });
+    await screen.findByText('TINV-2026-0001');
+    // Same actions-column gate as Edit/Delete — no PDF button surface for USER.
+    expect(screen.queryByRole('button', { name: /Download PDF for invoice/i })).toBeNull();
   });
 });

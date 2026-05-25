@@ -39,8 +39,8 @@
 // mode allows any starting status (Draft is the sensible default).
 
 import { useEffect, useState, useContext } from "react";
-import { Receipt, Plus, Pencil, Trash2 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { Receipt, Plus, Pencil, Trash2, FileDown } from "lucide-react";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
 import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
@@ -147,6 +147,11 @@ export default function InvoicesAdmin() {
   const [editingStatus, setEditingStatus] = useState(null); // server-side starting status, drives transition narrowing
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  // Per-row PDF download in-flight tracker. Holds the invoice.id while its
+  // GET /:id/pdf is hitting the server so the action button can flip to
+  // "Downloading…" and be disabled (defence against double-click producing
+  // two browser-side downloads of the same blob).
+  const [downloadingId, setDownloadingId] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -288,6 +293,44 @@ export default function InvoicesAdmin() {
       load();
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Delete failed");
+    }
+  };
+
+  // GET /api/travel/invoices/:id/pdf returns a PDF Buffer with
+  // Content-Type=application/pdf + Content-Disposition=attachment;
+  // filename="invoice-<id>.pdf" (shipped commit e1f994b0). We can't go
+  // through fetchApi() here because that helper JSON-parses every 2xx
+  // body — for a binary PDF we need raw fetch + Authorization header +
+  // .blob(). Mirrors the Estimates.jsx / Invoices.jsx per-row pattern
+  // (commit `#603` family) which has shipped tests pinning the same
+  // shape. Errors flow into notify.error('Failed to download PDF').
+  const downloadPdf = async (inv) => {
+    if (!inv?.id) {
+      notify.error("Save the invoice first before downloading PDF");
+      return;
+    }
+    setDownloadingId(inv.id);
+    try {
+      const token = getAuthToken();
+      const baseUrl = import.meta.env.VITE_API_URL || "";
+      const resp = await fetch(`${baseUrl}/api/travel/invoices/${inv.id}/pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!resp.ok) {
+        notify.error("Failed to download PDF");
+        return;
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `invoice-${inv.id}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      notify.error(err?.message || "Failed to download PDF");
+    } finally {
+      setDownloadingId(null);
     }
   };
 
@@ -518,6 +561,32 @@ export default function InvoicesAdmin() {
                           style={iconBtn}
                         >
                           <Pencil size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => downloadPdf(inv)}
+                          // Defensive: NEW rows in-flight wouldn't have an id
+                          // yet (won't appear in this list, but guarded anyway)
+                          // + disable while the in-flight download is active so
+                          // a double-click doesn't trigger two browser saves.
+                          disabled={!inv?.id || downloadingId === inv.id}
+                          title={
+                            downloadingId === inv.id
+                              ? "Downloading…"
+                              : `Download PDF for invoice ${inv.invoiceNum}`
+                          }
+                          aria-label={`Download PDF for invoice ${inv.invoiceNum}`}
+                          style={{
+                            ...iconBtn,
+                            opacity: downloadingId === inv.id ? 0.5 : 1,
+                            cursor: downloadingId === inv.id ? "wait" : "pointer",
+                          }}
+                        >
+                          {downloadingId === inv.id ? (
+                            <span style={{ fontSize: 11, fontWeight: 600 }}>Downloading…</span>
+                          ) : (
+                            <FileDown size={16} />
+                          )}
                         </button>
                         <button
                           type="button"

@@ -2588,6 +2588,143 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/:id/payables/quarterly — Arc 2 #903 slice 20 —
+// per-supplier quarterly payable rollup (PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.d
+// + §3.5.b "commission ledger per FY" precursor — FY-wide rollup composes
+// from quarterly which composes from monthly).
+//
+// Sibling to slice 18's /:id/payables/monthly — same parent-supplier guard
+// (loadParentSupplier) + same hard cap on payable rows fetched
+// (QUARTERLY_MAX_ROWS = 10_000) + same lib-pure aggregation
+// (computeQuarterlyRollup in payableAging.js, which composes from
+// computeMonthlyRollup so the per-status break is identical).
+//
+// Operator use-case: per-supplier detail page shows a "next 4 quarters
+// payable schedule" widget. Quarters are calendar-based
+// (Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec). Each quarter
+// displays total owed split by status — pending vs scheduled vs paid
+// vs cancelled — so finance can plan cash-flow by quarter rather than
+// scanning 12 monthly buckets at once.
+//
+// Optional ?from + ?to query bounds the result quarters (inclusive,
+// YYYY-Qn lexical compare works because Q1 < Q2 < Q3 < Q4). When
+// omitted, the route returns every quarter the supplier has a payable
+// scheduled for. Bounds are dates (YYYY-MM-DD form) — same parser as
+// the monthly route — that get mapped to their enclosing quarter.
+//
+// Route ordering: must register BEFORE /:id/payables/:payableId
+//   (PUT/DELETE) so "quarterly" cannot be captured as a payableId — same
+//   sub-paths-before-:id discipline used by slices 13-18.
+// ============================================================================
+
+const { computeQuarterlyRollup } = require("../lib/payableAging");
+const QUARTERLY_MAX_ROWS = 10_000;
+
+function dateToQuarterKey(d) {
+  const y = d.getUTCFullYear();
+  const q = Math.floor(d.getUTCMonth() / 3) + 1;
+  return `${y}-Q${q}`;
+}
+
+router.get(
+  "/suppliers/:id/payables/quarterly",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // Optional from / to bounds — applied at quarter-level after rollup.
+      // Parsing happens BEFORE loadParentSupplier so an invalid date
+      // surfaces 400 INVALID_FROM / INVALID_TO without a DB round-trip.
+      let fromQuarterKey = null;
+      let toQuarterKey = null;
+      if (req.query.from != null && req.query.from !== "") {
+        const parsed = new Date(String(req.query.from));
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date / parseable date string",
+            code: "INVALID_FROM",
+          });
+        }
+        fromQuarterKey = dateToQuarterKey(parsed);
+      }
+      if (req.query.to != null && req.query.to !== "") {
+        const parsed = new Date(String(req.query.to));
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date / parseable date string",
+            code: "INVALID_TO",
+          });
+        }
+        toQuarterKey = dateToQuarterKey(parsed);
+      }
+
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const rows = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+        },
+        select: {
+          id: true,
+          dueDate: true,
+          status: true,
+          amount: true,
+        },
+        take: QUARTERLY_MAX_ROWS,
+      });
+
+      const rollup = computeQuarterlyRollup(rows);
+
+      // Apply from / to bounds (inclusive, YYYY-Qn lexical compare —
+      // works because Q1 < Q2 < Q3 < Q4 sort lexically within a year
+      // and years are zero-padded year-first).
+      let quarters = rollup.quarters;
+      if (fromQuarterKey) {
+        quarters = quarters.filter((q) => q.quarter >= fromQuarterKey);
+      }
+      if (toQuarterKey) {
+        quarters = quarters.filter((q) => q.quarter <= toQuarterKey);
+      }
+
+      // Recompute grandTotal + totalCount over the filtered window so the
+      // caller's "this window's owed amount" matches the quarters array.
+      let windowGrandTotal = 0;
+      let windowTotalCount = 0;
+      for (const q of quarters) {
+        windowGrandTotal =
+          Math.round((windowGrandTotal + q.totalAmount + Number.EPSILON) * 100) /
+          100;
+        windowTotalCount += q.totalCount;
+      }
+
+      res.json({
+        supplier: {
+          id: supplier.id,
+          name: supplier.name,
+          supplierCategory: supplier.supplierCategory,
+          subBrand: supplier.subBrand,
+        },
+        from: fromQuarterKey,
+        to: toQuarterKey,
+        quarters,
+        grandTotal: windowGrandTotal,
+        totalCount: windowTotalCount,
+        excludedCount: rollup.excludedCount,
+        excludedReasons: rollup.excludedReasons,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] per-supplier quarterly rollup error:", e.message);
+      res.status(500).json({ error: "Failed to build per-supplier quarterly rollup" });
+    }
+  },
+);
+
 // POST /api/travel/suppliers/:id/payables — ADMIN/MANAGER only.
 // Required: description, amount. Optional: poNumber, currency, dueDate, notes, status.
 router.post(

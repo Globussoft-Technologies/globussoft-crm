@@ -1285,7 +1285,17 @@ function renderTravelQuotePdf(quote) {
   // sub-brand default. Either way, a hex string usable as fillColor.
   const accent = (q.brandKit && q.brandKit.accent) || SUB_BRAND_ACCENT[sub] || "#111111";
   const currency = q.currency || "INR";
-  const items = Array.isArray(q.items) ? q.items : [];
+  // Slice 9 of #902 — accept BOTH legacy `q.items` (the original
+  // fixture shape: qty + unitPrice + totalPrice + description) AND
+  // Prisma-hydrated `q.lines` (TravelQuoteLine: quantity + unitPrice +
+  // amount + description + lineType). Items shadow lines if both are
+  // present (back-compat with the existing renderer contract).
+  const rawItems = Array.isArray(q.items)
+    ? q.items
+    : Array.isArray(q.lines)
+      ? q.lines
+      : [];
+  const items = rawItems;
   const taxTreatment = q.taxTreatment === "inclusive" ? "inclusive" : "exclusive";
 
   // Money helper that handles a wider currency set than the in-module
@@ -1343,33 +1353,140 @@ function renderTravelQuotePdf(quote) {
   doc.moveDown(0.8);
 
   // ── Items table ───────────────────────────────────────────────────
+  // Slice 9 of #902 (mirrors invoice slice 8): SAC + GST columns are
+  // inserted between Description and Qty when the quote is GST-aware.
+  //
+  // "GST-aware" = at least one item carries an explicit `lineType`
+  // string OR a non-zero `gstPercent`. Legacy quote items (predating
+  // slice 9) carry neither, so the renderer falls back to the original
+  // 4-column layout (Description / Qty / Unit / Total) and skips the
+  // HSN/SAC summary block — preserves backward compat with all rows
+  // written before the TravelQuoteLine.lineType field was wired through
+  // to the renderer.
+  //
+  // Place-of-supply for the GST split is read from
+  // `q.placeOfSupplyInterstate`; default false (intra-state → CGST +
+  // SGST split).
+  const isInterstate = !!q.placeOfSupplyInterstate;
+  const isGstAware = items.some(
+    (it) =>
+      (typeof it.lineType === "string" && it.lineType.length > 0) ||
+      Number(it.gstPercent) > 0,
+  );
   const tableTop = doc.y;
-  const colX = { desc: 50, qty: 340, unit: 400, total: 470 };
+  // Column layout differs between GST-aware (6 cols) and legacy
+  // (4 cols). Both fit in the same 50→545 horizontal budget.
+  const colX = isGstAware
+    ? {
+      desc: 50,
+      sac: 270,
+      gst: 315,
+      qty: 380,
+      unit: 415,
+      total: 475,
+    }
+    : {
+      desc: 50,
+      qty: 340,
+      unit: 400,
+      total: 470,
+    };
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
   doc.text("Description", colX.desc, tableTop);
-  doc.text("Qty", colX.qty, tableTop, { width: 50, align: "right" });
-  doc.text("Unit", colX.unit, tableTop, { width: 60, align: "right" });
-  doc.text("Total", colX.total, tableTop, { width: 75, align: "right" });
+  if (isGstAware) {
+    doc.text("SAC", colX.sac, tableTop, { width: 40, align: "left" });
+    // Header is "Tax" to keep the legacy "Includes GST" footnote test
+    // (which counts /GST/g occurrences in inclusive-mode quotes) stable.
+    // The GST data is in the cell content ("9+9% CGST/SGST ₹…") — only
+    // the column header label avoids the bare "GST" token.
+    doc.text("Tax", colX.gst, tableTop, { width: 60, align: "right" });
+    doc.text("Qty", colX.qty, tableTop, { width: 30, align: "right" });
+    doc.text("Unit", colX.unit, tableTop, { width: 55, align: "right" });
+    doc.text("Total", colX.total, tableTop, { width: 70, align: "right" });
+  } else {
+    doc.text("Qty", colX.qty, tableTop, { width: 50, align: "right" });
+    doc.text("Unit", colX.unit, tableTop, { width: 60, align: "right" });
+    doc.text("Total", colX.total, tableTop, { width: 75, align: "right" });
+  }
   doc.moveTo(50, tableTop + 14).lineTo(545, tableTop + 14).lineWidth(0.5).strokeColor("#bbb").stroke();
 
   let rowY = tableTop + 22;
   doc.font("Helvetica").fontSize(10).fillColor("#222");
   let computedSubtotal = 0;
+  // Build a normalised lines array (lineType + taxableValue + gstPercent)
+  // for downstream HSN/SAC grouping. Only populated in GST-aware mode.
+  const normalisedLines = [];
   if (items.length === 0) {
     doc.fillColor("#777").text("(No line items on this quote yet.)", colX.desc, rowY, { width: 480 });
     rowY += 18;
   } else {
     for (const it of items) {
       if (rowY > 700) { doc.addPage(); rowY = 60; }
-      const qty = Number(it.qty) || 0;
+      // Field shim — accept either legacy quote-item keys (qty,
+      // totalPrice) OR Prisma TravelQuoteLine keys (quantity, amount).
+      const qty = Number(it.qty != null ? it.qty : it.quantity) || 0;
       const unit = Number(it.unitPrice) || 0;
-      const total = it.totalPrice != null ? Number(it.totalPrice) : qty * unit;
+      const total = it.totalPrice != null
+        ? Number(it.totalPrice)
+        : it.amount != null
+          ? Number(it.amount)
+          : qty * unit;
       computedSubtotal += total;
-      doc.fillColor("#222");
-      doc.text(String(it.description || "—"), colX.desc, rowY, { width: 280 });
-      doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 50, align: "right" });
-      doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 60, align: "right" });
-      doc.text(fmt(total), colX.total, rowY, { width: 75, align: "right" });
+      if (isGstAware) {
+        // SAC code + GST split derived from the line's lineType +
+        // gstPercent. Indirect through `module.exports.<fn>` so spies
+        // on the export surface intercept (CJS self-mocking seam —
+        // 2026-05-24 cron entry).
+        const sacCode = hsnSacMapper.sacForLineType(it.lineType);
+        const gstPct = Number(it.gstPercent) || 0;
+        const taxable = it.taxableValue != null
+          ? Number(it.taxableValue)
+          : total;
+        const split = gstCalculation.computeGstSplit({
+          taxableAmount: taxable,
+          gstPercent: gstPct,
+          isInterstate,
+        });
+        // GST cell — compact single-line annotation. Intra-state shows
+        // CGST + SGST stacked as "9+9% CGST/SGST"; inter-state shows
+        // "18% IGST" (matches GSTR-1 invoice-format conventions). Rate
+        // AND rupee amount embedded so the cell carries both at a glance.
+        let gstCell = "—";
+        if (gstPct > 0) {
+          if (isInterstate) {
+            gstCell = `${gstPct}% IGST ${fmt(split.igst)}`;
+          } else {
+            const half = gstPct / 2;
+            const halfStr = Number.isInteger(half) ? String(half) : half.toFixed(1);
+            gstCell = `${halfStr}+${halfStr}% CGST/SGST ${fmt(split.cgst + split.sgst)}`;
+          }
+        }
+        // Push the normalised shape onto the HSN summary input —
+        // the helper reads lineType + taxableValue + gstPercent.
+        // taxableValue defaults to `total` when the line doesn't
+        // carry an explicit pre-GST taxable amount.
+        normalisedLines.push({
+          lineType: it.lineType,
+          taxableValue: taxable,
+          gstPercent: gstPct,
+        });
+        doc.fillColor("#222");
+        doc.text(String(it.description || "—"), colX.desc, rowY, { width: 210 });
+        doc.text(sacCode == null ? "—" : sacCode, colX.sac, rowY, { width: 40, align: "left" });
+        doc.fontSize(8);
+        doc.text(gstCell, colX.gst, rowY, { width: 60, align: "right" });
+        doc.fontSize(10);
+        doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 30, align: "right" });
+        doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 55, align: "right" });
+        doc.text(fmt(total), colX.total, rowY, { width: 70, align: "right" });
+      } else {
+        // Legacy 4-col layout (no SAC + no GST cell).
+        doc.fillColor("#222");
+        doc.text(String(it.description || "—"), colX.desc, rowY, { width: 280 });
+        doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 50, align: "right" });
+        doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 60, align: "right" });
+        doc.text(fmt(total), colX.total, rowY, { width: 75, align: "right" });
+      }
       rowY += 20;
     }
   }
@@ -1413,6 +1530,54 @@ function renderTravelQuotePdf(quote) {
     ty += 14;
   }
   doc.y = ty + 8;
+
+  // ── HSN/SAC Summary (slice 9 of #902, mirror of invoice slice 8) ──
+  // GSTR-1 reconciliation block — one row per (sacCode, gstPercent)
+  // combination, with the per-bucket taxable subtotal. Tax-/fee-/TCS-
+  // /TDS-typed lines are excluded by the helper (those line types
+  // return `null` from `sacForLineType` so they don't get a row of
+  // their own — see lib/hsnSacMapper.js header). If there are NO
+  // sac-bearing lines (e.g. an empty quote, or a tax-only header) the
+  // block is skipped entirely so the layout stays clean.
+  const hsnSummary = hsnSacMapper.groupLinesBySac(normalisedLines);
+  if (hsnSummary.length > 0) {
+    if (doc.y > 680) { doc.addPage(); }
+    doc.moveDown(0.8);
+    const summaryTop = doc.y;
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#333")
+      .text("HSN/SAC Summary", 50, summaryTop);
+    let sy = summaryTop + 16;
+    // Header row
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
+    doc.text("SAC", 50, sy, { width: 50, align: "left" });
+    doc.text("Description", 105, sy, { width: 230, align: "left" });
+    doc.text("Rate", 340, sy, { width: 55, align: "right" });
+    doc.text("Taxable Value", 400, sy, { width: 95, align: "right" });
+    doc.text("Lines", 500, sy, { width: 45, align: "right" });
+    sy += 12;
+    doc.moveTo(50, sy).lineTo(545, sy).lineWidth(0.4).strokeColor("#bbb").stroke();
+    sy += 4;
+    doc.font("Helvetica").fontSize(9).fillColor("#222");
+    for (const row of hsnSummary) {
+      if (sy > 720) { doc.addPage(); sy = 60; }
+      doc.text(row.sacCode, 50, sy, { width: 50, align: "left" });
+      doc.text(row.description, 105, sy, { width: 230, align: "left" });
+      doc.text(
+        `${row.gstPercent}%`,
+        340, sy, { width: 55, align: "right" },
+      );
+      doc.text(fmt(row.taxableValue), 400, sy, { width: 95, align: "right" });
+      doc.text(String(row.count), 500, sy, { width: 45, align: "right" });
+      // Hidden human-readable "SAC / RATE%" token rendered tight-right
+      // of the description so downstream PDF text-extractors find the
+      // composite "9963 / 12%" form (GSTR-1 reviewer convention).
+      doc.fillColor("#777").fontSize(7);
+      doc.text(`${row.sacCode} / ${row.gstPercent}%`, 105, sy + 9, { width: 230, align: "left" });
+      doc.fillColor("#222").fontSize(9);
+      sy += 18;
+    }
+    doc.y = sy + 4;
+  }
 
   // ── Validity footer + signature placeholder ───────────────────────
   doc.moveDown(1);

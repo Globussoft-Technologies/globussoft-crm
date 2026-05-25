@@ -66,6 +66,11 @@ model Tenant {
   country         String   @default("US")
   defaultCurrency String   @default("USD")
   locale          String   @default("en-US") // BCP-47 for date/number formatting
+  // #902 slice 3 — Operator's GST-registration state for place-of-supply
+  // decisions in the travel-vertical GST module. ISO 3166-2 like "IN-MH".
+  // Nullable; backend/lib/gstStateCodeResolver.js falls back to "IN-MH"
+  // (legacy default) when null. Set per-tenant during onboarding.
+  gstStateCode    String?
   // Agent C: white-label branding
   logoUrl         String? // path to uploaded logo, e.g. /uploads/branding/tenant-2/logo.png
   brandColor      String? // hex like #265855, overrides theme accent when set
@@ -550,6 +555,11 @@ model Contact {
   anniversary   DateTime?
   gst           String?
   walletBalance Float?
+
+  // #902 slice 3 — Customer's place-of-supply state for travel-vertical
+  // GST decisions. ISO 3166-2 like "IN-KA". Nullable; the resolver
+  // mirrors Tenant.gstStateCode (intra-state default) when null.
+  stateCode String?
 
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.

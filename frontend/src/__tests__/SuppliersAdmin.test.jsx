@@ -188,6 +188,26 @@ const SUPPLIERS_DEFAULT = [
   makeSupplier({ id: 203, subBrand: 'visasure', name: 'Old Visa Consul', supplierCategory: 'visa-consul', isActive: false }),
 ];
 
+// Default aging stub — installFetchMock returns this on every
+// /api/travel/payables/aging GET so the panel-mount fetch doesn't trip
+// the existing cases (which don't care about aging but DO assert on
+// the suppliers GET firing first).
+const AGING_DEFAULT = {
+  asOf: '2026-05-25T00:00:00.000Z',
+  subBrand: null,
+  supplierCategory: null,
+  bucketTotals: {
+    current: { count: 0, totalAmount: 0 },
+    '1-30': { count: 0, totalAmount: 0 },
+    '31-60': { count: 0, totalAmount: 0 },
+    '61-90': { count: 0, totalAmount: 0 },
+    '90+': { count: 0, totalAmount: 0 },
+  },
+  grandTotal: 0,
+  excludedCount: 0,
+  excludedReasons: {},
+};
+
 // Install a fetchApi mock that routes by URL + method. Tests override
 // only the surface they care about.
 function installFetchMock({
@@ -195,9 +215,15 @@ function installFetchMock({
   create = null,
   update = null,
   del = null,
+  aging = AGING_DEFAULT,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
+    // Aging endpoint match BEFORE the suppliers prefix (URL overlap).
+    if (url.startsWith('/api/travel/payables/aging') && method === 'GET') {
+      if (aging instanceof Error) return Promise.reject(aging);
+      return Promise.resolve(aging);
+    }
     if (url.startsWith('/api/travel/suppliers') && method === 'GET') {
       if (list instanceof Error) return Promise.reject(list);
       return Promise.resolve(list);
@@ -825,9 +851,15 @@ function installFetchMockWithPayables({
   payablesCreate = null,
   payablesUpdate = null,
   payablesDelete = null,
+  aging = AGING_DEFAULT,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
+    // Aging endpoint match BEFORE the suppliers prefix.
+    if (url.startsWith('/api/travel/payables/aging') && method === 'GET') {
+      if (aging instanceof Error) return Promise.reject(aging);
+      return Promise.resolve(aging);
+    }
     // Nested payables match BEFORE the supplier-level patterns (URL prefix overlap).
     if (/^\/api\/travel\/suppliers\/\d+\/payables$/.test(url) && method === 'GET') {
       if (payables instanceof Error) return Promise.reject(payables);
@@ -1157,5 +1189,232 @@ describe('<SuppliersAdmin /> — slice 4 (#903) payables panel', () => {
     // Second opens; first closes (single-expanded contract).
     expect(await screen.findByTestId('payables-panel-202')).toBeInTheDocument();
     expect(screen.queryByTestId('payables-panel-201')).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 9 (#903) — Payables Aging panel (top-of-page aged-payable summary).
+// Consumes GET /api/travel/payables/aging shipped in commit c7900645. Pins
+// the panel's render contract:
+//   - 5 urgency-coloured bucket cards: current / 1-30 / 31-60 / 61-90 / 90+
+//     (green → yellow → orange → red → dark-red).
+//   - Each card surfaces both the count and the totalAmount for the bucket.
+//   - Grand total + excluded summary line below the cards.
+//   - Loading + error states inline.
+//   - 5xx fires notify.error (403 stays silent — the suppliers list itself
+//     surfaces permission-denied UX; duplicating it on the aging panel
+//     would be noisy).
+//   - Empty buckets render zero count + zero amount (no missing card).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('<SuppliersAdmin /> — slice 9 (#903) payables aging panel', () => {
+  it('panel mounts and renders 5 bucket cards', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    // Panel container present.
+    expect(await screen.findByTestId('payables-aging-panel')).toBeInTheDocument();
+    // 5 bucket cards present.
+    expect(screen.getByTestId('aging-card-current')).toBeInTheDocument();
+    expect(screen.getByTestId('aging-card-1-30')).toBeInTheDocument();
+    expect(screen.getByTestId('aging-card-31-60')).toBeInTheDocument();
+    expect(screen.getByTestId('aging-card-61-90')).toBeInTheDocument();
+    expect(screen.getByTestId('aging-card-90+')).toBeInTheDocument();
+  });
+
+  it('GETs /api/travel/payables/aging on mount', async () => {
+    renderPage();
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' &&
+        u.startsWith('/api/travel/payables/aging') &&
+        (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('cards display correct count + amount from the response', async () => {
+    installFetchMock({
+      aging: {
+        asOf: '2026-05-25T00:00:00.000Z',
+        subBrand: null,
+        supplierCategory: null,
+        bucketTotals: {
+          current: { count: 4, totalAmount: 125000 },
+          '1-30': { count: 2, totalAmount: 67500.5 },
+          '31-60': { count: 1, totalAmount: 20000 },
+          '61-90': { count: 0, totalAmount: 0 },
+          '90+': { count: 3, totalAmount: 380000 },
+        },
+        grandTotal: 592500.5,
+        excludedCount: 7,
+        excludedReasons: { EXCLUDED_PAID: 4, EXCLUDED_CANCELLED: 2, NO_DUE_DATE: 1 },
+      },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    // Current: 4 payables, ₹1,25,000
+    await waitFor(() => {
+      expect(screen.getByTestId('aging-card-amount-current').textContent).toMatch(/1,25,000|125,?000/);
+    });
+    expect(screen.getByTestId('aging-card-count-current').textContent).toMatch(/4 payables/);
+    // 1-30
+    expect(screen.getByTestId('aging-card-amount-1-30').textContent).toMatch(/67,500/);
+    expect(screen.getByTestId('aging-card-count-1-30').textContent).toMatch(/2 payables/);
+    // 31-60
+    expect(screen.getByTestId('aging-card-amount-31-60').textContent).toMatch(/20,000/);
+    expect(screen.getByTestId('aging-card-count-31-60').textContent).toMatch(/1 payable/);
+    // 61-90 (empty bucket)
+    expect(screen.getByTestId('aging-card-count-61-90').textContent).toMatch(/0 payables/);
+    // 90+ (worst bucket)
+    expect(screen.getByTestId('aging-card-amount-90+').textContent).toMatch(/3,80,000|380,?000/);
+    expect(screen.getByTestId('aging-card-count-90+').textContent).toMatch(/3 payables/);
+  });
+
+  it('grand total is displayed below the cards', async () => {
+    installFetchMock({
+      aging: {
+        ...AGING_DEFAULT,
+        bucketTotals: {
+          current: { count: 1, totalAmount: 50000 },
+          '1-30': { count: 1, totalAmount: 30000 },
+          '31-60': { count: 0, totalAmount: 0 },
+          '61-90': { count: 0, totalAmount: 0 },
+          '90+': { count: 0, totalAmount: 0 },
+        },
+        grandTotal: 80000,
+        excludedCount: 0,
+        excludedReasons: {},
+      },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    await waitFor(() => {
+      const gt = screen.getByTestId('aging-grand-total');
+      expect(gt.textContent).toMatch(/Grand total/i);
+      expect(gt.textContent).toMatch(/80,000/);
+    });
+  });
+
+  it('excluded summary line is displayed below the cards', async () => {
+    installFetchMock({
+      aging: {
+        ...AGING_DEFAULT,
+        excludedCount: 12,
+        excludedReasons: { EXCLUDED_PAID: 8, EXCLUDED_CANCELLED: 3, NO_DUE_DATE: 1 },
+      },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    await waitFor(() => {
+      const sum = screen.getByTestId('aging-excluded-summary');
+      expect(sum.textContent).toMatch(/12 excluded/);
+      expect(sum.textContent).toMatch(/paid\/cancelled\/missing dueDate/i);
+    });
+  });
+
+  it('empty buckets render zero counts + zero amounts (no missing card)', async () => {
+    installFetchMock({
+      aging: {
+        ...AGING_DEFAULT,
+        bucketTotals: {
+          current: { count: 0, totalAmount: 0 },
+          '1-30': { count: 0, totalAmount: 0 },
+          '31-60': { count: 0, totalAmount: 0 },
+          '61-90': { count: 0, totalAmount: 0 },
+          '90+': { count: 0, totalAmount: 0 },
+        },
+        grandTotal: 0,
+        excludedCount: 0,
+      },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    // All 5 cards still rendered.
+    await waitFor(() => {
+      ['current', '1-30', '31-60', '61-90', '90+'].forEach((key) => {
+        const cardCount = screen.getByTestId(`aging-card-count-${key}`);
+        expect(cardCount.textContent).toMatch(/0 payables/);
+        const cardAmount = screen.getByTestId(`aging-card-amount-${key}`);
+        // Amount renders 0 (with currency symbol).
+        expect(cardAmount.textContent).toMatch(/0/);
+      });
+    });
+    expect(screen.getByTestId('aging-grand-total').textContent).toMatch(/0/);
+    expect(screen.getByTestId('aging-excluded-summary').textContent).toMatch(/0 excluded/);
+  });
+
+  it('5xx failure surfaces notify.error + renders error state', async () => {
+    const err = new Error('aging endpoint exploded');
+    err.status = 500;
+    installFetchMock({ aging: err });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    await waitFor(() => {
+      const agingErrors = notifyError.mock.calls.filter(([m]) =>
+        typeof m === 'string' && /aging/i.test(m),
+      );
+      expect(agingErrors.length).toBeGreaterThan(0);
+    });
+    // Error state placeholder renders.
+    expect(screen.getByTestId('aging-error')).toBeInTheDocument();
+    // Bucket cards not in the DOM during the error state (replaced by the
+    // error placeholder).
+    expect(screen.queryByTestId('aging-card-current')).toBeNull();
+  });
+
+  it('403 failure does NOT fire notify.error (suppliers list owns the permission-denied UX)', async () => {
+    const err = new Error('forbidden');
+    err.status = 403;
+    installFetchMock({ aging: err });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    // Give the aging promise time to reject + reach the catch handler.
+    await waitFor(() => {
+      // Error state placeholder still renders (the panel observes failure).
+      expect(screen.getByTestId('aging-error')).toBeInTheDocument();
+    });
+    // But no notify.error fired for the aging-403 case.
+    const agingErrors = notifyError.mock.calls.filter(([m]) =>
+      typeof m === 'string' && /aging/i.test(m),
+    );
+    expect(agingErrors.length).toBe(0);
+  });
+
+  it('loading placeholder renders before the GET resolves', async () => {
+    let resolveAging;
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/payables/aging') && method === 'GET') {
+        return new Promise((res) => { resolveAging = res; });
+      }
+      if (url.startsWith('/api/travel/suppliers') && method === 'GET') {
+        return Promise.resolve({ suppliers: SUPPLIERS_DEFAULT, total: SUPPLIERS_DEFAULT.length });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    // Loading placeholder for aging in DOM before the aging promise resolves.
+    expect(await screen.findByTestId('aging-loading')).toBeInTheDocument();
+    resolveAging(AGING_DEFAULT);
+    // After resolve, the bucket cards appear.
+    expect(await screen.findByTestId('aging-card-current')).toBeInTheDocument();
+    expect(screen.queryByTestId('aging-loading')).toBeNull();
+  });
+
+  it('aging GET respects sub-brand filter (passes ?subBrand=)', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fetchApiMock.mockClear();
+    installFetchMock({ list: { suppliers: [SUPPLIERS_DEFAULT[1]], total: 1 } });
+    fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), { target: { value: 'rfu' } });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' &&
+        u.startsWith('/api/travel/payables/aging') &&
+        u.includes('subBrand=rfu') &&
+        (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
   });
 });

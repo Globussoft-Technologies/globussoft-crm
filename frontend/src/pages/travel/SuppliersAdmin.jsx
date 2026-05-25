@@ -19,7 +19,7 @@
 // honors the #829 permission-denied vs no-rows distinction.
 
 import { useEffect, useState, useContext, Fragment } from "react";
-import { Building2, Plus, Pencil, Trash2, ChevronDown, ChevronRight, CheckCircle2, XCircle, Wallet } from "lucide-react";
+import { Building2, Plus, Pencil, Trash2, ChevronDown, ChevronRight, CheckCircle2, XCircle, Wallet, BarChart3 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
@@ -104,6 +104,26 @@ const PAYABLE_STATUS_STYLE = {
   cancelled: { bg: "rgba(148, 163, 184, 0.18)", fg: "var(--text-secondary)" },
 };
 
+// PRD_TRAVEL_SUPPLIER_MASTER #903 slice 9 — Payables Aging panel.
+// Operator-facing aged-payable summary at the top of the page. Consumes the
+// backend report endpoint shipped in commit c7900645:
+//   GET /api/travel/payables/aging
+//     → 200 { asOf, subBrand, supplierCategory, bucketTotals, grandTotal,
+//             excludedCount, excludedReasons }
+// bucketTotals shape: { "current"|"1-30"|"31-60"|"61-90"|"90+":
+//                       { count: <int>, totalAmount: <number> } }
+// Urgency palette: green → yellow → orange → red → dark-red across the 5
+// buckets. The page renders the panel on mount once (no auto-refresh — the
+// numbers shift slowly enough that the operator can refresh by reloading
+// the page when they want fresh data).
+const AGING_BUCKETS = [
+  { key: "current", label: "Current",   bg: "rgba(34, 197, 94, 0.18)",  fg: "var(--success-color, #22c55e)" }, // green
+  { key: "1-30",    label: "1-30 days", bg: "rgba(234, 179, 8, 0.18)",  fg: "#eab308" },                       // yellow
+  { key: "31-60",   label: "31-60 days",bg: "rgba(249, 115, 22, 0.18)", fg: "#f97316" },                       // orange
+  { key: "61-90",   label: "61-90 days",bg: "rgba(244, 63, 94, 0.18)",  fg: "var(--danger-color, #f43f5e)" },  // red
+  { key: "90+",     label: "90+ days",  bg: "rgba(127, 29, 29, 0.28)",  fg: "#dc2626" },                       // dark red
+];
+
 // Slice-4 add-payable form initial state. Empty strings normalise to null
 // on submit (description + amount required, the rest optional).
 const EMPTY_PAYABLE_FORM = {
@@ -166,6 +186,15 @@ export default function SuppliersAdmin() {
   const [payableForm, setPayableForm] = useState({});               // { [supplierId]: form }
   const [payableSaving, setPayableSaving] = useState({});           // { [supplierId]: bool }
 
+  // Slice 9 (#903) — payables aging panel state. Loaded once on mount via
+  // GET /api/travel/payables/aging. `aging` is null until first response;
+  // `agingLoading` gates the placeholder render; `agingError` true on 5xx
+  // (after notify.error fires) so the panel can render an inline retry
+  // affordance rather than disappearing silently.
+  const [aging, setAging] = useState(null);
+  const [agingLoading, setAgingLoading] = useState(true);
+  const [agingError, setAgingError] = useState(false);
+
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
@@ -188,6 +217,37 @@ export default function SuppliersAdmin() {
   };
 
   useEffect(load, [subBrand, supplierCategory, includeInactive]);
+
+  // Slice 9 (#903) — load aged-payable report on mount + when sub-brand or
+  // category filters change (so the panel mirrors the suppliers list the
+  // operator is currently looking at). Single-fetch, no polling — operator
+  // refreshes the page when they want a re-read.
+  const loadAging = () => {
+    setAgingLoading(true);
+    setAgingError(false);
+    const qs = new URLSearchParams();
+    if (subBrand) qs.set("subBrand", subBrand);
+    if (supplierCategory) qs.set("supplierCategory", supplierCategory);
+    const url = `/api/travel/payables/aging${qs.toString() ? `?${qs.toString()}` : ""}`;
+    fetchApi(url)
+      .then((d) => {
+        setAging(d || null);
+        setAgingError(false);
+      })
+      .catch((err) => {
+        setAging(null);
+        setAgingError(true);
+        // 403 is silently absorbed (the suppliers list itself surfaces the
+        // permission-denied empty state — duplicating it on the aging panel
+        // would be noisy). All other failures get a notify.error.
+        if (err?.status !== 403) {
+          notify.error(err?.body?.error || err?.message || "Failed to load payables aging");
+        }
+      })
+      .finally(() => setAgingLoading(false));
+  };
+
+  useEffect(loadAging, [subBrand, supplierCategory]);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -480,6 +540,106 @@ export default function SuppliersAdmin() {
           Include inactive
         </label>
       </div>
+
+      {/* Slice 9 (#903) — Payables Aging panel. Consumes GET /api/travel/
+          payables/aging (commit c7900645). Renders 5 urgency-coloured bucket
+          cards + grand total + excluded summary line. Loading + error states
+          inline. */}
+      <section
+        data-testid="payables-aging-panel"
+        aria-label="Payables aging summary"
+        className="glass"
+        style={{ padding: 16, marginBottom: 16 }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 12,
+          }}
+        >
+          <BarChart3 size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
+          <strong style={{ fontSize: 13 }}>Payables Aging</strong>
+          <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+            Open invoices bucketed by days-overdue.
+          </span>
+        </div>
+
+        {agingLoading ? (
+          <div data-testid="aging-loading" style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            Loading aging&hellip;
+          </div>
+        ) : agingError ? (
+          <div data-testid="aging-error" style={{ fontSize: 13, color: "var(--danger-color, #f43f5e)" }}>
+            Failed to load aging report.
+          </div>
+        ) : (
+          <>
+            <div
+              data-testid="aging-bucket-cards"
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))",
+                gap: 8,
+              }}
+            >
+              {AGING_BUCKETS.map((b) => {
+                const slot = aging?.bucketTotals?.[b.key] || { count: 0, totalAmount: 0 };
+                const countVal = Number.isFinite(Number(slot.count)) ? Number(slot.count) : 0;
+                const amountVal = Number.isFinite(Number(slot.totalAmount)) ? Number(slot.totalAmount) : 0;
+                return (
+                  <div
+                    key={b.key}
+                    data-testid={`aging-card-${b.key}`}
+                    style={{
+                      background: b.bg,
+                      color: b.fg,
+                      padding: "10px 12px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(255,255,255,0.04)",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.85 }}>
+                      {b.label}
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 700 }} data-testid={`aging-card-amount-${b.key}`}>
+                      ₹{amountVal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    </div>
+                    <div style={{ fontSize: 11, opacity: 0.85 }} data-testid={`aging-card-count-${b.key}`}>
+                      {countVal} payable{countVal === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div
+              style={{
+                marginTop: 10,
+                paddingTop: 10,
+                borderTop: "1px dashed var(--border-color)",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 16,
+                alignItems: "baseline",
+                fontSize: 12,
+                color: "var(--text-secondary)",
+              }}
+            >
+              <span data-testid="aging-grand-total">
+                <strong style={{ color: "var(--text-primary)" }}>Grand total:</strong>{" "}
+                ₹{(Number(aging?.grandTotal) || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+              </span>
+              <span data-testid="aging-excluded-summary">
+                {Number(aging?.excludedCount) || 0} excluded (paid/cancelled/missing dueDate)
+              </span>
+            </div>
+          </>
+        )}
+      </section>
 
       {showForm && (
         <form

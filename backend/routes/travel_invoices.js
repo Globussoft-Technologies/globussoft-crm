@@ -1691,6 +1691,305 @@ router.get("/invoices/by-quarter", verifyToken, requireTravelTenant, async (req,
   }
 });
 
+// GET /api/travel/invoices/by-year — any verified token (tenant + sub-brand scoped).
+//
+// Slice 31 of #901 (PRD_TRAVEL_BILLING §3 — tenant-wide invoice
+// analytics rolled up by calendar year). Completes the
+// by-month/by-quarter/by-year time-series triplet (slices 29/30/31) for
+// the billing dashboard. Mirrors slice 30's /invoices/by-quarter with
+// the coarsest-granularity year bucket; same UTC rationale as by-month
+// + by-quarter (finance reconciliation works in calendar years; FY
+// tooling is a future overlay on top of this calendar-year primitive).
+// Also mirrors #900 slice 18 (/quotes/by-year) for shape consistency
+// across the quote + invoice time-series surfaces. Surfaces the full
+// 5-status TravelInvoice envelope (Draft/Issued/Partial/Paid/Voided)
+// plus paidValue + openValue (totalValue - paidValue - voidedValue).
+//
+// Why a separate endpoint instead of aggregate=year on by-quarter:
+// callers expect different defaults (10 years is a sensible UI default
+// for an "annual trend" tile; 40 quarters ≠ 10 years in the same
+// fixed-width chart slot). Pre-fills the annual-trend tile on the
+// billing dashboard with ~10 bars.
+//
+// Bucket key shape: "YYYY" string (e.g. "2026") derived from
+// TravelInvoice.createdAt's UTC year (`getUTCFullYear()`).
+//
+// Scope rules:
+//   - Tenant-scoped on TravelInvoice.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   status    optional TravelInvoice.status filter
+//             (Draft/Issued/Partial/Paid/Voided)
+//   from      optional inclusive lower bound on bucket (YYYY); rows
+//             with year < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY); rows
+//             with year > to are excluded
+//   orderBy   default "year:asc" (chronological); also accepts
+//             "year:desc", "totalValue:asc|desc", "invoiceCount:asc|desc",
+//             "paidCount:asc|desc". Unknown tokens degrade silently
+//             to default.
+//   limit     default 10 (a decade), max 30.
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     years: [ {
+//       year: "2026",
+//       invoiceCount, totalValue,
+//       draftCount, issuedCount, partialCount, paidCount, voidedCount,
+//       paidValue, openValue
+//     } ],
+//     totalYears,
+//     grandInvoiceCount,
+//     grandTotalValue,
+//     grandPaidValue,
+//     grandOpenValue,
+//     limit, offset
+//   }
+//
+// openValue per row = totalValue - paidValue - voidedValue (where
+// voidedValue is the sum of totalAmount on Voided rows — voided
+// invoices contribute to totalValue but neither paid nor open).
+// grandOpenValue is the sum of per-row openValue, half-up rounded.
+//
+// Defensive behaviour: null/invalid TravelInvoice.totalAmount contributes
+// 0 (no NaN poisoning); null/invalid createdAt → "unknown" bucket
+// (excluded when ?from / ?to is set, kept otherwise so the count surface
+// stays accurate). Half-up 2dp rounding via Number.EPSILON.
+//
+// Route ordering: declared BEFORE GET /invoices/:id so Express doesn't
+// try to parse "by-year" as a numeric :id (which would 400 INVALID_ID).
+router.get("/invoices/by-year", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+    if (statusFilter) {
+      try {
+        assertValidStatus(statusFilter);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+    }
+
+    // YYYY validation — bucket labels we emit follow this exact shape so
+    // callers passing year-tokens to from/to should already be using it.
+    // Anything else is a 400 INVALID_YEAR_FORMAT.
+    const YEAR_RE = /^\d{4}$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+    if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "year:asc",
+      "year:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+      "invoiceCount:asc",
+      "invoiceCount:desc",
+      "paidCount:asc",
+      "paidCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /invoices list handler — empty access set → all-zeros rollup (not
+    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+    // operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        years: [],
+        totalYears: 0,
+        grandInvoiceCount: 0,
+        grandTotalValue: 0,
+        grandPaidValue: 0,
+        grandOpenValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY. Input size bound is the same as
+    // /invoices/by-month + /invoices/by-quarter (low thousands at
+    // platinum scale).
+    const invoices = await prisma.travelInvoice.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) =>
+      Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-year. Map "YYYY" → { ...row counts/sums }.
+    // Invoices with null/invalid createdAt go into "unknown" so counts
+    // stay accurate. Null/invalid totalAmount contributes 0. voidedValue
+    // is tracked separately so openValue can subtract it (voided rows
+    // contribute to totalValue but are neither paid nor open).
+    const byYear = new Map();
+    for (const inv of invoices) {
+      let yearKey = "unknown";
+      if (inv.createdAt) {
+        const dt = new Date(inv.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          yearKey = String(dt.getUTCFullYear());
+        }
+      }
+
+      let row = byYear.get(yearKey);
+      if (!row) {
+        row = {
+          year: yearKey,
+          invoiceCount: 0,
+          totalValue: 0,
+          draftCount: 0,
+          issuedCount: 0,
+          partialCount: 0,
+          paidCount: 0,
+          voidedCount: 0,
+          paidValue: 0,
+          voidedValue: 0,
+        };
+        byYear.set(yearKey, row);
+      }
+
+      row.invoiceCount += 1;
+      const amt = Number(inv.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (inv.status) {
+        case "Draft":
+          row.draftCount += 1;
+          break;
+        case "Issued":
+          row.issuedCount += 1;
+          break;
+        case "Partial":
+          row.partialCount += 1;
+          break;
+        case "Paid":
+          row.paidCount += 1;
+          row.paidValue += safeAmt;
+          break;
+        case "Voided":
+          row.voidedCount += 1;
+          row.voidedValue += safeAmt;
+          break;
+        default:
+          break;
+      }
+    }
+
+    // Finalise rounding on per-row sums + compute openValue.
+    // openValue = totalValue - paidValue - voidedValue (the
+    // customer-owed-but-not-yet-paid surface).
+    let years = [...byYear.values()].map((r) => {
+      const openValue = r.totalValue - r.paidValue - r.voidedValue;
+      return {
+        year: r.year,
+        invoiceCount: r.invoiceCount,
+        totalValue: round2(r.totalValue),
+        draftCount: r.draftCount,
+        issuedCount: r.issuedCount,
+        partialCount: r.partialCount,
+        paidCount: r.paidCount,
+        voidedCount: r.voidedCount,
+        paidValue: round2(r.paidValue),
+        openValue: round2(openValue),
+      };
+    });
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (no comparable token); when no bounds are set,
+    // "unknown" stays so the count surface remains complete. Mirrors
+    // slices 29 + 30's posture.
+    if (fromRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+    }
+    if (toRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+    }
+
+    // Sort. "year" sorts lexicographically on YYYY which is also
+    // chronological (4-digit zero-padded years sort correctly as ASCII).
+    // "unknown" lexicographically > "9999" so it sorts last in asc /
+    // first in desc — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    years.sort((a, b) => {
+      if (field === "year") {
+        if (a.year < b.year) return -1 * mult;
+        if (a.year > b.year) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalYears = years.length;
+    const grandInvoiceCount = years.reduce(
+      (acc, r) => acc + (Number(r.invoiceCount) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandPaidValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.paidValue) || 0), 0),
+    );
+    const grandOpenValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.openValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as
+    // slices 29 + 30.
+    const paged = years.slice(skip, skip + take);
+
+    res.json({
+      years: paged,
+      totalYears,
+      grandInvoiceCount,
+      grandTotalValue,
+      grandPaidValue,
+      grandOpenValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-invoices] by-year error:", e.message);
+    res.status(500).json({ error: "Failed to compute annual rollup" });
+  }
+});
+
 // ============================================================================
 // GET /api/travel/invoices/hsn-summary — Arc 2 #902 slice 17.
 //

@@ -2120,3 +2120,198 @@ test.describe("IDOR #919 slice 9 — flyer-template + supplier cross-resource pr
     ).toContain(res.status());
   });
 });
+
+test.describe("IDOR #919 slice 10 — quote + invoice cross-resource probes", () => {
+  // Slices 8 + 9 covered commission-profile, itinerary-item, flyer-
+  // template and supplier sub-resources. Slice 10 closes the remaining
+  // two big aggregation surfaces — TravelQuote sub-resources and
+  // TravelInvoice sub-resources. Every probe asserts [403, 404].toContain
+  // so the spec stays robust whether the route emits the cross-vertical
+  // sentinel (`requireTravelTenant` → 403 WRONG_VERTICAL) or the tenant-
+  // scope sentinel (`findFirst({ where: { id, tenantId } })` → 404) first.
+  //
+  // Slice 10 drift note (per .claude/skills/verifying-gap-card-claims/):
+  // the slice-10 prompt listed `/quotes/:id/analytics` as a probe target.
+  // Reality check: `routes/travel_quotes.js` exposes `/quotes/analytics`
+  // as a COLLECTION-level aggregate (line 304) — there is no per-quote
+  // `/:id/analytics` route. Dropped that probe and pin reality. The
+  // collection-level `/quotes/analytics` IS guarded by requireTravelTenant
+  // (slice 7's list-endpoint probe pattern would catch any regression
+  // there), so coverage isn't lost — it just lives on the LIST surface
+  // rather than the per-id surface.
+
+  // ---- TravelQuote sub-resources ---------------------------------------
+
+  test("wellness admin GET /quotes/:id/audit-trail → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/quotes/${FAKE_ID}/audit-trail`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach quote audit-trail: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /quotes/:id/duplicate → 403/404 (mutation vector)", async ({
+    request,
+  }) => {
+    // POST /duplicate is a mutation vector — a missed guard would let
+    // cross-tenant attackers clone quotes into their own tenant. Pinning
+    // 403/404 ensures the parent /:id guard fires before any Prisma
+    // create runs.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/quotes/${FAKE_ID}/duplicate`,
+      {},
+    );
+    expect(
+      [403, 404],
+      `generic admin must not reach quote duplicate: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin DELETE /quotes/:id → 403/404 (destructive mutation)", async ({
+    request,
+  }) => {
+    // DELETE /quotes/:id is the worst-case mutation — a missed guard
+    // would let cross-tenant attackers delete sales quotes belonging to
+    // another tenant. Pinning 403/404 ensures the tenant-scope filter
+    // fires before any Prisma delete runs.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await del(
+      request,
+      token,
+      `/api/travel/quotes/${FAKE_ID}`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not DELETE travel quote: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /quotes/:id/accept → 403/404 (state-transition mutation)", async ({
+    request,
+  }) => {
+    // POST /accept transitions a quote to accepted state — a missed
+    // guard would let cross-tenant attackers force-accept another
+    // tenant's pending quotes (skewing pipeline, triggering downstream
+    // invoice generation, etc.). Pinning 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/quotes/${FAKE_ID}/accept`,
+      {},
+    );
+    expect(
+      [403, 404],
+      `generic admin must not accept travel quote: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // ---- TravelInvoice sub-resources -------------------------------------
+
+  test("wellness admin GET /invoices/:id/timeline → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/invoices/${FAKE_ID}/timeline`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach invoice timeline: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /invoices/:id/late-penalty → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/invoices/${FAKE_ID}/late-penalty`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach invoice late-penalty: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /invoices/:id/apply-penalty → 403/404 (financial mutation)", async ({
+    request,
+  }) => {
+    // POST /apply-penalty mutates the invoice with a late-fee line — a
+    // missed guard would let cross-tenant attackers stack penalties onto
+    // another tenant's invoices. Pinning 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/invoices/${FAKE_ID}/apply-penalty`,
+      {},
+    );
+    expect(
+      [403, 404],
+      `generic admin must not apply penalty to travel invoice: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin POST /invoices/:id/convert-to-tax-invoice → 403/404 (tax-mode mutation)", async ({
+    request,
+  }) => {
+    // POST /convert-to-tax-invoice transitions a proforma to a tax
+    // invoice — a missed guard would let cross-tenant attackers force
+    // tax-mode conversion on another tenant's proforma (tax-event
+    // implications). Pinning 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/invoices/${FAKE_ID}/convert-to-tax-invoice`,
+      {},
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not convert travel invoice to tax-invoice: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /invoices/:id/void → 403/404 (destructive state mutation)", async ({
+    request,
+  }) => {
+    // POST /void cancels an issued invoice — a missed guard would let
+    // cross-tenant attackers void another tenant's revenue-recognised
+    // invoices (audit-log + ledger implications). Pinning 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/invoices/${FAKE_ID}/void`,
+      {},
+    );
+    expect(
+      [403, 404],
+      `generic admin must not void travel invoice: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+});

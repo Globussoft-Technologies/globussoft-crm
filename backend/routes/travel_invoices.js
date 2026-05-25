@@ -1764,6 +1764,304 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/invoices/tax-summary — Arc 2 #902 slice 19.
+//
+// PRD_TRAVEL_GST_COMPLIANCE.md FR-3.4 (returns + reports family). An executive
+// cross-sub-brand tax rollup over a flexible date range — complements the
+// month-bucketed filing exports (gstr1-export, gstr-3b, hsn-summary) by
+// answering: "across all sub-brands, what tax did we collect between
+// these two dates?". Useful for FY closes, quarter reviews, cash-flow
+// planning, and CFO dashboards — none of which align to a single GST
+// filing month.
+//
+// === Differs from existing exports ===
+//
+//   - Flexible date range (?from + ?to) — not month-bucketed.
+//   - Per-sub-brand rollup rows + a grandTotal envelope — surfaces
+//     cross-brand contribution at a glance.
+//   - JSON only (no CSV) — dashboard-shaped, not filing-shaped. Operators
+//     who want CSV use gstr1-export / hsn-summary instead.
+//   - INR-only by default (?currency=ALL opts in to including non-INR).
+//     NFR-4.4 specifies GST is computed only on INR invoices; non-INR
+//     rows therefore have zero tax contribution and would clutter the
+//     summary without being actionable.
+//   - No state-of-supply expansion: per-sub-brand row carries the same
+//     taxableValue / IGST / CGST / SGST shape as hsn-summary (interstate
+//     vs intrastate decided per-invoice via resolveStateCodes).
+//
+// === Query params ===
+//
+//   ?from=YYYY-MM-DD   REQUIRED   inclusive start (UTC midnight)
+//   ?to=YYYY-MM-DD     REQUIRED   inclusive end (next-day UTC midnight, half-open)
+//   ?subBrand=tmc      OPTIONAL   narrow to one sub-brand
+//   ?currency=INR|ALL  OPTIONAL   default INR (NFR-4.4 — non-INR rows
+//                                 carry zero tax contribution)
+//
+// === Response (JSON) ===
+//
+//   {
+//     from: "2026-04-01",
+//     to: "2026-06-30",
+//     subBrand: "all" | "tmc",
+//     currency: "INR" | "ALL",
+//     docTypes: ["TaxInvoice", "CreditNote", "DebitNote"],
+//     perSubBrand: [
+//       { subBrand, taxableValue, igst, cgst, sgst, totalTax,
+//         invoiceCount, lineCount },
+//       ...
+//     ],
+//     grandTotal: { taxableValue, igst, cgst, sgst, totalTax,
+//                   invoiceCount, lineCount }
+//   }
+//
+// === Auth ===
+//
+//   verifyToken + verifyRole(ADMIN | MANAGER) + requireTravelTenant +
+//   sub-brand access narrowing via getSubBrandAccessSet.
+//
+// === Error codes ===
+//
+//   - INVALID_DATE_RANGE (400) — missing from/to, malformed, or to < from
+//   - INVALID_SUB_BRAND (400)
+//   - INVALID_CURRENCY (400) — when ?currency= isn't 'INR' or 'ALL'
+//
+// === Math ===
+//
+//   Reuses gstRateForCategory + groupLinesBySac (line-level SAC grouping)
+//   then folds each invoice's interstate/intrastate decision via
+//   resolveStateCodes + isInterstateSupply (same per-contact cache pattern
+//   as hsn-summary). All money values rounded half-up to 2dp.
+//
+// ============================================================================
+const TAX_SUMMARY_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
+
+function parseTaxSummaryDateRange(rawFrom, rawTo) {
+  const dateRe = /^(\d{4})-(\d{2})-(\d{2})$/;
+  if (rawFrom == null || rawTo == null) {
+    const e = new Error("from and to query params are required (YYYY-MM-DD)");
+    e.status = 400;
+    e.code = "INVALID_DATE_RANGE";
+    throw e;
+  }
+  const fromStr = String(rawFrom).trim();
+  const toStr = String(rawTo).trim();
+  const fm = fromStr.match(dateRe);
+  const tm = toStr.match(dateRe);
+  if (!fm || !tm) {
+    const e = new Error("from/to must be YYYY-MM-DD");
+    e.status = 400;
+    e.code = "INVALID_DATE_RANGE";
+    throw e;
+  }
+  const start = new Date(Date.UTC(+fm[1], +fm[2] - 1, +fm[3]));
+  const endInclusive = new Date(Date.UTC(+tm[1], +tm[2] - 1, +tm[3]));
+  if (Number.isNaN(start.getTime()) || Number.isNaN(endInclusive.getTime())) {
+    const e = new Error("from/to are not valid calendar dates");
+    e.status = 400;
+    e.code = "INVALID_DATE_RANGE";
+    throw e;
+  }
+  if (endInclusive < start) {
+    const e = new Error("to must be on or after from");
+    e.status = 400;
+    e.code = "INVALID_DATE_RANGE";
+    throw e;
+  }
+  // Half-open [start, end) — end is one day past the inclusive `to`.
+  const end = new Date(endInclusive.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end, fromStr, toStr };
+}
+
+router.get(
+  "/invoices/tax-summary",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { start, end, fromStr, toStr } = parseTaxSummaryDateRange(
+        req.query.from,
+        req.query.to,
+      );
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      const currencyParam =
+        req.query.currency != null
+          ? String(req.query.currency).trim().toUpperCase()
+          : "INR";
+      if (currencyParam !== "INR" && currencyParam !== "ALL") {
+        return res.status(400).json({
+          error: "currency must be 'INR' or 'ALL'",
+          code: "INVALID_CURRENCY",
+        });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        createdAt: { gte: start, lt: end },
+        docType: { in: TAX_SUMMARY_DOC_TYPES },
+      };
+      if (subBrandFilter) where.subBrand = subBrandFilter;
+      if (currencyParam === "INR") where.currency = "INR";
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+
+      const invoiceIds = invoices.map((i) => i.id);
+      const allLines =
+        invoiceIds.length > 0
+          ? await prisma.travelInvoiceLine.findMany({
+              where: {
+                invoiceId: { in: invoiceIds },
+                tenantId: req.travelTenant.id,
+              },
+              orderBy: [{ invoiceId: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
+            })
+          : [];
+      const linesByInvoice = new Map();
+      for (const l of allLines) {
+        if (!linesByInvoice.has(l.invoiceId)) linesByInvoice.set(l.invoiceId, []);
+        linesByInvoice.get(l.invoiceId).push(l);
+      }
+
+      // Per-contact state-code cache (same pattern as hsn-summary).
+      const stateCodeCache = new Map();
+      async function getInterstateForInvoice(invoice) {
+        if (stateCodeCache.has(invoice.contactId)) {
+          return stateCodeCache.get(invoice.contactId);
+        }
+        const codes = await resolveStateCodes({
+          prisma,
+          tenantId: req.travelTenant.id,
+          contactId: invoice.contactId,
+          operatorOverride: null,
+          customerOverride: null,
+        });
+        let isInterstate;
+        try {
+          isInterstate = isInterstateSupply(
+            codes.operatorStateCode,
+            codes.customerStateCode,
+          );
+        } catch (_e) {
+          isInterstate = false;
+        }
+        const result = { isInterstate };
+        stateCodeCache.set(invoice.contactId, result);
+        return result;
+      }
+
+      // Per-sub-brand accumulator. Initialised lazily on first hit.
+      const perSubBrand = new Map();
+      function getOrInitBucket(sb) {
+        if (!perSubBrand.has(sb)) {
+          perSubBrand.set(sb, {
+            subBrand: sb,
+            taxableValue: 0,
+            igst: 0,
+            cgst: 0,
+            sgst: 0,
+            totalTax: 0,
+            invoiceCount: 0,
+            lineCount: 0,
+          });
+        }
+        return perSubBrand.get(sb);
+      }
+
+      for (const inv of invoices) {
+        const bucket = getOrInitBucket(inv.subBrand);
+        bucket.invoiceCount += 1;
+        const lines = linesByInvoice.get(inv.id) || [];
+        const { isInterstate } = await getInterstateForInvoice(inv);
+        const normalized = lines.map((l) => ({
+          lineType: l.lineType,
+          taxableValue: Number(l.amount || 0),
+          gstPercent: gstRateForCategory(l.lineType),
+        }));
+        const grouped = groupLinesBySac(normalized);
+        for (const g of grouped) {
+          const totalTax =
+            Math.round(((g.taxableValue * g.gstPercent) / 100) * 100) / 100;
+          bucket.taxableValue =
+            Math.round((bucket.taxableValue + g.taxableValue) * 100) / 100;
+          bucket.lineCount += g.count;
+          if (isInterstate) {
+            bucket.igst = Math.round((bucket.igst + totalTax) * 100) / 100;
+          } else {
+            const half = Math.round((totalTax / 2) * 100) / 100;
+            bucket.cgst = Math.round((bucket.cgst + half) * 100) / 100;
+            bucket.sgst = Math.round((bucket.sgst + half) * 100) / 100;
+          }
+          bucket.totalTax =
+            Math.round((bucket.igst + bucket.cgst + bucket.sgst) * 100) / 100;
+        }
+      }
+
+      const perSubBrandRows = [...perSubBrand.values()].sort((a, b) =>
+        a.subBrand.localeCompare(b.subBrand),
+      );
+
+      const grandTotal = perSubBrandRows.reduce(
+        (acc, r) => {
+          acc.taxableValue =
+            Math.round((acc.taxableValue + r.taxableValue) * 100) / 100;
+          acc.igst = Math.round((acc.igst + r.igst) * 100) / 100;
+          acc.cgst = Math.round((acc.cgst + r.cgst) * 100) / 100;
+          acc.sgst = Math.round((acc.sgst + r.sgst) * 100) / 100;
+          acc.totalTax = Math.round((acc.totalTax + r.totalTax) * 100) / 100;
+          acc.invoiceCount += r.invoiceCount;
+          acc.lineCount += r.lineCount;
+          return acc;
+        },
+        {
+          taxableValue: 0,
+          igst: 0,
+          cgst: 0,
+          sgst: 0,
+          totalTax: 0,
+          invoiceCount: 0,
+          lineCount: 0,
+        },
+      );
+
+      return res.status(200).json({
+        from: fromStr,
+        to: toStr,
+        subBrand: subBrandFilter || "all",
+        currency: currencyParam,
+        docTypes: TAX_SUMMARY_DOC_TYPES,
+        perSubBrand: perSubBrandRows,
+        grandTotal,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] tax-summary error:", e.message);
+      res.status(500).json({ error: "Failed to generate tax summary" });
+    }
+  },
+);
+
 // GET /api/travel/invoices/:id
 //
 // #901 slice 3 (PRD_TRAVEL_BILLING UC-2.5): supports ?include=lines to return

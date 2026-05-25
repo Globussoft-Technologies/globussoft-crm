@@ -41,7 +41,7 @@
 //   what does the agent earn?" before committing to a profile assignment
 //   (slice 6) or persisting a real invoice line item.
 //
-// Slice 10 extension — Ledger panel (this slice):
+// Slice 10 extension — Ledger panel:
 //   Each row gains a List-icon button. Clicking opens a ledger panel above
 //   the table that GETs /commission-profiles/:id/ledger (slice 9, commit
 //   e04c0990). Renders one row per Deal whose Contact carries this profile
@@ -54,11 +54,23 @@
 //   earned so far?" without dropping into Deals/Contacts and aggregating
 //   client-side (a structural-bug class — see CLAUDE.md standing rules).
 //
+// Slice 12 extension — Download CSV (this slice):
+//   Ledger-panel header gains a "Download CSV" button that hits the slice-11
+//   endpoint GET /commission-profiles/:id/ledger.csv (commit 75ac8390).
+//   Carries the current `?stage=` filter so what the operator sees on screen
+//   matches what they download. Uses the canonical Blob → createObjectURL →
+//   anchor.click() pattern (cloned verbatim from Products.jsx CSV export so
+//   the FE has one consistent download flow). The endpoint streams text/csv
+//   server-side with a Content-Disposition filename; we override with our
+//   own `<profileName>-ledger-<date>.csv` so it's friendlier when 5+ files
+//   pile up in the operator's Downloads folder. fetch (not fetchApi) is used
+//   because fetchApi auto-parses JSON; the CSV response is a Blob.
+//
 // Template: pattern-matched against SuppliersAdmin / FlyerTemplates / QuotesAdmin.
 
 import { useEffect, useState, useContext } from "react";
-import { Percent, Plus, Pencil, Trash2, Calculator, List } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { Percent, Plus, Pencil, Trash2, Calculator, List, Download } from "lucide-react";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
 import { AuthContext } from "../../App";
@@ -264,6 +276,9 @@ export default function CommissionProfilesAdmin() {
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState(null);
   const [ledgerWonOnly, setLedgerWonOnly] = useState(false);
+  // Slice 12 — Download CSV in-flight gate so the operator can't double-fire
+  // the export endpoint while a download is being assembled.
+  const [ledgerCsvBusy, setLedgerCsvBusy] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -473,6 +488,48 @@ export default function CommissionProfilesAdmin() {
       cancelled = true;
     };
   }, [ledgerProfile, ledgerWonOnly]);
+
+  // Slice 12 — Download the ledger as CSV. Hits the slice-11 export endpoint
+  // GET /:id/ledger.csv, mirroring the current `?stage=` filter so the file
+  // matches what the operator sees on screen. Uses the canonical Blob →
+  // createObjectURL → anchor.click() pattern (Products.jsx is the reference);
+  // wraps with try/finally on `ledgerCsvBusy` so repeated clicks are gated.
+  const handleLedgerDownload = async () => {
+    if (!ledgerProfile || ledgerCsvBusy) return;
+    setLedgerCsvBusy(true);
+    try {
+      const qs = new URLSearchParams();
+      if (ledgerWonOnly) qs.set("stage", "won");
+      const url = `/api/travel/commission-profiles/${ledgerProfile.id}/ledger.csv${
+        qs.toString() ? `?${qs.toString()}` : ""
+      }`;
+      const token = getAuthToken();
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      // Friendlier filename than the server-supplied Content-Disposition —
+      // pivots on profileName + today so multiple files don't collide.
+      const safeName = (ledgerProfile.name || "ledger")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      a.download = `${safeName}-ledger-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      notify.success("Ledger CSV downloaded.");
+    } catch (err) {
+      notify.error(err?.message || "Ledger CSV export failed.");
+    } finally {
+      setLedgerCsvBusy(false);
+    }
+  };
 
   const addTier = () => {
     setForm((f) => ({
@@ -948,6 +1005,17 @@ export default function CommissionProfilesAdmin() {
               />
               Won deals only
             </label>
+            <button
+              type="button"
+              onClick={handleLedgerDownload}
+              disabled={ledgerCsvBusy || ledgerLoading}
+              style={secondaryBtn}
+              aria-label="Download ledger CSV"
+              data-testid="commission-profile-ledger-download-csv"
+              title="Download the ledger as CSV (mirrors the current stage filter)"
+            >
+              <Download size={14} /> {ledgerCsvBusy ? "Downloading…" : "Download CSV"}
+            </button>
             <button
               type="button"
               onClick={closeLedger}

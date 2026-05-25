@@ -31,6 +31,12 @@
  *  17. (slice 10) "Won deals only" toggle re-fetches with ?stage=won.
  *  18. (slice 10) Empty entries[] yields the slice-10 empty-state copy.
  *  19. (slice 10) GET /:id/ledger error surfaces in the inline error region.
+ *  20. (slice 12) Download CSV button renders inside the ledger panel header
+ *      when the panel is open.
+ *  21. (slice 12) Click fires fetch on /:id/ledger.csv carrying the current
+ *      ?stage=won filter when the won-only toggle is on.
+ *  22. (slice 12) Blob anchor-click pattern — verifies URL.createObjectURL +
+ *      document.createElement('a') + anchor.click() + cleanup all fire.
  *
  * Mocking discipline (per CLAUDE.md RTL standing rules):
  *   - fetchApi mocked at ../utils/api (the page's dep).
@@ -38,8 +44,13 @@
  *     stays stable across renders (Wave 11 cfb5789 / Wave 12 f59e91d).
  *   - AuthContext provided via the real App module's Provider; default
  *     user role = ADMIN.
+ *   - For slice-12 CSV tests: window.fetch is mocked at test-level (the
+ *     download handler uses raw fetch, NOT fetchApi, because fetchApi
+ *     JSON-parses responses and the CSV endpoint returns text/csv as a
+ *     Blob). URL.createObjectURL + URL.revokeObjectURL stubbed; anchor
+ *     creation observed via a document.createElement spy.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -654,5 +665,142 @@ describe('<CommissionProfilesAdmin /> — ledger panel (slice 10)', () => {
     // Table + summary tile must NOT render on error.
     expect(screen.queryByTestId('commission-profile-ledger-table')).toBeNull();
     expect(screen.queryByTestId('commission-profile-ledger-summary')).toBeNull();
+  });
+});
+
+describe('<CommissionProfilesAdmin /> — ledger CSV download (slice 12)', () => {
+  // The download handler uses RAW fetch (not fetchApi) because the CSV
+  // endpoint returns text/csv as a Blob, and fetchApi auto-parses JSON.
+  // We stub window.fetch / URL.createObjectURL / URL.revokeObjectURL at the
+  // describe level and observe anchor creation via a document.createElement
+  // spy so each test asserts the exact wire-shape it cares about.
+  let originalFetch;
+  let originalCreateObjectURL;
+  let originalRevokeObjectURL;
+  let fetchMock;
+  let createObjectURLMock;
+  let revokeObjectURLMock;
+  let createElementSpy;
+  let lastAnchor;
+
+  beforeEach(() => {
+    originalFetch = window.fetch;
+    originalCreateObjectURL = URL.createObjectURL;
+    originalRevokeObjectURL = URL.revokeObjectURL;
+
+    fetchMock = vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob(['dealId,commission\n4001,5000\n'], { type: 'text/csv' })),
+    }));
+    window.fetch = fetchMock;
+
+    createObjectURLMock = vi.fn(() => 'blob:mock-object-url');
+    revokeObjectURLMock = vi.fn();
+    URL.createObjectURL = createObjectURLMock;
+    URL.revokeObjectURL = revokeObjectURLMock;
+
+    // Track every anchor created. The handler creates exactly one per click.
+    lastAnchor = null;
+    const realCreate = document.createElement.bind(document);
+    createElementSpy = vi.spyOn(document, 'createElement').mockImplementation((tag) => {
+      const el = realCreate(tag);
+      if (tag === 'a') {
+        // Spy click() so the test verifies it fires without actually
+        // navigating the jsdom window.
+        el.click = vi.fn();
+        lastAnchor = el;
+      }
+      return el;
+    });
+  });
+
+  afterEach(() => {
+    window.fetch = originalFetch;
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    createElementSpy.mockRestore();
+  });
+
+  it('Download CSV button renders inside the ledger panel header', async () => {
+    renderPage();
+    await screen.findByText('Flat 5% TMC');
+    // Closed by default — no download button yet.
+    expect(screen.queryByTestId('commission-profile-ledger-download-csv')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('commission-profile-ledger-901'));
+    const panel = await screen.findByTestId('commission-profile-ledger-panel');
+    const dlBtn = within(panel).getByTestId('commission-profile-ledger-download-csv');
+    expect(dlBtn).toBeInTheDocument();
+    expect(dlBtn).toHaveTextContent(/Download CSV/i);
+  });
+
+  it('clicking Download CSV with won-only toggle ON fetches /:id/ledger.csv?stage=won', async () => {
+    renderPage();
+    await screen.findByText('Flat 5% TMC');
+    fireEvent.click(screen.getByTestId('commission-profile-ledger-901'));
+    await screen.findByTestId('commission-profile-ledger-total');
+
+    // Flip the won-only toggle so the CSV download mirrors it.
+    fireEvent.click(screen.getByTestId('commission-profile-ledger-won-toggle'));
+    // Wait for the ledger re-fetch (via fetchApi) to land so we don't race.
+    await waitFor(() => {
+      const get = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string'
+          && /\/api\/travel\/commission-profiles\/901\/ledger/.test(u)
+          && /[?&]stage=won/.test(u)
+          && (!o?.method || o.method === 'GET'),
+      );
+      expect(get).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId('commission-profile-ledger-download-csv'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    const [calledUrl, calledOpts] = fetchMock.mock.calls[0];
+    expect(calledUrl).toBe('/api/travel/commission-profiles/901/ledger.csv?stage=won');
+    // Authorization header threads through when getAuthToken() returns a token.
+    expect(calledOpts.headers).toHaveProperty('Authorization');
+    expect(calledOpts.headers.Authorization).toMatch(/^Bearer /);
+
+    // Success toast surfaces.
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Ledger CSV downloaded/i));
+    });
+  });
+
+  it('Blob anchor-click pattern: createObjectURL + anchor.click() + cleanup all fire', async () => {
+    renderPage();
+    await screen.findByText('Flat 5% TMC');
+    fireEvent.click(screen.getByTestId('commission-profile-ledger-901'));
+    await screen.findByTestId('commission-profile-ledger-total');
+
+    fireEvent.click(screen.getByTestId('commission-profile-ledger-download-csv'));
+
+    // 1. fetch fired.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    // No stage filter on the URL since won-only is off.
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/travel/commission-profiles/901/ledger.csv',
+    );
+
+    // 2. Blob → createObjectURL.
+    await waitFor(() => {
+      expect(createObjectURLMock).toHaveBeenCalledTimes(1);
+    });
+    const blobArg = createObjectURLMock.mock.calls[0][0];
+    expect(blobArg).toBeInstanceOf(Blob);
+
+    // 3. Anchor created, given href + download filename, clicked.
+    await waitFor(() => {
+      expect(lastAnchor).not.toBeNull();
+    });
+    expect(lastAnchor.href).toContain('blob:mock-object-url');
+    expect(lastAnchor.getAttribute('download')).toMatch(/flat-5-tmc-ledger-\d{4}-\d{2}-\d{2}\.csv/);
+    expect(lastAnchor.click).toHaveBeenCalledTimes(1);
   });
 });

@@ -6,9 +6,11 @@
 //     detail (V8 diagnostic answers / V9 AI summary / V10 risk indicators)
 //
 // Endpoints:
-//   GET  /api/travel/visa/applications              — paginated list with filters
-//   GET  /api/travel/visa/applications/:id          — single application detail
-//   POST /api/travel/visa/applications              — create new application (intake)
+//   GET   /api/travel/visa/applications                       — paginated list with filters
+//   GET   /api/travel/visa/applications/:id                   — single application detail
+//   POST  /api/travel/visa/applications                       — create new application (intake)
+//   PATCH /api/travel/visa/applications/:id                   — field-by-field edit + status transitions
+//   GET   /api/travel/visa/applications/:id/status-history    — read-only audit-derived history (slice)
 //
 // PATCH / DELETE are intentionally NOT in this commit. Status transitions
 // (intake → docs-pending → filed → approved/rejected) need an explicit
@@ -750,6 +752,235 @@ router.patch(
       console.error("[travel-visa/patch] error:", e.message);
       res.status(500).json({
         error: "Failed to update visa application",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+// ─── GET /api/travel/visa/applications/:id/status-history ───────────
+//
+// Read-only audit-derived chronological history of an application's
+// lifecycle events (CREATE / UPDATE / status transitions). Mirrors the
+// audit-trail pattern shipped at:
+//   - #900 slice 15 — backend/routes/travel_quotes.js /quotes/:id/audit-trail
+//   - #908 slice 18 — backend/routes/travel_flyer_templates.js /audit-trail
+//
+// Surfaced for the AdvisorDashboard SHELL (90b58fa) so the per-row
+// drilldown can render an inline "history" drawer (who moved this
+// application from intake → docs-pending → filed, when, with what
+// metadata) without paging the generic /api/audit feed and filtering
+// client-side (heavy + leaks other entities + cross-tenant risk).
+//
+// AUDIT-ROW NOTES (what is and isn't emitted today):
+//   - CREATE rows: emitted by POST /applications (see writeAudit
+//     "CREATE" call around line ~514).
+//   - UPDATE rows: emitted by PATCH /applications/:id (see writeAudit
+//     "UPDATE" call around line ~713). The `details` JSON includes
+//     `changedFields: [...]` — so callers can detect "status changed"
+//     by inspecting whether `'status'` appears in changedFields.
+//   - A dedicated `STATUS_CHANGE` action is NOT currently written by
+//     this route's PATCH handler — that's a future slice (the route's
+//     header comment historically said "status transitions need an
+//     explicit state-machine + audit"; the dedicated row type would
+//     land alongside that work). This endpoint reads whatever rows
+//     the audit table has today: CREATE + UPDATE (and any forward-
+//     compatible STATUS_CHANGE rows if the future slice ships them).
+//   - APPLICATION_READ rows are intentionally EXCLUDED — they're
+//     read-event audit (PHI access tracking) not lifecycle events,
+//     and surfacing them in a status-history drawer would clutter
+//     the timeline. Same exclusion as #900 slice 15.
+//
+// Behavior:
+//   - 400 INVALID_ID for non-numeric :id.
+//   - 404 NOT_FOUND for cross-tenant or missing application (resolved
+//     via the same {id, tenantId} pattern as GET /:id).
+//   - 404 NOT_VISA_SURE when application exists but its owning
+//     Contact.subBrand != 'visasure' — defense-in-depth sub-brand
+//     isolation, identical posture to the other Visa endpoints.
+//   - Defensive empty: if no audit rows exist for this entityId
+//     (route never emitted any, or row table was pruned), returns
+//     `{applicationId, total: 0, history: []}` — NOT 404.
+//
+// Query params:
+//   ?limit=N   default 100, clamped to [1..500] (matches slice 15's 500 cap)
+//   ?from=ISO  optional lower bound on createdAt (inclusive)
+//   ?to=ISO    optional upper bound on createdAt (inclusive)
+//   Bad ISO date → 400 INVALID_DATE_BOUND.
+//
+// Response shape:
+//   {
+//     applicationId: <int>,
+//     total:         <int>,           // count BEFORE limit
+//     history: [
+//       {
+//         at:          <ISO string>,
+//         action:      <string>,       // CREATE | UPDATE | STATUS_CHANGE | ...
+//         fromStatus:  <string|null>,  // from details.fromStatus if present
+//         toStatus:    <string|null>,  // from details.toStatus or details.status
+//         userId:      <int|null>,     // actor id; null for system/cron writes
+//         details:     <object|null>   // parsed details JSON (full payload)
+//       },
+//       ...
+//     ]
+//   }
+//
+// Auth: same gate as the rest of the file — verifyToken (router-level)
+// + verifyRole(['ADMIN','MANAGER']) + requireTravelTenant.
+//
+// No audit row written: read-only meta surface (mirrors slice 12 / 13
+// / 17 / 18 — meta reads don't audit-back themselves).
+router.get(
+  "/applications/:id/status-history",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({
+          error: "id must be a number",
+          code: "INVALID_ID",
+        });
+      }
+
+      // Resolve + tenant-gate the application FIRST so cross-tenant /
+      // cross-sub-brand callers can't enumerate audit-event existence
+      // via a 200-with-empty-history reply.
+      const application = await prisma.visaApplication.findFirst({
+        where: { id, tenantId },
+        select: { id: true, contactId: true },
+      });
+      if (!application) {
+        return res.status(404).json({
+          error: "Visa application not found",
+          code: "APPLICATION_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand isolation: same defense-in-depth as GET /:id and PATCH.
+      const contact = await prisma.contact.findFirst({
+        where: { id: application.contactId, tenantId },
+        select: { id: true, subBrand: true },
+      });
+      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+        return res.status(404).json({
+          error: "Visa application not found",
+          code: "NOT_VISA_SURE",
+        });
+      }
+
+      // Limit clamp: [1..500], default 100. Mirrors #900 slice 15.
+      const limitRaw = parseInt(req.query.limit, 10);
+      const limit =
+        Number.isFinite(limitRaw) && limitRaw > 0
+          ? Math.min(limitRaw, 500)
+          : 100;
+
+      // Optional date bounds. ISO-only; bad input → 400.
+      const where = {
+        tenantId,
+        entity: "VisaApplication",
+        entityId: id,
+        action: { in: ["CREATE", "UPDATE", "STATUS_CHANGE"] },
+      };
+
+      if (req.query.from !== undefined && req.query.from !== "") {
+        const fromDate = new Date(String(req.query.from));
+        if (Number.isNaN(fromDate.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE_BOUND",
+          });
+        }
+        where.createdAt = { ...(where.createdAt || {}), gte: fromDate };
+      }
+      if (req.query.to !== undefined && req.query.to !== "") {
+        const toDate = new Date(String(req.query.to));
+        if (Number.isNaN(toDate.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE_BOUND",
+          });
+        }
+        where.createdAt = { ...(where.createdAt || {}), lte: toDate };
+      }
+
+      // Read in chronological (asc) order — UI renders oldest-first.
+      // Total is computed BEFORE limit so the consumer can detect
+      // truncation when total > history.length.
+      const [rows, total] = await Promise.all([
+        prisma.auditLog.findMany({
+          where,
+          orderBy: { createdAt: "asc" },
+          take: limit,
+          select: {
+            id: true,
+            action: true,
+            createdAt: true,
+            userId: true,
+            details: true,
+          },
+        }),
+        prisma.auditLog.count({ where }),
+      ]);
+
+      // Re-parse stored details (String? @db.Text JSON) so consumers
+      // don't have to. Surface status-transition projections explicitly:
+      //   fromStatus → details.fromStatus (future STATUS_CHANGE rows)
+      //   toStatus   → details.toStatus  (future) OR details.status (today's
+      //                UPDATE rows carry the new status only if the caller
+      //                included it in changedFields — the actual new value
+      //                is in details.status when explicitly written, else
+      //                null). Tolerant of legacy null-details rows.
+      const history = rows.map((row) => {
+        let parsedDetails = null;
+        if (row.details != null) {
+          if (typeof row.details === "string") {
+            try {
+              parsedDetails = JSON.parse(row.details);
+            } catch (_e) {
+              parsedDetails = { _raw: row.details };
+            }
+          } else {
+            parsedDetails = row.details;
+          }
+        }
+
+        const fromStatus =
+          parsedDetails && typeof parsedDetails === "object"
+            ? (parsedDetails.fromStatus ?? parsedDetails.oldStatus ?? null)
+            : null;
+        const toStatus =
+          parsedDetails && typeof parsedDetails === "object"
+            ? (parsedDetails.toStatus ?? parsedDetails.newStatus ?? parsedDetails.status ?? null)
+            : null;
+
+        const at =
+          row.createdAt instanceof Date
+            ? row.createdAt.toISOString()
+            : new Date(row.createdAt).toISOString();
+
+        return {
+          at,
+          action: row.action,
+          fromStatus,
+          toStatus,
+          userId: row.userId ?? null,
+          details: parsedDetails,
+        };
+      });
+
+      res.json({
+        applicationId: id,
+        total,
+        history,
+      });
+    } catch (e) {
+      console.error("[travel-visa/status-history] error:", e.message);
+      res.status(500).json({
+        error: "Failed to load visa application status history",
         code: "INTERNAL_ERROR",
       });
     }

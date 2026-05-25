@@ -1069,6 +1069,195 @@ router.get(
   },
 );
 
+// GET /api/travel/flyer-templates/by-quarter — tenant-wide quarterly rollup
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 22).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-Qn calendar
+// quarter for the tenant-scoped (and sub-brand-narrowed) flyer-template
+// population. Each row carries count + activeCount + archivedCount so
+// the operator dashboard can render a "templates created per quarter"
+// trend at coarser granularity than slice 21's by-month — useful for
+// year-over-year boardroom views and seasonality analysis.
+//
+// Mirrors slice 21 (/flyer-templates/by-month) at quarter resolution.
+// Calendar quarter computed as Math.floor(UTCMonth/3)+1 → Jan-Mar=Q1,
+// Apr-Jun=Q2, Jul-Sep=Q3, Oct-Dec=Q4. Token format YYYY-Qn (e.g.
+// "2026-Q2") for both the rollup row and the from/to bounds. Same
+// defensive "unknown" bucket for null/invalid createdAt rows. Same
+// activeCount/archivedCount split. Same JS-side aggregation rationale
+// (mock-friendly + bounded tenant population).
+//
+// PRD anchors:
+//   - §3 — tenant-wide flyer-template analytics (quarterly trend tile
+//          for the marketing-ops dashboard)
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-Qn bounds; invalid →
+//                     400 INVALID_QUARTER_FORMAT
+//   - ?orderBy      — default quarter:asc; accepts quarter:{asc|desc},
+//                     count:{asc|desc}, activeCount:{asc|desc};
+//                     unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 40 (smaller cap
+//                        than by-month — quarterly granularity covers
+//                        10 years in 40 rows)
+//
+// Behaviour:
+//   - Sub-brand-scoped: identical gate to slice 21 — MANAGER restricted
+//     to one sub-brand sees their allowed sub-brands' templates plus
+//     tenant-wide (subBrand=NULL) rows. Empty access set → all-zeros
+//     rollup envelope (not 403).
+//   - JS-side aggregation over { isActive, createdAt } projection.
+//   - "unknown" bucket: rows with null/invalid createdAt land here.
+//     Excluded when ?from / ?to is set (no comparable quarter token);
+//     included otherwise so the count surface stays accurate.
+//   - Pagination applied AFTER aggregation + sort + bucket filter.
+//
+// No audit row written — read-only meta surface; matches slice 21.
+//
+// Express route ordering: literal-path /by-quarter MUST be declared
+// BEFORE the /:id family or `:id="by-quarter"` would 400 INVALID_ID
+// before reaching this handler. Same convention as /by-month +
+// /sub-brands + /global-stats + /bulk-archive + /bulk-unarchive.
+router.get(
+  "/flyer-templates/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+      // YYYY-Qn validation — Q1..Q4 only.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "count:asc",
+        "count:desc",
+        "activeCount:asc",
+        "activeCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+      // Tenant-scoped where + sub-brand narrowing — identical to slice 21.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json({
+          quarters: [],
+          totalQuarters: 0,
+          grandCount: 0,
+          grandActiveCount: 0,
+          limit: take,
+          offset: skip,
+        });
+      }
+      const where = { tenantId: req.travelTenant.id };
+      if (allowed instanceof Set) {
+        where.OR = [
+          { subBrand: { in: [...allowed] } },
+          { subBrand: null },
+        ];
+      }
+
+      const rows = await prisma.travelFlyerTemplate.findMany({
+        where,
+        select: { isActive: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-quarter. Calendar quarter = Math.floor(M/3)+1.
+      const byQuarter = new Map();
+      for (const r of rows) {
+        let quarterKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${q}`;
+          }
+        }
+
+        let bucket = byQuarter.get(quarterKey);
+        if (!bucket) {
+          bucket = {
+            quarter: quarterKey,
+            count: 0,
+            activeCount: 0,
+            archivedCount: 0,
+          };
+          byQuarter.set(quarterKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.isActive) bucket.activeCount += 1;
+        else bucket.archivedCount += 1;
+      }
+
+      let quarters = [...byQuarter.values()];
+
+      // Apply ?from / ?to bucket filter. YYYY-Qn lexicographic sort is
+      // also chronological because the year prefix dominates and Q1..Q4
+      // sort correctly within a year. "unknown" excluded when bounded.
+      if (fromRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+      }
+
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalQuarters = quarters.length;
+      const grandCount = quarters.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+      const grandActiveCount = quarters.reduce(
+        (acc, r) => acc + (Number(r.activeCount) || 0),
+        0,
+      );
+
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        quarters: paged,
+        totalQuarters,
+        grandCount,
+        grandActiveCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
+
 // GET /api/travel/flyer-templates/:id
 router.get(
   "/flyer-templates/:id",

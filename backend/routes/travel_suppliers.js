@@ -1171,6 +1171,211 @@ router.post(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/:id/access-trail
+// (Arc 2 #903 slice 15 — PRD_TRAVEL_SUPPLIER_MASTER §3.7 "credentials audit
+// trail" + AC-6.8 supplier-detail "Supplier Portal Logins" sub-tab).
+//
+// Paginated cross-credential audit-trail view for a single TravelSupplier:
+// every SupplierCredentialAccessLog row across ALL of the supplier's vault
+// credentials, joined into one feed sorted DESC by `at`. Complements slice 13
+// (GET creds — per-cred metadata) and slice 14 (POST rotate — writes one
+// "rotated" row): this slice surfaces the historical record so operators can
+// audit "who touched which cred when" for a single supplier on one page.
+//
+// A per-credential equivalent exists at `GET /supplier-credentials/:id/
+// access-log` (route line ~319). That returns rows for ONE credentialId. This
+// slice spans ALL credentials whose `supplierName === supplier.name` (same
+// name-match contract as slice 13).
+//
+// Auth: ADMIN + MANAGER (mirrors slice 13's GET — read-only audit trail). USER
+// gets 403. Sub-brand access enforced via the parent supplier's subBrand.
+//
+// Route ordering: registered BEFORE the catch-all `GET /suppliers/:id` so the
+// 3-segment sub-path wins. Sibling to slice 13's GET and slice 14's POST under
+// `/suppliers/:id/...`.
+//
+// Query params (all optional):
+//   ?limit=N         — page size; default 50, max 200 (ACCESS_TRAIL_MAX_LIMIT).
+//                      Out-of-range or non-integer → 400 INVALID_LIMIT.
+//   ?offset=N        — page offset; default 0. Negative / non-integer silently
+//                      coerces to 0 (mirrors parsePayablesOffset shape).
+//   ?action=X        — filter to one action. Valid: viewed | used-in-checkin |
+//                      rotated | deleted. Anything else → 400 INVALID_ACTION.
+//
+// Response: 200 + { supplier: {id, name, supplierCategory, subBrand},
+//                   accessTrail: [{ id, credentialId, credentialName, action,
+//                                   userId, ip, at }],
+//                   total, limit, offset }.
+// Errors:  INVALID_ID (400)     — non-numeric :id.
+//          INVALID_LIMIT (400)  — out-of-range or non-integer limit.
+//          INVALID_ACTION (400) — action filter not in valid set.
+//          NOT_FOUND (404)      — supplier missing or different tenant.
+//          SUB_BRAND_DENIED (403) — caller lacks sub-brand access.
+//
+// Decisions:
+//   - Credential IDs are resolved via a single findMany on supplierCredential
+//     (where supplierName + tenantId), then accessLog rows are loaded via
+//     `credentialId: { in: [...] }`. Two-step rather than nested relation
+//     filter so the credentialName join in the response is a plain map lookup
+//     (no extra `include`). Empty cred list short-circuits to empty trail.
+//   - credentialName in each row is derived from the parent cred's
+//     `supplierName` field (which IS the supplier.name by definition here).
+//     We include the credentialId so the frontend can route into the per-cred
+//     access log if needed. credentialCategory carried for context too.
+//   - This endpoint READS audit rows — it does NOT write a new audit row.
+//     Slice 13's GET writes "viewed" rows because it surfaces secrets-adjacent
+//     metadata; this endpoint surfaces only the audit-rows themselves, so
+//     adding "viewed" rows here would be circular/noisy.
+//   - Pagination total uses a paired count() on the same WHERE so the caller
+//     can build a paginator. Cap at limit=200/page is sized to fit a typical
+//     audit-tab UI without further clicks; longer histories paginate.
+// ============================================================================
+
+const ACCESS_TRAIL_DEFAULT_LIMIT = 50;
+const ACCESS_TRAIL_MAX_LIMIT = 200;
+const VALID_ACCESS_TRAIL_ACTIONS = [
+  "viewed",
+  "used-in-checkin",
+  "rotated",
+  "deleted",
+];
+
+function parseAccessTrailLimit(input) {
+  if (input == null || input === "") return ACCESS_TRAIL_DEFAULT_LIMIT;
+  const v = Number(input);
+  if (!Number.isInteger(v) || v < 1) {
+    const err = new Error("limit must be a positive integer");
+    err.status = 400;
+    err.code = "INVALID_LIMIT";
+    throw err;
+  }
+  return Math.min(v, ACCESS_TRAIL_MAX_LIMIT);
+}
+
+function parseAccessTrailOffset(input) {
+  if (input == null || input === "") return 0;
+  const v = Number(input);
+  if (!Number.isInteger(v) || v < 0) return 0;
+  return v;
+}
+
+router.get(
+  "/suppliers/:id/access-trail",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const limit = parseAccessTrailLimit(req.query.limit);
+      const offset = parseAccessTrailOffset(req.query.offset);
+
+      const actionFilter = req.query.action
+        ? String(req.query.action)
+        : null;
+      if (actionFilter && !VALID_ACCESS_TRAIL_ACTIONS.includes(actionFilter)) {
+        return res.status(400).json({
+          error: `action must be one of: ${VALID_ACCESS_TRAIL_ACTIONS.join(", ")}`,
+          code: "INVALID_ACTION",
+        });
+      }
+
+      const supplier = await prisma.travelSupplier.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true, name: true, supplierCategory: true, subBrand: true },
+      });
+      if (!supplier) {
+        return res
+          .status(404)
+          .json({ error: "Supplier not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, supplier.subBrand)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      // Resolve all credentialIds for this supplier (name-match — same
+      // contract as slice 13). Two-step lookup so the join into credential
+      // metadata for the response is a cheap in-memory map.
+      const creds = await prisma.supplierCredential.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierName: supplier.name,
+        },
+        select: { id: true, category: true, supplierName: true },
+      });
+
+      // Short-circuit: no credentials → empty trail. Avoids a findMany on
+      // accessLog with an empty `in` array (which Prisma's `in: []` shape
+      // would technically handle, but is unnecessary work).
+      if (creds.length === 0) {
+        return res.json({
+          supplier,
+          accessTrail: [],
+          total: 0,
+          limit,
+          offset,
+        });
+      }
+
+      const credIds = creds.map((c) => c.id);
+      const credById = new Map(creds.map((c) => [c.id, c]));
+
+      const where = { credentialId: { in: credIds } };
+      if (actionFilter) where.action = actionFilter;
+
+      const [rows, total] = await Promise.all([
+        prisma.supplierCredentialAccessLog.findMany({
+          where,
+          orderBy: [{ at: "desc" }, { id: "desc" }],
+          take: limit,
+          skip: offset,
+        }),
+        prisma.supplierCredentialAccessLog.count({ where }),
+      ]);
+
+      const accessTrail = rows.map((r) => {
+        const cred = credById.get(r.credentialId);
+        return {
+          id: r.id,
+          credentialId: r.credentialId,
+          credentialName: cred ? cred.supplierName : null,
+          credentialCategory: cred ? cred.category : null,
+          action: r.action,
+          userId: r.userId,
+          ip: r.ip,
+          at: r.at,
+        };
+      });
+
+      res.json({
+        supplier,
+        accessTrail,
+        total,
+        limit,
+        offset,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] access-trail error:", e.message);
+      res.status(500).json({ error: "Failed to load access trail" });
+    }
+  },
+);
+
 // GET /api/travel/suppliers/:id
 router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

@@ -589,3 +589,246 @@ describe('POST /api/travel/suppliers/:id/credentials/:credId/rotate', () => {
     expect(prisma.supplierCredentialAccessLog.create).toHaveBeenCalledTimes(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Arc 2 #903 slice 15 — GET /api/travel/suppliers/:id/access-trail.
+//
+// Paginated cross-credential audit trail for a single TravelSupplier. Joins
+// every SupplierCredentialAccessLog row across all of the supplier's vault
+// credentials (matched by supplierName) into one feed sorted DESC by `at`.
+//
+// What's pinned
+// -------------
+//   - Happy path:        returns supplier + accessTrail rows + total/limit/
+//                        offset (200). Row shape: { id, credentialId,
+//                        credentialName, credentialCategory, action, userId,
+//                        ip, at }.
+//   - Auth gate:         USER (not ADMIN/MANAGER) → 403.
+//   - Cross-tenant:      supplier in different tenant → 404 NOT_FOUND.
+//   - Invalid id:        non-numeric :id → 400 INVALID_ID.
+//   - Action filter:     ?action=rotated → WHERE includes action='rotated'.
+//                        Invalid action value → 400 INVALID_ACTION.
+//   - Limit validation:  ?limit=0 or non-integer → 400 INVALID_LIMIT.
+//   - Limit cap:         ?limit=500 → capped to 200 (ACCESS_TRAIL_MAX_LIMIT).
+//   - Empty creds:       supplier exists but has zero credentials → 200 +
+//                        empty trail, total=0. No accessLog query fired.
+//   - Name match:        credential lookup pins supplierName + tenantId
+//                        (same contract as slice 13/14).
+// ---------------------------------------------------------------------------
+
+describe('GET /api/travel/suppliers/:id/access-trail', () => {
+  // findMany is shared with slice 13's tests — ensure a default mock per case.
+  beforeEach(() => {
+    prisma.supplierCredentialAccessLog.findMany = vi.fn().mockResolvedValue([]);
+    prisma.supplierCredentialAccessLog.count = vi.fn().mockResolvedValue(0);
+  });
+
+  test('happy path: returns supplier + accessTrail rows (200)', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      { id: 11, category: 'hotel-portal', supplierName: 'Grand Hilton Mumbai' },
+      { id: 12, category: 'gds', supplierName: 'Grand Hilton Mumbai' },
+    ]);
+    prisma.supplierCredentialAccessLog.findMany.mockResolvedValue([
+      {
+        id: 501,
+        credentialId: 11,
+        userId: 7,
+        action: 'rotated',
+        ip: '10.0.0.1',
+        at: new Date('2026-05-25T12:00:00Z'),
+      },
+      {
+        id: 500,
+        credentialId: 12,
+        userId: 8,
+        action: 'viewed',
+        ip: '10.0.0.2',
+        at: new Date('2026-05-24T09:00:00Z'),
+      },
+    ]);
+    prisma.supplierCredentialAccessLog.count.mockResolvedValue(2);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/access-trail')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.supplier).toMatchObject({ id: 42, name: 'Grand Hilton Mumbai' });
+    expect(res.body.total).toBe(2);
+    expect(res.body.limit).toBe(50);
+    expect(res.body.offset).toBe(0);
+    expect(res.body.accessTrail).toHaveLength(2);
+    // Row 0: credId=11, action=rotated, credentialName/Category joined from
+    // the cred lookup map.
+    expect(res.body.accessTrail[0]).toMatchObject({
+      id: 501,
+      credentialId: 11,
+      credentialName: 'Grand Hilton Mumbai',
+      credentialCategory: 'hotel-portal',
+      action: 'rotated',
+      userId: 7,
+      ip: '10.0.0.1',
+    });
+    // Sort is DESC by at — newest first.
+    expect(new Date(res.body.accessTrail[0].at).getTime()).toBeGreaterThan(
+      new Date(res.body.accessTrail[1].at).getTime(),
+    );
+  });
+
+  test('USER role (not ADMIN/MANAGER) → 403', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/access-trail')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(403);
+    expect(prisma.travelSupplier.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('cross-tenant: supplier not in tenant → 404 NOT_FOUND', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/9999/access-trail')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+    // The findFirst MUST pin tenantId — a supplier with id=9999 but
+    // tenantId=2 must not leak.
+    expect(prisma.travelSupplier.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 9999, tenantId: 1 }),
+      }),
+    );
+    expect(prisma.supplierCredentialAccessLog.findMany).not.toHaveBeenCalled();
+  });
+
+  test('invalid :id (non-numeric) → 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/abc/access-trail')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+    expect(prisma.travelSupplier.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('action filter: ?action=rotated → WHERE.action="rotated"', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      { id: 11, category: 'hotel-portal', supplierName: 'Grand Hilton Mumbai' },
+    ]);
+    prisma.supplierCredentialAccessLog.findMany.mockResolvedValue([]);
+    prisma.supplierCredentialAccessLog.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/access-trail?action=rotated')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    // Both the findMany and the count must filter by action='rotated'.
+    expect(prisma.supplierCredentialAccessLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          action: 'rotated',
+          credentialId: { in: [11] },
+        }),
+      }),
+    );
+    expect(prisma.supplierCredentialAccessLog.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ action: 'rotated' }),
+      }),
+    );
+  });
+
+  test('action filter: invalid value → 400 INVALID_ACTION', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/access-trail?action=hacked')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ACTION' });
+    expect(prisma.travelSupplier.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('limit validation: ?limit=0 → 400 INVALID_LIMIT', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/access-trail?limit=0')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_LIMIT' });
+    expect(prisma.travelSupplier.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('limit cap: ?limit=500 → coerced to 200 (ACCESS_TRAIL_MAX_LIMIT)', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([
+      { id: 11, category: 'hotel-portal', supplierName: 'Grand Hilton Mumbai' },
+    ]);
+    prisma.supplierCredentialAccessLog.findMany.mockResolvedValue([]);
+    prisma.supplierCredentialAccessLog.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/access-trail?limit=500')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.limit).toBe(200);
+    // findMany.take must reflect the cap, not the raw query value.
+    expect(prisma.supplierCredentialAccessLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 200 }),
+    );
+  });
+
+  test('empty credentials: supplier with no creds → 200 + empty trail, no accessLog query', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/42/access-trail')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.accessTrail).toEqual([]);
+    expect(res.body.total).toBe(0);
+    // Short-circuit: zero credentials → no accessLog findMany fires.
+    expect(prisma.supplierCredentialAccessLog.findMany).not.toHaveBeenCalled();
+    expect(prisma.supplierCredentialAccessLog.count).not.toHaveBeenCalled();
+  });
+
+  test('name match: cred findMany pins supplierName + tenantId', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findMany.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/travel/suppliers/42/access-trail')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    // Same contract as slice 13/14: the cred set is scoped by supplierName +
+    // tenantId. A cred belonging to a different supplier (different name) or
+    // a different tenant must NOT leak into this trail.
+    expect(prisma.supplierCredential.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 1,
+          supplierName: 'Grand Hilton Mumbai',
+        }),
+      }),
+    );
+  });
+
+  test('sub-brand-restricted MANAGER reading other-brand supplier → 403 SUB_BRAND_DENIED', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_RFU);
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['tmc']),
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/99/access-trail')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'SUB_BRAND_DENIED' });
+    // The accessLog query must NOT fire after the sub-brand denial.
+    expect(prisma.supplierCredentialAccessLog.findMany).not.toHaveBeenCalled();
+  });
+});

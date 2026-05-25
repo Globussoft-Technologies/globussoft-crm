@@ -199,10 +199,42 @@ async function createRule(request, body) {
   return j.rule;
 }
 
+// IDs of demo's pre-existing active rules — captured at beforeAll, restored
+// at afterAll. Tests 9 + 12 ("no bonus" expectations) need a clean
+// rules-state in the tenant; demo's seed rules with low minAmountCents
+// would otherwise qualify any top-up + ship a bonus, breaking the
+// `bonusRuleId === null` assertion. Triaged 2026-05-25 after `6c8070a`
+// triple-RED — single-fix on test 11 (off-band pct) exposed test 12 in
+// the next iteration; rather than whack-a-mole each "bonus expectation"
+// test, deactivate ALL pre-existing rules for the spec's duration.
+const preExistingActiveRuleIds = [];
+
 test.beforeAll(async ({ request }) => {
   for (const [k, f] of Object.entries(FIXTURES)) {
     const t = await login(request, f);
     if (t) tokens[k] = t;
+  }
+  // Snapshot + deactivate demo's pre-existing active rules so the spec's
+  // own seeded rules are the ONLY active rules during the run. Restored
+  // in afterAll. No-op if wellnessAdmin fixture didn't seed.
+  if (!tokens.wellnessAdmin) return;
+  const listRes = await request.get(`${API}/wallet/rules`, {
+    headers: authHeader(tokens.wellnessAdmin),
+    timeout: REQUEST_TIMEOUT,
+  }).catch(() => null);
+  if (!listRes || listRes.status() !== 200) return;
+  const body = await listRes.json();
+  const rules = Array.isArray(body.rules) ? body.rules : [];
+  for (const r of rules) {
+    if (!r.active) continue;
+    // Deactivate via PUT (NOT delete — DELETE marks active=false too, but
+    // PUT keeps the row clean + reversible without the soft-delete flag).
+    await request.put(`${API}/wallet/rules/${r.id}`, {
+      headers: authHeader(tokens.wellnessAdmin),
+      data: { active: false },
+      timeout: REQUEST_TIMEOUT,
+    }).catch(() => {});
+    preExistingActiveRuleIds.push(r.id);
   }
 });
 
@@ -224,6 +256,16 @@ test.afterAll(async ({ request }) => {
   // contaminate downstream specs.
   for (const id of createdRuleIds) {
     await authDel(request, tokens.wellnessAdmin, `/wallet/rules/${id}`).catch(() => {});
+  }
+  // Restore pre-existing demo rules that we deactivated in beforeAll. PUT
+  // active=true to flip them back on so demo's normal bonus-rule UX keeps
+  // working for the next QA session / spec run.
+  for (const id of preExistingActiveRuleIds) {
+    await request.put(`${API}/wallet/rules/${id}`, {
+      headers: authHeader(tokens.wellnessAdmin),
+      data: { active: true },
+      timeout: REQUEST_TIMEOUT,
+    }).catch(() => {});
   }
 });
 

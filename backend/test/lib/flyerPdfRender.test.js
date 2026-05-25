@@ -216,3 +216,127 @@ describe('module exports', () => {
     expect(PAPER_SIZES).toMatchObject({ a4: 'A4', us_letter: 'LETTER' });
   });
 });
+
+describe('renderFlyerPdf — extended edge cases', () => {
+  test('template as an array (not object) folds to empty template — placeholder PDF', async () => {
+    // Source guards `template && typeof === "object" && !isArray` so an
+    // array input must take the empty-template branch (line 126).
+    const buf = await renderFlyerPdf(
+      [{ palette: validPalette }, { layout: validLayout }],
+      { aspect: 'a4', hash: 'e'.repeat(64) },
+    );
+    expect(isPdfMagic(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(500);
+  });
+
+  test('very long title still renders (pdfkit ellipsis path)', async () => {
+    // Title block is rendered with { ellipsis: true } in a 90pt box —
+    // a >4000 char title should still produce a valid PDF without throw.
+    const longTitle = 'Summer Umrah Package '.repeat(250); // ~5000 chars
+    const buf = await renderFlyerPdf(
+      {
+        palette: validPalette,
+        layout: [{ type: 'text', content: longTitle }],
+        assets: validAssets,
+      },
+      { aspect: 'a4', hash: 'f'.repeat(64) },
+    );
+    expect(isPdfMagic(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(500);
+  });
+
+  test('layout block with non-string content falls back to default zone text', async () => {
+    // Source checks `typeof block.content === "string"` for text/price/cta.
+    // Numeric / object content should fold to defaults — no throw.
+    const buf = await renderFlyerPdf(
+      {
+        palette: validPalette,
+        layout: [
+          { type: 'text', content: 42 },
+          { type: 'price', content: { nested: 'object' } },
+          { type: 'cta', content: null },
+        ],
+        assets: validAssets,
+      },
+      { aspect: 'a4', hash: '1234567890abcdef'.repeat(4) },
+    );
+    expect(isPdfMagic(buf)).toBe(true);
+  });
+
+  test('opts.hash too short / wrong format folds to "no-hash" footer', async () => {
+    // Hash regex is /^[0-9a-f]{8,}$/ — anything <8 hex chars or with
+    // non-hex chars takes the no-hash branch. Just exercise the path.
+    const buf1 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a4', hash: 'abc' }, // too short
+    );
+    const buf2 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a4', hash: 'ZZZZZZZZ' }, // non-hex
+    );
+    const buf3 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a4', hash: 42 }, // wrong type
+    );
+    expect(isPdfMagic(buf1)).toBe(true);
+    expect(isPdfMagic(buf2)).toBe(true);
+    expect(isPdfMagic(buf3)).toBe(true);
+  });
+
+  test('opts as non-object renders an a4 placeholder PDF (defensive aspect read)', async () => {
+    // Source reads `opts && typeof opts.aspect === "string"` — a non-
+    // object opts still works because `'aspect' in number` returns
+    // undefined (not a throw). Pin defensive coercion.
+    const buf = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      'not-an-opts-object',
+    );
+    expect(isPdfMagic(buf)).toBe(true);
+  });
+
+  test('assets.logo / assets.hero as non-string values fold to placeholder text', async () => {
+    // Source uses truthy check `assets.logo ? ... : "Sub-brand logo"`.
+    // Non-string truthy (object / number) WILL take the truthy branch
+    // and pdfkit will coerce via String() — must not throw.
+    const buf = await renderFlyerPdf(
+      {
+        palette: validPalette,
+        layout: validLayout,
+        assets: { logo: 42, hero: { url: 'object' } },
+      },
+      { aspect: 'a4', hash: '0'.repeat(64) },
+    );
+    expect(isPdfMagic(buf)).toBe(true);
+  });
+
+  test('safeHex accepts 3-char and 8-char (with alpha) hex variants', () => {
+    // Regex is /^#[0-9A-Fa-f]{3,8}$/ — pin both extremes are accepted.
+    expect(safeHex('#abc', '#000000')).toBe('#abc');
+    expect(safeHex('#ABCDEF12', '#000000')).toBe('#ABCDEF12');
+    // 9-char (over the 8-char limit) rejected.
+    expect(safeHex('#abcdef123', '#000000')).toBe('#000000');
+    // 2-char rejected.
+    expect(safeHex('#ab', '#000000')).toBe('#000000');
+  });
+
+  test('safeHex falls back on empty string', () => {
+    expect(safeHex('', '#FF00FF')).toBe('#FF00FF');
+  });
+
+  test('pickBlock is case-sensitive on block.type', () => {
+    // Source does `block.type === type` (strict equality, case-sensitive).
+    // 'Text' !== 'text' — should miss.
+    const layout = [{ type: 'Text', content: 'caps' }];
+    expect(pickBlock(layout, 'text')).toBeNull();
+    expect(pickBlock(layout, 'Text')).toMatchObject({ content: 'caps' });
+  });
+
+  test('completely empty palette / layout / assets objects render placeholder PDF', async () => {
+    // Distinct from earlier "no key" case — explicit empty objects.
+    const buf = await renderFlyerPdf(
+      { palette: {}, layout: [], assets: {} },
+      { aspect: 'a4', hash: '9'.repeat(64) },
+    );
+    expect(isPdfMagic(buf)).toBe(true);
+  });
+});

@@ -144,6 +144,185 @@ router.post("/rfu-profiles", verifyToken, requireTravelTenant, requireRfuAccess,
   }
 });
 
+// ─── Stats — tenant-wide RFU profile rollup ──────────────────────────
+//
+// GET /api/travel/rfu-profiles/stats
+// (PRD_TRAVEL_RFU §3 — operator-facing dashboard rollup).
+//
+// Mirrors #903 slice 23 /suppliers/stats + #905 slice 18
+// /commission-profiles/stats. USER-readable anodyne aggregate that powers
+// the RFU pilgrim library page header summary strip ("47 RFU profiles ·
+// 18 premium · 12 primary · 17 entry · 42 with passport · 4 passports
+// expiring < 6mo · last activity 3h ago"). Without this, the frontend
+// has to fire {list, count by tier×3, count where passportNumber non-null,
+// count where passportExpiry < threshold} as separate round-trips.
+//
+// RFU is a single-sub-brand surface (requireRfuAccess gates everything
+// in this file). No bySubBrand bucket — the route only ever sees rfu
+// rows. The schema groups RfuLeadProfile around productTier (the only
+// indexed categorical field, see schema.prisma @@index([tenantId,
+// productTier])) so byProductTier is the load-bearing bucket.
+//
+// PRD anchors:
+//   - §3.2.6 — pilgrim risk surface: passport expiry < 6 months tags
+//     the profile for follow-up (renewal SOP)
+//   - §4.5 — PII completeness — operators want to know how many of
+//     their pilgrims have a passport on file (the rest can't be
+//     ticketed)
+//
+// Behaviour:
+//   - Tenant-scoped count of all RfuLeadProfile rows
+//   - byProductTier: { entry: { count }, primary: { count }, premium: { count } }
+//                    Tiers with zero rows still appear (pre-seeded).
+//   - byTravelStyle: { <style|_unset>: { count } }   — free-text bucket
+//                    with null/empty coalesced to '_unset'.
+//   - withPassport: count where passportNumber is non-null + non-empty
+//   - expiringPassports: count where passportExpiry < (now + 6 months)
+//                        AND passportExpiry is non-null
+//   - lastUpdatedAt: max(updatedAt) across the visible set; null if 0 rows
+//   - ?from / ?to (ISO date bounds) filter rows on createdAt before aggregation.
+//
+// Safety cap: process at most 2000 profiles per call; if matching total >
+// 2000, return counts but mark aggregateExceedsCap=true.
+//
+// USER-readable: anodyne aggregate (counts + timestamps); safe. No audit
+// row: read-only meta surface, mirrors /suppliers/stats +
+// /commission-profiles/stats.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE
+// the /:id family or `:id="stats"` would 400 INVALID_ID before reaching
+// this handler. Same for the /by-contact/:contactId and /check-duplicate
+// sub-routes (already mounted below).
+const RFU_STATS_CAP = 2000;
+const RFU_TIERS = ["entry", "primary", "premium"];
+const PASSPORT_EXPIRY_WINDOW_MS = 6 * 30 * 24 * 60 * 60 * 1000; // ~6 months
+
+router.get(
+  "/rfu-profiles/stats",
+  verifyToken,
+  requireTravelTenant,
+  requireRfuAccess,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Optional ISO date bounds on createdAt
+      const where = { tenantId };
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+      }
+
+      // Bounded fetch + true total so callers know if aggregation is bounded.
+      const profiles = await prisma.rfuLeadProfile.findMany({
+        where,
+        select: {
+          id: true,
+          productTier: true,
+          travelStyle: true,
+          passportNumber: true,
+          passportExpiry: true,
+          updatedAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+        take: RFU_STATS_CAP,
+      });
+      const totalMatching = await prisma.rfuLeadProfile.count({ where });
+      const aggregateExceedsCap = totalMatching > RFU_STATS_CAP;
+
+      // Pre-seed tier buckets so the response shape is stable regardless
+      // of how many rows landed.
+      const byProductTier = {};
+      for (const t of RFU_TIERS) byProductTier[t] = { count: 0 };
+
+      if (profiles.length === 0) {
+        return res.json({
+          total: 0,
+          byProductTier,
+          byTravelStyle: {},
+          withPassport: 0,
+          expiringPassports: 0,
+          lastUpdatedAt: null,
+          aggregateExceedsCap: false,
+        });
+      }
+
+      const byTravelStyle = {};
+      let withPassport = 0;
+      let expiringPassports = 0;
+      let lastUpdatedAt = null;
+      const expiryThreshold = new Date(Date.now() + PASSPORT_EXPIRY_WINDOW_MS);
+
+      for (const p of profiles) {
+        // Tier bucket — defensive: unknown/null tier → skip (don't pollute
+        // the pre-seeded shape with random keys).
+        const tier = p.productTier;
+        if (tier && RFU_TIERS.includes(tier)) {
+          byProductTier[tier].count += 1;
+        }
+
+        // travelStyle bucket — coalesce falsy → '_unset' so operators
+        // see "how many profiles haven't picked a style yet".
+        const styleKey = p.travelStyle ? String(p.travelStyle) : "_unset";
+        if (!byTravelStyle[styleKey]) byTravelStyle[styleKey] = { count: 0 };
+        byTravelStyle[styleKey].count += 1;
+
+        // Passport-completeness counter.
+        if (p.passportNumber && String(p.passportNumber).trim().length > 0) {
+          withPassport += 1;
+        }
+
+        // Passport-expiry risk window (< 6 months from now).
+        if (p.passportExpiry) {
+          const exp = p.passportExpiry instanceof Date
+            ? p.passportExpiry
+            : new Date(p.passportExpiry);
+          if (!Number.isNaN(exp.getTime()) && exp < expiryThreshold) {
+            expiringPassports += 1;
+          }
+        }
+
+        // lastUpdatedAt rollup.
+        const ts = p.updatedAt instanceof Date ? p.updatedAt : new Date(p.updatedAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+        }
+      }
+
+      res.json({
+        total: profiles.length,
+        byProductTier,
+        byTravelStyle,
+        withPassport,
+        expiringPassports,
+        lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
+        aggregateExceedsCap,
+      });
+    } catch (e) {
+      console.error("[travel-rfu] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise RFU profiles" });
+    }
+  },
+);
+
 // ─── Phase 2 — preflight duplicate check (PRD §4.5) ──────────────────
 //
 // The Phase 2 "full pop-up flow with preferences" needs a check-without-

@@ -366,6 +366,192 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/religious-packets/by-month — tenant-wide monthly rollup
+//
+// PRD §4.8 + §4.10 RFU sub-brand. Sibling to /religious-packets/stats
+// (line 243). USER-readable meta endpoint returning one row per UTC YYYY-MM
+// bucket for the tenant-scoped (sub-brand-narrowed) religious-packet
+// population. Each bucket carries count + per-sub-brand breakdown so the
+// Religious Packets admin dashboard can render the "packets curated over
+// time" trend chart without N round-trips per month.
+//
+// Mirrors /suppliers/by-month (PRD_TRAVEL_SUPPLIER_MASTER §3 #903 slice 24)
+// + /flyer-templates/by-month (#908 slice 21) — same UTC YYYY-MM bucketing,
+// same defensive math (null/invalid createdAt → "unknown" bucket; excluded
+// when ?from / ?to is set, kept otherwise), same orderBy semantics.
+//
+// Distinct from /religious-packets/stats: /stats is a point-in-time KPI
+// tile (total / active / archived / bySubBrand / byDayOffset / byChannel);
+// /by-month is the per-month time series across the same population. Both
+// power the same Religious Packets library page header (/stats for the KPI
+// strip, /by-month for the trend chart).
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//                     400 INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// Behaviour:
+//   - Sub-brand-scoped: mirrors /religious-packets/stats exactly. Schema
+//     has subBrand non-nullable but we defensively coalesce falsy →
+//     '_tenant' for forward-compat (same as /stats line 332). The Prisma
+//     where uses a plain `subBrand: { in: [...allowed] }` (NOT the
+//     flyer-templates `OR: [{ subBrand: { in } }, { subBrand: null }]`
+//     pattern, since the column is non-nullable). Empty allowed set →
+//     forces `subBrand: "__none__"` so the response is a clean zero-rollup
+//     envelope (not 403).
+//   - JS-side aggregation over a light findMany projection
+//     ({ subBrand, createdAt }) — population is bounded by tenant scale
+//     (hundreds at most for content libraries); JS aggregation matches the
+//     mock-friendly rationale of /stats and the by-month family.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so the
+//     count surface stays accurate. Excluded when ?from / ?to is set (no
+//     comparable month token); included otherwise.
+//   - Per-bucket bySubBrand: falsy subBrand coerces to "_tenant" for
+//     forward-compat (matches /stats).
+//   - Pagination applied AFTER aggregation + sort + bucket filter.
+//
+// No audit row written — read-only meta surface; matches /stats posture.
+//
+// Express route ordering: literal-path /by-month MUST be declared BEFORE
+// the /religious-packets/:id family or `:id="by-month"` would 400
+// INVALID_ID before reaching this handler. Same convention as /stats.
+// ============================================================================
+router.get(
+  "/religious-packets/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors /suppliers/by-month.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors /stats exactly:
+      // subBrand-restricted callers see only their allowed sub-brands;
+      // admins (allowed=null) see all. Empty allowed set returns a clean
+      // zero-rollup envelope (not 403). subBrand is non-nullable in the
+      // schema, so we do NOT mix in a `{ subBrand: null }` OR clause.
+      const where = { tenantId: req.travelTenant.id };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed !== null) {
+        if (allowed.size === 0) {
+          where.subBrand = "__none__"; // forces zero rows
+        } else {
+          where.subBrand = { in: [...allowed] };
+        }
+      }
+
+      // Light projection — subBrand + createdAt is enough for bucket totals
+      // + per-bucket bySubBrand. No content blobs pulled.
+      const rows = await prisma.religiousGuidancePacket.findMany({
+        where,
+        select: { subBrand: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { month, count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const r of rows) {
+        let monthKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            month: monthKey,
+            count: 0,
+            bySubBrand: {},
+          };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+        // Forward-compat: falsy subBrand coerces to "_tenant" (matches
+        // /stats line 332).
+        const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+        bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise. Mirrors
+      // /suppliers/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also
+      // chronological). "unknown" sorts last in asc / first in desc
+      // (lexicographically > "9999-12") — acceptable for a defensive
+      // fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = months.length;
+      // Pagination AFTER aggregation + sort + filter.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      console.error("[travel-religious] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
+
 // ─── Get + patch + delete ────────────────────────────────────────────
 
 router.get(

@@ -155,16 +155,18 @@ test.describe('Security headers gate (G-25) — Helmet/CSP regression detection'
 
       // 4. CSP must be PRESENT (#654 transitional CSP). The directive list
       // is asserted in the snapshot test below; here we just confirm the
-      // header is emitted at all. CSP-Report-Only stays ABSENT because we
-      // don't ship a parallel report-only header today.
+      // header is emitted at all. CSP-Report-Only is ALSO present now
+      // (#917 slice 1 — strict report-only CSP layered alongside the
+      // transitional enforce-mode CSP so violations surface without
+      // breaking the SPA).
       expect(
         headers['content-security-policy'],
         'CSP missing — #654 transitional CSP regressed (security.js contentSecurityPolicy turned back off?)'
       ).toBeTruthy();
       expect(
         headers['content-security-policy-report-only'],
-        'CSP-Report-Only unexpectedly enabled — was the helmet config silently changed?'
-      ).toBeUndefined();
+        'CSP-Report-Only missing — #917 slice 1 strict CSP report-only regressed'
+      ).toBeTruthy();
     });
   }
 
@@ -217,8 +219,17 @@ test.describe('Security headers gate (G-25) — Helmet/CSP regression detection'
     expect(csp.toLowerCase()).toContain("default-src 'self'");
     expect(csp.toLowerCase()).toContain("object-src 'none'");
 
+    // #917 slice 1 — CSP-Report-Only is now PRESENT alongside the
+    // enforce-mode CSP. Strict directives (no 'unsafe-inline' on
+    // script-src/style-src, frame-ancestors 'none') with the
+    // load-bearing default-src 'self' anchor. SPA violations surface
+    // here without breaking the page.
+    const cspReportOnly = headers['content-security-policy-report-only'];
+    expect(cspReportOnly, 'CSP-Report-Only missing — #917 slice 1 regressed').toBeTruthy();
+    expect(cspReportOnly.toLowerCase()).toContain("default-src 'self'");
+    expect(cspReportOnly.toLowerCase()).toContain("frame-ancestors 'none'");
+
     // Negatives — these should NOT be in the snapshot.
     expect(headers['x-powered-by']).toBeUndefined();
-    expect(headers['content-security-policy-report-only']).toBeUndefined();
   });
 });

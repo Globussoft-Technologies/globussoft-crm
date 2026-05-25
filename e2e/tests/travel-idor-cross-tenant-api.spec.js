@@ -1,19 +1,38 @@
 // @ts-check
 /**
- * Cross-tenant IDOR probe — GH #919 slices 1 + 2.
+ * Cross-tenant IDOR probe — GH #919 slices 1 + 2 + 3.
  *
  * Issue #919's remediation: "Add a CI test suite: for every /api/* route,
  * seed two tenants A and B with one record each, then call the route with
  * A's JWT and B's ID and assert non-2xx." Slice 1 (ab8bcdbe) seeded
  * representative coverage across the Travel-vertical + cross-vertical
- * Contact surface. Slice 2 (this commit) extends the Travel-vertical
+ * Contact surface. Slice 2 (475b387b) extended the Travel-vertical
  * sweep to 6 additional /:id endpoints that landed after slice 1 was
  * authored, including the two routes that #5c48de2a unblocked by adding
  * their missing app.use() mounts (flyer-templates already covered in
  * slice 1; trips + diagnostics + suppliers + cost-master + rfu-profiles
- * + diagnostic-banks are the new sweep). Future slices expand to
- * additional /api/* routes (Patient, Visit, Prescription, Deal, Invoice,
- * etc.) on the same pattern.
+ * + diagnostic-banks are the new sweep). Slice 3 (this commit) extends
+ * the cross-vertical sweep from GET probes to MUTATION probes — PUT /
+ * PATCH / DELETE / POST against existing /:id endpoints on Travel
+ * routes. Mutation IDOR is the worst-case path because it can CORRUPT
+ * or DELETE cross-tenant data, not just leak it. Future slices expand
+ * to additional /api/* routes (Patient, Visit, Prescription, Deal,
+ * Invoice, etc.) on the same pattern.
+ *
+ * Slice 3 drift note (per .claude/skills/verifying-gap-card-claims/):
+ * the slice-3 prompt named `PUT /api/travel/quotes/:id`, `PATCH
+ * /api/travel/invoices/:id`, `POST /api/travel/quotes/:id/accept`,
+ * `POST /api/travel/invoices/:id/issue` as targets. Those endpoints
+ * do NOT exist in backend/routes/travel_*.js — `/quotes` is owned by
+ * routes/cpq.js (a generic-tenant CPQ route, not Travel), and there
+ * is no `/api/travel/invoices` namespace at all. We PIN REALITY here:
+ * the actual mutating /:id endpoints on Travel routes are itineraries
+ * (PATCH/PUT/DELETE-item/POST-accept/POST-reject/POST-share),
+ * trips (PATCH), rfu-profiles (PATCH), and the item-level
+ * /itineraries/:id/items/:itemId DELETE. The contract pinned is
+ * identical: requireTravelTenant fires BEFORE the body parse + id
+ * lookup, so cross-vertical mutations get 403 WRONG_VERTICAL — the
+ * data is never touched, never corrupted, never deleted.
  *
  * Slice 2 also pins the layered-guard-order contract for /api/travel/
  * trips/:id — the route mounts requireTravelTenant BEFORE
@@ -167,6 +186,24 @@ async function del(request, token, path) {
   return retryOn5xx(() =>
     request.delete(`${BASE_URL}${path}`, {
       headers: headers(token),
+      timeout: REQUEST_TIMEOUT,
+    }),
+  );
+}
+async function put(request, token, path, body) {
+  return retryOn5xx(() =>
+    request.put(`${BASE_URL}${path}`, {
+      headers: headers(token),
+      data: body ?? {},
+      timeout: REQUEST_TIMEOUT,
+    }),
+  );
+}
+async function patch(request, token, path, body) {
+  return retryOn5xx(() =>
+    request.patch(`${BASE_URL}${path}`, {
+      headers: headers(token),
+      data: body ?? {},
       timeout: REQUEST_TIMEOUT,
     }),
   );
@@ -392,6 +429,189 @@ test.describe("IDOR #919 — /api/travel/* cross-vertical (403 WRONG_VERTICAL)",
   });
 });
 
+// ─── Slice 3 — Mutation IDOR (cross-vertical PUT/PATCH/DELETE/POST) ──
+// The slice-1+2 GET probes pin that cross-vertical READS are blocked at
+// the vertical-guard layer (403 WRONG_VERTICAL). Slice 3 extends that
+// contract to MUTATIONS — the worst-case IDOR class, where a missed
+// guard would let wellness/generic admins CORRUPT or DELETE Travel
+// data they don't own. The middleware-order guarantee is the same
+// (requireTravelTenant runs before the handler body), so the expected
+// shape is identical: 403 WRONG_VERTICAL, body is never touched, the
+// target id is never even looked up. We pin id=999999999 as a
+// deliberate non-existent sentinel so a regression that demoted the
+// guard would surface as "200 OK but no such row found" (a 404 from
+// inside the handler) — pinning 403 specifically catches that.
+//
+// Note on PUT body shape: routes/travel_itineraries.js:1325 PUT
+// /itineraries/:id requires `title` + `items[]` in the body. We pass
+// a minimal valid-shape body so a regression that bypassed the
+// vertical guard would proceed to body validation rather than 400'ing
+// for a separate reason. The probe is "guard fires FIRST" — body shape
+// is irrelevant to the contract, but valid-shape makes the failure
+// signal clean.
+
+const MIN_PUT_ITINERARY = {
+  title: "IDOR-probe-must-never-reach-handler",
+  items: [],
+};
+
+test.describe("IDOR #919 slice 3 — /api/travel/* cross-vertical mutations (403 WRONG_VERTICAL)", () => {
+  // Each row: { method, path, body?, label }. The body is irrelevant to
+  // the contract (guard fires before body parse) but a minimal valid
+  // shape avoids confusing a future regression that demoted the guard
+  // with a separate 400 for malformed body.
+  const MUTATION_PROBES = [
+    {
+      method: "PATCH",
+      path: `/api/travel/itineraries/${FAKE_ID}`,
+      body: { status: "ACCEPTED" },
+      label: "PATCH /itineraries/:id status amend (corruption vector)",
+    },
+    {
+      method: "PUT",
+      path: `/api/travel/itineraries/${FAKE_ID}`,
+      body: MIN_PUT_ITINERARY,
+      label: "PUT /itineraries/:id full replace (corruption vector)",
+    },
+    {
+      method: "DELETE",
+      path: `/api/travel/itineraries/${FAKE_ID}/items/${FAKE_ID}`,
+      body: null,
+      label: "DELETE /itineraries/:id/items/:itemId (deletion vector)",
+    },
+    {
+      method: "POST",
+      path: `/api/travel/itineraries/${FAKE_ID}/accept`,
+      body: { acceptanceNotes: "idor-probe" },
+      label: "POST /itineraries/:id/accept (state-change vector)",
+    },
+    {
+      method: "POST",
+      path: `/api/travel/itineraries/${FAKE_ID}/reject`,
+      body: { rejectionReason: "idor-probe" },
+      label: "POST /itineraries/:id/reject (state-change vector)",
+    },
+    {
+      method: "POST",
+      path: `/api/travel/itineraries/${FAKE_ID}/share`,
+      body: { recipientEmail: "idor-probe@e2e.local" },
+      label: "POST /itineraries/:id/share (exfiltration vector)",
+    },
+    {
+      method: "PATCH",
+      path: `/api/travel/trips/${FAKE_ID}`,
+      body: { destination: "idor-probe" },
+      label: "PATCH /trips/:id (TMC trip corruption vector)",
+    },
+    {
+      method: "PATCH",
+      path: `/api/travel/rfu-profiles/${FAKE_ID}`,
+      body: { notes: "idor-probe" },
+      label: "PATCH /rfu-profiles/:id (RFU profile corruption vector)",
+    },
+  ];
+
+  async function doMutation(request, token, method, path, body) {
+    switch (method) {
+      case "PATCH":
+        return patch(request, token, path, body);
+      case "PUT":
+        return put(request, token, path, body);
+      case "POST":
+        return post(request, token, path, body);
+      case "DELETE":
+        return del(request, token, path);
+      default:
+        throw new Error(`unsupported method ${method}`);
+    }
+  }
+
+  for (const { method, path, body, label } of MUTATION_PROBES) {
+    test(`wellness admin ${method} ${path} → 403 WRONG_VERTICAL (${label})`, async ({
+      request,
+    }) => {
+      const token = await getWellnessAdmin(request);
+      if (!token) test.skip(true, "wellness admin token required");
+      const res = await doMutation(request, token, method, path, body);
+      expect(
+        res.status(),
+        `wellness admin must not reach ${method} ${path}: got ${res.status()} (${await res.text()})`,
+      ).toBe(403);
+      const respBody = await res.json();
+      expect(
+        respBody.code,
+        `${method} ${path}: expected code=WRONG_VERTICAL`,
+      ).toBe("WRONG_VERTICAL");
+    });
+
+    test(`generic admin ${method} ${path} → 403 WRONG_VERTICAL (${label})`, async ({
+      request,
+    }) => {
+      const token = await getGenericAdmin(request);
+      if (!token) test.skip(true, "generic admin token required");
+      const res = await doMutation(request, token, method, path, body);
+      expect(
+        res.status(),
+        `generic admin must not reach ${method} ${path}: got ${res.status()} (${await res.text()})`,
+      ).toBe(403);
+      const respBody = await res.json();
+      expect(
+        respBody.code,
+        `${method} ${path}: expected code=WRONG_VERTICAL`,
+      ).toBe("WRONG_VERTICAL");
+    });
+  }
+
+  // Pin guard-fires-before-body-parse: a deliberately MALFORMED body
+  // (missing required fields, wrong types) must STILL surface 403
+  // WRONG_VERTICAL, not a 400 from body validation. If a regression
+  // moved body-parse / validation BEFORE the vertical guard, this
+  // would flip to 400 — silently revealing endpoint-shape information
+  // (the field-validation error message itself is an enumeration
+  // surface) to the cross-vertical attacker.
+  test("guard-before-body-parse: malformed PUT body still surfaces 403 WRONG_VERTICAL", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await put(
+      request,
+      token,
+      `/api/travel/itineraries/${FAKE_ID}`,
+      { notATitle: 42, items: "this-is-not-an-array" },
+    );
+    expect(
+      res.status(),
+      `malformed body must STILL 403 (not 400) — guard runs first; got ${res.status()} (${await res.text()})`,
+    ).toBe(403);
+    const respBody = await res.json();
+    expect(respBody.code).toBe("WRONG_VERTICAL");
+  });
+
+  // Pin DELETE-without-body-validation: DELETE /itineraries/:id/items/:itemId
+  // has TWO id params. Even with two non-existent ids, the guard fires
+  // BEFORE either lookup. A regression that demoted the guard would
+  // surface as 404 (handler couldn't find the parent itinerary), which
+  // would leak that the parent-id-shape is at least *valid* on this route.
+  test("guard-before-lookup: DELETE on TWO non-existent ids still 403 (no 404 leak)", async ({
+    request,
+  }) => {
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await del(
+      request,
+      token,
+      `/api/travel/itineraries/${FAKE_ID}/items/${FAKE_ID}`,
+    );
+    expect(
+      res.status(),
+      `cross-vertical DELETE must be 403 not 404: got ${res.status()} (${await res.text()})`,
+    ).toBe(403);
+    const respBody = await res.json();
+    expect(respBody.code).toBe("WRONG_VERTICAL");
+  });
+});
+
 // ─── Auth gate ───────────────────────────────────────────────────────
 // Defense-in-depth: probes without ANY token should never 200, regardless
 // of vertical. The global auth guard 401/403s before requireTravelTenant.
@@ -441,4 +661,35 @@ test.describe("IDOR #919 — auth gate (no token never 200s)", () => {
       ).toContain(res.status());
     });
   }
+
+  // Slice 3 — mutation auth-gate. No token must never 2xx on a
+  // mutation, regardless of method. Pair-tested with the slice-3
+  // cross-vertical describe above (which proves the wellness/generic
+  // admins can't mutate either) — together they form the
+  // "no path to a cross-tenant write" contract.
+  test("PATCH /api/travel/itineraries/1 without token → 401/403", async ({ request }) => {
+    const res = await request.patch(`${BASE_URL}/api/travel/itineraries/1`, {
+      data: { status: "ACCEPTED" },
+      headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test("DELETE /api/travel/itineraries/1/items/1 without token → 401/403", async ({ request }) => {
+    const res = await request.delete(
+      `${BASE_URL}/api/travel/itineraries/1/items/1`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test("POST /api/travel/itineraries/1/accept without token → 401/403", async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/travel/itineraries/1/accept`, {
+      data: {},
+      headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
 });

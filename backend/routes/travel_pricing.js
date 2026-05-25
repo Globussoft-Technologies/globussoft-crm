@@ -544,6 +544,226 @@ router.get("/pricing/stats", verifyToken, requireTravelTenant, async (req, res) 
   }
 });
 
+// ─── /pricing/by-month ───────────────────────────────────────────────
+
+// GET /api/travel/pricing/by-month — tenant-wide monthly rollup.
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-MM bucket
+// for the tenant-scoped (and sub-brand-narrowed) pricing-config
+// population, bucketing BOTH TravelSeasonCalendar AND TravelMarkupRule
+// rows by createdAt into the same month buckets. Each row carries
+// seasonCount + markupCount + totalCount so the operator dashboard can
+// render a "pricing-config changes over time" trend chart without N
+// round-trips per month.
+//
+// Pairs with /pricing/stats (`5feca84c`) — that surface gives the
+// current-state aggregate, this one gives the temporal distribution.
+//
+// Mirrors #908 slice 21 (/flyer-templates/by-month) + #900 slice 16
+// (/quotes/by-month) — same UTC YYYY-MM bucketing template, same
+// pagination semantics, same defensive math (null/invalid createdAt →
+// "unknown" bucket; excluded when ?from / ?to is set, kept otherwise so
+// the count surface stays accurate).
+//
+// PRD anchors:
+//   - PRD_TRAVEL_PRICING §3 — operator-facing pricing-config dashboard
+//     surfaces "when did we last touch our pricing config; how busy is
+//     each month" — this endpoint feeds that trend chart in one
+//     round-trip.
+//
+// Query params:
+//   - ?from / ?to     — optional inclusive YYYY-MM bounds; invalid →
+//                       400 INVALID_MONTH_FORMAT
+//   - ?orderBy        — default month:asc; accepts month:{asc|desc},
+//                       seasonCount:{asc|desc}, markupCount:{asc|desc};
+//                       unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' rows in the rollup. Same gate as the
+//     sibling /pricing/stats endpoint (TravelSeasonCalendar +
+//     TravelMarkupRule rows are always sub-brand-tagged; no NULL
+//     subBrand rows exist on these tables, so no OR-with-NULL needed).
+//     Empty access set → all-zeros envelope (not 403) so the dashboard
+//     tile renders cleanly for not-yet-onboarded operators.
+//   - JS-side aggregation over light findMany projections
+//     ({ subBrand, createdAt }) — population is bounded by tenant scale
+//     (low thousands), matches the rationale on /pricing/stats.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so
+//     the count surface stays accurate. Excluded when ?from / ?to is
+//     set; included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter.
+//
+// No audit row written — read-only meta surface.
+//
+// Express route ordering: literal-path /pricing/by-month doesn't
+// collide with /seasons/:id or /markup-rules/:id (distinct path
+// prefix). Declared BEFORE /pricing/quote for consistency with sibling
+// by-month endpoints, though no functional ordering requirement.
+router.get(
+  "/pricing/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors slice 16 /quotes/by-month.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "seasonCount:asc",
+        "seasonCount:desc",
+        "markupCount:asc",
+        "markupCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Sub-brand narrowing — same gate as /pricing/stats. Empty allowed
+      // set returns the zero-envelope (not 403).
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json({
+          months: [],
+          totalMonths: 0,
+          grandSeasonCount: 0,
+          grandMarkupCount: 0,
+          grandTotalCount: 0,
+          limit: take,
+          offset: skip,
+        });
+      }
+
+      const seasonWhere = { tenantId: req.travelTenant.id };
+      const ruleWhere = { tenantId: req.travelTenant.id };
+      if (allowed instanceof Set) {
+        const brandList = [...allowed];
+        seasonWhere.subBrand = { in: brandList };
+        ruleWhere.subBrand = { in: brandList };
+      }
+
+      const [seasons, rules] = await Promise.all([
+        prisma.travelSeasonCalendar.findMany({
+          where: seasonWhere,
+          select: { createdAt: true },
+        }),
+        prisma.travelMarkupRule.findMany({
+          where: ruleWhere,
+          select: { createdAt: true },
+        }),
+      ]);
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { month, seasonCount,
+      // markupCount, totalCount }. Null/invalid createdAt → "unknown".
+      const byMonth = new Map();
+
+      function bucketFor(monthKey) {
+        let b = byMonth.get(monthKey);
+        if (!b) {
+          b = {
+            month: monthKey,
+            seasonCount: 0,
+            markupCount: 0,
+            totalCount: 0,
+          };
+          byMonth.set(monthKey, b);
+        }
+        return b;
+      }
+
+      function monthKeyFor(createdAt) {
+        if (!createdAt) return "unknown";
+        const dt = createdAt instanceof Date ? createdAt : new Date(createdAt);
+        if (Number.isNaN(dt.getTime())) return "unknown";
+        const yyyy = dt.getUTCFullYear();
+        const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+        return `${yyyy}-${mm}`;
+      }
+
+      for (const s of seasons) {
+        const b = bucketFor(monthKeyFor(s.createdAt));
+        b.seasonCount += 1;
+        b.totalCount += 1;
+      }
+      for (const r of rules) {
+        const b = bucketFor(monthKeyFor(r.createdAt));
+        b.markupCount += 1;
+        b.totalCount += 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token).
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (chronological).
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandSeasonCount = months.reduce(
+        (acc, r) => acc + (Number(r.seasonCount) || 0),
+        0,
+      );
+      const grandMarkupCount = months.reduce(
+        (acc, r) => acc + (Number(r.markupCount) || 0),
+        0,
+      );
+      const grandTotalCount = grandSeasonCount + grandMarkupCount;
+
+      // Pagination AFTER aggregation + sort + filter.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        months: paged,
+        totalMonths,
+        grandSeasonCount,
+        grandMarkupCount,
+        grandTotalCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-pricing] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
+
 // ─── /pricing/quote ──────────────────────────────────────────────────
 
 // POST /api/travel/pricing/quote

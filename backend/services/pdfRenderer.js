@@ -1693,6 +1693,112 @@ function docTypeFooter(docType) {
   }
 }
 
+// ── Voucher Details block (Arc 2 #901 slice 18) ─────────────────────
+//
+// PRD_TRAVEL_BILLING acceptance: "Travel Voucher subtypes: Hotel /
+// Transfer / Activity (with supplier confirmation #, check-in date,
+// traveller list)". When `invoice.docType === 'TravelVoucher'`, the
+// renderer emits a dedicated "Voucher Details" block ABOVE the line
+// items table surfacing the three voucher-specific contracts:
+//
+//   1. Per-line: Voucher Subtype derived from `lineType`
+//        - per_night | per_room  → "Hotel"
+//        - per_pax              → "Activity"
+//        - per_trip             → "Transfer"
+//        - other lineType strings preserve their literal value as a
+//          fallback subtype label.
+//   2. Per-line: Supplier Confirmation # = `bookingRef || pnr || '—'`.
+//   3. Per-line: Service Date range from `serviceStartDate` /
+//      `serviceEndDate`. Single-day → just the start date; multi-day →
+//      "DD MMM YYYY → DD MMM YYYY". Missing dates render as "—".
+//   4. Invoice-level Traveller list:
+//        a. Prefer explicit `invoice.travellerList` (free-form string or
+//           Array<string>) when present — route layers may attach this
+//           defensively without a schema change.
+//        b. Fall back to parsing any line `notes` value matching
+//           /Travellers?:\s*(.+)/i — operator-friendly convention.
+//        c. If neither yields names, render "—".
+//
+// Non-voucher docTypes (TaxInvoice, Proforma, CreditNote, DebitNote)
+// SKIP this block entirely so existing invoice layouts are unchanged.
+//
+// Lines whose `lineType` is `tax | fee | tcs | tds` are excluded from
+// the per-line voucher subtype/confirmation rows — those are pure
+// withholding / charge lines, not service-fulfillment rows; surfacing
+// them as "Subtype: tax" would confuse the supplier reader. Only
+// fulfillment-style line types (per_pax | per_room | per_night |
+// per_trip | addon | other) get a Voucher Details row.
+const VOUCHER_FULFILLMENT_TYPES = new Set([
+  "per_pax",
+  "per_room",
+  "per_night",
+  "per_trip",
+  "addon",
+  "other",
+]);
+
+function voucherSubtypeForLine(lineType) {
+  switch (lineType) {
+    case "per_night":
+    case "per_room":
+      return "Hotel";
+    case "per_pax":
+      return "Activity";
+    case "per_trip":
+      return "Transfer";
+    case "addon":
+      return "Add-on";
+    case "other":
+      return "Service";
+    default:
+      // Defensive: return the literal lineType so future enum values
+      // (e.g. "per_visa") still surface as a recognisable label rather
+      // than a blank cell. Caller filters via VOUCHER_FULFILLMENT_TYPES
+      // before reaching this fallback under normal operation.
+      return String(lineType || "Service");
+  }
+}
+
+function formatVoucherServiceRange(startDate, endDate) {
+  const start = startDate ? formatDate(startDate) : null;
+  const end = endDate ? formatDate(endDate) : null;
+  if (start && end) {
+    // Same-day stay/transfer/activity → render single date (avoids the
+    // visually redundant "01 Jun 2026 → 01 Jun 2026").
+    if (start === end) return start;
+    return `${start} → ${end}`;
+  }
+  return start || end || "—";
+}
+
+function extractTravellerListFromInvoice(invoice, lines) {
+  // (a) Explicit synthetic field — route layer attaches as either a
+  // bare string ("Alice, Bob, Charlie") or an array of names.
+  if (invoice && invoice.travellerList) {
+    if (Array.isArray(invoice.travellerList)) {
+      const cleaned = invoice.travellerList
+        .map((n) => String(n).trim())
+        .filter(Boolean);
+      if (cleaned.length > 0) return cleaned.join(", ");
+    } else if (typeof invoice.travellerList === "string") {
+      const s = invoice.travellerList.trim();
+      if (s) return s;
+    }
+  }
+  // (b) Parse line notes for "Travellers: A, B, C" (case-insensitive,
+  // singular "Traveller:" also accepted). First match wins so a
+  // multi-line invoice that repeats the list per row doesn't render
+  // duplicates.
+  if (Array.isArray(lines)) {
+    for (const line of lines) {
+      if (!line || !line.notes) continue;
+      const m = String(line.notes).match(/Travellers?:\s*(.+)/i);
+      if (m && m[1].trim()) return m[1].trim();
+    }
+  }
+  return "—";
+}
+
 function renderTravelInvoicePdf(opts) {
   // Accept either the row-with-attached-lines form or the explicit
   // { invoice, lines, tenant } form. The first is friendlier for
@@ -1780,6 +1886,81 @@ function renderTravelInvoicePdf(opts) {
   const divY = doc.y;
   doc.moveTo(50, divY).lineTo(545, divY).lineWidth(0.7).strokeColor(accent).stroke();
   doc.moveDown(0.8);
+
+  // ── Voucher Details block (slice 18) ─────────────────────────────
+  // Only emitted for TravelVoucher docType. Surfaces supplier
+  // confirmation #, service / check-in dates, traveller list per PRD
+  // §3 acceptance. See `extractTravellerListFromInvoice` /
+  // `voucherSubtypeForLine` / `formatVoucherServiceRange` headers
+  // above for the shape contract.
+  if (docType === "TravelVoucher") {
+    const voucherLines = (lines || []).filter(
+      (l) => l && VOUCHER_FULFILLMENT_TYPES.has(l.lineType || "other"),
+    );
+    const travellers = extractTravellerListFromInvoice(invoice, lines);
+
+    const vTop = doc.y;
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
+      .text("Voucher Details", 50, vTop);
+    let vy = vTop + 16;
+
+    // Traveller list — invoice-level, single line. Long lists wrap
+    // within a 495-wide column so the block doesn't overflow the page
+    // margin.
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#555")
+      .text("Travellers:", 50, vy, { width: 65, continued: false });
+    doc.font("Helvetica").fontSize(9).fillColor("#222")
+      .text(travellers, 115, vy, { width: 430 });
+    vy = Math.max(vy + 14, doc.y + 4);
+
+    if (voucherLines.length === 0) {
+      // No fulfillment lines yet — print a placeholder so the operator
+      // sees the block even on an empty draft voucher.
+      doc.font("Helvetica-Oblique").fontSize(9).fillColor("#777")
+        .text(
+          "(No fulfillment lines yet — add Hotel / Transfer / Activity lines to populate this block.)",
+          50, vy, { width: 495 },
+        );
+      vy += 16;
+    } else {
+      // Per-line voucher rows: Subtype | Description | Supplier Conf# | Service Date.
+      const colVX = { subtype: 50, desc: 130, conf: 305, date: 405 };
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
+      doc.text("Subtype", colVX.subtype, vy, { width: 70, align: "left" });
+      doc.text("Description", colVX.desc, vy, { width: 165, align: "left" });
+      doc.text("Supplier Conf #", colVX.conf, vy, { width: 90, align: "left" });
+      doc.text("Service Date", colVX.date, vy, { width: 140, align: "left" });
+      vy += 12;
+      doc.moveTo(50, vy).lineTo(545, vy).lineWidth(0.4).strokeColor("#bbb").stroke();
+      vy += 4;
+      doc.font("Helvetica").fontSize(9).fillColor("#222");
+      for (const line of voucherLines) {
+        if (vy > 720) {
+          doc.addPage();
+          vy = 60;
+        }
+        const subtype = voucherSubtypeForLine(line.lineType);
+        const confNum = line.bookingRef || line.pnr || "—";
+        const range = formatVoucherServiceRange(
+          line.serviceStartDate,
+          line.serviceEndDate,
+        );
+        doc.text(subtype, colVX.subtype, vy, { width: 70, align: "left" });
+        doc.text(String(line.description || "—"), colVX.desc, vy, {
+          width: 165,
+          align: "left",
+        });
+        doc.text(String(confNum), colVX.conf, vy, { width: 90, align: "left" });
+        doc.text(range, colVX.date, vy, { width: 140, align: "left" });
+        vy += 16;
+      }
+    }
+    doc.y = vy + 6;
+    // Thin divider under the voucher block to separate from the
+    // standard line-items table below.
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).lineWidth(0.4).strokeColor("#ddd").stroke();
+    doc.moveDown(0.6);
+  }
 
   // ── Line-items table ──────────────────────────────────────────────
   // Slice 8 of #902: SAC + GST columns are inserted between Description
@@ -2213,4 +2394,10 @@ module.exports = {
   renderTravelInvoicePdf,
   generateTravelInvoicePdf,
   generatePosReceiptPdf,
+  // Arc 2 #901 slice 18 — voucher-detail helpers exported for unit tests.
+  // Pure functions; no side effects. Surface area intentionally small so
+  // route layers don't accidentally couple to the format strings.
+  voucherSubtypeForLine,
+  formatVoucherServiceRange,
+  extractTravellerListFromInvoice,
 };

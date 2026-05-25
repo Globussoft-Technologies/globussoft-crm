@@ -639,6 +639,264 @@ router.get("/quotes/by-month", verifyToken, requireTravelTenant, async (req, res
   }
 });
 
+// GET /api/travel/quotes/by-quarter — any verified token (tenant + sub-brand scoped).
+//
+// Slice 17 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — tenant-wide quote
+// analytics rolled up by calendar quarter). Mirrors slice 16's
+// /quotes/by-month with the coarser-granularity quarter bucket
+// (Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec — calendar quarters,
+// not Indian-FY April-March). Same UTC rationale as by-month — finance
+// reconciliation works in calendar quarters; FY tooling is a future
+// overlay on top of this calendar-quarter primitive. Also mirrors #905
+// slice 16 (/commission-profiles/:id/summary/by-quarter) for shape
+// consistency across the tenant-wide and per-profile time-series
+// surfaces.
+//
+// Why a separate endpoint instead of aggregate=quarter on by-month:
+// callers expect different defaults (12 quarters = 3 years at quarter
+// granularity is a sensible UI default; 36 months ≠ 12 quarters in the
+// same fixed-width chart slot). Pre-fills the quarterly-trend tile on
+// the operator dashboard with ~12 bars.
+//
+// Bucket key shape: "YYYY-Qn" string (e.g. "2026-Q2") derived from
+// TravelQuote.createdAt's UTC year + quarter (`Math.floor(month/3)+1`).
+//
+// Scope rules:
+//   - Tenant-scoped on TravelQuote.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   status    optional Quote.status filter (Draft/Sent/Accepted/Rejected)
+//   from      optional inclusive lower bound on bucket (YYYY-Qn); rows
+//             with quarter < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY-Qn); rows
+//             with quarter > to are excluded
+//   orderBy   default "quarter:asc" (chronological); also accepts
+//             "quarter:desc", "totalValue:asc|desc", "quoteCount:asc|desc",
+//             "acceptedCount:asc|desc". Unknown tokens degrade silently
+//             to default.
+//   limit     default 12 (3 years of quarters), max 40 (10 years).
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     quarters: [ {
+//       quarter: "2026-Q2",
+//       quoteCount, totalValue,
+//       draftCount, sentCount, acceptedCount, rejectedCount,
+//       acceptedValue
+//     } ],
+//     totalQuarters,
+//     grandQuoteCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Defensive behaviour: null/invalid TravelQuote.totalAmount contributes
+// 0 (no NaN poisoning); null/invalid createdAt → "unknown" bucket
+// (excluded when ?from / ?to is set, kept otherwise so the count surface
+// stays accurate). Half-up 2dp rounding via Number.EPSILON.
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-quarter" as a numeric :id (which would 400 INVALID_ID).
+router.get("/quotes/by-quarter", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+    if (statusFilter) {
+      try {
+        assertValidStatus(statusFilter);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+    }
+
+    // YYYY-Qn validation — same regex #905 slice 16 uses. Bucket labels we
+    // emit follow this exact shape so callers passing quarter-tokens to
+    // from/to should already be using it. Anything else is a 400
+    // INVALID_QUARTER_FORMAT.
+    const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+    if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "quarter:asc",
+      "quarter:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+      "quoteCount:asc",
+      "quoteCount:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /quotes list handler — empty access set → all-zeros rollup (not
+    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+    // operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        quarters: [],
+        totalQuarters: 0,
+        grandQuoteCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-Qn. Input size bound is the same as
+    // /quotes/analytics + by-month (low thousands at platinum scale).
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts/sums }.
+    // Quotes with null/invalid createdAt go into "unknown" so counts
+    // stay accurate. Null/invalid totalAmount contributes 0.
+    const byQuarter = new Map();
+    for (const q of quotes) {
+      let quarterKey = "unknown";
+      if (q.createdAt) {
+        const dt = new Date(q.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const qn = Math.floor(dt.getUTCMonth() / 3) + 1;
+          quarterKey = `${yyyy}-Q${qn}`;
+        }
+      }
+
+      let row = byQuarter.get(quarterKey);
+      if (!row) {
+        row = {
+          quarter: quarterKey,
+          quoteCount: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          acceptedValue: 0,
+        };
+        byQuarter.set(quarterKey, row);
+      }
+
+      row.quoteCount += 1;
+      const amt = Number(q.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (q.status) {
+        case "Draft": row.draftCount += 1; break;
+        case "Sent": row.sentCount += 1; break;
+        case "Accepted":
+          row.acceptedCount += 1;
+          row.acceptedValue += safeAmt;
+          break;
+        case "Rejected": row.rejectedCount += 1; break;
+        default: break;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let quarters = [...byQuarter.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (no comparable token); when no bounds are set,
+    // "unknown" stays so the count surface remains complete.
+    if (fromRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+    }
+    if (toRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+    }
+
+    // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+    // chronological (Q1<Q2<Q3<Q4 sorts correctly as ASCII). "unknown"
+    // lexicographically > "9999-Q4" so it sorts last in asc / first in
+    // desc — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    quarters.sort((a, b) => {
+      if (field === "quarter") {
+        if (a.quarter < b.quarter) return -1 * mult;
+        if (a.quarter > b.quarter) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalQuarters = quarters.length;
+    const grandQuoteCount = quarters.reduce(
+      (acc, r) => acc + (Number(r.quoteCount) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as slice 16.
+    const paged = quarters.slice(skip, skip + take);
+
+    res.json({
+      quarters: paged,
+      totalQuarters,
+      grandQuoteCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] by-quarter error:", e.message);
+    res.status(500).json({ error: "Failed to compute quarterly rollup" });
+  }
+});
+
 // POST /api/travel/quotes/bulk-decline-expired — ADMIN | MANAGER.
 //
 // Slice 14 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — bulk operations on

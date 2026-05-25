@@ -721,6 +721,219 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/diagnostics/by-quarter — tenant-wide Diagnostic submissions
+// quarterly rollup (PRD_TRAVEL_RFU_DIAGNOSTIC §3).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-Q[1-4] bucket
+// for the tenant-scoped (and sub-brand-narrowed) Diagnostic submission
+// population. Each row carries count + bySubBrand breakdown so the
+// Diagnostics dashboard can render a "submissions over time" quarterly
+// trend chart + per-quarter sub-brand drill-down.
+//
+// Pairs with /diagnostics/stats (KPI tile) + /diagnostics/by-month (monthly
+// time series). /by-quarter is the coarser sibling for trend tiles that
+// only need a 1-year-at-a-glance view — fewer buckets (4 per year vs 12),
+// same defensive math.
+//
+// Mirrors /itineraries/by-quarter (#907 slice 17) + /suppliers/by-quarter
+// + /visa/applications/by-quarter — same UTC YYYY-Qn bucketing template,
+// same defensive math (null/invalid createdAt → "unknown" bucket; excluded
+// when ?from / ?to is set, kept otherwise so count surface stays
+// accurate), same orderBy semantics.
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-Q[1-4] bounds; invalid →
+//                     400 INVALID_QUARTER_FORMAT
+//   - ?orderBy      — default quarter:asc; accepts quarter:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 8 / 0 (≈2 years' window of quarters);
+//                     limit caps at 40
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' diagnostics in the rollup. Same gate as
+//     /diagnostics/by-month — TravelDiagnostic.subBrand is NON-nullable
+//     in the schema, so we do NOT add a `{ subBrand: null }` OR clause
+//     (mirrors /suppliers/by-month posture). Empty access set →
+//     force-empty `subBrand: "__none__"` so the response stays a clean
+//     zero-rollup envelope.
+//   - JS-side aggregation over a light findMany projection
+//     ({ subBrand, createdAt }) — matches /diagnostics/stats +
+//     /by-month posture.
+//   - "unknown" bucket: rows with null/invalid createdAt land here.
+//     Excluded when ?from / ?to is set; included otherwise.
+//   - Per-quarter bySubBrand: each bucket carries a `bySubBrand` map keyed
+//     by sub-brand token (falsy → "_tenant" for forward-compat, mirrors
+//     /stats + /by-month).
+//   - Pagination applied AFTER aggregation + sort + bucket filter.
+//
+// No audit row written — read-only meta surface; matches /diagnostics/stats
+// + /by-month + /suppliers/by-quarter posture. USER-readable: anodyne
+// (counts + quarter-string tokens).
+//
+// Express route ordering: literal-path /by-quarter MUST be declared
+// BEFORE the /:id family or `:id="by-quarter"` would 400 INVALID_ID
+// before reaching this handler. Same convention as /by-month + /stats.
+// ============================================================================
+router.get(
+  "/diagnostics/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 8, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "quarter:asc";
+
+      // YYYY-Qn validation — quarter ∈ {1,2,3,4}, year is 4 digits.
+      // Mirrors /itineraries/by-quarter + /suppliers/by-quarter.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw)
+        ? orderByRaw
+        : "quarter:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors /by-month
+      // sub-brand gate: subBrand-restricted callers see only their
+      // allowed sub-brands' diagnostics; admins (allowed=null) see all.
+      // Empty allowed set → force-empty `subBrand: "__none__"` for a
+      // clean zero-rollup envelope (not 403).
+      //
+      // Note: TravelDiagnostic.subBrand is NON-nullable, so we do NOT
+      // mix in a `{ subBrand: null }` OR clause (that's the
+      // flyer-templates pattern). The narrowing is a pure
+      // `subBrand: { in: [...allowed] }`, mirroring /by-month.
+      const where = { tenantId: req.travelTenant.id };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          where.subBrand = { in: [...allowed] };
+        } else {
+          where.subBrand = "__none__";
+        }
+      }
+
+      // Light projection — subBrand + createdAt is enough for the
+      // bucket totals + per-bucket bySubBrand breakdown.
+      const rows = await prisma.travelDiagnostic.findMany({
+        where,
+        select: { subBrand: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byQuarter = new Map();
+      for (const r of rows) {
+        let quarterKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${q}`;
+          }
+        }
+
+        let bucket = byQuarter.get(quarterKey);
+        if (!bucket) {
+          bucket = {
+            quarter: quarterKey,
+            count: 0,
+            bySubBrand: {},
+          };
+          byQuarter.set(quarterKey, bucket);
+        }
+        bucket.count += 1;
+
+        // bySubBrand: defensively coalesce falsy → "_tenant" to match
+        // /diagnostics/stats + /by-month posture (forward-compat
+        // against any future schema change to nullable subBrand).
+        const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+        if (!bucket.bySubBrand[sbKey]) bucket.bySubBrand[sbKey] = { count: 0 };
+        bucket.bySubBrand[sbKey].count += 1;
+      }
+
+      let quarters = [...byQuarter.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise. Mirrors
+      // /by-month + /itineraries/by-quarter.
+      if (fromRaw !== null) {
+        quarters = quarters.filter(
+          (r) => r.quarter !== "unknown" && r.quarter >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter(
+          (r) => r.quarter !== "unknown" && r.quarter <= toRaw,
+        );
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Qn which is
+      // also chronological (Q1 < Q2 < Q3 < Q4 in ASCII, years
+      // naturally ordered). "unknown" sorts last in asc / first in
+      // desc by virtue of being lexicographically > "9999-Q4".
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalQuarters = quarters.length;
+      const grandCount = quarters.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as /by-month.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        quarters: paged,
+        totalQuarters,
+        grandCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
+
 // GET /api/travel/diagnostics/:id
 router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

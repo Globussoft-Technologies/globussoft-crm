@@ -1154,6 +1154,205 @@ router.get("/quotes/by-year", verifyToken, requireTravelTenant, async (req, res)
   }
 });
 
+// ============================================================================
+// GET /api/travel/quotes/stats — tenant-wide TravelQuote rollup
+// (#900 slice 19, PRD_TRAVEL_QUOTE_BUILDER §3).
+//
+// Mirrors #903 slice 23 (/suppliers/stats), #905 slice 18
+// (/commission-profiles/stats) and #908 slice 19
+// (/flyer-templates/global-stats) — same point-in-time KPI-tile shape:
+// total + per-status breakdown (count + summed totalAmount) + per-sub-brand
+// count + grand totals + acceptanceRate (terminal-state denominator) +
+// expiredCount (non-terminal AND validUntil past) + lastUpdatedAt.
+//
+// Scope rules:
+//   - Tenant-scoped on TravelQuote.tenantId.
+//   - Sub-brand restricted: MANAGER with subBrandAccess narrowed via
+//     getSubBrandAccessSet — empty set → all-zeros (not 403) so dashboard
+//     tiles render cleanly for not-yet-onboarded operators.
+//   - USER-readable (anodyne aggregate; no quote bodies leak).
+//
+// Query string:
+//   from   optional ISO date — TravelQuote.createdAt >= from
+//   to     optional ISO date — TravelQuote.createdAt <= to
+//          Either may be omitted; both invalid → 400 INVALID_DATE.
+//
+// Response shape:
+//   {
+//     total,
+//     byStatus: {
+//       Draft:    { count, totalValue },
+//       Sent:     { count, totalValue },
+//       Accepted: { count, totalValue },
+//       Rejected: { count, totalValue },
+//     },
+//     bySubBrand: { tmc: {count}, rfu: {count}, ..., _tenant: {count} },
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     acceptanceRate,    // accepted / (accepted + rejected); null if denom=0
+//     expiredCount,      // status IN (Draft, Sent) AND validUntil < now
+//     lastUpdatedAt,     // ISO string of max(updatedAt) across scoped rows
+//   }
+//
+// Defensive math: null/non-numeric totalAmount → 0 (no NaN poisoning);
+// half-up 2dp rounding via Number.EPSILON; null subBrand defensively
+// coalesces to "_tenant" (matches the sibling /suppliers/stats shape and
+// is forward-compat with any future nullable migration).
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to parse
+// "stats" as a numeric :id (which would 400 INVALID_ID).
+// ============================================================================
+router.get("/quotes/stats", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+
+    // Optional ISO date bounds on createdAt.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Sub-brand narrowing — empty access set → zeroed shape (not 403).
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    const zeroed = {
+      total: 0,
+      byStatus: {
+        Draft: { count: 0, totalValue: 0 },
+        Sent: { count: 0, totalValue: 0 },
+        Accepted: { count: 0, totalValue: 0 },
+        Rejected: { count: 0, totalValue: 0 },
+      },
+      bySubBrand: {},
+      grandTotalValue: 0,
+      grandAcceptedValue: 0,
+      acceptanceRate: null,
+      expiredCount: 0,
+      lastUpdatedAt: null,
+    };
+
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed);
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        status: true,
+        totalAmount: true,
+        validUntil: true,
+        updatedAt: true,
+      },
+    });
+
+    if (quotes.length === 0) {
+      return res.json(zeroed);
+    }
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const now = Date.now();
+
+    const byStatus = {
+      Draft: { count: 0, totalValue: 0 },
+      Sent: { count: 0, totalValue: 0 },
+      Accepted: { count: 0, totalValue: 0 },
+      Rejected: { count: 0, totalValue: 0 },
+    };
+    const bySubBrand = {};
+    let grandTotalValue = 0;
+    let grandAcceptedValue = 0;
+    let expiredCount = 0;
+    let lastUpdatedAt = null;
+
+    for (const q of quotes) {
+      const amt = Number(q.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      grandTotalValue += safeAmt;
+
+      if (byStatus[q.status]) {
+        byStatus[q.status].count += 1;
+        byStatus[q.status].totalValue += safeAmt;
+      }
+
+      if (q.status === "Accepted") {
+        grandAcceptedValue += safeAmt;
+      }
+
+      // expiredCount: non-terminal status AND validUntil past.
+      if (
+        (q.status === "Draft" || q.status === "Sent")
+        && q.validUntil
+      ) {
+        const vu = q.validUntil instanceof Date ? q.validUntil : new Date(q.validUntil);
+        if (!Number.isNaN(vu.getTime()) && vu.getTime() < now) {
+          expiredCount += 1;
+        }
+      }
+
+      // bySubBrand: defensively coalesce null → "_tenant" to match
+      // /suppliers/stats shape.
+      const sbKey = q.subBrand ? String(q.subBrand) : "_tenant";
+      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+      bySubBrand[sbKey].count += 1;
+
+      const ts = q.updatedAt instanceof Date ? q.updatedAt : new Date(q.updatedAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+      }
+    }
+
+    // Round per-status sums.
+    for (const s of Object.keys(byStatus)) {
+      byStatus[s].totalValue = round2(byStatus[s].totalValue);
+    }
+
+    // acceptanceRate: accepted / (accepted + rejected); null if denom=0.
+    const acceptedCount = byStatus.Accepted.count;
+    const rejectedCount = byStatus.Rejected.count;
+    const terminalCount = acceptedCount + rejectedCount;
+    const acceptanceRate = terminalCount > 0
+      ? round2(acceptedCount / terminalCount)
+      : null;
+
+    res.json({
+      total: quotes.length,
+      byStatus,
+      bySubBrand,
+      grandTotalValue: round2(grandTotalValue),
+      grandAcceptedValue: round2(grandAcceptedValue),
+      acceptanceRate,
+      expiredCount,
+      lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] stats error:", e.message);
+    res.status(500).json({ error: "Failed to summarise quotes" });
+  }
+});
+
 // POST /api/travel/quotes/bulk-decline-expired — ADMIN | MANAGER.
 //
 // Slice 14 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — bulk operations on

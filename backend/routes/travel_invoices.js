@@ -1263,4 +1263,418 @@ router.get(
   },
 );
 
+// ============================================================================
+// /api/travel/invoices/:id/schedule — payment-schedule milestones (PRD §3.2.a).
+//
+// Arc 2 #901 slice 6 — TravelPaymentSchedule CRUD scaffold. Mirrors the
+// supplier-payable ledger pattern in backend/routes/travel_suppliers.js
+// (commit 59336ab7) — same auth + sub-brand + audit conventions.
+//
+// Staged settlement: an invoice can have multiple milestones (e.g. 25% advance,
+// 50% pre-departure, 25% on-return per UC-2.1). Each row is one milestone
+// row with its own dueDate + expectedAmount + status. Operator-driven for
+// now — auto-create-on-issue (default 25/50/25 split, etc.) is slice 7.
+//
+// Status enum: pending | partial | paid | overdue | waived
+//   - pending  : not yet received (default)
+//   - partial  : some received but not full expectedAmount
+//   - paid     : fully settled (paidAt auto-set when transitioning here)
+//   - overdue  : dueDate past + not paid (cron will flip in slice 9)
+//   - waived   : operator wrote off the milestone (e.g. complimentary)
+//
+// Auth: read endpoints accept any verified token; write endpoints require
+// ADMIN/MANAGER. Sub-brand isolation flows through the parent invoice via
+// loadParentInvoice() — payable scope is inherited via FK.
+//
+// Error codes: INVALID_ID, INVOICE_NOT_FOUND, MILESTONE_NOT_FOUND,
+//   SUB_BRAND_DENIED, MISSING_FIELDS, INVALID_MILESTONE_ORDER, INVALID_AMOUNT,
+//   INVALID_DUE_DATE, INVALID_STATUS, INVALID_CURRENCY, EMPTY_BODY.
+// ============================================================================
+
+const VALID_SCHEDULE_STATUSES = [
+  "pending",
+  "partial",
+  "paid",
+  "overdue",
+  "waived",
+];
+
+function assertValidScheduleStatus(s) {
+  if (s == null) return;
+  if (!VALID_SCHEDULE_STATUSES.includes(s)) {
+    const err = new Error(
+      `status must be one of: ${VALID_SCHEDULE_STATUSES.join(", ")}`,
+    );
+    err.status = 400;
+    err.code = "INVALID_STATUS";
+    throw err;
+  }
+}
+
+function assertValidMilestoneOrder(n) {
+  if (n == null || n === "") {
+    const err = new Error("milestoneOrder is required");
+    err.status = 400;
+    err.code = "MISSING_FIELDS";
+    throw err;
+  }
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isInteger(v) || v < 1) {
+    const err = new Error("milestoneOrder must be a positive integer");
+    err.status = 400;
+    err.code = "INVALID_MILESTONE_ORDER";
+    throw err;
+  }
+  return v;
+}
+
+function assertValidExpectedAmount(a) {
+  if (a == null || a === "") {
+    const err = new Error("expectedAmount is required");
+    err.status = 400;
+    err.code = "MISSING_FIELDS";
+    throw err;
+  }
+  const v = typeof a === "number" ? a : Number(a);
+  if (!Number.isFinite(v) || v < 0) {
+    const err = new Error("expectedAmount must be a non-negative number");
+    err.status = 400;
+    err.code = "INVALID_AMOUNT";
+    throw err;
+  }
+  return v;
+}
+
+// Parse + validate a dueDate on the milestone. Same shape as parseDueDate
+// above but with a distinct error code for the schedule surface so
+// frontend can render the right field's validation feedback.
+function parseMilestoneDueDate(input) {
+  if (input === undefined) return undefined;
+  if (input === null || input === "") return null;
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) {
+    const err = new Error("dueDate must be a parseable date");
+    err.status = 400;
+    err.code = "INVALID_DUE_DATE";
+    throw err;
+  }
+  return d;
+}
+
+// Parse + validate a paidAt timestamp. Same shape as dueDate but allows
+// explicit null to clear a previously-set value.
+function parsePaidAt(input) {
+  if (input === undefined) return undefined;
+  if (input === null || input === "") return null;
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) {
+    const err = new Error("paidAt must be a parseable date");
+    err.status = 400;
+    err.code = "INVALID_DUE_DATE";
+    throw err;
+  }
+  return d;
+}
+
+// GET /api/travel/invoices/:id/schedule — list milestones for an invoice.
+// Returns { schedule: [...], total }, ordered by milestoneOrder asc.
+router.get(
+  "/invoices/:id/schedule",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      const schedule = await prisma.travelPaymentSchedule.findMany({
+        where: { invoiceId, tenantId: req.travelTenant.id },
+        orderBy: [{ milestoneOrder: "asc" }, { id: "asc" }],
+      });
+      res.json({ schedule, total: schedule.length });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] list schedule error:", e.message);
+      res.status(500).json({ error: "Failed to list schedule" });
+    }
+  },
+);
+
+// POST /api/travel/invoices/:id/schedule — ADMIN/MANAGER only.
+// Required: milestoneOrder, expectedAmount.
+// Optional: dueDate, expectedCurrency (default parent invoice currency),
+//   receivedAmount, notes, status, paidAt.
+router.post(
+  "/invoices/:id/schedule",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      const {
+        milestoneOrder,
+        expectedAmount,
+        dueDate,
+        expectedCurrency,
+        receivedAmount,
+        notes,
+        status,
+        paidAt,
+      } = req.body || {};
+
+      const order = assertValidMilestoneOrder(milestoneOrder);
+      const expected = assertValidExpectedAmount(expectedAmount);
+      assertValidScheduleStatus(status);
+      const parsedDueDate = parseMilestoneDueDate(dueDate);
+      const parsedPaidAt = parsePaidAt(paidAt);
+
+      // receivedAmount is optional on POST. Validate when supplied.
+      let received = undefined;
+      if (receivedAmount !== undefined && receivedAmount !== null) {
+        const v = Number(receivedAmount);
+        if (!Number.isFinite(v) || v < 0) {
+          return res.status(400).json({
+            error: "receivedAmount must be a non-negative number",
+            code: "INVALID_AMOUNT",
+          });
+        }
+        received = v;
+      }
+
+      const created = await prisma.travelPaymentSchedule.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          invoiceId,
+          milestoneOrder: order,
+          expectedAmount: String(expected),
+          expectedCurrency: expectedCurrency
+            ? String(expectedCurrency)
+            : invoice.currency,
+          dueDate: parsedDueDate === undefined ? null : parsedDueDate,
+          ...(received !== undefined ? { receivedAmount: String(received) } : {}),
+          notes: notes ? String(notes) : null,
+          status: status || undefined,
+          ...(parsedPaidAt !== undefined ? { paidAt: parsedPaidAt } : {}),
+        },
+      });
+
+      await writeAudit(
+        "TravelPaymentSchedule",
+        "CREATE",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          invoiceId,
+          milestoneOrder: created.milestoneOrder,
+          expectedAmount: String(created.expectedAmount),
+          status: created.status,
+        },
+      );
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] create schedule error:", e.message);
+      res.status(500).json({ error: "Failed to create milestone" });
+    }
+  },
+);
+
+// PUT /api/travel/invoices/:id/schedule/:milestoneId — ADMIN/MANAGER only.
+// Partial update. status='paid' auto-sets paidAt=now() if not already set.
+router.put(
+  "/invoices/:id/schedule/:milestoneId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      const milestoneId = parseInt(req.params.milestoneId, 10);
+      if (!Number.isFinite(milestoneId)) {
+        return res.status(400).json({
+          error: "milestoneId must be a number",
+          code: "INVALID_ID",
+        });
+      }
+      const existing = await prisma.travelPaymentSchedule.findFirst({
+        where: {
+          id: milestoneId,
+          invoiceId,
+          tenantId: req.travelTenant.id,
+        },
+      });
+      if (!existing) {
+        return res.status(404).json({
+          error: "Milestone not found",
+          code: "MILESTONE_NOT_FOUND",
+        });
+      }
+
+      const data = {};
+      const {
+        milestoneOrder,
+        expectedAmount,
+        dueDate,
+        expectedCurrency,
+        receivedAmount,
+        notes,
+        status,
+        paidAt,
+      } = req.body || {};
+
+      if (milestoneOrder !== undefined) {
+        data.milestoneOrder = assertValidMilestoneOrder(milestoneOrder);
+      }
+      if (expectedAmount !== undefined) {
+        data.expectedAmount = String(assertValidExpectedAmount(expectedAmount));
+      }
+      if (expectedCurrency !== undefined) {
+        if (expectedCurrency === null || expectedCurrency === "") {
+          return res.status(400).json({
+            error: "expectedCurrency must be a non-empty string",
+            code: "INVALID_CURRENCY",
+          });
+        }
+        data.expectedCurrency = String(expectedCurrency);
+      }
+      if (dueDate !== undefined) {
+        data.dueDate = parseMilestoneDueDate(dueDate);
+      }
+      if (receivedAmount !== undefined) {
+        if (receivedAmount === null) {
+          data.receivedAmount = null;
+        } else {
+          const v = Number(receivedAmount);
+          if (!Number.isFinite(v) || v < 0) {
+            return res.status(400).json({
+              error: "receivedAmount must be a non-negative number",
+              code: "INVALID_AMOUNT",
+            });
+          }
+          data.receivedAmount = String(v);
+        }
+      }
+      if (notes !== undefined) {
+        data.notes = notes === null ? null : String(notes);
+      }
+      if (status !== undefined) {
+        assertValidScheduleStatus(status);
+        data.status = status;
+        // Auto-set paidAt when transitioning to 'paid' (caller didn't supply one).
+        if (status === "paid" && paidAt === undefined && !existing.paidAt) {
+          data.paidAt = new Date();
+        }
+      }
+      if (paidAt !== undefined) {
+        data.paidAt = parsePaidAt(paidAt);
+      }
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({
+          error: "no updatable fields provided",
+          code: "EMPTY_BODY",
+        });
+      }
+
+      const updated = await prisma.travelPaymentSchedule.update({
+        where: { id: milestoneId },
+        data,
+      });
+
+      await writeAudit(
+        "TravelPaymentSchedule",
+        "UPDATE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { invoiceId, fields: Object.keys(data) },
+      );
+
+      res.json(updated);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] update schedule error:", e.message);
+      res.status(500).json({ error: "Failed to update milestone" });
+    }
+  },
+);
+
+// DELETE /api/travel/invoices/:id/schedule/:milestoneId — ADMIN/MANAGER only.
+// Hard delete (waived status is the soft-decline path — operators choose
+// status='waived' if they want the milestone to remain in history).
+router.delete(
+  "/invoices/:id/schedule/:milestoneId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      const milestoneId = parseInt(req.params.milestoneId, 10);
+      if (!Number.isFinite(milestoneId)) {
+        return res.status(400).json({
+          error: "milestoneId must be a number",
+          code: "INVALID_ID",
+        });
+      }
+      const existing = await prisma.travelPaymentSchedule.findFirst({
+        where: {
+          id: milestoneId,
+          invoiceId,
+          tenantId: req.travelTenant.id,
+        },
+      });
+      if (!existing) {
+        return res.status(404).json({
+          error: "Milestone not found",
+          code: "MILESTONE_NOT_FOUND",
+        });
+      }
+
+      // Audit BEFORE delete (same pattern as supplier-payable DELETE).
+      await writeAudit(
+        "TravelPaymentSchedule",
+        "DELETE",
+        milestoneId,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          invoiceId,
+          milestoneOrder: existing.milestoneOrder,
+          expectedAmount: String(existing.expectedAmount),
+          status: existing.status,
+        },
+      );
+
+      await prisma.travelPaymentSchedule.delete({ where: { id: milestoneId } });
+      res.status(204).end();
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] delete schedule error:", e.message);
+      res.status(500).json({ error: "Failed to delete milestone" });
+    }
+  },
+);
+
 module.exports = router;

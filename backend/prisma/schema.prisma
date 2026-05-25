@@ -171,6 +171,7 @@ model Tenant {
   travelQuoteLines         TravelQuoteLine[]
   travelInvoices           TravelInvoice[]
   travelInvoiceLines       TravelInvoiceLine[]
+  travelPaymentSchedules   TravelPaymentSchedule[]
   travelSuppliers          TravelSupplier[]
   travelSupplierPayables   TravelSupplierPayable[]
   // TMC curriculum→destination mapping (PRD_TMC_CURRICULUM_MAPPING PC-1
@@ -4898,8 +4899,8 @@ model TravelQuoteLine {
 }
 
 model TravelInvoice {
-  id          Int                 @id @default(autoincrement())
-  tenantId    Int                 @default(1)
+  id          Int                     @id @default(autoincrement())
+  tenantId    Int                     @default(1)
   subBrand    String
   contactId   Int
   // Optional FK to TravelQuote — an invoice can be generated without a
@@ -4908,16 +4909,17 @@ model TravelInvoice {
   // Tenant-scoped human-readable identifier (e.g. "TINV-2026-0001"). The
   // route layer assigns sequentially per tenant + sub-brand at create time.
   invoiceNum  String
-  status      String              @default("Draft") // Draft | Issued | Partial | Paid | Voided
-  totalAmount Decimal?            @db.Decimal(15, 2)
-  currency    String              @default("INR")
+  status      String                  @default("Draft") // Draft | Issued | Partial | Paid | Voided
+  totalAmount Decimal?                @db.Decimal(15, 2)
+  currency    String                  @default("INR")
   dueDate     DateTime?
   paidAt      DateTime?
   lines       TravelInvoiceLine[]
-  quote       TravelQuote?        @relation(fields: [quoteId], references: [id], onDelete: SetNull)
-  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  schedule    TravelPaymentSchedule[]
+  quote       TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
 
   @@unique([tenantId, invoiceNum])
   @@index([tenantId, subBrand])
@@ -4984,6 +4986,46 @@ model TravelInvoiceLine {
 
   @@index([tenantId, invoiceId])
   @@index([invoiceId, sortOrder])
+}
+
+// PRD_TRAVEL_BILLING FR-3.2.a — payment-schedule milestones.
+// Staged settlement: a single TravelInvoice can have multiple milestones
+// (e.g. 25% advance, 50% pre-departure, 25% on-return). Each row is
+// one milestone with its own dueDate + expectedAmount + status.
+//
+// status flow: pending → partial → paid (or waived / overdue at any point)
+// onDelete: Cascade on invoiceId — if parent invoice is hard-deleted
+// the milestones go with it.
+//
+// receivedAmount tracks partial settlement (operator manually records
+// receipts in slice 6; slice 8 will wire it to the Stripe/Razorpay
+// payment-webhook surface). All decimal columns share the existing
+// Decimal(15,2) convention used across TravelInvoice + TravelQuote.
+//
+// Future slices (NOT in this slice):
+//   slice 7 — auto-create a default 25/50/25 schedule on POST /:id/issue
+//   slice 8 — payment-webhook wires receivedAmount + paidAt automatically
+//   slice 9 — overdue cron flips status to 'overdue' on dueDate < now
+model TravelPaymentSchedule {
+  id               Int           @id @default(autoincrement())
+  tenantId         Int           @default(1)
+  invoiceId        Int
+  milestoneOrder   Int // 1-based; operator-controlled sequencing
+  dueDate          DateTime?
+  expectedAmount   Decimal       @db.Decimal(15, 2)
+  expectedCurrency String        @default("INR")
+  receivedAmount   Decimal?      @db.Decimal(15, 2)
+  status           String        @default("pending") // pending | partial | paid | overdue | waived
+  paidAt           DateTime?
+  notes            String?       @db.Text
+  invoice          TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, invoiceId, milestoneOrder])
+  @@index([tenantId, status, dueDate])
 }
 
 model TravelSupplier {

@@ -1104,6 +1104,10 @@ function renderTravelNav({
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />
       <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" />
       <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" />
+      {/* Arc 2 #900 slice 2 — operator-facing Quote Builder (line items +
+          totals + action cluster). Distinct from the CRUD list above.
+          MANAGER+ per RoleGuard on the route element. */}
+      {isManager && <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" />}
       <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" />
       {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />}
       {isAdmin && <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" />}

@@ -174,6 +174,12 @@ const TravelRfuCustomerProfile = lazy(() => import("./pages/travel/RfuCustomerPr
 const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
 const TravelSuppliersAdmin = lazy(() => import("./pages/travel/SuppliersAdmin"));
 const TravelQuotesAdmin = lazy(() => import("./pages/travel/QuotesAdmin"));
+// Arc 2 #900 slice 2 — operator-facing single-quote builder (line items +
+// totals panel + Save/Send/Duplicate/Download-PDF action cluster). Distinct
+// from TravelQuotesAdmin which is the CRUD list. PRD:
+// docs/PRD_TRAVEL_QUOTE_BUILDER.md §3. RoleGuard allow=[ADMIN,MANAGER]
+// mirrors backend write RBAC.
+const TravelQuoteBuilder = lazy(() => import("./pages/travel/QuoteBuilder"));
 const TravelInvoicesAdmin = lazy(() => import("./pages/travel/InvoicesAdmin"));
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
@@ -1276,6 +1282,11 @@ export default function App() {
               <Route path="travel/suppliers" element={<TravelOnly><TravelSuppliers /></TravelOnly>} />
               <Route path="travel/suppliers-admin" element={<TravelOnly><TravelSuppliersAdmin /></TravelOnly>} />
               <Route path="travel/quotes-admin" element={<TravelOnly><TravelQuotesAdmin /></TravelOnly>} />
+              {/* Arc 2 #900 slice 2 — Quote Builder (line-items composition).
+                  Optional :id param (`/builder` = new; `/builder/:id` = edit).
+                  RoleGuard allow=[ADMIN,MANAGER] mirrors backend write RBAC. */}
+              <Route path="travel/quotes/builder" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
+              <Route path="travel/quotes/builder/:id" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
               <Route path="travel/invoices-admin" element={<TravelOnly><TravelInvoicesAdmin /></TravelOnly>} />
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
               <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />

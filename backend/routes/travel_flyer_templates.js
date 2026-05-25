@@ -20,6 +20,7 @@
  * Endpoints:
  *   GET    /api/travel/flyer-templates                — list (tenant + sub-brand scoped)
  *   GET    /api/travel/flyer-templates/sub-brands     — USER+ per-sub-brand counts (slice 13)
+ *   GET    /api/travel/flyer-templates/global-stats   — USER+ tenant-wide rollup (slice 19)
  *   POST   /api/travel/flyer-templates/bulk-archive   — ADMIN/MANAGER batch archive (slice 15)
  *   POST   /api/travel/flyer-templates/bulk-unarchive — ADMIN/MANAGER batch restore (slice 16)
  *   GET    /api/travel/flyer-templates/:id            — fetch one
@@ -362,6 +363,187 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] sub-brands error:", e.message);
       res.status(500).json({ error: "Failed to summarise flyer templates by sub-brand" });
+    }
+  },
+);
+
+// GET /api/travel/flyer-templates/global-stats — tenant-wide flyer-templates rollup
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 19).
+//
+// USER-readable meta endpoint. Powers the FlyerTemplates library page's
+// header summary strip ("42 templates · 35 active · 7 archived ·
+// 184 lifetime exports · 12 last 7d"). Without this, the frontend has
+// to fire {/sub-brands, /?isActive=true, /?isActive=false, /audit poll}
+// just to render the header — 4 round-trips for a single visual surface.
+//
+// Distinct from slice 13 /sub-brands (per-sub-brand counts only) and
+// slice 17 /:id/usage-stats (per-template rollup). This is the
+// tenant-wide aggregate across BOTH dimensions: template-count summary
+// (status + sub-brand) AND audit-derived activity (lifetime exports +
+// recent activity), in one envelope.
+//
+// PRD anchors:
+//   - §3.7.2 — per-template metadata feeds the marketplace list +
+//              future conversion-rate column (this is the upstream
+//              tenant-level rollup the dashboard reads)
+//   - §3.7.4 — template marketplace search/filter (header summary
+//              gives the operator the population denominator)
+//   - §3.6.4 — performance hint engine consumes per-tenant export
+//              counts to surface optimisation suggestions
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees
+//     ONLY their allowed sub-brands' templates in the counts, PLUS
+//     tenant-wide (NULL subBrand) rows. Same gate as the list endpoint.
+//   - Template-count rollup (from prisma.travelFlyerTemplate.findMany
+//     with select: { subBrand, isActive }):
+//       total, active, archived              — overall + by status
+//       bySubBrand[]                         — { subBrand, total, active, archived }
+//                                              one row per visible sub-brand
+//                                              + tenant-wide (subBrand: null)
+//   - Audit-derived rollup (from prisma.auditLog.findMany scoped to
+//     entity='TravelFlyerTemplate' for this tenant):
+//       exports.total                        — lifetime EXPORTED + EXPORT_QUEUED
+//       exports.last7d                       — exports in the last 7d
+//       recentActivity.last7d                — total audit rows in last 7d
+//       lastActivityAt                       — ISO ts of newest audit row,
+//                                              or null if no history
+//
+// USER-readable: matches the read-only-aid contract on /sub-brands +
+// /usage-stats + /audit-trail. The data is anodyne (counts +
+// timestamps); no payload bodies leak.
+//
+// No audit row: read-only meta surface. Mirrors slice 12 / 13 / 17 / 18.
+//
+// Implementation note: two findMany reads (templates + audit logs)
+// rather than groupBy. Templates findMany returns { subBrand, isActive }
+// only (light row shape); audit findMany returns { action, createdAt }
+// only. JS-side aggregation stays mock-friendly for vitest and matches
+// the rationale on /sub-brands (slice 13) + /usage-stats (slice 17).
+// Sub-brand-restricted callers' template read is narrowed via the
+// same OR / IN clause as the list endpoint, so cross-sub-brand rows
+// can NEVER appear in the rollup denominator.
+//
+// Express route ordering: literal-path /global-stats MUST be declared
+// BEFORE the /:id family or `:id="global-stats"` would 400 INVALID_ID
+// before reaching this handler. Same convention as /sub-brands +
+// /bulk-archive + /bulk-unarchive.
+router.get(
+  "/flyer-templates/global-stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Sub-brand narrowing — same gate as the list endpoint above.
+      // Sub-brand-restricted callers see their allowed sub-brands plus
+      // tenant-wide (NULL) rows; admins/managers without subBrandAccess
+      // see everything.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const templateWhere = { tenantId };
+      if (allowed) {
+        templateWhere.OR = [
+          { subBrand: { in: [...allowed] } },
+          { subBrand: null },
+        ];
+      }
+
+      // Single findMany returns the light projection; JS aggregates
+      // both status counts AND per-sub-brand buckets in one pass.
+      const rows = await prisma.travelFlyerTemplate.findMany({
+        where: templateWhere,
+        select: { subBrand: true, isActive: true },
+      });
+
+      // Pre-seed buckets — tenant-wide always present, plus every
+      // sub-brand the caller can see. Zero-init so the frontend
+      // sees a stable shape regardless of which sub-brands have rows.
+      const bucketMap = new Map();
+      bucketMap.set(null, { subBrand: null, total: 0, active: 0, archived: 0 });
+      for (const sb of VALID_SUB_BRANDS) {
+        if (!allowed || allowed.has(sb)) {
+          bucketMap.set(sb, { subBrand: sb, total: 0, active: 0, archived: 0 });
+        }
+      }
+
+      let total = 0;
+      let active = 0;
+      let archived = 0;
+      for (const row of rows) {
+        const key = row.subBrand ?? null;
+        const bucket = bucketMap.get(key);
+        // Defensive: skip a row the where-clause shouldn't have surfaced.
+        if (!bucket) continue;
+        bucket.total += 1;
+        if (row.isActive) bucket.active += 1;
+        else bucket.archived += 1;
+        total += 1;
+        if (row.isActive) active += 1;
+        else archived += 1;
+      }
+
+      // Stable order: tenant-wide first, then sub-brands in VALID_SUB_BRANDS
+      // order (matches /sub-brands convention).
+      const bySubBrand = [bucketMap.get(null)];
+      for (const sb of VALID_SUB_BRANDS) {
+        if (bucketMap.has(sb)) bySubBrand.push(bucketMap.get(sb));
+      }
+
+      // Audit-derived rollup. Single findMany over this entity's tenant
+      // audit history. The result set is bounded per tenant (a heavy
+      // user might accumulate a few thousand rows over months) — JS
+      // aggregation keeps it mock-friendly. We do NOT sub-brand-narrow
+      // the audit read: audit rows don't carry subBrand and the data
+      // we surface (counts + timestamps) is anodyne enough that the
+      // tenant-level slice is correct for the header strip.
+      const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const auditRows = await prisma.auditLog.findMany({
+        where: {
+          tenantId,
+          entity: "TravelFlyerTemplate",
+        },
+        select: { action: true, createdAt: true },
+      });
+
+      let exportsTotal = 0;
+      let exportsLast7d = 0;
+      let recentActivityLast7d = 0;
+      let lastActivityAt = null;
+      for (const row of auditRows) {
+        const ts = row.createdAt instanceof Date
+          ? row.createdAt
+          : new Date(row.createdAt);
+        if (!lastActivityAt || ts > lastActivityAt) lastActivityAt = ts;
+        const isRecent = ts.getTime() >= sevenDaysAgoMs;
+        if (isRecent) recentActivityLast7d += 1;
+        if (
+          row.action === "TRAVEL_FLYER_TEMPLATE_EXPORTED" ||
+          row.action === "TRAVEL_FLYER_TEMPLATE_EXPORT_QUEUED"
+        ) {
+          exportsTotal += 1;
+          if (isRecent) exportsLast7d += 1;
+        }
+      }
+
+      res.json({
+        total,
+        active,
+        archived,
+        bySubBrand,
+        exports: {
+          total: exportsTotal,
+          last7d: exportsLast7d,
+        },
+        recentActivity: {
+          last7d: recentActivityLast7d,
+        },
+        lastActivityAt: lastActivityAt ? lastActivityAt.toISOString() : null,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] global-stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise flyer templates" });
     }
   },
 );

@@ -2570,3 +2570,257 @@ describe('GET /api/travel/flyer-templates/:id/audit-trail (slice 18)', () => {
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /api/travel/flyer-templates/global-stats (slice 19)', () => {
+  beforeEach(() => {
+    // Reset to ADMIN with no sub-brand restriction so most tests see the
+    // unrestricted-caller path. Individual tests override for MANAGER /
+    // sub-brand-restricted cases.
+    prisma.user.findUnique.mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+    prisma.travelFlyerTemplate.findMany.mockReset();
+    prisma.auditLog.findMany = vi.fn().mockResolvedValue([]);
+  });
+
+  test('happy path: rollup combines template counts + audit-derived exports + recent activity', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([
+      { subBrand: null, isActive: true },
+      { subBrand: null, isActive: true },
+      { subBrand: null, isActive: false },
+      { subBrand: 'tmc', isActive: true },
+      { subBrand: 'tmc', isActive: true },
+      { subBrand: 'tmc', isActive: false },
+      { subBrand: 'rfu', isActive: true },
+      { subBrand: 'travelstall', isActive: true },
+      { subBrand: 'travelstall', isActive: true },
+      { subBrand: 'visasure', isActive: false },
+    ]);
+
+    const now = Date.now();
+    const recent = new Date(now - 2 * 24 * 60 * 60 * 1000); // 2d ago
+    const old = new Date(now - 30 * 24 * 60 * 60 * 1000); // 30d ago
+    prisma.auditLog.findMany.mockResolvedValue([
+      { action: 'CREATE', createdAt: old },
+      { action: 'UPDATE', createdAt: old },
+      { action: 'UPDATE', createdAt: recent },
+      { action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED', createdAt: old },
+      { action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED', createdAt: recent },
+      { action: 'TRAVEL_FLYER_TEMPLATE_EXPORT_QUEUED', createdAt: recent },
+      { action: 'TRAVEL_FLYER_TEMPLATE_ARCHIVED', createdAt: recent },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/global-stats')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(10);
+    expect(res.body.active).toBe(7);
+    expect(res.body.archived).toBe(3);
+    expect(res.body.exports.total).toBe(3); // 2 EXPORTED + 1 EXPORT_QUEUED
+    expect(res.body.exports.last7d).toBe(2); // 1 recent EXPORTED + 1 recent EXPORT_QUEUED
+    expect(res.body.recentActivity.last7d).toBe(4); // UPDATE + EXPORTED + EXPORT_QUEUED + ARCHIVED all recent
+    expect(typeof res.body.lastActivityAt).toBe('string');
+    expect(res.body.lastActivityAt).not.toBeNull();
+  });
+
+  test('bySubBrand carries one bucket per visible sub-brand + tenant-wide; ordered tenant-wide-first', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([
+      { subBrand: null, isActive: true },
+      { subBrand: 'tmc', isActive: true },
+      { subBrand: 'tmc', isActive: false },
+      { subBrand: 'rfu', isActive: true },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/global-stats')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.bySubBrand)).toBe(true);
+    // Tenant-wide bucket first
+    expect(res.body.bySubBrand[0]).toEqual({ subBrand: null, total: 1, active: 1, archived: 0 });
+    // Subsequent buckets in VALID_SUB_BRANDS order; every sub-brand present (zero-seeded)
+    const sbKeys = res.body.bySubBrand.slice(1).map((b) => b.subBrand);
+    expect(sbKeys).toContain('tmc');
+    expect(sbKeys).toContain('rfu');
+    expect(sbKeys).toContain('travelstall');
+    expect(sbKeys).toContain('visasure');
+    const tmc = res.body.bySubBrand.find((b) => b.subBrand === 'tmc');
+    expect(tmc).toEqual({ subBrand: 'tmc', total: 2, active: 1, archived: 1 });
+    const visasure = res.body.bySubBrand.find((b) => b.subBrand === 'visasure');
+    expect(visasure).toEqual({ subBrand: 'visasure', total: 0, active: 0, archived: 0 });
+  });
+
+  test('empty tenant: zero counts + null lastActivityAt + every sub-brand bucket present', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([]);
+    prisma.auditLog.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/global-stats')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(0);
+    expect(res.body.active).toBe(0);
+    expect(res.body.archived).toBe(0);
+    expect(res.body.exports.total).toBe(0);
+    expect(res.body.exports.last7d).toBe(0);
+    expect(res.body.recentActivity.last7d).toBe(0);
+    expect(res.body.lastActivityAt).toBeNull();
+    // bySubBrand is still seeded with tenant-wide + 4 sub-brand buckets
+    expect(res.body.bySubBrand).toHaveLength(5);
+    for (const b of res.body.bySubBrand) {
+      expect(b.total).toBe(0);
+      expect(b.active).toBe(0);
+      expect(b.archived).toBe(0);
+    }
+  });
+
+  test('MANAGER restricted to one sub-brand: read narrowed; bySubBrand only includes allowed + tenant-wide', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([
+      { subBrand: null, isActive: true },
+      { subBrand: 'rfu', isActive: true },
+      { subBrand: 'rfu', isActive: false },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/global-stats')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(3);
+    expect(res.body.active).toBe(2);
+    expect(res.body.archived).toBe(1);
+
+    // bySubBrand has tenant-wide + rfu only — tmc / travelstall / visasure
+    // buckets MUST NOT appear (the caller can't see those sub-brands).
+    const sbKeys = res.body.bySubBrand.map((b) => b.subBrand);
+    expect(sbKeys).toEqual([null, 'rfu']);
+    expect(res.body.bySubBrand.find((b) => b.subBrand === 'rfu')).toEqual({
+      subBrand: 'rfu',
+      total: 2,
+      active: 1,
+      archived: 1,
+    });
+
+    // Verify the template findMany where-clause was narrowed.
+    const findManyCall = prisma.travelFlyerTemplate.findMany.mock.calls.at(-1)[0];
+    expect(findManyCall.where.tenantId).toBe(1);
+    expect(Array.isArray(findManyCall.where.OR)).toBe(true);
+    // The narrowing OR must include the allowed sub-brand AND tenant-wide null.
+    const orShapes = findManyCall.where.OR.map((c) => JSON.stringify(c));
+    expect(orShapes.some((s) => s.includes('rfu'))).toBe(true);
+    expect(orShapes.some((s) => s.includes('null'))).toBe(true);
+  });
+
+  test('exports.last7d narrows to last-7d window; older exports counted in total only', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([]);
+
+    const now = Date.now();
+    const fresh = new Date(now - 60 * 60 * 1000); // 1h ago
+    const stale = new Date(now - 14 * 24 * 60 * 60 * 1000); // 14d ago
+    prisma.auditLog.findMany.mockResolvedValue([
+      { action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED', createdAt: stale },
+      { action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED', createdAt: stale },
+      { action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED', createdAt: fresh },
+      { action: 'TRAVEL_FLYER_TEMPLATE_EXPORT_QUEUED', createdAt: fresh },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/global-stats')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.exports.total).toBe(4);
+    expect(res.body.exports.last7d).toBe(2); // 1 EXPORTED + 1 EXPORT_QUEUED in the last 7d
+  });
+
+  test('audit findMany scoped to entity=TravelFlyerTemplate and current tenant', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([]);
+    prisma.auditLog.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/global-stats')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.auditLog.findMany).toHaveBeenCalledTimes(1);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({
+      tenantId: 1,
+      entity: 'TravelFlyerTemplate',
+    });
+  });
+
+  test('USER role is allowed (read-only-aid contract; mirrors slice 13 / 17 / 18)', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([
+      { subBrand: null, isActive: true },
+    ]);
+    prisma.auditLog.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/global-stats')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.active).toBe(1);
+  });
+
+  test('NO audit row written by this read-only endpoint (mirrors slice 13 / 17 / 18)', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([]);
+    prisma.auditLog.findMany.mockResolvedValue([]);
+    prisma.auditLog.create.mockClear();
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/global-stats')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('Express route ordering: /global-stats resolves to the literal handler, NOT /:id', async () => {
+    // If route ordering were broken, this hits GET /:id and 400s on
+    // INVALID_ID since "global-stats" doesn't parseInt to a finite number.
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([]);
+    prisma.auditLog.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/global-stats')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    // The handler reads the template population (signature of the
+    // literal-path resolver); the :id family would NOT call findMany.
+    expect(prisma.travelFlyerTemplate.findMany).toHaveBeenCalled();
+  });
+
+  test('audit-row Date instances and ISO-string-storable timestamps both flow through cleanly', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([]);
+
+    // Mix of Date instances + ISO-string createdAt to exercise the
+    // defensive `instanceof Date` fallback path in the handler.
+    const now = Date.now();
+    const dateInstance = new Date(now - 2 * 24 * 60 * 60 * 1000);
+    const isoString = new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString();
+    prisma.auditLog.findMany.mockResolvedValue([
+      { action: 'CREATE', createdAt: dateInstance },
+      { action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED', createdAt: isoString },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/global-stats')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.recentActivity.last7d).toBe(2);
+    expect(res.body.exports.total).toBe(1);
+    expect(res.body.exports.last7d).toBe(1);
+    expect(typeof res.body.lastActivityAt).toBe('string');
+  });
+});

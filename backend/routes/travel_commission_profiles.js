@@ -19,6 +19,7 @@
  *   POST   /api/travel/commission-profiles/:id/preview    — what-if commission preview (slice 7)
  *   GET    /api/travel/commission-profiles/:id/ledger     — operator-view commission ledger (slice 9)
  *   GET    /api/travel/commission-profiles/:id/ledger.csv — operator CSV export of ledger (slice 11)
+ *   POST   /api/travel/commission-profiles/:id/duplicate  — ADMIN/MANAGER clone (slice 13)
  *
  * Validation strictness (slice 2):
  *   - name required, non-empty trim                       → 400 MISSING_FIELDS
@@ -1028,6 +1029,130 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-commission-profiles] ledger.csv error:", e.message);
       res.status(500).json({ error: "Failed to export commission ledger CSV" });
+    }
+  },
+);
+
+// POST /api/travel/commission-profiles/:id/duplicate — ADMIN/MANAGER only.
+//
+// Clones an existing TravelCommissionProfile row into a fresh row under the
+// same tenant. Optional body fields { name, subBrand } let the operator
+// override the copy's name + sub-brand assignment (e.g. cloning a TMC
+// flat-percent profile across to RFU, or naming the variant "Festive 8%
+// boost"). Mirrors #908 slice 6's flyer-template duplicate pattern, so
+// operator UI affordances stay consistent across the travel admin surface.
+//
+// Source row is looked up tenant-scoped + sub-brand-scoped (same guard as
+// GET/PUT/DELETE), so cross-tenant lookups yield 404 and cross-sub-brand
+// reads yield 403. The duplicate inherits profileType / profileJson /
+// notes verbatim from the source — duplicate is a starting point for
+// percentage variations (seasonal tier tweak, sub-brand-specific rate),
+// so the full computational shape comes with it. isActive is reset to
+// true regardless of source state so the new copy enters the active list
+// cleanly; source.isActive=false still duplicates fine (no INVALID_STATE
+// gate — archiving a profile should not block authoring a variant of it).
+//
+// Name suffix convention: when no `name` override is supplied, the copy
+// is named `"<source.name> (copy)"`. Operators routinely duplicate then
+// immediately rename in the editor, so the suffix is a hint not a
+// commitment; pin the verbatim string here so consumers (tests, UI
+// chrome) can rely on it.
+//
+// Why no profileJson override on duplicate: the editor flow is "clone
+// then edit"; mutating profileJson at duplicate-time would skip the
+// validation path that PUT runs. Operators clone then call PUT to tweak
+// the new row's rate/tiers, which keeps the deep-shape-validation
+// deferral semantics consistent.
+router.post(
+  "/commission-profiles/:id/duplicate",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const source = await prisma.travelCommissionProfile.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!source) {
+        return res.status(404).json({
+          error: "Commission profile not found",
+          code: "PROFILE_NOT_FOUND",
+        });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (source.subBrand && !canAccessSubBrand(allowed, source.subBrand)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      const { name: nameOverride, subBrand: subBrandOverride } = req.body || {};
+
+      let targetSubBrand = source.subBrand;
+      if (subBrandOverride !== undefined) {
+        if (subBrandOverride === null || subBrandOverride === "") {
+          targetSubBrand = null;
+        } else {
+          assertValidSubBrand(subBrandOverride);
+          if (!canAccessSubBrand(allowed, subBrandOverride)) {
+            return res.status(403).json({
+              error: "Sub-brand access denied",
+              code: "SUB_BRAND_DENIED",
+            });
+          }
+          targetSubBrand = String(subBrandOverride);
+        }
+      }
+
+      let targetName;
+      if (nameOverride !== undefined && nameOverride !== null && nameOverride !== "") {
+        if (typeof nameOverride !== "string" || !nameOverride.trim()) {
+          return res.status(400).json({
+            error: "name must be non-empty",
+            code: "MISSING_FIELDS",
+          });
+        }
+        targetName = nameOverride.trim();
+      } else {
+        targetName = `${source.name} (copy)`;
+      }
+
+      const created = await prisma.travelCommissionProfile.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          name: targetName,
+          profileType: source.profileType,
+          profileJson: source.profileJson,
+          subBrand: targetSubBrand,
+          isActive: true,
+          notes: source.notes,
+        },
+      });
+
+      await writeAudit(
+        "TravelCommissionProfile",
+        "TRAVEL_COMMISSION_PROFILE_DUPLICATED",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          sourceId: source.id,
+          newId: created.id,
+          subBrand: created.subBrand,
+        },
+      );
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] duplicate error:", e.message);
+      res.status(500).json({ error: "Failed to duplicate commission profile" });
     }
   },
 );

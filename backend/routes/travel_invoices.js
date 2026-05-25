@@ -4576,4 +4576,266 @@ router.get(
   },
 );
 
+// ============================================================================
+// POST /api/travel/invoices/:id/apply-penalty
+// Arc 2 #901 slice 25 — PRD_TRAVEL_BILLING §3 late-payment penalty PERSIST.
+//
+// Counterpart to slice 24's read-only GET /:id/late-penalty. Materialises
+// the computed penalty as a TravelInvoiceLine (lineType='fee') against the
+// parent invoice + recomputes totalAmount via the existing pipeline + writes
+// an audit row. Idempotency surface: idempotencyKey body field, threaded
+// through to TravelInvoiceLine.notes (no schema change — the per-invoice
+// uniqueness search runs against existing lines on each request).
+//
+// Why a SEPARATE endpoint from /lines (not just "create a line manually"):
+//   - Operator decision flow: preview → review → apply. Surfacing it as a
+//     first-class verb lets the UI render "Apply penalty for ₹113.42?" with
+//     the math pinned, instead of asking the operator to retype the amount.
+//   - The math runs server-side a second time at apply-time, guaranteeing
+//     preview-vs-applied parity (same /asOf, same policy overrides → same
+//     penalty value). Operator can't typo a stale preview value into a
+//     manual /lines POST.
+//   - Audit trail carries 'TRAVEL_INVOICE_PENALTY_APPLIED' with the math
+//     details (daysOverdue, chargeableDays, ratePercent, mode, penalty) —
+//     a manual /lines POST would only log 'CREATE' on the line with no
+//     policy context.
+//
+// Idempotency model: caller-supplied idempotencyKey (string, optional).
+// When present + a prior line on this invoice has the same key (matched
+// against notes containing 'penaltyKey:<key>'), returns the EXISTING line
+// + status:'already_applied'. When absent, every call creates a fresh
+// penalty line (operator-confirmed escalation — they meant to add another).
+//
+// Auth: ADMIN/MANAGER only (writes).
+// Pre-conditions: invoice exists, tenant-scoped, sub-brand-accessible.
+// Status guard: REJECT if status not in PAYABLE_STATUSES (Issued/Partial).
+//   Returns 409 INVOICE_NOT_PAYABLE for Draft/Paid/Voided. Distinct from
+//   the preview's applies:false+reason:'INVOICE_CLOSED' shape because this
+//   is a write operation and we want to surface the precondition violation
+//   explicitly rather than silently no-op.
+//
+// Body (all optional, mirrors slice-24 query params):
+//   asOf, graceDays, annualRatePercent, flatFeePercent, mode, idempotencyKey,
+//   description (override the auto-generated penalty-line description).
+//
+// Response on apply: 201 + { invoiceId, line, penalty, daysOverdue,
+//   chargeableDays, mode, ratePercent, status:'applied' }.
+// Response on idempotent hit: 200 + { invoiceId, line, status:'already_applied' }.
+// Response when penalty does not apply (in-grace, not-yet-due, zero-principal):
+//   200 + { applies:false, reason, status:'not_applied' }. NO line created.
+//
+// Error codes: INVALID_ID, INVOICE_NOT_FOUND, SUB_BRAND_DENIED,
+//   INVALID_AS_OF, INVALID_NUMERIC_QUERY, INVALID_MODE, INVALID_IDEMPOTENCY_KEY,
+//   INVOICE_NOT_PAYABLE.
+// ============================================================================
+router.post(
+  "/invoices/:id/apply-penalty",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      // Status pre-condition. Draft can't be penalised (no obligation yet);
+      // Paid/Voided are closed states.
+      if (!["Issued", "Partial"].includes(invoice.status)) {
+        return res.status(409).json({
+          error:
+            "Late-payment penalty can only be applied to invoices in Issued or Partial status",
+          code: "INVOICE_NOT_PAYABLE",
+          currentStatus: invoice.status,
+        });
+      }
+
+      const body = req.body || {};
+
+      // Parse asOf — wall-clock default, body override must be a valid date.
+      let asOf = new Date();
+      if (body.asOf != null && body.asOf !== "") {
+        const parsed = new Date(body.asOf);
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "asOf must be a valid ISO 8601 date string",
+            code: "INVALID_AS_OF",
+          });
+        }
+        asOf = parsed;
+      }
+
+      // Parse numeric overrides — each must coerce cleanly OR be absent.
+      function parseOptionalNonNeg(name) {
+        const raw = body[name];
+        if (raw == null || raw === "") return undefined;
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0) {
+          const err = new Error(`${name} must be a non-negative number`);
+          err.status = 400;
+          err.code = "INVALID_NUMERIC_QUERY";
+          throw err;
+        }
+        return n;
+      }
+
+      const graceDays = parseOptionalNonNeg("graceDays");
+      const annualRatePercent = parseOptionalNonNeg("annualRatePercent");
+      const flatFeePercent = parseOptionalNonNeg("flatFeePercent");
+
+      let mode;
+      if (body.mode != null && body.mode !== "") {
+        if (body.mode !== "simple" && body.mode !== "flat") {
+          return res.status(400).json({
+            error: "mode must be 'simple' or 'flat'",
+            code: "INVALID_MODE",
+          });
+        }
+        mode = body.mode;
+      }
+
+      // Idempotency key — optional, free-form string capped at 64 chars.
+      let idempotencyKey = null;
+      if (body.idempotencyKey != null && body.idempotencyKey !== "") {
+        if (
+          typeof body.idempotencyKey !== "string" ||
+          body.idempotencyKey.length > 64
+        ) {
+          return res.status(400).json({
+            error: "idempotencyKey must be a string ≤64 chars",
+            code: "INVALID_IDEMPOTENCY_KEY",
+          });
+        }
+        idempotencyKey = body.idempotencyKey;
+      }
+
+      // Idempotency probe — search this invoice's existing lines for a
+      // notes-token marking the same caller-supplied key. Scoped by
+      // tenantId + invoiceId so cross-invoice keys don't collide.
+      if (idempotencyKey) {
+        const existing = await prisma.travelInvoiceLine.findFirst({
+          where: {
+            tenantId: req.travelTenant.id,
+            invoiceId: invoice.id,
+            lineType: "fee",
+            notes: { contains: `penaltyKey:${idempotencyKey}` },
+          },
+        });
+        if (existing) {
+          return res.status(200).json({
+            invoiceId: invoice.id,
+            line: existing,
+            status: "already_applied",
+            idempotencyKey,
+          });
+        }
+      }
+
+      const result = computeLatePenalty({
+        invoiceAmount: invoice.totalAmount,
+        dueDate: invoice.dueDate,
+        status: invoice.status,
+        asOf,
+        graceDays,
+        annualRatePercent,
+        flatFeePercent,
+        mode,
+      });
+
+      // Penalty did not apply → 200 envelope, NO line created, NO audit row.
+      // Mirrors apply-tcs's "applies===false" branch which also no-ops.
+      if (!result.applies) {
+        return res.status(200).json({
+          invoiceId: invoice.id,
+          status: "not_applied",
+          applies: false,
+          reason: result.reason,
+          daysOverdue: result.daysOverdue,
+          chargeableDays: result.chargeableDays,
+          graceDays: result.graceDays,
+          mode: result.mode,
+          ratePercent: result.ratePercent,
+          penalty: 0,
+        });
+      }
+
+      // Build the line. Description auto-generated unless operator overrode
+      // (audit-trail-friendly default). Notes carries the policy details +
+      // the idempotency key marker (when supplied).
+      const autoDesc =
+        result.mode === "flat"
+          ? `Late-payment penalty (${result.ratePercent}% flat, ${result.daysOverdue}d overdue)`
+          : `Late-payment penalty (${result.ratePercent}% p.a., ${result.chargeableDays}d chargeable)`;
+      const description =
+        typeof body.description === "string" && body.description.trim()
+          ? body.description.trim().slice(0, 255)
+          : autoDesc;
+
+      const notesParts = [
+        `mode:${result.mode}`,
+        `ratePercent:${result.ratePercent}`,
+        `daysOverdue:${result.daysOverdue}`,
+        `chargeableDays:${result.chargeableDays}`,
+        `asOf:${asOf.toISOString()}`,
+      ];
+      if (idempotencyKey) notesParts.push(`penaltyKey:${idempotencyKey}`);
+      const notes = notesParts.join("; ");
+
+      const line = await prisma.travelInvoiceLine.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          invoiceId: invoice.id,
+          lineType: "fee",
+          description,
+          quantity: 1,
+          unitPrice: result.penalty,
+          amount: result.penalty,
+          currency: invoice.currency,
+          sortOrder: 9999, // penalty rows render last (operator can re-sort).
+          notes,
+        },
+      });
+
+      await recomputeInvoiceTotal(invoice.id, req.travelTenant.id);
+
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_PENALTY_APPLIED",
+        invoice.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          lineId: line.id,
+          penalty: result.penalty,
+          mode: result.mode,
+          ratePercent: result.ratePercent,
+          daysOverdue: result.daysOverdue,
+          chargeableDays: result.chargeableDays,
+          asOf: asOf.toISOString(),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        },
+      );
+
+      return res.status(201).json({
+        invoiceId: invoice.id,
+        line,
+        status: "applied",
+        penalty: result.penalty,
+        daysOverdue: result.daysOverdue,
+        chargeableDays: result.chargeableDays,
+        graceDays: result.graceDays,
+        mode: result.mode,
+        ratePercent: result.ratePercent,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] apply-penalty error:", e.message);
+      res.status(500).json({ error: "Failed to apply late-payment penalty" });
+    }
+  },
+);
+
 module.exports = router;

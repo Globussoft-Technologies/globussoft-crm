@@ -370,6 +370,177 @@ router.get("/quotes/analytics", verifyToken, requireTravelTenant, async (req, re
   }
 });
 
+// POST /api/travel/quotes/bulk-decline-expired — ADMIN | MANAGER.
+//
+// Slice 14 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — bulk operations on
+// expired quotes). Operator-dashboard cleanup tool: in one request,
+// decline every Draft|Sent quote whose validUntil < now within the
+// caller's sub-brand scope. Per-row audit (TRAVEL_QUOTE_DECLINED with
+// bulk: true detail) so the rejection trail matches the singular
+// /:id/decline endpoint shape — downstream audit consumers don't need
+// a separate code path for bulk vs single.
+//
+// Idempotent: re-running after a cleanup affects 0 rows (the second
+// invocation's findMany returns []). Always 200 — never an error for
+// "nothing to decline" since the cleanup tile may render the button
+// even when the list is empty.
+//
+// Body (optional):
+//   { reason?: string, subBrand?: 'tmc'|'rfu'|'travelstall'|'visasure' }
+//   - reason: string ≤1000 chars, captured in every audit row's details.
+//             Same truncation policy as POST /:id/decline (silent slice,
+//             not 400 — operators have no UI hint for the limit).
+//   - subBrand: scope the sweep to ONE sub-brand (must be in caller's
+//               access set, else 403 SUB_BRAND_DENIED). When omitted,
+//               the sweep covers ALL sub-brands the caller can access.
+//
+// Response:
+//   { declinedCount: N, declinedIds: [n,n,...], reason: string|null,
+//     subBrand: 'tmc'|null }
+//
+// Route-ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "bulk-decline-expired" as a numeric :id and 400.
+router.post(
+  "/quotes/bulk-decline-expired",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const body = req.body || {};
+
+      // Optional reason: string ≤1000 chars, blank → null.
+      let reason = null;
+      if (body.reason != null) {
+        if (typeof body.reason !== "string") {
+          return res.status(400).json({
+            error: "reason must be a string",
+            code: "INVALID_REASON",
+          });
+        }
+        reason = body.reason.trim().slice(0, 1000);
+        if (reason === "") reason = null;
+      }
+
+      // Optional sub-brand scope: must be valid + caller must have access.
+      let subBrandScope = null;
+      if (body.subBrand != null && body.subBrand !== "") {
+        if (typeof body.subBrand !== "string") {
+          return res.status(400).json({
+            error: "subBrand must be a string",
+            code: "INVALID_SUB_BRAND",
+          });
+        }
+        try {
+          assertValidSubBrand(body.subBrand);
+        } catch (e) {
+          return res.status(e.status || 400).json({ error: e.message, code: e.code });
+        }
+        subBrandScope = body.subBrand;
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      // Empty access set → caller has no sub-brand grants. Mirror the
+      // expired-list short-circuit: return zero-result envelope (not 403)
+      // so the dashboard tile's button stays clickable for not-yet-
+      // onboarded operators.
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.status(200).json({
+          declinedCount: 0,
+          declinedIds: [],
+          reason,
+          subBrand: subBrandScope,
+        });
+      }
+
+      // If a specific sub-brand was requested, the caller must be able
+      // to access it.
+      if (subBrandScope && !canAccessSubBrand(allowed, subBrandScope)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        status: { in: ["Draft", "Sent"] },
+        validUntil: { lt: new Date() },
+      };
+
+      if (subBrandScope) {
+        where.subBrand = subBrandScope;
+      } else if (allowed instanceof Set) {
+        // Non-admin caller: restrict to their access set.
+        where.subBrand = { in: Array.from(allowed) };
+      }
+      // allowed === null → admin / unrestricted: no subBrand clause needed.
+
+      // Load the doomed rows BEFORE the flip so each audit entry carries
+      // its previousStatus + per-row context.
+      const doomed = await prisma.travelQuote.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          contactId: true,
+          status: true,
+        },
+      });
+
+      if (doomed.length === 0) {
+        return res.status(200).json({
+          declinedCount: 0,
+          declinedIds: [],
+          reason,
+          subBrand: subBrandScope,
+        });
+      }
+
+      const doomedIds = doomed.map((q) => q.id);
+
+      await prisma.travelQuote.updateMany({
+        where: { id: { in: doomedIds }, tenantId: req.travelTenant.id },
+        data: { status: "Rejected" },
+      });
+
+      // Per-row audit so downstream consumers can join on the same action
+      // code that the singular /:id/decline emits. bulk: true distinguishes
+      // mass-cleanup events from operator-initiated single declines.
+      const declinedAt = new Date().toISOString();
+      for (const row of doomed) {
+        await writeAudit(
+          "TravelQuote",
+          "TRAVEL_QUOTE_DECLINED",
+          row.id,
+          req.user.userId,
+          req.travelTenant.id,
+          {
+            quoteId: row.id,
+            subBrand: row.subBrand,
+            contactId: row.contactId,
+            previousStatus: row.status,
+            declinedAt,
+            reason: reason || null,
+            bulk: true,
+          },
+        );
+      }
+
+      res.status(200).json({
+        declinedCount: doomed.length,
+        declinedIds: doomedIds,
+        reason,
+        subBrand: subBrandScope,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] bulk-decline-expired error:", e.message);
+      res.status(500).json({ error: "Failed to bulk-decline expired quotes" });
+    }
+  },
+);
+
 // GET /api/travel/quotes/:id
 router.get("/quotes/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

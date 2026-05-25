@@ -47,7 +47,7 @@
  * in at slice 2 in server.js).
  */
 
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 
 // Patch the prisma singleton BEFORE requiring the router so the route's
@@ -427,5 +427,221 @@ describe('POST /api/travel/inbound/leads/:channel — error envelope', () => {
     expect(res.body).toMatchObject({ error: 'Failed to ingest inbound lead' });
     // No stack trace / no raw prisma message leak.
     expect(res.body.error).not.toMatch(/P2002/);
+  });
+});
+
+// ─── Slice 4: verification wire-in (lib/inboundLeadVerification) ──────
+//
+// Contracts asserted (slice-4 additions):
+//   - Voyagr HMAC: when VOYAGR_HMAC_SECRET is SET, the route verifies the
+//     X-Voyagr-Signature header against an HMAC-SHA256 of the raw body.
+//     Valid sig → 201. Mismatch → 400 VERIFICATION_FAILED + reason
+//     SIGNATURE_MISMATCH.
+//   - Voyagr STUB mode: when VOYAGR_HMAC_SECRET is UNSET, the route logs
+//     a WARN and persists anyway (preserves dev/test flow + slice-1
+//     legacy assertions that send no signature).
+//   - Webform: honeypot field "website_url" — empty → 201; non-empty
+//     → 400 VERIFICATION_FAILED + reason HONEYPOT_TRIPPED.
+//   - Anti-spam: viagra / <script tag → 400 VERIFICATION_FAILED with
+//     reason `SPAM_PATTERN_*`.
+//   - Format: email without @ → 400 INVALID_EMAIL; phone <7 digits →
+//     400 INVALID_PHONE.
+//   - WhatsApp STUB: helper returns {ok:true, stub:true} — route persists
+//     unchanged.
+//
+// All cases stub prisma.contact.create so no real DB IO fires.
+
+const crypto = require('crypto');
+
+describe('POST /api/travel/inbound/leads/:channel — slice 4 verification', () => {
+  // Save + restore the env per test so the test order is independent.
+  const ORIGINAL_SECRET = process.env.VOYAGR_HMAC_SECRET;
+  afterEach(() => {
+    if (ORIGINAL_SECRET === undefined) {
+      delete process.env.VOYAGR_HMAC_SECRET;
+    } else {
+      process.env.VOYAGR_HMAC_SECRET = ORIGINAL_SECRET;
+    }
+  });
+
+  test('voyagr happy: VALID HMAC + VOYAGR_HMAC_SECRET set → 201', async () => {
+    process.env.VOYAGR_HMAC_SECRET = 'test-secret-v4';
+    const body = {
+      tenantSlug: 'travel-stall',
+      name: 'Voyagr Verified',
+      email: 'verified@example.com',
+    };
+    const payload = JSON.stringify(body);
+    const sig = crypto
+      .createHmac('sha256', 'test-secret-v4')
+      .update(payload)
+      .digest('hex');
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .set('X-Voyagr-Signature', sig)
+      .set('Content-Type', 'application/json')
+      .send(payload);
+
+    expect(res.status).toBe(201);
+    expect(res.body.channel).toBe('voyagr');
+    expect(prisma.contact.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('voyagr INVALID signature → 400 VERIFICATION_FAILED reason=SIGNATURE_MISMATCH', async () => {
+    process.env.VOYAGR_HMAC_SECRET = 'test-secret-v4';
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .set(
+        'X-Voyagr-Signature',
+        // 64-char hex string but wrong value (length must match for the
+        // helper to reach the timing-safe compare branch).
+        'a'.repeat(64),
+      )
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Bad Sig',
+        email: 'bad@example.com',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: 'VERIFICATION_FAILED',
+      reason: 'SIGNATURE_MISMATCH',
+      channel: 'voyagr',
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('voyagr WITHOUT env (STUB mode) → 201 + console.warn called', async () => {
+    delete process.env.VOYAGR_HMAC_SECRET;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Stub Voyagr',
+        email: 'stub@example.com',
+      });
+
+    expect(res.status).toBe(201);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy.mock.calls.some((c) =>
+      String(c[0] || '').includes('VOYAGR_HMAC_SECRET unset'),
+    )).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  test('webform happy (no honeypot) → 201', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/webform')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Real Human',
+        email: 'real@example.com',
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('webform with honeypot filled → 400 VERIFICATION_FAILED reason=HONEYPOT_TRIPPED', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/webform')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Bot Filler',
+        email: 'bot@example.com',
+        website_url: 'http://bot-site.example',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: 'VERIFICATION_FAILED',
+      reason: 'HONEYPOT_TRIPPED',
+      channel: 'webform',
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('anti-spam: body containing "viagra" → 400 VERIFICATION_FAILED', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/manual')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Buy viagra now',
+        email: 'spam@example.com',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VERIFICATION_FAILED');
+    expect(res.body.reason).toMatch(/SPAM_PATTERN_VIAGRA/);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('anti-spam: body containing "<script>" → 400 VERIFICATION_FAILED', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/manual')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Inline note',
+        email: 'xss@example.com',
+        // Body field value contains <script — caught by anti-spam before
+        // sanitization layer. The global sanitizeBody middleware would
+        // strip the tag anyway, but anti-spam runs first so we get the
+        // rejection envelope.
+        notes: 'hi <script>alert(1)</script>',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VERIFICATION_FAILED');
+    expect(res.body.reason).toMatch(/SPAM_PATTERN/);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('email format invalid (no @) → 400 INVALID_EMAIL', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/manual')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Bad Email',
+        email: 'not-an-email',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_EMAIL' });
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('phone format invalid (too short) → 400 INVALID_PHONE', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/manual')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Bad Phone',
+        phone: '12345', // 5 digits — below helper's 7-digit floor
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_PHONE' });
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('whatsapp channel STUB-mode → 201 (helper returns ok:true, stub:true)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/whatsapp')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'WA Stub',
+        phone: '+919812340000',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.channel).toBe('whatsapp');
+    expect(prisma.contact.create).toHaveBeenCalledTimes(1);
   });
 });

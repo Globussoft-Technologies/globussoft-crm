@@ -46,6 +46,12 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const {
+  verifyByChannel,
+  isValidEmail,
+  isValidPhone,
+  checkAntiSpam,
+} = require("../lib/inboundLeadVerification");
 
 // Slice-1 channel enum — narrower than the full PRD §3.1.2 16-value enum
 // because slice 1 only ships the four launch-critical Travel-Stall channels
@@ -134,9 +140,77 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       });
     }
 
-    // STUB (Q9 / Q1 / Voyagr HMAC): channel-specific verification pending
-    // creds. Today the handler trusts the payload — the X-API-Key middleware
-    // (slice 2 wire-in) is the perimeter for now.
+    // Format validation (finer-grained than presence). Helpers from
+    // lib/inboundLeadVerification.js — permissive checks, send-time RFC
+    // validation deferred to outbound.
+    if (email && !isValidEmail(email)) {
+      return res.status(400).json({
+        error: "email format is invalid",
+        code: "INVALID_EMAIL",
+      });
+    }
+    if (phone && !isValidPhone(phone)) {
+      return res.status(400).json({
+        error: "phone format is invalid",
+        code: "INVALID_PHONE",
+      });
+    }
+
+    // Anti-spam heuristic check (any channel). Narrow pattern list —
+    // viagra / casino / "crypto wallet" / <script tag. Heuristic only;
+    // real spam filtering belongs at the WAF / Cloudflare layer.
+    const spam = checkAntiSpam(req.body);
+    if (!spam.ok) {
+      return res.status(400).json({
+        error: "Payload failed anti-spam check",
+        code: "VERIFICATION_FAILED",
+        reason: spam.reason,
+      });
+    }
+
+    // Channel-specific verification (slice 4 wire-in of slice-3 helpers).
+    //
+    // STUB (Q9 Wati / Q1 AdsGPT): whatsapp/ads/adsgpt channels still
+    // return {ok:true, stub:true} from the helper until creds drop.
+    //
+    // STUB (Voyagr HMAC env-missing fallback): when VOYAGR_HMAC_SECRET
+    // is unset AND channel is voyagr, log a WARN + skip HMAC check +
+    // persist with no verification. This preserves dev/test flow (slice 1
+    // tests + local dev never set the env) while production deploys
+    // (which DO set the env) enforce the check. Once Voyagr creds are
+    // permanently provisioned across all environments, this fallback
+    // should be removed and the helper's MISSING_INPUTS reason allowed
+    // to propagate as a 400.
+    const channelParam = req.params.channel;
+    const voyagrEnvMissing =
+      channelParam === "voyagr" && !process.env.VOYAGR_HMAC_SECRET;
+    if (voyagrEnvMissing) {
+      console.warn(
+        "[travel-inbound-leads] VOYAGR_HMAC_SECRET unset — skipping HMAC verification (STUB mode)",
+      );
+    } else {
+      // Channel-mapping: the route enum is wider than the helper's switch.
+      // `metaads` (route) maps to `ads` (helper) — same Q1 cred surface
+      // (Meta lead-ads webhook signature spec). Keeps the route's external
+      // channel taxonomy stable while the helper's internal STUB set
+      // collapses Meta + adsgpt + native ads together pending Q1 drop.
+      const helperChannel = channelParam === "metaads" ? "ads" : channelParam;
+      const args = {
+        payload: JSON.stringify(req.body || {}),
+        signature: req.headers["x-voyagr-signature"] || null,
+        secret: process.env.VOYAGR_HMAC_SECRET || null,
+        body: req.body,
+      };
+      const verification = verifyByChannel(helperChannel, args);
+      if (!verification.ok) {
+        return res.status(400).json({
+          error: `Verification failed for channel ${channelParam}`,
+          code: "VERIFICATION_FAILED",
+          reason: verification.reason,
+          channel: channelParam,
+        });
+      }
+    }
 
     const tenant = await prisma.tenant.findUnique({
       where: { slug: tenantSlug },

@@ -28,6 +28,11 @@
  *      on confirm-no.
  *  12. "Use as starting point" navigates to /travel/marketing-flyer-studio
  *      with ?template=<id> query param.
+ *  13. (slice 7) "Duplicate" button: ADMIN/MANAGER sees the button; USER
+ *      does not. Click POSTs /api/travel/flyer-templates/:id/duplicate
+ *      with empty body; success adds the returned template to the list
+ *      and fires notify.success; 5xx fires notify.error; concurrent
+ *      clicks while in-flight are suppressed via the disabled state.
  *
  * STUB-mode (slice 2): the GET endpoint at /api/travel/flyer-templates
  * does NOT exist on the backend yet — slice 3 (route + Prisma model)
@@ -154,6 +159,7 @@ function installFetchMock({
   create = null,
   update = null,
   del = null,
+  duplicate = null,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -164,6 +170,13 @@ function installFetchMock({
     if (url === '/api/travel/flyer-templates' && method === 'POST') {
       if (create instanceof Error) return Promise.reject(create);
       return Promise.resolve(create || makeTemplate({ id: 999 }));
+    }
+    if (/^\/api\/travel\/flyer-templates\/\d+\/duplicate$/.test(url) && method === 'POST') {
+      if (duplicate instanceof Error) return Promise.reject(duplicate);
+      if (typeof duplicate === 'function') return Promise.resolve(duplicate(url));
+      return Promise.resolve(
+        duplicate || makeTemplate({ id: 901, name: 'TMC Summer Europe Flyer (copy)' }),
+      );
     }
     if (/^\/api\/travel\/flyer-templates\/\d+$/.test(url) && method === 'PUT') {
       if (update instanceof Error) return Promise.reject(update);
@@ -216,13 +229,14 @@ describe('<FlyerTemplates /> — page chrome + initial fetch', () => {
     });
   });
 
-  it('hides "New Template" CTA + Edit/Delete on each card for plain USER role', async () => {
+  it('hides "New Template" CTA + Edit/Delete/Duplicate on each card for plain USER role', async () => {
     renderPage(USER_USER);
     await screen.findByText('TMC Summer Europe Flyer');
     expect(screen.queryByRole('button', { name: /New Template/i })).toBeNull();
-    // No Edit / Delete buttons exist for any row.
+    // No Edit / Delete / Duplicate buttons exist for any row.
     expect(screen.queryByRole('button', { name: /^Edit TMC Summer Europe Flyer$/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Delete TMC Summer Europe Flyer$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Duplicate TMC Summer Europe Flyer$/ })).toBeNull();
     // The non-write "Use as starting point" CTA still shows.
     expect(
       screen.getByRole('button', { name: /Use TMC Summer Europe Flyer as starting point/i }),
@@ -425,5 +439,131 @@ describe('<FlyerTemplates /> — "Use as starting point" navigation', () => {
       screen.getByRole('button', { name: /Use TMC Summer Europe Flyer as starting point/i }),
     );
     expect(mockNavigate).toHaveBeenCalledWith('/travel/marketing-flyer-studio?template=501');
+  });
+});
+
+describe('<FlyerTemplates /> — Duplicate action (slice 7, consumes 6bbad574)', () => {
+  it('renders the Duplicate button on each card for ADMIN', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    expect(
+      screen.getByRole('button', { name: /^Duplicate TMC Summer Europe Flyer$/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /^Duplicate RFU Ramadan Umrah Flyer$/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /^Duplicate Visa Sure UK Flyer$/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the Duplicate button for MANAGER role', async () => {
+    const MANAGER_USER = { userId: 3, name: 'Mgr', email: 'm@x.com', role: 'MANAGER' };
+    renderPage(MANAGER_USER);
+    await screen.findByText('TMC Summer Europe Flyer');
+    expect(
+      screen.getByRole('button', { name: /^Duplicate TMC Summer Europe Flyer$/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking Duplicate POSTs /api/travel/flyer-templates/:id/duplicate with empty body', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(
+      screen.getByRole('button', { name: /^Duplicate TMC Summer Europe Flyer$/ }),
+    );
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/flyer-templates/501/duplicate' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      // Empty body lets the backend defaults apply: name = "<source> (copy)",
+      // subBrand inherits from source. The slice-6 contract pin.
+      expect(JSON.parse(post[1].body)).toEqual({});
+    });
+  });
+
+  it('successful duplicate adds the new template to the list state', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    // Sanity: the (copy) row isn't there yet.
+    expect(screen.queryByText('TMC Summer Europe Flyer (copy)')).toBeNull();
+    installFetchMock({
+      duplicate: makeTemplate({ id: 901, name: 'TMC Summer Europe Flyer (copy)', subBrand: 'tmc' }),
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: /^Duplicate TMC Summer Europe Flyer$/ }),
+    );
+    expect(
+      await screen.findByText('TMC Summer Europe Flyer (copy)'),
+    ).toBeInTheDocument();
+  });
+
+  it('successful duplicate fires notify.success with the source name', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(
+      screen.getByRole('button', { name: /^Duplicate TMC Summer Europe Flyer$/ }),
+    );
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/TMC Summer Europe Flyer.*duplicated/i),
+      );
+    });
+  });
+
+  it('5xx server error surfaces notify.error and does NOT add a row', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    const before = screen.getAllByTestId(/^flyer-template-card-\d+$/).length;
+    installFetchMock({ duplicate: Object.assign(new Error('Server error'), { status: 500 }) });
+    fireEvent.click(
+      screen.getByRole('button', { name: /^Duplicate TMC Summer Europe Flyer$/ }),
+    );
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/Server error|Duplicate failed/i));
+    });
+    const after = screen.getAllByTestId(/^flyer-template-card-\d+$/).length;
+    expect(after).toBe(before);
+  });
+
+  it('concurrent Duplicate clicks on the same card do NOT double-fire (disabled while in-flight)', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fetchApiMock.mockClear();
+    // Hold the duplicate response open until we release it manually so we
+    // can observe the disabled state mid-flight.
+    let resolveDup;
+    const dupPromise = new Promise((res) => { resolveDup = res; });
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/flyer-templates') && method === 'GET') {
+        return Promise.resolve({ templates: TEMPLATES_DEFAULT, total: TEMPLATES_DEFAULT.length });
+      }
+      if (/^\/api\/travel\/flyer-templates\/\d+\/duplicate$/.test(url) && method === 'POST') {
+        return dupPromise;
+      }
+      return Promise.resolve(null);
+    });
+    const btn = screen.getByRole('button', { name: /^Duplicate TMC Summer Europe Flyer$/ });
+    fireEvent.click(btn);
+    // While in-flight: button is disabled.
+    await waitFor(() => {
+      expect(btn).toBeDisabled();
+    });
+    // Fire 3 more clicks — they should be suppressed.
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    // Release the duplicate fetch.
+    resolveDup(makeTemplate({ id: 902, name: 'TMC Summer Europe Flyer (copy)' }));
+    await waitFor(() => {
+      const dupPosts = fetchApiMock.mock.calls.filter(([u, o]) =>
+        u === '/api/travel/flyer-templates/501/duplicate' && o?.method === 'POST',
+      );
+      expect(dupPosts.length).toBe(1);
+    });
   });
 });

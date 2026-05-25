@@ -15,6 +15,9 @@
  *                                                       → 201 created
  *   PUT    /api/travel/flyer-templates/:id              → 200 updated
  *   DELETE /api/travel/flyer-templates/:id              → 204 No Content
+ *   POST   /api/travel/flyer-templates/:id/duplicate    → 201 created  (slice 6, 6bbad574)
+ *     body (optional): { name?, subBrand? } — defaults: name = "<source.name> (copy)",
+ *     subBrand = source.subBrand. ADMIN/MANAGER only.
  *
  * STUB note (slice 2): the GET endpoint above does NOT exist yet — slice 3
  * (backend route + Prisma model FlyerTemplate) is the next slice in the
@@ -51,7 +54,7 @@
  */
 import { useEffect, useState, useContext, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileImage, Plus, Pencil, Trash2, Copy, Search } from "lucide-react";
+import { FileImage, Plus, Pencil, Trash2, Copy, CopyPlus, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SUB_BRAND_BG, SUB_BRAND_LABEL } from "../../utils/travelSubBrand";
@@ -103,6 +106,10 @@ export default function FlyerTemplates() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  // Per-card in-flight Duplicate guard — keyed by source template id so
+  // a duplicate on row A doesn't disable the button on row B (and a
+  // concurrent double-click on row A is suppressed by the disabled state).
+  const [duplicatingId, setDuplicatingId] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -212,6 +219,32 @@ export default function FlyerTemplates() {
 
   const handleUseAsStartingPoint = (t) => {
     navigate(`/travel/marketing-flyer-studio?template=${t.id}`);
+  };
+
+  // Duplicate consumes POST /api/travel/flyer-templates/:id/duplicate (slice
+  // 6, commit 6bbad574). Empty body → backend defaults: name becomes
+  // "<source.name> (copy)", subBrand inherits from source. The new template
+  // is spliced into local list state so the operator sees it immediately
+  // without waiting on a full re-fetch. duplicatingId guards against
+  // concurrent double-fires (per-row disabled state).
+  const handleDuplicate = async (t) => {
+    if (duplicatingId === t.id) return;
+    setDuplicatingId(t.id);
+    try {
+      const created = await fetchApi(
+        `/api/travel/flyer-templates/${t.id}/duplicate`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      if (created && typeof created === "object" && created.id) {
+        setTemplates((prev) => [created, ...prev]);
+        setTotal((prev) => prev + 1);
+      }
+      notify.success(`Template "${t.name}" duplicated`);
+    } catch (err) {
+      notify.error(err?.message || "Duplicate failed");
+    } finally {
+      setDuplicatingId(null);
+    }
   };
 
   return (
@@ -466,6 +499,16 @@ export default function FlyerTemplates() {
                   </button>
                   {canWrite && (
                     <>
+                      <button
+                        type="button"
+                        onClick={() => handleDuplicate(t)}
+                        disabled={duplicatingId === t.id}
+                        style={iconBtn}
+                        title={`Duplicate ${t.name}`}
+                        aria-label={`Duplicate ${t.name}`}
+                      >
+                        <CopyPlus size={14} />
+                      </button>
                       <button
                         type="button"
                         onClick={() => openEdit(t)}

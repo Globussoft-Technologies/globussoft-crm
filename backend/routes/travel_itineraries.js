@@ -3,6 +3,7 @@
 // Endpoints:
 //   GET    /api/travel/itineraries                          — list (paginated, filterable)
 //   POST   /api/travel/itineraries                          — create itinerary (+ optional items)
+//   GET    /api/travel/itineraries/by-month                  — tenant-wide monthly rollup (#907 slice 16)
 //   GET    /api/travel/itineraries/:id                      — fetch one with items
 //   PATCH  /api/travel/itineraries/:id                      — amend top-level fields (not items)
 //   POST   /api/travel/itineraries/:id/items                — append a polymorphic item
@@ -227,6 +228,293 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
     }
     console.error("[travel-itin] create error:", e.message);
     res.status(500).json({ error: "Failed to create itinerary" });
+  }
+});
+
+// ─── Tenant-wide monthly rollup (slice 16) ────────────────────────────
+
+// GET /api/travel/itineraries/by-month — any verified token (tenant + sub-brand scoped).
+//
+// Slice 16 of #907 (PRD_TRAVEL_ITINERARY_UPGRADES.md §3 — tenant-wide
+// itinerary analytics rolled up by calendar month). Mirrors #900 slice
+// 16 (/quotes/by-month) + #901 slice 29 (/invoices/by-month) + #908
+// slice 21 (/flyer-templates/by-month) — same UTC YYYY-MM bucketing
+// template, same defensive math (null/invalid totalAmount → 0 contrib;
+// null/invalid createdAt → "unknown" bucket, excluded when ?from/?to is
+// set), same orderBy semantics, same half-up 2dp rounding via
+// Number.EPSILON. One row per UTC-month present in the scoped itinerary
+// set, summarising count + 7-status splits + value sums for that month.
+// Read-only; consumed by the operator-facing "itineraries trend" chart
+// on the Travel dashboard and the per-month drill-down picker into the
+// underlying /itineraries list.
+//
+// 7-status envelope (PRD §4.7 Phase 2 50%-advance booking):
+//   draft / sent / revised / accepted / rejected / advance_paid / fully_paid
+// The acceptedValue rollup sums totalAmount across the THREE
+// "agreement-secured" statuses {accepted, advance_paid, fully_paid} —
+// once the customer accepts the itinerary, the booking is locked in even
+// if payment is still pending or only the 50% advance has cleared. This
+// matches Phase 2's deposit-mechanics: an itinerary with status=
+// accepted-but-zero-paid still represents committed revenue for the
+// trend chart's "closed deals" line. totalValue, by contrast, sums
+// totalAmount across ALL statuses (the pipeline view).
+//
+// Why a separate endpoint instead of extending /global-stats:
+//   - Different aggregation granularity (per-month time-series, not
+//     single-rollup).
+//   - Different natural sort (chronological, not single row).
+//   - Pre-fills a different UI surface (line/bar chart vs KPI tile).
+//
+// Bucket key shape: ISO YYYY-MM string (e.g. "2026-05") derived from
+// Itinerary.createdAt's UTC year + month. UTC chosen deliberately so
+// bucket labels stay stable across operator timezones — finance
+// reconciliation works in calendar-month UTC for cross-border volume.
+//
+// Scope rules:
+//   - Tenant-scoped on Itinerary.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access). Itinerary
+//     .subBrand is required + non-nullable, so the narrowing uses
+//     `{ in: [...allowed] }` (no NULL OR-clause — mirrors the /itineraries
+//     list endpoint, NOT the flyer-templates endpoint which allows tenant-wide
+//     NULL rows).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   status   optional Itinerary.status filter (one of VALID_STATUSES);
+//            invalid → 400 INVALID_STATUS.
+//   from     optional inclusive lower bound on bucket (YYYY-MM); rows
+//            with month < from are excluded.
+//   to       optional inclusive upper bound on bucket (YYYY-MM); rows
+//            with month > to are excluded.
+//   orderBy  default "month:asc" (chronological); also accepts
+//            "month:desc", "count:asc|desc", "acceptedCount:asc|desc",
+//            "totalValue:asc|desc". Unknown tokens degrade silently to
+//            the default (same posture as slice 16 / slice 29 / slice 21).
+//   limit    default 12 (one year of months), max 60 (5 years).
+//   offset   default 0
+//
+// Response shape:
+//   {
+//     months: [ {
+//       month: "2026-05",
+//       count, totalValue,
+//       draftCount, sentCount, revisedCount, acceptedCount, rejectedCount,
+//       advancePaidCount, fullyPaidCount,
+//       acceptedValue
+//     } ],
+//     totalMonths,
+//     grandCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-month" as a numeric :id (which would 400 INVALID_ID).
+router.get("/itineraries/by-month", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    if (statusFilter && !VALID_STATUSES.includes(statusFilter)) {
+      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+    }
+
+    // YYYY-MM validation — same regex slice 16 / 29 / 21 use. Bucket
+    // labels we emit follow this exact shape so callers passing
+    // month-tokens to from/to should already be using it.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "count:asc",
+      "count:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /itineraries list handler — empty access set → all-zeros rollup
+    // (not 403) so the dashboard tile renders cleanly for
+    // not-yet-onboarded operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        months: [],
+        totalMonths: 0,
+        grandCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-MM. Input size bound is the same as the list
+    // endpoint (low thousands at platinum scale).
+    const itineraries = await prisma.itinerary.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Statuses whose totalAmount counts toward acceptedValue — the
+    // "agreement-secured" set. Phase 2 50%-advance booking treats
+    // advance_paid + fully_paid as continuations of accepted, NOT as
+    // separate post-acceptance states (PRD §4.7).
+    const ACCEPTED_VALUE_STATUSES = new Set(["accepted", "advance_paid", "fully_paid"]);
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts/sums }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate. Null/invalid totalAmount contributes 0.
+    const byMonth = new Map();
+    for (const it of itineraries) {
+      let monthKey = "unknown";
+      if (it.createdAt) {
+        const dt = it.createdAt instanceof Date
+          ? it.createdAt
+          : new Date(it.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let row = byMonth.get(monthKey);
+      if (!row) {
+        row = {
+          month: monthKey,
+          count: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          revisedCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          advancePaidCount: 0,
+          fullyPaidCount: 0,
+          acceptedValue: 0,
+        };
+        byMonth.set(monthKey, row);
+      }
+
+      row.count += 1;
+      const amt = Number(it.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (it.status) {
+        case "draft": row.draftCount += 1; break;
+        case "sent": row.sentCount += 1; break;
+        case "revised": row.revisedCount += 1; break;
+        case "accepted": row.acceptedCount += 1; break;
+        case "rejected": row.rejectedCount += 1; break;
+        case "advance_paid": row.advancePaidCount += 1; break;
+        case "fully_paid": row.fullyPaidCount += 1; break;
+        default: break;
+      }
+      if (ACCEPTED_VALUE_STATUSES.has(it.status)) {
+        row.acceptedValue += safeAmt;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let months = [...byMonth.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable month token); when no
+    // bounds are set, "unknown" stays so the count surface remains
+    // complete. Mirrors slice 16 / 29 / 21 posture.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM which is also
+    // chronological. "unknown" sorts last in asc / first in desc by
+    // virtue of being lexicographically > "9999-12" — acceptable for a
+    // defensive fallback bucket that should rarely appear.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalMonths = months.length;
+    const grandCount = months.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as
+    // slice 16 / 29 / 21.
+    const paged = months.slice(skip, skip + take);
+
+    res.json({
+      months: paged,
+      totalMonths,
+      grandCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] by-month error:", e.message);
+    res.status(500).json({ error: "Failed to compute monthly rollup" });
   }
 });
 

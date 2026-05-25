@@ -571,6 +571,17 @@ model Contact {
   // mirrors Tenant.gstStateCode (intra-state default) when null.
   stateCode String?
 
+  // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 6 — TravelCommissionProfile
+  // assignment for B2B agent contacts. Nullable so generic + wellness +
+  // travel-direct-consumer Contacts ignore it entirely. Set via
+  // POST /api/travel/commission-profiles/:id/assign (bulk-assign endpoint).
+  // No FK relation declared — keeps the column free of cascade-delete
+  // coupling and mirrors the same shape choice as preferredLocationId /
+  // preferredPractitionerId above. Profile deletion just leaves stale
+  // references; the calculator skips contacts whose profile id no longer
+  // resolves to a row in TravelCommissionProfile.
+  commissionProfileId Int?
+
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.

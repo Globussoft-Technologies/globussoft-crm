@@ -15,6 +15,7 @@
  *   POST   /api/travel/commission-profiles                — ADMIN/MANAGER create
  *   PUT    /api/travel/commission-profiles/:id            — ADMIN/MANAGER partial update
  *   DELETE /api/travel/commission-profiles/:id            — ADMIN-only hard delete
+ *   POST   /api/travel/commission-profiles/:id/assign     — ADMIN/MANAGER bulk-assign to Contact rows (slice 6)
  *
  * Validation strictness (slice 2):
  *   - name required, non-empty trim                       → 400 MISSING_FIELDS
@@ -452,6 +453,114 @@ router.delete(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-commission-profiles] delete error:", e.message);
       res.status(500).json({ error: "Failed to delete commission profile" });
+    }
+  },
+);
+
+// POST /api/travel/commission-profiles/:id/assign — ADMIN/MANAGER bulk-assign
+// the profile to a list of Contact rows (B2B agents). Body: { contactIds: int[] }.
+// Sub-brand-restricted callers must be able to access the profile's sub-brand.
+//
+// Partial-assignment semantics: when some of the requested contactIds don't
+// belong to the tenant (cross-tenant probe, or already-deleted row), they're
+// silently skipped — assignedCount < requestedCount surfaces the gap to the
+// caller without throwing. This mirrors how prisma.updateMany naturally
+// behaves with a tenant-scoped `where` clause: rows outside the tenant simply
+// don't match, the call succeeds, and the count delta is the signal.
+//
+// Returns: { profileId, assignedCount, requestedCount }.
+// Audit row: action='TRAVEL_COMMISSION_PROFILE_ASSIGNED' with the delta.
+router.post(
+  "/commission-profiles/:id/assign",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const { contactIds } = req.body || {};
+      if (contactIds === undefined || contactIds === null) {
+        return res.status(400).json({
+          error: "contactIds required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      if (!Array.isArray(contactIds)) {
+        return res.status(400).json({
+          error: "contactIds must be an array of integers",
+          code: "INVALID_CONTACT_IDS",
+        });
+      }
+      if (contactIds.length === 0) {
+        return res.status(400).json({
+          error: "contactIds must be non-empty",
+          code: "MISSING_FIELDS",
+        });
+      }
+      if (!contactIds.every((cid) => Number.isInteger(cid))) {
+        return res.status(400).json({
+          error: "contactIds entries must all be integers",
+          code: "INVALID_CONTACT_IDS",
+        });
+      }
+
+      const profile = await prisma.travelCommissionProfile.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!profile) {
+        return res.status(404).json({
+          error: "Commission profile not found",
+          code: "PROFILE_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand gate — NULL subBrand profiles are tenant-wide and
+      // assignable by any authorised caller; sub-brand-scoped profiles
+      // require the caller to have access to that sub-brand.
+      if (profile.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, profile.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      const updateResult = await prisma.contact.updateMany({
+        where: {
+          id: { in: contactIds },
+          tenantId: req.travelTenant.id,
+        },
+        data: { commissionProfileId: id },
+      });
+
+      await writeAudit(
+        "TravelCommissionProfile",
+        "TRAVEL_COMMISSION_PROFILE_ASSIGNED",
+        id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          profileId: id,
+          assignedCount: updateResult.count,
+          requestedCount: contactIds.length,
+        },
+      );
+
+      res.json({
+        profileId: id,
+        assignedCount: updateResult.count,
+        requestedCount: contactIds.length,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] assign error:", e.message);
+      res.status(500).json({ error: "Failed to assign commission profile" });
     }
   },
 );

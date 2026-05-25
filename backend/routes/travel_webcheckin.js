@@ -18,6 +18,7 @@
 //   GET    /api/travel/webcheckins                            — list
 //   GET    /api/travel/webcheckins/upcoming                   — window opens ≤48h
 //   GET    /api/travel/webcheckins/stats                      — tenant-wide rollup
+//   GET    /api/travel/webcheckins/by-month                   — tenant-wide monthly creation rollup
 //   GET    /api/travel/webcheckins/:id                        — fetch one
 //   POST   /api/travel/webcheckins                            — admin manual create
 //   PATCH  /api/travel/webcheckins/:id                        — amend
@@ -25,9 +26,9 @@
 //   POST   /api/travel/webcheckins/:id/deliver                — mark delivered (stub WA)
 //   DELETE /api/travel/webcheckins/:id                        — ADMIN only
 //
-// Route-precedence note: /upcoming AND /stats MUST mount before /:id
-// so the parseInt("upcoming"|"stats") → NaN trap doesn't capture them
-// (CLAUDE.md standing rule).
+// Route-precedence note: /upcoming, /stats AND /by-month MUST mount
+// before /:id so the parseInt("upcoming"|"stats"|"by-month") → NaN
+// trap doesn't capture them (CLAUDE.md standing rule).
 //
 // WhatsApp dispatch on /deliver is stub-mode (console.log) pending
 // Wati BSP creds (Q9) — mirrors backend/cron/contactGreetingsEngine.js
@@ -379,6 +380,215 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-webcheckin] stats error:", e.message);
       res.status(500).json({ error: "Failed to summarise web check-ins" });
+    }
+  },
+);
+
+// ─── Tenant-wide monthly rollup ──────────────────────────────────────
+//
+// GET /api/travel/webcheckins/by-month — tenant-wide WebCheckin creation
+// rollup, one row per UTC YYYY-MM bucket. Pairs with /webcheckins/stats
+// (the at-a-glance snapshot) to surface the WebCheckin operations trend
+// over time on the operator dashboard. Mirrors the by-month template
+// shipped on /flyer-templates/by-month (slice 21) + /quotes/by-month
+// (slice 16) + /invoices/by-month (slice 29) — same UTC YYYY-MM
+// bucketing, same defensive "unknown" bucket math, same orderBy
+// semantics, same pagination posture.
+//
+// Each row carries:
+//   - month            — "YYYY-MM" UTC, or "unknown" for null/invalid
+//                        createdAt (excluded when from/to is set so the
+//                        comparable month-string token still works)
+//   - count            — total WebCheckin rows created in this month
+//   - deliveredCount   — subset where deliveredAt IS NOT NULL
+//   - pendingCount     — remainder (count - deliveredCount)
+//
+// The delivered/pending split is the WebCheckin analogue of the flyer
+// active/archived split — gives the dashboard a "creation cadence vs.
+// follow-through cadence" delta at a glance.
+//
+// PRD §4.6 — WebCheckin tracking dashboard.
+//
+// Sub-brand narrowing: WebCheckin has NO direct subBrand column — the
+// sub-brand lives on the parent Itinerary (same as /stats). When a
+// MANAGER's subBrandAccess set is restrictive, we resolve the visible
+// Itinerary id-set first, then narrow the WebCheckin query by
+// itineraryId IN. Defensive: WebCheckin rows whose itineraryId is null
+// (manual-create path) are KEPT when the caller is unrestricted and
+// DROPPED for a sub-brand-restricted MANAGER (no parent itinerary →
+// no sub-brand attribution → cannot prove access). Same posture as
+// /webcheckins/stats above.
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//                     400 INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}, deliveredCount:{asc|desc};
+//                     unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// USER-readable anodyne aggregate — counts + month-string tokens; no
+// audit row written. Matches sibling by-month posture.
+//
+// Express route ordering: literal-path /by-month MUST be declared
+// BEFORE the /:id family or `:id="by-month"` would 400 INVALID_ID
+// before reaching this handler. Same trap as /upcoming and /stats above.
+const WEBCHECKIN_BY_MONTH_CAP = 5000;
+
+router.get(
+  "/webcheckins/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors /flyer-templates/by-month slice 21.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+        "deliveredCount:asc",
+        "deliveredCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      const tenantId = req.travelTenant.id;
+      const where = { tenantId };
+
+      // Sub-brand narrowing — WebCheckin lacks a subBrand column, so we
+      // resolve the visible Itinerary id-set up front (same as /stats).
+      // Unrestricted callers (allowed === null) skip this fetch entirely.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set) {
+        if (allowed.size === 0) {
+          return res.json({
+            months: [],
+            totalMonths: 0,
+            grandCount: 0,
+            grandDeliveredCount: 0,
+            limit: take,
+            offset: skip,
+          });
+        }
+        const visibleItins = await prisma.itinerary.findMany({
+          where: { tenantId, subBrand: { in: [...allowed] } },
+          select: { id: true },
+          take: WEBCHECKIN_BY_MONTH_CAP,
+        });
+        if (visibleItins.length === 0) {
+          where.itineraryId = -1;
+        } else {
+          where.itineraryId = { in: visibleItins.map((i) => i.id) };
+        }
+      }
+
+      // Light projection — createdAt + deliveredAt is enough for the
+      // bucket totals. No JSON columns pulled. Same posture as the
+      // sibling by-month endpoints — the population is bounded by
+      // tenant scale (low thousands of WebCheckins), and JS aggregation
+      // matches the rationale on /flyer-templates/by-month.
+      const rows = await prisma.webCheckin.findMany({
+        where,
+        select: { createdAt: true, deliveredAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { count, deliveredCount,
+      // pendingCount }. Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const r of rows) {
+        let monthKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            month: monthKey,
+            count: 0,
+            deliveredCount: 0,
+            pendingCount: 0,
+          };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.deliveredAt != null) bucket.deliveredCount += 1;
+        else bucket.pendingCount += 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set; kept otherwise. Mirrors slice 21 /flyer-templates/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also
+      // chronological). "unknown" sorts last in asc / first in desc.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandCount = months.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+      const grandDeliveredCount = months.reduce(
+        (acc, r) => acc + (Number(r.deliveredCount) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as siblings.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        months: paged,
+        totalMonths,
+        grandCount,
+        grandDeliveredCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-webcheckin] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
     }
   },
 );

@@ -3,7 +3,7 @@ import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-react';
+import { UserPlus, Search, ArrowRightCircle, UserCheck, Users, Plus, X } from 'lucide-react';
 import { AuthContext } from '../App';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
@@ -73,6 +73,9 @@ const Leads = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [bulkAgent, setBulkAgent] = useState('');
+  // #892 — Create Lead surface is a header CTA + drawer (not the inline
+  // always-visible form). `creating` drives whether the drawer is rendered.
+  const [creating, setCreating] = useState(false);
   // #600 — Initial source defaults differ per vertical: wellness leads
   // typically arrive walk-in/WhatsApp; generic CRM leads default to Organic.
   const [newLead, setNewLead] = useState({
@@ -122,6 +125,20 @@ const Leads = () => {
       .then(d => setLocations(Array.isArray(d) ? d : (d?.locations || [])))
       .catch(() => setLocations([]));
   }, [isWellness]);
+
+  // #892 — close the Create drawer on Escape. Attached only while the drawer
+  // is open so we don't trap key events for users not actively creating.
+  useEffect(() => {
+    if (!creating) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setCreating(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [creating]);
+
+  const openCreate = () => setCreating(true);
+  const closeCreate = () => setCreating(false);
 
   const handleCreateLead = async (e) => {
     e.preventDefault();
@@ -247,6 +264,9 @@ const Leads = () => {
         body: JSON.stringify({ ...newLead, name: trimmedName, phone: phoneOut, countryCode: undefined }),
       });
       setNewLead({ name: '', email: '', company: '', title: '', countryCode: '+1', phone: '', source: 'Organic', status: 'Lead' });
+      // #892 — close the drawer on successful create; the list refresh
+      // below puts the new row at the top so the user sees the result.
+      setCreating(false);
     } finally {
       fetchLeads();
     }
@@ -323,16 +343,6 @@ const Leads = () => {
         .leads-table {
           width: 100%;
         }
-        @media (min-width: 1600px) {
-          .leads-layout {
-            grid-template-columns: 340px 1fr !important;
-          }
-        }
-        @media (max-width: 1599px) {
-          .leads-layout {
-            grid-template-columns: 1fr !important;
-          }
-        }
       `}</style>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -344,6 +354,20 @@ const Leads = () => {
             </p>
           </div>
         </div>
+        {/* #892 — Create Lead is now a header CTA + drawer (was an inline
+            always-visible form to the left of the table). Right-aligned so
+            it sits alongside future header controls; primary styling per
+            the c031ba0 travel/Leads pattern. */}
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={openCreate}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', fontSize: '0.875rem' }}
+          aria-label="Create a new lead"
+        >
+          <Plus size={16} />
+          Create Lead
+        </button>
       </header>
 
       {/* Bulk Assign Bar */}
@@ -377,126 +401,9 @@ const Leads = () => {
         </div>
       )}
 
-      <div className="leads-layout" style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '1.5rem', alignItems: 'start' }}>
-        {/* Left Panel: Create Lead Form */}
-        <div className="card" style={{ padding: '1.5rem' }}>
-          <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1.25rem' }}>Create Lead</h3>
-          {/* #557: noValidate so the JS handler in handleCreateLead runs the
-              client-side validation (length caps, control-char rejection,
-              HTML strip, email shape). Native HTML5 validation would block
-              submit without giving us a chance to surface the targeted toasts. */}
-          <form onSubmit={handleCreateLead} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-            <input type="text" placeholder="Full Name" required maxLength={191} className="input-field" value={newLead.name} onChange={e => handleChange('name', e.target.value)} />
-            <input type="email" placeholder="Email Address" required={!isWellness} maxLength={191} className="input-field" value={newLead.email} onChange={e => handleChange('email', e.target.value)} />
-            <input type="text" placeholder="Company" maxLength={191} className="input-field" value={newLead.company} onChange={e => handleChange('company', e.target.value)} />
-            <input type="text" placeholder="Job Title" maxLength={200} className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
-            {/* #600 — phone field is wellness-specific (Patient-intake mirror).
-                Generic CRM keeps phone optional and out of the Lead form to
-                avoid noise. */}
-            {isWellness && (
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <select className="input-field" value={newLead.countryCode} onChange={e => handleChange('countryCode', e.target.value)} style={{ width: '100px' }}>
-                  {COUNTRY_CODES.map(cc => (
-                    <option key={cc.code} value={cc.code}>{cc.code}</option>
-                  ))}
-                </select>
-                <input
-                  type="tel"
-                  placeholder="Phone (10-digit mobile, e.g. 9876543210)"
-                  required
-                  className="input-field"
-                  value={newLead.phone}
-                  onChange={e => handleChange('phone', e.target.value)}
-                  style={{ flex: 1 }}
-                />
-              </div>
-            )}
-            <select
-              className="input-field"
-              name="source"
-              value={newLead.source}
-              onChange={e => handleChange('source', e.target.value)}
-            >
-              {isWellness
-                ? WELLNESS_SOURCE_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))
-                : SOURCE_OPTIONS.map(src => (
-                    <option key={src} value={src}>{src}</option>
-                  ))}
-            </select>
-
-            {/* #600 — wellness extras: treatment of interest (dropdown of
-                catalog services + a free-text "Other" fallback if the
-                catalogue is empty), preferred clinic, preferred
-                practitioner. All three persist on Contact and feed
-                marketing-attribution + lead-routing downstream. */}
-            {isWellness && (
-              <>
-                {services.length > 0 ? (
-                  <select
-                    className="input-field"
-                    name="treatmentOfInterest"
-                    value={newLead.treatmentOfInterest}
-                    onChange={e => handleChange('treatmentOfInterest', e.target.value)}
-                  >
-                    <option value="">Treatment of interest (optional)</option>
-                    {services.map(svc => (
-                      <option key={svc.id} value={svc.name || svc.title}>
-                        {svc.name || svc.title}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    name="treatmentOfInterest"
-                    placeholder="Treatment of interest (optional)"
-                    maxLength={191}
-                    className="input-field"
-                    value={newLead.treatmentOfInterest}
-                    onChange={e => handleChange('treatmentOfInterest', e.target.value)}
-                  />
-                )}
-                {locations.length > 0 && (
-                  <select
-                    className="input-field"
-                    name="preferredLocationId"
-                    value={newLead.preferredLocationId}
-                    onChange={e => handleChange('preferredLocationId', e.target.value)}
-                  >
-                    <option value="">Preferred clinic (optional)</option>
-                    {locations.map(loc => (
-                      <option key={loc.id} value={loc.id}>{loc.name}</option>
-                    ))}
-                  </select>
-                )}
-                {staff.filter(s => (s.wellnessRole || '').toLowerCase() === 'doctor').length > 0 && (
-                  <select
-                    className="input-field"
-                    name="preferredPractitionerId"
-                    value={newLead.preferredPractitionerId}
-                    onChange={e => handleChange('preferredPractitionerId', e.target.value)}
-                  >
-                    <option value="">Preferred practitioner (optional)</option>
-                    {staff
-                      .filter(s => (s.wellnessRole || '').toLowerCase() === 'doctor')
-                      .map(doc => (
-                        <option key={doc.id} value={doc.id}>{doc.name || doc.email}</option>
-                      ))}
-                  </select>
-                )}
-              </>
-            )}
-
-            <button type="submit" className="btn-primary" style={{ marginTop: '0.5rem' }}>
-              Add Lead
-            </button>
-          </form>
-        </div>
-
-        {/* Right Panel: Leads Table */}
-        <div className="card leads-table-wrapper" style={{ overflow: 'hidden' }}>
+      {/* #892 — Leads Table (full-width; Create Lead form now lives in the
+          drawer below, triggered by the header CTA). */}
+      <div className="card leads-table-wrapper" style={{ overflow: 'hidden' }}>
           <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
             <div style={{ position: 'relative', maxWidth: '300px' }}>
               <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
@@ -613,7 +520,175 @@ const Leads = () => {
             </tbody>
           </table>
         </div>
-      </div>
+
+        {/* #892 — Create Lead drawer. Mounted only when `creating` is true.
+            Close triggers: X button, ESC keypress (handled by the useEffect
+            above), and clicking on the dark overlay outside the drawer body.
+            The form fields + submit handler are unchanged from the previous
+            inline form — only the trigger surface moved. */}
+        {creating && (
+          <div
+            onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.5)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'flex-end',
+              zIndex: 1000,
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Create Lead"
+          >
+            <div
+              style={{
+                background: 'var(--surface-color)',
+                color: 'var(--text-primary)',
+                width: '100%',
+                maxWidth: 460,
+                height: '100vh',
+                overflowY: 'auto',
+                padding: '1.5rem',
+                boxShadow: '-8px 0 24px rgba(0,0,0,0.2)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Create Lead</h3>
+                <button
+                  type="button"
+                  onClick={closeCreate}
+                  aria-label="Close"
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 4 }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              {/* #557: noValidate so the JS handler in handleCreateLead runs the
+                  client-side validation (length caps, control-char rejection,
+                  HTML strip, email shape). Native HTML5 validation would block
+                  submit without giving us a chance to surface the targeted toasts. */}
+              <form onSubmit={handleCreateLead} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                <input type="text" placeholder="Full Name" required maxLength={191} className="input-field" value={newLead.name} onChange={e => handleChange('name', e.target.value)} />
+                <input type="email" placeholder="Email Address" required={!isWellness} maxLength={191} className="input-field" value={newLead.email} onChange={e => handleChange('email', e.target.value)} />
+                <input type="text" placeholder="Company" maxLength={191} className="input-field" value={newLead.company} onChange={e => handleChange('company', e.target.value)} />
+                <input type="text" placeholder="Job Title" maxLength={200} className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
+                {/* #600 — phone field is wellness-specific (Patient-intake mirror).
+                    Generic CRM keeps phone optional and out of the Lead form to
+                    avoid noise. */}
+                {isWellness && (
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <select className="input-field" value={newLead.countryCode} onChange={e => handleChange('countryCode', e.target.value)} style={{ width: '100px' }}>
+                      {COUNTRY_CODES.map(cc => (
+                        <option key={cc.code} value={cc.code}>{cc.code}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="tel"
+                      placeholder="Phone (10-digit mobile, e.g. 9876543210)"
+                      required
+                      className="input-field"
+                      value={newLead.phone}
+                      onChange={e => handleChange('phone', e.target.value)}
+                      style={{ flex: 1 }}
+                    />
+                  </div>
+                )}
+                <select
+                  className="input-field"
+                  name="source"
+                  value={newLead.source}
+                  onChange={e => handleChange('source', e.target.value)}
+                >
+                  {isWellness
+                    ? WELLNESS_SOURCE_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))
+                    : SOURCE_OPTIONS.map(src => (
+                        <option key={src} value={src}>{src}</option>
+                      ))}
+                </select>
+
+                {/* #600 — wellness extras: treatment of interest (dropdown of
+                    catalog services + a free-text "Other" fallback if the
+                    catalogue is empty), preferred clinic, preferred
+                    practitioner. All three persist on Contact and feed
+                    marketing-attribution + lead-routing downstream. */}
+                {isWellness && (
+                  <>
+                    {services.length > 0 ? (
+                      <select
+                        className="input-field"
+                        name="treatmentOfInterest"
+                        value={newLead.treatmentOfInterest}
+                        onChange={e => handleChange('treatmentOfInterest', e.target.value)}
+                      >
+                        <option value="">Treatment of interest (optional)</option>
+                        {services.map(svc => (
+                          <option key={svc.id} value={svc.name || svc.title}>
+                            {svc.name || svc.title}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        name="treatmentOfInterest"
+                        placeholder="Treatment of interest (optional)"
+                        maxLength={191}
+                        className="input-field"
+                        value={newLead.treatmentOfInterest}
+                        onChange={e => handleChange('treatmentOfInterest', e.target.value)}
+                      />
+                    )}
+                    {locations.length > 0 && (
+                      <select
+                        className="input-field"
+                        name="preferredLocationId"
+                        value={newLead.preferredLocationId}
+                        onChange={e => handleChange('preferredLocationId', e.target.value)}
+                      >
+                        <option value="">Preferred clinic (optional)</option>
+                        {locations.map(loc => (
+                          <option key={loc.id} value={loc.id}>{loc.name}</option>
+                        ))}
+                      </select>
+                    )}
+                    {staff.filter(s => (s.wellnessRole || '').toLowerCase() === 'doctor').length > 0 && (
+                      <select
+                        className="input-field"
+                        name="preferredPractitionerId"
+                        value={newLead.preferredPractitionerId}
+                        onChange={e => handleChange('preferredPractitionerId', e.target.value)}
+                      >
+                        <option value="">Preferred practitioner (optional)</option>
+                        {staff
+                          .filter(s => (s.wellnessRole || '').toLowerCase() === 'doctor')
+                          .map(doc => (
+                            <option key={doc.id} value={doc.id}>{doc.name || doc.email}</option>
+                          ))}
+                      </select>
+                    )}
+                  </>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={closeCreate}
+                    style={{ padding: '0.5rem 1rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.875rem' }}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn-primary" style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>
+                    Add Lead
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
     </div>
   );
 };

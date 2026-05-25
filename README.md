@@ -12,12 +12,12 @@
 | Surface | Count |
 |---|---|
 | API routes | 103 (`backend/routes/*.js`) |
-| Data models | 151 (`prisma/schema.prisma`) |
-| UI pages | 122 (`frontend/src/pages/`) |
-| Automation engines | 17 (`backend/cron/`) |
+| Data models | 152 (`prisma/schema.prisma`) |
+| UI pages | 124 (`frontend/src/pages/`) |
+| Automation engines | 22 (`backend/cron/`) |
 | Playwright spec files | 234 (`e2e/tests/`) — per-push gate runs a subset, e2e-full runs all |
-| Backend vitest files | 90 (`backend/test/`) |
-| Frontend vitest files | 61 (`frontend/src/__tests__/`) |
+| Backend vitest files | 98 (`backend/test/`) |
+| Frontend vitest files | 76 (`frontend/src/__tests__/`) |
 | Reusable Claude Skills | 17 (`.claude/skills/`) |
 
 **Deploy pipeline** *(GitHub Actions)*
@@ -51,7 +51,7 @@ This README documents the product as it stands today. It does not narrate per-ve
 | Payments | Stripe, Razorpay |
 | Communications | **SendGrid (transactional email — live on demo)**, Twilio (SMS/Voice), Fast2SMS / MSG91 (Indian SMS providers — DLT-aware), WhatsApp Cloud API, Web Push (VAPID), IMAP inbound email |
 | Production | PM2, Nginx reverse proxy, Certbot SSL, Sentry error tracking |
-| Testing | Playwright E2E (~199 spec files; ~79 in the per-push gate, the rest in `e2e-full.yml` release-validation), vitest (42 backend + 6 frontend unit-test files) |
+| Testing | Playwright E2E (234 spec files — the per-push gate runs the gated API-spec subset, the rest in `e2e-full.yml` release-validation), vitest (98 backend + 76 frontend unit-test files) |
 | Styling | Vanilla CSS with glassmorphism design, dark/light theme support |
 
 ---
@@ -175,7 +175,7 @@ Three integration options: drop-in script, pure iframe, direct API POST. Full gu
 
 ---
 
-## All Modules (102 Routes)
+## All Modules (103 Routes)
 
 ### Sales & Pipeline
 - **Dashboard** -- Executive analytics (MRR, revenue, deal closures, pipeline charts)
@@ -344,7 +344,7 @@ Wellness tenants land on `/wellness` after login (vs `/dashboard` for generic).
 
 ## API
 
-102 route modules, all prefixed with `/api/`, protected by JWT auth. Public landing pages served at `/p/:slug`.
+103 route modules, all prefixed with `/api/`, protected by JWT auth. Public landing pages served at `/p/:slug`.
 
 The **External Partner API** (`/api/v1/external/*`) uses API-key auth instead of JWT — see [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md).
 
@@ -352,7 +352,7 @@ Rate limiting: 5000 req/15min general, 1000 req/15min on auth.
 
 Interactive docs at `/api-docs` (Swagger UI).
 
-## Automation Engines (16 Cron Jobs)
+## Automation Engines (22 Cron Jobs)
 
 | Engine | Schedule | Purpose |
 |--------|----------|---------|
@@ -372,6 +372,12 @@ Interactive docs at `/api-docs` (Swagger UI).
 | **orchestratorEngine** | Daily 07:00 IST | **Wellness AI orchestration — generates Owner Dashboard recommendation cards** |
 | **appointmentRemindersEngine** | Every 15 min | **Queue SMS reminders 24h + 1h before each booked visit (wellness)** |
 | **wellnessOpsEngine** | Hourly | **NPS survey 72h post-visit + 90-day junk-lead retention purge (wellness)** |
+| slaBreachEngine | Every 5 min | Ticket SLA breach detection + escalation |
+| leadSlaEngine | Every 2 min | Lead-response SLA breach detection |
+| lowStockEngine | Daily 09:00 IST | Wellness inventory low-stock alerts |
+| leavePolicyEngine | Daily 02:30 | Leave accrual / policy processing (wellness) |
+| demoHygieneEngine | Hourly | Purges E2E / test-data pollution from the demo box |
+| auditIntegrityEngine | Daily 04:00 | Audit hash-chain integrity sweep |
 
 Each engine has an admin-gated manual trigger at `POST /api/<area>/run` (forecasting, billing/recurring, email/scheduled, gdpr/retention) for deterministic testing + ops. The `DISABLE_CRONS=1` env switch skips cron init at boot — used by side-by-side coverage instances.
 
@@ -397,12 +403,12 @@ Each engine has an admin-gated manual trigger at `POST /api/<area>/run` (forecas
 
 ## E2E Testing
 
-**~3,784 tests on every push** across 6 mandatory deploy gates; ~199 spec files in `e2e/tests/` total. The per-push gate runs ~79 Playwright API specs (~2,560 tests) against a CI-local MySQL stack. The full `e2e-full.yml` chromium suite runs sharded 4-way against the live demo on every `git tag` push (release validation).
+**Several thousand tests on every push** across 6 mandatory deploy gates; 234 spec files in `e2e/tests/` total. The per-push gate runs the gated subset of Playwright API specs against a CI-local MySQL stack. The full `e2e-full.yml` chromium suite runs sharded 4-way against the live demo on every `git tag` push (release validation).
 
 **Per-push gate composition:**
-- `api_tests` — ~79 Playwright API specs against CI-local MySQL (~2,560 tests, ~10 min)
-- `unit_tests` — 42 backend vitest files (~1,189 tests covering `lib/` + `middleware/` + `services/` + `utils/` + `cron/`)
-- `frontend_unit_tests` — 6 frontend vitest files (~35 tests on critical components)
+- `api_tests` — the gated Playwright API specs against CI-local MySQL (~10 min)
+- `unit_tests` — 98 backend vitest files covering `lib/` + `middleware/` + `services/` + `utils/` + `cron/`
+- `frontend_unit_tests` — 76 frontend vitest files on critical components
 - `build` — vite build + `node --check` parse-check on every backend `.js`
 - `lint` — ESLint flat config + `npm audit` allowlist gate
 - `migration_check` — Prisma schema-safety detector with commit-message bless markers (`[allow-unique]`, `[allow-drop]`, `[allow-not-null]`, `[allow-narrow]`)

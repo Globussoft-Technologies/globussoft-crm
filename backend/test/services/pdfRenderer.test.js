@@ -16,7 +16,12 @@ import { describe, test, expect } from 'vitest';
 import zlib from 'node:zlib';
 import pdfR from '../../services/pdfRenderer.js';
 
-const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf } = pdfR;
+const {
+  renderPrescriptionPdf,
+  renderConsentPdf,
+  renderBrandedInvoicePdf,
+  generateTravelQuotePdf,
+} = pdfR;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -309,24 +314,31 @@ describe('renderPrescriptionPdf', () => {
   });
 
   test('renders instructions block when supplied', async () => {
+    // #839 — the top-level instructions paragraph now renders under the
+    // "Advice / Notes" header (renamed for clinician-Rx readability).
+    // "Instructions" remains the column header in the medications table.
     const buf = await renderPrescriptionPdf(
       { drugs: [], instructions: 'Avoid sun exposure for 7 days.' },
       patientFixture(),
       clinicFixture(),
     );
     const txt = extractPdfText(buf);
-    expect(txt).toContain('Instructions');
+    expect(txt).toContain('Advice');
     expect(txt).toContain('Avoid sun exposure');
   });
 
-  test('omits instructions block when none supplied', async () => {
+  test('omits Advice block when no top-level instructions supplied', async () => {
+    // #839 — "Advice / Notes" section is omitted when prescription.instructions
+    // is absent. The string "Instructions" still appears as the medications
+    // table column header (always present), so we check the section heading
+    // ("Advice") instead.
     const buf = await renderPrescriptionPdf(
       { drugs: [] },
       patientFixture(),
       clinicFixture(),
     );
     const txt = extractPdfText(buf);
-    expect(txt).not.toContain('Instructions');
+    expect(txt).not.toContain('Advice');
   });
 
   test('formats createdAt as en-IN long-form date in header', async () => {
@@ -337,6 +349,348 @@ describe('renderPrescriptionPdf', () => {
     );
     const txt = extractPdfText(buf);
     expect(txt).toContain('Apr 2026');
+  });
+
+  // ── #839 — redesigned clinical-prescription layout ────────────────
+  //
+  // The bug report rated the pre-fix PDF "unprofessional / not suitable
+  // to hand to a pharmacy". These tests pin the new layout's contract:
+  // patient ID, doctor letterhead (qualification + reg number + contact),
+  // vitals row, symptoms/diagnosis, per-drug Instructions column,
+  // Advice/Notes, follow-up date, signature block, and footer.
+
+  describe('#839 — redesigned clinical layout', () => {
+    test('renders Patient ID in the patient block', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture({ id: 8421 }),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Patient ID:');
+      expect(txt).toContain('8421');
+    });
+
+    test('renders patient email when supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture({ email: 'priya@example.com' }),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Email:');
+      expect(txt).toContain('priya@example.com');
+    });
+
+    test('renders doctor letterhead with qualification + registration number', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+        {
+          name: 'Harsh Mehta',
+          qualification: 'MBBS, MD (Derm)',
+          registrationNumber: 'MCI-123456',
+        },
+      );
+      const txt = extractPdfText(buf);
+      // Doctor letterhead near top
+      expect(txt).toContain('Dr. Harsh Mehta');
+      expect(txt).toContain('MBBS, MD');
+      expect(txt).toContain('MCI-123456');
+      expect(txt).toContain('Reg. No.');
+    });
+
+    test('renders doctor contact (phone + email) in letterhead when present', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+        {
+          name: 'Harsh Mehta',
+          phone: '+919999111122',
+          email: 'drharsh@enhancedwellness.in',
+        },
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('+919999111122');
+      expect(txt).toContain('drharsh@enhancedwellness.in');
+    });
+
+    test('renders Vitals row when at least one vital supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        {
+          drugs: [],
+          vitals: { bp: '120/80', pulse: 72, weight: 65, height: 170, temperature: 98.6, spo2: 98 },
+        },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Vitals');
+      expect(txt).toContain('BP:');
+      expect(txt).toContain('120/80');
+      expect(txt).toContain('Pulse:');
+      expect(txt).toContain('72');
+      expect(txt).toContain('Weight:');
+      expect(txt).toContain('65 kg');
+    });
+
+    test('omits Vitals section entirely when no vitals supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).not.toContain('Vitals');
+      expect(txt).not.toContain('BP:');
+    });
+
+    test('omits Vitals section when vitals object is empty', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [], vitals: {} },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).not.toContain('Vitals');
+    });
+
+    test('renders Symptoms section when supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [], symptoms: 'Hair thinning at crown for 6 months' },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Symptoms');
+      expect(txt).toContain('Hair thinning at crown');
+    });
+
+    test('renders Diagnosis section when supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [], diagnosis: 'Androgenetic alopecia, Norwood-Hamilton stage III' },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Diagnosis');
+      expect(txt).toContain('Androgenetic alopecia');
+    });
+
+    test('omits Symptoms + Diagnosis blocks when not supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).not.toContain('Symptoms');
+      expect(txt).not.toContain('Diagnosis');
+    });
+
+    test('medications table includes Instructions column header', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [{ name: 'Finasteride 1mg', dosage: '1 tab', frequency: 'OD', duration: '6 months' }] },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Medication');
+      expect(txt).toContain('Dosage');
+      expect(txt).toContain('Frequency');
+      expect(txt).toContain('Duration');
+      expect(txt).toContain('Instructions');
+    });
+
+    test('per-drug instructions render in the Instructions column', async () => {
+      const buf = await renderPrescriptionPdf(
+        {
+          drugs: [
+            {
+              name: 'Metformin 500mg',
+              dosage: '1 tab',
+              frequency: 'BID',
+              duration: '30 days',
+              instructions: 'with food',
+            },
+          ],
+        },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Metformin 500mg');
+      expect(txt).toContain('with food');
+    });
+
+    test('per-drug notes field is honoured as fallback for instructions', async () => {
+      const buf = await renderPrescriptionPdf(
+        {
+          drugs: [
+            { name: 'Vitamin D3', dosage: '60k IU', frequency: 'weekly', duration: '8 weeks', notes: 'after breakfast' },
+          ],
+        },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('after breakfast');
+    });
+
+    test('Advice / Notes section renders top-level instructions', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [], instructions: 'Avoid sun exposure for 7 days; report rash immediately' },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Advice');
+      expect(txt).toContain('Notes');
+      expect(txt).toContain('Avoid sun exposure');
+    });
+
+    test('Follow-up date renders when supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [], followUpAt: '2026-06-15' },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('Next follow-up');
+      expect(txt).toContain('Jun 2026');
+    });
+
+    test('omits follow-up line when not supplied', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      expect(txt).not.toContain('Next follow-up');
+    });
+
+    test('signature block stacks doctor name + qualification + registration', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+        {
+          name: 'Harsh Mehta',
+          qualification: 'MBBS, MD',
+          registrationNumber: 'MCI-789',
+        },
+      );
+      const txt = extractPdfText(buf);
+      // Doctor letterhead + signature both render "Dr. Harsh Mehta" + the
+      // qualification + the reg number — assert at least one occurrence
+      // each (extractor is order-preserving but doesn't track position).
+      expect(txt).toContain("Doctor's signature");
+      // Doctor name appears in BOTH the letterhead AND the signature
+      // block — verify it appears at least twice in the extracted text.
+      const drMatches = (txt.match(/Dr\. Harsh Mehta/g) || []).length;
+      expect(drMatches).toBeGreaterThanOrEqual(2);
+    });
+
+    test('footer renders clinic phone + email', async () => {
+      const buf = await renderPrescriptionPdf(
+        { drugs: [] },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      // Clinic contact strip appears in BOTH the clinic header AND the
+      // page footer — verify both phone + email survive.
+      expect(txt).toContain('+919999000011');
+      expect(txt).toContain('hello@enhancedwellness.in');
+    });
+
+    test('long drug list paginates with re-rendered table headers on each page', async () => {
+      const drugs = [];
+      for (let i = 0; i < 60; i++) {
+        drugs.push({
+          name: `Drug-${i}`,
+          dosage: '5mg',
+          frequency: 'OD',
+          duration: '30 days',
+          instructions: 'with water',
+        });
+      }
+      const buf = await renderPrescriptionPdf(
+        { drugs },
+        patientFixture(),
+        clinicFixture(),
+      );
+      const txt = extractPdfText(buf);
+      // First + last drugs both made it across the page break
+      expect(txt).toContain('Drug-0');
+      expect(txt).toContain('Drug-59');
+      // Multi-page output — /Count >= 2 in the Pages object
+      const raw = buf.toString('latin1');
+      expect(raw).toMatch(/\/Count\s+[2-9]/);
+      // Table header reappears on each page — "Medication" should occur
+      // at least twice when content spans 2+ pages.
+      const medMatches = (txt.match(/Medication/g) || []).length;
+      expect(medMatches).toBeGreaterThanOrEqual(2);
+    });
+
+    test('5+ medications scenario from acceptance criteria renders cleanly', async () => {
+      const buf = await renderPrescriptionPdf(
+        {
+          drugs: [
+            { name: 'Finasteride 1mg', dosage: '1 tab', frequency: 'OD', duration: '6 months', instructions: 'morning' },
+            { name: 'Minoxidil 5%', dosage: '1ml', frequency: 'BID', duration: '6 months', instructions: 'apply to scalp' },
+            { name: 'Biotin 10mg', dosage: '1 cap', frequency: 'OD', duration: '3 months' },
+            { name: 'Vitamin D3 60k', dosage: '1 sachet', frequency: 'weekly', duration: '8 weeks' },
+            { name: 'Zinc 50mg', dosage: '1 tab', frequency: 'OD', duration: '3 months' },
+            { name: 'Iron 100mg', dosage: '1 tab', frequency: 'OD', duration: '3 months', instructions: 'with vit C' },
+          ],
+          instructions: 'Follow scalp-care protocol; report any unusual shedding within 4 weeks.',
+          followUpAt: '2026-07-01',
+        },
+        patientFixture({ id: 1234, email: 'priya@example.com' }),
+        clinicFixture(),
+        { name: 'Harsh Mehta', qualification: 'MBBS, MD (Derm)', registrationNumber: 'MCI-789' },
+      );
+      const txt = extractPdfText(buf);
+      // Every medication present
+      expect(txt).toContain('Finasteride');
+      expect(txt).toContain('Minoxidil');
+      expect(txt).toContain('Biotin');
+      expect(txt).toContain('Vitamin D3');
+      expect(txt).toContain('Zinc');
+      expect(txt).toContain('Iron');
+      // Top-level fields all present
+      expect(txt).toContain('Patient ID:');
+      expect(txt).toContain('1234');
+      expect(txt).toContain('Advice');
+      expect(txt).toContain('Next follow-up');
+      expect(txt).toContain('MCI-789');
+    });
+
+    test('long advice notes from acceptance criteria render without breaking layout', async () => {
+      const longAdvice =
+        'Patient should follow a strict scalp-care regimen: gentle shampoo every other day, ' +
+        'avoid hot water, no chemical treatments for 12 weeks. Apply prescribed topicals as ' +
+        'directed; do not exceed dosage. Report any signs of allergic reaction including ' +
+        'redness, itching, swelling, or shortness of breath immediately. Avoid direct sun ' +
+        'exposure on treated areas for at least 14 days post-procedure. Maintain a balanced ' +
+        'diet rich in iron, zinc, and B-complex vitamins. Hydrate well — minimum 2L water/day. ' +
+        'Sleep on a clean pillowcase; rotate every 2 days. Stress management is critical — ' +
+        'consider meditation or yoga. Schedule the follow-up exactly as advised; missed ' +
+        'follow-ups may delay assessment of treatment efficacy.';
+      const buf = await renderPrescriptionPdf(
+        { drugs: [{ name: 'X', dosage: 'Y', frequency: 'Z', duration: 'W' }], instructions: longAdvice },
+        patientFixture(),
+        clinicFixture(),
+      );
+      expect(Buffer.isBuffer(buf)).toBe(true);
+      const txt = extractPdfText(buf);
+      expect(txt).toContain('strict scalp-care regimen');
+      expect(txt).toContain('follow-ups may delay');
+    });
   });
 });
 
@@ -680,5 +1034,242 @@ describe('renderBrandedInvoicePdf', () => {
     const txt = extractPdfText(buf);
     expect(txt).toContain('hello@enhancedwellness.in');
     expect(txt).toContain('+919999000011');
+  });
+});
+
+// ── generateTravelQuotePdf (DD-5.6) ─────────────────────────────────
+//
+// Travel-quote PDF — sub-brand-aware header, currency-aware money
+// rendering (DD-5.4), tax-treatment branching (DD-5.3, 'inclusive' →
+// "Includes GST" footnote; 'exclusive' → GST line item), validity-date
+// footer. No DB calls (pure function over a quote-object).
+
+function travelQuoteFixture(overrides = {}) {
+  return {
+    id: 42,
+    quoteNumber: 'TQ-2026-0042',
+    subBrand: 'tmc',
+    customerName: 'Anita Roy',
+    customerEmail: 'anita@example.com',
+    customerPhone: '+919876543210',
+    status: 'Sent',
+    issuedDate: '2026-05-20',
+    validUntil: '2026-06-20',
+    items: [
+      { description: 'School trip — Delhi 5D/4N', qty: 30, unitPrice: 18500, totalPrice: 555000 },
+      { description: 'Travel insurance (per pax)', qty: 30, unitPrice: 350, totalPrice: 10500 },
+    ],
+    subtotal: 565500,
+    gstAmount: 28275,
+    totalAmount: 593775,
+    currency: 'INR',
+    taxTreatment: 'exclusive',
+    ...overrides,
+  };
+}
+
+describe('generateTravelQuotePdf', () => {
+  test('returns a non-empty PDF Buffer (happy path)', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture());
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(800);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+  });
+
+  test('renders quote number, customer name, and status in the document', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture());
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('TQ-2026-0042');
+    expect(txt).toContain('Anita Roy');
+    expect(txt).toContain('Sent');
+    expect(txt).toContain('QUOTE');
+  });
+
+  test('sub-brand label appears in branded header (tmc → "TMC")', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({ subBrand: 'tmc' }));
+    const txt = extractPdfText(buf);
+    // SUB_BRAND_LABEL.tmc = "TMC — School Trips"; the em-dash is outside
+    // WinAnsi so the extractor splits the label, but "TMC" + "School Trips"
+    // both survive intact.
+    expect(txt).toContain('TMC');
+    expect(txt).toContain('School Trips');
+  });
+
+  test('sub-brand label switches per quote.subBrand (rfu → "RFU" + "Umrah")', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({ subBrand: 'rfu' }));
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('RFU');
+    expect(txt).toContain('Umrah');
+  });
+
+  test('sub-brand fallback for unknown sub-brand → "Travel CRM"', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({ subBrand: 'unknown-brand' }));
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Travel CRM');
+  });
+
+  test('DD-5.3 inclusive → "Includes GST" footnote present; no GST line item', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({
+      taxTreatment: 'inclusive',
+      gstAmount: 0,
+      totalAmount: 565500,
+    }));
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Includes GST');
+    // Subtotal and Total are always shown; with inclusive treatment the
+    // standalone "GST" line item must NOT appear between them. We check
+    // that "GST" only appears inside the "Includes GST" footnote — the
+    // bare "GST" line label is absent. A targeted check: count "GST"
+    // occurrences; exactly one (the footnote) is expected.
+    const gstHits = txt.match(/GST/g) || [];
+    expect(gstHits.length).toBe(1);
+  });
+
+  test('DD-5.3 exclusive → standalone GST line item shown after subtotal', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({
+      taxTreatment: 'exclusive',
+      subtotal: 100000,
+      gstAmount: 18000,
+      totalAmount: 118000,
+    }));
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Subtotal');
+    expect(txt).toContain('GST');
+    // The GST amount line should render — verify the value made it in.
+    expect(txt).toContain('18000.00');
+    // Exclusive treatment must NOT render the "Includes GST" footnote.
+    expect(txt).not.toContain('Includes GST');
+  });
+
+  test('DD-5.4 currency=INR renders ₹ symbol', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({
+      currency: 'INR',
+      items: [{ description: 'INR item', qty: 1, unitPrice: 1234.5, totalPrice: 1234.5 }],
+      subtotal: 1234.5,
+      gstAmount: 0,
+      totalAmount: 1234.5,
+      taxTreatment: 'inclusive',
+    }));
+    // The ₹ glyph (U+20B9) is outside the latin1 range pdfkit's WinAnsi
+    // encoding handles; we verify the amount renders + the currency-
+    // mapping path was taken by checking the formatted value is present
+    // and the USD-style "$" prefix is absent.
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('1234.50');
+    expect(txt).not.toContain('$1234.50');
+  });
+
+  test('DD-5.4 currency=USD renders $ symbol verbatim', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({
+      currency: 'USD',
+      items: [{ description: 'USD item', qty: 2, unitPrice: 500, totalPrice: 1000 }],
+      subtotal: 1000,
+      gstAmount: 0,
+      totalAmount: 1000,
+      taxTreatment: 'inclusive',
+    }));
+    const txt = extractPdfText(buf);
+    // $ is ASCII so it survives extraction intact.
+    expect(txt).toContain('$1000.00');
+    expect(txt).toContain('$500.00');
+  });
+
+  test('DD-5.4 unknown currency code (EUR) prefixed verbatim', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({
+      currency: 'EUR',
+      items: [{ description: 'EUR item', qty: 1, unitPrice: 750, totalPrice: 750 }],
+      subtotal: 750,
+      gstAmount: 0,
+      totalAmount: 750,
+      taxTreatment: 'inclusive',
+    }));
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('EUR 750.00');
+  });
+
+  test('renders all item descriptions in the items table', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture());
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('School trip');
+    expect(txt).toContain('Travel insurance');
+  });
+
+  test('renders "Valid until <date>" footer line', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({
+      validUntil: '2026-06-20',
+    }));
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Valid until');
+    expect(txt).toContain('Jun 2026');
+  });
+
+  test('renders signature block placeholder', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture());
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Authorised signature');
+  });
+
+  test('BrandKit.logoUrl renders as a text placeholder (no fetch)', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({
+      brandKit: { logoUrl: 'https://cdn.example.com/tmc-logo.png', accent: '#0B4F6C' },
+    }));
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Logo:');
+    expect(txt).toContain('tmc-logo.png');
+    // Sanity: PDF has no /Subtype /Image (we did NOT fetch + embed).
+    expect(buf.toString('latin1')).not.toContain('/Subtype /Image');
+  });
+
+  test('handles empty items list without throwing', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({
+      items: [],
+      subtotal: 0,
+      gstAmount: 0,
+      totalAmount: 0,
+    }));
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('No line items');
+  });
+
+  test('falls back to "Draft" status when none supplied', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({ status: undefined }));
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Draft');
+  });
+
+  test('handles null quote input gracefully (no throw)', async () => {
+    const buf = await generateTravelQuotePdf(null);
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(300);
+  });
+
+  test('computes subtotal from items when not provided explicitly', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({
+      items: [{ description: 'A', qty: 2, unitPrice: 100, totalPrice: 200 }],
+      subtotal: undefined,
+      gstAmount: 0,
+      totalAmount: undefined,
+      taxTreatment: 'inclusive',
+      currency: 'USD',
+    }));
+    const txt = extractPdfText(buf);
+    // Total = 200 (sum of items.totalPrice), rendered as $200.00.
+    expect(txt).toContain('$200.00');
+  });
+
+  test('default taxTreatment is exclusive when field absent', async () => {
+    const buf = await generateTravelQuotePdf(travelQuoteFixture({
+      taxTreatment: undefined,
+      subtotal: 100,
+      gstAmount: 18,
+      totalAmount: 118,
+      currency: 'USD',
+    }));
+    const txt = extractPdfText(buf);
+    // Exclusive path → GST line item should appear (not the footnote).
+    expect(txt).not.toContain('Includes GST');
+    expect(txt).toContain('GST');
+    expect(txt).toContain('$18.00');
   });
 });

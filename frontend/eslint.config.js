@@ -71,6 +71,12 @@ export default [
       'no-empty': ['warn', { allowEmptyCatch: true }],
       'no-prototype-builtins': 'warn',
       'no-useless-escape': 'warn',
+      // console.log/.info/.debug left in production code leak data shape
+      // into the browser console (AUDIT_2026-05-17_code.md P1.2). warn —
+      // not error — so the lint gate isn't blocked by the ~160 legacy
+      // call sites; sweep them down incrementally. console.warn/.error
+      // stay allowed as legitimate diagnostics.
+      'no-console': ['warn', { allow: ['warn', 'error'] }],
       'react/no-unescaped-entities': 'warn',
       'react/display-name': 'warn',
       'react-hooks/exhaustive-deps': 'warn',

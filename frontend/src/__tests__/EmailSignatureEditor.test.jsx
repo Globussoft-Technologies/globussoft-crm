@@ -86,11 +86,16 @@ describe('EmailSignatureEditor', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(/failed/i);
   });
 
-  it('renders the live preview HTML dangerously', async () => {
+  it('renders the signature inside a sandboxed preview iframe', async () => {
     fetchApiMock.mockResolvedValue(mockResponse({ data: { signature: '<strong>Bold</strong>' } }));
     const { container } = render(<EmailSignatureEditor />);
     await waitFor(() => {
-      expect(container.querySelector('strong')).toBeTruthy();
+      const iframe = container.querySelector('iframe');
+      expect(iframe).toBeTruthy();
+      // signature HTML is carried in srcDoc, not injected into the page DOM
+      expect(iframe.getAttribute('srcdoc')).toContain('<strong>Bold</strong>');
+      // sandbox="" (no allow-scripts) → typed markup cannot execute
+      expect(iframe.getAttribute('sandbox')).toBe('');
     });
   });
 

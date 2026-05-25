@@ -66,6 +66,11 @@ model Tenant {
   country         String   @default("US")
   defaultCurrency String   @default("USD")
   locale          String   @default("en-US") // BCP-47 for date/number formatting
+  // #902 slice 3 — Operator's GST-registration state for place-of-supply
+  // decisions in the travel-vertical GST module. ISO 3166-2 like "IN-MH".
+  // Nullable; backend/lib/gstStateCodeResolver.js falls back to "IN-MH"
+  // (legacy default) when null. Set per-tenant during onboarding.
+  gstStateCode    String?
   // Agent C: white-label branding
   logoUrl         String? // path to uploaded logo, e.g. /uploads/branding/tenant-2/logo.png
   brandColor      String? // hex like #265855, overrides theme accent when set
@@ -106,6 +111,7 @@ model Tenant {
   projects             Project[]
   notifications        Notification[]
   auditLogs            AuditLog[]
+  llmCalls             LlmCallLog[]
   pipelineStages       PipelineStage[]
   emailTemplates       EmailTemplate[]
   reportSchedules      ReportSchedule[]
@@ -146,6 +152,62 @@ model Tenant {
   referrals            Referral[]
   // #614: per-tenant earn/burn rule config (one-to-one)
   loyaltyConfig        LoyaltyConfig?
+
+  // Travel vertical — Day 2 schema migration. Back-relations only (FK
+  // cascade behavior lives on each child via @relation onDelete).
+  travelDiagnostics        TravelDiagnostic[]
+  travelDiagQuestionBanks  TravelDiagnosticQuestionBank[]
+  itineraries              Itinerary[]
+  travelCostMasters        TravelCostMaster[]
+  travelSeasonCalendars    TravelSeasonCalendar[]
+  travelMarkupRules        TravelMarkupRule[]
+  tmcTrips                 TmcTrip[]
+  webCheckins              WebCheckin[]
+  supplierCredentials      SupplierCredential[]
+  visaApplications         VisaApplication[]
+  embassyRules             EmbassyRule[]
+  rfuLeadProfiles          RfuLeadProfile[]
+  religiousGuidancePackets ReligiousGuidancePacket[]
+  tripMicrosites           TripMicrosite[]
+  // Travel-vertical financial fork (PRD_TRAVEL_{QUOTE_BUILDER,BILLING,
+  // SUPPLIER_MASTER} DD-5.1 [RESOLVED 2026-05-24]) — fork models alongside
+  // the generic Quote / Invoice / Vendor. See model docs at bottom of file.
+  travelQuotes             TravelQuote[]
+  travelQuoteLines         TravelQuoteLine[]
+  travelInvoices           TravelInvoice[]
+  travelInvoiceLines       TravelInvoiceLine[]
+  travelPaymentSchedules   TravelPaymentSchedule[]
+  travelSuppliers          TravelSupplier[]
+  travelSupplierPayables   TravelSupplierPayable[]
+  // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles
+  // (additive; consumes lib/agentCommissionCalculator.js from slice 1
+  // commit cb284098). Each row is one named operator-facing pricing
+  // profile (flat_percent | tiered | per_pax_flat | hybrid).
+  travelCommissionProfiles TravelCommissionProfile[]
+  // PRD_TRAVEL_MARKETING_FLYER #908 slice 3 — saved flyer templates
+  // (additive; consumes lib/flyerTemplateValidator.js from slice 1
+  // commit 28146498). Each row is one operator-composed flyer (palette
+  // + layout + asset placeholders) validated before persistence.
+  travelFlyerTemplates     TravelFlyerTemplate[]
+  // TMC curriculum→destination mapping (PRD_TMC_CURRICULUM_MAPPING PC-1
+  // RESOLVED 2026-05-24). 100-200 starter rows seeded by GS; TMC academic
+  // team validates + extends over 6-week window.
+  curriculumMappings       TravelCurriculumMapping[]
+  // Per-sub-brand brand kits (PRD_TRAVEL_PER_SUBBRAND_BRANDING DD-5.2
+  // [RESOLVED 2026-05-24]) — versioned brand-asset storage forked out of
+  // subBrandConfigJson. See BrandKit model at bottom of file.
+  brandKits                BrandKit[]
+  // Sub-brand config (Q9, Q14, Q21) — JSON keyed by sub-brand storing
+  // per-brand WhatsApp number / Wati WABA id / legal entity / GSTIN /
+  // Drive folder root / microsite domain. Nullable; sub-brands without
+  // an entry inherit tenant-level defaults.
+  subBrandConfigJson       String?                        @db.Text
+  /// Per-sub-brand default theme. Resolved at runtime by chain:
+  /// user.themePreference → tenant.subBrandThemes[activeSubBrand] → 'system'.
+  /// Per #876 + DD-5.3 RESOLVED 2026-05-24. JSON-string column per
+  /// CLAUDE.md convention (call site stringifies; sanitizeJson preserves shape).
+  /// Shape: { "tmc": "light", "rfu": "dark", "travelstall": "system", "visasure": "light" }
+  subBrandThemes           String?                        @db.Text
 
   // Subscriptions
   subscriptions Subscription[]
@@ -254,6 +316,11 @@ model Tenant {
   giftCards          GiftCard[]
   coupons            Coupon[]
   cashbackRules      CashbackRule[]
+  // D16 Wallet Top-up (PRD_WALLET_TOPUP §3 + DD-5.2 round-2 RESOLVED 2026-05-25):
+  // operator-configurable bonus rules + FIFO redemption-tracking credit
+  // batches. See WalletBonusRule + WalletCreditBatch models below.
+  walletBonusRules   WalletBonusRule[]
+  creditBatches      WalletCreditBatch[]
 
   // Wave 11 Agent GG — Resource availability (Resource / Holiday /
   // WorkingHours). Cascade-delete with the tenant.
@@ -289,6 +356,17 @@ model Tenant {
 
   // Notification preferences (per-user opt-in/out)
   notificationPreferences NotificationPreference[]
+
+  // Phase 2 (PRD §4.7) — per-tenant key/value settings table. First
+  // consumer is the travel advance-ratio (`travel.advanceRatio.<subBrand>`
+  // override + `travel.advanceRatio.default`); future per-tenant tunables
+  // can land here without adding a column to Tenant for each one.
+  settings TenantSetting[]
+
+  // PRD §4.5 + §4.7 — DigiLocker OAuth sessions for Aadhaar verification
+  // (currently stub-mode pending Q3 cred drop from Travel Stall). Per-
+  // tenant scoped + cascade-deletes with the tenant.
+  digilockerSessions DigilockerSession[]
 }
 
 model User {
@@ -315,7 +393,24 @@ model User {
   ssoProvider String? // "google", "microsoft", null = local
 
   // Wellness sub-role (orthogonal to RBAC role)
-  wellnessRole String? // doctor, professional, telecaller, helper
+  // PRD_WELLNESS_RBAC DD-5.1 [RESOLVED 2026-05-24]: 'cashier' added for POS-only
+  // sales role. Cashier is NOT a clinical role — phiReadGate excludes it
+  // (routes/wellness.js:212).
+  wellnessRole String? // doctor, professional, telecaller, helper, stylist, cashier
+
+  // #870 — server-side theme persistence so user choice roams across browsers
+  // and devices. DD-5.2 RESOLVED 2026-05-24: user preference wins; tenant
+  // default applies only when this column is null. Permitted values:
+  // 'light' | 'dark' | 'system'. Read/written via GET/PUT /api/user/theme.
+  themePreference String? // 'light' | 'dark' | 'system' — null = use tenant default
+
+  // Travel vertical sub-brand access (Q25 — single tenant + sub-brand
+  // tagging). JSON array of sub-brand codes the user can see/act on,
+  // e.g. ["tmc","rfu"] or ["travelstall","visasure"]. Empty/null = all
+  // sub-brands (admin-tier). Enforced at route level via a helper that
+  // reads this column + filters queries by Contact.subBrand /
+  // Deal.subBrand / etc.
+  subBrandAccess String? @db.Text
 
   // #618 — soft-deactivation. Set to now() when an admin clicks Deactivate
   // in the Staff Directory; cleared back to null on Reactivate. Reversible
@@ -382,6 +477,13 @@ model User {
 
   // Notification preferences
   notificationPreference NotificationPreference?
+
+  // Travel vertical — Visa Sure embassy-rule authorship (PC-3 RESOLVED 2026-05-24).
+  embassyRulesCreated EmbassyRule[] @relation("EmbassyRuleCreator")
+
+  // Travel vertical — TMC curriculum-mapping advisor authorship
+  // (PRD_TMC_CURRICULUM_MAPPING PC-1 RESOLVED 2026-05-24).
+  curriculumMappingsCreated TravelCurriculumMapping[] @relation("CurriculumMappingCreator")
 }
 
 model Contact {
@@ -393,6 +495,11 @@ model Contact {
   title                 String?
   status                String    @default("Lead") // Lead, Prospect, Customer, Churned
   source                String?   @default("Organic")
+  // Travel vertical sub-brand tag — nullable so generic + wellness Contacts
+  // ignore it. Set to "tmc" | "rfu" | "travelstall" | "visasure" when the
+  // Contact entered through a travel-vertical funnel. Drives analytics
+  // (per-sub-brand lead counts) + UI badge.
+  subBrand              String?
   aiScore               Int       @default(0) // 1-100 predictive close probability
   /// Last time leadScoringEngine wrote aiScore for this contact. Used as
   /// the recompute-window key so the cron only re-scores contacts whose
@@ -458,6 +565,22 @@ model Contact {
   anniversary   DateTime?
   gst           String?
   walletBalance Float?
+
+  // #902 slice 3 — Customer's place-of-supply state for travel-vertical
+  // GST decisions. ISO 3166-2 like "IN-KA". Nullable; the resolver
+  // mirrors Tenant.gstStateCode (intra-state default) when null.
+  stateCode String?
+
+  // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 6 — TravelCommissionProfile
+  // assignment for B2B agent contacts. Nullable so generic + wellness +
+  // travel-direct-consumer Contacts ignore it entirely. Set via
+  // POST /api/travel/commission-profiles/:id/assign (bulk-assign endpoint).
+  // No FK relation declared — keeps the column free of cascade-delete
+  // coupling and mirrors the same shape choice as preferredLocationId /
+  // preferredPractitionerId above. Profile deletion just leaves stale
+  // references; the calculator skips contacts whose profile id no longer
+  // resolves to a row in TravelCommissionProfile.
+  commissionProfileId Int?
 
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
@@ -538,6 +661,12 @@ model Deal {
   expectedClose   DateTime?
   lostReason      String?
   winLossReasonId Int?
+  // Travel vertical — Day 2 schema migration. Nullable so non-travel deals
+  // (generic, wellness) ignore both columns. subBrand mirrors Contact.subBrand;
+  // diagnosticId links the deal to its originating TravelDiagnostic (one
+  // diagnostic per deal — soft FK, no @relation block to keep edits minimal).
+  subBrand        String?
+  diagnosticId    Int?
   createdAt       DateTime  @default(now())
   // #167: soft-delete column (see Contact).
   deletedAt       DateTime?
@@ -617,11 +746,21 @@ model Campaign {
   scheduleStatus  String?
   scheduleFilters String?   @db.Text
 
+  // #932 — Campaign → Sequence linkage (follow-up to #898 acceptance #4).
+  // When sequenceId is set, sendCampaign auto-enrolls every recipient into
+  // the linked Sequence after dispatch completes. Nullable so existing rows
+  // survive `prisma db push` without a backfill; onDelete: SetNull keeps
+  // the campaign row valid if the linked sequence is later removed.
+  sequenceId Int?
+  sequence   Sequence? @relation(fields: [sequenceId], references: [id], onDelete: SetNull)
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   smsMessages       SmsMessage[]
   pushNotifications PushNotification[]
+
+  @@index([sequenceId])
 }
 
 model AutomationRule {
@@ -720,6 +859,12 @@ model ApiKey {
   id        Int       @id @default(autoincrement())
   keySecret String    @unique // Hashed or raw token
   name      String
+  // #899 Part A: per-sub-brand key scoping (Travel vertical).
+  // null = tenant-wide key (legacy / generic); 'tmc'|'rfu'|'travelstall'|'visasure'
+  // = scoped to one Travel sub-brand. Enforced by externalAuth/voyagrAuth via
+  // req.requireSubBrandMatch(targetSubBrand) helper — a key with subBrand='tmc'
+  // posting a lead with subBrand='rfu' is rejected 403 SUB_BRAND_MISMATCH.
+  subBrand  String?
   createdAt DateTime  @default(now())
   lastUsed  DateTime?
 
@@ -756,6 +901,12 @@ model Invoice {
   recurFrequency  String? // "monthly", "quarterly", "yearly"
   nextRecurDate   DateTime?
   parentInvoiceId Int? // original invoice this was generated from
+  // Travel vertical — Day 2 schema migration. A single tenant can issue
+  // invoices under different GST registrations (TMC vs Travel Stall vs
+  // RFU each operate under separate legal entities per Q-meta). Nullable;
+  // non-travel invoices ignore. e.g. "tmc_nexus", "labbaik_travels",
+  // "travel_stall_parent".
+  legalEntityCode String?
 
   // #413 — Restrict (not Cascade) on Tenant deletion. Invoices are financial
   // records of record; a misclick on tenant.delete() must NOT silently nuke
@@ -853,6 +1004,10 @@ model Sequence {
   // engine uses it instead of parsing nodes/edges, so legacy sequences keep
   // running unchanged.
   steps       SequenceStep[]
+  // #932 — campaigns that auto-enroll their recipients into this sequence
+  // after sendCampaign completes. Back-relation only; lookup is via
+  // Campaign.sequenceId (indexed there).
+  campaigns   Campaign[]
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
@@ -1133,6 +1288,46 @@ model AuditLog {
 
   @@index([tenantId, entity])
   @@index([tenantId, createdAt])
+}
+
+// PRD §9.1 + R7 — LLM cost observability.
+//
+// One row written per LLM router call (backend/lib/llmRouter.js) — captures
+// task class, chosen model, token counts, cost estimate, and stub-vs-real
+// mode. Powers the admin daily-summary endpoint at GET /api/admin/llm-spend.
+// Append-only: no @@unique, no UPDATE path; rows are inserted fire-and-
+// forget so a DB-write failure never breaks the LLM call itself.
+//
+// In stub mode (current state — Q11 keys held by Travel Stall) `costEstimate`
+// is always 0 and `stub: true`. Real-mode wire-in will compute per-token
+// pricing from a config map and set `stub: false`.
+model LlmCallLog {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int      @default(1)
+  // Mirrors the router's task taxonomy (TASK_ROUTING in
+  // backend/lib/llmRouter.js). Stored as a string so adding a new task
+  // class is a code-only change — no schema migration.
+  task             String // search | citation | reasoning | talking-points | form-vs-call | bulk-text | call-summary | <unknown>
+  model            String // claude-opus-4-7 | gemini-flash | perplexity-sonar | gpt-4 | claude-haiku
+  reason           String? // primary | unknown-task-fallback | <future: fallback-after-primary-failure>
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  totalTokens      Int      @default(0)
+  costEstimate     Decimal  @default(0) @db.Decimal(12, 6) // up to 6dp; USD by convention
+  stub             Boolean  @default(true)
+  // Optional caller context — useful for "which user / which surface burned
+  // the most tokens". Both nullable so public-endpoint callers (no req.user)
+  // just leave them null.
+  userId           Int?
+  surface          String? // free-form caller tag, e.g. "talking-points-regen", "form-vs-call-comparison"
+  errorMessage     String?  @db.Text // populated only when the call failed
+  createdAt        DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, task, createdAt])
+  @@index([tenantId, model, createdAt])
 }
 
 model PipelineStage {
@@ -2106,6 +2301,14 @@ model Booking {
   notes         String?
   status        String   @default("CONFIRMED") // CONFIRMED, CANCELED, COMPLETED
   contactId     Int?
+  // Travel vertical — Day 2 schema migration. Optional links to the
+  // travel-side trip + itinerary so a Booking can be the operational
+  // anchor for a TMC school trip or a Travel Stall family holiday.
+  // Nullable: non-travel bookings (calendar bookings, wellness visits
+  // routed through BookingPage) ignore both. Soft FK — no @relation
+  // block to keep the additive migration purely additive.
+  tripId        Int?
+  itineraryId   Int?
   tenantId      Int      @default(1)
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt     DateTime @default(now())
@@ -2460,6 +2663,17 @@ model Patient {
   // upper-cases for canonicality). Surfaced on invoices for B2B billing
   // (corporate-account patients, salon-on-salon recharge, etc.).
   gst           String?   @db.VarChar(15)
+  /// Free-text tag list for patient segmentation. Used by #931 bulk-tag-add
+  /// UI + filter-by-tag in Patients page. Storage matches the canonical
+  /// JSON-string-column convention used elsewhere in this schema
+  /// (SequenceStep.conditionJson, AbTest.variantA/B, ReportSchedule.metrics,
+  /// Campaign.scheduleFilters, etc. — see CLAUDE.md "Standing rules" §
+  /// JSON-string columns): String? @db.Text holding a JSON-stringified
+  /// array of strings (e.g. '["vip","diabetic","new"]'). Contact has no
+  /// tags column today, so this also establishes the shape for a symmetric
+  /// Contact.tags field if/when bulk-tag-add ships for Contact too. Route
+  /// layer stringifies on write + JSON.parses on read. Null = no tags.
+  tags          String?   @db.Text
 
   // #413 — Restrict (not Cascade) on Tenant deletion. Patient is PHI
   // (medical history, allergies, photos, prescriptions cascade-from-here).
@@ -2771,6 +2985,44 @@ model ConsentTemplate {
 
   @@unique([tenantId, key])
   @@index([tenantId, isActive])
+}
+
+/// Generic per-tenant key/value settings (PRD §4.7 + 2026-05-24 product-
+/// call). Each row is a freeform string value keyed by `(tenantId, key)`;
+/// callers parse `value` into whatever shape they need (number, JSON
+/// blob, boolean string). Consumers so far:
+///   PRD §4.7 travel advance-ratio:
+///     key = "travel.advanceRatio.default"             value = "0.5"
+///     key = "travel.advanceRatio.travelstall"         value = "0.5"
+///     key = "travel.advanceRatio.rfu"                 value = "0.3"
+///   2026-05-24 per-tenant budget cap pattern (AdsGPT DC-2, AI_CALLING
+///   DC-1, RateHawk DC-1) — values stored as USD cents (integers):
+///     key = "budgetCap_adsgpt_monthly_usd_cents"      value = "5000"   ($50.00)
+///     key = "budgetCap_ai_calling_monthly_usd_cents"  value = "10000"  ($100.00)
+///     key = "budgetCap_ratehawk_monthly_usd_cents"    value = "5000"   ($50.00)
+///     key = "budgetCap_llm_monthly_usd_cents"         value = "10000"  ($100.00)
+/// Lookup chain in backend/lib/tenantSettings.js:
+///   sub-brand-scoped → tenant default → hard-coded fallback (varies by helper).
+/// The `@@unique([tenantId, key])` is intentional — every key is
+/// per-tenant unique. Brand-new table, zero existing rows when first
+/// introduced, so the migration-safety detector's unique-constraint
+/// guard was blessed in the introducing commit (`[allow-unique]`).
+/// `category` is a NEW nullable column (additive — no bless marker
+/// needed) added 2026-05-24 to group settings in the future admin UI
+/// ("budget", "feature-flag", "branding", "travel-pricing").
+model TenantSetting {
+  id        Int      @id @default(autoincrement())
+  tenantId  Int
+  key       String // dotted/snake namespace, e.g. "travel.advanceRatio.travelstall" or "budgetCap_adsgpt_monthly_usd_cents"
+  value     String   @db.Text // freeform; caller parses
+  category  String?  @db.VarChar(50) // optional grouping for admin UI: "budget", "feature-flag", "branding"
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId, key])
+  @@index([tenantId, category])
 }
 
 model TreatmentPlan {
@@ -3178,6 +3430,11 @@ model ProductCategory {
   parent    ProductCategory?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children  ProductCategory[] @relation("CategoryHierarchy")
   isActive  Boolean           @default(true)
+  // #845 — optional image/icon thumbnail for the category. Served as a static
+  // URL like "/uploads/product-categories/pc-<stamp>.png" via the multer disk
+  // pattern from routes/booking_pages.js. Nullable + VarChar(500) keeps the
+  // migration additive (no [allow-*] bless marker needed per CLAUDE.md).
+  imageUrl  String?           @db.VarChar(500)
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
 
@@ -3301,7 +3558,10 @@ model Wallet {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  transactions WalletTransaction[]
+  transactions  WalletTransaction[]
+  // D16 Wallet Top-up (PRD_WALLET_TOPUP §3) — FIFO credit batches for
+  // per-record sliding-30-day usage metering. See WalletCreditBatch.
+  creditBatches WalletCreditBatch[]
 
   @@index([tenantId, patientId])
 }
@@ -3325,6 +3585,62 @@ model WalletTransaction {
 
   @@index([tenantId, walletId, createdAt])
   @@index([tenantId, type])
+}
+
+// D16 Wallet Top-up — Arc 1 Slice 1 (PRD_WALLET_TOPUP §3 + DD-5.2 round-2
+// RESOLVED 2026-05-25). Operator-configurable rules that govern bonus credit
+// on wallet top-ups: when a patient tops up ≥ minAmountCents, a bonus batch
+// of `amount * bonusPercent / 100` is issued that expires after
+// validityMonths. `validFrom` / `validTo` window the rule's active dates
+// (null = always-on within `active=true`). Slice 5 (admin rules page) CRUDs
+// this; Slice 2 (top-up route) reads the highest-threshold matching active
+// rule to compute the bonus batch.
+model WalletBonusRule {
+  id             Int       @id @default(autoincrement())
+  tenantId       Int
+  name           String    @db.VarChar(100)
+  minAmountCents Int // threshold to trigger bonus
+  bonusPercent   Decimal   @db.Decimal(5, 2) // e.g. 10.00 for 10%
+  validityMonths Int // expiry window after top-up
+  active         Boolean   @default(true)
+  validFrom      DateTime?
+  validTo        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  tenant         Tenant    @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, active])
+}
+
+// D16 Wallet Top-up — Arc 1 Slice 1 (PRD_WALLET_TOPUP §3 + DD-5.2 round-2
+// RESOLVED 2026-05-25). FIFO redemption-tracking ledger sibling of Wallet.
+// Each top-up creates two batches: a PRINCIPAL batch (`expiresAt` null —
+// principal never expires) + an optional BONUS batch (`expiresAt` set per
+// the matching WalletBonusRule.validityMonths). On redemption (Slice 3),
+// batches deplete in FIFO order — soonest-expiry first, then oldest-issued.
+// `remainingCents` reaches 0 → status flips to EXHAUSTED; expiry cron
+// (Slice 4) sweeps `expiresAt < now()` for ACTIVE bonus batches and flips
+// them to EXPIRED. `sourceTransactionId` links the batch to the
+// WalletTransaction that minted it; `sourceRuleId` links bonus batches to
+// the rule that triggered them (audit + analytics).
+model WalletCreditBatch {
+  id                  Int       @id @default(autoincrement())
+  tenantId            Int
+  walletId            Int
+  batchType           String    @db.VarChar(20) // 'PRINCIPAL' | 'BONUS'
+  amountCents         Int
+  remainingCents      Int // depletes as redeemed
+  expiresAt           DateTime? // null for principal (never expires); set for bonus
+  sourceRuleId        Int? // FK to WalletBonusRule when batchType=BONUS
+  sourceTransactionId Int? // FK to WalletTransaction that created this batch
+  status              String    @default("ACTIVE") @db.VarChar(20) // 'ACTIVE' | 'EXHAUSTED' | 'EXPIRED'
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  tenant              Tenant    @relation(fields: [tenantId], references: [id])
+  wallet              Wallet    @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, status])
+  @@index([tenantId, expiresAt])
 }
 
 model GiftCard {
@@ -3958,4 +4274,1089 @@ model Subscription {
   @@index([tenantId, userId, status])
   @@index([tenantId, renewalDate])
   @@index([tenantId, startDate, endDate])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Travel CRM vertical — Day 2 schema migration (Phase 1 scaffolding)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Hosts four sub-brands under a single tenant (Q25 decision): TMC (school
+// trips), RFU (Umrah), Travel Stall (family holidays), Visa Sure (visa).
+// `subBrand` String column on every travel-side model isolates per-brand
+// data + drives sub-brand-scoped queries via `subBrandAccess[]` on User
+// (added below).
+//
+// Conventions match existing CRM (NOT the PRD draft):
+//   - Int @id @default(autoincrement()), not cuid()
+//   - tenantId Int @default(1) (Q25: single tenant, sub-brand tags inside)
+//   - Decimal(15,2) for INR money (Q24 decision)
+//   - Multi-tenant invariant: every model scopes to tenantId
+//   - JSON-as-String pattern (String? @db.Text) per CLAUDE.md standing rule
+//
+// See docs/TRAVEL_CRM_PRD.md §5 for the source spec.
+
+// ── Diagnostic engine (cross-sub-brand) ──────────────────────────────
+//
+// Weighted-scoring questionnaire that classifies leads into 3-4 tiers
+// BEFORE any quote is shown. The Q-set itself (questions + weights) lives
+// in TravelDiagnosticQuestionBank, versioned per sub-brand. Each
+// TravelDiagnostic captures an immutable snapshot of the Q-set used at
+// the time of submission (questionsJson) so changing the bank later
+// doesn't retroactively re-classify completed diagnostics.
+model TravelDiagnostic {
+  id                  Int       @id @default(autoincrement())
+  tenantId            Int       @default(1)
+  subBrand            String // tmc | rfu | travelstall | visasure
+  contactId           Int? // back-link if known at submission
+  leadId              Int? // links to Deal/Lead in pipeline
+  questionBankId      Int? // FK TravelDiagnosticQuestionBank
+  questionsJson       String    @db.Text // immutable Q-bank snapshot at submission
+  answersJson         String    @db.Text // {qid: answer}
+  score               Decimal?  @db.Decimal(10, 4)
+  classification      String? // level_1 .. level_4
+  classificationLabel String? // "Confident & Prepared" etc.
+  recommendedTier     String? // entry | primary | premium
+  reportPdfUrl        String?
+  talkingPointsJson   String?   @db.Text // LLM-generated advisor brief
+  formVsCallJson      String?   @db.Text // LLM-generated form-vs-call comparison cache
+  consentCapturedAt   DateTime?
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([tenantId, subBrand, contactId])
+  @@index([tenantId, subBrand, classification])
+}
+
+model TravelDiagnosticQuestionBank {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int      @default(1)
+  subBrand         String
+  version          Int      @default(1)
+  questionsJson    String   @db.Text // ordered Qs + weights + branching rules
+  scoringRulesJson String   @db.Text // band thresholds + classification labels
+  isActive         Boolean  @default(true)
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([tenantId, subBrand, version])
+  @@index([tenantId, subBrand, isActive])
+}
+
+// ── Itinerary (multi-product trips: RFU + Travel Stall) ──────────────
+model Itinerary {
+  id                Int             @id @default(autoincrement())
+  tenantId          Int             @default(1)
+  subBrand          String
+  contactId         Int
+  leadId            Int?
+  // status enum extended for Phase 2 50%-advance booking:
+  //   draft | sent | revised | accepted | rejected | advance_paid | fully_paid
+  // advance_paid means the 50% deposit has been recorded; fully_paid means
+  // the balance has cleared. Existing draft/sent/etc. semantics unchanged.
+  status            String          @default("draft")
+  version           Int             @default(1)
+  parentItineraryId Int? // version-history chain
+  // Phase 2 PRD §6.4 — recommended product tier captured at itinerary
+  // creation, defaulted from the contact's latest diagnostic
+  // (entry | primary | premium). Nullable — TMC + Visa Sure don't carry a
+  // tier today. Captured-at-creation so tier-vs-actual analytics stay
+  // stable if the diagnostic is re-taken later.
+  productTier       String?
+  destination       String
+  startDate         DateTime?
+  endDate           DateTime?
+  pricingJson       String?         @db.Text // breakdown
+  totalAmount       Decimal?        @db.Decimal(15, 2)
+  currency          String          @default("INR")
+  pdfUrl            String?
+  shareToken        String?         @unique // WhatsApp/email share link
+  // Phase 2 — 50% advance booking pattern (PRD §4.7 Travel Stall). All
+  // three fields nullable + additive so existing Itinerary rows backfill
+  // implicitly. advancePaidAmount is the rupee amount the customer has
+  // paid as advance (typically 0.5 * totalAmount but the actual value is
+  // recorded — partial pays / over-pays are non-fatal). paymentReference
+  // stores the gateway charge id (Razorpay/Stripe) for reconciliation.
+  // Wati/payment-gateway integration arrives once Q9 / payment creds land;
+  // until then the route's demo-mode endpoint accepts the reference
+  // directly so the booking flow can be operated/tested end-to-end.
+  advancePaidAmount Decimal?        @db.Decimal(15, 2)
+  advancePaidAt     DateTime?
+  paymentReference  String?
+  // LLM-generated draft summary block. Persisted so re-renders don't burn
+  // tokens. Operator triggers regeneration via POST /draft/regen. Stays
+  // null until the first regen call lands; the customer-facing PDF + share
+  // page render conditionally on it. Bulk-text task per PRD §9.1 (Gemini
+  // Flash when Q11 keys arrive; stub-mode placeholder text until then).
+  draftSummary      String?         @db.Text
+  items             ItineraryItem[]
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([tenantId, subBrand, contactId, status])
+  @@index([tenantId, status])
+}
+
+model ItineraryItem {
+  id          Int       @id @default(autoincrement())
+  itineraryId Int
+  itemType    String // flight | hotel | transfer | activity | visa | insurance
+  position    Int
+  description String
+  detailsJson String?   @db.Text // type-specific payload
+  supplierId  Int?
+  unitCost    Decimal?  @db.Decimal(15, 2)
+  markup      Decimal?  @db.Decimal(15, 2)
+  gstAmount   Decimal?  @db.Decimal(15, 2)
+  totalPrice  Decimal?  @db.Decimal(15, 2)
+  itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([itineraryId, position])
+}
+
+// ── Cost master + seasonal calendar + markup rules ───────────────────
+model TravelCostMaster {
+  id             Int       @id @default(autoincrement())
+  tenantId       Int       @default(1)
+  subBrand       String
+  category       String // hotel | flight | transport | visa | insurance
+  supplierId     Int?
+  routeOrSku     String // "MAA-JED" or "Makkah:Hilton:Deluxe-HaramFacing"
+  attributesJson String?   @db.Text // floor/view/room category for hotels
+  baseRate       Decimal   @db.Decimal(15, 2)
+  currency       String    @default("INR")
+  seasonId       Int?
+  validFrom      DateTime?
+  validTo        DateTime?
+  isActive       Boolean   @default(true)
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([tenantId, subBrand, category, isActive])
+  @@index([tenantId, supplierId])
+}
+
+model TravelSeasonCalendar {
+  id         Int      @id @default(autoincrement())
+  tenantId   Int      @default(1)
+  subBrand   String
+  seasonName String // peak | lean | ramadan-peak | school-holiday
+  startDate  DateTime
+  endDate    DateTime
+  multiplier Decimal? @db.Decimal(6, 4) // optional uniform multiplier
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([tenantId, subBrand, startDate, endDate])
+}
+
+model TravelMarkupRule {
+  id           Int      @id @default(autoincrement())
+  tenantId     Int      @default(1)
+  subBrand     String
+  scope        String // flight | hotel | transport | package
+  matchKeyJson String   @db.Text // airline+route+fareBucket / hotel+city / route
+  markupPct    Decimal? @db.Decimal(6, 4)
+  markupFlat   Decimal? @db.Decimal(15, 2)
+  ownerUserId  Int? // agent-level markup (flight plugin)
+  priority     Int      @default(100)
+  isActive     Boolean  @default(true)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([tenantId, subBrand, scope, isActive])
+}
+
+// ── TMC trip + children ──────────────────────────────────────────────
+model TmcTrip {
+  id                   Int                       @id @default(autoincrement())
+  tenantId             Int                       @default(1)
+  tripCode             String                    @unique // "bali2026"
+  schoolContactId      Int // FK Contact (B2B school)
+  destination          String
+  departDate           DateTime
+  returnDate           DateTime
+  legalEntity          String                    @default("tmc_nexus")
+  micrositeUrl         String?
+  micrositeUuid        String?                   @unique
+  pricePerStudent      Decimal?                  @db.Decimal(15, 2)
+  status               String                    @default("confirmed") // confirmed | in-trip | completed | cancelled
+  driveFolderId        String?
+  participants         TripParticipant[]
+  rooming              RoomingAssignment[]
+  paymentPlan          TripPaymentPlan?
+  documentRequirements TripDocumentRequirement[]
+  microsite            TripMicrosite?
+  tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, departDate])
+}
+
+model TripParticipant {
+  id                 Int                 @id @default(autoincrement())
+  tripId             Int
+  fullName           String
+  passportNumber     String?
+  passportExpiry     DateTime?
+  passportDocId      Int? // ContactAttachment id
+  aadhaarLast4       String?
+  aadhaarTokenId     String? // DigiLocker token, encrypted
+  parentName         String?
+  parentPhone        String?
+  parentEmail        String?
+  medicalNotes       String?             @db.Text
+  consentCapturedAt  DateTime?
+  trip               TmcTrip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  digilockerSessions DigilockerSession[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([tripId])
+}
+
+// PRD §4.5 + §4.7 — DigiLocker OAuth flow state. Created on /initiate
+// (status="initiated"), updated to "verified" on /callback after the
+// stub (or real, once Q3 creds land) DigiLocker token exchange. The
+// `state` column doubles as the OAuth CSRF token AND the dedup key
+// (replay protection — a session that's already "verified" can't be
+// re-callbacked).
+//
+// resultLast4 / resultTokenId mirror what gets written to
+// TripParticipant on a successful callback — the row is kept as an
+// audit trail of the verification event.
+model DigilockerSession {
+  id            Int             @id @default(autoincrement())
+  tenantId      Int             @default(1)
+  participantId Int
+  state         String          @unique // OAuth state (CSRF token); dedup/replay-protection key
+  status        String          @default("initiated") // initiated | verified | failed | expired
+  redirectUri   String          @db.Text
+  initiatedAt   DateTime        @default(now())
+  verifiedAt    DateTime?
+  failedReason  String?
+  // Stub-mode: holds the synthetic last-4 + token written by the stub
+  // client. Real-mode: holds the values returned from DigiLocker's
+  // signed Aadhaar XML after callback exchange.
+  resultLast4   String?
+  resultTokenId String?
+  participant   TripParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([tenantId, status])
+  @@index([participantId])
+}
+
+model RoomingAssignment {
+  id             Int      @id @default(autoincrement())
+  tripId         Int
+  roomNumber     String
+  roomType       String // single | twin | triple | quad
+  participantIds String   @db.Text // JSON array of TripParticipant ids
+  trip           TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([tripId])
+}
+
+model TripPaymentPlan {
+  id              Int      @id @default(autoincrement())
+  tripId          Int      @unique
+  instalmentsJson String   @db.Text // [{dueDate, amount, reminderDays}]
+  graceDays       Int      @default(0)
+  trip            TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model TripInstalmentPayment {
+  id              Int       @id @default(autoincrement())
+  tripId          Int
+  participantId   Int
+  instalmentIndex Int
+  dueDate         DateTime
+  amount          Decimal   @db.Decimal(15, 2)
+  paidAmount      Decimal   @default(0) @db.Decimal(15, 2)
+  paidAt          DateTime?
+  invoiceId       Int? // FK Invoice (existing model)
+  status          String    @default("pending") // pending | partial | paid | overdue
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([tripId, status])
+  @@index([dueDate])
+}
+
+model TripDocumentRequirement {
+  id        Int      @id @default(autoincrement())
+  tripId    Int
+  docType   String // passport | aadhaar | medical-form | consent-form | school-id
+  required  Boolean  @default(true)
+  trip      TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId])
+}
+
+// ── Web check-in (cross-cutting) ─────────────────────────────────────
+//
+// Records each pending web check-in window. Cron sweeps when departureAt
+// crosses T-48h / T-24h and the Chrome extension processes; if no
+// extension is available (or DOM-change broke the adapter) the row
+// transitions to "fallback-agent" with a Task for manual handling.
+model WebCheckin {
+  id              Int       @id @default(autoincrement())
+  tenantId        Int       @default(1)
+  contactId       Int
+  itineraryId     Int?
+  pnr             String
+  airlineCode     String
+  flightNumber    String
+  departureAt     DateTime
+  windowOpenAt    DateTime // T-48h or T-24h
+  passengerName   String
+  seatPref        String?
+  mealPref        String?
+  status          String    @default("pending") // pending | reminded | in-progress | done | fallback-agent | failed
+  attemptsJson    String?   @db.Text // [{at, result, errorReason}]
+  boardingPassUrl String?
+  deliveredAt     DateTime?
+  assignedAgentId Int?
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([tenantId, status, windowOpenAt])
+  @@index([tenantId, contactId])
+}
+
+// ── Supplier credentials vault ───────────────────────────────────────
+//
+// Login + 2FA seed material for airline / hotel / GDS / visa portals,
+// encrypted via backend/lib/fieldEncryption.js (AES-256-GCM). Access is
+// logged in SupplierCredentialAccessLog for audit. ADMIN-gated.
+model SupplierCredential {
+  id                Int                           @id @default(autoincrement())
+  tenantId          Int                           @default(1)
+  category          String // airline | hotel | gds | visa-portal | payment-gateway | insurance | government
+  supplierName      String
+  loginIdEncrypted  String                        @db.Text // AES-256-GCM ciphertext
+  passwordEncrypted String                        @db.Text
+  metadataJson      String?                       @db.Text // 2FA backup codes, MFA seed, notes
+  ownerUserId       Int?
+  lastUsedAt        DateTime?
+  tenant            Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  accessLog         SupplierCredentialAccessLog[]
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+
+  @@index([tenantId, category])
+}
+
+model SupplierCredentialAccessLog {
+  id           Int                @id @default(autoincrement())
+  credentialId Int
+  userId       Int
+  action       String // viewed | used-in-checkin | rotated | deleted
+  ip           String?
+  credential   SupplierCredential @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+  at           DateTime           @default(now())
+
+  @@index([credentialId, at])
+}
+
+// ── Visa Sure (Phase 3 model, schema-defined now for Phase 1 stability) ──
+model VisaApplication {
+  id                   Int                         @id @default(autoincrement())
+  tenantId             Int                         @default(1)
+  contactId            Int
+  applicationType      String // tourist | business | student | work | umrah | hajj
+  destinationCountry   String
+  status               String                      @default("intake") // intake | docs-pending | filed | approved | rejected | appeal
+  readinessLevel       Int? // 1-4 from diagnostic
+  complexCase          Boolean                     @default(false)
+  rejectionHistoryJson String?                     @db.Text // [{country, date, reason}]
+  /// Family/dependents trigger for risk-flag engine FR-3.1(c) — PC-8 RESOLVED 2026-05-24.
+  familySize           Int?
+  advisorRiskFlag      String? // null | low | medium | high | priority
+  filedAt              DateTime?
+  decidedAt            DateTime?
+  outcome              String? // null | approved | rejected
+  outcomeReason        String?                     @db.Text
+  recoveryProgramId    Int? // FK to a future RejectionRecoveryProgram model
+  /// Self-FK to a prior rejected application — used by visaRiskFlagEngine R13 cooldown rule (PC-4 RESOLVED 2026-05-24). Pure FK; full rejection-recovery diagnostic linkage is Phase 2 (PC-2 deferred until VisaDiagnostic model materializes).
+  priorApplicationId   Int?
+  priorApplication     VisaApplication?            @relation("PriorRejection", fields: [priorApplicationId], references: [id], onDelete: SetNull)
+  recoveryApplications VisaApplication[]           @relation("PriorRejection")
+  documentChecklist    VisaDocumentChecklistItem[]
+  tenant               Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+
+  @@index([tenantId, status, advisorRiskFlag])
+  @@index([tenantId, contactId])
+  @@index([priorApplicationId])
+}
+
+model VisaDocumentChecklistItem {
+  id            Int             @id @default(autoincrement())
+  applicationId Int
+  docType       String
+  required      Boolean         @default(true)
+  status        String          @default("pending") // pending | uploaded | verified | rejected
+  attachmentId  Int?
+  notes         String?         @db.Text
+  application   VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([applicationId, status])
+}
+
+/// Per-destination embassy quirks for Visa Sure risk-flag engine. PRD §PC-3 resolved 2026-05-24: Phase 3 in-scope structured rules; advisor-head + admin UI maintainer (PC-7).
+model EmbassyRule {
+  id                 Int     @id @default(autoincrement())
+  tenantId           Int
+  ruleType           String // document_required | cooldown_period | interview_required | minimum_funds
+  destinationCountry String // ISO-3166-1 alpha-2 (e.g. US, AE)
+  applicationType    String? // null = all | tourist | business | family | student
+  conditionJson      String? @db.Text // rule logic JSON-stringified per sanitizeJson convention
+  actionLabel        String // human-readable advisor warning text
+  severity           String // info | warning | blocker
+  isActive           Boolean @default(true)
+  createdById        Int?
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdBy User?    @relation("EmbassyRuleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, destinationCountry, applicationType, ruleType])
+  @@index([tenantId])
+}
+
+// ── RFU customer profile extension ───────────────────────────────────
+model RfuLeadProfile {
+  id                    Int       @id @default(autoincrement())
+  tenantId              Int       @default(1)
+  contactId             Int       @unique // 1:1 with Contact
+  passportNumber        String?
+  passportExpiry        DateTime?
+  visaHistoryJson       String?   @db.Text
+  frequentFlyerJson     String?   @db.Text
+  seatPref              String?
+  mealPref              String?
+  travelStyle           String?
+  budgetMin             Decimal?  @db.Decimal(15, 2)
+  budgetMax             Decimal?  @db.Decimal(15, 2)
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  medicalNotes          String?   @db.Text
+  specialAssistance     String?   @db.Text
+  pastComplaintsJson    String?   @db.Text
+  productTier           String? // entry | primary | premium
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([tenantId, productTier])
+}
+
+// ── Religious-guidance content library (RFU) ─────────────────────────
+//
+// PRD §4.8 + §4.10 RFU sub-brand. Admin-curated content packets fired
+// at fixed pre-departure offsets (T-14d / T-7d / T-1d, etc.) for
+// pilgrims on the RFU (Reach for Umrah) journey. Library is editable
+// via /api/travel/religious-packets; cron firing lives in
+// backend/cron/religiousGuidanceEngine.js.
+//
+// Phase 1 ships placeholder copy at dayOffset 14 / 7 / 1; Yasin's Q1
+// canonical Hajj/Umrah ritual guidance replaces the placeholder via
+// admin PATCH — no schema change required.
+//
+// subBrand kept as a freeform string (not enum) so the same library
+// pattern can be reused for future sub-brands (TMC parent-trip prep,
+// Travel Stall destination tips) without a schema migration. Phase 1
+// only seeds "rfu" rows.
+//
+// dayOffset semantics: positive = days BEFORE departure (14 = T-14d).
+// Negative reserved for future "thank-you / share-your-journey"
+// post-trip packets but Phase 1 ships only pre-trip (positive).
+//
+// channels = comma-separated subset of "wa","email","sms". Phase 1
+// defaults to "wa,email"; wa goes through the Wati stub (Q9-blocked),
+// email + sms log dispatch intent only until the scheduledEmail engine
+// wire-in lands.
+//
+// NOT user-input-bound — admin-only CRUD; contentHtml passes through
+// the standard sanitizeHtml pipeline at create time.
+//
+// No UNIQUE on (tenantId, subBrand, dayOffset) — multiple packets at
+// the same offset (e.g. "ritual prep" + "documents reminder" both at
+// T-7d) are intentional.
+model ReligiousGuidancePacket {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int      @default(1)
+  subBrand    String // "rfu" | future "tmc" | "travelstall" | "visasure"
+  dayOffset   Int // 14, 7, 3, 1, 0 (= day of departure); positive = pre-trip
+  title       String
+  contentHtml String   @db.Text
+  channels    String   @default("wa,email") // CSV: wa|email|sms
+  isActive    Boolean  @default(true)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, subBrand, isActive])
+  @@index([tenantId, subBrand, dayOffset])
+}
+
+// ── Trip microsite (TMC) — public, OTP-gated for sensitive views ─────
+model TripMicrosite {
+  id            Int                @id @default(autoincrement())
+  tenantId      Int                @default(1)
+  tripId        Int                @unique
+  publicUuid    String             @unique
+  subdomain     String // "trip-bali2026" (subdomain on tmc.travelstall.in per Q21)
+  itineraryHtml String             @db.Text
+  faqJson       String?            @db.Text
+  publishedAt   DateTime?
+  expiresAt     DateTime?
+  otps          TripMicrositeOtp[]
+  trip          TmcTrip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tenant        Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([tenantId, subdomain])
+}
+
+model TripMicrositeOtp {
+  id          Int           @id @default(autoincrement())
+  micrositeId Int
+  phone       String
+  purpose     String // registration | payment-plan | document-checklist | teacher-access
+  otpHash     String
+  expiresAt   DateTime
+  usedAt      DateTime?
+  microsite   TripMicrosite @relation(fields: [micrositeId], references: [id], onDelete: Cascade)
+  createdAt   DateTime      @default(now())
+
+  @@index([micrositeId, phone, purpose])
+}
+
+// ── Travel-vertical financial fork (PRD_TRAVEL_{QUOTE_BUILDER,BILLING,SUPPLIER_MASTER} DD-5.1 [RESOLVED 2026-05-24]) ──
+//
+// Per the 2026-05-24 product-call session, the travel vertical forks its
+// financial models rather than extending Quote / Invoice / Vendor in place.
+// These 3 models live alongside the originals; generic CRM operator UI
+// continues using the originals; travel-vertical operator UI routes to these.
+//
+// Field set here is INTENTIONALLY MINIMAL — establishes the schema beachhead
+// + indexes. Real PRD §3 fields (TCS, supplier-payable, multi-stage
+// settlement, commission ledger) land in follow-up commits per PRD spec.
+//
+// Sub-brand scoping (Q25): every row carries .subBrand and is indexed by
+// (tenantId, subBrand). The voyagrAuth + apiKeyAuth.requireSubBrandMatch
+// helpers enforce sub-brand isolation at the route layer.
+model TravelQuote {
+  id          Int               @id @default(autoincrement())
+  tenantId    Int               @default(1)
+  subBrand    String
+  contactId   Int
+  status      String            @default("Draft") // Draft | Sent | Accepted | Rejected
+  totalAmount Decimal?          @db.Decimal(15, 2)
+  currency    String            @default("INR")
+  validUntil  DateTime?
+  lines       TravelQuoteLine[]
+  invoices    TravelInvoice[]
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([tenantId, subBrand])
+  @@index([tenantId, subBrand, status])
+}
+
+// PRD_TRAVEL_QUOTE_BUILDER §3.2 — line-item composition.
+//
+// Stores the composite line items that make up a quote (hotel rooms,
+// flight segments, transport, visa fees, ad-hoc services). Each row
+// carries its own lineType for downstream supplier-PO routing + tax
+// classification (DD-5.3, pending product call). Amount is stored
+// derived (quantity * unitPrice) at write time so the operator UI
+// + PDF render don't need to recompute on every read.
+//
+// supplierId is optional — set when the operator has picked a vendor
+// for that line (so supplier-payable ledgers can be backfilled).
+// sortOrder controls display order in the quote PDF + builder UI.
+//
+// onDelete: Cascade on quoteId — if the parent quote is hard-deleted
+// (TravelQuote.delete is a hard-delete per route comment at the
+// DELETE handler), the line rows go with it.
+model TravelQuoteLine {
+  id          Int         @id @default(autoincrement())
+  tenantId    Int         @default(1)
+  quoteId     Int
+  lineType    String      @default("other") // hotel | flight | transport | visa | service | other
+  description String
+  quantity    Int         @default(1)
+  unitPrice   Decimal     @db.Decimal(15, 2)
+  amount      Decimal     @db.Decimal(15, 2)
+  currency    String      @default("INR")
+  supplierId  Int?
+  sortOrder   Int         @default(0)
+  notes       String?     @db.Text
+  quote       TravelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([tenantId, quoteId])
+  @@index([quoteId, sortOrder])
+}
+
+model TravelInvoice {
+  id                 Int                     @id @default(autoincrement())
+  tenantId           Int                     @default(1)
+  subBrand           String
+  contactId          Int
+  // Optional FK to TravelQuote — an invoice can be generated without a
+  // prior quote (direct billing, supplier-passthrough scenarios).
+  quoteId            Int?
+  // Tenant-scoped human-readable identifier (e.g. "TINV-2026-0001"). The
+  // route layer assigns sequentially per tenant + sub-brand at create time.
+  invoiceNum         String
+  status             String                  @default("Draft") // Draft | Issued | Partial | Paid | Voided
+  totalAmount        Decimal?                @db.Decimal(15, 2)
+  currency           String                  @default("INR")
+  dueDate            DateTime?
+  paidAt             DateTime?
+  // Arc 2 #901 slice 10 — Section 206C(1G) TCS persistence (PRD_TRAVEL_BILLING
+  // UC-2.6 + FR-3.5). All four fields nullable + additive — invoices that
+  // never get TCS applied (domestic, below-threshold, pre-slice-10 historical)
+  // leave them null. tcsAppliedAt doubles as the idempotency sentinel — once
+  // set, POST /:id/apply-tcs rejects with TCS_ALREADY_APPLIED. Line-level
+  // TCS persistence (separate TravelInvoiceLine row) is deferred to slice 11.
+  tcsAmount          Decimal?                @db.Decimal(15, 2)
+  tcsRate            Decimal?                @db.Decimal(5, 2)
+  tcsExceedingAmount Decimal?                @db.Decimal(15, 2)
+  tcsAppliedAt       DateTime?
+  // Arc 2 #901 slice 11 — Doc-type taxonomy (PRD_TRAVEL_BILLING FR-3.x).
+  // Nullable with default "TaxInvoice"; new rows get the default, existing
+  // rows remain NULL (route layer treats NULL as "TaxInvoice"). Enum values:
+  // Proforma | TaxInvoice | CreditNote | DebitNote | TravelVoucher.
+  // Separate CreditNote/DebitNote workflows deferred to slice 12; this slice
+  // ships the field + validation + filter only.
+  docType            String?                 @default("TaxInvoice")
+  // Arc 2 #901 slice 14 — CreditNote workflow (PRD_TRAVEL_BILLING UC-2.7).
+  // Self-relation linking a CreditNote (or DebitNote) row back to the
+  // original invoice it adjusts. Nullable + onDelete SetNull — if the parent
+  // is hard-deleted the credit-note row remains as an orphan financial
+  // record (audit-trail preservation; deletion of a parent in Issued/Paid
+  // state is already prevented at the route layer). Existing rows get NULL
+  // (additive safe — no bless marker needed).
+  parentInvoiceId    Int?
+  parentInvoice      TravelInvoice?          @relation("InvoiceCreditNotes", fields: [parentInvoiceId], references: [id], onDelete: SetNull)
+  creditNotes        TravelInvoice[]         @relation("InvoiceCreditNotes")
+  lines              TravelInvoiceLine[]
+  schedule           TravelPaymentSchedule[]
+  quote              TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  tenant             Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  @@unique([tenantId, invoiceNum])
+  @@index([tenantId, subBrand])
+  @@index([tenantId, subBrand, status])
+  @@index([tenantId, parentInvoiceId])
+}
+
+// PRD_TRAVEL_BILLING FR-3.1.a — line-item composition under TravelInvoice.
+//
+// Mirrors TravelQuoteLine (commit f7203b8e) — same auth/audit conventions,
+// same parent-total recompute pattern, same amount-derived-server-side
+// contract. Stores the composite line items that make up an invoice
+// (hotel rooms, flight segments, transport, visa fees, taxes, fees, addons,
+// TCS/TDS withholding lines, ad-hoc services).
+//
+// Slice-1 minimal field set (matches TravelQuoteLine):
+//   - lineType enum extended to include tax/fee/addon/tcs/tds for the
+//     billing-side line-classification surface
+//   - amount stored derived (quantity * unitPrice) at write time so the
+//     operator UI + PDF render don't need to recompute on every read
+//
+// Future slices (NOT in this commit — land when downstream PRDs ship):
+//   - supplierId FK (lands with #903 Supplier Master wire-in)
+//   - cost-vs-sell + GST breakdown (PRD §3.5 TCS Sec 206C + tax engine)
+//
+// Slice 4 (this commit) — PRD_TRAVEL_BILLING FR-3.1.b + FR-3.1.d.
+//   PNR / booking-ref + service-dates. All NULLABLE — additive safe
+//   migration (no bless marker needed). Free-form strings; no FK to a
+//   PNR-master table because PNR is a vendor-side identifier and a single
+//   booking can carry multiple (airline PNR + GDS reference + supplier
+//   booking-ref) — operator picks which to record per line.
+//
+// onDelete: Cascade on invoiceId — if the parent invoice is hard-deleted
+// (TravelInvoice.delete is a hard-delete for Draft invoices per route
+// comment at the DELETE handler), the line rows go with it.
+model TravelInvoiceLine {
+  id               Int           @id @default(autoincrement())
+  tenantId         Int           @default(1)
+  invoiceId        Int
+  lineType         String        @default("other") // per_pax | per_room | per_night | per_trip | tax | fee | addon | tcs | tds | other
+  description      String
+  quantity         Int           @default(1)
+  unitPrice        Decimal       @db.Decimal(15, 2)
+  amount           Decimal       @db.Decimal(15, 2)
+  currency         String        @default("INR")
+  sortOrder        Int           @default(0)
+  notes            String?       @db.Text
+  // FR-3.1.b — per-line PNR / supplier booking-reference (free-form).
+  // pnr: 6-char airline/GDS PNR typically; cap at 20 to allow supplier
+  //   suffix variants (e.g. "ABC123-LEG2"). bookingRef is the alternative
+  //   confirmation number some suppliers (hotels, transfers) use; cap at
+  //   50 to accommodate longer hotel/cruise confirmation strings.
+  pnr              String?
+  bookingRef       String?
+  // FR-3.1.d — per-line service dates. Drives accrual-period reporting
+  // (revenue recognized when service rendered, not when invoiced).
+  // Inclusive range semantics: serviceEndDate >= serviceStartDate (same-day
+  // allowed for single-night stays / single-day transfers).
+  serviceStartDate DateTime?
+  serviceEndDate   DateTime?
+  // Arc 2 #901 slice 12 — UC-2.1 multi-currency support.
+  // Operator captures the day's FX rate when entering a line in a non-base
+  // currency (e.g. USD line on an INR invoice). baseAmount = amount *
+  // fxRateToBase, server-computed + persisted for accrual reporting.
+  // NULL means the line is single-currency (no FX conversion needed;
+  // baseAmount === amount). Live FX-rate lookup deferred (Q-blocker).
+  // 6dp precision on the rate accommodates inverse-quote pairs like
+  // USD→INR=0.012048 (1 / 83.00); 2dp on baseAmount matches the existing
+  // Decimal(15,2) convention used across TravelInvoice + TravelQuote.
+  fxRateToBase     Decimal?      @db.Decimal(15, 6)
+  baseAmount       Decimal?      @db.Decimal(15, 2)
+  invoice          TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([tenantId, invoiceId])
+  @@index([invoiceId, sortOrder])
+}
+
+// PRD_TRAVEL_BILLING FR-3.2.a — payment-schedule milestones.
+// Staged settlement: a single TravelInvoice can have multiple milestones
+// (e.g. 25% advance, 50% pre-departure, 25% on-return). Each row is
+// one milestone with its own dueDate + expectedAmount + status.
+//
+// status flow: pending → partial → paid (or waived / overdue at any point)
+// onDelete: Cascade on invoiceId — if parent invoice is hard-deleted
+// the milestones go with it.
+//
+// receivedAmount tracks partial settlement (operator manually records
+// receipts in slice 6; slice 8 will wire it to the Stripe/Razorpay
+// payment-webhook surface). All decimal columns share the existing
+// Decimal(15,2) convention used across TravelInvoice + TravelQuote.
+//
+// Future slices (NOT in this slice):
+//   slice 7 — auto-create a default 25/50/25 schedule on POST /:id/issue
+//   slice 8 — payment-webhook wires receivedAmount + paidAt automatically
+//   slice 9 — overdue cron flips status to 'overdue' on dueDate < now
+model TravelPaymentSchedule {
+  id               Int           @id @default(autoincrement())
+  tenantId         Int           @default(1)
+  invoiceId        Int
+  milestoneOrder   Int // 1-based; operator-controlled sequencing
+  dueDate          DateTime?
+  expectedAmount   Decimal       @db.Decimal(15, 2)
+  expectedCurrency String        @default("INR")
+  receivedAmount   Decimal?      @db.Decimal(15, 2)
+  status           String        @default("pending") // pending | partial | paid | overdue | waived
+  paidAt           DateTime?
+  notes            String?       @db.Text
+  invoice          TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, invoiceId, milestoneOrder])
+  @@index([tenantId, status, dueDate])
+}
+
+model TravelSupplier {
+  id                 Int                     @id @default(autoincrement())
+  tenantId           Int                     @default(1)
+  subBrand           String
+  name               String
+  contactPerson      String?
+  phone              String?
+  email              String?
+  gstin              String?
+  addressLine        String?
+  // hotel | flight | transport | visa-consul | other
+  supplierCategory   String                  @default("other")
+  isActive           Boolean                 @default(true)
+  // PRD_TRAVEL_SUPPLIER_MASTER slice 1 (#903) — payment terms + credit tracking.
+  // All NULLABLE — additive safe migration (no bless marker needed).
+  // paymentTermsDays: free-form NET-N day count (e.g. 30 for NET-30, 45 for NET-45).
+  // creditLimit:      max outstanding payable before booking-confirm guard fires (FR-3.1.c).
+  // creditCurrency:   ISO-4217 code, defaults to INR.
+  // taxRegimeCode:    "regular" | "composite" | "exempt" (free-form; will tighten in Phase 2).
+  // primaryContactRole: e.g. "Accounts payable" | "Sales rep" — distinct from contactPerson name.
+  // notes:            unstructured operator notes blob.
+  paymentTermsDays   Int?
+  creditLimit        Decimal?                @db.Decimal(15, 2)
+  creditCurrency     String?                 @default("INR")
+  taxRegimeCode      String?
+  primaryContactRole String?
+  notes              String?                 @db.Text
+  tenant             Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payables           TravelSupplierPayable[]
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  @@index([tenantId, subBrand])
+  @@index([tenantId, subBrand, supplierCategory])
+}
+
+// PRD_TRAVEL_BILLING UC-2.3 — supplier-payable ledger.
+// Tracks A/P (accounts payable) entries: what we owe each supplier.
+// Status flow: pending → scheduled → paid (or cancelled).
+// Each row is a single payable obligation (one PO, one supplier).
+//
+// Slice 3 of #903 (Supplier Master). All NULLABLE / additive — new model,
+// no migration risk. Status enum enforced at the route layer
+// (pending | scheduled | paid | cancelled); status='paid' auto-sets
+// paidAt=now() if not already set. Sub-brand isolation is inherited via
+// the parent TravelSupplier — every payable is scoped through its
+// supplier's subBrand + tenantId.
+model TravelSupplierPayable {
+  id          Int            @id @default(autoincrement())
+  tenantId    Int            @default(1)
+  supplierId  Int
+  poNumber    String? // free-form purchase-order or booking reference
+  description String // "50 PNRs Apr 2026" / "Hotel block 25-28 May" etc.
+  amount      Decimal        @db.Decimal(15, 2)
+  currency    String         @default("INR")
+  dueDate     DateTime?
+  status      String         @default("pending") // pending | scheduled | paid | cancelled
+  paidAt      DateTime?
+  notes       String?        @db.Text
+  supplier    TravelSupplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([tenantId, supplierId])
+  @@index([tenantId, supplierId, status])
+  @@index([tenantId, dueDate])
+}
+
+// ── Per-sub-brand brand kit (PRD_TRAVEL_PER_SUBBRAND_BRANDING DD-5.2 [RESOLVED 2026-05-24]) ──
+//
+// Per the 2026-05-24 product-call session, brand-kit storage forks from the
+// Tenant.subBrandConfigJson blob into a dedicated BrandKit model. Each
+// (tenantId, subBrand) pair can have multiple versions; only one is
+// isActive=true at a time per (tenantId, subBrand). Version history retained
+// (DD-5.6: last 10 versions per sub-brand; older purged by future cron).
+//
+// Consumer surfaces: per-sub-brand theme application (THEME_MANAGEMENT),
+// wellness mini-site editor (ZYLU MINI-001), marketing flyer studio
+// (MARKETING_FLYER), travel invoice PDF templates, customer portal headers.
+model BrandKit {
+  id             Int      @id @default(autoincrement())
+  tenantId       Int
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Sub-brand scope (Q25 — required for travel-vertical). For non-travel
+  // tenants (generic / wellness), subBrand stays null = tenant-wide default.
+  subBrand       String?  @db.VarChar(50)
+  // Version number — increments on every save. Latest version per
+  // (tenantId, subBrand) is the active one. Older versions kept for revert
+  // (DD-5.6 retention policy: last 10 versions; future cron purges).
+  version        Int      @default(1)
+  isActive       Boolean  @default(false)
+  // Brand assets
+  logoUrl        String?  @db.VarChar(500) // light-mode logo
+  logoDarkUrl    String?  @db.VarChar(500) // dark-mode logo (DD-5.5 — required when light inverts poorly)
+  faviconUrl     String?  @db.VarChar(500)
+  // Brand colors (hex; WCAG checked at save time per DD-5.5e)
+  primaryColor   String?  @db.VarChar(20)
+  secondaryColor String?  @db.VarChar(20)
+  accentColor    String?  @db.VarChar(20)
+  bgColor        String?  @db.VarChar(20)
+  textColor      String?  @db.VarChar(20)
+  // Typography (DD-5.1: Google Fonts only for v1)
+  fontFamily     String?  @db.VarChar(100) // e.g. "Inter, sans-serif"
+  fontUrl        String?  @db.VarChar(500) // Google Fonts URL when used
+  // Copy
+  tagline        String?  @db.VarChar(200)
+  // Audit
+  createdBy      Int? // userId who saved this version (FK omitted — User model has too many relations already; SetNull semantics via app)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, subBrand, version])
+  @@index([tenantId, subBrand, isActive])
+  @@index([tenantId, isActive])
+}
+
+/// TMC curriculum→destination mapping for Travel Stall's school-trip pitching.
+/// PC-1 RESOLVED 2026-05-24: GS drafts 100-200 starter rows + TMC academic team
+/// validates over 6 weeks. Referenced by /quotes builder + /diagnostics engine.
+///
+/// Fine-grain key (curriculum, grade, subject, learningOutcome) per PC-3 — one
+/// row represents "this learning outcome maps to this destination with this fit
+/// score". PC-2 scopes V1 to CBSE + ICSE; IB + Cambridge enabled but unseeded.
+/// PC-4 uses a 1-100 fitScore (human-judged for V1; rule-based pre-filter is
+/// Phase 2). PC-5 references TMC's existing trip catalogue via TmcTrip with a
+/// free-text destinationLabel fallback for advisor-suggested destinations not
+/// yet in the catalogue.
+model TravelCurriculumMapping {
+  id               Int     @id @default(autoincrement())
+  tenantId         Int
+  // Curriculum standard: 'CBSE' | 'ICSE' | 'IB' | 'Cambridge' (PC-2 — V1
+  // ships CBSE + ICSE only; IB + Cambridge enabled but rows unseeded).
+  // VarChar(32) tightened from default(191) for MySQL key-byte budget — see
+  // @@unique key-budget note below.
+  curriculum       String  @db.VarChar(32)
+  // Grade level — free-text since formats differ across curricula:
+  // CBSE/ICSE use 'Class 9', 'Class 10'; IB uses 'IB Year 1', 'IB Year 2';
+  // Cambridge uses 'IGCSE Year 10', etc. VarChar(32) for key-byte budget.
+  grade            String  @db.VarChar(32)
+  // Subject — e.g. 'Geography', 'History', 'Biology', 'Physics'.
+  // VarChar(64) for key-byte budget.
+  subject          String  @db.VarChar(64)
+  // Specific learning outcome the trip teaches (PC-3 — fine grain). Bounded
+  // VARCHAR (not Text) so it can participate in the composite @@unique below;
+  // 300 chars is enough for a concise outcome statement like "Plate tectonics
+  // + landform formation". Use fitRationale (@db.Text) for long-form notes.
+  // Tightened from 500 → 300 for MySQL key-byte budget (see @@unique below).
+  learningOutcome  String? @db.VarChar(300)
+  // PC-5 — optional FK to TMC's TravelTrip catalogue (TmcTrip). When the
+  // recommended destination exists as a trip template, link to it. Otherwise
+  // leave null and use destinationLabel as a free-text fallback. FK omitted
+  // here (Int? only, no @relation) to keep the model unbound from cascade
+  // semantics — the route layer resolves TmcTrip on read.
+  destinationId    Int?
+  // PC-5 — free-text destination fallback (e.g. "Italy + Iceland", "Mussoorie
+  // + Dehradun"). Required when destinationId is null.
+  destinationLabel String?
+  // PC-4 — human-judged 1-100 fit score for V1 (50 = no opinion yet).
+  // Rule-based pre-filter scoring is Phase 2.
+  fitScore         Int?    @default(50)
+  // Advisor's free-text explanation of why this destination fits this outcome.
+  fitRationale     String? @db.Text
+  // Soft-disable a mapping without deleting (preserves history).
+  isActive         Boolean @default(true)
+  // Authoring advisor (academic-team member or GS template author).
+  createdById      Int?
+  createdBy        User?   @relation("CurriculumMappingCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Block duplicate rows for the same (tenant, curriculum, grade, subject,
+  // outcome) combination — advisors should edit existing rows, not duplicate.
+  // Key-byte budget: 8 (Int) + 32*4 + 32*4 + 64*4 + 300*4 = 1720 bytes,
+  // well under MySQL's 3072-byte utf8mb4 limit. Tick #178's 500-char
+  // learningOutcome overflowed the budget (4300 bytes) — tick #179 triage.
+  @@unique([tenantId, curriculum, grade, subject, learningOutcome])
+  // Diagnostic-engine lookup path: "given a student's curriculum+grade+subject,
+  // surface candidate destinations sorted by fitScore."
+  @@index([curriculum, grade, subject])
+  @@index([tenantId, isActive])
+}
+
+// PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles.
+//
+// Each profile is a JSON blob matching one of the 4 shapes consumed by
+// lib/agentCommissionCalculator.js (flat_percent | tiered | per_pax_flat |
+// hybrid). Stored as a JSON String column (@db.Text) so the calculator
+// can be swapped or extended without schema migrations as more profile
+// types ship in future slices.
+//
+// Sub-brand isolation (Q25): profiles MAY be restricted to one sub-brand
+// (tmc / rfu / travelstall / visasure). NULL subBrand means the profile
+// applies tenant-wide and any agent in any sub-brand can be assigned it.
+// Operator-side guards in routes/travel_commission_profiles.js enforce
+// sub-brand access via getSubBrandAccessSet (mirrors travel_quotes.js).
+//
+// profileType validation is enforced at the route layer (whitelist match
+// against the 4 calculator types). profileJson is JSON.parse-validated
+// at the route boundary; deep-shape validation against profileType is
+// deferred to a future slice — the calculator itself returns
+// commission=0 with a "unknown profile type" breakdown if the shape is
+// malformed (defensive 200-with-zero, not a runtime throw).
+//
+// Future slices (not in this commit): mount in server.js, assignment of
+// profiles to specific User / TravelAgent rows (currently a profile is
+// a standalone catalog row), audit-trail of profile edits, computed
+// commission ledger.
+model TravelCommissionProfile {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int      @default(1)
+  name        String // operator-facing label, e.g. "Standard 5%"
+  subBrand    String? // optional sub-brand restriction (tmc/rfu/travelstall/visasure)
+  profileType String // flat_percent | tiered | per_pax_flat | hybrid
+  profileJson String   @db.Text // JSON serialization of profile shape
+  isActive    Boolean  @default(true)
+  notes       String?  @db.Text
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, subBrand])
+  @@index([tenantId, isActive])
+}
+
+// PRD_TRAVEL_MARKETING_FLYER #908 slice 3 — saved flyer template.
+//
+// Operator-composed JSON blob (palette + layout + asset placeholders)
+// validated via lib/flyerTemplateValidator.js (slice 1 commit 28146498)
+// before persistence. Replaces the frontend STUB in FlyerTemplates.jsx
+// (slice 2 commit a64c1058). The renderer (future slice) consumes the
+// same JSON columns at PDF/PNG export time.
+//
+// Why three JSON columns instead of separate models for palette / layout /
+// assets: a template is operator-composed as a single editor session, and
+// the renderer wants all three blobs together — splitting would force a
+// 3-way join on every read with no callsite that wants just one piece.
+//
+// Slice scope (slice 3): schema + CRUD endpoints. The server.js mount,
+// frontend wire-in (replacing the STUB), and renderer pipeline are
+// separate slices.
+model TravelFlyerTemplate {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int      @default(1)
+  name        String // operator-facing label, e.g. "Summer Umrah 2026"
+  subBrand    String? // optional sub-brand restriction (tmc/rfu/travelstall/visasure)
+  paletteJson String   @db.Text // JSON: { primaryHex, secondaryHex, accentHex?, textHex, bgHex }
+  layoutJson  String   @db.Text // JSON: [{type, x, y, width, height, content?, src?, href?}, ...]
+  assetsJson  String?  @db.Text // JSON: { logo?, hero?, footer? } URLs (optional)
+  isActive    Boolean  @default(true)
+  notes       String?  @db.Text
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, subBrand])
+  @@index([tenantId, isActive])
 }

@@ -75,8 +75,8 @@ router.post("/import/:id", verifyToken, async (req, res) => {
     if (!lead) return res.status(404).json({ error: "Lead not found." });
     if (lead.status === "Imported") return res.status(400).json({ error: "Lead already imported." });
 
-    const existing = await findDuplicateContact(lead.email, lead.phone);
-    if (existing && existing.tenantId === req.user.tenantId) {
+    const existing = await findDuplicateContact(lead.email, lead.phone, req.user.tenantId);
+    if (existing) {
       await prisma.marketplaceLead.update({
         where: { id: lead.id },
         data: { status: "Duplicate", contactId: existing.id },
@@ -151,8 +151,8 @@ router.post("/import-bulk", verifyToken, async (req, res) => {
         const lead = await prisma.marketplaceLead.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
         if (!lead || lead.status === "Imported") { results.failed++; continue; }
 
-        const existing = await findDuplicateContact(lead.email, lead.phone);
-        if (existing && existing.tenantId === req.user.tenantId) {
+        const existing = await findDuplicateContact(lead.email, lead.phone, req.user.tenantId);
+        if (existing) {
           await prisma.marketplaceLead.update({ where: { id: lead.id }, data: { status: "Duplicate", contactId: existing.id } });
           results.duplicates++;
           continue;

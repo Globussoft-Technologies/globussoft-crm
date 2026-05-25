@@ -1,11 +1,12 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown } from 'lucide-react';
+import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown, CheckCircle, Clock, Pill, Activity } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
 import { formatDate } from '../../utils/date';
 import { currencySymbol, formatMoney } from '../../utils/money';
+import DateRangePicker, { effectiveRangeFor } from '../../components/DateRangePicker';
 
 const tabStyle = (active) => ({
   padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--accent-color)' : 'transparent',
@@ -175,9 +176,15 @@ export default function PatientDetail() {
             <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', fontWeight: 500 }}>wallet</span>
           </div>
         )}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           <span>Source: <strong style={{ color: 'var(--text-primary)' }}>{patient.source || '—'}</strong></span>
           <span>{patient.visits.length} visits • {patient.prescriptions.length} Rx • {patient.treatmentPlans.length} treatment plans</span>
+          {/* #840 — consolidated patient-record export. Forces a save (not a
+              tab-open) because operators handing off records to referring
+              providers / archives want a file on disk, not a preview. The
+              endpoint requires Bearer auth so we stream via fetch + blob
+              rather than navigating via window.location. */}
+          <DownloadFullReportButton patientId={patient.id} patientName={patient.name} />
         </div>
       </div>
 
@@ -189,7 +196,21 @@ export default function PatientDetail() {
           attribute selector). Mobile rule allows the strip to scroll
           horizontally when too many tabs survive the wrap. */}
       <div className="wellness-tab-strip" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        {/* Tick #200 — unified Timeline tab consumes the server-merged
+            /timeline endpoint (1 fetch instead of the 4 stitched fetches the
+            Case-history tab does client-side). Listed FIRST because it's the
+            "what happened with this patient in chronological order" summary
+            view operators most often want as the landing surface. The
+            existing 4 per-resource tabs stay — they serve detail editing /
+            new-capture surfaces, while Timeline is the unified read view. */}
+        <button data-testid="timeline-tab" style={tabStyle(tab === 'timeline')} onClick={() => setTab('timeline')}><Activity size={14} /> Timeline</button>
         <button style={tabStyle(tab === 'history')} onClick={() => setTab('history')}><Calendar size={14} /> Case history</button>
+        {/* #838 — dedicated Prescriptions list tab with Active/Past status
+            indicators + filter chips. Distinct from "New prescription"
+            (which is the capture surface). Clinicians need a one-click
+            way to see "what is this patient currently taking?" without
+            scrolling the merged case-history timeline. */}
+        <button data-testid="rx-list-tab" style={tabStyle(tab === 'rxlist')} onClick={() => setTab('rxlist')}><Pill size={14} /> Prescriptions</button>
         <button style={tabStyle(tab === 'prescribe')} onClick={() => setTab('prescribe')}><FileText size={14} /> New prescription</button>
         <button style={tabStyle(tab === 'consent')} onClick={() => setTab('consent')}><FileSignature size={14} /> Consent form</button>
         <button style={tabStyle(tab === 'plans')} onClick={() => setTab('plans')}><ClipboardList size={14} /> Treatment plans</button>
@@ -198,13 +219,16 @@ export default function PatientDetail() {
         <button style={tabStyle(tab === 'inventory')} onClick={() => setTab('inventory')}><Package size={14} /> Inventory used</button>
         {/* Agent B: telehealth tab */}
         <button style={tabStyle(tab === 'telehealth')} onClick={() => setTab('telehealth')}><Video size={14} /> Telehealth</button>
-        {/* Wave 11 Agent FF: wallet tab */}
-        <button style={tabStyle(tab === 'wallet')} onClick={() => setTab('wallet')}><WalletIcon size={14} /> Wallet</button>
+        {/* Wave 11 Agent FF: wallet tab. D16 Arc 1 slice 7 (this tick):
+            top-up modal + new endpoint integration. */}
+        <button data-testid="wallet-tab" style={tabStyle(tab === 'wallet')} onClick={() => setTab('wallet')}><WalletIcon size={14} /> Wallet</button>
         {/* Wave 11 Agent EE: Memberships tab — patient's purchased plans + balances */}
         <button style={tabStyle(tab === 'memberships')} onClick={() => setTab('memberships')}><Crown size={14} /> Memberships</button>
       </div>
 
+      {tab === 'timeline' && <TimelineTab patientId={patient.id} />}
       {tab === 'history' && <CaseHistoryTab patient={patient} />}
+      {tab === 'rxlist' && <PrescriptionsListTab patient={patient} />}
       {tab === 'prescribe' && <PrescribeTab patient={patient} onSaved={load} />}
       {tab === 'consent' && <ConsentTab patient={patient} services={services} onSaved={load} />}
       {tab === 'plans' && <PlansTab patient={patient} services={services} onSaved={load} />}
@@ -218,25 +242,136 @@ export default function PatientDetail() {
   );
 }
 
-// ── Wallet tab — balance + recent transactions + redeem-giftcard ──
-// Wave 11 Agent FF. Read-only history; redeem flow lets staff paste a gift
-// code that the patient handed in (the credit lands in this patient's
-// wallet). For larger flows (admin manual credit/debit, full ledger view)
-// see /wellness/wallet at the admin sidebar entry.
+// ── Download full patient record (#840) ───────────────────────────
+//
+// Streams /api/wellness/patients/:id/full-report.pdf via fetch (the endpoint
+// is Bearer-auth-gated, so a plain anchor href won't work) and pushes the
+// resulting blob through a synthetic <a download> click. Save dialog opens
+// directly — no new tab, no preview. We do NOT use window.location.href
+// because that would drop the Authorization header.
+function DownloadFullReportButton({ patientId, patientName }) {
+  const notify = useNotify();
+  const [downloading, setDownloading] = useState(false);
+
+  const onClick = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const token = getAuthToken();
+      const res = await fetch(`/api/wellness/patients/${patientId}/full-report.pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Download failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `patient-${patientId}-full-report.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify.success(`Downloaded ${patientName || 'patient'} record`);
+    } catch (err) {
+      notify.error(err.message || 'Failed to download patient report.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      data-testid="download-full-report-btn"
+      onClick={onClick}
+      disabled={downloading}
+      title="Download visits, prescriptions, consents, treatment plans, photos, and inventory as one PDF"
+      style={{
+        marginTop: '0.25rem',
+        padding: '0.45rem 0.85rem',
+        background: 'var(--primary-color, var(--accent-color))',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 6,
+        cursor: downloading ? 'wait' : 'pointer',
+        fontSize: '0.8rem',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.35rem',
+        opacity: downloading ? 0.7 : 1,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <Download size={13} />
+      {downloading ? 'Preparing…' : 'Download full record (PDF)'}
+    </button>
+  );
+}
+
+// ── Wallet tab — balance + recent transactions + top-up + redeem-giftcard ──
+//
+// Wave 11 Agent FF (gift-card redeem) + D16 Arc 1 slice 7 (this tick —
+// top-up modal + new-endpoint integration).
+//
+// Backend wiring (slice 7):
+//   - GET /api/wallet/:patientId/balance       → { balanceCents, currency, lastUpdated }
+//   - GET /api/wallet/:patientId/transactions  → { transactions, total }
+//   - POST /api/wallet/:patientId/topup        → { success, balanceCents, bonusBatchId?, bonusPercent }
+//
+// The legacy gift-card redeem flow (POST /api/wellness/giftcards/redeem)
+// stays in place — it's an orthogonal credit channel (customer hands a
+// gift code at the counter; not a top-up).
+//
+// 404 on /topup is handled gracefully — useful during a deploy gap where
+// the backend slice hasn't landed yet on the target environment.
+//
+// Validation: amount is constrained client-side to ₹100–₹100,000 (the
+// backend cap is ₹100K = 10_000_000 cents per single top-up per PRD
+// FR-3.2 MAX_TOPUP_CENTS; the floor of ₹100 prevents accidental ₹1 typos
+// that would otherwise create batch noise).
+const MIN_TOPUP_INR = 100;
+const MAX_TOPUP_INR = 100_000;
+const PAYMENT_METHODS = ['cash', 'card', 'upi', 'online'];
+
+function formatRelativeTime(iso) {
+  if (!iso) return '—';
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return '—';
+  const diffMs = Date.now() - then;
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.floor(months / 12);
+  return `${years}y ago`;
+}
+
 function WalletTab({ patient }) {
-  const [data, setData] = useState(null);
-  const [code, setCode] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [balance, setBalance] = useState(null); // {balanceCents, currency, lastUpdated}
+  const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [code, setCode] = useState('');
+  const [redeeming, setRedeeming] = useState(false);
+  const [topupOpen, setTopupOpen] = useState(false);
   const notify = useNotify();
 
   const load = async () => {
     setLoading(true);
     try {
-      const j = await fetchApi(`/api/wellness/patients/${patient.id}/wallet`);
-      setData(j);
-    } catch (e) {
-      notify.error(e.message || 'Failed to load wallet');
+      const [bal, txns] = await Promise.all([
+        fetchApi(`/api/wallet/${patient.id}/balance`).catch(() => null),
+        fetchApi(`/api/wallet/${patient.id}/transactions?limit=10`).catch(() => null),
+      ]);
+      setBalance(bal || { balanceCents: 0, currency: 'INR', lastUpdated: null });
+      setTransactions(Array.isArray(txns?.transactions) ? txns.transactions : []);
     } finally {
       setLoading(false);
     }
@@ -246,7 +381,7 @@ function WalletTab({ patient }) {
 
   const redeem = async () => {
     if (!code.trim()) return notify.error('Enter a gift card code.');
-    setSubmitting(true);
+    setRedeeming(true);
     try {
       await fetchApi('/api/wellness/giftcards/redeem', {
         method: 'POST',
@@ -258,65 +393,682 @@ function WalletTab({ patient }) {
     } catch (e) {
       notify.error(e.message || 'Failed to redeem gift card');
     } finally {
-      setSubmitting(false);
+      setRedeeming(false);
     }
   };
 
-  if (loading || !data) return <div>Loading wallet…</div>;
-  const { wallet, transactions } = data;
+  if (loading) return <div>Loading wallet…</div>;
+
+  const balanceRupees = balance ? (balance.balanceCents / 100) : 0;
+  const currency = balance?.currency || 'INR';
 
   return (
-    <div className="glass" style={{ padding: '1.25rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+    <div className="glass" style={{ padding: '1.25rem' }} data-testid="wallet-tab-panel">
+      {/* ── Balance card ─────────────────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Wallet balance</div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 600 }}>
-            {formatMoney(wallet.balance, { currency: wallet.currency })}
+          <div data-testid="wallet-balance" style={{ fontSize: '1.75rem', fontWeight: 600 }}>
+            {formatMoney(balanceRupees, { currency })}
+          </div>
+          <div data-testid="wallet-last-updated" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            {balance?.lastUpdated ? `Last updated ${formatRelativeTime(balance.lastUpdated)}` : 'No top-ups yet'}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-          <input
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="Gift card code"
-            style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', textTransform: 'uppercase' }}
-          />
-          <button
-            onClick={redeem}
-            disabled={submitting}
-            style={{ padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}
-          >
-            {submitting ? 'Redeeming…' : 'Redeem'}
-          </button>
-        </div>
+        <button
+          type="button"
+          data-testid="wallet-topup-btn"
+          onClick={() => setTopupOpen(true)}
+          style={{ padding: '0.55rem 1.1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600 }}
+        >
+          <Plus size={14} /> Top up
+        </button>
       </div>
 
-      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Recent transactions</h4>
+      {/* ── Recent transactions list ─────────────────────────── */}
+      <h4 style={{ marginTop: '0.5rem', marginBottom: '0.5rem' }}>Recent transactions</h4>
       {transactions.length === 0 ? (
-        <div style={{ color: 'var(--text-secondary)' }}>No transactions yet.</div>
+        <div data-testid="wallet-txn-empty" style={{ color: 'var(--text-secondary)', padding: '0.5rem 0' }}>No transactions yet.</div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <table data-testid="wallet-txn-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
               <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Date</th>
               <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Type</th>
               <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Amount</th>
-              <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Reason</th>
+              <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Method / reason</th>
             </tr>
           </thead>
           <tbody>
-            {transactions.map((tx) => (
-              <tr key={tx.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{formatDate(tx.createdAt)}</td>
-                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.type.replace('_', ' ')}</td>
-                <td style={{ padding: '0.5rem', fontSize: '0.85rem', color: tx.amount >= 0 ? 'var(--success-color, #10b981)' : 'var(--danger-color, #ef4444)' }}>
-                  {tx.amount >= 0 ? '+' : ''}{formatMoney(tx.amount, { currency: wallet.currency })}
-                </td>
-                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.reason || '—'}</td>
-              </tr>
-            ))}
+            {transactions.map((tx) => {
+              const isCredit = (tx.type === 'TOP_UP') || (tx.amount > 0 && tx.type !== 'REDEEM');
+              const signedRupees = isCredit ? Math.abs(tx.amount) : -Math.abs(tx.amount);
+              return (
+                <tr key={tx.id} data-testid={`wallet-txn-${tx.id}`} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                  <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{formatDate(tx.createdAt)}</td>
+                  <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{(tx.type || '').replace(/_/g, ' ')}</td>
+                  <td style={{ padding: '0.5rem', fontSize: '0.85rem', color: signedRupees >= 0 ? 'var(--success-color, #10b981)' : 'var(--danger-color, #ef4444)' }}>
+                    {signedRupees >= 0 ? '+' : '-'}{formatMoney(Math.abs(signedRupees), { currency })}
+                  </td>
+                  <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.reason || '—'}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+      )}
+
+      {/* ── Gift-card redeem strip (kept from Wave 11) ───────── */}
+      <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.5rem', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '0.85rem' }}>
+        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Redeem gift card:</span>
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder="Gift card code"
+          style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', textTransform: 'uppercase' }}
+        />
+        <button
+          type="button"
+          onClick={redeem}
+          disabled={redeeming}
+          style={{ padding: '0.5rem 1rem', background: 'transparent', color: 'var(--primary-color, var(--accent-color))', border: '1px solid var(--primary-color, var(--accent-color))', borderRadius: 6, cursor: redeeming ? 'wait' : 'pointer' }}
+        >
+          {redeeming ? 'Redeeming…' : 'Redeem'}
+        </button>
+      </div>
+
+      {topupOpen && (
+        <WalletTopupModal
+          patientId={patient.id}
+          currency={currency}
+          onClose={() => setTopupOpen(false)}
+          onSuccess={() => { setTopupOpen(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Top-up modal (D16 Arc 1 slice 7) ──────────────────────────────
+//
+// Captures (amountRupees, paymentMethod) and POSTs to
+// /api/wallet/:patientId/topup with `{amountCents, paymentMethod}`. On
+// success, shows the bonus credited (if any) and refreshes the parent
+// balance + transactions. Validation is client-side (₹100–₹100,000) plus
+// the backend's mirror validation; 400 / 403 / 404 are surfaced via
+// notify.error with friendly copy.
+function WalletTopupModal({ patientId, currency, onClose, onSuccess }) {
+  const [amount, setAmount] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [submitting, setSubmitting] = useState(false);
+  const notify = useNotify();
+
+  const amountNum = parseInt(amount, 10);
+  const amountValid = Number.isFinite(amountNum) && amountNum >= MIN_TOPUP_INR && amountNum <= MAX_TOPUP_INR;
+
+  const submit = async (e) => {
+    e?.preventDefault?.();
+    if (!amountValid) {
+      notify.error(`Amount must be between ₹${MIN_TOPUP_INR.toLocaleString()} and ₹${MAX_TOPUP_INR.toLocaleString()}.`);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetchApi(`/api/wallet/${patientId}/topup`, {
+        method: 'POST',
+        body: JSON.stringify({ amountCents: amountNum * 100, paymentMethod }),
+        silent: true, // We surface the toast ourselves so 404 gets the friendly "Backend not ready" copy.
+      });
+      const bonusPct = res?.bonusPercent || 0;
+      const msg = bonusPct > 0
+        ? `Top-up succeeded — ₹${amountNum.toLocaleString()} principal + ${bonusPct}% bonus credited.`
+        : `Top-up succeeded — ₹${amountNum.toLocaleString()} credited.`;
+      notify.success(msg);
+      onSuccess?.();
+    } catch (err) {
+      const status = err?.status;
+      if (status === 404) {
+        notify.error('Backend not ready — wallet top-up endpoint is being deployed. Try again in a few minutes.');
+      } else if (status === 403) {
+        notify.error(err.message || 'You don’t have permission to top up this wallet.');
+      } else if (status === 400) {
+        notify.error(err.message || 'Top-up rejected — check the amount and payment method.');
+      } else {
+        notify.error(err.message || 'Top-up failed.');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      data-testid="wallet-topup-modal"
+      role="dialog"
+      aria-label="Wallet top-up"
+      onClick={onClose}
+      style={{
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+        background: 'rgba(0,0,0,0.45)', zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '1rem',
+      }}
+    >
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="glass"
+        style={{
+          padding: '1.5rem', borderRadius: 12, maxWidth: 420, width: '100%',
+          background: 'var(--bg-color, #fff)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Top up wallet</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            data-testid="wallet-topup-close"
+            aria-label="Close"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <label style={{ display: 'block', marginBottom: '0.85rem' }}>
+          <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+            Amount ({currency === 'INR' ? '₹' : currency})
+          </span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={MIN_TOPUP_INR}
+            max={MAX_TOPUP_INR}
+            step={1}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder={`${MIN_TOPUP_INR}–${MAX_TOPUP_INR.toLocaleString()}`}
+            data-testid="wallet-topup-amount"
+            style={{ width: '100%', padding: '0.6rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: '1rem' }}
+            autoFocus
+          />
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+            Min ₹{MIN_TOPUP_INR.toLocaleString()} · Max ₹{MAX_TOPUP_INR.toLocaleString()} per top-up.
+          </span>
+        </label>
+
+        <label style={{ display: 'block', marginBottom: '1rem' }}>
+          <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+            Payment method
+          </span>
+          <select
+            value={paymentMethod}
+            onChange={(e) => setPaymentMethod(e.target.value)}
+            data-testid="wallet-topup-method"
+            style={{ width: '100%', padding: '0.6rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: '1rem' }}
+          >
+            {PAYMENT_METHODS.map((m) => (
+              <option key={m} value={m}>{m === 'upi' ? 'UPI' : m[0].toUpperCase() + m.slice(1)}</option>
+            ))}
+          </select>
+        </label>
+
+        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            style={{ padding: '0.55rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: 6, cursor: 'pointer' }}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            data-testid="wallet-topup-submit"
+            disabled={submitting || !amountValid}
+            style={{
+              padding: '0.55rem 1.1rem',
+              background: amountValid ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)',
+              color: '#fff', border: 'none', borderRadius: 6,
+              cursor: submitting ? 'wait' : (amountValid ? 'pointer' : 'not-allowed'),
+              fontWeight: 600,
+            }}
+          >
+            {submitting ? 'Submitting…' : 'Top up'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ── Prescriptions list tab (#838) ─────────────────────────────────
+//
+// Dedicated list view for ALL prescriptions on the patient with a status
+// indicator (Active / Past) per row and Active/Past/All filter chips.
+// Derived client-side because the Prescription model lacks an explicit
+// status field — instead we parse the max `duration` token across the
+// drugs JSON array and compare (createdAt + maxDays) to today.
+//
+// Status derivation contract:
+//   - Active: createdAt + maxDurationDays >= today
+//   - Past:   createdAt + maxDurationDays <  today
+//   - Fallback when no parseable duration: treat as Active for the
+//     first 30 days, Past after — clinically safest default (better to
+//     show "current" than silently hide an Rx the doctor wants to see).
+//
+// Duration token format: free-text on each drug (e.g. "7 days", "2 weeks",
+// "1 month", "30d"). Parsed by parseDurationDays() below; unparseable
+// values are skipped and the fallback applies.
+//
+// TODO: when Prescription gets an explicit status enum + endDate (#838
+// follow-up), replace derivation with the schema field. Migration is
+// out-of-scope for this commit (needs bless-marker + backfill plan).
+
+const RX_FALLBACK_ACTIVE_DAYS = 30;
+
+// Parse a free-text duration like "7 days", "2 weeks", "1 month", "10d"
+// to an integer day count. Returns null if unparseable.
+function parseDurationDays(text) {
+  if (!text || typeof text !== 'string') return null;
+  const s = text.trim().toLowerCase();
+  // "7d", "10 d"
+  const dMatch = s.match(/^(\d+)\s*d(ays?)?$/);
+  if (dMatch) return parseInt(dMatch[1], 10);
+  // "2 weeks", "3 wk", "1w"
+  const wMatch = s.match(/^(\d+)\s*w(eeks?|k)?$/);
+  if (wMatch) return parseInt(wMatch[1], 10) * 7;
+  // "1 month", "3 months", "2 mo", "1m"
+  const moMatch = s.match(/^(\d+)\s*m(o(nths?)?)?$/);
+  if (moMatch) return parseInt(moMatch[1], 10) * 30;
+  // Plain integer — assume days (operator convention seen in seed data).
+  const intMatch = s.match(/^(\d+)$/);
+  if (intMatch) return parseInt(intMatch[1], 10);
+  return null;
+}
+
+// Given a Prescription row, return { active: boolean, expiresAt: Date|null,
+// maxDays: number|null }. expiresAt is the latest known end date across all
+// drugs in the Rx; null when no drug has a parseable duration (fallback path).
+export function derivePrescriptionStatus(rx, now = new Date()) {
+  let drugs = [];
+  try { drugs = typeof rx.drugs === 'string' ? JSON.parse(rx.drugs) : rx.drugs; } catch { drugs = []; }
+  if (!Array.isArray(drugs)) drugs = [];
+
+  const dayCounts = drugs
+    .map((d) => parseDurationDays(d?.duration))
+    .filter((n) => n != null && n > 0);
+
+  const createdAt = new Date(rx.createdAt);
+  const createdTs = createdAt.getTime();
+
+  if (dayCounts.length === 0) {
+    // Fallback: active for first 30 days post-creation.
+    const expiresAt = new Date(createdTs + RX_FALLBACK_ACTIVE_DAYS * 86400000);
+    return { active: now.getTime() <= expiresAt.getTime(), expiresAt, maxDays: null, fallback: true };
+  }
+
+  const maxDays = Math.max(...dayCounts);
+  const expiresAt = new Date(createdTs + maxDays * 86400000);
+  return { active: now.getTime() <= expiresAt.getTime(), expiresAt, maxDays, fallback: false };
+}
+
+function RxStatusBadge({ active, fallback }) {
+  // Active = teal (clinical positive), Past = neutral grey.
+  const cfg = active
+    ? { color: '#10b981', bg: 'rgba(16,185,129,0.15)', label: 'Active', Icon: CheckCircle }
+    : { color: '#6b7280', bg: 'rgba(107,114,128,0.15)', label: 'Past',   Icon: Clock };
+  const Icon = cfg.Icon;
+  return (
+    <span
+      data-testid={active ? 'rx-status-active' : 'rx-status-past'}
+      title={fallback ? 'Status derived from createdAt (no parseable duration on drugs)' : undefined}
+      style={{
+        padding: '0.2rem 0.55rem', borderRadius: 999, fontSize: '0.7rem', fontWeight: 600,
+        backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.color}33`,
+        display: 'inline-flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap',
+      }}
+    >
+      <Icon size={11} />
+      {cfg.label}
+    </span>
+  );
+}
+
+function PrescriptionsListTab({ patient }) {
+  const [filter, setFilter] = useState('active'); // 'active' | 'past' | 'all'
+  const [openRx, setOpenRx] = useState(null);
+
+  // Decorate each Rx with its derived status, sort newest-first, then filter.
+  const rxWithStatus = useMemo(() => {
+    const now = new Date();
+    return (patient.prescriptions || [])
+      .map((p) => ({ ...p, _status: derivePrescriptionStatus(p, now) }))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }, [patient.prescriptions]);
+
+  const counts = useMemo(() => ({
+    all: rxWithStatus.length,
+    active: rxWithStatus.filter((r) => r._status.active).length,
+    past: rxWithStatus.filter((r) => !r._status.active).length,
+  }), [rxWithStatus]);
+
+  const filtered = useMemo(() => {
+    if (filter === 'all') return rxWithStatus;
+    if (filter === 'active') return rxWithStatus.filter((r) => r._status.active);
+    return rxWithStatus.filter((r) => !r._status.active);
+  }, [rxWithStatus, filter]);
+
+  const chipStyle = (active) => ({
+    padding: '0.4rem 0.85rem', borderRadius: 999, border: '1px solid var(--border-color)',
+    background: active ? 'var(--primary-color, var(--accent-color))' : 'transparent',
+    color: active ? '#fff' : 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem',
+    fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+  });
+
+  if (rxWithStatus.length === 0) {
+    return (
+      <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+        No prescriptions yet. Use the <strong>New prescription</strong> tab to capture one.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      <div data-testid="rx-filter-chips" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <button type="button" data-testid="rx-chip-active" style={chipStyle(filter === 'active')} onClick={() => setFilter('active')}>
+          Active <span style={{ opacity: 0.75, fontWeight: 500 }}>({counts.active})</span>
+        </button>
+        <button type="button" data-testid="rx-chip-past" style={chipStyle(filter === 'past')} onClick={() => setFilter('past')}>
+          Past <span style={{ opacity: 0.75, fontWeight: 500 }}>({counts.past})</span>
+        </button>
+        <button type="button" data-testid="rx-chip-all" style={chipStyle(filter === 'all')} onClick={() => setFilter('all')}>
+          All <span style={{ opacity: 0.75, fontWeight: 500 }}>({counts.all})</span>
+        </button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="glass" style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          {filter === 'active' && 'No active prescriptions. The patient is not currently on any medication course.'}
+          {filter === 'past' && 'No past prescriptions in this list.'}
+        </div>
+      ) : (
+        filtered.map((rx) => (
+          <div
+            key={rx.id}
+            className="glass"
+            data-testid={`rx-row-${rx.id}`}
+            onClick={() => setOpenRx(rx)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setOpenRx(rx); } }}
+            style={{ padding: '1rem', display: 'flex', gap: '0.75rem', cursor: 'pointer' }}
+            title="Click to view full prescription details"
+          >
+            <div style={{ width: 8, background: '#a855f7', borderRadius: 4, flexShrink: 0 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.3rem', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                  <FileText size={14} />
+                  <strong>Prescription</strong>
+                  <RxStatusBadge active={rx._status.active} fallback={rx._status.fallback} />
+                  {rx._status.expiresAt && (
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      {rx._status.active ? 'Ends ' : 'Ended '}
+                      {rx._status.expiresAt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  {new Date(rx.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                </div>
+              </div>
+              <RxSummary drugs={rx.drugs} instructions={rx.instructions} />
+            </div>
+          </div>
+        ))
+      )}
+
+      {openRx && (
+        <RxDetailModal rx={openRx} patient={patient} onClose={() => setOpenRx(null)} />
+      )}
+    </div>
+  );
+}
+
+// ── Timeline tab (tick #200) ──────────────────────────────────────
+//
+// Consumes the server-merged GET /api/wellness/patients/:id/timeline
+// endpoint shipped in tick #198 (`c5eec0e7`). Replaces 4 client-side
+// fetches + manual stitching with 1 round-trip + uniform event shape:
+//   { eventType, eventId, eventAt, summary, refType, refId }
+// where eventType ∈ {VISIT, PRESCRIPTION, CONSENT, TREATMENT_PLAN}.
+//
+// The endpoint sorts DESC server-side (with deterministic tie-breaker
+// on eventType ASC + eventId ASC) so this tab just iterates and renders.
+// Per-event detail navigation: each row links to the canonical sub-
+// resource view via Link to `/wellness/<sub-path>/<refId>` so an
+// operator scanning the timeline can drill in with one click.
+//
+// Filter dropdown supports the endpoint's ?types= comma-list filter
+// ("ALL" passes nothing, otherwise sends the single selected type).
+// Pagination is fixed at the endpoint's max (200) — sufficient for a
+// per-patient view; demand for "Load more" can come later if needed.
+
+const TIMELINE_TYPES = [
+  { value: 'ALL', label: 'All' },
+  { value: 'VISIT', label: 'Visits' },
+  { value: 'PRESCRIPTION', label: 'Prescriptions' },
+  { value: 'CONSENT', label: 'Consents' },
+  { value: 'TREATMENT_PLAN', label: 'Treatment plans' },
+];
+
+function timelineIcon(eventType) {
+  const size = 14;
+  if (eventType === 'VISIT') return <Stethoscope size={size} />;
+  if (eventType === 'PRESCRIPTION') return <Pill size={size} />;
+  if (eventType === 'CONSENT') return <FileSignature size={size} />;
+  if (eventType === 'TREATMENT_PLAN') return <ClipboardList size={size} />;
+  return <Activity size={size} />;
+}
+
+function timelineLabel(eventType) {
+  if (eventType === 'VISIT') return 'Visit';
+  if (eventType === 'PRESCRIPTION') return 'Prescription';
+  if (eventType === 'CONSENT') return 'Consent';
+  if (eventType === 'TREATMENT_PLAN') return 'Treatment plan';
+  return eventType;
+}
+
+// Build a deep-link path back into the sub-resource detail surface for
+// the event. The backend's refType uses Prisma model names; map them to
+// the SPA's routes. We deliberately fall through to the patient page
+// itself (current location) when no canonical detail route exists — the
+// link still works and the operator stays in context rather than
+// landing on a 404.
+function timelineHref(event, patientId) {
+  if (event.refType === 'Visit') return `/wellness/visits/${event.refId}`;
+  if (event.refType === 'Prescription') return `/wellness/prescriptions/${event.refId}`;
+  if (event.refType === 'ConsentForm') return `/wellness/consents/${event.refId}`;
+  if (event.refType === 'TreatmentPlan') return `/wellness/treatment-plans/${event.refId}`;
+  return `/wellness/patients/${patientId}`;
+}
+
+function TimelineTab({ patientId }) {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [filterType, setFilterType] = useState('ALL');
+  // Tick #201 — Export CSV in-flight guard. Disables the button while a
+  // download is mid-fetch so a double-click doesn't fire two requests.
+  const [timelineCsvBusy, setTimelineCsvBusy] = useState(false);
+  const notify = useNotify();
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    const params = new URLSearchParams();
+    params.set('limit', '200');
+    if (filterType !== 'ALL') params.set('types', filterType);
+    fetchApi(`/api/wellness/patients/${patientId}/timeline?${params.toString()}`)
+      .then((res) => {
+        if (cancelled) return;
+        // Endpoint returns { patientId, count, events: [...] }; tolerate
+        // a bare array too in case a future revision drops the envelope.
+        const list = Array.isArray(res) ? res : Array.isArray(res?.events) ? res.events : [];
+        setEvents(list);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err?.message || 'Failed to load timeline');
+        setEvents([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [patientId, filterType]);
+
+  // Tick #201 — Export the on-screen Timeline view as CSV. Mirrors the
+  // Patients.jsx XLSX/CSV button pattern from tick #188 (fetch with Auth
+  // header → .blob() → createObjectURL → anchor-click → revoke) because
+  // the Authorization header forbids a plain <a href> approach. Forwards
+  // the active type filter (and the same limit=200 cap) so the exported
+  // file matches the visible row set. Filename comes from the response
+  // Content-Disposition when the backend supplies one, else falls back
+  // to a per-patient default.
+  const exportCsv = async () => {
+    setTimelineCsvBusy(true);
+    try {
+      const token = getAuthToken();
+      const params = new URLSearchParams();
+      params.set('limit', '200');
+      if (filterType !== 'ALL') params.set('types', filterType);
+      const res = await fetch(
+        `/api/wellness/patients/${patientId}/timeline.csv?${params.toString()}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      // Parse filename out of the Content-Disposition header when present;
+      // accept both `filename="x.csv"` and bare `filename=x.csv` forms.
+      let filename = `patient-${patientId}-timeline.csv`;
+      const cd = res.headers.get('Content-Disposition') || res.headers.get('content-disposition') || '';
+      const m = /filename\*?=(?:UTF-8''|")?([^";]+)"?/i.exec(cd);
+      if (m && m[1]) filename = decodeURIComponent(m[1]).replace(/"/g, '');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify.success(`Exported ${events.length} event${events.length === 1 ? '' : 's'}.`);
+    } catch (e) {
+      notify.error(e.message || 'CSV export failed.');
+    } finally {
+      setTimelineCsvBusy(false);
+    }
+  };
+
+  const exportDisabled = timelineCsvBusy || events.length === 0 || loading;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <label htmlFor="timeline-type-filter" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Filter:</label>
+        <select
+          id="timeline-type-filter"
+          data-testid="timeline-type-filter"
+          value={filterType}
+          onChange={(e) => setFilterType(e.target.value)}
+          style={{ padding: '0.35rem 0.6rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: '0.85rem' }}
+        >
+          {TIMELINE_TYPES.map((t) => (
+            <option key={t.value} value={t.value}>{t.label}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          data-testid="timeline-export-csv"
+          onClick={exportCsv}
+          disabled={exportDisabled}
+          title={events.length === 0 ? 'No events to export' : 'Export the on-screen timeline as CSV'}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.3rem',
+            padding: '0.35rem 0.7rem',
+            background: 'transparent',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 8,
+            cursor: exportDisabled ? 'not-allowed' : 'pointer',
+            opacity: exportDisabled ? 0.6 : 1,
+            fontSize: '0.85rem',
+            marginLeft: 'auto',
+          }}
+        >
+          <Download size={14} /> {timelineCsvBusy ? 'Exporting…' : 'Export CSV'}
+        </button>
+      </div>
+
+      {loading && (
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          Loading timeline…
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--error-color)' }}>
+          {error}
+        </div>
+      )}
+
+      {!loading && !error && events.length === 0 && (
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          No events yet for this patient.
+        </div>
+      )}
+
+      {!loading && !error && events.length > 0 && (
+        <div data-testid="timeline-events" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          {events.map((e) => (
+            <Link
+              key={`${e.eventType}-${e.eventId}`}
+              to={timelineHref(e, patientId)}
+              data-testid={`timeline-event-${e.eventType}-${e.eventId}`}
+              className="glass"
+              style={{
+                padding: '0.9rem 1rem',
+                display: 'flex',
+                gap: '0.75rem',
+                alignItems: 'flex-start',
+                textDecoration: 'none',
+                color: 'inherit',
+              }}
+            >
+              <div style={{ flexShrink: 0, paddingTop: 2, color: 'var(--text-secondary)' }}>
+                {timelineIcon(e.eventType)}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: '0.9rem' }}>{timelineLabel(e.eventType)}</strong>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    {e.eventAt ? formatDate(e.eventAt) : ''}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem', lineHeight: 1.4 }}>
+                  {e.summary || '—'}
+                </div>
+              </div>
+            </Link>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -328,16 +1080,67 @@ function CaseHistoryTab({ patient }) {
   // #278: clicking an Rx card pops a detail modal with all fields + PDF download.
   const [openRx, setOpenRx] = useState(null);
 
-  const events = [
+  // #837 (cron tick #27 / Agent 1) — date-range filter for the case-history
+  // timeline. Filters the merged visits + prescriptions + consents stream by
+  // each event's date. Defaults to 'all' because case history is naturally
+  // retrospective: a clinician opening the tab wants the full record, not
+  // just today (unlike Payments/InventoryReceipts where 'today' is the more
+  // useful landing window). Operator can narrow via the dropdown.
+  const [dateState, setDateState] = useState({ preset: 'all', customFrom: '', customTo: '' });
+  const range = effectiveRangeFor(dateState);
+
+  const allEvents = useMemo(() => [
     ...patient.visits.map((v) => ({ kind: 'visit', date: v.visitDate, data: v })),
     ...patient.prescriptions.map((p) => ({ kind: 'rx', date: p.createdAt, data: p })),
     ...patient.consents.map((c) => ({ kind: 'consent', date: c.signedAt, data: c })),
-  ].sort((a, b) => new Date(b.date) - new Date(a.date));
+  ].sort((a, b) => new Date(b.date) - new Date(a.date)),
+  [patient.visits, patient.prescriptions, patient.consents]);
 
-  if (events.length === 0) return <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No case history yet.</div>;
+  // #837 — apply the date filter client-side. range.from/to are ISO date-only
+  // strings (YYYY-MM-DD) in the browser's local TZ; widen `to` to end-of-day
+  // so an event timestamped at 18:00 on the selected `to` date is still in
+  // window. Empty range (preset='all' or custom-mode with blank inputs)
+  // passes everything through.
+  const events = useMemo(() => {
+    const fromTs = range.from ? new Date(`${range.from}T00:00:00`).getTime() : -Infinity;
+    const toTs = range.to ? new Date(`${range.to}T23:59:59.999`).getTime() : Infinity;
+    if (!range.from && !range.to) return allEvents;
+    return allEvents.filter((e) => {
+      const ts = new Date(e.date).getTime();
+      return ts >= fromTs && ts <= toTs;
+    });
+  }, [allEvents, range.from, range.to]);
+
+  // #837 — date-filter pill always renders (even when the patient has no
+  // events) so the affordance is discoverable; the empty-state message
+  // distinguishes between "no history at all" vs "no history in this window."
+  const dateFilter = (
+    <DateRangePicker
+      id="rx-history-date-preset"
+      label="Filter by date:"
+      value={dateState}
+      onChange={setDateState}
+      presets={['today', 'yesterday', 'week7', 'last30', 'month', 'all', 'custom']}
+    />
+  );
+
+  if (allEvents.length === 0) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        {dateFilter}
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No case history yet.</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      {dateFilter}
+      {events.length === 0 && (
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          No prescriptions, visits, or consents in this window. Broaden the range to see more.
+        </div>
+      )}
       {events.map((e, i) => {
         const clickable = e.kind === 'rx';
         return (

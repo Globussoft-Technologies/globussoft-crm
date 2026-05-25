@@ -13,6 +13,12 @@ const multer = require("multer");
 const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 const { ipKeyGenerator } = require("express-rate-limit");
+// #820 — patients XLSX export. Mirrors the CSV exporter's shape exactly
+// (auth gate, masking policy, audit emission) but emits an Excel workbook
+// for operator workflows that consume .xlsx natively (Tally/Excel pivots,
+// pre-formatted finance reports). The CSV is kept as the canonical export;
+// XLSX is an alternate-format sibling.
+const XLSX = require("xlsx");
 const prisma = require("../lib/prisma");
 const { runForTenant, executeApproved } = require("../cron/orchestratorEngine");
 const {
@@ -23,6 +29,7 @@ const { getPatientsSummary, getPatientDetails } = require("../controllers/visitC
 const {
   renderPrescriptionPdf,
   renderConsentPdf,
+  renderFullPatientReportPdf,
   renderBrandedInvoicePdf,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
@@ -65,10 +72,7 @@ const { verifyRole, RBAC_DENIED_MESSAGE } = require("../middleware/auth");
 // Portal tokens carry { patientId } and are issued/verified separately from staff
 // tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
 // can't forge staff tokens; fall back to JWT_SECRET when unset for transition.
-const PORTAL_JWT_SECRET =
-  process.env.PORTAL_JWT_SECRET ||
-  process.env.JWT_SECRET ||
-  "enterprise_super_secret_key_2026";
+const { PORTAL_JWT_SECRET } = require("../config/secrets");
 
 // Patient-portal inline JWT middleware — used by /portal/* endpoints.
 // Portal endpoints bypass the global user-JWT guard (see server.js openPaths)
@@ -109,6 +113,23 @@ const photoUpload = multer({
     },
   }),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per photo
+});
+
+// #820 — multer for the patients-import CSV upload. Keep the body in RAM
+// (small files; no disk-spill needed) and cap at 2 MB / 1 file. The
+// fileFilter accepts text/csv OR a .csv suffix because Windows operators
+// often see browsers pick application/vnd.ms-excel for .csv files.
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const looksCsv =
+      file.mimetype === "text/csv" ||
+      file.mimetype === "application/vnd.ms-excel" ||
+      (file.originalname && file.originalname.toLowerCase().endsWith(".csv"));
+    if (looksCsv) return cb(null, true);
+    return cb(new Error("Only CSV files accepted"));
+  },
 });
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -182,6 +203,52 @@ function capLimit(raw, { def = 50, max = 200 } = {}) {
   return Math.min(n, max);
 }
 
+// #820 (tick #191) — shared filter mutator for the patient listing surface
+// (GET /patients + /patients.csv + /patients.xlsx). Reads the three new
+// query params and mutates `where` in-place so all three handlers stay
+// in lockstep without duplicating parsing logic.
+//
+// Contract:
+//   ?source=<string>      → where.source = source (verbatim — Patient.source
+//                           is a free-form text column; no enum constraint).
+//                           Empty string is a no-op.
+//   ?gender=<F|M|O>       → where.gender = gender (uppercase normalised).
+//                           Values outside {F, M, O} are silently ignored —
+//                           consistent with REST listing conventions
+//                           (no 400 on a bad filter; just returns unfiltered).
+//   ?createdFrom=<ISO>    → where.createdAt.gte = parsed Date.
+//                           Invalid date strings are silently ignored.
+//   ?createdTo=<ISO>      → where.createdAt.lte = parsed Date.
+//                           Invalid date strings are silently ignored.
+//
+// All four are additive — omitting them gives the pre-#820 behaviour.
+function applyPatientListFilters(where, query) {
+  const sourceVal = typeof query.source === "string" ? query.source.trim() : "";
+  if (sourceVal) {
+    where.source = sourceVal;
+  }
+  const genderRaw = typeof query.gender === "string" ? query.gender.trim().toUpperCase() : "";
+  if (genderRaw === "F" || genderRaw === "M" || genderRaw === "O") {
+    where.gender = genderRaw;
+  }
+  const createdAt = {};
+  if (query.createdFrom) {
+    const d = new Date(query.createdFrom);
+    if (Number.isFinite(d.getTime())) {
+      createdAt.gte = d;
+    }
+  }
+  if (query.createdTo) {
+    const d = new Date(query.createdTo);
+    if (Number.isFinite(d.getTime())) {
+      createdAt.lte = d;
+    }
+  }
+  if (Object.keys(createdAt).length > 0) {
+    where.createdAt = { ...(where.createdAt || {}), ...createdAt };
+  }
+}
+
 // #527 / #533 (CRIT-02 + HI-04): PHI access gates.
 //
 // Pre-fix the wellness clinical routes were tenant-scoped but had NO
@@ -211,6 +278,9 @@ function capLimit(raw, { def = 50, max = 200 } = {}) {
 //
 // Tenant.vertical check is inherited from verifyWellnessRole — non-wellness
 // tenants get 403 WELLNESS_TENANT_REQUIRED before the role check runs.
+// PRD_WELLNESS_RBAC DD-5.6 invariant: phiReadGate MUST stay cashier-free —
+// cashier is a sales-side wellnessRole (POS-only) without clinical context.
+// Tests pin this contract; adding 'cashier' here would leak PHI.
 const phiReadGate = verifyWellnessRole(["doctor", "professional", "telecaller", "admin", "manager"]);
 const phiWriteGate = verifyWellnessRole(["doctor", "professional", "admin", "manager"]);
 
@@ -418,6 +488,14 @@ router.get("/patients", phiReadGate, async (req, res) => {
     if (req.query.includeDeleted !== '1' && req.query.includeDeleted !== 'true') {
       where.deletedAt = null;
     }
+    // #820 (tick #191) — additive list filters: source / gender /
+    // createdFrom / createdTo. All optional + backward-compatible. Invalid
+    // shapes are silently ignored (no 400) consistent with REST listing
+    // conventions — a search with createdFrom='garbage' returns the same
+    // result as omitting the param. The same filter-application block is
+    // mirrored on /patients.csv + /patients.xlsx below so listing + export
+    // stay consistent.
+    applyPatientListFilters(where, req.query);
     const [patients, total] = await Promise.all([
       prisma.patient.findMany({
         where,
@@ -503,6 +581,8 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
     if (req.query.includeDeleted !== "1" && req.query.includeDeleted !== "true") {
       where.deletedAt = null;
     }
+    // #820 (tick #191) — same additive filters as GET /patients (above).
+    applyPatientListFilters(where, req.query);
     const patients = await prisma.patient.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -556,6 +636,578 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
     res.status(500).json({ error: "Failed to export patients" });
   }
 });
+
+// #820 — patients XLSX export. Sibling to /patients.csv above; identical
+// auth, masking, filter, and audit policy, but emits a native Excel
+// workbook so operator-side flows that consume .xlsx (Tally pivots,
+// pre-formatted finance reports, partners that won't take CSV) get a
+// first-class shape instead of having to round-trip through Excel's
+// CSV import wizard.
+//
+// Audit shape: TWO rows on unmasked exports —
+//   (1) PATIENT_LIST_EXPORT with `{ format: 'xlsx', count, masked, query,
+//       locationId }` — always emitted; this is the export-trail row that
+//       lets compliance reviewers see WHEN exports happened regardless of
+//       whether PII was disclosed.
+//   (2) PII_DISCLOSED — only when masked=false. Same disclosure-trail row
+//       the CSV exporter emits; pairs with audit.findMany({
+//       action: 'PII_DISCLOSED' }) so disclosure dashboards stay
+//       format-agnostic.
+// On masked exports only (1) fires (no PII left the building).
+router.get("/patients.xlsx", phiReadGate, async (req, res) => {
+  try {
+    const { q, locationId } = req.query;
+    const wantMasked = req.query.masked === "1" || req.query.masked === "true";
+    const where = tenantWhere(req);
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { phone: { contains: q } },
+        { email: { contains: q } },
+      ];
+    }
+    if (locationId) where.locationId = parseInt(locationId);
+    if (req.query.includeDeleted !== "1" && req.query.includeDeleted !== "true") {
+      where.deletedAt = null;
+    }
+    // #820 (tick #191) — same additive filters as GET /patients (above).
+    applyPatientListFilters(where, req.query);
+    const patients = await prisma.patient.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 5000,
+    });
+    // Decide mask: query flag wins; otherwise role-based.
+    const mustMask = wantMasked || shouldMaskForViewer(req);
+    const piiFields = ["name", "phone", "email", "dob"];
+    const rows = mustMask ? maskRows(patients, piiFields) : patients;
+
+    // Flatten to scalar columns before handing to json_to_sheet — Prisma
+    // rows can contain nested objects (location relation if included
+    // upstream) + Date instances. XLSX serializes Date as a numeric cell
+    // (Excel serial) which silently drifts under TZ-aware tooling; ISO
+    // strings render fine in Excel and avoid the drift.
+    const sheetRows = rows.map((p) => ({
+      ID: p.id,
+      Name: p.name || "",
+      Phone: p.phone || "",
+      Email: p.email || "",
+      DOB: p.dob
+        ? typeof p.dob === "string"
+          ? p.dob.slice(0, 10)
+          : new Date(p.dob).toISOString().slice(0, 10)
+        : "",
+      Gender: p.gender || "",
+      Created: p.createdAt ? new Date(p.createdAt).toISOString() : "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(sheetRows, {
+      header: ["ID", "Name", "Phone", "Email", "DOB", "Gender", "Created"],
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Patients");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    // Audit-row 1: PATIENT_LIST_EXPORT — always, format-tagged so the audit
+    // dashboard can split exports by output type.
+    writeAudit(
+      "Patient",
+      "PATIENT_LIST_EXPORT",
+      null,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        format: "xlsx",
+        count: patients.length,
+        masked: mustMask,
+        query: q || null,
+        locationId: locationId ? parseInt(locationId) : null,
+      },
+    ).catch((e) => console.warn("[wellness] audit PATIENT_LIST_EXPORT failed:", e.message));
+
+    // Audit-row 2: PII_DISCLOSED — only when masked=false. Mirrors the
+    // CSV exporter so disclosure dashboards stay format-agnostic.
+    if (!mustMask) {
+      writeAudit(
+        "Patient",
+        "PII_DISCLOSED",
+        null,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          ...auditDisclosureDetails(req, "patient_export_xlsx", patients, {
+            fields: piiFields,
+          }),
+          masked: false,
+          format: "xlsx",
+          query: q || null,
+          locationId: locationId ? parseInt(locationId) : null,
+        },
+      ).catch((e) => console.warn("[wellness] audit Patient PII_DISCLOSED (xlsx) failed:", e.message));
+    }
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="patients${mustMask ? "-masked" : ""}-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+    );
+    res.end(buf);
+  } catch (e) {
+    console.error("[wellness] patients.xlsx export error:", e.message);
+    res.status(500).json({ error: "Failed to export patients" });
+  }
+});
+
+// #820 — patient bulk-import template (CSV scaffold).
+//
+// Emits a 2-line CSV (header row + one fictional example row) that an
+// operator downloads, fills with N real-patient rows in a spreadsheet, and
+// uploads via the future `POST /api/wellness/patients/import` endpoint
+// (separate slice). No PHI is disclosed — the example row is synthetic
+// sample data — so no audit row fires here.
+//
+// Column set MUST stay in lockstep with whatever the import endpoint
+// eventually accepts. Pinned here: name, phone, email, dob, gender,
+// source, locationId, tags, notes (the user-editable subset of the
+// Patient model).
+//
+// Auth uses phiReadGate (same as the patients.csv export) because the
+// operator who triggers an import flow is already PHI-write-authorized
+// by their RBAC role on this tenant. A USER role with no wellnessRole
+// can't trigger this, by design.
+router.get("/patients/import-template.csv", phiReadGate, async (req, res) => {
+  try {
+    // CSV cell escape: wrap in quotes when the value contains comma,
+    // quote, newline, or carriage return; double internal quotes.
+    const escape = (v) => {
+      const s = String(v ?? "");
+      if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const columns = [
+      "name",
+      "phone",
+      "email",
+      "dob",
+      "gender",
+      "source",
+      "locationId",
+      "tags",
+      "notes",
+    ];
+    const example = [
+      "Anita Sharma",
+      "+919876543210",
+      "anita.example@gmail.com",
+      "1990-03-15",
+      "F",
+      "walk-in",
+      "1",
+      "VIP;repeat",
+      "Sample notes — replace with real patient data",
+    ];
+    const csv =
+      columns.map(escape).join(",") +
+      "\r\n" +
+      example.map(escape).join(",") +
+      "\r\n";
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="patients-import-template.csv"`,
+    );
+    // BOM so Excel auto-detects UTF-8 on the operator's machine.
+    res.write("﻿");
+    res.end(csv);
+  } catch (e) {
+    console.error("[wellness] patients/import-template.csv error:", e.message);
+    res.status(500).json({ error: "Failed to emit import template" });
+  }
+});
+
+// #820 — POST /patients/import — CSV upload + per-row create with
+// validation + dedup + per-row error report. Closes the import flow that
+// /patients/import-template.csv (above) opens: operator downloads the 9-col
+// template, fills it in, uploads here.
+//
+// Contract:
+//   - multipart/form-data; field name `file`; max 2 MB; max 500 rows.
+//   - CSV columns: name, phone, email, dob, gender, source, locationId,
+//     tags (semicolon-separated), notes. Header row required (case-
+//     insensitive, BOM-tolerant).
+//   - Per-row validation: name (≤191), phone (10–15 digits / India shape),
+//     email (basic regex), dob (parseable date), gender (M/F/O after
+//     upper-case), source (≤50), locationId (own-tenant only), tags (split
+//     on `;`, ≤20 entries × ≤50 chars each), notes (≤1000).
+//   - Dedup: (tenantId, normalizedPhone) — uses Patient's unique constraint
+//     directly. Existing row → row marked `duplicate`, not inserted.
+//   - Auth: phiWriteGate (same as POST /patients).
+//   - Idempotency: re-submitting the same file ⇒ all rows return as
+//     `duplicate` on the second run. No special infra needed.
+//
+// Output envelope (200):
+//   { summary: { totalRows, imported, duplicates, invalid },
+//     errors: [{ row, errorCode, errorMessage }, ...],
+//     createdIds: [<int>, ...] }
+//
+// Error envelopes (400):
+//   - EMPTY_CSV          — no rows after header
+//   - TOO_MANY_ROWS      — > MAX_IMPORT_ROWS (500)
+//   - MISSING_HEADER     — first line not a recognisable header
+//   - NO_FILE            — multipart field `file` absent
+//   - INVALID_FILE_TYPE  — non-CSV (caught by multer fileFilter; we map
+//                          multer's MulterError too)
+const MAX_IMPORT_ROWS = 500;
+const EXPECTED_COLUMNS = [
+  "name", "phone", "email", "dob", "gender", "source", "locationId", "tags", "notes",
+];
+
+// In-file CSV line parser. Handles:
+//   - quote-wrapped cells:  "a,b","c"
+//   - escaped quotes in quoted cells:  "she said ""hi"""
+//   - mixed quoted + bare cells:  alice,"smith, jr",30
+// Returns array of string cells (un-quoted). No npm dep.
+function parseCsvLine(line) {
+  const out = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (ch === '"') {
+        inQ = false;
+      } else {
+        cur += ch;
+      }
+    } else {
+      if (ch === '"') inQ = true;
+      else if (ch === ",") {
+        out.push(cur);
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+router.post(
+  "/patients/import",
+  phiWriteGate,
+  // Wrap multer so the fileFilter error / oversize error / wrong-field error
+  // becomes a clean 400 instead of an uncaught throw.
+  (req, res, next) => {
+    csvUpload.single("file")(req, res, (err) => {
+      if (err) {
+        const code = err && err.code === "LIMIT_FILE_SIZE" ? "FILE_TOO_LARGE" : "INVALID_FILE_TYPE";
+        return res.status(400).json({
+          error: err.message || "CSV upload rejected",
+          code,
+        });
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+        return res.status(400).json({
+          error: "No CSV file uploaded (expected multipart field 'file')",
+          code: "NO_FILE",
+        });
+      }
+
+      // Decode UTF-8 and strip BOM if present (Excel-on-Windows emits BOM).
+      let raw = req.file.buffer.toString("utf8");
+      if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+
+      // Normalise line endings; split; drop trailing-empty lines (Excel
+      // commonly ends with a blank line).
+      const lines = raw.replace(/\r\n?/g, "\n").split("\n").filter((l) => l.length > 0);
+      if (lines.length === 0) {
+        return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
+      }
+      if (lines.length === 1) {
+        // Header only, no data rows.
+        return res.status(400).json({ error: "CSV has no data rows", code: "EMPTY_CSV" });
+      }
+      // Excel-friendly cap: enforce BEFORE per-row work so a 100k-row
+      // operator mis-upload doesn't spin the backend.
+      if (lines.length - 1 > MAX_IMPORT_ROWS) {
+        return res.status(400).json({
+          error: `Too many rows (${lines.length - 1}); max ${MAX_IMPORT_ROWS} per import`,
+          code: "TOO_MANY_ROWS",
+        });
+      }
+
+      // Header — accept case-insensitively. Map operator's column order to
+      // a canonical-index lookup so the row parser can fetch by name.
+      const headerCells = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
+      const colIdx = {};
+      for (const want of EXPECTED_COLUMNS) {
+        const idx = headerCells.indexOf(want.toLowerCase());
+        if (idx >= 0) colIdx[want] = idx;
+      }
+      if (colIdx.name === undefined || colIdx.phone === undefined) {
+        return res.status(400).json({
+          error: "CSV header missing required columns (name, phone)",
+          code: "MISSING_HEADER",
+        });
+      }
+
+      const { normalizePhone, toE164 } = require("../utils/deduplication");
+
+      // Pre-resolve the operator's valid locationIds so per-row location
+      // checks don't round-trip per row.
+      const validLocationIds = new Set();
+      try {
+        const locs = await prisma.location.findMany({
+          where: { tenantId: req.user.tenantId },
+          select: { id: true },
+        });
+        for (const l of locs) validLocationIds.add(l.id);
+      } catch (_locErr) {
+        // If listing locations fails, fall through — per-row locationId
+        // will be dropped to null with an INVALID_LOCATION error.
+      }
+
+      const errors = [];
+      const createdIds = [];
+      let duplicates = 0;
+      let invalid = 0;
+      let imported = 0;
+
+      const dataRows = lines.slice(1);
+      for (let i = 0; i < dataRows.length; i++) {
+        const rowNum = i + 2; // 1-based; +1 for header
+        const cells = parseCsvLine(dataRows[i]);
+
+        const get = (col) => {
+          const idx = colIdx[col];
+          if (idx === undefined) return "";
+          return (cells[idx] || "").trim();
+        };
+
+        const name = get("name");
+        const phone = get("phone");
+        const email = get("email");
+        const dob = get("dob");
+        let gender = get("gender");
+        const source = get("source");
+        const locationIdRaw = get("locationId");
+        const tagsRaw = get("tags");
+        const notes = get("notes");
+
+        // ── Per-row validation ───────────────────────────────────────────
+        if (!name) {
+          errors.push({ row: rowNum, errorCode: "NAME_REQUIRED", errorMessage: "name is required" });
+          invalid++;
+          continue;
+        }
+        if (name.length > 191) {
+          errors.push({ row: rowNum, errorCode: "NAME_TOO_LONG", errorMessage: "name exceeds 191 chars" });
+          invalid++;
+          continue;
+        }
+        if (!phone) {
+          errors.push({ row: rowNum, errorCode: "PHONE_REQUIRED", errorMessage: "phone is required" });
+          invalid++;
+          continue;
+        }
+        if (!isValidPhoneOrEmpty(phone)) {
+          errors.push({
+            row: rowNum,
+            errorCode: "INVALID_PHONE",
+            errorMessage: "phone must be 10–15 digits (India format)",
+          });
+          invalid++;
+          continue;
+        }
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          errors.push({ row: rowNum, errorCode: "INVALID_EMAIL", errorMessage: "email is not a valid address" });
+          invalid++;
+          continue;
+        }
+        let dobDate = null;
+        if (dob) {
+          const d = new Date(dob);
+          if (!Number.isFinite(d.getTime())) {
+            errors.push({ row: rowNum, errorCode: "INVALID_DOB", errorMessage: "dob is not a valid date" });
+            invalid++;
+            continue;
+          }
+          dobDate = d;
+        }
+        if (gender) {
+          gender = gender.toUpperCase();
+          if (!["F", "M", "O"].includes(gender)) {
+            errors.push({
+              row: rowNum,
+              errorCode: "INVALID_GENDER",
+              errorMessage: "gender must be one of F, M, O",
+            });
+            invalid++;
+            continue;
+          }
+        } else {
+          gender = null;
+        }
+        if (source && source.length > 50) {
+          errors.push({ row: rowNum, errorCode: "SOURCE_TOO_LONG", errorMessage: "source exceeds 50 chars" });
+          invalid++;
+          continue;
+        }
+        let locationId = null;
+        if (locationIdRaw) {
+          const parsed = parseInt(locationIdRaw, 10);
+          if (!Number.isFinite(parsed) || parsed < 1) {
+            errors.push({
+              row: rowNum,
+              errorCode: "INVALID_LOCATION",
+              errorMessage: "locationId must be a positive integer",
+            });
+            invalid++;
+            continue;
+          }
+          // Cross-tenant guard — operator MUST NOT be able to set a
+          // locationId that belongs to a different tenant.
+          if (!validLocationIds.has(parsed)) {
+            errors.push({
+              row: rowNum,
+              errorCode: "INVALID_LOCATION",
+              errorMessage: "locationId does not belong to this tenant",
+            });
+            invalid++;
+            continue;
+          }
+          locationId = parsed;
+        }
+        let tagsArr = null;
+        if (tagsRaw) {
+          const parts = tagsRaw.split(";").map((t) => t.trim()).filter(Boolean);
+          if (parts.length > 20) {
+            errors.push({
+              row: rowNum,
+              errorCode: "TOO_MANY_TAGS",
+              errorMessage: "max 20 tags per patient",
+            });
+            invalid++;
+            continue;
+          }
+          if (parts.some((t) => t.length > 50)) {
+            errors.push({
+              row: rowNum,
+              errorCode: "TAG_TOO_LONG",
+              errorMessage: "each tag must be ≤ 50 chars",
+            });
+            invalid++;
+            continue;
+          }
+          tagsArr = parts;
+        }
+        if (notes && notes.length > 1000) {
+          errors.push({ row: rowNum, errorCode: "NOTES_TOO_LONG", errorMessage: "notes exceeds 1000 chars" });
+          invalid++;
+          continue;
+        }
+
+        // ── Dedup against (tenantId, normalizedPhone) ────────────────────
+        const normalizedPhone = normalizePhone(phone);
+        if (normalizedPhone) {
+          const dup = await prisma.patient.findFirst({
+            where: {
+              tenantId: req.user.tenantId,
+              normalizedPhone,
+              deletedAt: null,
+            },
+            select: { id: true },
+          });
+          if (dup) {
+            errors.push({
+              row: rowNum,
+              errorCode: "DUPLICATE_PHONE",
+              errorMessage: "patient with this phone already exists",
+            });
+            duplicates++;
+            continue;
+          }
+        }
+
+        // ── Create ───────────────────────────────────────────────────────
+        try {
+          const e164Phone = phone ? toE164(phone) || phone : null;
+          const created = await prisma.patient.create({
+            data: {
+              name: scrubPlainText(name),
+              email: email || null,
+              phone: e164Phone,
+              normalizedPhone,
+              dob: dobDate,
+              gender,
+              source: source || null,
+              locationId,
+              tags: tagsArr ? JSON.stringify(tagsArr) : null,
+              notes: notes ? scrubPlainText(notes) : null,
+              tenantId: req.user.tenantId,
+            },
+          });
+          createdIds.push(created.id);
+          imported++;
+        } catch (createErr) {
+          // P2002 race — duplicate phone landed between our findFirst and
+          // create. Bucket as duplicate (matches the user-visible intent).
+          if (createErr && createErr.code === "P2002" && isNormalizedPhoneTarget(createErr.meta?.target)) {
+            errors.push({
+              row: rowNum,
+              errorCode: "DUPLICATE_PHONE",
+              errorMessage: "patient with this phone already exists",
+            });
+            duplicates++;
+            continue;
+          }
+          errors.push({
+            row: rowNum,
+            errorCode: "CREATE_FAILED",
+            errorMessage: createErr && createErr.message ? createErr.message : "create failed",
+          });
+          invalid++;
+        }
+      }
+
+      const summary = {
+        totalRows: dataRows.length,
+        imported,
+        duplicates,
+        invalid,
+      };
+
+      // Fire-and-forget audit. Don't block the response on it.
+      writeAudit(
+        "Patient",
+        "PATIENT_BULK_IMPORT",
+        null,
+        req.user.userId,
+        req.user.tenantId,
+        summary,
+      ).catch((auditErr) => {
+        console.warn("[wellness] audit PATIENT_BULK_IMPORT failed:", auditErr.message);
+      });
+
+      return res.status(200).json({ summary, errors, createdIds });
+    } catch (e) {
+      console.error("[wellness] patients/import error:", e.message);
+      return res.status(500).json({ error: "Failed to process patients import" });
+    }
+  },
+);
 
 router.get("/patients/:id", phiReadGate, async (req, res) => {
   try {
@@ -749,6 +1401,350 @@ router.get("/patients/:id/treatment-plans", phiReadGate, async (req, res) => {
   } catch (e) {
     console.error("[wellness] list patient treatment plans error:", e.message);
     res.status(500).json({ error: "Failed to list patient treatment plans" });
+  }
+});
+
+// GET /patients/:id/timeline — unified chronological feed merging Visits,
+// Prescriptions, ConsentForms, and TreatmentPlans for a single patient.
+//
+// Tick #198 (Agent A): the Patient detail SPA today fires 4 separate fetches
+// — /visits, /prescriptions, /consents, /treatment-plans — and stitches them
+// client-side into a chronological "patient history" feed. That's N+1 over
+// the wire AND each sub-resource ships its own audit row. This endpoint
+// merges them server-side into a single sorted feed with one audit emission
+// (PATIENT_TIMELINE_READ) and ONE round-trip from the SPA.
+//
+// Event shape is uniform across sources so the frontend doesn't need a
+// per-type renderer table:
+//   { eventType: 'VISIT' | 'PRESCRIPTION' | 'CONSENT' | 'TREATMENT_PLAN',
+//     eventId:   <int — the source row's id>,
+//     eventAt:   <ISO8601 — visit.visitDate / rx.createdAt / consent.signedAt / plan.startedAt>,
+//     summary:   <human-readable one-liner; masked under shouldMaskForViewer>,
+//     refType:   'Visit' | 'Prescription' | 'ConsentForm' | 'TreatmentPlan',
+//     refId:     <int — same as eventId, named to mirror audit-log refType/refId> }
+//
+// Sort order: eventAt DESC. Tie-breaker: eventType ASC, then eventId ASC
+// (deterministic — paginated callers see consistent order on identical
+// timestamps).
+//
+// Query params (all optional):
+//   ?from=<ISO>           — filter eventAt >= from
+//   ?to=<ISO>             — filter eventAt <= to
+//   ?types=VISIT,RX,...   — comma-separated subset filter (VISIT, PRESCRIPTION
+//                            or RX, CONSENT, TREATMENT_PLAN). Unknown tokens
+//                            silently dropped (forward-compat).
+//   ?limit=<int>          — caps the result count. Default 50, max 200.
+//
+// PHI / mask policy: if shouldMaskForViewer(req) is true (telecaller/helper
+// or USER on wellness tenant), each event's `summary` is replaced with the
+// generic placeholder "[masked]" — eventType / eventAt / refId still surface
+// so the timeline shape remains useful for non-clinical operators.
+// buildPatientTimeline — shared timeline builder consumed by BOTH
+// /patients/:id/timeline (JSON, tick #198) AND /patients/:id/timeline.csv
+// (CSV, tick #200). Extracted into a closure (NOT module.exports) because
+// both consumers live in this file and there's no testing surface that
+// needs to spy on it — a CJS self-mocking seam would be overkill.
+//
+// Returns null when the patient doesn't exist in the request's tenant
+// (caller emits 404 + skips the audit). Returns `{ allTypesUnknown: true }`
+// when the caller passed ?types= but every token was unknown — JSON consumer
+// returns the empty envelope, CSV consumer emits the header-only row.
+// Otherwise returns `{ outEvents, mustMask }` ready to render.
+async function buildPatientTimeline(req, patientId) {
+  // Verify patient exists + belongs to tenant. Returning null lets the
+  // caller decide between 404 (timeline routes) and "empty body" if anyone
+  // else ever reuses the helper.
+  const patient = await prisma.patient.findFirst({
+    where: tenantWhere(req, { id: patientId }),
+    select: { id: true },
+  });
+  if (!patient) return null;
+
+  // ── Parse query params ──────────────────────────────────────────────
+  // limit: default 50, capped at 200. Anything non-numeric falls back to 50.
+  let limit = parseInt(req.query.limit, 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = 50;
+  if (limit > 200) limit = 200;
+
+  // types: subset filter. "RX" is an accepted alias for "PRESCRIPTION"
+  // because the frontend used it historically when consuming the flat
+  // /prescriptions endpoint. Unknown tokens are silently dropped so we
+  // don't 400 on forward-incompatible clients.
+  const ALL_TYPES = new Set(["VISIT", "PRESCRIPTION", "CONSENT", "TREATMENT_PLAN"]);
+  let wantTypes = null; // null = include all
+  if (typeof req.query.types === "string" && req.query.types.trim()) {
+    const raw = req.query.types.split(",").map((t) => t.trim().toUpperCase());
+    const expanded = raw.map((t) => (t === "RX" ? "PRESCRIPTION" : t));
+    wantTypes = new Set(expanded.filter((t) => ALL_TYPES.has(t)));
+    // If the caller passed `types=` but ALL tokens were unknown, treat as
+    // "no events match" rather than "include all" — that's the safer
+    // interpretation of an explicit filter.
+    if (wantTypes.size === 0) {
+      return { allTypesUnknown: true, outEvents: [], mustMask: shouldMaskForViewer(req) };
+    }
+  }
+  const wants = (t) => wantTypes === null || wantTypes.has(t);
+
+  // from / to: ISO timestamps. Invalid values are silently dropped (don't
+  // 400 — pagination callers may pass back our own eventAt and we want it
+  // to round-trip cleanly).
+  let fromDate = null;
+  let toDate = null;
+  if (req.query.from) {
+    const d = new Date(req.query.from);
+    if (!Number.isNaN(d.getTime())) fromDate = d;
+  }
+  if (req.query.to) {
+    const d = new Date(req.query.to);
+    if (!Number.isNaN(d.getTime())) toDate = d;
+  }
+
+  // ── Parallel fan-out — one findMany per source table ────────────────
+  // Each source already has a (tenantId, patientId) composite index so the
+  // fan-out is 4 cheap index hits. Empty slots ([]) when the type is filtered
+  // out so the merge logic stays uniform.
+  const [visits, prescriptions, consents, treatmentPlans] = await Promise.all([
+    wants("VISIT")
+      ? prisma.visit.findMany({
+          where: tenantWhere(req, { patientId }),
+          select: {
+            id: true, visitDate: true, status: true,
+            service: { select: { id: true, name: true } },
+          },
+          orderBy: { visitDate: "desc" },
+        })
+      : Promise.resolve([]),
+    wants("PRESCRIPTION")
+      ? prisma.prescription.findMany({
+          where: tenantWhere(req, { patientId }),
+          select: {
+            id: true, createdAt: true, instructions: true,
+            doctor: { select: { id: true, name: true } },
+          },
+          orderBy: { createdAt: "desc" },
+        })
+      : Promise.resolve([]),
+    wants("CONSENT")
+      ? prisma.consentForm.findMany({
+          where: tenantWhere(req, { patientId }),
+          select: { id: true, signedAt: true, templateName: true },
+          orderBy: { signedAt: "desc" },
+        })
+      : Promise.resolve([]),
+    wants("TREATMENT_PLAN")
+      ? prisma.treatmentPlan.findMany({
+          where: tenantWhere(req, { patientId }),
+          select: {
+            id: true, startedAt: true, name: true, status: true,
+            completedSessions: true, totalSessions: true,
+          },
+          orderBy: { startedAt: "desc" },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  // ── Map to uniform event shape ──────────────────────────────────────
+  const events = [];
+  for (const v of visits) {
+    const svc = v.service ? v.service.name : null;
+    events.push({
+      eventType: "VISIT",
+      eventId: v.id,
+      eventAt: v.visitDate ? v.visitDate.toISOString() : null,
+      summary: svc
+        ? `Visit (${svc}) — ${v.status || "completed"}`
+        : `Visit — ${v.status || "completed"}`,
+      refType: "Visit",
+      refId: v.id,
+    });
+  }
+  for (const rx of prescriptions) {
+    const doc = rx.doctor ? rx.doctor.name : null;
+    events.push({
+      eventType: "PRESCRIPTION",
+      eventId: rx.id,
+      eventAt: rx.createdAt ? rx.createdAt.toISOString() : null,
+      summary: doc
+        ? `Prescription by Dr. ${doc}`
+        : "Prescription issued",
+      refType: "Prescription",
+      refId: rx.id,
+    });
+  }
+  for (const c of consents) {
+    events.push({
+      eventType: "CONSENT",
+      eventId: c.id,
+      eventAt: c.signedAt ? c.signedAt.toISOString() : null,
+      summary: `Consent signed: ${c.templateName || "general"}`,
+      refType: "ConsentForm",
+      refId: c.id,
+    });
+  }
+  for (const p of treatmentPlans) {
+    const progress = `${p.completedSessions || 0}/${p.totalSessions || 0}`;
+    events.push({
+      eventType: "TREATMENT_PLAN",
+      eventId: p.id,
+      eventAt: p.startedAt ? p.startedAt.toISOString() : null,
+      summary: `Treatment plan: ${p.name || "(unnamed)"} (${progress} sessions, ${p.status || "active"})`,
+      refType: "TreatmentPlan",
+      refId: p.id,
+    });
+  }
+
+  // ── from/to filter ──────────────────────────────────────────────────
+  let filtered = events;
+  if (fromDate || toDate) {
+    filtered = events.filter((e) => {
+      if (!e.eventAt) return false;
+      const t = new Date(e.eventAt).getTime();
+      if (fromDate && t < fromDate.getTime()) return false;
+      if (toDate && t > toDate.getTime()) return false;
+      return true;
+    });
+  }
+
+  // ── Sort: eventAt DESC, tiebreak by eventType ASC then eventId ASC ──
+  // The tiebreaker is load-bearing for paginated callers: two events on
+  // the same wall-clock instant must return in a stable order or the
+  // limit/offset paging window shifts under the caller's feet.
+  filtered.sort((a, b) => {
+    const ta = a.eventAt ? new Date(a.eventAt).getTime() : 0;
+    const tb = b.eventAt ? new Date(b.eventAt).getTime() : 0;
+    if (tb !== ta) return tb - ta;
+    if (a.eventType !== b.eventType) {
+      return a.eventType < b.eventType ? -1 : 1;
+    }
+    return a.eventId - b.eventId;
+  });
+
+  // ── Cap at limit ────────────────────────────────────────────────────
+  const capped = filtered.slice(0, limit);
+
+  // ── Mask summary for low-trust viewers ──────────────────────────────
+  // PRD §11 — HIPAA / DPDP. Telecallers / helpers see WHEN events
+  // happened (for scheduling) but NOT clinical detail. eventType, eventAt,
+  // refId still surface so they can build the patient-history shape; the
+  // free-text `summary` is replaced with the generic "[masked]" placeholder.
+  const mustMask = shouldMaskForViewer(req);
+  const outEvents = mustMask
+    ? capped.map((e) => ({ ...e, summary: "[masked]" }))
+    : capped;
+
+  return { outEvents, mustMask };
+}
+
+router.get("/patients/:id/timeline", phiReadGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    if (!Number.isFinite(patientId) || patientId <= 0) {
+      return res.status(400).json({ error: "Invalid patient id" });
+    }
+
+    const built = await buildPatientTimeline(req, patientId);
+    if (!built) return res.status(404).json({ error: "Patient not found" });
+
+    const { outEvents, mustMask } = built;
+
+    // ── Audit (fire-and-forget) ─────────────────────────────────────────
+    // PRD §11 clinical-reads invariant — every PHI read row, including
+    // unified-feed reads, must emit an audit. PATIENT_TIMELINE_READ
+    // distinguishes from the per-sub-resource READ rows so audit reviewers
+    // can grep "which patients had timeline views requested" separately
+    // from "which had individual sub-resource views."
+    writeAudit(
+      "Patient",
+      "PATIENT_TIMELINE_READ",
+      patientId,
+      req.user.userId,
+      req.user.tenantId,
+      { patientId, eventCount: outEvents.length, masked: mustMask },
+    ).catch((auditErr) => {
+      console.warn("[wellness] audit PATIENT_TIMELINE_READ failed:", auditErr.message);
+    });
+
+    res.json({ patientId, count: outEvents.length, events: outEvents });
+  } catch (e) {
+    console.error("[wellness] patient timeline error:", e.message);
+    res.status(500).json({ error: "Failed to load patient timeline" });
+  }
+});
+
+// GET /patients/:id/timeline.csv — CSV export of the unified patient
+// timeline. Tick #200 (Agent B). Mirrors the JSON sibling above 1-for-1
+// (same auth, tenant-scoping, query-param semantics, mask policy) but emits
+// CSV rather than JSON for compliance exports / external review / audits.
+//
+// CSV shape:
+//   Header row: Event Date, Event Type, Summary, Reference ID, Reference Type
+//   Data rows : one per event, ordered DESC by eventAt (same sort as JSON).
+//
+// Masking: when shouldMaskForViewer is true, the Summary cell collapses to
+// "[masked]" — Event Date / Type / Reference ID / Reference Type still
+// surface so the export is usable for non-clinical operators (scheduling
+// audits etc).
+//
+// Audit: PATIENT_TIMELINE_EXPORT with { patientId, eventCount, masked,
+// format: 'csv' }. Distinct from PATIENT_TIMELINE_READ so compliance
+// dashboards can grep "which timelines left the building as files"
+// separately from "which were just viewed in-app."
+router.get("/patients/:id/timeline.csv", phiReadGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    if (!Number.isFinite(patientId) || patientId <= 0) {
+      return res.status(400).json({ error: "Invalid patient id" });
+    }
+
+    const built = await buildPatientTimeline(req, patientId);
+    if (!built) return res.status(404).json({ error: "Patient not found" });
+
+    const { outEvents, mustMask } = built;
+
+    // ── Build CSV ──────────────────────────────────────────────────────
+    // Columns mirror the JSON event shape, renamed for human-readable
+    // export consumption. ISO date strings render cleanly in Excel without
+    // TZ drift (the same render-layer rule the /patients.csv exporter
+    // follows).
+    const headers = ["Event Date", "Event Type", "Summary", "Reference ID", "Reference Type"];
+    const csvRows = outEvents.map((ev) => [
+      ev.eventAt || "",
+      ev.eventType,
+      ev.summary || "",
+      ev.refId,
+      ev.refType,
+    ]);
+    const csv = rowsToCsv(headers, csvRows);
+
+    // ── Audit (fire-and-forget) ────────────────────────────────────────
+    // Distinct action from PATIENT_TIMELINE_READ so compliance reviewers
+    // can separate "viewed in UI" from "exported as file" — exports are
+    // the higher-severity action under HIPAA / DPDP because the data
+    // leaves the application boundary.
+    writeAudit(
+      "Patient",
+      "PATIENT_TIMELINE_EXPORT",
+      patientId,
+      req.user.userId,
+      req.user.tenantId,
+      { patientId, eventCount: outEvents.length, masked: mustMask, format: "csv" },
+    ).catch((auditErr) => {
+      console.warn("[wellness] audit PATIENT_TIMELINE_EXPORT failed:", auditErr.message);
+    });
+
+    // ── Emit ───────────────────────────────────────────────────────────
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="patient-${patientId}-timeline.csv"`,
+    );
+    // UTF-8 BOM so Excel auto-detects encoding (matches /patients.csv +
+    // /patients/import-template.csv conventions in this file).
+    res.write("﻿");
+    res.end(csv);
+  } catch (e) {
+    console.error("[wellness] patient timeline.csv export error:", e.message);
+    res.status(500).json({ error: "Failed to export patient timeline" });
   }
 });
 
@@ -1099,6 +2095,221 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
     const mapped = httpFromPrismaError(e);
     if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to update patient" });
+  }
+});
+
+// #931 — bulk-tag mutation endpoint. Wires the Patients-page bulk-select
+// toolbar "Add tags to N selected" CTA to a single tenant-scoped batch
+// update. Tick #196: extended ADDITIVELY to also accept `removeTags` so
+// operators can drain tag-mistake pollution without per-patient surgery.
+//
+// Request shape (one or both of addTags/removeTags MUST be non-empty):
+//   { patientIds: number[], addTags?: string[], removeTags?: string[] }
+//
+// Schema: Patient.tags is `String? @db.Text` storing a JSON-stringified
+// array (shipped at 5841d736). Idempotent — incoming addTags merge with
+// the existing set; removeTags filter against the post-merge set; dedupe
+// is case-insensitive (lowercase canonical form). Rows whose effective
+// tag-set didn't change are skipped (no DB write).
+//
+// RBAC: any wellness-write role (phiWriteGate); excludes telecaller/USER
+// without PHI access. Limits: ≤200 patientIds AND ≤20 entries on EACH of
+// addTags/removeTags per call so a UI-driven select-all-then-mutate
+// operation can't be turned into a gigantic transactional update.
+//
+// Audit pattern: single `BULK_TAG_MUTATE` row carrying both tagsAdded and
+// tagsRemoved payloads (one row per call, regardless of which mutation
+// directions were exercised). Picked single-row over two-row (BULK_TAG_ADD
+// + BULK_TAG_REMOVE) so the audit chain stays one-action-per-API-call —
+// downstream audit-viewer + integrity-verify don't need a special "these
+// two rows came from the same request" join.
+//
+// Response envelope additive: `updated` (row-write count, unchanged) +
+// `removed` (count of patientIds whose effective tag-set lost ≥1 entry
+// from the removeTags step). Frontend Patients.jsx today only reads
+// `updated`; the additive `removed` is for the follow-up bulk-remove UI
+// tick.
+router.patch("/patients/bulk-tags", phiWriteGate, async (req, res) => {
+  try {
+    const { patientIds, addTags, removeTags } = req.body || {};
+
+    // Shape validation — patientIds must be a non-empty array of integers.
+    if (!Array.isArray(patientIds) || patientIds.length === 0) {
+      return res.status(400).json({
+        error: "patientIds must be a non-empty array of integers",
+        code: "INVALID_PATIENT_IDS",
+      });
+    }
+    if (patientIds.length > 200) {
+      return res.status(400).json({
+        error: "Cannot tag more than 200 patients in a single request",
+        code: "BULK_LIMIT_EXCEEDED",
+      });
+    }
+    const normalizedIds = [];
+    for (const raw of patientIds) {
+      const n = typeof raw === "number" ? raw : parseInt(raw, 10);
+      if (!Number.isInteger(n) || n <= 0) {
+        return res.status(400).json({
+          error: "patientIds entries must be positive integers",
+          code: "INVALID_PATIENT_IDS",
+        });
+      }
+      normalizedIds.push(n);
+    }
+
+    // Tick #196: both addTags and removeTags are now optional individually,
+    // but AT LEAST ONE must be a non-empty array. Default each to [] when
+    // absent so the rest of the handler doesn't need null-guards.
+    const addTagsInput = Array.isArray(addTags) ? addTags : [];
+    const removeTagsInput = Array.isArray(removeTags) ? removeTags : [];
+    if (addTagsInput.length === 0 && removeTagsInput.length === 0) {
+      return res.status(400).json({
+        error: "At least one of addTags or removeTags must be a non-empty array",
+        code: "EMPTY_TAG_LIST",
+      });
+    }
+    if (addTagsInput.length > 20) {
+      return res.status(400).json({
+        error: "Cannot add more than 20 tags in a single request",
+        code: "BULK_LIMIT_EXCEEDED",
+      });
+    }
+    if (removeTagsInput.length > 20) {
+      return res.status(400).json({
+        error: "Cannot remove more than 20 tags in a single request",
+        code: "BULK_LIMIT_EXCEEDED",
+      });
+    }
+
+    // Shared validator — entries must be trimmed, 1–50-char strings.
+    const normalizeTagList = (list, label) => {
+      const out = [];
+      const seen = new Set();
+      for (const raw of list) {
+        if (typeof raw !== "string") {
+          return { error: `${label} entries must be strings`, code: "INVALID_TAGS" };
+        }
+        const trimmed = raw.trim();
+        if (trimmed.length < 1 || trimmed.length > 50) {
+          return {
+            error: `${label} entries must be 1–50 characters after trim`,
+            code: "INVALID_TAGS",
+          };
+        }
+        const lower = trimmed.toLowerCase();
+        if (seen.has(lower)) continue;
+        seen.add(lower);
+        out.push(lower);
+      }
+      return { tags: out };
+    };
+
+    const addNorm = normalizeTagList(addTagsInput, "addTags");
+    if (addNorm.error) return res.status(400).json(addNorm);
+    const removeNorm = normalizeTagList(removeTagsInput, "removeTags");
+    if (removeNorm.error) return res.status(400).json(removeNorm);
+
+    const cleanedAdd = addNorm.tags;
+    const cleanedRemove = removeNorm.tags;
+    const removeSet = new Set(cleanedRemove);
+
+    // Re-check: if BOTH normalised lists are empty (e.g. only blanks/dupes
+    // came in), treat as EMPTY_TAG_LIST so the caller gets a deterministic
+    // error rather than a silent 200.
+    if (cleanedAdd.length === 0 && cleanedRemove.length === 0) {
+      return res.status(400).json({
+        error: "addTags/removeTags resolved to zero unique tags after dedupe",
+        code: "EMPTY_TAG_LIST",
+      });
+    }
+
+    // Tenant-scoped fetch — only rows belonging to req.user.tenantId enter
+    // the merge loop, so a forged patientId for another tenant is silently
+    // ignored (filtered at the query level, not inside the loop).
+    const rows = await prisma.patient.findMany({
+      where: tenantWhere(req, { id: { in: normalizedIds } }),
+      select: { id: true, tags: true },
+    });
+
+    let updated = 0;
+    let removed = 0;
+    for (const row of rows) {
+      let existing = [];
+      if (row.tags) {
+        try {
+          const parsed = JSON.parse(row.tags);
+          if (Array.isArray(parsed)) {
+            existing = parsed.filter((t) => typeof t === "string");
+          }
+        } catch (_e) {
+          // Corrupt stored JSON — treat as empty so the merge still yields
+          // a clean array, rather than 500-ing the whole batch.
+          existing = [];
+        }
+      }
+
+      // Phase 1: normalise existing into canonical lowercase + dedup.
+      const normalizedExisting = [];
+      const existingSeen = new Set();
+      for (const t of existing) {
+        const lower = String(t).trim().toLowerCase();
+        if (!lower || existingSeen.has(lower)) continue;
+        existingSeen.add(lower);
+        normalizedExisting.push(lower);
+      }
+
+      // Phase 2: union with addTags (preserves order: existing first, new
+      // additions appended in input order, dedup-aware).
+      const mergedSeen = new Set(existingSeen);
+      const merged = [...normalizedExisting];
+      for (const t of cleanedAdd) {
+        if (mergedSeen.has(t)) continue;
+        mergedSeen.add(t);
+        merged.push(t);
+      }
+
+      // Phase 3: set-difference against removeTags (after union, so a tag
+      // present in BOTH addTags and removeTags ends up removed — explicit
+      // remove wins; documented in the JSDoc above).
+      const finalTags = removeSet.size > 0
+        ? merged.filter((t) => !removeSet.has(t))
+        : merged;
+
+      // Count "removed" — rows whose tag-set shrunk vs the pre-add baseline.
+      // Compares against normalizedExisting (not merged) so the metric
+      // measures the visible operator-perceived removal, not the internal
+      // post-union state. A patient with no tags + removeTags=['X'] sees
+      // no change → not counted as removed.
+      const removedFromThisRow = normalizedExisting.filter((t) => removeSet.has(t)).length;
+      if (removedFromThisRow > 0) removed += 1;
+
+      // Idempotency: skip the write if the final tag-set is identical to
+      // the normalised-existing set. Same length AND same membership.
+      const sameLength = finalTags.length === normalizedExisting.length;
+      const sameMembership = sameLength
+        && finalTags.every((t, i) => t === normalizedExisting[i]);
+      if (sameMembership) continue;
+
+      await prisma.patient.update({
+        where: { id: row.id },
+        data: { tags: JSON.stringify(finalTags) },
+      });
+      updated += 1;
+    }
+
+    await writeAudit('Patient', 'BULK_TAG_MUTATE', null, req.user.userId, req.user.tenantId, {
+      patientIdsRequested: normalizedIds.length,
+      patientsUpdated: updated,
+      patientsRemovedFrom: removed,
+      tagsAdded: cleanedAdd,
+      tagsRemoved: cleanedRemove,
+    });
+
+    res.json({ updated, removed });
+  } catch (e) {
+    console.error("[wellness] bulk-tag-mutate error:", e.message);
+    res.status(500).json({ error: "Failed to bulk-mutate tags" });
   }
 });
 
@@ -5307,6 +6518,152 @@ async function primaryClinic(tenantId) {
   return prisma.location.findFirst({ where: { tenantId }, orderBy: { id: "asc" } });
 }
 
+// #840 — single consolidated patient-record PDF.
+//
+// Problem: pre-this-fix the operator had to download visits / prescriptions
+// / consents individually and manually staple them together to hand a
+// complete record to a referring provider or to archive. There was no
+// "Download full patient record" surface.
+//
+// Path: GET /api/wellness/patients/:id/full-report.pdf
+//   - PHI gate: phiReadGate (doctor / professional / admin / manager;
+//     telecaller is intentionally INCLUDED here because telecallers do
+//     route hand-offs and need the consolidated view; this matches the
+//     gate on GET /patients/:id itself).
+//   - Tenant scoping: tenantWhere() on every relation read.
+//   - Audit: PATIENT_FULL_REPORT_DOWNLOAD row written via writeAudit
+//     (fire-and-forget per #534 PERF-1 — never fail the download because
+//     the audit row failed; the catch just warns).
+//   - Response: application/pdf with Content-Disposition: attachment
+//     (force-save, not inline — operator typically wants this on disk for
+//     archival, not in a tab).
+//
+// Service consumptions live on Visit, not Patient — we fetch them by
+// visitId after loading the patient + visits. Photos come from visit.photosBefore
+// / photosAfter JSON columns (parsed inline). Consents include signatureSvg
+// so the renderer can inline-embed the captured signature.
+router.get("/patients/:id/full-report.pdf", phiReadGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ error: "Invalid patient id" });
+    }
+    const where = tenantWhere(req, { id });
+    where.deletedAt = null; // never expose soft-deleted patients via export
+
+    const patient = await prisma.patient.findFirst({
+      where,
+      include: {
+        visits: {
+          orderBy: { visitDate: "desc" },
+          include: {
+            service: { select: { id: true, name: true, category: true } },
+            doctor: { select: { id: true, name: true } },
+          },
+        },
+        prescriptions: {
+          orderBy: { createdAt: "desc" },
+          include: { doctor: { select: { id: true, name: true } } },
+        },
+        consents: {
+          orderBy: { signedAt: "desc" },
+          // signatureSvg is needed so the PDF renderer can inline-embed
+          // the captured signature image; rest of the columns mirror the
+          // detail-view select shape.
+          select: {
+            id: true, templateName: true, signedAt: true,
+            patientId: true, serviceId: true,
+            signatureSvg: true,
+            service: { select: { id: true, name: true } },
+          },
+        },
+        treatmentPlans: { include: { service: { select: { id: true, name: true } } } },
+      },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    // Photos: extract from visit.photosBefore / photosAfter JSON columns.
+    // Only include visits that actually have at least one photo so the
+    // section stays focused.
+    const photos = patient.visits
+      .map((v) => {
+        let before = [];
+        let after = [];
+        try { before = v.photosBefore ? JSON.parse(v.photosBefore) : []; } catch { before = []; }
+        try { after = v.photosAfter ? JSON.parse(v.photosAfter) : []; } catch { after = []; }
+        if (!Array.isArray(before)) before = [];
+        if (!Array.isArray(after)) after = [];
+        return { visitDate: v.visitDate, before, after };
+      })
+      .filter((p) => p.before.length > 0 || p.after.length > 0);
+
+    // Inventory consumed: ServiceConsumption rows for every visit this
+    // patient has. Tenant-scoped read; flatten with visitDate denorm for
+    // the renderer's table.
+    const visitIds = patient.visits.map((v) => v.id);
+    let consumptions = [];
+    if (visitIds.length > 0) {
+      const rows = await prisma.serviceConsumption.findMany({
+        where: tenantWhere(req, { visitId: { in: visitIds } }),
+        orderBy: { createdAt: "desc" },
+        include: { visit: { select: { id: true, visitDate: true } } },
+      });
+      consumptions = rows.map((r) => ({
+        visitDate: r.visit?.visitDate || r.createdAt,
+        productName: r.productName,
+        qty: r.qty,
+        unitCost: r.unitCost,
+      }));
+    }
+
+    const clinic = await primaryClinic(req.user.tenantId);
+
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient,
+        visits: patient.visits,
+        prescriptions: patient.prescriptions,
+        consents: patient.consents,
+        treatmentPlans: patient.treatmentPlans,
+        photos,
+        consumptions,
+        operator: { name: req.user?.name, email: req.user?.email },
+        generatedAt: new Date(),
+      },
+      clinic,
+    );
+
+    // Audit: PATIENT_FULL_REPORT_DOWNLOAD. Fire-and-forget — see
+    // PATIENT_DETAIL_READ above (#534 PERF-1). Never reference values that
+    // could contain PHI in the audit details (counts / IDs only).
+    writeAudit('Patient', 'PATIENT_FULL_REPORT_DOWNLOAD', patient.id, req.user.userId, req.user.tenantId, {
+      patientId: patient.id,
+      visitCount: patient.visits.length,
+      rxCount: patient.prescriptions.length,
+      consentCount: patient.consents.length,
+      treatmentPlanCount: patient.treatmentPlans.length,
+      photoSets: photos.length,
+      consumptionCount: consumptions.length,
+    }).catch((auditErr) => {
+      console.warn("[wellness] audit PATIENT_FULL_REPORT_DOWNLOAD failed:", auditErr.message);
+    });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="patient-${id}-full-report.pdf"`,
+    );
+    res.setHeader("Content-Length", buf.length);
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.send(buf);
+  } catch (e) {
+    console.error("[wellness] full patient report pdf error:", e.message);
+    res.status(500).json({ error: "Failed to render patient report PDF" });
+  }
+});
+
 router.get("/prescriptions/:id/pdf", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -6026,7 +7383,17 @@ router.post(
   async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: "No logo file provided (field 'logo')" });
-      const logoUrl = `/uploads/branding/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
+      // #884 — store the canonical API URL, not the bare `/uploads/branding/...`
+      // path. The /api/ namespace is reverse-proxied to the backend by Nginx;
+      // `/uploads/*` on demo falls through to the SPA catch-all and returns
+      // `text/html` for an <img> request → broken-image icons on the sidebar +
+      // Branding card + branded PDFs. Mirrors the #743 visit-photos fix: serve
+      // images through `/api/wellness/...` so Nginx routes them correctly.
+      // The public read endpoint (`GET /public/branding/:tenantId/logo`) is
+      // unauthenticated by design — <img> tags don't carry Authorization
+      // headers (JWT lives in localStorage, not cookie), and tenant logos are
+      // intentionally public via direct URL.
+      const logoUrl = `/api/wellness/public/branding/${req.user.tenantId}/logo`;
       await prisma.tenant.update({
         where: { id: req.user.tenantId },
         data: { logoUrl },
@@ -6063,10 +7430,82 @@ router.get("/branding", async (req, res) => {
       select: { logoUrl: true, brandColor: true, name: true, defaultCurrency: true },
     });
     if (!tenant) return res.status(404).json({ error: "Tenant not found" });
-    res.json(tenant);
+    // #884 — normalise + persist legacy `/uploads/branding/...` URLs (stored
+    // before the canonical-URL fix landed) to the API-namespaced public URL
+    // so the SPA sidebar + Branding card + auth/me responses render correctly
+    // even before the next upload. We rewrite the DB row on read so the next
+    // /api/auth/me call (which returns tenant.logoUrl verbatim from the DB
+    // for the sidebar) also gets the working URL — without forcing every
+    // existing tenant to re-upload. The disk file is untouched.
+    let logoUrl = tenant.logoUrl;
+    if (logoUrl && /^\/uploads\/branding\//.test(logoUrl)) {
+      logoUrl = `/api/wellness/public/branding/${req.user.tenantId}/logo`;
+      // Best-effort persist; don't fail the read if the update errors.
+      prisma.tenant
+        .update({ where: { id: req.user.tenantId }, data: { logoUrl } })
+        .catch((e) => console.warn("[wellness] branding logoUrl backfill failed:", e.message));
+    }
+    res.json({ ...tenant, logoUrl });
   } catch (e) {
     console.error("[wellness] branding get error:", e.message);
     res.status(500).json({ error: "Failed to load branding" });
+  }
+});
+
+// #884 — public branding-logo serve. <img src> tags from the SPA sidebar,
+// Settings → Branding card, and branded PDFs (downstream consumers) all
+// need to fetch this without auth headers (JWT lives in localStorage, not
+// cookies — so <img> requests carry no credentials). Tenant logos are
+// intentionally public via direct URL — they ship on login pages, public
+// booking pages, and customer-facing PDFs already.
+//
+// Discovery is by tenantId in the URL. The file on disk lives at
+// `backend/uploads/branding/tenant-<id>/logo.<ext>`; we list the directory
+// to find `logo.<known-ext>` and serve it with the correct MIME so the
+// browser decodes it as an image (not text/html). Path-traversal is
+// impossible because we hard-code the filename prefix + reject any tenantId
+// that isn't a positive integer.
+const BRANDING_MIME_BY_EXT = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+};
+router.get("/public/branding/:tenantId/logo", async (req, res) => {
+  try {
+    const tenantId = parseInt(req.params.tenantId, 10);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(400).json({ error: "Invalid tenantId", code: "INVALID_TENANT_ID" });
+    }
+    const dir = path.join(__dirname, "..", "uploads", "branding", `tenant-${tenantId}`);
+    if (!fs.existsSync(dir)) {
+      return res.status(404).json({ error: "Logo not found" });
+    }
+    // Find `logo.<ext>` for any supported image extension. There's only ever
+    // one logo per tenant (the upload handler writes a fixed `logo.<ext>`
+    // filename), so the first match wins.
+    let file = null;
+    let mime = null;
+    for (const ext of Object.keys(BRANDING_MIME_BY_EXT)) {
+      const candidate = path.join(dir, `logo${ext}`);
+      if (fs.existsSync(candidate)) {
+        file = candidate;
+        mime = BRANDING_MIME_BY_EXT[ext];
+        break;
+      }
+    }
+    if (!file) {
+      return res.status(404).json({ error: "Logo not found" });
+    }
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.sendFile(file);
+  } catch (e) {
+    console.error("[wellness] public branding logo error:", e.message);
+    res.status(500).json({ error: "Failed to serve logo" });
   }
 });
 

@@ -2,11 +2,31 @@
 // Lists prior receipts and lets admins record new ones (which increments
 // Product.currentStock as a server-side side effect — no client-side stock
 // math here).
+//
+// #843 (Cron tick #26 / Agent 2) — UI/UX polish:
+//   1. Search bar — enlarged client-side filter across receipt #, supplier,
+//      product name/SKU, batch, notes. Sits prominently above the date row.
+//   2. Date filter — preset-dropdown pattern (Today / Yesterday / Last 7 days
+//      / This month / All / Custom…). Backed by the shared
+//      <DateRangePicker> component (cron tick #29 / Agent 1).
+//   3. Default to today — initial preset is 'today' (not 'all'), so the
+//      page lands on today's receipts instead of "No receipts in window."
+//
+// Cron tick #29 / Agent 1 — migrated the inline preset/<select>/date-input
+// block to the shared <DateRangePicker> component (extracted in tick #27,
+// `fabf035`). Closes the rule-of-3 DRY loop: Payments.jsx (tick #28,
+// `5b3ed01`) + PatientDetail.jsx (tick #27, `fabf035`) + this file are
+// now all consuming the single source of truth. Future date-filter
+// additions just import the component.
+//
+// Backend GET /api/wellness/inventory/receipts already supports ?from&to with
+// the validateDateRange (#665) guard, so no backend change was needed.
 
-import { useEffect, useState } from 'react';
-import { ArrowDownToLine, Plus, Calendar } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowDownToLine, Plus, Search } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import DateRangePicker, { effectiveRangeFor } from '../../components/DateRangePicker';
 
 const EMPTY = {
   productId: '', vendorId: '', quantity: '', unitCost: '',
@@ -22,13 +42,35 @@ export default function InventoryReceipts() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
-  const [filter, setFilter] = useState({ from: '', to: '' });
+
+  // #843 — default landing window is TODAY (not 'all'), so the page is useful
+  // immediately on open. Operator can broaden via the preset dropdown.
+  // Cron tick #29 — single controlled state object owned by the parent and
+  // passed to <DateRangePicker> as a controlled input (mirrors Payments.jsx
+  // and PatientDetail.jsx).
+  const [dateRange, setDateRange] = useState({
+    preset: 'today',
+    customFrom: '',
+    customTo: '',
+  });
+
+  // #843 — client-side free-text filter across receipt #, supplier name,
+  // product name/SKU, batch, notes. Kept client-side because list size is
+  // capped at 500 by the backend; a server-side search isn't justified yet.
+  const [search, setSearch] = useState('');
+
+  // Cron tick #29 — delegate preset → {from, to} resolution to the shared
+  // helper so the logic stays single-sourced across consumers.
+  const effectiveRange = useMemo(
+    () => effectiveRangeFor(dateRange),
+    [dateRange],
+  );
 
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
-    if (filter.from) qs.set('from', filter.from);
-    if (filter.to) qs.set('to', filter.to);
+    if (effectiveRange.from) qs.set('from', effectiveRange.from);
+    if (effectiveRange.to) qs.set('to', effectiveRange.to);
     Promise.all([
       fetchApi(`/api/wellness/inventory/receipts${qs.toString() ? `?${qs}` : ''}`).catch(() => []),
       fetchApi('/api/wellness/products').catch(() => []),
@@ -39,7 +81,10 @@ export default function InventoryReceipts() {
       setVendors(Array.isArray(vens) ? vens.filter((v) => v.isActive) : []);
     }).finally(() => setLoading(false));
   };
-  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // #843 — re-fetch when the effective date range changes. Custom-mode with
+  // both inputs blank → no params → backend returns unfiltered (preserves
+  // the broad-window option).
+  useEffect(load, [effectiveRange.from, effectiveRange.to]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async (e) => {
     e.preventDefault();
@@ -63,7 +108,26 @@ export default function InventoryReceipts() {
     setSaving(false);
   };
 
-  const totalCost = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
+  // #843 — apply free-text search client-side. Matches across the same fields
+  // the issue's placeholder lists (receipt #, supplier, product, batch) plus
+  // SKU + notes for completeness.
+  const filteredReceipts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return receipts;
+    return receipts.filter((r) => {
+      const hay = [
+        r.receiptNumber,
+        r.vendor?.name,
+        r.product?.name,
+        r.product?.sku,
+        r.batchNumber,
+        r.notes,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }, [receipts, search]);
+
+  const totalCost = filteredReceipts.reduce((s, r) => s + (r.totalCost || 0), 0);
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
@@ -73,7 +137,7 @@ export default function InventoryReceipts() {
             <ArrowDownToLine size={24} /> Inventory receipts
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            {receipts.length} receipt{receipts.length === 1 ? '' : 's'} in window — total cost ₹{Number(totalCost).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+            {filteredReceipts.length} receipt{filteredReceipts.length === 1 ? '' : 's'} in window — total cost ₹{Number(totalCost).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
           </p>
         </div>
         <button onClick={() => setShowForm((v) => !v)} style={primaryBtnStyle}>
@@ -81,11 +145,42 @@ export default function InventoryReceipts() {
         </button>
       </header>
 
-      <div className="glass" style={{ padding: '0.85rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-        <Calendar size={16} />
-        <label style={{ fontSize: '0.85rem' }}>From <input type="date" value={filter.from} onChange={(e) => setFilter({ ...filter, from: e.target.value })} style={inputStyle} /></label>
-        <label style={{ fontSize: '0.85rem' }}>To <input type="date" value={filter.to} onChange={(e) => setFilter({ ...filter, to: e.target.value })} style={inputStyle} /></label>
-        <button onClick={load} style={secondaryBtnStyle}>Apply</button>
+      {/* #843 — Search bar (enlarged, full-width, prominent). Lives above the
+          date-filter row so it reads as the primary entry-point for narrowing
+          the list. Icon + larger padding + bigger font signal that it's a
+          first-class control rather than a tucked-away filter field. */}
+      <div className="glass" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+        <Search size={18} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by invoice #, supplier, product, batch…"
+          aria-label="Search inventory receipts"
+          style={{
+            flex: 1,
+            padding: '0.65rem 0.85rem',
+            fontSize: '1rem',
+            border: '1px solid var(--border-color)',
+            borderRadius: 8,
+            background: 'transparent',
+            color: 'var(--text)',
+            minWidth: 0,
+          }}
+        />
+      </div>
+
+      {/* #843 — Date filter via shared <DateRangePicker> (cron tick #29).
+          Custom… reveals two date inputs for arbitrary windows. Defaults
+          to "Today" so the page lands on today's data. */}
+      <div style={{ marginBottom: '1rem' }}>
+        <DateRangePicker
+          id="receipts-date-preset"
+          value={dateRange}
+          onChange={setDateRange}
+          presets={['today', 'yesterday', 'week7', 'month', 'all', 'custom']}
+          label="Receipt date:"
+        />
       </div>
 
       {showForm && (
@@ -112,8 +207,10 @@ export default function InventoryReceipts() {
       <div className="glass" style={{ padding: '0.5rem 0' }}>
         {loading ? (
           <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>Loading…</div>
-        ) : receipts.length === 0 ? (
-          <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>No receipts in window.</div>
+        ) : filteredReceipts.length === 0 ? (
+          <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>
+            {search.trim() ? 'No receipts match your search.' : 'No receipts in window.'}
+          </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -128,7 +225,7 @@ export default function InventoryReceipts() {
               </tr>
             </thead>
             <tbody>
-              {receipts.map((r) => (
+              {filteredReceipts.map((r) => (
                 <tr key={r.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                   <td style={cellStyle}>{r.receiptNumber}</td>
                   <td style={cellStyle}>{r.product?.name || `#${r.productId}`}</td>
@@ -149,5 +246,4 @@ export default function InventoryReceipts() {
 
 const inputStyle = { padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: '0.9rem', minWidth: 0 };
 const primaryBtnStyle = { display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.55rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' };
-const secondaryBtnStyle = { padding: '0.4rem 0.75rem', background: 'transparent', color: 'var(--text)', border: '1px solid var(--border-color)', borderRadius: 6, cursor: 'pointer' };
 const cellStyle = { padding: '0.6rem 0.85rem', fontSize: '0.9rem' };

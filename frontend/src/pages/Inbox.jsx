@@ -375,10 +375,10 @@ export default function Inbox() {
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetail({ kind: 'sms', item: msg }); } }}
-                className="table-row-hover"
-                style={{ padding: '1.25rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: msg.direction === 'INBOUND' ? 'rgba(16, 185, 129, 0.05)' : 'transparent', display: 'flex', gap: '1rem', alignItems: 'flex-start', cursor: 'pointer' }}
+                className={`table-row-hover inbox-bubble inbox-bubble--sms ${msg.direction === 'INBOUND' ? 'inbox-bubble--inbound' : ''}`}
+                style={{ padding: '1.25rem', border: '1px solid var(--border-color)', borderRadius: '12px', display: 'flex', gap: '1rem', alignItems: 'flex-start', cursor: 'pointer' }}
               >
-                <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(16, 185, 129, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: '#10b981' }}>
+                <div className="inbox-avatar inbox-avatar--sms" style={{ width: '36px', height: '36px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <MessageSquare size={18} />
                 </div>
                 <div style={{ flex: 1 }}>
@@ -387,7 +387,7 @@ export default function Inbox() {
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(msg.createdAt).toLocaleString()}</span>
                   </div>
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{msg.body}</p>
-                  <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', marginTop: '0.375rem', display: 'inline-block', background: msg.status === 'DELIVERED' ? 'rgba(16,185,129,0.1)' : msg.status === 'FAILED' ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)', color: msg.status === 'DELIVERED' ? '#10b981' : msg.status === 'FAILED' ? '#ef4444' : '#3b82f6' }}>{msg.status}</span>
+                  <span className={`inbox-status-pill inbox-status-pill--${(msg.status === 'DELIVERED' ? 'delivered' : msg.status === 'FAILED' ? 'failed' : 'pending')}`} style={{ marginTop: '0.375rem' }}>{msg.status}</span>
                 </div>
               </div>
             ))}
@@ -402,10 +402,10 @@ export default function Inbox() {
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetail({ kind: 'wa', item: msg }); } }}
-                className="table-row-hover"
-                style={{ padding: '1.25rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: msg.direction === 'INBOUND' ? 'rgba(37, 211, 102, 0.05)' : 'transparent', display: 'flex', gap: '1rem', alignItems: 'flex-start', cursor: 'pointer' }}
+                className={`table-row-hover inbox-bubble inbox-bubble--wa ${msg.direction === 'INBOUND' ? 'inbox-bubble--inbound' : ''}`}
+                style={{ padding: '1.25rem', border: '1px solid var(--border-color)', borderRadius: '12px', display: 'flex', gap: '1rem', alignItems: 'flex-start', cursor: 'pointer' }}
               >
-                <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(37, 211, 102, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: '#25D366' }}>
+                <div className="inbox-avatar inbox-avatar--wa" style={{ width: '36px', height: '36px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <MessageCircle size={18} />
                 </div>
                 <div style={{ flex: 1 }}>
@@ -415,8 +415,8 @@ export default function Inbox() {
                   </div>
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{msg.body || `Template: ${msg.templateName}`}</p>
                   <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.375rem', alignItems: 'center' }}>
-                    <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', background: msg.status === 'READ' ? 'rgba(59,130,246,0.1)' : msg.status === 'DELIVERED' ? 'rgba(16,185,129,0.1)' : msg.status === 'FAILED' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)', color: msg.status === 'READ' ? '#3b82f6' : msg.status === 'DELIVERED' ? '#10b981' : msg.status === 'FAILED' ? '#ef4444' : '#f59e0b' }}>{msg.status}</span>
-                    {msg.status === 'READ' && <span style={{ color: '#3b82f6', fontSize: '0.7rem' }}>✓✓</span>}
+                    <span className={`inbox-status-pill inbox-status-pill--${(msg.status === 'READ' ? 'read' : msg.status === 'DELIVERED' ? 'delivered' : msg.status === 'FAILED' ? 'failed' : 'pending')}`}>{msg.status}</span>
+                    {msg.status === 'READ' && <span className="inbox-read-receipt">✓✓</span>}
                   </div>
                 </div>
               </div>

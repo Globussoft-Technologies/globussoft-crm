@@ -36,6 +36,11 @@ import { MemoryRouter } from 'react-router-dom';
 const fetchApiMock = vi.fn();
 vi.mock('../../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
+  // tick #188 — XLSX export uses raw fetch + getAuthToken (separate from
+  // fetchApi). Mock the helper so the export click doesn't TypeError on
+  // `getAuthToken is not a function` under the module-mock that previously
+  // only exposed fetchApi.
+  getAuthToken: () => 'fake-token',
 }));
 
 const notifyError = vi.fn();
@@ -115,14 +120,26 @@ describe('<wellness/Patients /> — page surface', () => {
       expect(screen.getByRole('heading', { name: /Patients/i })).toBeInTheDocument();
     });
     // Total counter from /api/wellness/patients's .total field — "2 total".
-    expect(screen.getByText(/2 total/i)).toBeInTheDocument();
+    // Async findByText: data-dependent text appears AFTER the mock fetch
+    // resolves; synchronous getByText is a CI-only race (fast locally, slow
+    // under shard load).
+    expect(await screen.findByText(/2 total/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /New patient/i })).toBeInTheDocument();
   });
 
   it('initial mount fetches /api/wellness/patients with NO ?q= (full list)', async () => {
     renderPatients();
+    // #820 Part 1 (tick #185 dd67f1a0) — initial mount now passes limit + offset
+    // every call. Assert NO q= param but ALLOW limit/offset query string.
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/patients');
+      const initialCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string'
+        && u.startsWith('/api/wellness/patients?')
+        && !u.includes('q=')
+        && !u.includes('.csv')
+        && !u.includes('/bulk-tags')
+      );
+      expect(initialCall).toBeTruthy();
     });
   });
 
@@ -166,8 +183,16 @@ describe('<wellness/Patients /> — page surface', () => {
     try {
       renderPatients();
       // Wait for the initial mount fetch to settle.
+      // #820 Part 1 (tick #185 dd67f1a0) — initial mount passes limit + offset.
       await waitFor(() => {
-        expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/patients');
+        const initialCall = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/wellness/patients?')
+          && !u.includes('q=')
+          && !u.includes('.csv')
+          && !u.includes('/bulk-tags')
+        );
+        expect(initialCall).toBeTruthy();
       });
       fetchApiMock.mockClear();
 
@@ -193,6 +218,132 @@ describe('<wellness/Patients /> — page surface', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // #820 (tick #192) — list-filter dropdowns. Pins the source / gender /
+  // createdFrom / createdTo controls and their fetch-forwarding contract.
+  // Backend filters shipped tick #191 (`4fa87b0a`, `applyPatientListFilters`
+  // helper at backend/routes/wellness.js:208). Four invariants here:
+  //   1. Source select renders with the vocab from the New-patient form
+  //      (single source of truth — `walk-in`, `referral`, `whatsapp`, etc.)
+  //      and changing it issues a fetch carrying `?source=…`.
+  //   2. Gender select renders with F / M / O options and changing it
+  //      issues a fetch carrying `?gender=F` (matches backend's case-
+  //      normalized accepted set).
+  //   3. Date-from + date-to inputs render with aria-labels "Created from"
+  //      and "Created to" and setting both fires a single fetch with both
+  //      params encoded.
+  //   4. Changing a filter resets the page to 1 (mirrors the existing
+  //      search-input + rowsPerPage reset shape). Verified by the offset=0
+  //      param on the post-change fetch.
+  describe('#820 list filters (tick #192)', () => {
+    it('Source select renders + changing fires a fetch with ?source=walk-in', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const sourceSel = screen.getByLabelText(/Filter by source/i);
+      // Vocab matches the New-patient form's <option> set.
+      expect(sourceSel).toBeInTheDocument();
+      const options = Array.from(sourceSel.querySelectorAll('option')).map((o) => o.value);
+      expect(options).toEqual([
+        '', 'walk-in', 'referral', 'website-form', 'whatsapp',
+        'instagram', 'meta-ad', 'google-ad', 'indiamart',
+      ]);
+
+      fetchApiMock.mockClear();
+      fireEvent.change(sourceSel, { target: { value: 'walk-in' } });
+
+      await waitFor(() => {
+        const filteredCall = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/wellness/patients?')
+          && u.includes('source=walk-in')
+        );
+        expect(filteredCall).toBeTruthy();
+      });
+    });
+
+    it('Gender select renders with F/M/O and changing fires a fetch with ?gender=F', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const genderSel = screen.getByLabelText(/Filter by gender/i);
+      const values = Array.from(genderSel.querySelectorAll('option')).map((o) => o.value);
+      expect(values).toEqual(['', 'F', 'M', 'O']);
+
+      fetchApiMock.mockClear();
+      fireEvent.change(genderSel, { target: { value: 'F' } });
+
+      await waitFor(() => {
+        const filteredCall = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/wellness/patients?')
+          && u.includes('gender=F')
+        );
+        expect(filteredCall).toBeTruthy();
+      });
+    });
+
+    it('Date-from + date-to render and setting both fires a fetch carrying both params', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      const fromInput = screen.getByLabelText(/Created from/i);
+      const toInput = screen.getByLabelText(/Created to/i);
+      expect(fromInput).toBeInTheDocument();
+      expect(toInput).toBeInTheDocument();
+
+      fetchApiMock.mockClear();
+      fireEvent.change(fromInput, { target: { value: '2026-01-01' } });
+      fireEvent.change(toInput, { target: { value: '2026-03-31' } });
+
+      // Both date filters share the SEARCH_DEBOUNCE_MS debounce, so the
+      // last-typed value's debounced fire must include both params (state
+      // for both has already been set by the time the timer runs).
+      await waitFor(() => {
+        const filteredCall = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/wellness/patients?')
+          && u.includes('createdFrom=2026-01-01')
+          && u.includes('createdTo=2026-03-31')
+        );
+        expect(filteredCall).toBeTruthy();
+      });
+    });
+
+    it('changing a filter resets pagination to page 1 (offset=0)', async () => {
+      // Seed a larger dataset so page-2 actually exists.
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url.startsWith('/api/wellness/patients') && (!opts || !opts.method || opts.method === 'GET')) {
+          return Promise.resolve({ patients: samplePatients, total: 200 });
+        }
+        if (url === '/api/wellness/locations') return Promise.resolve(sampleLocations);
+        return Promise.resolve(null);
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      // Click Next to land on page 2 — the next fetch carries offset=25.
+      fireEvent.click(screen.getByTestId('patients-page-next'));
+      await waitFor(() => {
+        const page2Call = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string' && u.includes('offset=25')
+        );
+        expect(page2Call).toBeTruthy();
+      });
+
+      // Now flip the gender filter — the post-change fetch MUST be offset=0.
+      fetchApiMock.mockClear();
+      fireEvent.change(screen.getByLabelText(/Filter by gender/i), { target: { value: 'M' } });
+
+      await waitFor(() => {
+        const resetCall = fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/wellness/patients?')
+          && u.includes('gender=M')
+          && u.includes('offset=0')
+        );
+        expect(resetCall).toBeTruthy();
+      });
+    });
   });
 
   it('clicking "New patient" toggles the create form open with Name + Phone inputs', async () => {
@@ -233,6 +384,538 @@ describe('<wellness/Patients /> — page surface', () => {
     // No POST fired.
     const postCall = fetchApiMock.mock.calls.find(([, opts]) => opts?.method === 'POST');
     expect(postCall).toBeUndefined();
+  });
+
+  // #931 — bulk-tag-add UI. Pins the row-checkbox + "Add tags to N selected"
+  // CTA visibility + modal open + PATCH /api/wellness/patients/bulk-tags
+  // body shape + success / error notify branches.
+  describe('#931 bulk-tag-add', () => {
+    it('CTA is hidden when no rows are selected', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      expect(screen.queryByText(/Add tags to .* selected/i)).not.toBeInTheDocument();
+    });
+
+    it('checking a row reveals the "Add tags to N selected" CTA', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const anitaCheckbox = screen.getByRole('checkbox', { name: /Select Anita Sharma/i });
+      fireEvent.click(anitaCheckbox);
+      expect(screen.getByRole('button', { name: /Add tags to 1 selected/i })).toBeInTheDocument();
+    });
+
+    it('clicking the CTA opens the modal with a tags input', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Add tags to 1 selected/i }));
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(screen.getByLabelText(/Tags \(comma-separated\)/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Apply/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument();
+    });
+
+    it('Apply fires PATCH /api/wellness/patients/bulk-tags with patientIds + addTags, closes modal, notifies success', async () => {
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/wellness/patients/bulk-tags' && opts?.method === 'PATCH') {
+          return Promise.resolve({ updated: 1 });
+        }
+        return defaultFetchMock(url, opts);
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Add tags to 1 selected/i }));
+
+      // Type two tags with mixed case + leading/trailing whitespace + a dup
+      // so we also pin the client-side trim/lowercase/dedupe shape.
+      fireEvent.change(screen.getByLabelText(/Tags \(comma-separated\)/i), {
+        target: { value: 'VIP, dermatology , vip' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^Apply$/ }));
+
+      await waitFor(() => {
+        const call = fetchApiMock.mock.calls.find(
+          ([u, o]) => u === '/api/wellness/patients/bulk-tags' && o?.method === 'PATCH'
+        );
+        expect(call).toBeTruthy();
+        const body = JSON.parse(call[1].body);
+        expect(body.patientIds).toEqual([1]);
+        // Trim + lowercase + dedupe shape: VIP + vip collapse to "vip".
+        expect(body.addTags).toEqual(['vip', 'dermatology']);
+      });
+
+      // Modal closes + success toast fires.
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Added 2 tags to 1 patient/i),
+      );
+    });
+
+    it('error response keeps the modal open and fires notify.error', async () => {
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/wellness/patients/bulk-tags' && opts?.method === 'PATCH') {
+          return Promise.reject(new Error('Bulk-tag service unavailable'));
+        }
+        return defaultFetchMock(url, opts);
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Add tags to 1 selected/i }));
+      fireEvent.change(screen.getByLabelText(/Tags \(comma-separated\)/i), {
+        target: { value: 'vip' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^Apply$/ }));
+
+      await waitFor(() => {
+        expect(notifyError).toHaveBeenCalledWith(
+          expect.stringMatching(/Bulk-tag service unavailable/i),
+        );
+      });
+      // Modal stays open so the user can correct + retry.
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(notifySuccess).not.toHaveBeenCalled();
+    });
+  });
+
+  // #931 (tick #197) — bulk-tag-REMOVE UI. Mirrors the add-tags describe
+  // above; pins the sibling button visibility, modal open, PATCH body shape
+  // (now `removeTags` instead of `addTags`), and success toast referencing
+  // the backend's new `removed` count field (shipped tick #196, `5b610a56`).
+  describe('#931 bulk-tag-remove (tick #197)', () => {
+    it('checking a row reveals the "Remove tags from N selected" CTA and clicking opens the modal', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      // Pre-select: CTA hidden.
+      expect(screen.queryByText(/Remove tags from .* selected/i)).not.toBeInTheDocument();
+      // Check a row → both Add + Remove buttons appear together.
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      expect(screen.getByRole('button', { name: /Add tags to 1 selected/i })).toBeInTheDocument();
+      const removeBtn = screen.getByRole('button', { name: /Remove tags from 1 selected/i });
+      expect(removeBtn).toBeInTheDocument();
+      // Clicking the Remove CTA opens the remove modal (distinguished by its
+      // aria-label on the input — "Tags to remove (comma-separated)" — so it
+      // doesn't collide with the add modal's "Tags (comma-separated)" label).
+      fireEvent.click(removeBtn);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(screen.getByLabelText(/Tags to remove \(comma-separated\)/i)).toBeInTheDocument();
+    });
+
+    it('Apply fires PATCH /api/wellness/patients/bulk-tags with patientIds + removeTags', async () => {
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/wellness/patients/bulk-tags' && opts?.method === 'PATCH') {
+          return Promise.resolve({ removed: 1, updated: 1 });
+        }
+        return defaultFetchMock(url, opts);
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Remove tags from 1 selected/i }));
+      // Same client-side trim / lowercase / dedupe shape as add-tags.
+      fireEvent.change(screen.getByLabelText(/Tags to remove \(comma-separated\)/i), {
+        target: { value: 'VIP, dermatology , vip' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^Apply$/ }));
+
+      await waitFor(() => {
+        const call = fetchApiMock.mock.calls.find(
+          ([u, o]) => u === '/api/wellness/patients/bulk-tags' && o?.method === 'PATCH'
+        );
+        expect(call).toBeTruthy();
+        const body = JSON.parse(call[1].body);
+        expect(body.patientIds).toEqual([1]);
+        // Pinned shape: `removeTags` not `addTags`; same trim+lower+dedupe.
+        expect(body.removeTags).toEqual(['vip', 'dermatology']);
+        expect(body.addTags).toBeUndefined();
+      });
+    });
+
+    it('success toast references the server-reported `removed` count', async () => {
+      // Backend envelope per tick #196 (5b610a56): { removed: N, updated: M }
+      // where N = total tag-deletions across the selection and M = patients
+      // touched. Toast prefers `removed` over `updated` to give a more
+      // honest signal than just "we hit 3 patients".
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/wellness/patients/bulk-tags' && opts?.method === 'PATCH') {
+          return Promise.resolve({ removed: 5, updated: 3 });
+        }
+        return defaultFetchMock(url, opts);
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('checkbox', { name: /Select Anita Sharma/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Remove tags from 1 selected/i }));
+      fireEvent.change(screen.getByLabelText(/Tags to remove \(comma-separated\)/i), {
+        target: { value: 'vip, dermatology' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^Apply$/ }));
+
+      await waitFor(() => {
+        expect(notifySuccess).toHaveBeenCalledWith(
+          expect.stringMatching(/Removed 5 tags from 3 patients/i),
+        );
+      });
+      // Modal closes on success.
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  // #820 (tick #188) — XLSX export button. Mirrors the CSV button surface;
+  // pinned here because the backend xlsx endpoint shipped tick #187 (ed00be9b)
+  // and the chrome is the same fetch+blob mechanic as CSV. Three load-bearing
+  // invariants:
+  //   1. Button renders + is clickable when not permission-denied + total > 0.
+  //   2. Clicking issues fetch GET to /api/wellness/patients.xlsx and honors
+  //      the active ?q= search filter.
+  //   3. Both CSV + XLSX buttons disable while a download is in-flight so a
+  //      double-click can't issue two concurrent downloads of the same
+  //      snapshot.
+  describe('#820 XLSX export (tick #188)', () => {
+    let createObjectURLMock;
+    let revokeObjectURLMock;
+    let realFetch;
+    let fetchMock;
+
+    beforeEach(() => {
+      // jsdom doesn't implement URL.createObjectURL / revokeObjectURL — the
+      // page calls them on the blob response. Stub for the test run.
+      createObjectURLMock = vi.fn(() => 'blob:fake-url');
+      revokeObjectURLMock = vi.fn();
+      URL.createObjectURL = createObjectURLMock;
+      URL.revokeObjectURL = revokeObjectURLMock;
+      // Spy on the global fetch (the XLSX/CSV exports bypass fetchApi).
+      realFetch = global.fetch;
+      fetchMock = vi.fn();
+      global.fetch = fetchMock;
+    });
+
+    afterEach(() => {
+      global.fetch = realFetch;
+    });
+
+    it('renders an "Export XLSX" button that is enabled with data and not permission-denied', async () => {
+      renderPatients();
+      // Wait for the table to populate so total > 0.
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const xlsxBtn = screen.getByRole('button', { name: /Export XLSX/i });
+      expect(xlsxBtn).toBeInTheDocument();
+      expect(xlsxBtn).not.toBeDisabled();
+    });
+
+    it('clicking "Export XLSX" issues a fetch to /api/wellness/patients.xlsx honoring the current ?q= filter', async () => {
+      // Resolve the global fetch with a Response-like { ok, blob() }.
+      fetchMock.mockResolvedValue({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['fake-xlsx'])),
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      // Type a search query so the export call includes it.
+      const searchBox = screen.getByPlaceholderText(/Search by name, phone, or email/i);
+      fireEvent.change(searchBox, { target: { value: 'anita' } });
+
+      // Click the Export XLSX button.
+      fireEvent.click(screen.getByRole('button', { name: /Export XLSX/i }));
+
+      // Assert fetch was called for the xlsx URL with the q param.
+      await waitFor(() => {
+        const xlsxCall = fetchMock.mock.calls.find(([u]) =>
+          typeof u === 'string' && u.startsWith('/api/wellness/patients.xlsx')
+        );
+        expect(xlsxCall).toBeTruthy();
+        expect(xlsxCall[0]).toMatch(/q=anita/);
+      });
+      // Bearer header forwarded from the mocked getAuthToken.
+      const lastCall = fetchMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/wellness/patients.xlsx')
+      );
+      expect(lastCall[1].headers).toEqual(
+        expect.objectContaining({ Authorization: 'Bearer fake-token' }),
+      );
+      // The blob → object-url plumbing actually fired.
+      await waitFor(() => {
+        expect(createObjectURLMock).toHaveBeenCalled();
+      });
+    });
+
+    it('disables BOTH Export CSV and Export XLSX while a download is in flight', async () => {
+      // Never-resolving fetch — the click sets xlsxBusy=true and stays there.
+      fetchMock.mockReturnValue(new Promise(() => {}));
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      const csvBtn = screen.getByRole('button', { name: /Export CSV/i });
+      const xlsxBtn = screen.getByRole('button', { name: /Export XLSX/i });
+      // Pre-click: both enabled.
+      expect(csvBtn).not.toBeDisabled();
+      expect(xlsxBtn).not.toBeDisabled();
+
+      fireEvent.click(xlsxBtn);
+
+      // After the click, xlsxBusy=true; both buttons disabled until the
+      // (never-arriving) response settles.
+      await waitFor(() => {
+        expect(xlsxBtn).toBeDisabled();
+        expect(csvBtn).toBeDisabled();
+      });
+    });
+  });
+
+  // #820 (tick #190) — "Download template" button. Surfaces the CSV import
+  // template (9-col header + 1 fictional example row + UTF-8 BOM) shipped at
+  // /api/wellness/patients/import-template.csv in tick #189 (6b4831bb). Pins:
+  //   1. Button renders + is clickable regardless of row count (template is
+  //      invariant — unlike Export CSV/XLSX which need total > 0).
+  //   2. Click issues fetch GET to /api/wellness/patients/import-template.csv
+  //      with NO query string (template ignores the active search filter).
+  //   3. All three export buttons (CSV / XLSX / template) disable while ANY
+  //      download is in-flight — preserves the existing combined-busy gate.
+  describe('#820 Download template (tick #190)', () => {
+    let createObjectURLMock;
+    let revokeObjectURLMock;
+    let realFetch;
+    let fetchMock;
+
+    beforeEach(() => {
+      createObjectURLMock = vi.fn(() => 'blob:fake-url');
+      revokeObjectURLMock = vi.fn();
+      URL.createObjectURL = createObjectURLMock;
+      URL.revokeObjectURL = revokeObjectURLMock;
+      realFetch = global.fetch;
+      fetchMock = vi.fn();
+      global.fetch = fetchMock;
+    });
+
+    afterEach(() => {
+      global.fetch = realFetch;
+    });
+
+    it('renders a "Download template" button that is enabled (template is invariant of row count)', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const tplBtn = screen.getByRole('button', { name: /Download template/i });
+      expect(tplBtn).toBeInTheDocument();
+      expect(tplBtn).not.toBeDisabled();
+    });
+
+    it('clicking "Download template" issues a fetch to /api/wellness/patients/import-template.csv with NO query params', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['name,phone,email\nAnita,+919876543210,a@x.in\n'])),
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      // Type a search query — proves the template URL ignores it.
+      const searchBox = screen.getByPlaceholderText(/Search by name, phone, or email/i);
+      fireEvent.change(searchBox, { target: { value: 'anita' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /Download template/i }));
+
+      await waitFor(() => {
+        const tplCall = fetchMock.mock.calls.find(([u]) =>
+          typeof u === 'string' && u.startsWith('/api/wellness/patients/import-template.csv')
+        );
+        expect(tplCall).toBeTruthy();
+        // No query string — template is invariant of the current search.
+        expect(tplCall[0]).toBe('/api/wellness/patients/import-template.csv');
+      });
+      // Bearer header forwarded from the mocked getAuthToken.
+      const tplCall = fetchMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/wellness/patients/import-template.csv')
+      );
+      expect(tplCall[1].headers).toEqual(
+        expect.objectContaining({ Authorization: 'Bearer fake-token' }),
+      );
+      await waitFor(() => {
+        expect(createObjectURLMock).toHaveBeenCalled();
+      });
+    });
+
+    it('disables CSV + XLSX + template buttons while a template download is in flight', async () => {
+      // Never-resolving fetch keeps templateBusy=true forever.
+      fetchMock.mockReturnValue(new Promise(() => {}));
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      const csvBtn = screen.getByRole('button', { name: /Export CSV/i });
+      const xlsxBtn = screen.getByRole('button', { name: /Export XLSX/i });
+      const tplBtn = screen.getByRole('button', { name: /Download template/i });
+      // Pre-click: all three enabled.
+      expect(csvBtn).not.toBeDisabled();
+      expect(xlsxBtn).not.toBeDisabled();
+      expect(tplBtn).not.toBeDisabled();
+
+      fireEvent.click(tplBtn);
+
+      // All three disabled while the template fetch hangs.
+      await waitFor(() => {
+        expect(tplBtn).toBeDisabled();
+        expect(csvBtn).toBeDisabled();
+        expect(xlsxBtn).toBeDisabled();
+      });
+    });
+  });
+
+  // #820 (tick #194) — Import Patients button + modal + upload flow.
+  // Backend endpoint shipped tick #193 (`69ee75dc`) — POST /api/wellness/
+  // patients/import accepts multipart CSV via multer csvUpload.single('file');
+  // returns `{ summary: {totalRows, imported, duplicates, invalid},
+  // errors: [{row, errorCode, errorMessage}, ...], createdIds: [...] }`. Three
+  // load-bearing invariants here:
+  //   1. Button renders for the default (ADMIN-like) test role and is
+  //      enabled when not permissionDenied + no other download in flight.
+  //   2. Clicking opens the modal; picking a CSV file + clicking Upload
+  //      fires a POST with FormData carrying the `file` field (name matches
+  //      multer's expectation — load-bearing).
+  //   3. Success response renders the summary message; partial-failure
+  //      response renders the errors table.
+  describe('#820 Import Patients (tick #194)', () => {
+    let createObjectURLMock;
+    let revokeObjectURLMock;
+    let realFetch;
+    let fetchMock;
+
+    beforeEach(() => {
+      createObjectURLMock = vi.fn(() => 'blob:fake-url');
+      revokeObjectURLMock = vi.fn();
+      URL.createObjectURL = createObjectURLMock;
+      URL.revokeObjectURL = revokeObjectURLMock;
+      realFetch = global.fetch;
+      fetchMock = vi.fn();
+      global.fetch = fetchMock;
+    });
+
+    afterEach(() => {
+      global.fetch = realFetch;
+    });
+
+    it('renders an "Import Patients" button that is enabled', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      const btn = screen.getByRole('button', { name: /Import Patients/i });
+      expect(btn).toBeInTheDocument();
+      expect(btn).not.toBeDisabled();
+    });
+
+    it('clicking Import opens the modal; selecting a file + Upload fires POST /api/wellness/patients/import with FormData', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          summary: { totalRows: 5, imported: 5, duplicates: 0, invalid: 0 },
+          errors: [],
+          createdIds: [101, 102, 103, 104, 105],
+        }),
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /Import Patients/i }));
+      // Modal opens — pin via the dialog role + file input.
+      expect(screen.getByRole('dialog', { name: /Import Patients/i })).toBeInTheDocument();
+      const fileInput = screen.getByLabelText(/CSV file/i);
+      expect(fileInput).toBeInTheDocument();
+
+      // Select a CSV file via the picker.
+      const file = new File(
+        ['name,phone\nAnita,+919876543210\n'],
+        'patients.csv',
+        { type: 'text/csv' },
+      );
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      // Click Upload — fires the POST with FormData.
+      fireEvent.click(screen.getByRole('button', { name: /^Upload$/ }));
+
+      await waitFor(() => {
+        const importCall = fetchMock.mock.calls.find(([u]) =>
+          typeof u === 'string' && u === '/api/wellness/patients/import'
+        );
+        expect(importCall).toBeTruthy();
+        const opts = importCall[1];
+        expect(opts.method).toBe('POST');
+        // Body is a FormData containing the `file` field.
+        expect(opts.body).toBeInstanceOf(FormData);
+        expect(opts.body.get('file')).toBe(file);
+        // Bearer header forwarded from the mocked getAuthToken.
+        expect(opts.headers).toEqual(
+          expect.objectContaining({ Authorization: 'Bearer fake-token' }),
+        );
+      });
+    });
+
+    it('mocked success response shows the summary message; partial-failure shows the errors table', async () => {
+      // First test: full-success response.
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          summary: { totalRows: 5, imported: 5, duplicates: 0, invalid: 0 },
+          errors: [],
+          createdIds: [101, 102, 103, 104, 105],
+        }),
+      });
+      const { unmount } = renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /Import Patients/i }));
+      const file1 = new File(['name,phone\nAnita,+919876543210\n'], 'good.csv', { type: 'text/csv' });
+      fireEvent.change(screen.getByLabelText(/CSV file/i), { target: { files: [file1] } });
+      fireEvent.click(screen.getByRole('button', { name: /^Upload$/ }));
+
+      // Summary text renders: "Imported 5 of 5 rows. 0 duplicates skipped. 0 rows failed validation."
+      await waitFor(() => {
+        const summary = screen.getByTestId('import-summary');
+        expect(summary.textContent).toMatch(/Imported\s*5\s*of\s*5\s*rows/i);
+        expect(summary.textContent).toMatch(/0 duplicates skipped/i);
+        expect(summary.textContent).toMatch(/0 rows failed validation/i);
+      });
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Imported 5 of 5 patients/i),
+      );
+      unmount();
+      notifySuccess.mockClear();
+      notifyError.mockClear();
+
+      // Second test: partial-failure response (3/5 imported, 2 invalid).
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          summary: { totalRows: 5, imported: 3, duplicates: 0, invalid: 2 },
+          errors: [
+            { row: 2, errorCode: 'INVALID_PHONE', errorMessage: 'Phone must be 10-15 digits' },
+            { row: 4, errorCode: 'INVALID_EMAIL', errorMessage: 'Email shape invalid' },
+          ],
+          createdIds: [201, 202, 203],
+        }),
+      });
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /Import Patients/i }));
+      const file2 = new File(['name,phone\nBad,abc\n'], 'partial.csv', { type: 'text/csv' });
+      fireEvent.change(screen.getByLabelText(/CSV file/i), { target: { files: [file2] } });
+      fireEvent.click(screen.getByRole('button', { name: /^Upload$/ }));
+
+      // Summary shows the 3/5 split + error codes/messages render in the table.
+      await waitFor(() => {
+        const summary = screen.getByTestId('import-summary');
+        expect(summary.textContent).toMatch(/Imported\s*3\s*of\s*5\s*rows/i);
+        expect(summary.textContent).toMatch(/2 rows failed validation/i);
+      });
+      expect(screen.getByText('INVALID_PHONE')).toBeInTheDocument();
+      expect(screen.getByText('Phone must be 10-15 digits')).toBeInTheDocument();
+      expect(screen.getByText('INVALID_EMAIL')).toBeInTheDocument();
+      expect(screen.getByText('Email shape invalid')).toBeInTheDocument();
+      // "Download full error CSV" affordance renders for the partial case.
+      expect(screen.getByRole('button', { name: /Download full error CSV/i })).toBeInTheDocument();
+    });
   });
 
   it('shows "Loading…" before the initial fetch resolves', async () => {

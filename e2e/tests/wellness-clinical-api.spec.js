@@ -88,15 +88,24 @@ function nextPhone() {
 }
 
 // Wave 11 GG booking-conflict gate: visits with the same (doctorId, UTC-hour)
-// collide with 409. This helper returns a never-collides visitDate by
-// combining a per-test random hour offset across a 720-hour spread (30 days)
-// starting 30+ days from now (always within #170 [now-5y, now+1y] window).
-// Each call returns a different ISO string, so retries don't collide either.
+// collide with 409 DOCTOR_DOUBLE_BOOKED. Iterations:
+//   v1 (pre-#64): Math.random()*720 — probabilistic; birthday-paradox
+//     collisions inevitable across 100+ tests on the same doctor.
+//   v2 (tick #64): monotonic counter — deterministic per-PROCESS but every
+//     Playwright worker starts with _visitDateOffset=0, so 4 workers all
+//     created visit #1 at hourOffset=720 → second-onwards POSTs hit 409.
+//     Surfaced as "DOCTOR_DOUBLE_BOOKED visit #232" on tick #71.
+//   v3 (this — tick #72): PID-bucketed monotonic. Each worker process gets
+//     a unique 200-hour range based on its PID; within the range,
+//     _visitDateOffset advances by 1 hour per call. 40 worker buckets * 200
+//     slots = 8000 unique (worker, hour) combinations, well within the
+//     [now+720h, now+8720h] window (~30d to ~1y, inside the #170 [now-5y,
+//     now+1y] guard).
 let _visitDateOffset = 0;
 function nextVisitDate() {
-  const dayOffset = 30 + _visitDateOffset++;
-  const hourOffset = Math.floor(Math.random() * 720) * 3600 * 1000;
-  return new Date(Date.now() + dayOffset * 86400000 + hourOffset).toISOString();
+  const workerBucket = (process.pid % 40) * 200;
+  const hourOffset = 720 + workerBucket + (_visitDateOffset++ % 200);
+  return new Date(Date.now() + hourOffset * 3600 * 1000).toISOString();
 }
 
 // ── Fixtures ───────────────────────────────────────────────────────
@@ -126,7 +135,15 @@ const userIdCache = {};
 async function login(request, who) {
   if (tokenCache[who]) return { token: tokenCache[who], userId: userIdCache[who] };
   const fixture = FIXTURES[who];
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // 4 attempts with 500/1000/1500ms backoff. Under 8-shard demo load, CloudFlare
+  // occasionally returns 502/520 mid-burst — the previous 2-attempt loop only
+  // retried on network errors (catch), not on 5xx HTTP responses, so a single
+  // CF blip during the describe-block beforeAll would cascade-fail the entire
+  // file's test list (run 26093112312 shard 7 hit this on wellness-clinical-
+  // api:1829 + 13 others). Retrying on 5xx HTTP statuses recovers from short
+  // CF blackouts. 4xx (401/403/429) still aborts immediately since retry with
+  // the same credentials wouldn't change the outcome.
+  for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const response = await request.post(`${BASE_URL}/api/auth/login`, {
         data: fixture,
@@ -139,8 +156,14 @@ async function login(request, who) {
         userIdCache[who] = data.user && data.user.id;
         return { token: tokenCache[who], userId: userIdCache[who] };
       }
+      const status = response.status();
+      // 5xx → CF blip / origin overload, worth retrying.
+      // 4xx → credentials or rate-limit issue, retry won't help.
+      if (status < 500 || attempt === 3) break;
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
     } catch (e) {
-      if (attempt === 0) continue;
+      if (attempt === 3) break;
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
     }
   }
   return { token: null, userId: null };

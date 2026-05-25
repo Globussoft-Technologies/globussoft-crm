@@ -1,5 +1,348 @@
 # CHANGELOG
 
+## Unreleased — Autonomous overnight cron 2026-05-23 (34-tick session)
+
+A continuous 34-tick autonomous-cron session driven against all 3 phases of the user's 2026-05-23 directive: Phase 1.5 + Phase 2 + Phase 3 features + PRD writing for every blocked / multi-day backlog item. Material shipped to `main`; gate stayed green throughout.
+
+### Quantitative deliverables (34 ticks)
+
+- **102 commits** — 0 rebase conflicts, 0 over-commits across all ticks
+- **23 GitHub issues closed + 3 partials**
+- **34 PRDs shipped + 1 meta-doc (DECISIONS_TRACKER.md)** — 118+ pending product decisions consolidated for product team review
+- **+25 new vitest cases** (DateRangePicker 19, PatientDetail #838 6)
+- **1 shared component** — `<DateRangePicker>` extracted (3/3 callers migrated: PatientDetail, Payments, InventoryReceipts)
+- **3 new backend endpoints** (category upload POST + DELETE; public branding logo stream)
+- **1 schema migration** (`ProductCategory.imageUrl` additive nullable, no bless marker)
+- **1 P0 routing unblock** (#897 / #887 `<GenericOnly>` guard removed from `/pipeline` — Travel-vertical Kanban now accessible)
+- **5+ follow-up GH issues filed** (#929 #930 #931 + others for clean handoff)
+- **11 phantom catches** (verify-before-pickup discipline cost ~2 min each vs ~30 min if dispatched blindly)
+
+### PRDs shipped (34 total, comprehensive design-call package)
+
+**Travel-vertical financial pack (4 sibling PRDs cross-referenced):**
+- [PRD_TRAVEL_GST_COMPLIANCE.md](docs/PRD_TRAVEL_GST_COMPLIANCE.md) — India GST + GSTR-1/3B + HSN/SAC + TCS Sec 206C
+- [PRD_TRAVEL_QUOTE_BUILDER.md](docs/PRD_TRAVEL_QUOTE_BUILDER.md) — travel-grade quotes (fork vs Estimate)
+- [PRD_TRAVEL_BILLING.md](docs/PRD_TRAVEL_BILLING.md) — invoice lifecycle (multi-stage settlement, multi-currency, TCS, supplier-payable)
+- [PRD_TRAVEL_SUPPLIER_MASTER.md](docs/PRD_TRAVEL_SUPPLIER_MASTER.md) — supplier master + PO workflow + payable + commission
+
+**Travel-vertical operator surfaces:**
+- [PRD_TRAVEL_PIPELINE_KANBAN.md](docs/PRD_TRAVEL_PIPELINE_KANBAN.md) — sub-brand filter (Pipeline.jsx already 90% built)
+- [PRD_TRAVEL_MULTICHANNEL_LEADS.md](docs/PRD_TRAVEL_MULTICHANNEL_LEADS.md) — 16-channel unifying intake envelope
+- [PRD_TRAVEL_B2B_AGENT_PORTAL.md](docs/PRD_TRAVEL_B2B_AGENT_PORTAL.md) — sub-agent + corporate portals
+- [PRD_TRAVEL_MARKETING_FLYER.md](docs/PRD_TRAVEL_MARKETING_FLYER.md) — flyer studio + AI copy + WhatsApp share
+- [PRD_TRAVEL_ITINERARY_UPGRADES.md](docs/PRD_TRAVEL_ITINERARY_UPGRADES.md) — operator tooling (template library + sightseeing master + LLM suggest)
+- [PRD_TRAVEL_PER_SUBBRAND_BRANDING.md](docs/PRD_TRAVEL_PER_SUBBRAND_BRANDING.md) — 9 consumer surfaces for brand-kit
+
+**RFU + Visa Sure + Phase-3 integrations:**
+- [PRD_RFU_GROUND_SERVICES.md](docs/PRD_RFU_GROUND_SERVICES.md) — Zikr Cabs + 5-portal hotel-scraper + Haramain HSR
+- [PRD_VISA_SURE_PHASE_3.md](docs/PRD_VISA_SURE_PHASE_3.md)
+- [PRD_PASSPORT_OCR.md](docs/PRD_PASSPORT_OCR.md)
+- [PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md](docs/PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md)
+- [PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md](docs/PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md)
+- [PRD_RATEHAWK_INTEGRATION.md](docs/PRD_RATEHAWK_INTEGRATION.md)
+- [PRD_BOOKING_EXPEDIA_DIRECT.md](docs/PRD_BOOKING_EXPEDIA_DIRECT.md)
+- [PRD_AI_CALLING_CALLIFIED.md](docs/PRD_AI_CALLING_CALLIFIED.md)
+- [PRD_ADSGPT_MARKETING_REPORTS.md](docs/PRD_ADSGPT_MARKETING_REPORTS.md)
+- [PRD_EXCEL_SOFTWARE_ACCOUNTING.md](docs/PRD_EXCEL_SOFTWARE_ACCOUNTING.md)
+- [PRD_TMC_CURRICULUM_MAPPING.md](docs/PRD_TMC_CURRICULUM_MAPPING.md)
+
+**Cross-cutting strategy PRDs (coordinating cluster PRDs):**
+- [PRD_TRAVEL_SECURITY_ARCHITECTURE.md](docs/PRD_TRAVEL_SECURITY_ARCHITECTURE.md) — coordinates 12 security findings (#913-#924)
+- [PRD_WELLNESS_POS_HARDENING.md](docs/PRD_WELLNESS_POS_HARDENING.md) — coordinates #823 #824 #826 #830
+- [PRD_WELLNESS_RBAC.md](docs/PRD_WELLNESS_RBAC.md) — coordinates #827 #829 #830
+- [PRD_ZYLU_GAP_CONSOLIDATED.md](docs/PRD_ZYLU_GAP_CONSOLIDATED.md) — coordinates 8 Zylu-parity issues
+- [PRD_ADMIN_SETTINGS_DISCOVERY.md](docs/PRD_ADMIN_SETTINGS_DISCOVERY.md) — coordinates 6 admin-organization gaps
+- [PRD_THEME_MANAGEMENT.md](docs/PRD_THEME_MANAGEMENT.md) — coordinates #862 #870 #876
+- [PRD_DARK_MODE_CLUSTER.md](docs/PRD_DARK_MODE_CLUSTER.md) — per-page CSS work
+- [PRD_AI_SURFACES.md](docs/PRD_AI_SURFACES.md) — 7 existing + 8 NEW LLM task classes
+- [PRD_UNIFIED_GLOBAL_SEARCH.md](docs/PRD_UNIFIED_GLOBAL_SEARCH.md) — header search across entities
+- [PRD_MOBILE_RESPONSIVENESS.md](docs/PRD_MOBILE_RESPONSIVENESS.md) — 6-phase rollout plan
+- [PRD_PLANS_BILLING_SELF_SERVE.md](docs/PRD_PLANS_BILLING_SELF_SERVE.md) — tenant self-serve subscription management
+
+**Meta-doc:**
+- [DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md) — 118 pending DD-5.X items across 20 PRDs, with 6 cross-cutting themes (fork-vs-extend, per-tenant budget cap, AI model+vendor selection, sub-brand defaulting, counsel-owned single-review session, auto-vs-prompt UX)
+
+### Notable code deliverables (non-PRD)
+
+- **Pipeline route fix (#897/#887)** — `<GenericOnly>` guard removed from `/pipeline`; Pipeline.jsx is cross-vertical-safe; Travel tenants can now access Kanban
+- **Tenant logo serving fix (#884)** — route through `/api/wellness/public/branding/:tenantId/logo` (Nginx demo has no `/uploads/` block); backward-compat for legacy `/uploads/branding/` URLs
+- **Webhook events (#929 Part B SHELL)** — `invoice.created` proof-of-emission via `eventBus.emitEvent` + 4 remaining emissions filed as follow-up
+- **Per-sub-brand API key scoping (#899 Part A)** — `ApiKey.subBrand` additive nullable + `requireSubBrandMatch` helper (extracted to `backend/lib/apiKeyAuth.js` per #930)
+- **Voyagr lead-capture F3** — `GET /api/attribution/voyagr/summary` for attribution reporting
+- **DateRangePicker shared component** — extracted after rule-of-3 trigger (Payments + InventoryReceipts + PatientDetail all consume)
+- **visaRiskFlagEngine extended** — 7 → 10 PC-1-independent rules (stale-intake, rejected-reopen, new-destination); 18 → 28 tests
+- **Visa Sure operator surface E2E** — POST + PATCH endpoints; ApplicationDetail + Applications list + Reports + AdvisorDashboard all wired
+
+### Cron-learning candidates surfaced (≥3 instances = standing rule)
+
+- **`git commit --only <files>` mandatory for parallel-agent dispatches** — promoted to standing rule (9+ confirmed instances)
+- **PRD §1.2 "existing infrastructure (do NOT rebuild)" pattern** — 4+ coordinating PRDs adopted; promotable as PRD-writer template requirement
+- **Phantom-from-upstream-root-cause-fix** — 3+ instances; pre-pickup `git log --since=<issue-date>` discipline recommended
+- **Rule-of-3 component extraction success** — DateRangePicker validated
+- **Disk-backed file uploads MUST serve through `/api/...` not `/uploads/...`** — 2nd instance (#743 + #884); 3rd → promote
+
+### Continuation arc — ticks #35-#77 (cron-driven through 2026-05-23 evening)
+
+Session continued past the original 34-tick milestone as the user kept firing the cron. Additional deliverables:
+
+- **+51 commits** (cumulative session total: 153)
+- **+21 GH closures** (cumulative: 44 closed) — paired with 2 new follow-ups (#932 Campaign→Sequence linkage, #933 Products admin page precursor)
+- **2 deploy gate triages absorbed cleanly** (tick #64 `62a4e5a` + tick #72 `86a01fa`) — both were the same `nextVisitDate()` helper iterating from random → per-process-monotonic → PID-bucketed-per-worker. Cron-learning logged for posterity.
+- **NEW** [CREDS_TRACKER.md](docs/CREDS_TRACKER.md) — 47 credential/asset/doc chases across 6 categories (Vendor APIs / Brand assets / Vendor docs / Counsel / Domains / SaaS). Pairs with DECISIONS_TRACKER for tri-doc coverage.
+- **DECISIONS_TRACKER refresh** (tick #65) — added 79 rows for the 13 PRDs that landed post-tick-#22. Now 192 decisions across 33 of 33 PRDs.
+- **MANUAL_CODING_BACKLOG xrefs** (tick #77) — wired 13 PRD links into clusters A1-A4 + B2-B6 + C4-C7 so navigation flows cluster → PRD → DECISIONS row → CREDS row in 3 hops.
+- **Multi-slice CSV gap (#816)** drained to 4/5 across ticks #69-#73: Services / Memberships / Bookings (export-only) / Patients. Products slice split to #933 (needs new admin page precursor).
+- **CRM closure highlights:** #862 (theme toggle in top bar), #851 (header global search trigger), #826 (POS empty-state deep-link), #829 (Patients honest access-denied state), #823 (`/pos` Navigate alias), #877 (Pipeline column dark-mode contrast), #898 (Campaigns sidebar + audience scoping), #899 (Developer UI sub-brand + 5 new webhook events), #834 + #835 (Zylu inventory + memberships demo seed).
+- **6 phantom-shipped closures** confirmed by code-grep (saved ~3 hours of agent dispatch on already-shipped work): #841 (login redirect — no specific module), #854 (consent history — fully wired), #869 (OS theme matchMedia — listener already shipped), #879 (CostMaster/PricingRules tables — already token-driven), #880 (form chrome dark-mode — fixed by #863/#864 chain), #898 (Campaigns surfacing — already at sidebar + alias route).
+- **Cron-learning entry** added (tick #76) for the per-worker test-helper pattern — second instance of multi-version triage in one session; promotion candidate.
+
+### Architectural arc — ticks #92-#107 (cap-consumer + wrapper-route + travel-fork completion)
+
+The autonomous cron continued past tick #77 into a focused architectural arc completing the **per-tenant budget-cap pattern end-to-end** + the **wrapper-route series** for all 4 stub-mode integrations + the **Travel-vertical fork models** + the **BrandKit per-sub-brand asset system**. Every commit ships with verifiable SHAs and the rule-of-3 promotion of `resolveSubBrand` landed at tick #106.
+
+**Per-tenant budget-cap pattern (5 consumers, end-to-end):**
+- `d8119a1` — TenantSetting Prisma model + `backend/lib/budgetCap.js` helper (initial cap pattern infra from product-call)
+- `cb0901f` — llmRouter wired as **first consumer** (tenant-scoped LLM monthly cap)
+- `1542b8e` — `/api/tenant-settings` CRUD route (operator-writable cap-override surface)
+- `0054a03` — Tenant Settings admin page (completes UX loop)
+- `991416c` — `evaluateCap`/`getBudgetCap` canonical swap + `KEYS` extended with `booking_expedia` (5 stub clients now read from a single helper)
+
+**Wrapper-route series (4/4 complete) — stub-mode clients + operator routes + admin UIs:**
+- AdsGPT — `9f35040` (STUB client + cap wiring, 2nd cap consumer) → `0d66a74` (wrapper routes) → `850391d` (admin Reports page)
+- RateHawk — `2852b82` (STUB client + cap wiring, 3rd cap consumer) → `be67789` (wrapper routes) → `f4268c1` (admin hotel-search page)
+- Callified — `9ec52df` (STUB client + cap + feature-flag + per-call ceiling, 4th cap consumer) → `cdad62d` (wrapper routes) → `7c7b88b` (admin AI Calls page)
+- BookingExpedia — `db06414` (STUB client + Phase-1/2 split + cap wiring, 5th cap consumer) → `bb33cbe` (wrapper routes) → `7a95d74` (admin operator page, FINAL cap-consumer UI)
+
+**Travel-vertical fork models (Quote/Invoice/Supplier trio):**
+- `fdb793e` — TravelQuote / TravelInvoice / TravelSupplier Prisma schema (DD-5.1 trio)
+- `b02c091` + `aaf8cb2` — TravelQuote CRUD routes + admin page
+- `192b8c1` + `08ebe5e` — TravelSupplier CRUD routes + admin page
+- `b2a9dcb` + `c156df4` — TravelInvoice CRUD routes + admin page (completes admin-UI trio)
+
+**BrandKit per-sub-brand asset system:**
+- `5060dda` — BrandKit Prisma model (per-sub-brand brand assets + version history)
+- `e4783e0` — BrandKit CRUD routes + active-version atomic demotion (DD-5.2 first slice)
+- `df2271c` — 4 starter BrandKits seeded per sub-brand (DD-5.3 RESOLVED)
+- `a20f2d9` — Brand Kits admin page
+
+**Shared helpers (rule-of-3 extractions):**
+- `3236d35` — **tick #106 rule-of-3 promotion** — `backend/lib/subBrandResolve.js` extracted from 3 wrapper routes (AdsGPT + RateHawk + Callified)
+- `9310196` — `frontend/src/utils/travelSubBrand.js` shared `SUB_BRAND_BG` util (rule-of-3 across SuppliersAdmin + QuotesAdmin + InvoicesAdmin)
+
+**Decision tracking (mid-arc product call):**
+- `a8f24ca` — DECISIONS_TRACKER.md: 27 product decisions RESOLVED in 2026-05-24 product-call session
+
+**Cron-learnings logged (4 entries promoted to CLAUDE.md cron-learnings section):**
+- CJS self-mocking seam (4 confirmed instances: `safeEmitEvent` + adsGptClient `9f35040` + ratehawkClient `2852b82` + callifiedClient `9ec52df`) — `module.exports.fn()` indirection required for `vi.spyOn` to intercept inter-function calls
+- e2e shared-DB helper PID-bucket (2 instances `62a4e5a` + `86a01fa` — `nextVisitDate()` iterations)
+- `git commit --only <files>` promoted to **standing rule** (3rd instance `d0a4e36` recovered to `afdc61b` + `5d9a95e`)
+- `git checkout HEAD -- <file>` data-restoring gotcha + phantom-carry-over via verify-before-pickup (tick #106 entry)
+
+**Cumulative since session start:** ~165+ commits, 44 GH closures (subset: #834 #835 #823 #826 #829 #836 #845 #851 #853 #854 #862 #867 #871 #877 #883 #884 #885 #886 #887 #888 #889 #890 #891 #892 #893 #894 #895 #897 #898 #899 #912 #913 #922 #923 #924 #929 #930 — per `gh issue list --state closed --search "closed:>=2026-05-22"`), 34+ PRDs shipped, 0 rebase conflicts across all parallel-agent waves.
+
+See [TODOS.md](TODOS.md) for per-tick handoff details, [DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md) for the 192-item product-decision queue, and [CREDS_TRACKER.md](docs/CREDS_TRACKER.md) for the 47-item credential/asset chase queue.
+
+---
+
+## v3.9.2 — 2026-05-20 — Travel CRM Phase 1 closeout
+
+Closes the last Phase 1 deliverable + the entire Phase 1.5 polish list
+(items 8a–8e from [docs/SESSION_HANDOFF_2026-05-20_PM.md](docs/SESSION_HANDOFF_2026-05-20_PM.md)).
+Six commits stacked on top of v3.9.1.
+
+### Phase 1 — Owner Dashboard (b40ef4a)
+
+Replaces the Day-1 placeholder at `/travel` with a real KPI surface.
+New endpoint `GET /api/travel/dashboard` ([backend/routes/travel_dashboard.js](backend/routes/travel_dashboard.js))
+fires 14 aggregate queries in parallel, returns counts for trips,
+diagnostics (last 30 days), itineraries, microsites, cost-master rates,
+and pricing rules — all sub-brand-scoped server-side via the caller's
+`subBrandAccess`. Frontend [Dashboard.jsx](frontend/src/pages/travel/Dashboard.jsx)
+rendered as a 6-tile responsive grid + Recent Trips panel. recentTrips
+deliberately omits PII (no participants / payment plans / schoolContactId).
+
+Gate spec [travel-dashboard-api.spec.js](e2e/tests/travel-dashboard-api.spec.js)
+(5 cases) pins auth gate, vertical gate, response shape, no-PII guarantee
+on recentTrips, and groupBy-key enum stability. Wired into both
+`deploy.yml` + `coverage.yml`.
+
+### Phase 1.5 — completes the polish list
+
+**8e — Seasons + Markup Rules admin UI (1acd073)**
+New page [PricingRules.jsx](frontend/src/pages/travel/PricingRules.jsx)
+at `/travel/pricing-rules` with two stacked CRUD sections backed by the
+existing `routes/travel_pricing.js` endpoints. Linked from sidebar
+(admin-only) + a "Pricing rules" button on the Cost Master page header.
+Frontend mirrors the backend invariants: exactly-one of `markupPct` /
+`markupFlat`, scope ∈ {flight,hotel,transport,package}, parseable
+`matchKeyJson`, `endDate >= startDate` on seasons.
+
+**8d — Inline microsite editor with rich-text + image upload (02c304e + 4e69e47)**
+Replaces the read-only `MicrositeTab` in [TripDetail.jsx](frontend/src/pages/travel/TripDetail.jsx)
+with a Create / Edit / Preview / Unpublish editor backed by a new
+`POST /api/travel/trips/:tripId/microsite/upload` endpoint (multer disk
+storage, PNG/JPEG/WebP, 4MB cap, mirrors `routes/booking_pages.js`).
+Rich-text editor uses native `contenteditable` + `document.execCommand`
+instead of TipTap/Lexical/Slate — deliberate trade-off to sidestep the
+Windows-npm-lockfile gotcha (adding the dep would have stripped
+`@esbuild/*` optional packages from `package-lock.json`). 6-button
+toolbar: Bold / Italic / H2 / list / link / image. If the lockfile
+constraint eases later, the `RichTextEditor` component is the sole
+swap-site.
+
+Follow-up `4e69e47` wraps multer in `uploadImageOrReject` so its
+`fileFilter` Error rejections land as `400 INVALID_FILE` instead of
+bubbling to Express's default 500 handler. Gate spec extended with
+6 image-upload cases.
+
+### CSV pattern extended to pricing tables (769c484 + 39ba54a)
+
+`backend/routes/travel_csv_io.js` gains `GET/POST` for `/seasons/{export,import}.csv`
+and `/markup-rules/{export,import}.csv` — completes the bulk-admin
+pattern across all four travel rate/rule tables (was cost-master +
+diagnostic-banks in v3.9.1; now also seasons + markup-rules).
+Idempotency keys: `(tenantId, subBrand, seasonName)` for seasons,
+`(tenantId, subBrand, scope, matchKeyJson)` for markup rules with
+JSON.parse round-trip normalisation so whitespace differences don't
+fork rows. PricingRules UI grows Export CSV / Import CSV buttons on
+both sections.
+
+Follow-up `39ba54a` adds the two new endpoints to
+`CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES` in `server.js` — second time
+this miss bit a CSV ship in 24 hours; the comment is now explicit that
+every new `/<resource>/import.csv` endpoint must be added here.
+
+### Known follow-ups (open for future work)
+
+- 415-guard refactor — promote `CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES`
+  from per-path allowlist to a suffix-based rule ("paths ending in
+  `/import.csv` bypass the guard") so this class of miss can't happen
+  again. Deferred per don't-bundle discipline.
+- `routes/booking_pages.js` `POST /:id/upload` shares the multer
+  rejection bug `4e69e47` fixed; its gate spec doesn't exercise the
+  non-image path so it stays latent.
+
+## v3.9.1 — 2026-05-20 — Travel CRM CSV import/export
+
+Closes the Phase 1.5 polish-list item "CSV import for cost-master +
+diagnostic banks" from [docs/TRAVEL_CRM_SESSION_HANDOFF_2026-05-20.md](docs/TRAVEL_CRM_SESSION_HANDOFF_2026-05-20.md).
+Clinic admins can now bulk-onboard a supplier rate card or a batch of
+diagnostic Q-set versions without the API-only / paste-JSON detour.
+
+**New endpoints** (`backend/routes/travel_csv_io.js`, mounted at /api/travel):
+- `GET  /cost-master/export.csv`        — verifyToken + requireTravelTenant; filterable by ?subBrand, ?category
+- `POST /cost-master/import.csv`        — ADMIN | MANAGER; upserts by `(tenantId, subBrand, category, routeOrSku)`
+- `GET  /diagnostic-banks/export.csv`   — verifyToken + requireTravelTenant
+- `POST /diagnostic-banks/import.csv`   — ADMIN only; upserts by `(tenantId, subBrand, version)`
+
+Per-row error reports follow the existing `routes/csv_io.js` contract:
+`{ imported, updated, skipped, errors: [{ rowNumber, reason }] }` JSON, or
+re-downloadable as a CSV with `?errorReport=csv`. Diagnostic-bank rows
+reuse the `parseBank()` validator from `lib/travelDiagnosticScoring.js`
+so a bad JSON cell can't slip past write time and crash a downstream
+scoring call.
+
+**Frontend buttons:**
+- `frontend/src/pages/travel/CostMaster.jsx` — Export CSV / Import CSV
+  buttons next to Add rate. Export honours the active sub-brand + category
+  filters so a TMC ops user can dump just their rates.
+- `frontend/src/pages/travel/DiagnosticBuilder.jsx` — Export CSV / Import
+  CSV buttons in the header alongside the existing paste-JSON-and-create
+  flow. The paste path stays for one-off bank authoring; CSV is the bulk
+  path.
+
+**Gate spec:** `e2e/tests/travel-csv-io-api.spec.js` — 12 cases covering
+the auth + vertical gate, the role gate (MANAGER allowed on cost-master,
+denied on diagnostic-banks per the existing POST /diagnostic-banks
+contract), export shape (BOM + content-type + header line), happy-path
+import + per-row validation, ?errorReport=csv CSV re-download, and
+idempotent re-runs. Wired into both `deploy.yml` api_tests + `coverage.yml`.
+
+## v3.9.0 — 2026-05-20 — Travel CRM vertical (Phase 1 backend + UI scaffolding)
+
+A new third `Tenant.vertical` value alongside `generic` + `wellness`. Hosts
+four sub-brands under one Travel Stall tenant per Q25: **TMC** (school
+educational trips), **RFU** (Umrah pilgrimage), **Travel Stall** (family
+holidays — Phase 2), and **Visa Sure** (visa assurance — Phase 3).
+
+Source-of-truth docs:
+- [docs/TRAVEL_CRM_PRD.md](docs/TRAVEL_CRM_PRD.md) — 12-section PRD with the
+  Phase 1 contract.
+- [docs/TRAVEL_CRM_OPEN_QUESTIONS.md](docs/TRAVEL_CRM_OPEN_QUESTIONS.md) —
+  25 decisions captured in a single session with Yasin.
+- [docs/TRAVEL_CRM_RISKS.md](docs/TRAVEL_CRM_RISKS.md) — 11 risks with
+  status / mitigation / owner.
+
+### Shipped this arc
+
+**Schema (Day 2):** 21 new Prisma models — `TravelDiagnostic +
+TravelDiagnosticQuestionBank`, `Itinerary + ItineraryItem`, `TmcTrip +
+TripParticipant + RoomingAssignment + TripPaymentPlan +
+TripInstalmentPayment + TripDocumentRequirement`, `WebCheckin`,
+`SupplierCredential + SupplierCredentialAccessLog`, `VisaApplication +
+VisaDocumentChecklistItem`, `RfuLeadProfile`, `TripMicrosite +
+TripMicrositeOtp`, `TravelCostMaster + TravelSeasonCalendar +
+TravelMarkupRule`. Plus 8 additive nullable columns on existing models
+(`Tenant.subBrandConfigJson`, `Contact.subBrand`, `Deal.subBrand +
+diagnosticId`, `Booking.tripId + itineraryId`, `Invoice.legalEntityCode`,
+`User.subBrandAccess`).
+
+**Backend routes (Days 3, 6, 7, 7.5, 8, 9, 10, 11, 12, 13):**
+- `routes/travel.js` — `/health` + vertical guard
+- `routes/travel_diagnostics.js` — 6 endpoints (banks + diagnostics)
+- `routes/travel_itineraries.js` — 8 endpoints (itineraries + polymorphic items)
+- `routes/travel_trips.js` — 12 endpoints (trips + participants + documents)
+- `routes/travel_trip_billing.js` — 11 endpoints (rooming + payment plan + instalments)
+- `routes/travel_microsites.js` — 5 endpoints (admin CRUD + public info)
+- `routes/travel_cost_master.js` — 5 endpoints
+- `routes/travel_pricing.js` — 9 endpoints (seasons + markup rules + `/quote`)
+- `routes/travel_suppliers.js` — 7 endpoints (encrypted vault + access log)
+- `routes/travel_rfu_profiles.js` — 6 endpoints
+- `middleware/travelGuards.js` — shared `requireTravelTenant` +
+  sub-brand access helpers
+- `lib/travelDiagnosticScoring.js` — pure scoring helper (20 vitest cases)
+- `lib/travelPricing.js` — pure pricing math (21 vitest cases)
+
+**Frontend (Days 1, 4, 6, 14):**
+- `pages/travel/Dashboard.jsx` — placeholder
+- `pages/travel/Diagnostics.jsx` — list view with filter chips
+- `pages/travel/DiagnosticWizard.jsx` — multi-step taker + result card
+- `pages/travel/DiagnosticBuilder.jsx` — admin JSON-paste editor
+- `pages/travel/Itineraries.jsx` — list with item-icon strip
+- `pages/travel/Trips.jsx` — TMC trips list
+- `pages/travel/TripDetail.jsx` — 5-tab detail (overview, participants,
+  rooming, payment plan, microsite)
+- `theme/travel.css` — navy + gold placeholder palette (pending Yasin's
+  brand handover per Q22)
+
+**Gate specs (Days 5-13):** 10 spec files (`travel-diagnostics-api`,
+`travel-itineraries-api`, `travel-trips-api`, `travel-cost-master-api`,
+`travel-suppliers-api`, `travel-microsites-api`, `travel-rfu-profiles-api`,
+`travel-pricing-api`, `travel-trip-billing-api`), all wired into
+`deploy.yml` + `coverage.yml`. Plus 56 new vitest cases on the
+diagnostic-scoring + pricing helpers + travelGuards.
+
+**Seed (Day 15):** `prisma/seed-travel.js` enriched with placeholder TMC
++ RFU diagnostic Q-sets, 9 cost-master rows (RFU + TMC), 5 season-
+calendar entries, 5 markup rules. Re-runnable.
+
+**Out of scope (deferred to Phase 1.5 / Phase 3):**
+- Visa Sure routes (Q18 — Phase 3)
+- Web check-in (Chrome extension is a separate project; airline portal
+  creds pending in Q9)
+- TripMicrositeOtp request/verify flow (needs SMS provider creds, Q9
+  pending)
+- Reminder cron for trip instalments (same SMS dep)
+- Frontend admin pages for cost-master / seasons / markup / supplier
+  vault (Phase 1.5 visual builders)
+
+**Open risks (still red):**
+- R2 — 6-week timeline is aggressive (structural)
+- R3 — Chrome extension auto-update outside Web Store (medium impact)
+- R11 — On-prem hosting operational complexity (new from Q6 decision)
+
+---
+
 ## v3.8.3 — 2026-05-18 — Shard-2 e2e-full stabilization: GDPR bounded queries + 5xx retry on flake-prone specs
 
 Closes the 4-day release-validation gap. v3.8.2's e2e-full had shard 2 red with 4 hard failures + 5 flakies; this release fixes both.

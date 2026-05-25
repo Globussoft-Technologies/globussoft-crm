@@ -5,7 +5,7 @@ import { Outlet, useNavigate } from 'react-router-dom';
 // to /profile. Logout is already a separate sibling button, so the simplest
 // honest fix is to drop the chevron rather than add a dropdown that
 // duplicates the logout button.
-import { LogOut, Menu, Building2 } from 'lucide-react';
+import { LogOut, Menu, Building2, Sun, Moon, Monitor, Search } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Omnibar from './Omnibar';
 import Presence from './Presence';
@@ -14,7 +14,7 @@ import NotificationBell from './NotificationBell';
 import Avatar from './Avatar';
 import TrialBanner from './TrialBanner';
 import SubscriptionExpiryModal from './SubscriptionExpiryModal';
-import { AuthContext } from '../App';
+import { AuthContext, ThemeContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { setupPush } from '../utils/pushSetup';
 
@@ -51,7 +51,13 @@ function TenantChip({ tenant }) {
         // produce light-blue-on-dark again.
         background: 'var(--accent-bg, var(--subtle-bg-3, rgba(255,255,255,0.08)))',
         border: '1px solid var(--accent-color)',
-        color: 'var(--text-primary)', borderRadius: 8,
+        // #885 / #882 — use --accent-text (white in wellness + travel themes,
+        // both of which set --accent-bg to a dark navy/teal surface) with a
+        // fallback to --text-primary for the generic theme where --accent-bg
+        // is a translucent light tint and dark text reads fine. Pre-fix the
+        // chip was --text-primary always, giving ~1.2:1 contrast on Travel
+        // Stall (dark-brown text on navy bg).
+        color: 'var(--accent-text, var(--text-primary))', borderRadius: 8,
         padding: '6px 12px', fontSize: '0.85rem',
         fontWeight: 500,
       }}
@@ -77,6 +83,11 @@ const MOBILE_BREAKPOINT_PX = 900;
 
 const Layout = () => {
   const { user, setUser, setToken, token, tenant, setTenant } = useContext(AuthContext);
+  // #862 — top-bar theme toggle. Cycles light → dark → system (matches the
+  // /settings Appearance card's 3-option group). Discoverable from anywhere
+  // in the app, addressing the QA observation that the only theme control
+  // was buried in /settings.
+  const { theme, toggleTheme } = useContext(ThemeContext) || {};
   const navigate = useNavigate();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === 'wellness';
@@ -267,6 +278,27 @@ const Layout = () => {
             <Menu size={18} />
           </button>
           <TenantChip tenant={tenant} />
+          {/* #851 — discoverable cross-entity search trigger. Dispatches the
+              `omnibar:open` custom event picked up by Omnibar.jsx (kept
+              self-contained — see Omnibar useEffect). The Ctrl/Cmd+K
+              shortcut continues to work in parallel for power users. */}
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('omnibar:open'))}
+            title="Search contacts, deals, invoices (Ctrl/Cmd+K)"
+            aria-label="Open global search"
+            style={{
+              display: 'flex', alignItems: 'center',
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: 'var(--text-secondary)',
+              padding: '6px 8px', borderRadius: '6px',
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+          >
+            <Search size={16} />
+          </button>
           <NotificationBell />
           <button
             onClick={() => navigate('/profile')}
@@ -290,6 +322,30 @@ const Layout = () => {
             />
             <span>{user?.name || user?.email || 'User'}</span>
           </button>
+          {/* #862 — discoverable theme toggle button. Cycles
+              light → dark → system and surfaces the active mode via icon
+              + tooltip (Sun = light, Moon = dark, Monitor = system).
+              Pre-fix the only control was buried under /settings →
+              Appearance. */}
+          {toggleTheme && (
+            <button
+              type="button"
+              onClick={toggleTheme}
+              title={`Theme: ${theme === 'light' ? 'Light' : theme === 'dark' ? 'Dark' : 'System'} — click to cycle`}
+              aria-label={`Switch theme (currently ${theme || 'system'})`}
+              style={{
+                display: 'flex', alignItems: 'center',
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--text-secondary)',
+                padding: '6px 8px', borderRadius: '6px',
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            >
+              {theme === 'light' ? <Sun size={16} /> : theme === 'dark' ? <Moon size={16} /> : <Monitor size={16} />}
+            </button>
+          )}
           <button
             onClick={handleLogout}
             title="Logout"

@@ -4,16 +4,27 @@ import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 import { ScrollText, Filter, Download, ChevronDown, User, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react';
 
+// StatCard left-border tint + the four stat values still use this hex map
+// (the cards are surface-color glass cards whose left border + value text
+// reads the per-action accent — fine on both themes since 4px borders +
+// large display text both clear AA against both bgs). #878 dark-mode
+// refactor: ActionBadge no longer reads this map for its inline bg/border —
+// it picks a `.audit-action-pill--<variant>` class instead so travel dark
+// mode can override the tinted-pill bg+fg pair without JS.
 const ACTION_COLOR = {
   CREATE: '#10b981',
   UPDATE: '#3b82f6',
   DELETE: '#ef4444',
 };
-const OTHER_COLOR = '#6b7280';
-
-function actionColor(action) {
-  return ACTION_COLOR[action] || OTHER_COLOR;
-}
+// Pre-refactor used an inline `${color}1f` bg + `${color}55` border map; #878
+// refactored to a `.audit-action-pill .audit-action-pill--<variant>` class
+// pair so travel dark-mode can override the tinted-pill foreground +
+// background tokens via CSS-only. Unknown actions fall through to `other`.
+const ACTION_VARIANT = {
+  CREATE: 'create',
+  UPDATE: 'update',
+  DELETE: 'delete',
+};
 
 const ENTITY_OPTIONS = [
   'Contact', 'Deal', 'Invoice', 'Estimate', 'Expense', 'Contract',
@@ -42,18 +53,9 @@ function StatCard({ label, value, color }) {
 }
 
 function ActionBadge({ action }) {
-  const color = actionColor(action);
+  const variant = ACTION_VARIANT[action] || 'other';
   return (
-    <span style={{
-      padding: '0.2rem 0.65rem',
-      borderRadius: 999,
-      fontSize: '0.72rem',
-      fontWeight: 700,
-      letterSpacing: '0.03em',
-      background: `${color}1f`,
-      color,
-      border: `1px solid ${color}55`,
-    }}>
+    <span className={`audit-action-pill audit-action-pill--${variant}`}>
       {action}
     </span>
   );
@@ -229,8 +231,12 @@ export default function AuditLog() {
     });
   }, [logs, search]);
 
+  // #878 — was `background: 'rgba(15,23,42,0.6)'` hardcoded slate (light-mode
+  // looked acceptable, dark-mode crushed contrast vs travel navy body).
+  // Switch to `var(--input-bg)` which both index.css (light/dark generic) and
+  // travel.css (light/dark travel) define correctly.
   const inputStyle = {
-    background: 'rgba(15,23,42,0.6)',
+    background: 'var(--input-bg)',
     color: 'var(--text-primary)',
     border: '1px solid var(--border-color)',
     borderRadius: 8,
@@ -346,17 +352,7 @@ export default function AuditLog() {
             {integrity?.integrityVerified ? (
               <span
                 data-testid="integrity-chip-ok"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  padding: '0.3rem 0.7rem',
-                  borderRadius: 999,
-                  background: 'rgba(16, 185, 129, 0.12)',
-                  color: '#10b981',
-                  border: '1px solid rgba(16, 185, 129, 0.4)',
-                  fontWeight: 600,
-                }}
+                className="audit-integrity-chip audit-integrity-chip--ok"
               >
                 <ShieldCheck size={14} />
                 {`Integrity verified at ${new Date(integrity.lastVerifiedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}`}
@@ -370,17 +366,7 @@ export default function AuditLog() {
               // below take care of the call to action.
               <span
                 data-testid="integrity-chip-needs-backfill"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  padding: '0.3rem 0.7rem',
-                  borderRadius: 999,
-                  background: 'rgba(234, 179, 8, 0.12)',
-                  color: '#eab308',
-                  border: '1px solid rgba(234, 179, 8, 0.4)',
-                  fontWeight: 600,
-                }}
+                className="audit-integrity-chip audit-integrity-chip--warn"
               >
                 <ShieldQuestion size={14} />
                 Backfill required
@@ -391,17 +377,7 @@ export default function AuditLog() {
             ) : integrity ? (
               <span
                 data-testid="integrity-chip-broken"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  padding: '0.3rem 0.7rem',
-                  borderRadius: 999,
-                  background: 'rgba(239, 68, 68, 0.12)',
-                  color: '#ef4444',
-                  border: '1px solid rgba(239, 68, 68, 0.4)',
-                  fontWeight: 600,
-                }}
+                className="audit-integrity-chip audit-integrity-chip--danger"
               >
                 <ShieldAlert size={14} />
                 Chain broken — please contact support
@@ -436,21 +412,19 @@ export default function AuditLog() {
       {isAdmin && integrity && integrity.unhashedRows > 0 && integrity.reason && /null hash/i.test(integrity.reason) && (
         <div
           data-testid="integrity-backfill-banner"
-          className="card"
+          className="card audit-backfill-banner"
           style={{
             padding: '0.85rem 1.25rem',
             marginBottom: '1.25rem',
-            background: 'rgba(234, 179, 8, 0.06)',
-            border: '1px solid rgba(234, 179, 8, 0.4)',
             display: 'flex',
             alignItems: 'center',
             gap: '0.85rem',
             flexWrap: 'wrap',
           }}
         >
-          <ShieldQuestion size={18} color="#eab308" />
+          <ShieldQuestion size={18} className="audit-backfill-icon" />
           <div style={{ flex: 1, minWidth: 240 }}>
-            <div style={{ fontWeight: 600, color: '#eab308' }}>
+            <div className="audit-backfill-title" style={{ fontWeight: 600 }}>
               Backfill required — {integrity.unhashedRows} {integrity.unhashedRows === 1 ? 'row is' : 'rows are'} unchained
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
@@ -464,12 +438,10 @@ export default function AuditLog() {
             data-testid="run-backfill-btn"
             onClick={runBackfill}
             disabled={backfilling}
-            className="btn-primary"
+            className="btn-primary audit-backfill-button"
             style={{
               fontSize: '0.8rem',
               padding: '0.5rem 1rem',
-              background: '#eab308',
-              borderColor: '#eab308',
               opacity: backfilling ? 0.5 : 1,
             }}
           >
@@ -483,7 +455,7 @@ export default function AuditLog() {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <thead>
-              <tr style={{ background: 'rgba(255,255,255,0.03)' }}>
+              <tr className="audit-table-header-row">
                 <th style={thStyle}></th>
                 <th style={thStyle}>Timestamp</th>
                 <th style={thStyle}>User</th>
@@ -505,10 +477,10 @@ export default function AuditLog() {
                   <React.Fragment key={log.id}>
                     <tr
                       onClick={() => setExpanded(isOpen ? null : log.id)}
+                      className={isOpen ? 'audit-row audit-row--expanded' : 'audit-row'}
                       style={{
                         cursor: 'pointer',
                         borderTop: '1px solid var(--border-color)',
-                        background: isOpen ? 'rgba(59,130,246,0.06)' : 'transparent',
                       }}
                     >
                       <td style={tdStyle}>
@@ -549,7 +521,7 @@ export default function AuditLog() {
                       </td>
                     </tr>
                     {isOpen && (
-                      <tr style={{ background: 'rgba(15,23,42,0.4)' }}>
+                      <tr className="audit-row-drawer">
                         <td></td>
                         <td colSpan={5} style={{ padding: '1rem 1.25rem 1.5rem' }}>
                           {/* #558 — Display truncated hash + prevHash so an

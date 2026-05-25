@@ -88,6 +88,34 @@ grep -rn "data\.database\|body\.database\|data\.uptime\|body\.uptime\|data\.vers
 
 For each hit, the assertion either needs to (a) authenticate first, or (b) drop the assertion if it's a basic-liveness probe. The `api-health.spec.js` two-tier shape contract covers the full assertion; other specs hitting `/api/health` should only assert `body.status === "healthy"`.
 
+#### Route URL shape change (e.g. `/api/wellness/patients` → `/api/wellness/patients?limit=25&offset=0`) (added 2026-05-25)
+
+When a frontend page changes the URL shape of an existing fetch (adds query params, splits to versioned path, etc.), the **per-push gate runs frontend vitest** but doesn't enumerate which sibling test files pin the old URL. The sibling-spec rot from tick #185 dd67f1a0 — `Patients.jsx` started issuing `/api/wellness/patients?limit=25&offset=0` on initial mount, and `frontend/src/__tests__/wellness/Patients.test.jsx:128+173` still asserted exact-equality on the bare `/api/wellness/patients` URL → `frontend_unit_tests` gate went RED on 8c53d1d. Fixed in 2c8d349d with a predicate-match assertion.
+
+Audit grep when changing a fetch URL:
+
+```bash
+# Grep ALL frontend test paths — NOT just one. Multi-path layouts exist
+# (e.g. frontend/src/__tests__/<Page>.test.jsx AND
+#       frontend/src/__tests__/<area>/<Page>.test.jsx).
+grep -rnE "toHaveBeenCalledWith\\(['\"]<OLD URL>['\"]\\)" frontend/src/__tests__/
+grep -rnE "fetchApi\\(['\"]<OLD URL>['\"]\\)" frontend/src/__tests__/
+grep -rnE "mock\\.calls\\.find.*['\"]<OLD URL>['\"]" frontend/src/__tests__/
+```
+
+Fix pattern: replace `toHaveBeenCalledWith('<bare URL>')` with a predicate match that tolerates query-string suffixes:
+
+```js
+const call = fetchApiMock.mock.calls.find(([u]) =>
+  typeof u === 'string'
+  && u.startsWith('/api/<route>?')   // allows the new query-string suffix
+  && !u.includes('<unwanted-param>')
+);
+expect(call).toBeTruthy();
+```
+
+Both stale assertions ship in the SAME fix-forward commit alongside the URL change. Don't push the URL change first and "we'll catch the spec misses on the next CI run" — that's exactly what produced the 8c53d1d → 7e3ca54a → 2c8d349d cascade (tick #185+#186).
+
 #### Public-response-shape change (e.g. `apiKey: 'TEST****'` → `apiKey: {configured, last4}`) (added 2026-05-12)
 
 The 2026-05-12 all-issues-sweep surfaced two cases where w-B4 (`#651` Channels credential masking, `885645a`) and w-C (`#654` CSP-enable, `b4ea83b`) changed a public response shape but missed a sibling spec that pinned the OLD shape:

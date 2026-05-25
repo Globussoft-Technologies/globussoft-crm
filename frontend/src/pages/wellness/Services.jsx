@@ -14,8 +14,10 @@ import {
   X,
   Save,
   Activity,
+  Download,
+  Upload,
 } from 'lucide-react';
-import { fetchApi } from '../../utils/api';
+import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney, currencySymbol } from '../../utils/money';
 import { formatDate } from '../../utils/date';
@@ -37,6 +39,11 @@ export default function Services() {
   const [treatmentsLoading, setTreatmentsLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTreatment, setSelectedTreatment] = useState(null);
+  // #816 — Catalog CSV import/export. Backend at /api/csv/services/{export.csv,
+  // import.csv} (mounted in server.js:679). Export downloads the current
+  // tenant's services; import accepts a multipart file with row-level error
+  // reporting. The file input is hidden + triggered by the Import button.
+  const [csvBusy, setCsvBusy] = useState(false);
   // #115: basePrice starts blank (not 0) so the placeholder shows and the
   // validity gate rejects submit until the user enters ≥ ₹1.
   const [form, setForm] = useState({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
@@ -57,6 +64,66 @@ export default function Services() {
       loadTreatments();
     }
   }, [tab]);
+
+  // #816 — Export the current tenant's services as CSV. Uses fetch + blob
+  // (not a plain <a href>) because the API requires the Authorization
+  // header; <a> downloads can't set headers.
+  const exportCsv = async () => {
+    setCsvBusy(true);
+    try {
+      const token = getAuthToken();
+      const res = await fetch('/api/csv/services/export.csv', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `services-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify.success(`Exported ${services.length} service${services.length === 1 ? '' : 's'}.`);
+    } catch (e) {
+      notify.error(e.message || 'CSV export failed.');
+    } finally {
+      setCsvBusy(false);
+    }
+  };
+
+  // #816 — Import services from CSV. Multipart upload to the same csv_io
+  // route. Backend returns { imported, skipped, errors: [{row, msg}] } —
+  // we toast a summary and re-load on success.
+  const importCsv = async (file) => {
+    if (!file) return;
+    setCsvBusy(true);
+    try {
+      const token = getAuthToken();
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/csv/services/import.csv', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Import failed (${res.status})`);
+      const imported = data.imported || 0;
+      const skipped = data.skipped || 0;
+      const errCount = (data.errors || []).length;
+      let msg = `Imported ${imported} service${imported === 1 ? '' : 's'}`;
+      if (skipped) msg += `; skipped ${skipped}`;
+      if (errCount) msg += `; ${errCount} row${errCount === 1 ? '' : 's'} with errors (see network response)`;
+      notify.success(msg);
+      load();
+    } catch (e) {
+      notify.error(e.message || 'CSV import failed.');
+    } finally {
+      setCsvBusy(false);
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -79,9 +146,38 @@ export default function Services() {
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Each service has a price, duration, and target marketing radius.</p>
         </div>
         {tab === 'catalog' && (
-          <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
-            <Plus size={16} /> {showAdd ? 'Cancel' : 'New service'}
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {/* #816 — Export/Import CSV. Mirrors Zylu's catalog flow. */}
+            <button
+              type="button"
+              onClick={exportCsv}
+              disabled={csvBusy || services.length === 0}
+              title="Download all services as CSV"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy || services.length === 0 ? 'not-allowed' : 'pointer', opacity: csvBusy || services.length === 0 ? 0.6 : 1 }}
+            >
+              <Download size={16} /> Export CSV
+            </button>
+            <label
+              title="Upload services from CSV (same columns as Export)"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy ? 'not-allowed' : 'pointer', opacity: csvBusy ? 0.6 : 1 }}
+            >
+              <Upload size={16} /> Import CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                disabled={csvBusy}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) importCsv(file);
+                  e.target.value = ''; // allow re-import of same filename
+                }}
+                style={{ display: 'none' }}
+              />
+            </label>
+            <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+              <Plus size={16} /> {showAdd ? 'Cancel' : 'New service'}
+            </button>
+          </div>
         )}
         {/* #365: Packages tab needs its own primary CTA. The package builder is
             already rendered inline below, so this just scrolls to the form

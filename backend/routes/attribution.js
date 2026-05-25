@@ -1,5 +1,6 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const { verifyRole } = require("../middleware/auth");
 // #268: server-side guard — strips test-skip / test-junk / e2e-* / qa-* / rbac-*
 // source rows from operator-facing aggregations so the next round of E2E
 // fixtures doesn't leak into Marketing Attribution screens (the original
@@ -343,6 +344,191 @@ router.get("/multi-touch-revenue", async (req, res) => {
   } catch (err) {
     console.error("[attribution/multi-touch-revenue]", err);
     res.status(500).json({ error: "Failed to compute multi-touch revenue" });
+  }
+});
+
+// ── GET /voyagr/summary?days=N — voyagr (OJR) lead-capture attribution ──
+//
+// F3 (cluster F): surfaces Contact + Touchpoint rows written by F1
+// (POST /api/v1/voyagr/leads → backend/routes/voyagr.js) as a
+// marketing-attribution summary scoped to the requesting tenant.
+//
+// Output shape:
+//   {
+//     windowDays: number,
+//     totalLeads: number,            // count of Contact rows with source='voyagr'
+//     bySubBrand:    [{ subBrand, count, deals, wonValue }],
+//     byUtmSource:   [{ utmSource, count }],
+//     byChannel:     [{ channel, count }],
+//     bySiteSlug:    [{ siteSlug, count }],
+//   }
+//
+// SCHEMA-DRIFT NOTE (2026-05-23 — F3 ship):
+//   The dispatch prompt for F3 assumed Touchpoint has dedicated `utmSource`,
+//   `utmCampaign`, `utmMedium`, `siteSlug` columns. The actual schema only
+//   has `channel`, `source`, `medium`, `url`, `campaignId`. F1
+//   (backend/routes/voyagr.js:308-322) maps utm_source → Touchpoint.source
+//   and utm_medium → Touchpoint.medium (with subBrand as a fallback when
+//   utm_medium is absent). siteSlug + utm_campaign + utm_term + utm_content
+//   are NOT persisted to Touchpoint — they're only captured in the
+//   per-request AuditLog details JSON. Net effect:
+//     - bySubBrand:  derived from Contact.subBrand (authoritative — F1
+//                    sets it on Contact create).
+//     - byUtmSource: derived from Touchpoint.source (which holds the raw
+//                    utm_source value F1 wrote — see voyagr.js:313).
+//     - byChannel:   derived from Touchpoint.channel (always "web" for F1
+//                    rows; reserved for future channels).
+//     - bySiteSlug:  ALWAYS empty array today — no column to query. Kept
+//                    in the response shape as a forward-compat placeholder
+//                    so callers don't break when the column is added.
+//                    Schema add tracked as a follow-up gap (see voyagr.js
+//                    line 308-321 + commit 0299031 context).
+//
+// Auth: ADMIN | MANAGER (matches the rest of attribution.js's reporting
+// surface; verifyToken is applied by the global guard at server.js:512).
+// Tenant scoping: req.user.tenantId — NEVER req.body.tenantId (stripDangerous
+// strips body-supplied tenantId; ESLint rule blocks the read).
+router.get("/voyagr/summary", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const tenantId = tenantOf(req);
+
+    // days param: default 30, clamp to [1, 365], reject anything else
+    // with a 400 so callers don't silently get a window other than the
+    // one they asked for.
+    const daysRaw = req.query.days;
+    let days = 30;
+    if (daysRaw !== undefined && daysRaw !== null && daysRaw !== "") {
+      const n = Number(daysRaw);
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 365) {
+        return res.status(400).json({
+          error: "days must be an integer in [1, 365]",
+          code: "INVALID_DAYS",
+        });
+      }
+      days = n;
+    }
+
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    // 1. Voyagr-sourced contacts in this tenant + window. F1 sets
+    //    Contact.source='voyagr' on create (voyagr.js:297), so this is
+    //    the load-bearing population — every F1 capture writes exactly
+    //    one Contact row (deduped) and the source tag is permanent.
+    //
+    //    Capped at top-50 per facet at the end, but we need all rows
+    //    here to join Touchpoints + Deals + compute facet counts. For
+    //    today's volumes (per docs/TRAVEL_CRM_PRD.md — tens of leads/day
+    //    across 4 sub-brands) this is well within unbounded-query
+    //    tolerance; if voyagr volume grows to 10k+ leads/window, this
+    //    helper should move to a SQL aggregate.
+    const contacts = await prisma.contact.findMany({
+      where: {
+        tenantId,
+        source: "voyagr",
+        createdAt: { gte: cutoff },
+      },
+      select: { id: true, subBrand: true },
+    });
+    const totalLeads = contacts.length;
+    const contactIds = contacts.map((c) => c.id);
+
+    // 2. bySubBrand — count + won-deal aggregation per Contact.subBrand.
+    //    F1 also tags Deal.subBrand on create (voyagr.js:335) so we
+    //    could query deals directly, but joining via contactId keeps the
+    //    "voyagr origin" filter authoritative (a manually-created
+    //    sub-brand deal NOT linked to a voyagr-sourced contact should
+    //    not appear in voyagr attribution).
+    const subBrandMap = new Map();
+    for (const c of contacts) {
+      const key = c.subBrand || null;
+      if (!subBrandMap.has(key)) {
+        subBrandMap.set(key, { subBrand: key, count: 0, deals: 0, wonValue: 0 });
+      }
+      subBrandMap.get(key).count += 1;
+    }
+
+    // 3. Pull all Deals tied to these contacts (any stage — we need
+    //    counts) + sum the won-value per subBrand. Deal.subBrand mirrors
+    //    Contact.subBrand for voyagr-sourced deals (voyagr.js:335).
+    let deals = [];
+    if (contactIds.length > 0) {
+      deals = await prisma.deal.findMany({
+        where: { tenantId, contactId: { in: contactIds } },
+        select: { contactId: true, subBrand: true, amount: true, stage: true },
+      });
+    }
+    // Build a contactId → subBrand map (fallback for deals whose subBrand
+    // field is null but the contact's isn't — defensive against schema drift).
+    const contactSubBrand = new Map(contacts.map((c) => [c.id, c.subBrand || null]));
+    for (const d of deals) {
+      const sb = d.subBrand || contactSubBrand.get(d.contactId) || null;
+      if (!subBrandMap.has(sb)) {
+        subBrandMap.set(sb, { subBrand: sb, count: 0, deals: 0, wonValue: 0 });
+      }
+      const e = subBrandMap.get(sb);
+      e.deals += 1;
+      if (d.stage === "won") {
+        e.wonValue += Number(d.amount) || 0;
+      }
+    }
+
+    // 4. Touchpoints tied to these contacts — for byUtmSource + byChannel.
+    let touchpoints = [];
+    if (contactIds.length > 0) {
+      touchpoints = await prisma.touchpoint.findMany({
+        where: { tenantId, contactId: { in: contactIds } },
+        select: { source: true, channel: true, medium: true },
+      });
+    }
+
+    const utmSourceMap = new Map();
+    const channelMap = new Map();
+    for (const tp of touchpoints) {
+      const src = tp.source || null;
+      // Skip junk-source rows so e2e fixtures don't pollute the
+      // operator-facing summary (#268 standing pattern).
+      if (src && isJunkSource(src)) continue;
+      if (!utmSourceMap.has(src)) {
+        utmSourceMap.set(src, { utmSource: src, count: 0 });
+      }
+      utmSourceMap.get(src).count += 1;
+
+      const ch = tp.channel || null;
+      if (!channelMap.has(ch)) {
+        channelMap.set(ch, { channel: ch, count: 0 });
+      }
+      channelMap.get(ch).count += 1;
+    }
+
+    // 5. Sort + cap top-50 per facet.
+    const TOP = 50;
+    const sortByCountDesc = (a, b) => b.count - a.count;
+    const bySubBrand = Array.from(subBrandMap.values())
+      .map((e) => ({
+        subBrand: e.subBrand,
+        count: e.count,
+        deals: e.deals,
+        wonValue: Math.round(e.wonValue * 100) / 100,
+      }))
+      .sort(sortByCountDesc)
+      .slice(0, TOP);
+    const byUtmSource = Array.from(utmSourceMap.values()).sort(sortByCountDesc).slice(0, TOP);
+    const byChannel = Array.from(channelMap.values()).sort(sortByCountDesc).slice(0, TOP);
+
+    return res.json({
+      windowDays: days,
+      totalLeads,
+      bySubBrand,
+      byUtmSource,
+      byChannel,
+      // Schema-drift placeholder — see SCHEMA-DRIFT NOTE above. Empty
+      // until Touchpoint gains a siteSlug column or F1 starts persisting
+      // siteSlug to a queryable surface.
+      bySiteSlug: [],
+    });
+  } catch (err) {
+    console.error("[attribution/voyagr/summary]", err);
+    res.status(500).json({ error: "Failed to build voyagr attribution summary" });
   }
 });
 

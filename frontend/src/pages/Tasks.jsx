@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame } from 'lucide-react';
+import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X } from 'lucide-react';
 
 const PRIORITY_CONFIG = {
   Critical: { color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: '#ef4444', pulse: true },
@@ -59,13 +59,28 @@ function isPastDate(localDateTimeStr) {
   return picked.getTime() < Date.now();
 }
 
+const EMPTY_FORM = { title: '', dueDate: '', contactId: '', notes: '', priority: 'Medium' };
+
 export default function Tasks() {
   const notify = useNotify();
   const [tasks, setTasks] = useState([]);
   const [contacts, setContacts] = useState([]);
-  const [newTask, setNewTask] = useState({ title: '', dueDate: '', contactId: '', notes: '', priority: 'Medium' });
+  const [newTask, setNewTask] = useState(EMPTY_FORM);
+  // #893: the Enqueue Activity form used to sit inline above the queue,
+  // eating vertical real-estate and inviting accidental typing. Mirror the
+  // c031ba0 pattern: header "+ Create Task" CTA opens this drawer; close on
+  // X / ESC / outside-click; submit handler is preserved verbatim.
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => { loadData(); }, []);
+
+  // #893: ESC closes the drawer to match the c031ba0 Travel-page convention.
+  useEffect(() => {
+    if (!creating) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setCreating(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [creating]);
 
   const loadData = async () => {
     try {
@@ -78,6 +93,15 @@ export default function Tasks() {
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const openCreate = () => {
+    setNewTask(EMPTY_FORM);
+    setCreating(true);
+  };
+
+  const closeCreate = () => {
+    setCreating(false);
   };
 
   const createTask = async (e) => {
@@ -93,7 +117,8 @@ export default function Tasks() {
         dueDate: newTask.dueDate ? new Date(newTask.dueDate).toISOString() : null,
       };
       await fetchApi('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
-      setNewTask({ title: '', dueDate: '', contactId: '', notes: '', priority: 'Medium' });
+      setNewTask(EMPTY_FORM);
+      setCreating(false);
       loadData();
       // #625: invalidate sidebar counters so the My Tasks badge bumps.
       window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
@@ -127,13 +152,31 @@ export default function Tasks() {
 
   return (
     <div className="tasks-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <Flame size={26} color="var(--accent-color)" /> Agent Task Queue
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Prioritized daily follow-ups and outbound activity directives.
-        </p>
+      <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <Flame size={26} color="var(--accent-color)" /> Agent Task Queue
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Prioritized daily follow-ups and outbound activity directives.
+          </p>
+        </div>
+        <button
+          id="open-create-task-btn"
+          type="button"
+          onClick={openCreate}
+          aria-label="Create a new task"
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '0.65rem 1.1rem', borderRadius: 6, fontWeight: 600, fontSize: '0.875rem',
+            background: 'var(--primary-color, var(--accent-color))',
+            color: 'var(--accent-text, #fff)',
+            border: '1px solid var(--primary-color, var(--accent-color))',
+            cursor: 'pointer',
+          }}
+        >
+          <Plus size={14} /> Create Task
+        </button>
       </header>
 
       {/* Stats bar */}
@@ -160,167 +203,207 @@ export default function Tasks() {
         </div>
       )}
 
-      <div className="tasks-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
+      {/* #893: Queue + Completed are now the full width. The Enqueue Activity
+         form lives in the drawer below, opened by the header CTA. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
 
-        {/* Enqueue Panel */}
-        <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
+        {/* Active Queue */}
+        <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Plus size={20} color="var(--accent-color)" /> Enqueue Activity
+            <Phone size={20} color="var(--danger-color)" /> Active Priority Queue
           </h3>
-          <form onSubmit={createTask} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Directive Title</label>
-              <input id="task-title-input" type="text" required className="input-field" placeholder="e.g. Q3 Renewal Call"
-                value={newTask.title} onChange={e => setNewTask({ ...newTask, title: e.target.value })} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {activeTasks.length === 0 ? (
+              <p id="empty-queue-msg" style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
+                Queue is empty. Excellent work.
+              </p>
+            ) : activeTasks.map(t => {
+              const cfg = PRIORITY_CONFIG[t.priority] || PRIORITY_CONFIG.Medium;
+              const overdue = isOverdue(t);
+              return (
+                <div key={t.id} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '1.25rem', background: cfg.bg,
+                  borderLeft: `4px solid ${cfg.border}`, borderRadius: '0 8px 8px 0',
+                  transition: '0.2s', position: 'relative',
+                  boxShadow: t.priority === 'Critical' ? `0 0 12px ${cfg.color}22` : 'none',
+                }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                      <h4 style={{ fontWeight: '600', fontSize: '1rem', margin: 0 }}>{t.title}</h4>
+                      <PriorityBadge priority={t.priority} />
+                      {overdue && (
+                        <span style={{ padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', background: 'rgba(239,68,68,0.15)', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <AlertTriangle size={10} /> OVERDUE
+                        </span>
+                      )}
+                    </div>
+                    {t.contact && (
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: '0 0 0.2rem' }}>
+                        <Search size={12} /> {t.contact.name} • {t.contact.email}
+                      </p>
+                    )}
+                    {t.dueDate && (
+                      <p style={{ fontSize: '0.8rem', color: overdue ? '#ef4444' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+                        <Clock size={12} /> {new Date(t.dueDate).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', marginLeft: '1rem', flexShrink: 0 }}>
+                    <button
+                      onClick={() => markComplete(t.id)}
+                      className="btn-secondary"
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--success-color)', color: '#fff', border: 'none', padding: '0.5rem 0.9rem', fontSize: '0.8rem', position: 'relative', zIndex: 10, pointerEvents: 'all' }}
+                    >
+                      <CheckCircle2 size={14} /> Resolve
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Completed Log */}
+        <div className="card" style={{ padding: '2rem', opacity: 0.75 }}>
+          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <CheckCircle2 size={20} color="var(--success-color)" /> Completed Log
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {completedTasks.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No completed tasks yet.</p>
+            ) : completedTasks.slice(0, 8).map(t => (
+              <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.65rem 1rem', background: 'rgba(255,255,255,0.01)', borderRadius: '4px' }}>
+                <span style={{ textDecoration: 'line-through', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t.title}</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--success-color)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                  <CheckCircle2 size={10} /> Resolved
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+      </div>
+
+      {/* #893: Create Task drawer — opens from header CTA. Close on X, ESC, outside-click. */}
+      {creating && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end',
+            zIndex: 1000,
+          }}
+        >
+          <form
+            onSubmit={createTask}
+            style={{
+              background: 'var(--surface-color)', color: 'var(--text-primary)',
+              width: '100%', maxWidth: 460, height: '100vh', overflowY: 'auto',
+              padding: 20, boxShadow: '-8px 0 24px rgba(0,0,0,0.2)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Plus size={18} color="var(--accent-color)" /> Enqueue Activity
+              </h2>
+              <button
+                type="button"
+                onClick={closeCreate}
+                aria-label="Close"
+                style={{
+                  background: 'transparent', border: 'none', color: 'var(--text-secondary)',
+                  cursor: 'pointer', padding: 4,
+                }}
+              >
+                <X size={16} />
+              </button>
             </div>
 
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Priority Level</label>
-              <select id="task-priority-select" className="input-field" value={newTask.priority}
-                onChange={e => setNewTask({ ...newTask, priority: e.target.value })}
-                style={{ background: 'var(--input-bg)' }}>
-                <option value="Critical">🔴 Critical</option>
-                <option value="High">🟠 High</option>
-                <option value="Medium">🔵 Medium</option>
-                <option value="Low">⚪ Low</option>
-              </select>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Directive Title</label>
+                <input id="task-title-input" type="text" required className="input-field" placeholder="e.g. Q3 Renewal Call"
+                  value={newTask.title} onChange={e => setNewTask({ ...newTask, title: e.target.value })} />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Priority Level</label>
+                <select id="task-priority-select" className="input-field" value={newTask.priority}
+                  onChange={e => setNewTask({ ...newTask, priority: e.target.value })}
+                  style={{ background: 'var(--input-bg)' }}>
+                  <option value="Critical">🔴 Critical</option>
+                  <option value="High">🟠 High</option>
+                  <option value="Medium">🔵 Medium</option>
+                  <option value="Low">⚪ Low</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Associated Contact</label>
+                <select className="input-field" value={newTask.contactId}
+                  onChange={e => setNewTask({ ...newTask, contactId: e.target.value })}
+                  style={{ background: 'var(--input-bg)' }}>
+                  <option value="">-- Unassigned --</option>
+                  {contacts.map(c => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Execution Deadline</label>
+                <input
+                  type="datetime-local"
+                  className="input-field"
+                  value={newTask.dueDate}
+                  onChange={e => setNewTask({ ...newTask, dueDate: e.target.value })}
+                  aria-describedby={isPastDate(newTask.dueDate) ? 'task-duedate-warning' : undefined}
+                  style={isPastDate(newTask.dueDate) ? { borderColor: '#f59e0b' } : undefined}
+                />
+                {isPastDate(newTask.dueDate) && (
+                  <p
+                    id="task-duedate-warning"
+                    data-testid="task-past-date-warning"
+                    style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                  >
+                    <AlertTriangle size={12} /> This task will be created already overdue.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Execution Notes</label>
+                <textarea className="input-field" rows="3" placeholder="Briefing notes..."
+                  value={newTask.notes} onChange={e => setNewTask({ ...newTask, notes: e.target.value })} />
+              </div>
             </div>
 
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Associated Contact</label>
-              <select className="input-field" value={newTask.contactId}
-                onChange={e => setNewTask({ ...newTask, contactId: e.target.value })}
-                style={{ background: 'var(--input-bg)' }}>
-                <option value="">-- Unassigned --</option>
-                {contacts.map(c => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
-              </select>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+              <button
+                type="button"
+                onClick={closeCreate}
+                style={{
+                  padding: '0.65rem 1.1rem', borderRadius: 6, fontWeight: 500, fontSize: '0.875rem',
+                  background: 'var(--surface-color)', color: 'var(--text-secondary)',
+                  border: '1px solid var(--border-color)', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button id="assign-task-btn" type="submit" className="btn-primary" style={{ padding: '0.65rem 1.1rem' }}>
+                Assign Task
+              </button>
             </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Execution Deadline</label>
-              <input
-                type="datetime-local"
-                className="input-field"
-                value={newTask.dueDate}
-                onChange={e => setNewTask({ ...newTask, dueDate: e.target.value })}
-                aria-describedby={isPastDate(newTask.dueDate) ? 'task-duedate-warning' : undefined}
-                style={isPastDate(newTask.dueDate) ? { borderColor: '#f59e0b' } : undefined}
-              />
-              {isPastDate(newTask.dueDate) && (
-                <p
-                  id="task-duedate-warning"
-                  data-testid="task-past-date-warning"
-                  style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                >
-                  <AlertTriangle size={12} /> This task will be created already overdue.
-                </p>
-              )}
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Execution Notes</label>
-              <textarea className="input-field" rows="3" placeholder="Briefing notes..."
-                value={newTask.notes} onChange={e => setNewTask({ ...newTask, notes: e.target.value })} />
-            </div>
-
-            <button id="assign-task-btn" type="submit" className="btn-primary" style={{ padding: '1rem' }}>
-              Assign Task
-            </button>
           </form>
         </div>
-
-        {/* Queue + Completed */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-
-          {/* Active Queue */}
-          <div className="card" style={{ padding: '2rem' }}>
-            <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Phone size={20} color="var(--danger-color)" /> Active Priority Queue
-            </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              {activeTasks.length === 0 ? (
-                <p id="empty-queue-msg" style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
-                  Queue is empty. Excellent work.
-                </p>
-              ) : activeTasks.map(t => {
-                const cfg = PRIORITY_CONFIG[t.priority] || PRIORITY_CONFIG.Medium;
-                const overdue = isOverdue(t);
-                return (
-                  <div key={t.id} style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    padding: '1.25rem', background: cfg.bg,
-                    borderLeft: `4px solid ${cfg.border}`, borderRadius: '0 8px 8px 0',
-                    transition: '0.2s', position: 'relative',
-                    boxShadow: t.priority === 'Critical' ? `0 0 12px ${cfg.color}22` : 'none',
-                  }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
-                        <h4 style={{ fontWeight: '600', fontSize: '1rem', margin: 0 }}>{t.title}</h4>
-                        <PriorityBadge priority={t.priority} />
-                        {overdue && (
-                          <span style={{ padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', background: 'rgba(239,68,68,0.15)', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                            <AlertTriangle size={10} /> OVERDUE
-                          </span>
-                        )}
-                      </div>
-                      {t.contact && (
-                        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: '0 0 0.2rem' }}>
-                          <Search size={12} /> {t.contact.name} • {t.contact.email}
-                        </p>
-                      )}
-                      {t.dueDate && (
-                        <p style={{ fontSize: '0.8rem', color: overdue ? '#ef4444' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
-                          <Clock size={12} /> {new Date(t.dueDate).toLocaleString()}
-                        </p>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', marginLeft: '1rem', flexShrink: 0 }}>
-                      <button
-                        onClick={() => markComplete(t.id)}
-                        className="btn-secondary"
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--success-color)', color: '#fff', border: 'none', padding: '0.5rem 0.9rem', fontSize: '0.8rem', position: 'relative', zIndex: 10, pointerEvents: 'all' }}
-                      >
-                        <CheckCircle2 size={14} /> Resolve
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Completed Log */}
-          <div className="card" style={{ padding: '2rem', opacity: 0.75 }}>
-            <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <CheckCircle2 size={20} color="var(--success-color)" /> Completed Log
-            </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {completedTasks.length === 0 ? (
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No completed tasks yet.</p>
-              ) : completedTasks.slice(0, 8).map(t => (
-                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.65rem 1rem', background: 'rgba(255,255,255,0.01)', borderRadius: '4px' }}>
-                  <span style={{ textDecoration: 'line-through', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t.title}</span>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--success-color)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                    <CheckCircle2 size={10} /> Resolved
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-        </div>
-      </div>
+      )}
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-        /* #480: collapse the 1fr 2fr two-column layout to a single stack on mobile.
-           Without this, the Enqueue Activity card title clips ("Enqueu...") and
-           field labels ("Directive Title" etc.) wrap word-by-word vertically because
-           the left column is squeezed to ~30% of a 425px viewport. minmax(0, ...) on
-           desktop prevents form min-content from blowing the column wider than 1fr. */
+        /* #480 / #893: with the form moved to a drawer the main grid is now a single column.
+           Keep the mobile padding adjustment in place so the page still breathes on narrow
+           viewports; the drawer itself is full-width on mobile via maxWidth: 460 + width: 100%. */
         @media (max-width: 768px) {
           .tasks-page { padding: 1rem !important; }
-          .tasks-grid { grid-template-columns: 1fr !important; gap: 1.25rem !important; }
           .tasks-page .card { padding: 1.25rem !important; }
           .tasks-page h3 { white-space: normal !important; }
         }

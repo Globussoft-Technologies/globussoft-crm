@@ -1,10 +1,37 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { Key, Globe, Plus, Trash2, Copy, CheckCircle2, Activity } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../App';
+
+// #899 — Travel-vertical sub-brand options for API key scoping. Mirrors the
+// VALID_API_KEY_SUB_BRANDS list in backend/routes/developer.js.
+const TRAVEL_SUB_BRANDS = [
+  { value: '', label: 'Tenant-wide (all sub-brands)' },
+  { value: 'tmc', label: 'TMC (School trips)' },
+  { value: 'rfu', label: 'RFU (Umrah)' },
+  { value: 'travelstall', label: 'Travel Stall (Family)' },
+  { value: 'visasure', label: 'Visa Sure' },
+];
+
+// #899 — webhook event catalogue: original 3 + 5 added in ticks #36-#41 + #47.
+// Backend emits via backend/lib/eventBus.js (see safeEmitEvent + canonical
+// catalogue JSDoc); subscribers receive via webhookDelivery.js.
+const WEBHOOK_EVENTS = [
+  { value: 'deal.created', label: 'Deal Created' },
+  { value: 'deal.won', label: 'Deal Won' },
+  { value: 'contact.created', label: 'Contact Created' },
+  { value: 'invoice.created', label: 'Invoice Created' },
+  { value: 'payment.collected', label: 'Payment Collected' },
+  { value: 'quote.sent', label: 'Quote Sent' },
+  { value: 'itinerary.accepted', label: 'Itinerary Accepted' },
+  { value: 'visa.status_changed', label: 'Visa Status Changed' },
+];
 
 export default function Developer() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const isTravelTenant = user?.tenant?.vertical === 'travel';
   const [keys, setKeys] = useState([]);
   const [hooks, setHooks] = useState([]);
   const [copiedId, setCopiedId] = useState(null);
@@ -14,6 +41,9 @@ export default function Developer() {
   const [agentActivityErr, setAgentActivityErr] = useState(null);
 
   const [newKeyName, setNewKeyName] = useState('');
+  // #899 — empty string = tenant-wide; 'tmc'|'rfu'|'travelstall'|'visasure'
+  // = scoped. Only the sub-brand-scoped variant matters on travel tenants.
+  const [newKeySubBrand, setNewKeySubBrand] = useState('');
   const [newHook, setNewHook] = useState({ event: 'deal.created', targetUrl: '' });
 
   useEffect(() => {
@@ -63,9 +93,14 @@ export default function Developer() {
       return;
     }
     try {
-      const { rawKey } = await fetchApi('/api/developer/apikeys', { method: 'POST', body: JSON.stringify({ name: trimmed }) });
+      // #899 — send subBrand only when set + on travel tenants; backend
+      // validates against the whitelist and rejects unknown values 400.
+      const body = { name: trimmed };
+      if (isTravelTenant && newKeySubBrand) body.subBrand = newKeySubBrand;
+      const { rawKey } = await fetchApi('/api/developer/apikeys', { method: 'POST', body: JSON.stringify(body) });
       notify.success(`ATTENTION: This is the ONLY time this key will be displayed.\n\nSave this in a secure vault immediately:\n\n${rawKey}`, { ttl: 30000 });
       setNewKeyName('');
+      setNewKeySubBrand('');
       loadDevData();
     } catch(err) {
       notify.error("Failed to create key.");
@@ -188,7 +223,7 @@ export default function Developer() {
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Key size={20} color="var(--accent-color)" /> API Credentials
           </h3>
-          <form onSubmit={generateKey} style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
+          <form onSubmit={generateKey} style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap' }}>
             {/* #720: required attribute triggers the browser-native validity
                 tooltip on submit + disables the Generate Key button via the
                 form's :invalid state, so an empty-name submission never even
@@ -197,13 +232,30 @@ export default function Developer() {
             <input
               type="text"
               className="input-field"
-              style={{ margin: 0, flex: 1 }}
+              style={{ margin: 0, flex: 1, minWidth: 200 }}
               placeholder="Key Name (e.g. Zapier Integration)"
               required
               minLength={1}
               value={newKeyName}
               onChange={e => setNewKeyName(e.target.value)}
             />
+            {/* #899 — sub-brand scoping selector (travel-vertical only).
+                Backend validates against the whitelist; null/empty = tenant-wide
+                (legacy / generic). Scoped keys can only push to their named
+                sub-brand via voyagrAuth's requireSubBrandMatch helper. */}
+            {isTravelTenant && (
+              <select
+                className="input-field"
+                style={{ margin: 0, minWidth: 220 }}
+                value={newKeySubBrand}
+                onChange={e => setNewKeySubBrand(e.target.value)}
+                aria-label="Sub-brand scope"
+              >
+                {TRAVEL_SUB_BRANDS.map(b => (
+                  <option key={b.value || 'all'} value={b.value}>{b.label}</option>
+                ))}
+              </select>
+            )}
             <button className="btn-primary" type="submit" disabled={!newKeyName.trim()}>Generate Key</button>
           </form>
 
@@ -211,7 +263,16 @@ export default function Developer() {
             {keys.map(k => (
               <div key={k.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem', background: 'var(--subtle-bg-2)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
                 <div>
-                  <h4 style={{ fontWeight: '600', fontSize: '1rem' }}>{k.name}</h4>
+                  <h4 style={{ fontWeight: '600', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {k.name}
+                    {/* #899 — render sub-brand badge when the key is scoped.
+                        Tenant-wide keys (subBrand=null) show no badge. */}
+                    {k.subBrand && (
+                      <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: 10, background: 'rgba(59,130,246,0.12)', color: 'var(--accent-color)', fontWeight: 600 }} title={`Scoped to sub-brand: ${k.subBrand}`}>
+                        {k.subBrand}
+                      </span>
+                    )}
+                  </h4>
                   <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', fontFamily: 'monospace', letterSpacing: '0.1em', marginTop: '0.25rem' }}>{k.keySecret.substring(0, 10)}****************</p>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -247,10 +308,15 @@ export default function Developer() {
 
           <form onSubmit={registerWebhook} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
             <div style={{ display: 'flex', gap: '1rem' }}>
-              <select className="input-field" style={{ margin: 0, width: '200px', background: 'var(--input-bg)' }} value={newHook.event} onChange={e => setNewHook({ ...newHook, event: e.target.value })}>
-                <option value="deal.created">Deal Created</option>
-                <option value="deal.won">Deal Won</option>
-                <option value="contact.created">Contact Created</option>
+              {/* #899 — webhook event catalogue expanded from the original 3
+                  to include the 5 lifecycle events added in ticks #36-#41 +
+                  #47 (Invoice Created, Payment Collected, Quote Sent,
+                  Itinerary Accepted, Visa Status Changed). Backend emits via
+                  backend/lib/eventBus.js → webhookDelivery.js. */}
+              <select className="input-field" style={{ margin: 0, width: '220px', background: 'var(--input-bg)' }} value={newHook.event} onChange={e => setNewHook({ ...newHook, event: e.target.value })}>
+                {WEBHOOK_EVENTS.map(ev => (
+                  <option key={ev.value} value={ev.value}>{ev.label}</option>
+                ))}
               </select>
               <input type="url" className="input-field" style={{ margin: 0, flex: 1 }} placeholder="https://endpoint.example.com/webhook" required value={newHook.targetUrl} onChange={e => setNewHook({ ...newHook, targetUrl: e.target.value })} />
             </div>

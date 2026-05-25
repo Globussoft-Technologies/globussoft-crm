@@ -39,6 +39,10 @@ const { test, expect } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const API = `${BASE_URL}/api`;
+// Demo (e2e-full target) sees concurrent rule firings from 7 other shards
+// → ApprovalRequest counts get polluted. Skip create_approval tests on
+// demo; per-push gate runs them against the deterministic local stack.
+const IS_LOCAL_STACK = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(BASE_URL);
 
 const ADMIN = { email: 'admin@globussoft.com', password: 'password123' };
 
@@ -345,6 +349,7 @@ test.describe('eventBus.executeAction() — dispatcher coverage', () => {
 
   // ── create_approval ────────────────────────────────────────────────
   test('create_approval branch creates an ApprovalRequest row and chains approval.created', async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, 'ApprovalRequest counter polluted by 8-shard concurrent firings on demo — per-push gate runs against local stack');
     const rule = await createRule(request, {
       name: `act-approval-${TAG}`,
       triggerType: 'deal.created',
@@ -395,6 +400,7 @@ test.describe('eventBus.executeAction() — dispatcher coverage', () => {
   });
 
   test('create_approval skips when payload entityId is missing', async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, 'ApprovalRequest counter polluted by 8-shard concurrent firings on demo — per-push gate runs against local stack');
     const rule = await createRule(request, {
       name: `act-approval-noid-${TAG}`,
       triggerType: 'deal.created',

@@ -486,6 +486,38 @@ const NotificationBell = () => {
               </div>
             ))
           )}
+
+          {/* #853 — Footer "View all" link deep-links to the full
+              NotificationsCenter inbox page (paginated history + filters).
+              Hidden when the panel is empty since there's nothing to "view all
+              of" yet. */}
+          {notifications.length > 0 && (
+            <div
+              style={{
+                borderTop: "1px solid var(--border-color)",
+                padding: "10px 16px",
+                textAlign: "center",
+              }}
+            >
+              <button
+                onClick={() => {
+                  navigate("/notifications");
+                  setOpen(false);
+                }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--accent-color)",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: 500,
+                }}
+                aria-label="View all notifications"
+              >
+                View all notifications →
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -180,7 +180,9 @@ jobs:
             tests/wellness-rbac-api.spec.js \
             tests/auth-security-api.spec.js \
             tests/route-contracts-api.spec.js \
+            tests/admin-llm-spend-api.spec.js \
             tests/billing-api.spec.js \
+            tests/billing-export-api.spec.js \
             tests/lead-routing-api.spec.js \
             tests/search-api.spec.js \
             tests/workflows-api.spec.js \
@@ -261,6 +263,32 @@ jobs:
             tests/portal-api.spec.js \
             tests/tenant-switch-disabled-api.spec.js \
             tests/voice-transcription-api.spec.js \
+            tests/channels-credentials-api.spec.js \
+            tests/wellness-consent-archive-api.spec.js \
+            tests/travel-diagnostics-api.spec.js \
+            tests/travel-digilocker-stub-api.spec.js \
+            tests/travel-itineraries-api.spec.js \
+            tests/travel-trips-api.spec.js \
+            tests/travel-cost-master-api.spec.js \
+            tests/travel-suppliers-api.spec.js \
+            tests/travel-microsites-api.spec.js \
+            tests/travel-religious-packets-api.spec.js \
+            tests/travel-rfu-profiles-api.spec.js \
+            tests/travel-pricing-api.spec.js \
+            tests/travel-trip-billing-api.spec.js \
+            tests/travel-webcheckin-api.spec.js \
+            tests/travel-csv-io-api.spec.js \
+            tests/travel-dashboard-api.spec.js \
+            tests/travel-reports-api.spec.js \
+            tests/travel-seed-taxonomy-api.spec.js \
+            tests/voyagr-lead-capture-api.spec.js \
+            tests/travel-travelstall-personalised-pdf-api.spec.js \
+            tests/travel-visa-analytics-api.spec.js \
+            tests/travel-visa-applications-api.spec.js \
+            tests/wellness-patient-timeline-api.spec.js \
+            tests/wallet-topup-api.spec.js \
+            tests/pos-sale-finalize-api.spec.js \
+            tests/travel-quote-lines-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

@@ -408,8 +408,10 @@ test.describe.serial('Wellness deep — Real browser UI flows', () => {
     await page.goto(`${BASE_URL}/login`);
     await page.waitForLoadState('domcontentloaded');
 
-    // Quick-login button "Demo Admin" sits under the Enhanced Wellness section
-    const demoAdminBtn = page.getByRole('button', { name: /Demo Admin/i });
+    // Quick-login button "Demo Admin" sits under the Enhanced Wellness section.
+    // v3.9.0 added a sibling Travel Stall "Demo Admin" — anchor on the email
+    // suffix in the accessible name to keep the locator unique.
+    const demoAdminBtn = page.getByRole('button', { name: /Demo Admin\s+admin@wellness/i });
     await expect(demoAdminBtn).toBeVisible({ timeout: 10000 });
     await demoAdminBtn.click();
 
@@ -423,7 +425,7 @@ test.describe.serial('Wellness deep — Real browser UI flows', () => {
 
   test('23. Click into Patients → search → click first patient → tabs render', async ({ page }) => {
     await page.goto(`${BASE_URL}/login`);
-    await page.getByRole('button', { name: /Demo Admin/i }).click();
+    await page.getByRole('button', { name: /Demo Admin\s+admin@wellness/i }).click();
     await page.waitForURL(/\/wellness/, { timeout: 15000 });
 
     await page.getByRole('link', { name: /Patients/i }).first().click();
@@ -444,7 +446,7 @@ test.describe.serial('Wellness deep — Real browser UI flows', () => {
 
   test('24. Owner Dashboard → click "Recommendations" link → list renders', async ({ page }) => {
     await page.goto(`${BASE_URL}/login`);
-    await page.getByRole('button', { name: /Demo Admin/i }).click();
+    await page.getByRole('button', { name: /Demo Admin\s+admin@wellness/i }).click();
     await page.waitForURL(/\/wellness/, { timeout: 15000 });
 
     // Click the Recommendations sidebar link
@@ -491,7 +493,7 @@ test.describe('Wellness deep — Theme', () => {
 
   test('27. After wellness login, body has data-vertical="wellness"', async ({ page }) => {
     await page.goto(`${BASE_URL}/login`);
-    await page.getByRole('button', { name: /Demo Admin/i }).click();
+    await page.getByRole('button', { name: /Demo Admin\s+admin@wellness/i }).click();
     await page.waitForURL(/\/wellness/, { timeout: 15000 });
     await page.waitForFunction(() => document.body.getAttribute('data-vertical') === 'wellness', { timeout: 10000 });
     expect(await page.locator('body').getAttribute('data-vertical')).toBe('wellness');

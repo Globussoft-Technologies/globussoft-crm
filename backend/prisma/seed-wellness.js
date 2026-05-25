@@ -882,6 +882,95 @@ async function main() {
   }
   console.log(`[seed-wellness] drugs: ${drugSeeds.length}`);
 
+  // ── Inventory + Memberships seed (#834 #835) ──────────────────────
+  // Pre-fix: Inventory back-office (Categories / Vendors / Receipts) and
+  // Memberships landed on staging as empty shells. The engines existed but
+  // no seed rows meant clinics couldn't see the flow exercised end-to-end.
+  // This block seeds a minimal-but-realistic set so the staging walkthrough
+  // shows live numbers in every counter.
+
+  // Product categories — 2 hierarchical groups matching Dr. Haror's
+  // consumable patterns (sterile + topical pharmacy aisles).
+  const categorySeeds = [
+    { name: "Consumables", parentId: null },
+    { name: "Topical Pharmacy", parentId: null },
+    { name: "Hair Restoration Kits", parentId: null },
+  ];
+  const seededCategories = {};
+  for (const c of categorySeeds) {
+    const existing = await prisma.productCategory.findFirst({ where: { tenantId: tenant.id, name: c.name } });
+    if (existing) {
+      seededCategories[c.name] = existing;
+    } else {
+      seededCategories[c.name] = await prisma.productCategory.create({
+        data: { ...c, tenantId: tenant.id },
+      });
+    }
+  }
+  // One child category to demonstrate hierarchy
+  const sterileChildName = "Sterile Disposables";
+  const existingSterile = await prisma.productCategory.findFirst({ where: { tenantId: tenant.id, name: sterileChildName } });
+  if (!existingSterile) {
+    await prisma.productCategory.create({
+      data: { name: sterileChildName, parentId: seededCategories.Consumables.id, tenantId: tenant.id },
+    });
+  }
+  console.log(`[seed-wellness] product categories: ${categorySeeds.length} + 1 child`);
+
+  // Vendors — realistic Indian pharma + medical-supplies distributors
+  const vendorSeeds = [
+    { name: "Apollo Pharma Distributors", contactPerson: "Rajesh Kumar", phone: "+919811020030", email: "orders@apollopharma.in", gstin: "07AAACA1234B1Z5", addressLine: "Sector 18, Noida, UP — 201301" },
+    { name: "Sterilab Medical Supplies",  contactPerson: "Priya Sharma", phone: "+919833445566", email: "sales@sterilab.co.in", gstin: "27AABCS5678C1Z2", addressLine: "MIDC Andheri East, Mumbai — 400093" },
+    { name: "Galderma India (Tretinoin)", contactPerson: "Dr. Anil Bhatt", phone: "+918044556677", email: "india@galderma.com", gstin: "29AAACG4321D1Z9", addressLine: "Embassy Tech Square, Bengaluru — 560071" },
+  ];
+  const seededVendors = {};
+  for (const v of vendorSeeds) {
+    const existing = await prisma.vendor.findFirst({ where: { tenantId: tenant.id, name: v.name } });
+    if (existing) {
+      seededVendors[v.name] = existing;
+    } else {
+      seededVendors[v.name] = await prisma.vendor.create({ data: { ...v, tenantId: tenant.id } });
+    }
+  }
+  console.log(`[seed-wellness] vendors: ${vendorSeeds.length}`);
+
+  // Membership plans (#835) — Dr. Haror's realistic offerings.
+  // Entitlements are stamped onto Membership.balance at purchase; for the
+  // shell stage we ship empty arrays — the engine fills them at plan-edit
+  // time when the operator wires service quantities. Keeps schema honest.
+  const membershipPlanSeeds = [
+    {
+      name: "Skincare Maintenance — 30 day",
+      description: "1 facial + 1 chemical peel + 2 home-care follow-ups (skincare maintenance plan for active patients).",
+      durationDays: 30,
+      price: 6500,
+      entitlements: JSON.stringify([]),
+    },
+    {
+      name: "Hair Restoration — Annual",
+      description: "12 monthly PRP sessions + quarterly trichologist review + topical minoxidil refills. Ideal for AGA Stage 2-3 patients on long-arc protocol.",
+      durationDays: 365,
+      price: 65000,
+      entitlements: JSON.stringify([]),
+    },
+    {
+      name: "Aesthetic Touch-up — Single Session",
+      description: "One Botox/filler session within 60 days (pre-event/wedding-window pricing).",
+      durationDays: 60,
+      price: 18500,
+      entitlements: JSON.stringify([]),
+    },
+  ];
+  for (const p of membershipPlanSeeds) {
+    const existing = await prisma.membershipPlan.findFirst({ where: { tenantId: tenant.id, name: p.name } });
+    if (existing) {
+      await prisma.membershipPlan.update({ where: { id: existing.id }, data: p });
+    } else {
+      await prisma.membershipPlan.create({ data: { ...p, tenantId: tenant.id } });
+    }
+  }
+  console.log(`[seed-wellness] membership plans: ${membershipPlanSeeds.length}`);
+
   console.log("\n[seed-wellness] DONE");
   console.log("\nLogin to Enhanced Wellness with:");
   console.log("  ── Demo accounts (use these for the live walkthrough) ──");

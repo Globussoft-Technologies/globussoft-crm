@@ -73,7 +73,7 @@ describe('verifyToken', () => {
     await verifyToken(req, res, next);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: 'Authentication required' });
-    expect(res.set).toHaveBeenCalledWith('WWW-Authenticate', 'Bearer realm="api"');
+    expect(res.set).toHaveBeenCalledWith('WWW-Authenticate', 'Bearer');
     expect(next).not.toHaveBeenCalled();
   });
 

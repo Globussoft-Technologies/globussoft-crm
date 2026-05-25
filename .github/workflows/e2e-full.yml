@@ -2,25 +2,33 @@ name: Full E2E suite (release validation)
 
 # Heavyweight Playwright run — the FULL chromium project (UI flows,
 # wellness deep, a11y, integration, auth, api-health) against the
-# deployed target URL. Runs ONLY on release-style events:
-#   - push of a tag matching v* (the normal release path: tag a green
-#     main commit AFTER its deploy.yml run has succeeded)
-#   - GitHub Release published (alternate)
+# deployed target URL. Fires on:
+#   - workflow_run: every main commit, AFTER its deploy.yml run goes green
+#     (auto-validation — the demo has the new code by then). Skips when
+#     deploy is red (no point validating a broken demo).
+#   - push of a tag matching v* (manual release tagging still works)
+#   - GitHub Release published (alternate manual path)
 #   - workflow_dispatch (manual; lets you point at any URL)
 #
 # Per-commit CI stays fast — deploy.yml's api_tests job keeps to the
-# 18 gated API specs (~2-3 min). This release validation runs the full
-# Playwright surface (~10-20 min) and is opt-in by tagging.
+# 18 gated API specs (~2-3 min). This heavyweight suite then runs after
+# the deploy lands (~30-60 min wall-clock across 4 parallel shards).
 #
-# Recommended release flow:
-#   1. Push to main — deploy.yml deploys to demo + smoke-checks
-#   2. Wait for the deploy job to go green
-#   3. Tag the commit:    git tag v3.2.6 && git push origin v3.2.6
-#   4. This workflow fires + runs the full suite against demo
-#   5. If green, the tag stands as a verified release. If red, the
-#      demo isn't broken (deploy.yml's smoke check already passed) but
-#      a deeper UI/flow regression has surfaced — fix it on main and
-#      retag.
+# Why workflow_run instead of `push: branches: [main]`?
+#   - workflow_run fires AFTER deploy.yml completes, so the demo
+#     actually has the new code when this suite hits it.
+#   - A bare `push:` trigger would race the deploy — the suite's
+#     `Wait for target health` would 200 against the PREVIOUS code on
+#     demo (because /api/health responds OK before the new code is
+#     deployed), giving false-green on stale code.
+#
+# Doc-only commits are skipped naturally: deploy.yml's paths-ignore
+# blocks them upstream, so they never reach this workflow_run trigger.
+#
+# CI-cost note: ~240 runner-minutes per fire (4 shards × 60-min ceiling).
+# Bumps total usage by 5-10× depending on commit cadence — confirm with
+# Actions billing before merging this trigger if Free-tier minutes
+# matter for the org.
 
 on:
   push:
@@ -28,6 +36,13 @@ on:
       - 'v*'
   release:
     types: [published]
+  # Auto-validate every main commit AFTER its deploy.yml goes green.
+  # The job-level `if:` below filters to conclusion == 'success', so
+  # red deploys don't waste a 4-shard run validating broken code.
+  workflow_run:
+    workflows: ['Deploy to demo server (crm.globusdemos.com)']
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       base_url:
@@ -47,14 +62,39 @@ jobs:
   # into N equal slices that run in parallel; each slice gets ~645 tests
   # / ~15 min wall time. All 4 shards execute concurrently, so total
   # release-validation latency stays around 15-20 min.
+  #
+  # 2026-05-19: an 8-shard experiment (runs 26053988488 → 26093112312) was
+  # tried to target ~15 min wall-clock. Result: wall-clock didn't improve
+  # (~30 min, dominated by longest shard), AND total-concurrent test
+  # workers doubled from 8 to 16, saturating the demo origin and causing
+  # chronic CF 502/520 blips. Cascade-fail rates 5–10× higher than 4-shard,
+  # multiple shards hitting the 45-min timeout. Reverted. Future ~15-min
+  # target needs a non-demo backing target (local docker stack per shard)
+  # — see TODOS.md / #457 / handoff.
   e2e-full:
+    # workflow_run fires on BOTH success and failure of upstream deploy.yml;
+    # we only want to validate when it succeeded (broken-deploy demos
+    # would just light up the suite red for the wrong reason). For non-
+    # workflow_run triggers (tag, release, manual), the condition is true
+    # by default — those paths still run.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    # 30 min was the original ceiling but shard 1+2 wall-clock crept past
-    # 30:00 on v3.8.0 + v3.8.1 (audit-api serial-mode + heavy specs concentrate
-    # there) while shards 3+4 finish in 17-23 min. Bumping to 45 absorbs the
-    # imbalance. If a shard genuinely exceeds 45 min that's a real perf
-    # regression — the ceiling shouldn't silently grow further.
-    timeout-minutes: 45
+    # Per-shard wall-clock ceiling. History:
+    #   30 min — original, fine until shard 1+2 audit-api serial-mode +
+    #            heavy specs crossed 30 min.
+    #   45 min — absorbed the imbalance through v3.8.x.
+    #   60 min — current. Three consecutive runs (26095628417, 26121861939,
+    #            26125335052) hit the 45-min wall on shards 1+2 even after
+    #            7 bandaid commits (actionTimeout 60→30s, CI retries 3→2,
+    #            IS_LOCAL_STACK skips on 7 audit-api convergence specs).
+    #            Root cause is structural: at 4 shards × 2 workers, CF
+    #            blips + slow Prisma JOINs pile retry overhead until the
+    #            heavier shards exhaust 45 min. The real fix is per-shard
+    #            local docker stacks (eliminating demo contention) — see
+    #            R11 in docs/TRAVEL_CRM_RISKS.md if you want context.
+    #            60 unblocks release validation today; long-term local-
+    #            stack lift remains on the backlog.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

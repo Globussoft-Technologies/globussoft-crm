@@ -265,7 +265,7 @@ export default function Sequences() {
            <button onClick={resetCanvas} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
              <RefreshCw size={16} /> New
            </button>
-           <button onClick={() => setShowNameModal(true)} disabled={saving} className="btn-primary" id="save-sequence-btn" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#ec4899', border: 'none' }}>
+           <button onClick={() => setShowNameModal(true)} disabled={saving} className="btn-primary sequence-save-btn" id="save-sequence-btn" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
              <Save size={18} /> {saving ? 'Saving...' : 'Create Sequence'}
            </button>
          </div>
@@ -287,7 +287,7 @@ export default function Sequences() {
             />
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
               <button onClick={() => setShowNameModal(false)} className="btn-secondary">Cancel</button>
-              <button onClick={() => saveSequence()} className="btn-primary" style={{ background: '#ec4899', border: 'none' }}>Save</button>
+              <button onClick={() => saveSequence()} className="btn-primary sequence-save-btn">Save</button>
             </div>
           </div>
         </div>
@@ -299,7 +299,7 @@ export default function Sequences() {
         {/* ReactFlow Graph Canvas */}
         <div style={{ flex: 3, position: 'relative' }}>
           <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} fitView>
-            <Panel position="top-left" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', background: 'rgba(0,0,0,0.8)', padding: '0.75rem', borderRadius: '8px', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.05)', maxWidth: '420px' }}>
+            <Panel position="top-left" className="sequence-canvas-toolbar" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', padding: '0.75rem', borderRadius: '8px', backdropFilter: 'blur(10px)', maxWidth: '420px' }}>
               <button onClick={() => addLogicNode('default', 'ACTION: Send Email', '#3b82f6')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderColor: 'rgba(59,130,246,0.4)' }}>
                 <Mail size={16} color="#3b82f6"/> Add Email
               </button>
@@ -347,8 +347,8 @@ export default function Sequences() {
         </div>
 
         {/* Existing Sequences Sidebar */}
-        <div className="sequence-list card" style={{ flex: 1, minWidth: '220px', maxWidth: '280px', borderLeft: '1px solid rgba(255,255,255,0.05)', background: 'rgba(0,0,0,0.4)', padding: '1.5rem', overflowY: 'auto' }}>
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#ec4899' }}>
+        <div className="sequence-list sequence-list-sidebar card" style={{ flex: 1, minWidth: '220px', maxWidth: '280px', padding: '1.5rem', overflowY: 'auto' }}>
+          <h3 className="sequence-list-heading" style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Network size={18} /> Saved Sequences
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -356,11 +356,10 @@ export default function Sequences() {
               <div
                 key={seq.id}
                 onClick={() => loadSequenceIntoCanvas(seq)}
+                className={`sequence-card${activeSeqId === seq.id ? ' sequence-card--active' : ''}`}
                 style={{
-                  background: activeSeqId === seq.id ? 'rgba(236,72,153,0.15)' : 'rgba(255,255,255,0.02)',
                   padding: '1rem',
                   borderRadius: '8px',
-                  border: `1px solid ${activeSeqId === seq.id ? 'rgba(236,72,153,0.4)' : 'rgba(255,255,255,0.05)'}`,
                   cursor: 'pointer',
                   transition: 'all 0.2s'
                 }}
@@ -370,7 +369,8 @@ export default function Sequences() {
                   <Link
                     to={`/sequences/${seq.id}/builder`}
                     onClick={(e) => e.stopPropagation()}
-                    style={{ background: 'transparent', border: 'none', color: '#3b82f6', padding: '2px 4px', position: 'relative', zIndex: 10, pointerEvents: 'all', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+                    className="sequence-card-builder-link"
+                    style={{ background: 'transparent', border: 'none', padding: '2px 4px', position: 'relative', zIndex: 10, pointerEvents: 'all', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
                     title="Open step-list builder"
                   >
                     <ListOrdered size={14} />

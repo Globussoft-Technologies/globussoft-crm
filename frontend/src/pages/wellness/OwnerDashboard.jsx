@@ -1,11 +1,13 @@
 import { useContext, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Activity, AlertTriangle, Calendar, IndianRupee, Sparkles, TrendingUp, Users, Bell, ArrowRight, Stethoscope, Megaphone, PhoneCall, ExternalLink } from 'lucide-react';
+import { Activity, AlertTriangle, Calendar, IndianRupee, Sparkles, TrendingUp, Users, Bell, ArrowRight, Stethoscope, Megaphone, PhoneCall, ExternalLink, RefreshCw } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
 import { launchAdsGptAs, ADSGPT_DEMO_LOGIN } from '../../utils/adsgpt';
-import { launchCallifiedSSO } from '../../utils/callified';
+// #832 — launchCallifiedSSO is no longer imported here. The "Open Callified"
+// card now navigates internally to /wellness/callified (the embedded iframe
+// page). The util is still consumed by the embed page itself.
 import { getGreeting } from '../../utils/greeting';
 
 // #207/#214: clinical staff (doctor/professional/telecaller/helper) must not
@@ -48,7 +50,54 @@ export default function OwnerDashboard() {
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState('');
   const [adsGptStatus, setAdsGptStatus] = useState({ state: 'idle', msg: '' });
-  const [callifiedStatus, setCallifiedStatus] = useState({ state: 'idle', msg: '' });
+  // #832 — callifiedStatus removed. The "Open Callified" card now does an
+  // SPA navigate (instantaneous), so loading/error states aren't surfaced
+  // on the dashboard card — they live inside the embed page itself.
+  // #831: AdsGPT card was hard-wired to ADSGPT_DEMO_LOGIN at build time
+  // and never consulted real linked-account state. Pen-test framing on
+  // staging: card reads "Linked account: Not configured" regardless of
+  // what's actually wired — the env var isn't baked into the staging
+  // build, and nothing falls back to a server-side truth source.
+  // Now: query /api/integrations, find the adsgpt row (if any), and
+  // render one of three states (linked / not-linked / fetch-error).
+  // 'idle' = first paint before /api/integrations resolves;
+  // 'linked' = Integration row exists + isActive;
+  // 'not_linked' = no Integration row, OR row exists but isActive=false;
+  // 'error' = /api/integrations call failed.
+  const [adsGptIntegration, setAdsGptIntegration] = useState({ state: 'idle', login: null });
+  // #836: surface a freshness signal on the "Top recommendation" panel +
+  // give Owner a manual-refresh CTA when the top card is stale. The
+  // orchestrator runs daily 07:00 IST, but its output can age out if the
+  // cron misses a day (or if it's running against a tenant whose payload
+  // hasn't changed). Pre-fix the panel read the top row's title/body with
+  // no date context — same copy every visit, regardless of when it was
+  // generated. The pen-test framing was "looks scripted" because it
+  // literally was reading week-old seed-table copy.
+  const [orchestratorStatus, setOrchestratorStatus] = useState({ state: 'idle', msg: '' });
+
+  const refreshDashboard = () => {
+    const url = locationId ? `/api/wellness/dashboard?locationId=${locationId}` : '/api/wellness/dashboard';
+    return fetchApi(url).then(setData).catch(() => {});
+  };
+
+  const handleRunOrchestrator = async () => {
+    setOrchestratorStatus({ state: 'loading', msg: 'Refreshing recommendations…' });
+    try {
+      const result = await fetchApi('/api/wellness/orchestrator/run', { method: 'POST', silent: true });
+      const count = (result && typeof result.created === 'number') ? result.created : 0;
+      await refreshDashboard();
+      setOrchestratorStatus({
+        state: 'ok',
+        msg: count > 0 ? `Generated ${count} new recommendation${count === 1 ? '' : 's'}.` : 'No new recommendations — today\'s queue is up-to-date.',
+      });
+      setTimeout(() => setOrchestratorStatus({ state: 'idle', msg: '' }), 4000);
+    } catch (err) {
+      const msg = err?.status === 403
+        ? 'Admin or manager only.'
+        : (err?.message || 'Refresh failed.');
+      setOrchestratorStatus({ state: 'error', msg });
+    }
+  };
 
   // #207/#214: redirect non-management away from the Owner Dashboard.
   // Direct URL nav by a doctor/telecaller/helper/professional now bounces
@@ -72,20 +121,80 @@ export default function OwnerDashboard() {
     }
   };
 
-  const handleLaunchCallified = async () => {
-    setCallifiedStatus({ state: 'loading', msg: 'Signing you into Callified…' });
-    try {
-      await launchCallifiedSSO();
-      setCallifiedStatus({ state: 'ok', msg: 'Opened Callified dashboard' });
-      setTimeout(() => setCallifiedStatus({ state: 'idle', msg: '' }), 3000);
-    } catch (err) {
-      setCallifiedStatus({ state: 'error', msg: err.message || 'Callified launch failed' });
-    }
+  // #832 — "Open Callified" no longer pops a new browser tab. It now
+  // navigates the user to the embedded panel at /wellness/callified, where
+  // an iframe loads Callified inside the CRM shell. The SSO contract with
+  // Callified is unchanged — the embed page hits the same auth-url endpoint
+  // we used to call here. setCallifiedStatus stays for any future flow
+  // (e.g. a pre-flight check could set 'loading' before navigating) but is
+  // currently inert; SPA navigation is effectively instant.
+  const handleLaunchCallified = () => {
+    navigate('/wellness/callified');
   };
 
   useEffect(() => {
     fetchApi('/api/wellness/locations').then(setLocations).catch(() => setLocations([]));
   }, []);
+
+  // #831: load real AdsGPT linked-account state from /api/integrations.
+  // Pre-fix the card read a build-time env var (ADSGPT_DEMO_LOGIN) that
+  // wasn't set on the staging build — so every demo showed "Not
+  // configured" with no path forward. Wrapped in a callable so the
+  // "Retry" CTA on the error state can re-fire it without remounting
+  // the dashboard.
+  const loadAdsGptIntegration = () => {
+    setAdsGptIntegration((prev) => ({ ...prev, state: 'idle' }));
+    fetchApi('/api/integrations', { silent: true })
+      .then((rows) => {
+        const list = Array.isArray(rows) ? rows : [];
+        const adsgpt = list.find((r) => r && r.provider === 'adsgpt');
+        if (adsgpt && adsgpt.isActive) {
+          // settings is a JSON-stringified blob per the Integration model
+          // (@db.Text). Try to pull a human-readable account label off
+          // it; fall back to the build-time demo login so the demo box
+          // still has something to show when the row is wired but
+          // unannotated.
+          let login = null;
+          if (adsgpt.settings) {
+            try {
+              const parsed = typeof adsgpt.settings === 'string'
+                ? JSON.parse(adsgpt.settings)
+                : adsgpt.settings;
+              login = parsed?.login || parsed?.accountName || parsed?.account || null;
+            } catch (_e) { /* ignore parse failure — fallback handles it */ }
+          }
+          setAdsGptIntegration({ state: 'linked', login: login || ADSGPT_DEMO_LOGIN });
+        } else {
+          setAdsGptIntegration({ state: 'not_linked', login: null });
+        }
+      })
+      .catch(() => setAdsGptIntegration({ state: 'error', login: null }));
+  };
+
+  useEffect(() => {
+    loadAdsGptIntegration();
+  }, []);
+
+  // #831: "Connect AdsGPT" CTA path on the not_linked state — reuses
+  // the existing SSO impersonation helper so Owner gets the same
+  // one-click surface whether they're linking for the first time or
+  // re-entering an already-linked account. Server-side persistence of
+  // the Integration row is handled out-of-band today (demo fixture);
+  // this CTA is the user-visible "go connect now" surface the
+  // pen-test asked for. After launch, we don't optimistically flip to
+  // 'linked' — the source of truth is /api/integrations, so the user
+  // clicks Retry (or refreshes) to pick up the real state once the
+  // out-of-band link completes.
+  const handleConnectAdsGpt = async () => {
+    setAdsGptStatus({ state: 'loading', msg: 'Opening AdsGPT connect flow…' });
+    try {
+      await launchAdsGptAs(ADSGPT_DEMO_LOGIN);
+      setAdsGptStatus({ state: 'ok', msg: 'Connect flow opened in a new tab. Complete the link, then click Retry below.' });
+      setTimeout(() => setAdsGptStatus({ state: 'idle', msg: '' }), 6000);
+    } catch (err) {
+      setAdsGptStatus({ state: 'error', msg: err.message || 'AdsGPT connect failed' });
+    }
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -125,9 +234,15 @@ export default function OwnerDashboard() {
           {/* #636: greeting now derives from the user's local clock via the
               shared getGreeting helper (4 branches inc. "Good night" for
               22:00–04:59). Was inline IST-only with 3 branches and no
-              late-night case. */}
+              late-night case.
+              #833: previously used `user.name.split(' ')[0]` which truncated
+              two-word display labels — for the demo seed user `name="Demo Admin"`
+              the greeting rendered as "Good evening, Demo" and looked broken /
+              role-truncated. Use the full name; for genuine first-and-last
+              names ("Rishu Sharma" → "Good evening, Rishu Sharma") this still
+              reads cleanly. */}
           <h1 style={{ fontFamily: 'var(--font-family)', fontSize: '1.75rem', fontWeight: 600 }}>
-            {getGreeting()}{user?.name ? `, ${user.name.split(' ')[0]}` : ''}
+            {getGreeting()}{user?.name ? `, ${user.name}` : ''}
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
             Here's the snapshot for today — {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
@@ -194,21 +309,93 @@ export default function OwnerDashboard() {
         </div>
 
         <div className="glass" style={{ padding: '1.25rem' }}>
-          <h3 style={{ marginBottom: '0.75rem', fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Sparkles size={16} color="#a855f7" /> Top recommendation
+          <h3 style={{ marginBottom: '0.75rem', fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Sparkles size={16} color="#a855f7" /> Top recommendation
+            </span>
+            {/* #836: manual orchestrator-run CTA — same endpoint the daily
+                07:00 IST cron uses. Backend dedup-suppresses re-emits for
+                cards already created today, so a double-click cannot
+                duplicate the queue. */}
+            <button
+              type="button"
+              onClick={handleRunOrchestrator}
+              disabled={orchestratorStatus.state === 'loading'}
+              aria-label="Refresh recommendations from the orchestrator"
+              title="Re-run the orchestrator to generate today's recommendations"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                padding: '0.3rem 0.6rem', borderRadius: 6,
+                background: 'rgba(168, 85, 247, 0.1)', color: '#a855f7',
+                border: '1px solid rgba(168, 85, 247, 0.25)',
+                fontSize: '0.75rem', fontWeight: 500,
+                cursor: orchestratorStatus.state === 'loading' ? 'wait' : 'pointer',
+                opacity: orchestratorStatus.state === 'loading' ? 0.7 : 1,
+              }}
+            >
+              <RefreshCw size={12} style={{ animation: orchestratorStatus.state === 'loading' ? 'spin 1s linear infinite' : 'none' }} />
+              {orchestratorStatus.state === 'loading' ? 'Refreshing…' : 'Refresh'}
+            </button>
           </h3>
+          {orchestratorStatus.state !== 'idle' && orchestratorStatus.state !== 'loading' && (
+            <div role="status" style={{
+              fontSize: '0.75rem', marginBottom: '0.5rem',
+              color: orchestratorStatus.state === 'error' ? '#f87171' : '#34d399',
+            }}>
+              {orchestratorStatus.msg}
+            </div>
+          )}
           {data.pendingRecommendations.length > 0 ? (
             <>
               <div style={{ fontSize: '0.95rem', fontWeight: 500 }}>{data.pendingRecommendations[0].title}</div>
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.4rem', lineHeight: 1.4 }}>
                 {data.pendingRecommendations[0].body}
               </div>
+              {/* #836: surface the recommendation's age so Owner can tell
+                  at a glance whether the card reflects today's data or a
+                  week-old snapshot. Anything older than 1 day gets a
+                  warning-coloured chip and a hint to refresh. */}
+              {(() => {
+                const createdAt = data.pendingRecommendations[0].createdAt;
+                if (!createdAt) return null;
+                const ageMs = Date.now() - new Date(createdAt).getTime();
+                const ageHours = ageMs / 3600000;
+                const ageDays = ageMs / 86400000;
+                let label;
+                if (ageHours < 1) label = 'Generated less than an hour ago';
+                else if (ageHours < 24) label = `Generated ${Math.round(ageHours)} hour${Math.round(ageHours) === 1 ? '' : 's'} ago`;
+                else if (ageDays < 7) label = `Generated ${Math.round(ageDays)} day${Math.round(ageDays) === 1 ? '' : 's'} ago`;
+                else label = `Generated ${Math.round(ageDays)} days ago — likely stale`;
+                const stale = ageHours >= 24;
+                return (
+                  <div
+                    aria-label="recommendation age"
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                      marginTop: '0.5rem', padding: '0.2rem 0.5rem', borderRadius: 4,
+                      fontSize: '0.7rem',
+                      background: stale ? 'rgba(245, 158, 11, 0.1)' : 'rgba(52, 211, 153, 0.1)',
+                      color: stale ? 'var(--warning-color, #f59e0b)' : '#34d399',
+                      border: `1px solid ${stale ? 'rgba(245, 158, 11, 0.25)' : 'rgba(52, 211, 153, 0.2)'}`,
+                    }}
+                  >
+                    {label}
+                  </div>
+                );
+              })()}
               <Link to="/wellness/recommendations" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--accent-color)' }}>
                 Review all {data.pendingApprovals} <ArrowRight size={14} />
               </Link>
             </>
           ) : (
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No pending recommendations.</div>
+            // #836: honest empty-state instead of the old "No pending
+            // recommendations." which read as a UI-error placeholder when
+            // the user landed here with zero rows. Pen-test pushback was
+            // about believability — explicitly naming the orchestrator
+            // makes it clear this is a real engine, not stub copy.
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              No recommendations awaiting your review. The AI orchestrator runs daily at 07:00 IST — click <strong>Refresh</strong> to re-run now.
+            </div>
           )}
         </div>
       </div>
@@ -231,9 +418,31 @@ export default function OwnerDashboard() {
             </div>
             <div>
               <div style={{ fontSize: '1rem', fontWeight: 600 }}>AdsGPT</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }}>
-                Linked account: <strong>{ADSGPT_DEMO_LOGIN}</strong>
-              </div>
+              {/* #831: card now reflects real /api/integrations state
+                  rather than a build-time env var. Three render branches:
+                  linked (account name + View campaigns), not_linked
+                  (Connect AdsGPT CTA), error (Retry CTA). 'idle' is the
+                  pre-fetch flash — kept brief to avoid layout jitter. */}
+              {adsGptIntegration.state === 'linked' && (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }} data-testid="adsgpt-linked-label">
+                  Linked account: <strong>{adsGptIntegration.login}</strong>
+                </div>
+              )}
+              {adsGptIntegration.state === 'not_linked' && (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }} data-testid="adsgpt-not-linked-label">
+                  No AdsGPT account linked yet
+                </div>
+              )}
+              {adsGptIntegration.state === 'error' && (
+                <div style={{ fontSize: '0.85rem', color: 'var(--warning-color, #f59e0b)', marginTop: 2 }} data-testid="adsgpt-error-label">
+                  Unable to check link status
+                </div>
+              )}
+              {adsGptIntegration.state === 'idle' && (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                  Checking link status…
+                </div>
+              )}
               {adsGptStatus.state !== 'idle' && (
                 <div
                   role="status"
@@ -250,26 +459,74 @@ export default function OwnerDashboard() {
               )}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={handleLaunchAdsGpt}
-            disabled={adsGptStatus.state === 'loading'}
-            aria-label={`Open AdsGPT as ${ADSGPT_DEMO_LOGIN}`}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
-              padding: '0.65rem 1rem', borderRadius: 10,
-              background: 'linear-gradient(135deg, #a855f7, #6366f1)',
-              color: '#fff', border: 'none',
-              fontSize: '0.9rem', fontWeight: 500,
-              boxShadow: '0 8px 20px rgba(139, 92, 246, 0.3)',
-              cursor: adsGptStatus.state === 'loading' ? 'wait' : 'pointer',
-              opacity: adsGptStatus.state === 'loading' ? 0.7 : 1,
-              alignSelf: 'flex-start',
-            }}
-          >
-            {adsGptStatus.state === 'loading' ? 'Signing in…' : 'Open AdsGPT'}
-            <ExternalLink size={14} />
-          </button>
+          {/* #831: state-driven CTA. 'linked' → existing View-campaigns SSO
+              into AdsGPT dashboard. 'not_linked' → Connect AdsGPT (same
+              SSO helper — out-of-band link completion writes the
+              Integration row). 'error' → Retry to re-fire the /api/
+              integrations fetch. 'idle' → disabled placeholder. */}
+          {adsGptIntegration.state === 'linked' && (
+            <button
+              type="button"
+              onClick={handleLaunchAdsGpt}
+              disabled={adsGptStatus.state === 'loading'}
+              aria-label={`Open AdsGPT campaigns for ${adsGptIntegration.login}`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                padding: '0.65rem 1rem', borderRadius: 10,
+                background: 'linear-gradient(135deg, #a855f7, #6366f1)',
+                color: '#fff', border: 'none',
+                fontSize: '0.9rem', fontWeight: 500,
+                boxShadow: '0 8px 20px rgba(139, 92, 246, 0.3)',
+                cursor: adsGptStatus.state === 'loading' ? 'wait' : 'pointer',
+                opacity: adsGptStatus.state === 'loading' ? 0.7 : 1,
+                alignSelf: 'flex-start',
+              }}
+            >
+              {adsGptStatus.state === 'loading' ? 'Signing in…' : 'View campaigns'}
+              <ExternalLink size={14} />
+            </button>
+          )}
+          {adsGptIntegration.state === 'not_linked' && (
+            <button
+              type="button"
+              onClick={handleConnectAdsGpt}
+              disabled={adsGptStatus.state === 'loading'}
+              aria-label="Connect AdsGPT account"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                padding: '0.65rem 1rem', borderRadius: 10,
+                background: 'linear-gradient(135deg, #f472b6, #8b5cf6)',
+                color: '#fff', border: 'none',
+                fontSize: '0.9rem', fontWeight: 500,
+                boxShadow: '0 8px 20px rgba(139, 92, 246, 0.3)',
+                cursor: adsGptStatus.state === 'loading' ? 'wait' : 'pointer',
+                opacity: adsGptStatus.state === 'loading' ? 0.7 : 1,
+                alignSelf: 'flex-start',
+              }}
+            >
+              {adsGptStatus.state === 'loading' ? 'Opening…' : 'Connect AdsGPT'}
+              <ExternalLink size={14} />
+            </button>
+          )}
+          {adsGptIntegration.state === 'error' && (
+            <button
+              type="button"
+              onClick={loadAdsGptIntegration}
+              aria-label="Retry checking AdsGPT link status"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                padding: '0.65rem 1rem', borderRadius: 10,
+                background: 'rgba(245, 158, 11, 0.15)',
+                color: 'var(--warning-color, #f59e0b)',
+                border: '1px solid rgba(245, 158, 11, 0.35)',
+                fontSize: '0.9rem', fontWeight: 500,
+                cursor: 'pointer',
+                alignSelf: 'flex-start',
+              }}
+            >
+              <RefreshCw size={14} /> Retry
+            </button>
+          )}
         </div>
 
         {/* Callified launch — one-click SSO into Callified for voice/WhatsApp
@@ -289,26 +546,13 @@ export default function OwnerDashboard() {
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }}>
                 Voice & WhatsApp integration
               </div>
-              {callifiedStatus.state !== 'idle' && (
-                <div
-                  role="status"
-                  style={{
-                    fontSize: '0.8rem',
-                    marginTop: 6,
-                    color: callifiedStatus.state === 'error' ? '#f87171'
-                      : callifiedStatus.state === 'ok' ? '#34d399'
-                      : 'var(--text-secondary)',
-                  }}
-                >
-                  {callifiedStatus.msg}
-                </div>
-              )}
+              {/* #832 — inline status row removed; loading/error are now
+                  surfaced on the embed page itself. */}
             </div>
           </div>
           <button
             type="button"
             onClick={handleLaunchCallified}
-            disabled={callifiedStatus.state === 'loading'}
             aria-label="Open Callified dashboard"
             style={{
               display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
@@ -317,13 +561,15 @@ export default function OwnerDashboard() {
               color: '#fff', border: 'none',
               fontSize: '0.9rem', fontWeight: 500,
               boxShadow: '0 8px 20px rgba(6, 182, 212, 0.3)',
-              cursor: callifiedStatus.state === 'loading' ? 'wait' : 'pointer',
-              opacity: callifiedStatus.state === 'loading' ? 0.7 : 1,
+              cursor: 'pointer',
               alignSelf: 'flex-start',
             }}
           >
-            {callifiedStatus.state === 'loading' ? 'Signing in…' : 'Open Callified'}
-            <ExternalLink size={14} />
+            {/* #832 — was <ExternalLink/> + "Open Callified" (new-tab launch).
+                Now <ArrowRight/> signals in-app navigation to the embedded
+                /wellness/callified panel; matches the other in-shell CTAs. */}
+            Open Callified
+            <ArrowRight size={14} />
           </button>
         </div>
       </div>

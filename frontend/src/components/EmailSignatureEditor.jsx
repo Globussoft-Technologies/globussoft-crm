@@ -65,6 +65,20 @@ export default function EmailSignatureEditor() {
     color: 'var(--text-primary, #e2e8f0)',
   };
 
+  // Preview renders inside a sandboxed <iframe> (sandbox="" → no
+  // allow-scripts) so the operator's freeform signature HTML displays
+  // but cannot execute scripts / event-handler attributes. Replaces
+  // dangerouslySetInnerHTML — removes the XSS surface entirely
+  // (AUDIT_2026-05-17_code.md P1.1).
+  const previewDoc =
+    '<!doctype html><meta charset="utf-8"><style>' +
+    'body{margin:0;padding:1rem;background:#fff;color:#111827;' +
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;' +
+    'font-size:0.9rem;line-height:1.5;overflow-wrap:break-word}' +
+    '</style>' +
+    (signature ||
+      '<span style="color:#9ca3af">Your signature preview will appear here...</span>');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       <div style={glassCard}>
@@ -203,25 +217,19 @@ export default function EmailSignatureEditor() {
         >
           <Eye size={14} /> Live Preview
         </div>
-        <div
+        <iframe
+          title="Email signature preview"
+          sandbox=""
+          srcDoc={previewDoc}
           style={{
+            display: 'block',
+            width: '100%',
+            height: '140px',
             background: '#ffffff',
-            color: '#111827',
             borderRadius: '8px',
-            padding: '1rem',
-            minHeight: '80px',
-            fontFamily:
-              '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-            fontSize: '0.9rem',
-            lineHeight: 1.5,
             border: '1px solid rgba(0,0,0,0.08)',
           }}
            
-          dangerouslySetInnerHTML={{
-            __html:
-              signature ||
-              '<span style="color:#9ca3af">Your signature preview will appear here...</span>',
-          }}
         />
       </div>
     </div>

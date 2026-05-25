@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { Prisma } = require("@prisma/client");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 // ──────────────────────────────────────────────────────────────────
@@ -40,8 +41,11 @@ router.get("/", verifyToken, async (req, res) => {
     let sizes = {};
     if (ids.length > 0) {
       // Raw query for byte length of data; works on MySQL
-      const rows = await prisma.$queryRawUnsafe(
-        `SELECT id, OCTET_LENGTH(data) AS size FROM SandboxSnapshot WHERE id IN (${ids.join(",")})`
+      // Parameterized via Prisma.sql + Prisma.join — `ids` are DB-derived
+      // ints so this was safe, but the tagged form forecloses the
+      // string-interpolation footgun (P1.1 from AUDIT_2026-05-17_code.md).
+      const rows = await prisma.$queryRaw(
+        Prisma.sql`SELECT id, OCTET_LENGTH(data) AS size FROM SandboxSnapshot WHERE id IN (${Prisma.join(ids)})`
       );
       for (const r of rows) {
         sizes[r.id] = Number(r.size) || 0;
@@ -180,8 +184,8 @@ router.get("/:id", verifyToken, async (req, res) => {
     if (!snap) return res.status(404).json({ error: "Snapshot not found" });
 
     // Size + counts via raw query and a partial header parse
-    const rows = await prisma.$queryRawUnsafe(
-      `SELECT OCTET_LENGTH(data) AS size FROM SandboxSnapshot WHERE id = ${id}`
+    const rows = await prisma.$queryRaw(
+      Prisma.sql`SELECT OCTET_LENGTH(data) AS size FROM SandboxSnapshot WHERE id = ${id}`
     );
     const sizeBytes = rows && rows[0] ? Number(rows[0].size) : 0;
 

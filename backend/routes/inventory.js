@@ -30,6 +30,9 @@
 // Audit emitted on every mutation to feed the AuditLog hash chain.
 
 const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const prisma = require("../lib/prisma");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
@@ -38,6 +41,30 @@ const { generateReceiptNumber } = require("../lib/inventoryReceiptNumber");
 const { validateDateRange } = require("../lib/validateDateRange");
 
 const router = express.Router();
+
+// #845 — multer disk storage for ProductCategory image uploads. Mirrors the
+// booking_pages.js + landing_pages.js pattern: directory created on demand,
+// safe filename (no path traversal), 2 MB cap per the issue requirement, and
+// fileFilter restricts to JPG / PNG / SVG / WEBP. Served statically from
+// server.js's `/uploads` mount at line 744.
+const CATEGORY_UPLOAD_DIR = path.join(__dirname, "..", "uploads", "product-categories");
+try { fs.mkdirSync(CATEGORY_UPLOAD_DIR, { recursive: true }); } catch { /* best-effort */ }
+const categoryImageUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, CATEGORY_UPLOAD_DIR),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "").toLowerCase();
+      const safeExt = /^\.(png|jpe?g|webp|svg)$/i.test(ext) ? ext.toLowerCase() : ".png";
+      const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+      cb(null, `pc-${stamp}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2 MB cap per issue #845
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(png|jpe?g|webp|svg\+xml)$/i.test(file.mimetype || "")) return cb(null, true);
+    return cb(new Error("Only PNG / JPEG / WebP / SVG images are allowed"));
+  },
+});
 
 // Standard tenant-where helper used everywhere in wellness.js.
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
@@ -65,7 +92,7 @@ router.get("/product-categories", adminGate, async (req, res) => {
 
 router.post("/product-categories", adminGate, async (req, res) => {
   try {
-    const { name, parentId, isActive } = req.body;
+    const { name, parentId, isActive, imageUrl } = req.body;
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
     }
@@ -75,17 +102,27 @@ router.post("/product-categories", adminGate, async (req, res) => {
       });
       if (!parent) return res.status(400).json({ error: "parentId does not exist in this tenant", code: "PARENT_NOT_FOUND" });
     }
+    // #845 — imageUrl is set by the /upload endpoint or pre-existing; accept it
+    // here so the form can create-then-upload OR create-with-existing-url in one
+    // shot. Length cap mirrors the @db.VarChar(500) schema column.
+    if (imageUrl !== undefined && imageUrl !== null && imageUrl !== "") {
+      if (typeof imageUrl !== "string" || imageUrl.length > 500) {
+        return res.status(400).json({ error: "imageUrl must be a string ≤500 chars", code: "IMAGE_URL_INVALID" });
+      }
+    }
     const cat = await prisma.productCategory.create({
       data: {
         name: name.trim(),
         parentId: parentId ? parseInt(parentId) : null,
         isActive: isActive !== false,
+        imageUrl: imageUrl || null,
         tenantId: req.user.tenantId,
       },
     });
     await writeAudit("ProductCategory", "CREATE", cat.id, req.user.userId, req.user.tenantId, {
       name: cat.name,
       parentId: cat.parentId,
+      imageUrl: cat.imageUrl,
     });
     res.status(201).json(cat);
   } catch (e) {
@@ -101,7 +138,7 @@ router.put("/product-categories/:id", adminGate, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Product category not found" });
 
     const data = {};
-    const allowed = ["name", "parentId", "isActive"];
+    const allowed = ["name", "parentId", "isActive", "imageUrl"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
 
     if (data.parentId === id) {
@@ -113,6 +150,16 @@ router.put("/product-categories/:id", adminGate, async (req, res) => {
       });
       if (!parent) return res.status(400).json({ error: "parentId does not exist in this tenant", code: "PARENT_NOT_FOUND" });
       data.parentId = parseInt(data.parentId);
+    }
+    // #845 — imageUrl can be set to a new string, cleared with `null`, or left
+    // alone by omission. Empty-string is normalised to null so the DB stores a
+    // single canonical absent-value form.
+    if (data.imageUrl !== undefined) {
+      if (data.imageUrl === null || data.imageUrl === "") {
+        data.imageUrl = null;
+      } else if (typeof data.imageUrl !== "string" || data.imageUrl.length > 500) {
+        return res.status(400).json({ error: "imageUrl must be a string ≤500 chars", code: "IMAGE_URL_INVALID" });
+      }
     }
 
     const updated = await prisma.productCategory.update({ where: { id }, data });
@@ -139,6 +186,81 @@ router.delete("/product-categories/:id", adminGate, async (req, res) => {
   } catch (e) {
     console.error("[inventory] delete category error:", e.message);
     res.status(500).json({ error: "Failed to delete product category" });
+  }
+});
+
+// #845 — Upload (or replace) the category's image. Mirrors the multer disk
+// pattern from routes/booking_pages.js:328. Multipart field name is "file".
+// Cleans up the orphan upload on tenant-scope miss so a 404 can't pollute
+// disk. On success, persists the new imageUrl, audit-logs the change, and
+// returns the updated row.
+router.post("/product-categories/:id/upload", adminGate, categoryImageUpload.single("file"), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      if (req.file && req.file.path) { try { fs.unlinkSync(req.file.path); } catch { /* swallow */ } }
+      return res.status(400).json({ error: "invalid id" });
+    }
+    const existing = await prisma.productCategory.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) {
+      if (req.file && req.file.path) { try { fs.unlinkSync(req.file.path); } catch { /* swallow */ } }
+      return res.status(404).json({ error: "Product category not found" });
+    }
+    if (!req.file) return res.status(400).json({ error: "file is required (multipart field 'file')" });
+
+    const imageUrl = `/uploads/product-categories/${req.file.filename}`;
+    const updated = await prisma.productCategory.update({
+      where: { id },
+      data: { imageUrl },
+    });
+
+    // Best-effort cleanup of the previous file once the row points at the new URL.
+    if (existing.imageUrl && existing.imageUrl.startsWith("/uploads/product-categories/")) {
+      const oldFilename = existing.imageUrl.replace("/uploads/product-categories/", "");
+      const oldPath = path.join(CATEGORY_UPLOAD_DIR, oldFilename);
+      try { if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath); } catch { /* swallow */ }
+    }
+
+    await writeAudit("ProductCategory", "UPDATE", id, req.user.userId, req.user.tenantId, {
+      changedFields: { imageUrl: { from: existing.imageUrl, to: imageUrl } },
+    });
+    res.status(201).json({ success: true, imageUrl, category: updated });
+  } catch (err) {
+    console.error("[inventory] category upload error:", err);
+    if (err && /file too large|allowed/i.test(err.message)) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to upload category image" });
+  }
+});
+
+// #845 — Remove the category's image without deleting the row. Clears the
+// imageUrl column and best-effort unlinks the file on disk.
+router.delete("/product-categories/:id/upload", adminGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    const existing = await prisma.productCategory.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Product category not found" });
+    if (!existing.imageUrl) return res.status(200).json({ success: true, imageUrl: null, category: existing });
+
+    if (existing.imageUrl.startsWith("/uploads/product-categories/")) {
+      const oldFilename = existing.imageUrl.replace("/uploads/product-categories/", "");
+      const oldPath = path.join(CATEGORY_UPLOAD_DIR, oldFilename);
+      try { if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath); } catch { /* swallow */ }
+    }
+
+    const updated = await prisma.productCategory.update({
+      where: { id },
+      data: { imageUrl: null },
+    });
+    await writeAudit("ProductCategory", "UPDATE", id, req.user.userId, req.user.tenantId, {
+      changedFields: { imageUrl: { from: existing.imageUrl, to: null } },
+    });
+    res.json({ success: true, imageUrl: null, category: updated });
+  } catch (err) {
+    console.error("[inventory] category image remove error:", err);
+    res.status(500).json({ error: "Failed to remove category image" });
   }
 });
 

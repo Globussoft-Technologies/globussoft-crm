@@ -4,44 +4,97 @@
 
 ---
 
-## 🏁 SESSION HANDOFF (2026-05-15 — pen-test cluster cleanup: #756-#768 RBAC-denial UX + #742/#739 + CVE remediation)
+## 🚧 KEY BLOCKERS — Travel CRM (refreshed 2026-05-22 post-cron-exhaustion)
 
-**HEAD on origin/main:** `5d3205d`. Latest release tag still **v3.7.16** — today's work is 4 product/security fix commits deployed to demo via the per-push gate; **no new tag cut** (see "first next session" item 1).
+Phase 1 + Phase 1.5 autonomous-doable work is **100% shipped** (78/78
+§4 PRD requirements per [`docs/TRAVEL_CRM_GAP_AUDIT_2026-05-22.md`](docs/TRAVEL_CRM_GAP_AUDIT_2026-05-22.md)).
+Stub-mode scaffolding is in place for every cred-blocked integration —
+each one is now a 1-line `if (apiKey) realCall(...)` swap when the cred
+arrives. What remains falls into three buckets; none is autonomous-doable.
 
-**State:** working tree clean, `main` in sync with `origin/main`, deploy gate green on `5d3205d` (all 6 gates + deploy).
+### 🔑 Cred-blocked (chase order by blast radius)
 
-### What shipped today
+| # | Q-marker | What to ask Yasin for | Unblocks (count) |
+|---|---|---|---|
+| 1 | **Q9 — Wati WhatsApp** | Meta System User access token + 3×WABA ID + 3×phoneNumberId + App ID/Secret + webhook verify token | **10 consumers** — 7 crons (`tripPaymentReminders`, `travelJourneyReminders`, `tripPostTripFeedback`, `webCheckinScheduler`, `contactGreetingsEngine`, `travelDiagnosticAdvisorAlerts`, `religiousGuidanceEngine`) + 3 endpoints (microsite OTP, itinerary /share, webcheckin /deliver). `subBrandConfig` helper (`621aab7`) pre-routes per-sub-brand WABA — Q9 swap is zero-edit per consumer. PRD: [`docs/WHATSAPP_INTEGRATION_PRD.md`](docs/WHATSAPP_INTEGRATION_PRD.md) |
+| 2 | **Q11 — LLM API keys** | `ANTHROPIC_API_KEY` + `GOOGLE_API_KEY` + `PERPLEXITY_API_KEY` + `OPENAI_API_KEY` | 3 consumers go non-stub (talking-points, form-vs-call, itinerary draft) + `LlmCallLog.costEstimate` becomes non-zero → just-shipped `LlmSpend.jsx` dashboard (`76996c8`) shows real spend |
+| 3 | **Q3 — DigiLocker** | `DIGILOCKER_CLIENT_ID` + `DIGILOCKER_CLIENT_SECRET` | Real Aadhaar-XML pull (TMC parent registration moves PARTIAL → SHIPPED). Single env-var drop. Spec: [`docs/DIGILOCKER_INTEGRATION_SPEC.md`](docs/DIGILOCKER_INTEGRATION_SPEC.md) + use case: [`docs/DIGILOCKER_USE_CASE.md`](docs/DIGILOCKER_USE_CASE.md) |
+| 4 | **Q1 — Section 13 packet** | Google Workspace admin + AdsGPT handover + Callified.ai handover + brand assets | Drive folder auto-create + AdsGPT marketing reports + AI calling / form-vs-call live mode + themed PDFs |
+| 5 | **Q19 — RateHawk** | RateHawk production API key + per-tenant API ID | RFU unified-search lowest-rate auto-pick (lifts PARTIAL); W3 sprint gate. Requires also writing `services/ratehawkClient.js` |
+| 6 | **Q8 — Excel Software** | REST API docs (endpoints + auth + payload shapes) | `services/excelSoftwareClient.js` + accounting bridge (CRM → Excel Software invoice/payment sync) |
+| 7 | **Q22 — Brand assets pack** | Per-sub-brand logos (SVG light+dark) + palettes (hex) + fonts + PDF letterhead templates | `frontend/src/theme/travel.css` palette swap + per-sub-brand PDF templates + 4th LLM consumer (TravelStallPersonalisedPDF — currently parked) |
+| 8 | **Q15 — UAT users** | Named testers per sub-brand + availability windows | W6 sprint exit-gate (not code-blocked, stakeholder-blocked) |
 
-- **`d567ce2` — #756-#768 permission-denial cluster (13 pen-test issues).** Collapsed `RoleGuard.jsx`'s two divergent denial modes (strict redirect+toast / lockedInPlace panel+toast) into ONE canonical pattern: a denied role renders the full-page lock panel **in place** — no toast, no redirect, children never mount (no info-disclosure of page chrome/KPI shapes). Removed `useNotify`/`Navigate`/`useEffect`/`redirectTo`/`lockedInPlace`. Plus 3 small page edits: Sidebar nav-gating (#756), Payments env-var `<details>` admin-gated (#759), Recommendations empty-state copy (#767). `RoleGuard.test.jsx` rewritten — 15 tests pinning the single-behavior contract. All 13 closed (#757 NOT REPRODUCED).
-- **`cf678f7` — sanitize-html 2.17.3 → 2.17.4.** `npm audit` gate caught a new CRITICAL XSS (`GHSA-rpr9-rxv7-x643`, `xmp` raw-text passthrough) — not our code. Remediated per the "remediate, don't allowlist" rule.
-- **`4e24a0d` — #742 (Critical) + #739 (High).** #742: added a tenant-scoped patient-existence guard (`prisma.patient.findFirst` → `404 PATIENT_NOT_FOUND`) on `POST /visits /prescriptions /consents /treatment-plans` — previously accepted writes against deleted/non-existent patients. The frontend half of #742 (stale header card) was a **phantom** — already fixed on current `main`. #739: added `portalVerifyOtpLimiter` (10/10min/IP prod) to `/portal/login` + `/portal/login/verify-otp` which had NO limiter; `/public/book` (named in the issue) was already correctly throttled.
-- **`5d3205d` — test fix.** The #742 guard broke `consent-templates.test.js` (mocked `prisma.patient` had no `findFirst` → 500). Stubbed `findFirst`, defaulted to "patient found" in `beforeEach`.
+### 🗣️ Product-call (waiting on a decision, not a cred)
 
-### Issues closed: #742, #739, and #756-#768 (13). Issues #728-item-3 and #457 remain open (product input / manual-QA umbrella) — unchanged from the 2026-05-14 handoff.
+| Q-marker | Decision needed | Who decides |
+|---|---|---|
+| **Q2 — Aadhaar consent legal copy** | Exact wording shown to TMC parents at DigiLocker consent surface | Yasin's legal counsel (or whoever signs India consent UX). Draft at `7d162cd` |
+| **Q13 — TMC curriculum mapping** | Mapping table: school-trip destination/activity → CBSE/ICSE/state-board learning outcomes | TMC senior academic coordinator |
 
-### Three things to do first next session
+### 🟡 PARTIAL — half-shipped; finish blocked on above
 
-1. **Consider cutting v3.7.17.** Today's 4 commits are deployed to demo but not release-validated via `e2e-full.yml`. If a clean release marker is wanted, tag a green `5d3205d` and let e2e-full run. Optional — they're already live.
-2. **QA-RBAC sweep #735-#741** — the next recommended cluster. #740 is a free already-closed close; #736 is legacy-403-string cleanup (see RBAC test plan §8). Run `verifying-issue-before-pickup` on each before dispatch.
-3. Carry-over from the 2026-05-14 handoff still stands: PRD stakeholder review, `docs/test-coverage-gaps.md` audit.
+- **LeadRoutingRule sub-brand extension** — schema supports `subBrand` but routing engine doesn't filter on it
+- **RFU Haram-facing filter UI** — backend filter works; UI surface still raw JSON
+- **RFU Umrah quotation engine** — quote shell ships; lowest-rate pick waits on Q19 RateHawk
+- **Microsite OTP send** — flow live in dev with stub; real SMS waits on Q9 Wati
+- **Parent registration** — works with stub Aadhaar; real DigiLocker waits on Q3
 
+### 🛑 Out of cron scope (multi-commit / multi-day)
 
-> Older session handoffs moved to [docs/handoffs-archive/](docs/handoffs-archive/) per the archive convention. To reconstruct what was discussed on a specific date, look there.
+- **Phase 3 Visa Sure** — route + 3 UI pages + checklist tracking + risk-flag engine + rejection-recovery flow. Multi-day program; needs human re-baselining before dispatch.
+- **Chrome flight-quote plugin** — browser-extension infra not in repo; ~10-15 engineer-days; separate Manifest V3 codebase
+- **Airline web-checkin automation** — paired with Chrome plugin work
+
+### 🛠️ Already-shipped, flaggable (still applies)
+
+- **Itinerary `/pdf`** template (`c18fe62`) is functional but minimal — page-2+ (T&Cs, brand footer) lands with Q22 asset pack
+- **Sub-brand switcher** (`bb0c620`) state is built + persisted, but only some pages currently *read* `useActiveSubBrand` to pre-seed their filter — incremental UX adoption
 
 ---
 
-## 📝 SESSION CONTINUATION (2026-05-08 evening — PR #644 merged + Google Doc audit)
+## 🏁 SESSION HANDOFF (tick #92 → #107 — architectural arc completion: cap pattern + wrapper-routes + travel-fork + BrandKit)
 
-Brief office→home handoff covering today's additions on top of the Wave 10 AA + BB handoff (further down in the doc).
+**Tick range covered:** #92 → #107 of the autonomous 2026-05-23/2026-05-24 cron arc (continuation of the 34-tick + 51-tick session documented in CHANGELOG's Unreleased entry). Anchor: tick #92 began with `d8119a1` (TenantSetting model + cap helper); tick #107 closed with the docs sweep capturing everything.
 
-- **PR #644 merged** at [`3114b8a`](https://github.com/Globussoft-Technologies/globussoft-crm/commit/3114b8a) (Feat/gemini, @mohitkumardas-cloud). Author addressed all 3 review blockers in commit `42883e34`: `/uploads` `verifyToken` removed; duplicate `/embed/lead-form.html` handler dropped (surviving line-548 handler now carries the #297 ApiKey shape-check + DB lookup); `leadScoringEngine` `activities.length > 0` guard restored per #571. Lands Gemini AI lead scoring + DealInsights rewrite + Leads cleanup + 17 wellness React-import drops. CI 6/6 green. Worth a smoke-test of /lead-scoring + DealInsights post-deploy — same author had post-merge surprises on PR #511 (multi-recipient regression caught inline) and PR #512 (silent modal drop).
-- **Google Doc audit** — "CRM Wellness — Developer Implementation List" (8 May 2026), Zylu vs CRM Wellness gap PRD, ~80 bullets across 12 sections. Verdict: ~25-30 features genuinely shipped, 50-55 are real gaps. **"Completed" markers misleading on 2 of 3** sections claiming done:
-  - **Notification Center (Mohit completed)**: ✅ genuinely done — model + bell + routes + push all present
-  - **Calendar / Resource Availability (Mohit completed)**: 🟡 calendar SYNC done (CalendarEvent + CalendarIntegration + Google/Outlook), resource AVAILABILITY missing (Resource model for rooms/machines, Holiday model, `Visit.resourceId` all absent)
-  - **Inventory Backbone (SHIKSHA completed)**: 🟡 Product + ServiceConsumption + low-stock cron exist; ProductCategory + InventoryReceipt + InventoryAdjustment + Vendor models missing; auto-consumption rules engine missing
-  - **Confirmed-missing entirely**: POS/New Sale shape (polymorphic invoice lines, registerId/cashierId/invoiceNumber), Cash Register/Shift, Memberships, Wallet/Cashback/GiftCard/Coupon, Attendance/Biometric, Leave Management
-  - **Confirmed-partial**: WhatsApp 2-way (msg/template/config + Channels/Inbox/SharedInbox/LiveChat pages exist; WhatsAppThread + agent assignment + opt-out missing), Mini Website + Booking Widget (~70% done — bookingType enum + At-Home address+travel-time + UTM-into-booking missing)
-- **Open PRs**: 0. **Open operator-blockers**: B-03 (SendGrid Sender Identity — verify `noreply@crm.globusdemos.com` in dashboard, ~2 min).
+**Architectural arc completion (4 milestones, end-to-end):**
+
+1. **Per-tenant budget-cap pattern (5/5 consumers wired):** `d8119a1` (model + helper) → `cb0901f` (llmRouter live consumer) → `1542b8e` (CRUD route) → `0054a03` (admin UI) → `991416c` (canonical helper swap). All 4 stub clients now read caps through the same surface.
+2. **Wrapper-route series (4/4 complete):** AdsGPT + RateHawk + Callified + BookingExpedia each shipped STUB-client → operator-routes → admin-UI triple. See CHANGELOG for the 12 SHAs.
+3. **Travel-vertical fork models (trio):** TravelQuote / TravelInvoice / TravelSupplier — schema (`fdb793e`) + 3 CRUD route scaffolds + 3 admin UIs. Replaces the "use Estimate/Invoice for travel" Day-1 placeholder.
+4. **BrandKit per-sub-brand asset system:** `5060dda` (schema) → `e4783e0` (CRUD + atomic version-demotion) → `df2271c` (4 seeded starter kits) → `a20f2d9` (admin UI).
+
+**Shared helpers extracted (rule-of-3 promotions):**
+- `3236d35` (tick #106) — `backend/lib/subBrandResolve.js` extracted from 3 wrapper routes (AdsGPT + RateHawk + Callified)
+- `9310196` — `frontend/src/utils/travelSubBrand.js` extracted from 3 admin pages
+
+**Mid-arc product call:** `a8f24ca` — 27 product decisions RESOLVED via 7 AskUserQuestion rounds (DECISIONS_TRACKER refreshed).
+
+**Remaining work-pool reality (post-arc):**
+- **49 GitHub issues open** (was 50+ at session start; 44 closed cumulatively across session)
+- **P3 PRD-writer role exhausted** — all 12 originally-queued PRDs shipped, plus 13th (PRD_DARK_MODE_CLUSTER)
+- **Cap-consumer wrapper series exhausted** — 4/4 stub-mode integrations now have operator routes + admin UIs
+- Remaining work is: multi-day architectural (Phase 3 Visa Sure / Chrome flight plugin / airline web-checkin / Travel Security cluster #913-#924) **OR** cred-blocked (Q9 Wati / Q11 LLM keys / Q3 DigiLocker / Q1 Workspace+AdsGPT+Callified handover / Q19 RateHawk creds / Q8 Excel Software docs / Q22 brand assets pack) **OR** product-call-blocked (Q2 Aadhaar consent copy / Q13 TMC curriculum mapping / DECISIONS_TRACKER's 192 open items) **OR** file-collision-prone single-commit slices (dark-mode cluster needs per-page sequential, not parallel)
+
+**Cron status — Step 4 phase-transition signals fired tick #106:**
+- ✅ All 12+ P3 PRDs shipped (Step 4 first signal — drop to 2 agents/tick already in effect)
+- ✅ GH open-issue count crossed below 50
+- ✅ Cap-consumer wrapper series exhausted (no more parallel-safe lean-shape work)
+- → **Recommendation: user `CronDelete` + redirect to one of:** (a) directed product-call session against [DECISIONS_TRACKER.md](docs/DECISIONS_TRACKER.md) — pick 1 PRD's DD-5.X items to resolve; (b) focused architectural wave (Phase 3 Visa Sure full implementation OR Travel Security cluster #913-#924 OR Chrome flight plugin Manifest V3 codebase); (c) cred-drop cycle — Q22 brand assets pack unblocks 4 PRDs simultaneously per [CREDS_TRACKER.md](docs/CREDS_TRACKER.md)
+
+---
+
+## 📦 Recently archived (2026-05-25)
+
+Stale session-handoff blocks dated before 2026-05-22 — plus completed cron-arc tick logs, closed-and-shipped sweep summaries, and explicitly-marked-historical snapshots — moved to [docs/handoffs-archive/TODOS-2026-05-25-archived-blocks.md](docs/handoffs-archive/TODOS-2026-05-25-archived-blocks.md). 13 blocks archived; ~2,700 lines moved. If you need to reconstruct what was discussed on a specific pre-2026-05-22 date, look there or in `docs/handoffs-archive/HANDOFF-2026-05-*.md`.
+
+---
+
+## 🎯 SEND TO YASIN (one-line action)
+
+**Send [`docs/WHATSAPP_INTEGRATION_PRD.md`](docs/WHATSAPP_INTEGRATION_PRD.md) to Yasin.** It's the formal answer to his 2026-05-13 clarifications email (the "Vati (WhatsApp)" paragraph asking for cost model + template approval timelines + message-volume limits + per-sub-brand separation). PRD now has a §5.4 that maps his 4 questions to GS answers point-by-point. Once he sees this, he can deliver the Q9 bundle (§5.2 Path A — ~30 min one-time work) to unblock 10 stubbed call sites in one cred drop.
+
+Pair it with [`docs/DIGILOCKER_USE_CASE.md`](docs/DIGILOCKER_USE_CASE.md) for the Q3 ask (single env-var drop unlocks real Aadhaar pull).
 
 ---
 
@@ -56,7 +109,7 @@ These open issues from the 2026-05-07 QA pass need a design / product call befor
 | ~~**#568**~~ | ~~Pipeline routes have zero `writeAudit` calls~~ | ✅ **Closed 2026-05-07** by Agent K in commit `5f2656a`. Pipeline POST/PUT/DELETE now emit `writeAudit('Pipeline', CREATE/UPDATE/DELETE, ...)`. Audit-coverage-api spec's 2 gap-tracking tests flipped from "asserts absence" to positive `expectAuditShape(...)`. |
 | ~~**#569**~~ | ~~`/auth/logout` does not emit `writeAudit('User', 'LOGOUT', ...)`~~ | ✅ **Closed 2026-05-07** by Agent K in same commit `5f2656a`. POST /logout now emits `writeAudit('User', 'LOGOUT', ...)` after RevokedToken upsert. Audit-coverage-api spec's #180 test flipped from soft `console.warn` to hard `expectAuditShape`. |
 | ~~**formatMoney callsite-sweep**~~ | ~~#286 + #330 callsite-sweep~~ | ✅ **Closed 2026-05-07** by Agent M in commit `437614f`. 16 callsites swept (8 backend: PDF rendering + AI-prompt context + won-deal activity; 8 frontend: CommandPalette/CPQBuilder/Omnibar/AgentReports). All currency-shape `${amount}` interpolations now route through `formatMoney(amount, currency, locale)`. ESLint custom-rule extension is the next-level lock-in if regressions reappear; not blocking. |
-| **wellness `computeAttribution` junkSourceFilter wire-in** (filed 2026-05-07 — backlog #24 follow-up) | Backlog #24 / #268 helper landed at `backend/lib/junkSourceFilter.js` and is wired into generic `routes/attribution.js` (GET /report + first-touch-revenue + multi-touch-revenue). The actual demo bug surface — `routes/wellness.js` `computeAttribution()` (~line 2360) — was deferred because Agent O held the file mid-flight on the datetime callsite-sweep. **One-line wire-in** when the file is free: `const { isJunkSource } = require("../lib/junkSourceFilter");` at the top, then `if (isJunkSource(l.firstTouchSource || l.source)) continue;` inside the lead-aggregation loop. ~5 min. Autonomous-fixable. The 14 vitest cases in `backend/test/lib/leadJunkFilter.test.js` already pin the helper contract — no test changes needed for the wellness wire-in. |
+| ~~**wellness `computeAttribution` junkSourceFilter wire-in**~~ | ✅ **CLOSED 2026-05-18** — verified shipped in commit `bf7bbe1`: `routes/wellness.js` `computeAttribution()` already imports `isJunkSource` and filters both the lead-aggregation and visit-revenue loops. _Original note:_ Backlog #24 / #268 helper landed at `backend/lib/junkSourceFilter.js` and is wired into generic `routes/attribution.js` (GET /report + first-touch-revenue + multi-touch-revenue). The actual demo bug surface — `routes/wellness.js` `computeAttribution()` (~line 2360) — was deferred because Agent O held the file mid-flight on the datetime callsite-sweep. **One-line wire-in** when the file is free: `const { isJunkSource } = require("../lib/junkSourceFilter");` at the top, then `if (isJunkSource(l.firstTouchSource || l.source)) continue;` inside the lead-aggregation loop. ~5 min. Autonomous-fixable. The 14 vitest cases in `backend/test/lib/leadJunkFilter.test.js` already pin the helper contract — no test changes needed for the wellness wire-in. |
 | ~~**datetime callsite-sweep**~~ | ~~#244 + #313 + #387 callsite migration~~ | ✅ **Closed 2026-05-07** by Agent O. All three classes migrated: (a) `routes/wellness.js` `IST_OFFSET_MS` arithmetic + `startOfDay`/`endOfDay` now route through `formatInTenantTZ` + `parseDateTimeLocalInTZ` with `Asia/Kolkata` literally pinned (product decision: India-anchored clinics, NOT tenant-locale-dynamic — the offset-math hack is gone but the IST anchor is preserved by design); (b) Visit POST/PUT `visitDate` + waitlist `expiresAt`/`offeredAt`/`visitDate` now route datetime-local form input ('YYYY-MM-DDTHH:mm', no TZ marker) through `parseDateTimeLocalInTZ(input, 'Asia/Kolkata')` via a new private `parseTenantDateInput` sniffer; full ISO with 'Z' or '±HH:mm' suffix passes through native `Date()` unchanged — (#313 round-trip now correct: 10:30 IST stores as 05:00Z); (c) `routes/audit_viewer.js` GET `/`, GET `/entity/:entity/:id`, and `/export.csv` now decorate every row with a `createdAtFormatted` field (rendered in viewer's TZ from `User.timezone` → wellness fallback `'Asia/Kolkata'` → `'UTC'`) + envelope `viewerTimezone`. CSV gains a `TimestampLocal` column. AuditLog.jsx frontend stays untouched; the new server-side fields satisfy #387's TZ-label acceptance for API consumers + CSV without forcing UI churn. **NOT migrated (intentional):** `email_scheduling.js` / `booking_pages.js` / `marketing.js` `scheduledAt` / `dueDate` / `paidAt` / `validUntil` callsites — the route validation explicitly documents "must be a valid ISO date" so they're full-ISO inputs; native `Date()` is correct. Tests added: 15 vitest cases in `backend/test/lib/datetime.test.js` pinning the wellness day-boundary form-equivalence + `parseTenantDateInput` sniffer + audit-row decorator (1284→1299 backend vitest); 2 #313 round-trip cases in `wellness-clinical-api.spec.js`; 2 audit-viewer createdAtFormatted cases in `audit_viewer.spec.js`. |
 | ~~#555~~ | ✅ **CLOSED v3.7.3** — lock-per-session policy: LOGIN audit row + `/auth/tenant-switch` always 410 + `TenantChip` read-only widget. (Original framing: tenant context flipped silently between tenants based on URL alone.) |
 | ~~**#574**~~ | ✅ **CLOSED** — backend RBAC closed 2026-05-07; frontend RoleGuard wrap shipped via `<RoleGuard allow={["ADMIN"]}>` pattern. USER → 403 redirect now canonical across `/field-permissions`. |
@@ -71,55 +124,6 @@ When you've decided on a direction for any of these, drop a comment on the linke
 
 ---
 
-## 📋 PRD 14.3/14.4 verification findings (2026-05-09)
-
-Investigation pass on the two PRD §14 demo gaps (parked in TODOS.md PRD analysis lines 3323-3324) by Wave 1 Agent D. **READ-ONLY audit; no code changes shipped.** Findings below are pinned to file:line evidence so the next reader can verify without re-grepping.
-
-### PRD 14.3 — AdsGPT push to Meta — **⚠️ partial, demo-able as-is**
-
-**Status:** ⚠️ partial. The CRM's AdsGPT-side surface is a **launcher only**, not a "generate creative + push to Meta" stub. By PRD §6.6 design (`docs/wellness-client/PRD.md:124-132`) this is **correct** — AdsGPT is a separate product with no data integration, and the CRM is explicitly NOT supposed to generate creatives or render ad performance.
-
-**Evidence of what ships:**
-- [`frontend/src/pages/wellness/OwnerDashboard.jsx:7,64-72,216-273`](frontend/src/pages/wellness/OwnerDashboard.jsx) — "Open AdsGPT" card with one-click SSO impersonation. Shows linked-account name + a status banner (idle/loading/ok/error).
-- [`frontend/src/components/Sidebar.jsx:75,381-405,635,850`](frontend/src/components/Sidebar.jsx) — `AdsGptLink` rendered in BOTH wellness and generic sidebars, both nav surfaces.
-- [`frontend/src/utils/adsgpt.js`](frontend/src/utils/adsgpt.js) — 3-leg SSO helper (`launchAdsGptAs()`): GET `/adsgpt/check-access/by-login/<login>` → POST `/adsgpt/backup/save` → `window.open(dashboard/?forword=<key>)`. Real socket.adsgpt.io flow; `frontend/src/__tests__/adsgpt.test.js` exercises 7 paths.
-- [`backend/scripts/sandbox/adsgpt-mock.js`](backend/scripts/sandbox/adsgpt-mock.js) — sandbox mock with `/api/campaigns` + `/api/campaigns/:id/creatives` + `/api/sso/impersonate` endpoints, listens on :5102. **NOT auto-started**; requires `ADSGPT_BASE_URL=http://localhost:5102` + manual `node` invocation.
-- [`backend/cron/orchestratorEngine.js:148-162`](backend/cron/orchestratorEngine.js) — `campaign_boost` recommendation type creates a Task ("Marketer: <title>") + log note `"Awaiting AdsGPT/Callified handshake for direct budget API"`. No auto-push to AdsGPT.
-- [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma) — `AdsGptCampaign` / `AdsGptCreative` / `AdsGptCreativeStub` models **deliberately not built** (TODOS.md:3314 confirms PRD §6.6 scope clarification superseded the original §9 model list).
-
-**Demo readiness:** ✅ tester can click "Open AdsGPT" on `/wellness` → SSO into dashboard.adsgpt.io → generate creatives + push to Meta **inside AdsGPT itself**. The CRM does not render a creative card — by design. PRD §14.3's "mocked OK" qualifier applies to the AdsGPT push API, not to a CRM-rendered stub. The orchestrator's `campaign_boost` recommendation is the only CRM-side surface that could be confused with a "creative stub"; it's a Task, not a creative.
-
-**Recommended next action:** **no-op.** PRD goal is met by the launcher + by AdsGPT being a separate product. Close PRD 14.3 line in TODOS.md:3323 as `✅ verified — launcher live, creative-rendering correctly out-of-scope per §6.6`. The remaining external-team deliverable (silent SSO provisioning + back-link from AdsGPT) is correctly tracked under "Pending external/client deliverables" (TODOS.md:3328) and is not a CRM engineering task.
-
-### PRD 14.4 — WhatsApp chatbot booking → real appointment — **⚠️ partial (CRM contract ready; chatbot routing absent)**
-
-**Status:** ⚠️ partial — the CRM-side ingest contract is fully built and tested, BUT there is **no chatbot intent routing inside the CRM** that converts an inbound WhatsApp message into a Visit row. Per PRD §6.5 (`docs/wellness-client/PRD.md:96,112`), this is by design: the chatbot booking flow lives in **Callified.ai**, not in the CRM. Callified is responsible for parsing the conversation, picking a slot, and posting the confirmed appointment back via the external API. The contract Callified would call is shipped:
-
-**Evidence of CRM-side ingest contract:**
-- [`backend/routes/external.js:533-556`](backend/routes/external.js) — `POST /api/v1/external/appointments` accepts `{patientId, serviceId, doctorId, locationId, slotStart, notes, status}` → creates `prisma.visit.create(...)` row. Returns 201 with the Visit.
-- [`backend/routes/external.js:399-445`](backend/routes/external.js) — `POST /api/v1/external/messages` logs WhatsApp/SMS conversation rows scoped to the partner's tenant.
-- [`backend/routes/external.js:210-325`](backend/routes/external.js) — `POST /api/v1/external/leads` runs junk filter + auto-router + SLA timer. Source defaults to `"callified"`.
-- [`backend/middleware/externalAuth.js`](backend/middleware/externalAuth.js) — `X-API-Key: glbs_<32-hex>` validation, tenant-scoped via `req.tenantId`. Demo key seeded as "Callified.ai (demo key)" (`backend/prisma/seed-wellness.js`).
-- [`e2e/tests/external-api.spec.js`](e2e/tests/external-api.spec.js) — full Callified flow exercised (lead push → contact lookup → call recording → message log) under `Wellness — External Partner API (Callified flow)` describe block.
-- [`e2e/tests/wellness.spec.js:303-435`](e2e/tests/wellness.spec.js) — `tests 21-33` simulate the same flow against the deployed wellness tenant.
-
-**Evidence the chain is NOT wired end-to-end:**
-- [`backend/routes/whatsapp.js:363-452`](backend/routes/whatsapp.js) — Meta WhatsApp webhook `POST /webhook` creates a `WhatsAppMessage` row + emits a Socket.io `whatsapp:received` event but **does NOT** parse `/book` intent, look up an available slot, or create a Visit. There is no chatbot router in the CRM at all (`grep "intent.*book\|chatbot.*appointment"` returns zero matches).
-- [`backend/routes/chatbots.js:273`](backend/routes/chatbots.js) — `POST /chat/:botId` is a generic chatbot conversation endpoint scoped to `Chatbot` model; it does not route to wellness Visit creation.
-- The Callified.ai webhook contract (Callified → CRM on confirmed booking) is documented as "pending contract" in [`docs/wellness-client/STATUS.md:260`](docs/wellness-client/STATUS.md). The CRM has the receiver; Callified has not yet shipped the sender.
-
-**Demo readiness:** ⚠️ a tester CAN demonstrate the flow by manually calling `POST /api/v1/external/appointments` with `X-API-Key: glbs_…` and seeing the new Visit appear on `/wellness/calendar`. They CANNOT demonstrate "user sent a WhatsApp message and a Visit was created automatically" — the chatbot half doesn't run inside the CRM and Callified hasn't shipped the auto-post yet. The demo path Rishu was promised in PRD §14.4 needs a **scripted curl call** as a stand-in for Callified, OR it needs to wait on the partner's webhook.
-
-**Recommended next action:** file a fresh GitHub issue **"PRD 14.4 — Demo script for WhatsApp → Appointment flow (Callified webhook stand-in)"** capturing a 5-line `curl POST /api/v1/external/appointments` script + a 1-page docs/wellness-client/DEMO_14_4.md showing tester steps. ~30 min. Keeps the demo green while the Callified team finishes their side. The CRM engineering side has nothing more to build — the receiver contract is shipped, tested, and proven by the e2e Callified-flow describe block.
-
-### Follow-up TODOS row to add
-
-| # | Task | Estimate |
-|---|---|---|
-| **PRD 14.4 demo script** | Author `docs/wellness-client/DEMO_14_4.md` + a `scripts/demo-callified-booking.sh` curl wrapper that tester can run live during the demo to simulate Callified posting a confirmed booking. ~30 min, autonomous-fixable. Closes PRD 14.4 from a demo-readiness perspective without waiting on Callified. PRD 14.3 closes as `✅ verified — out-of-scope per §6.6` with no further action. | 0.25 day |
-
----
-
 ## 🚧 OPERATOR-BLOCKER TASKS — need a human (programmer / ops) to act
 
 These are NOT autonomous-fixable. They need a real person with credentials, infrastructure access, or a product-design call. Auto-loops should NOT try to close these.
@@ -127,7 +131,7 @@ These are NOT autonomous-fixable. They need a real person with credentials, infr
 | # | Task | Who needs to do it | Why it's blocked |
 |---|---|---|---|
 | ~~**B-01**~~ | ~~Set TURNSTILE_SECRET_KEY env-var on demo for real CAPTCHA enforcement~~ | ✅ **SHIPPED** 2026-05-05 evening | Cloudflare Turnstile sitekey + secret-key pair created via dashboard. Both keys deployed to demo's `backend/.env` via [scripts/apply-turnstile-env.py](scripts/apply-turnstile-env.py) (paramiko + SFTP + backup-and-rollback safety net). pm2 restart with --update-env confirmed; `/api/health` returned 200 with fresh uptime 3.16s. **Per-form opt-in still required** — landing-page forms must set `props.enableCaptcha: true` in the LandingPageBuilder UI to actually render the widget. The frontend wiring at [landingPageRenderer.js:149-205](backend/services/landingPageRenderer.js#L149) is complete; the env-var-default behaviour is "render-only-when-explicitly-enabled" so no surprise activation on existing forms. Optional follow-up: add TURNSTILE_SECRET_KEY to GH Actions secrets if you want CI to enforce verification (currently CI passes with unset → stub-friendly 200). |
-| **B-03** | **Verify SendGrid Sender Identity for `noreply@crm.globusdemos.com`** | Operator with SendGrid dashboard access | 2026-05-06 evening SSH probe on #524 confirmed: post-#524-follow-up fix at [`316d5a0`](https://github.com/Globussoft-Technologies/globussoft-crm/commit/316d5a0), `/scheduled-emails/:id/send-now` now lands the FAILED-row update cleanly (column widened to `@db.Text`). Re-running /send-now on demo (id 210, recipient `sumit@globussoft.com`) returned the actual SendGrid rejection reason: **"The from address does not match a verified Sender Identity. Mail cannot be sent until this error is resolved."** Every email-send attempt from demo has been failing at SendGrid because the FROM address has never been verified. Two fix paths: (a) **Single Sender Verification** (faster, ~2 min) — SendGrid dashboard → Settings → Sender Authentication → Single Sender Verification → add `noreply@crm.globusdemos.com` → click the verification link emailed to that address; OR (b) **Domain Authentication** (better long-term, needs DNS access) — verify the entire `crm.globusdemos.com` domain via DNS records (CNAME for `s1._domainkey`, etc. — SPF + DKIM). Path (a) is sufficient for demo; path (b) prevents the address from being a single-point-of-failure. Until B-03 ships, **no email delivers from demo regardless of code** — the SENDGRID_REJECTED 502 response will continue surfacing the same Sender Identity error. **Verification command after fix**: `curl -X POST https://crm.globusdemos.com/api/email-scheduling/<new-id>/send-now -H "Authorization: Bearer $TOKEN"` should return 200 with `delivered: true`, and the row's `status` flips to `SENT`. |
+| ~~**B-03**~~ | ~~Verify SendGrid Sender Identity for `noreply@crm.globusdemos.com`~~ | ✅ **CLOSED 2026-05-13** — Single Sender Verification done; see [PENDING_USER_AND_OPERATOR.md](docs/PENDING_USER_AND_OPERATOR.md) §1 | _(historical)_ 2026-05-06 evening SSH probe on #524 confirmed: post-#524-follow-up fix at [`316d5a0`](https://github.com/Globussoft-Technologies/globussoft-crm/commit/316d5a0), `/scheduled-emails/:id/send-now` now lands the FAILED-row update cleanly (column widened to `@db.Text`). Re-running /send-now on demo (id 210, recipient `sumit@globussoft.com`) returned the actual SendGrid rejection reason: **"The from address does not match a verified Sender Identity. Mail cannot be sent until this error is resolved."** Every email-send attempt from demo has been failing at SendGrid because the FROM address has never been verified. Two fix paths: (a) **Single Sender Verification** (faster, ~2 min) — SendGrid dashboard → Settings → Sender Authentication → Single Sender Verification → add `noreply@crm.globusdemos.com` → click the verification link emailed to that address; OR (b) **Domain Authentication** (better long-term, needs DNS access) — verify the entire `crm.globusdemos.com` domain via DNS records (CNAME for `s1._domainkey`, etc. — SPF + DKIM). Path (a) is sufficient for demo; path (b) prevents the address from being a single-point-of-failure. Until B-03 ships, **no email delivers from demo regardless of code** — the SENDGRID_REJECTED 502 response will continue surfacing the same Sender Identity error. **Verification command after fix**: `curl -X POST https://crm.globusdemos.com/api/email-scheduling/<new-id>/send-now -H "Authorization: Bearer $TOKEN"` should return 200 with `delivered: true`, and the row's `status` flips to `SENT`. |
 
 When B-NN ships, move it to "## Recently shipped" and remove from this section. Add new operator-blockers above with B-NN ids.
 
@@ -137,340 +141,6 @@ When B-NN ships, move it to "## Recently shipped" and remove from this section. 
 
 - **Estimate `validUntil` upper-bound cap (#178/#322 partial — surfaced 2026-05-07 by regression-coverage-backlog #11)** — backlog item #11's gap card claimed validUntil should be range-checked to "year 2026..2100"; backend currently caps the LOWER bound (rejects past dates) but has NO upper-bound cap. Probe: `validUntil: '2150-06-01'` → 201 Created. Spec test "validUntil far future (year 2150) currently accepted" pins this as the actual behaviour (Path B.2 from CLAUDE.md "gap-card-claims-as-hypotheses" rule). When the cap lands, flip that test's assertion to expect 400 with a new `INVALID_VALID_UNTIL_FUTURE` code. Design questions: (a) what's the actual upper bound (2100? +10y from today? sliding window?); (b) should this apply to PUT too (it should — currently both POST and PUT delegate to the shared `validateEstimateInput()` validator, so one fix lands both); (c) what's the user-facing error message ("validUntil cannot be more than X years in the future"). ~20 min implementation in [`backend/routes/estimates.js`](backend/routes/estimates.js#L38) once the cap is decided.
 
----
-
-## 🎯 Architect-priority sequencing (2026-05-02)
-
-Everything below in this doc is real backlog. The order matters. Pick from this section top-down — these are the cuts an architect would make on what's most worth doing **next**, given the current state (4-gate CI green, v3.2.5 shipped, 236 substantive closed issues across 9 months, RBAC + seed-pollution clusters keep re-appearing in QA).
-
-Three observations that frame the priorities:
-
-1. **The 4-gate CI is genuinely good. Stop adding more layers; start exploiting what's there.**
-2. **The biggest risk right now is invisible.** Release validation (`e2e-full.yml`) is silently broken — 88% pass rate has been treated as "test debt", but ~70% of those failures trace to one bug ([Bucket A below](#-e2e-full-ui-test-debt--release-validation-88-pass-rate)): `auth.setup.js` writes to `localStorage` but the v3.2.5 SPA reads from `sessionStorage`. **The team thinks it has release validation. It doesn't.** This is the single most dangerous gap.
-3. **Several QA-recurring bugs are architectural, not testable.** Adding more regression specs doesn't fix RBAC drift or seed pollution at the root. Some items below need redesign, not coverage.
-
-### Tier 1 — this week (highest ROI, lowest cost)
-
-| # | Item | Effort | Why now |
-|---|---|---|---|
-| ✅ **T1.1** | ~~Fix `e2e/auth.setup.js` — write `sessionStorage` not `localStorage`~~ — **DIAGNOSIS WAS WRONG; actual fix shipped 2026-05-02 in commits `2b79a34` + `0aa5165` + `f5af14a`** | done | Real root cause: `auth.setup.js` wrote token but not `user`+`tenant`. App.jsx reads all three from `localStorage` in its useState initializers; without `user`, `isAdmin`/`isManager` were false and Sidebar's `managerOnly` filter hid most links. The sessionStorage-migration claim in old Bucket A was misleading — that path had been working. Result: e2e-full failures **201 → 25 unique** (~88% reduction; release validation pass rate ~88% → ~99%). 25-spec long tail remains for per-spec triage. |
-| **T1.2** | **Wire a real SMS provider OR feature-flag OTP-dependent flows OFF in prod** | 1 day | [#182](https://github.com/Globussoft-Technologies/globussoft-crm/issues/182) (closed) said the SMS queue had 25 stuck messages 30+ hrs old. The wellness vertical's entire telecaller flow + patient portal + appointment reminders depend on SMS that may not actually be sending. Either pick a provider (MSG91 is cheapest in INR) and ship credentials, or feature-flag the OTP UI off until you do. Right now it's broken-by-default and clinics don't know. |
-| ✅ **T1.3** | ~~Ship P0 of the regression backlog — `wellness-rbac-api.spec.js` + `auth-security-api.spec.js` + `demo-hygiene-api.spec.js`~~ — **shipped earlier 2026-05-02** (see [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md) P0 bucket — all three ☑) | done | All three P0 specs landed + were wired into the per-push gate + coverage workflow. Closes regression risk for ~42 closed RBAC / auth-security / seed-pollution issues. |
-
-### ✅ T1.2 — COMPLETE (2026-05-03)
-
-All 4 pieces shipped end-to-end:
-
-1. ✅ **Backend feature flag** — `/api/auth/me` exposes `features.smsConfigured` (commit `e941d7b`).
-2. ✅ **Admin banner** in `Layout.jsx` (commit `3e63b82`) — non-dismissable amber bar when role ∈ {ADMIN, MANAGER} AND `features.smsConfigured === false`. Hidden for regular USERs.
-3. ✅ **Patient portal graceful-degrade** (commit `3e63b82`) — new public `GET /api/wellness/portal/health` (env-var fallback probe only since portal is anonymous pre-OTP). PatientPortal.jsx renders "Phone-OTP login is temporarily unavailable. Please contact your clinic for help accessing your records." when `smsConfigured === false`.
-4. ✅ **Fast2SMS API key live** — `FAST2SMS_API_KEY` set in `backend/.env` locally + appended to demo's `backend/.env` via SSH + `pm2 restart globussoft-crm-backend --update-env`. Verified end-to-end:
-   - Local `/api/wellness/portal/health` → `{"smsConfigured":true}`
-   - Demo `/api/wellness/portal/health` → `{"smsConfigured":true}`
-
-The OTP flow is now functionally live — clinic staff see no banner; patients see the OTP form (not the degrade notice). Cron drains queued messages via Fast2SMS.
-
-### ✅ e2e-full long-tail — ALL 3 closed (2026-05-03)
-
-The 13 "real product issues" from 2026-05-02 evening triage were really 0 product bugs. Of the 13, all but 3 were fixed by today's heal-loop work and earlier session commits. The remaining 3 turned out to be test/env drift, not product bugs:
-
-| # | Spec | Resolution | Commit |
-|---|---|---|---|
-| ~~**L1**~~ | ~~`eventbus-emit.spec.js:137`~~ | ✅ **Not a bug — test race.** `backend/lib/eventBus.js:176-178` correctly scopes rule lookup with `where: { tenantId, triggerType, isActive: true }`. The failing test was contaminated by parallel sibling specs (`eventbus-actions/-conditions/-template`, `approvals-flow`, `workflows-*`) all creating tenant-A rules on `deal.created` and firing them via `/test`. Fix: tag the audit-count query with a unique `_specBus` token so each spec only counts its own emits. | `3dc49c2` |
-| ~~**L2**~~ | ~~`lead-scoring.spec.js:14, 31, 40, 53`~~ | ✅ **Not a bug — environment mismatch.** All 7 tests pass against `BASE_URL=https://crm.globusdemos.com`. The "failure" reproduces only when run against `BASE_URL=http://127.0.0.1:5000`, because `local-stack-up.ps1` boots backend only — backend doesn't serve the SPA, so `page.goto('/lead-scoring')` returns Express's 404 and every UI locator times out. **Standing rule:** UI specs need the SPA served (demo or local Vite at :5173); the local 127.0.0.1:5000 stack is API-only by design. | `35fedc7` |
-| ~~**L3**~~ | ~~`wellness-real-user-journeys.spec.js:238, 292, 342, 502`~~ | ✅ **Not a bug.** B1 + D1 are same SPA-served issue as L2 (added `test.skip()` with descriptive message when SPA not served, mirrors L2's pattern). C1 + F1 had a hardcoded `PARTNER_KEY = 'glbs_6ba9...'` (demo's seeded key); `prisma/seed-wellness.js` mints a random `glbs_<hex>` per fresh-DB run. New `resolvePartnerKey(request)` helper: tries static key → if 401, logs in as wellness admin and reads `/api/developer/apikeys` to discover the local Callified key. Cached per worker. | `fe91c36` |
-
-**Already fixed earlier this session or before** (passing locally now):
-- ✅ eventbus neq/nin off-by-one
-- ✅ external-api leads 500 (the 188-char clamp + #408 fixes addressed the downstream chain)
-- ✅ lead-routing 400 round-trip (resolved by `a557e18` revert of approvals contract)
-- ✅ sequences engine flow 3 specs
-- ✅ approvals re-approve state machine (`a557e18` — idempotent-200 same-state, 422 cross-state)
-- ✅ sso google-callback redirect (`2c036e5`)
-- ✅ wellness-rbac professional scope leak (`bc729b7`)
-- ✅ tasks-api cross-tenant leak (heal-loop fixes + gate spec assertion passing)
-- ✅ wellness-feature-gaps consumption
-
-**Net:** the long-tail is **fully cleared**. Worth firing `e2e-full.yml` manually against demo (`gh workflow run e2e-full.yml`) to confirm CI agrees before tagging the next release.
-
-**Lone pre-existing residue (out of scope for the long-tail closure, ~30 min next session):** B3 tab-locator drift in `wellness-real-user-journeys.spec.js` against demo. Was failing before today's L3 work; verified by stashing the L3 edits and re-running. Not a regression from this session's changes.
-
-> **Standing rule on running UI specs locally:** UI specs (`lead-scoring`, `dashboard`, `navigation`, `theme`, `sequences`, `responsive`, `developer`, `notifications`, `custom-objects`, `wellness-real-user-journeys`, etc.) need the SPA served. The local `127.0.0.1:5000` stack is backend-only — UI specs against it will report cosmetic locator-not-found failures that don't reflect real bugs. For UI specs, run against `BASE_URL=https://crm.globusdemos.com` (or `cd frontend && npm run dev` and target `http://localhost:5173`). The gate-spec list in `deploy.yml` / `test-local.ps1` is **API-only** for exactly this reason.
-
-
-
-### Tier 2 — this month (unblock real users + close the regression loop)
-
-| # | Item | Effort | Why now |
-|---|---|---|---|
-| **T2.1** | **Mobile responsiveness — sidebar collapse + drawer < 900px** | 3-5 days | [#228](https://github.com/Globussoft-Technologies/globussoft-crm/issues/228) is closed but NOT actually fixed. Sidebar is fixed-width with no hamburger. Wellness clinics overwhelmingly run on phones (telecallers, doctors looking up Rx between patients). This is an **adoption blocker, not a polish item.** Move to: CSS Grid sidebar collapse + drawer at <900px, wire the existing Lucide menu icon. One PR. |
-| **T2.2** | **Audit-log coverage build-out — implementation, not just spec** | 4-5 days | [#179](https://github.com/Globussoft-Technologies/globussoft-crm/issues/179) is closed but the audit middleware still only fires on Deal events. Compliance for wellness PHI requires Patient / Visit / Rx / Consent mutations all in AuditLog. This is implementation work — `audit-coverage-api.spec.js` from the regression backlog can't pass until this lands. Use [backend/lib/audit.js](backend/lib/audit.js) helper + Express middleware on `res.json()` for any non-GET. |
-| **T2.3** | **Ship P1 of the regression backlog** — `route-contracts-api.spec.js` + `billing-api.spec.js` + `lead-routing-api.spec.js` + `audit-coverage-api.spec.js` + 5 spec extensions | 7 days | Once T2.2 lands, the audit spec becomes shippable. Closes regression-risk loop on ~100 more closed issues. Detail in [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md) P1 bucket. |
-
-### Tier 3 — this quarter (architecture; close bug classes permanently)
-
-| # | Item | Effort | Why now |
-|---|---|---|---|
-| **T3.1** | **Consolidate RBAC into a real policy engine (CASL or Casbin)** | 2 weeks | Current model has 3 orthogonal axes — `User.role` (ADMIN/MANAGER/USER), `User.wellnessRole` (doctor/professional/telecaller/helper), `Tenant.vertical` (generic/wellness) — enforced by hand-rolled `verifyRole(...)` chains across 91 route files. QA cycles keep finding "doctor sees X they shouldn't" bugs because there is no single source of truth. Move to a policy file naming every (role, action, resource) tuple; replace `verifyRole` with policy-checked middleware. **`wellness-rbac-api.spec.js` from T1.3 then becomes the test of the policy file, not 100 individual route guards.** Closes the entire C2 cluster permanently. Future RBAC bugs become impossible to ship without a policy diff in code review. |
-| **T3.2** | **Separate seed scripts from test fixtures** | 1 week | Demo pollution keeps happening because [prisma/seed.js](backend/prisma/seed.js) + [prisma/seed-wellness.js](backend/prisma/seed-wellness.js) are also where E2E specs originally landed their realistic-data fixtures. Split: `seed.js` produces clean brand-safe demo, tests get their own setup against a separate `gbscrm_test` schema or inside a transaction. Pair with `demo-hygiene-api.spec.js` from T1.3 — together they make pollution structurally impossible. |
-| **T3.3** | **Currency / locale single source of truth + ESLint enforcement** | 3 days | The `$ ₹` and "$3.73 instead of ₹310" bugs ([#242](https://github.com/Globussoft-Technologies/globussoft-crm/issues/242), [#286](https://github.com/Globussoft-Technologies/globussoft-crm/issues/286), [#330](https://github.com/Globussoft-Technologies/globussoft-crm/issues/330)) keep re-appearing because frontend has multiple inline `${amount}` template literals that bypass `formatMoney()`. ESLint custom rule: ban `\$\{.*amount.*\}` and `₹\$\{.*\}` outside [frontend/src/utils/formatMoney.js](frontend/src/utils/formatMoney.js). Plus the unit test from regression-backlog #22. Once the rule lands, the bug class is dead. |
-
-### What I'd explicitly NOT do next
-
-- **Don't add more cron engines.** 19 is already a lot, and several overlap (orchestrator + recommendations + sentiment all touch the same data). Consolidate before adding more.
-- **Don't expand to a third vertical (gym/spa)** until T3.1 lands. Adding a vertical with the current RBAC matrix triples the enforcement bugs.
-- **Don't chase 100% test coverage.** Today's 40% on routes is fine *if* the gated specs cover the high-risk surface. The regression backlog names the under-covered routes — ship those, don't blanket-test everything.
-- **Don't rewrite the UI test suite yet.** T1.1 alone recovers most of it. A full rewrite is a multi-week effort that pays off only after the per-push gate is comprehensive (still in progress — see T1.3 / T2.3).
-
-### Sequencing summary
-
-```
-Week 1   T1.1 sessionStorage fix (1h)  →  T1.2 SMS wiring (1d)  →  T1.3 P0 specs (3d)
-Week 2-3 T2.2 audit impl (5d)         →  T2.3 P1 specs (7d, can parallelize)
-Week 2-4 T2.1 mobile (5d, parallel with T2.2/T2.3)
-Q-end    T3.1 RBAC consolidation (2w) →  T3.2 seed split (1w) → T3.3 currency lint (3d)
-```
-
-Tier 1 + Tier 2 = **~3 weeks of focused work** and closes the loop on ~150 of the 236 substantive closed issues, plus unblocks mobile clinic adoption, plus restores release validation. **That's the bar to hold to before spending architect-time on Tier 3.**
-
----
-
-## 📦 Parallelization batches (2026-05-02)
-
-Pick a batch, spin up N agents in a single message with disjoint file scopes, ship. The constraint that decides "what runs together" is the file-affinity discipline from the lessons-learned section ([TODOS.md:529-531](TODOS.md#L529-L531) below) — *4-5 agents in parallel works reliably when each owns a disjoint set of files; same-file work is one agent*. The groups below are pre-cut along those lines so a developer doesn't have to do the conflict analysis from scratch.
-
-**Sweet-spot capacity per round: 5 agents.** Beyond that, file-affinity starts breaking down even when the targets look disjoint on paper (shared workflow files, shared seed fixtures, shared route helpers).
-
-### Group A — Tier 1 unblockers (5 parallel agents, ship this week)
-
-All disjoint files, no inter-dependencies. **Start here** — single highest-leverage batch in the backlog.
-
-| Slot | Item | Files | Effort | Ref |
-|---|---|---|---|---|
-| A1 | **T1.1** Fix `auth.setup.js` to write `sessionStorage` not `localStorage` | [e2e/auth.setup.js](e2e/auth.setup.js) | 30-60 min | T1.1 + Bucket A |
-| A2 | **T1.2** Wire SMS provider OR feature-flag OTP-dependent flows OFF | [backend/services/smsProvider.js](backend/services/smsProvider.js), env, possibly [PatientPortal.jsx](frontend/src/pages/wellness/PatientPortal.jsx) | 1 day | T1.2 |
-| A3 | **T1.3a** `wellness-rbac-api.spec.js` (P0 regression) | `e2e/tests/wellness-rbac-api.spec.js` (NEW) | 1 day | T1.3 + [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md) |
-| A4 | **T1.3b** `auth-security-api.spec.js` | `e2e/tests/auth-security-api.spec.js` (NEW) | 1 day | T1.3 |
-| A5 | **T1.3c** `demo-hygiene-api.spec.js` | `e2e/tests/demo-hygiene-api.spec.js` (NEW) | 1 day | T1.3 |
-
-⚠️ Shared touch-point: A3-A5 each need to be added to the gate list in [.github/workflows/deploy.yml](.github/workflows/deploy.yml). Coordinate as a **single follow-up commit** after the spec agents finish — not parallel edits.
-
-### Group B — Coverage push specs (5 parallel agents, anytime)
-
-Each spec is a single new file in `e2e/tests/`. Pattern proven by `tasks-api.spec.js` / `estimates-api.spec.js` / `push-api.spec.js`. Top under-covered routes from the Phase-2 list above:
-
-| Slot | Spec | Target route | Notes |
-|---|---|---|---|
-| B1 | `billing-api.spec.js` | [backend/routes/billing.js](backend/routes/billing.js) | PATCH + mark-paid (#202). Clean. |
-| B2 | `social-api.spec.js` | [backend/routes/social.js](backend/routes/social.js) | Internal CRUD. |
-| B3 | `marketplace-leads-api.spec.js` | [backend/routes/marketplace_leads.js](backend/routes/marketplace_leads.js) | Includes public `/webhook`. |
-| B4 | `knowledge-base-api.spec.js` | `backend/routes/knowledge_base.js` | Clean. |
-| B5 | `approvals-api.spec.js` (extension) | [backend/routes/approvals.js](backend/routes/approvals.js) | State-machine partly covered. |
-
-Same `deploy.yml` gate-list coordination caveat as Group A. **Skip in this round**: payments / auth / sandbox / chatbots — they have rate-limit / external-service / destructive-state issues that warrant a single careful agent, not a parallel slot.
-
-⛔ **Do NOT parallel-spec** `routes/whatsapp.js` / `routes/voice.js` / `routes/voice_transcription.js` per PRD §6.5 (Callified.ai territory).
-
-### Group C — CI hardening (3 parallel agents, anytime)
-
-Most CI items touch disjoint files; the exceptions are CI-6 / CI-7 / CI-12 which all edit `deploy.yml` and must serialize.
-
-**Parallel slots:**
-| Slot | Item | Files | Effort |
-|---|---|---|---|
-| C1 | **CI-5** Prisma migration safety check | `.github/workflows/migration-safety.yml`, `backend/scripts/check-migration.js` (both NEW) | 1 day |
-| C2 | **CI-9** Lighthouse CI on demo post-deploy | `.github/workflows/lighthouse.yml`, `lighthouserc.json` (both NEW) | 4 hours |
-| C3 | **CI-11** Mutation testing with Stryker | `backend/stryker.config.json`, `.github/workflows/mutation.yml` (both NEW) | 2 days |
-
-**Sequential** (each touches `deploy.yml`, do one at a time): CI-6 bundle size → CI-7 OpenAPI contract → CI-12 canary deploy.
-
-**Big standalone**: CI-8 frontend vitest + @testing-library/react is its own 3-day effort confined to `frontend/` — runs cleanly in parallel with anything outside `frontend/`.
-
-### Group D — Tier 2 (2 parallel agents max)
-
-| Slot | Item | Files | Effort |
-|---|---|---|---|
-| D1 | **T2.1** Mobile responsiveness — sidebar collapse + drawer < 900px | [frontend/src/components/Sidebar.jsx](frontend/src/components/Sidebar.jsx), [frontend/src/styles/responsive.css](frontend/src/styles/responsive.css), ~80 page CSS | 3-5 days |
-| D2 | **T2.2** Audit-log middleware build-out (Patient/Visit/Rx/Consent mutations) | `backend/middleware/audit.js` (NEW) + [backend/lib/audit.js](backend/lib/audit.js) + ~5 wellness routes | 4-5 days |
-
-D1 (frontend) and D2 (backend) are disjoint and can run together. **T2.3 P1 specs are blocked by D2** — `audit-coverage-api.spec.js` cannot pass until the audit middleware lands.
-
-After D2 ships, T2.3's specs (`route-contracts-api.spec.js`, `billing-api.spec.js`, `lead-routing-api.spec.js`, `audit-coverage-api.spec.js`) become a fresh round of 4 parallel agents.
-
-### Group E — UI test debt cleanup (sequential, **blocked by A1**)
-
-These cannot start until A1 (sessionStorage fix) ships:
-
-1. Un-skip the 6 deferred tests in [e2e/tests/auth.spec.js](e2e/tests/auth.spec.js) (auth-test-debt section above) — 1 hour
-2. Annotate Bucket B specs with `test.skip(process.env.E2E_SKIP_SCRUB === '1', …)` — 30 min
-3. Re-run `e2e-full.yml` and triage what's left
-
-### Group F — Tier 3 architecture (mostly sequential)
-
-- **T3.1 RBAC policy engine (CASL/Casbin)** — touches all 91 route files. **Cannot parallelize with anything else** that edits routes. 2 weeks, single coordinated effort.
-- **T3.2 Seed split** ([prisma/seed.js](backend/prisma/seed.js) + [prisma/seed-wellness.js](backend/prisma/seed-wellness.js)) — disjoint from T3.3.
-- **T3.3 Currency lint rule** — frontend + [backend/eslint.config.js](backend/eslint.config.js) — disjoint from T3.2.
-
-**T3.2 + T3.3 are the only Tier-3 pair safe to run together (2 parallel agents).** T3.1 must run alone.
-
-### Recommended order
-
-```
-Week 1   ┌─ A1 sessionStorage (1h)
-         ├─ A2 SMS wiring (1d)
-         ├─ A3 wellness-rbac spec (1d)         ── 5 agents in parallel ──
-         ├─ A4 auth-security spec (1d)
-         └─ A5 demo-hygiene spec (1d)
-                    │
-                    └─→ Group E (sequential after A1)
-
-Week 2   ┌─ D1 mobile (5d)                ┐
-         └─ D2 audit middleware (5d)      ┘── 2 agents in parallel ──
-                                              + Group B/C agents to fill capacity
-
-Week 3   ┌─ T2.3 P1 specs (4 parallel after D2 lands)
-         └─ Continue Group B/C as bandwidth allows
-
-Q-end    Tier 3: T3.1 alone (2w), then T3.2 + T3.3 in parallel (1w)
-```
-
-### What CANNOT be parallelized
-
-- **Anything editing [.github/workflows/deploy.yml](.github/workflows/deploy.yml)** — gate-list updates, CI-6, CI-7, CI-12 — must serialize. Either one agent at a time, or batch all `deploy.yml` changes into a single follow-up commit after the file-creating agents finish.
-- **T3.1 RBAC consolidation** vs anything else touching `backend/routes/*.js` — policy migration touches all 91 route files.
-- **Same-route coverage specs** — e.g. `wellness-dashboard-api.spec.js` + `wellness-reports-api.spec.js` + `wellness-telecaller-api.spec.js` cannot parallel because they'd all share `routes/wellness.js` test helpers / test patient pool. Fold splits into one agent.
-
----
-
-## 🧹 2026-05-01 afternoon — repo hygiene shipped
-
-| SHA | What | Lines | CI |
-|---|---|---|---|
-| `b281dd6` | rm stale root `package-lock.json` (99 bytes, no companion package.json) + `checked_issues.json` (output of close_issues.py, already in .gitignore but landed pre-ignore) | -7 | ✓ green |
-| `84129a9` | secret-scan: gitleaks-action@v2 → docker://zricethezav/gitleaks:latest (free OSS, no license needed). Plus actions/checkout/setup-node v4→v5 across all 4 workflow files | +48 -31 | ✓ green |
-| `5e364d6` | ESLint sweep: 180 warnings → 0. Caught errors → `_err`/`_e`. Multi-line decl/assign cases (`let count`, `let generatedOtp`) had to be touched in pairs. Destructure renames rewritten as `name: _name` form (the naive `{ _name }` reads `obj._name` — different property). 6 unused module imports deleted from require destructures rather than renamed | +183 -184 (56 files) | ✓ green |
-
-**Honest scope**: 1 ESLint warning remains (`no-useless-escape` in `sandbox.js:206`) — pre-existing, not from this sweep. 1-char fix when convenient, not blocking.
-
-**Sweep audit notes** (for the next time this is needed):
-- Naive identifier renames break in 3 ways the column-precise script missed: (1) multi-line `let X = …; X = Y;` where the script only hits the line ESLint reports; (2) destructure patterns where `{ X }` becomes `{ _X }` and silently reads a different property; (3) module imports where `{ used, X }` should drop `X` entirely, not rename it. All 3 surfaced during review and got fixed in the same commit. Audit scripts saved at `C:\Users\Admin\AppData\Local\Temp\check-{stragglers,multi-line,destructures}.js`.
-- All audit scripts return zero remaining real issues post-fix (their output flags pre-existing patterns: Prisma `_count._all` aggregation, SQL `WHERE id = ${id}` template-literal, Prisma model field `_captured`, original `_key` module state in `fieldEncryption.js`).
-
-**Local dev environment note**: backend `npm install` fails on Node 18.15 because Prisma needs ≥18.18. Upgrade to Node 20 LTS (`winget install OpenJS.NodeJS.LTS`) before running `npm run lint` / `npm test` locally; CI uses Node 24 already so it's unaffected.
-
----
-
-Last updated (overnight previous to today's afternoon pass): 2026-05-01 — **major coverage push**. Phase 1 e2e: **5 new API specs (~411 tests)** for routes/wellness.js + routes/contacts.js + routes/external.js + routes/deals.js + routes/surveys.js. CI gate now **23 specs / ~1,084 mandatory API tests**. **Surfaced + fixed a real prod bug class**: bare `req.user.id` (always undefined; JWT key is `userId`) across `routes/wellness.js`, `routes/workflows.js`, `routes/custom_reports.js`, `routes/dashboards.js` — including the Rx PUT prescriber check that 403'd every original prescriber. Plus **vitest unit-test layer (22 files / 674 tests / 3 skipped)** covering all of `lib/`, `middleware/`, `services/` (except whatsapp), `utils/` — now mandatory CI gate. Plus three new GitHub Actions workflows: `deploy.yml` (existing, expanded), `e2e-full.yml` (release-only Playwright sweep on tag push), `coverage.yml` (workflow_dispatch coverage measurement).
-
-## 🧪 e2e-full UI test debt — release validation 88% pass-rate
-
-Surfaced by the v3.3.0 release validation (commit `7fe0a5a`, run [25217155402](https://github.com/Globussoft-Technologies/globussoft-crm/actions/runs/25217155402)). After the auth.setup fix unblocked the chromium project, the full sharded run produced:
-
-- **2,222 passed / 201 failed / 114 did not run** out of 2,537 tests = **88% pass rate**
-- ~28 min total wall time across 4 parallel shards (within 30-min per-shard budget)
-
-The 201 failing + 114 not-running tests are **pre-existing UI test drift**, not v3.3.0 regressions. The per-push 4-gate CI (build / lint / api_tests / unit_tests) is GREEN — none of these failing UI specs are part of it.
-
-### Failure attribution (initial-attempt failures only, excluding retries)
-
-| Spec | Failed | Likely cause |
-|---|---|---|
-| `navigation.spec.js` | 36 | Sidebar / back-button flow drift since 2026-04-26 |
-| `api-health.spec.js` | 34 | Worth investigating — could be a real route gap |
-| `developer.spec.js` | 8 | UI form / button selectors |
-| `contacts.spec.js` | 8 | UI flow (NOT contacts-api which passes in per-push) |
-| `wellness-ui-flows.spec.js` | 7 | Wellness theme cascade + form selectors |
-| `wellness.spec.js` | 6 | UI |
-| `pipeline.spec.js` | 6 | Drag-drop / stage-change UI |
-| `dashboard.spec.js` | 6 | Percentage badge / KPI tile drift |
-| `theme.spec.js` | 5 | Theme toggle (was disabled in v3.2.3 per #264) |
-| `custom-objects.spec.js` | 5 | UI |
-| ... (tail of ~70 more, all in 1-4 failures range) | ~70 | UI flows |
-
-### Deeper investigation (2026-05-01 afternoon — pickup from home)
-
-Pulled `gh run view 25217155402 --log-failed` and dug into the actual error messages, not just the test names. Three distinct failure buckets — they need different fixes, can't be batched.
-
-#### Bucket A — ✅ FIXED 2026-05-02 (commit `2b79a34`); diagnosis below was WRONG
-
-> **Real root cause** (logged for future reference, since the original "sessionStorage migration" framing led at least one investigator down a dead end):
->
-> `auth.setup.js` wrote `localStorage.token` but NOT `localStorage.user` + `localStorage.tenant`. App.jsx reads all three from `localStorage` in its useState initializers (lines 237–273). Without `user`, both `isAdmin` and `isManager` were `false` on first render, and Sidebar.jsx's `managerOnly` filter (`if (managerOnly && !isManager) return null;` — line 117) hid every Marketing / Sequences / Reports / Forecasting / Approvals / Lead Routing / Quotas / etc. link. UI tests asserting those specific labels then timed out at 8-15s with `expect(locator).toBeAttached() failed; element(s) not found`.
->
-> The sessionStorage-vs-localStorage detail in the original diagnosis was a red herring. The setup's pre-existing dual-write strategy (write both stores; let App.jsx's legacy-localStorage migration shuttle token → sessionStorage on cold start) WAS working — auth itself passed in every shard, and authenticated API specs ran fine after auth.setup. The visible failures pointed at sidebar links, not auth state. Worth re-reading the actual error message before trusting any pre-existing diagnosis.
->
-> **Concrete evidence** that proved it: 4 sidebar links (Contacts / Pipeline / Invoices — all *no* `managerOnly` gate) passed; 3 sidebar links (Marketing / Sequences / Reports — all *with* `managerOnly` gate) failed. The split is a function of the Link's `managerOnly` prop, full stop.
->
-> **Fix shipped**: read `user` + `tenant` from the `/api/auth/login` response (already returned per `routes/auth.js`) and write them to `localStorage` alongside the token. 20 lines added to `e2e/auth.setup.js`. e2e-full failures dropped 201 → 43 in a single commit.
-
-**~70% of original failures** in this bucket. After fix: ~0 in this bucket.
-
-#### Bucket B — `E2E_SKIP_SCRUB=1` vs specs that assume clean state (~15% of failures)
-
-[`.github/workflows/e2e-full.yml:105`](.github/workflows/e2e-full.yml#L105) sets `E2E_SKIP_SCRUB: '1'` — designed to keep the demo data intact for live walkthroughs. But several specs assert empty/zero counts, then fail with shapes like `Expected: 0  Received: 350` and `Expected: >= 2  Received: 0`. The data IS there, just not the data the test expected.
-
-**Fix shape** (~30 min): either drop `E2E_SKIP_SCRUB=1` from `e2e-full.yml` (lets cleanup specs run, but mutates the demo), or annotate offending specs with `test.skip(process.env.E2E_SKIP_SCRUB === '1', 'requires clean tenant state')`. Second option preserves the demo-friendly default.
-
-#### Bucket C — api-health flake at 14:13Z (~5 minutes of red, then green) (~5% of failures)
-
-A 1-minute window where `GET /api/health`, `POST /api/auth/login`, `GET /api/auth/users` all 3-retry'd and failed (387-526ms responses, but content/shape mismatch). Surrounding chromium tests at the same timestamps passed against the same server, so the demo wasn't fully down. **No deploy was running** during this window (mine started 12 minutes later at 14:25Z). Most likely a transient demo blip — possibly Cloudflare/PM2 hiccup, or a momentary DB connection saturation.
-
-**Fix shape** (no immediate action): add `--retries=3` at the api-health project level in `playwright.config.js` (already enabled it appears, since we see "retry #2" lines). If this recurs across multiple runs, then investigate; one occurrence in one run is normal demo noise. Track but don't chase yet.
-
-#### Strict timing evidence: this is NOT caused by today's afternoon commits
-
-Failures started at **14:02:50Z** (earliest = `approvals.spec.js:115` "cannot re-approve already-approved"). My first commit (`b281dd6`) didn't push until **14:22:57Z** and didn't deploy until **~14:25:00Z** — 22 minutes after the first failure. None of today's commits touched runtime code anyway: file deletes are repo-only, workflow edits are CI-only, and the ESLint sweep was either no-op renames (catch params) or trivially-equivalent renames (unused vars/imports). The teammate's commit `287fc1a` (which landed mid-failure-run) explicitly attributes the 12% red as "pre-existing UI test debt".
-
-### Original cleanup approach (still valid, but order revised by buckets above)
-
-1. **First: ship the sessionStorage fix in auth.setup.js** — single highest-leverage change. ~30-60 min, reclaims ~70% of the red.
-2. **Then: triage Bucket B** (E2E_SKIP_SCRUB skips). ~30 min annotating offending specs.
-3. **Re-run e2e-full** via `gh workflow run e2e-full.yml`. Expect to land at 95%+. Anything still red after that is genuinely test debt that needs rewrite.
-4. **Eventually**: rewrite the UI test surface to use accessibility-locator patterns (role + name) instead of brittle text/CSS selectors. Multi-day effort. Park until the per-push API surface is comprehensive.
-
-### What actually shipped 2026-05-02
-
-| Round | Commit | What | Failures (unique) |
-|---|---|---|---|
-| 1 | `2b79a34` | auth.setup writes user + tenant to localStorage (the real Bucket A fix; see above) | **201 → 43** |
-| 2 | `0aa5165` | `demo-hygiene-api` + `demo-health` skip under `E2E_SKIP_SCRUB`; `responsive.spec.js` clears sessionStorage too; `notifications.spec.js` uses `aria-label` locator instead of `header button:first` (the hamburger from #228 is the new first button); `navigation.spec.js` brand-text test name-agnostic | 43 → 26 |
-| 3 | `f5af14a` | `wellness-real-user-journeys.spec.js` helpers — `clearBrowserState()` clears sessionStorage; `uiLoginViaToken()` writes `user` to localStorage too. `dashboard.spec.js:75` Globussoft literal removed | 26 → 25 |
-| 4 | (in progress) | Per-spec triage of the remaining 25-spec long tail (each independent) | 25 → ? |
-
-### Long-tail residue — the 25 specs still failing after rounds 1-3
-
-Each requires its own ~15-30 min spec-by-spec triage; they're truly independent. Categories:
-
-- **Likely UI/spec drift**: `dashboard.spec.js:75` (fixed), `navigation.spec.js:69` (fixed), `notifications.spec.js` (fixed), `responsive.spec.js` (fixed), `wellness-a11y.spec.js` (2), `wellness-orchestrator-depth.spec.js:121` (no-show widget), `developer.spec.js:93` (toast message), `wellness-deep.spec.js:439` (recommendations link)
-- **Likely seed/data drift**: `landing-page-renderer.spec.js:105` (no published page on demo), `wellness-clinical-journey-flow.spec.js:294` (loyalty visible — depends on seeded loyalty rows), `tasks-api.spec.js:567` (cross-tenant isolation — depends on Tenant B seed)
-- **Likely real product issues**: `approvals.spec.js:115` (re-approve state machine), `billing-update.spec.js:85` (negative-amount validation), `external-api.spec.js:288` (junk filter false-positive), `lead-routing.spec.js:59` (round-trip), `lead-scoring.spec.js:53` (trigger API), `sso.spec.js:79` (Google callback no-code redirect), `sequences-flow.spec.js:133`/`sequences-step-list.spec.js:121`/`sequences.spec.js:119` (drip engine + step-list), `wellness-feature-gaps.spec.js:428` (consumption), `wellness-integration.spec.js:44` (race), `wellness-rbac-api.spec.js:219` (professional scope — could be a real RBAC gap caught by the new spec)
-- **Multi-cause**: `wellness-real-user-journeys.spec.js` (3 — D1 Rishu KPI, B3 Patient tabs, F5 portal login)
-- **Misc**: `eventbus-conditions.spec.js`, `wellness-deep.spec.js:239` (photo upload)
-
-### Release decision for v3.3.0
-
-The v3.3.0 tag stands. The runtime code at `5ba7422` is correct and deployed. The 88% pass rate represents documented pre-existing test debt, not new regressions. The per-push 4-gate CI prevented any real regression from reaching deploy.
-
-If a future release wants 100% e2e-full green, the test debt above must be cleaned up first. Currently logged but not blocking.
-
----
-
-## 🧪 auth-test-debt — UI auth specs need updating for v3.2.5+ auth model
-
-Surfaced by the v3.3.0 e2e-full release validation. 6 tests in `e2e/tests/auth.spec.js` plus the `e2e/auth.setup.js` fixture were written assuming localStorage-based token persistence — v3.2.5 (#343) migrated to a module-level in-memory holder + sessionStorage fallback for security. The setup fixture was fixed in v3.3.1 (`localStorage.setItem` → `sessionStorage.setItem`); the 6 spec tests are skipped with `test.skip` + a referenced reason.
-
-### Deferred tests (un-skip after fix)
-
-- [ ] `auth.spec.js:34` — "shows demo credentials hint" — locator `text=Demo Credentials` doesn't match current Login.jsx copy. Update to match the actual section title (e.g., `text=Globussoft CRM` or `text=Enhanced Wellness — Demo`).
-- [ ] `auth.spec.js:70` — "successfully logs in with valid credentials" — `waitForURL('/')` times out. /api/auth/login returns 200 + token (verified via curl). Investigate: does Login.jsx redirect to '/' or somewhere else? Does the AuthProvider's loading-flag (#347) interact with the redirect? Possibly switch to `waitForURL('**/dashboard')` or wait for a known dashboard-only element.
-- [ ] `auth.spec.js:84` — "token is stored in localStorage" — assert `sessionStorage.getItem('token')` instead. Note: v3.2.5+ token may live ONLY in module memory if sessionStorage is disabled; the test should be tolerant of either.
-- [ ] `auth.spec.js:95` — "token persists across page reload" — same root cause as :70. Re-enable when redirect flow works.
-- [ ] `auth.spec.js:130` — "clearing token redirects to login" — clear sessionStorage, not localStorage. Note: even after sessionStorage clear, the in-memory holder still has the token until the JS context is destroyed; the page reload achieves that, so the assertion should still hold post-fix.
-- [ ] `auth.spec.js:153` — "authenticated user visiting /signup is redirected" — same UI-login flake as :70.
-
-### Probable root cause for the redirect failures
-
-CHANGELOG #347: "AuthContext on cold start migrates legacy localStorage token once and deletes the key". The migration logic may not fire reliably from a Playwright-injected token (browser reload semantics differ). Or the post-login redirect URL changed. Recommend: open Login.jsx + AuthContext, trace the login submit → redirect target. ~1 hour to fix all 6 tests cleanly.
 
 ---
 
@@ -562,71 +232,6 @@ What CI **does NOT** catch yet — the backlog below. Tackled top-down. Each ite
 
 ---
 
-## 📌 (HISTORICAL snapshot — superseded) NEXT SESSION pick-up
-
-> **⚠️ Historical**: kept for context only. The authoritative pickup point is now [🎯 Architect-priority sequencing (2026-05-02)](#-architect-priority-sequencing-2026-05-02) at the top of this file. The HEAD reference + CI gate counts below are stale. The Phase 2 route-coverage table (under-covered routes by absolute uncovered lines) is still useful as a reference but mostly superseded by [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md).
-
-**HEAD at end of overnight run**: `868b227` (test(unit): vitest layer for backend lib + middleware + services + utils). All four CI jobs green. Working tree clean. No open PRs. Issue inbox: 0.
-
-### Phase 1 + vitest layer — what shipped
-
-| Commit | What |
-|---|---|
-| `c529e1f` | test(e2e): Phase 1 coverage push — 5 new API specs (~411 tests) |
-| `2f7a0db` | fix(test): skip wellness-clinical onerror= test |
-| `7506ebd` | fix(wellness): use req.user.userId not req.user.id in Rx PUT prescriber-check |
-| `6b1470f` | fix(routes): replace bare req.user.id (always undefined) with req.user.userId — class fix across wellness, workflows, custom_reports, dashboards |
-| `868b227` | test(unit): vitest layer for backend lib + middleware + services + utils (22 files / 674 tests / 3 skipped) |
-
-**CI gate now**: build + 23 specs / 1,084 API tests + 22 unit-test files / 674 unit tests + deploy. All four jobs mandatory.
-
-### Coverage state
-
-| Tier | Tool | Lines | Notes |
-|---|---|---|---|
-| Routes | Playwright + c8 (`coverage.yml`) | **40.52%** (was 33.63% — +6.89pp) | Methodology: 23 gated API specs against c8-instrumented backend |
-| Helpers (lib + middleware + services + utils) | vitest + v8 (`npm run test:coverage`) | **79.01%** | First measurement; vitest layer is brand new |
-
-### Phase 2 — biggest remaining route targets (top by absolute uncovered lines)
-
-| Rank | Uncov | File | Notes |
-|---|---|---|---|
-| 1 | 2,347 | `routes/wellness.js` | Already 41.4% covered by wellness-clinical-api; remaining is dashboard, reports, telecaller, patient-portal sub-flows. Could split into `wellness-dashboard-api.spec.js` + `wellness-reports-api.spec.js` + `wellness-telecaller-api.spec.js`. |
-| 2 | 530 | `cron/orchestratorEngine.js` | Has admin trigger endpoint; pattern same as sla-breach-api.spec.js. |
-| 3 | 475 | `routes/billing.js` | Includes PATCH + mark-paid (#202) — clean target. |
-| 4 | 396 | `routes/sandbox.js` | DESTRUCTIVE-RESTORE endpoints; test the gates carefully. |
-| 5 | 368 | `routes/social.js` | Internal CRUD, clean target. |
-| 6 | 362 | `routes/payments.js` | Stripe/Razorpay external — test only the auth gate + validation paths until integration mocks land. |
-| 7 | 352 | `routes/auth.js` | Login + signup + 2FA + sessions. Watch out for rate limits — need unique emails per test. |
-| 8 | 351 | `routes/approvals.js` | State machine; partly covered via wellness approvals already. |
-| 9 | 347 | `routes/marketplace_leads.js` | Includes public `/webhook` — public endpoint testing. |
-| 10 | 334 | `routes/chatbots.js` | Clean target. |
-
-Recommended next round: 5 parallel agents on **billing, social, marketplace_leads, knowledge_base, approvals** (all clean targets, no rate limit / external service issues). Expected lift: 40.52% → ~48-50%.
-
-### 🛑 Deferred for later (do NOT pick up unless explicitly assigned)
-
-### External-service mocked integration tests
-The vitest unit suite intentionally does NOT cover these external-service paths because they require fault-injection mocks that don't fit cleanly inside the CJS+ESM hybrid we have:
-
-- **Stripe webhooks** — signed payload validation + idempotency-key replay (`backend/routes/payments.js`).
-- **Razorpay webhooks** — same.
-- **OAuth callback success branches** — Google + Microsoft + Calendar flows (`backend/routes/sso.js`, `backend/routes/calendar_*.js`).
-- **Mailgun delivery success branch** — current notificationService email-channel skipped because `vi.mock('global.fetch')` doesn't intercept the SUT's `require('node:fetch')` chain. Need a real Mailgun mock server (msw or nock).
-- **web-push delivery success branch** — same pattern; pushService 410-Gone-cleanup path is covered, the OK path needs a fake VAPID server.
-- **OTP-redaction + DLT-PE-ID branches** in routes/sms.js — currently exercised by sms-api.spec.js's e2e specs, not by vitest.
-
-These belong in a future "integration tests" tier — somewhere between the fast vitest unit suite (~1.2s) and the e2e Playwright suite. Suggested approach: add a `backend/test/integration/` dir with msw + nock fixtures; gate behind a separate CI job (`integration_tests`) that runs alongside `unit_tests` + `api_tests`.
-
-Estimate: 2-3 days dedicated work. Not urgent.
-
-### Frontend test infrastructure
-No vitest / jest setup exists in `frontend/`. The 80 React pages and 11 components have zero unit-test coverage. The e2e Playwright UI specs (e2e/tests/notifications.spec.js, theme.spec.js, navigation.spec.js, wellness*.spec.js) cover frontend behavior end-to-end but don't isolate component logic. Future work: vitest + @testing-library/react in frontend, mock API calls via msw, target `frontend/src/components/*` first (NotificationBell, Sidebar, Layout, DealModal, etc.). Estimate: 2-4 days for the highest-leverage components.
-
----
-
----
-
 ## 🎯 PRD scope guardrails — read before picking up new work
 
 **The PRD lives at [docs/wellness-client/PRD.md](docs/wellness-client/PRD.md).** Stay inside its bounds. Recent drift was caught on 2026-04-27:
@@ -660,706 +265,6 @@ The two ⚠️ items are external-blocked (Callified + AdsGPT teams owe their si
 
 ---
 
-## 📌 (HISTORICAL snapshot — superseded) NEXT SESSION pick-up (older)
-
-> **⚠️ Historical**: kept for context only. The authoritative pickup point is now [🎯 Architect-priority sequencing (2026-05-02)](#-architect-priority-sequencing-2026-05-02) at the top of this file. The HEAD reference, gate counts, and "What to work on next" list below are stale.
-
-**HEAD at end of 2026-04-30 late evening**: `da5ba56` (push-api spec wired into gate + 3 pre-existing flakes fixed: cpq quantity NaN, expenses nullable expenseDate, expenses status case-insensitivity). Working tree clean. Open issues: **0**. Open PRs: **0**.
-
-### Quick state check before starting
-
-```bash
-git pull origin main
-# expected HEAD: da5ba56 or later
-# CI gate: 16 specs, 611 mandatory API tests + build + deploy
-# coverage: ~67-68% lines (estimated; needs rerun), gate 66/52/66/66
-# site: https://crm.globusdemos.com — verify last deploy succeeded after
-#   da5ba56 landed; the 3 flake fixes should have flipped api_tests green
-#   for the first time since 9a5dffc.
-```
-
-Important pickup tasks before starting new work:
-
-1. **Verify CI is green at HEAD** — `gh run list --repo Globussoft-Technologies/globussoft-crm --branch main --limit 1`. If api_tests is still red, check whether `prisma db push` ran on demo (the expenseDate nullable migration only auto-applies in CI's ephemeral container).
-
-2. **Sync demo schema** — if api_tests is green on CI but demo's expenses page is broken or expenses-api spec fails against demo: SSH to demo, `cd ~/globussoft-crm/backend && npx prisma db push --skip-generate --accept-data-loss` to apply the nullable expenseDate column. Backwards-compatible change, no data loss.
-
-3. **Re-measure coverage** — once CI is green, re-run `ssh_full_coverage.py` (or the cheat-sheet at the bottom of this file) to capture the lift from tasks-api (53), estimates-api (58), and push-api (33) — 144 new tests total. Expected lift ~1.5-2pt on global lines (roughly 67.27 → 68.5-69%). If ≥70 measured, bump c8 gate from 66 → 70.
-
-If `local.env` doesn't have `GH_TOKEN`, the gh CLI's keychain creds work for git push via `git push https://x-access-token:$(gh auth token)@github.com/...`. The embedded ghp_ token in `git remote -v origin` URL is stale and asks for a password.
-
-### What to work on next (no urgent bug pressure)
-
-With issue board + PR queue both at zero, options in priority order:
-
-1. **Coverage push toward 70% gate** — tasks (53) + estimates (58) + push (33) shipped today; remaining top drags (each ~+0.3-0.5 pt):
-     - `lib/notificationService.js` (29.37%, 143 lines)
-     - `cron/lowStockEngine.js` (31.15%)
-     - `routes/communications.js` (32.05%) — inbox, send-email (with Mailgun no-API-key branch), tracking pixels (public, no auth), call logs. Clean target.
-     - `services/pushService.js` (35.41%) — partly covered now via push-api spec; check the actual delta after coverage rerun before writing a dedicated spec.
-     - `cron/sentimentEngine.js` (36.61%)
-     - ⛔ NOT `services/whatsappProvider.js` (Callified per PRD §6.5) — stays skipped.
-   Each spec should follow the proven pattern in `e2e/tests/sla-breach-api.spec.js`, `e2e/tests/tasks-api.spec.js`, or `e2e/tests/push-api.spec.js`. Always add to the CI gate list in `.github/workflows/deploy.yml` after each new spec.
-
-2. **Mobile parity follow-up** — #228 shipped 80/20; complete pass
-   needs per-page audit at 320/375/414/768 across all ~80 pages,
-   replace inline-style grid columns with classes, focus trap on
-   drawer, touch-target 44×44 audit, forms (PublicBooking, NewPatient,
-   signature canvas), Recharts narrow-screen tuning, real iOS/Android
-   device test. Listed in `frontend/src/styles/responsive.css` header
-   comment.
-
-3. **Real sandbox infra** — #137 shipped foundation; complete pass in
-   `docs/wellness-client/SANDBOX.md §5`: admin cron-trigger endpoints
-   + engine refactor (some engines like sequenceEngine + slaBreach
-   already have admin tick endpoints — extend the pattern), 8 new
-   cron specs (campaign, recurringInvoice, scheduledEmail, retention,
-   backup, appointmentReminders, wellnessOps, lowStock — all currently
-   under-covered), Stripe/Razorpay signed-payload replayer,
-   Mailgun/Twilio outbound capture, fake OAuth issuer, CI nightly
-   `sandbox-e2e` job.
-
-4. **CI hardening**:
-   - Bake an `npm install` step into the api_tests workflow run so
-     PR-introduced lockfile drift gets surfaced earlier (today's PR #400
-     hit this; build job did catch it but the error message is dense).
-     Optional `npm audit --omit=dev` on a clean checkout to flag known
-     vulns.
-   - Add a coverage-threshold step in CI: run `c8 check-coverage`
-     against the gate every push. Currently coverage is only measured
-     manually by `ssh_full_coverage.py`. Wiring it into CI would mean
-     either:
-       (a) running c8 over the api_tests run inside the runner (clean
-           but adds ~3-5 min to CI), or
-       (b) keeping the manual server-side measurement but having a CI
-           job assert against a checked-in `coverage-baseline.json`.
-
-5. **Orchestrator depth audit** (PRD §6.7) — verify the engine actually
-   computes occupancy gap → recommends ad budget → drafts campaign vs
-   being a single-recommendation stub. The dedup work in v3.2.4 fixed
-   surface bugs but didn't audit recommendation logic.
-
-6. **Lead-side SLA** (PRD §6.4) — current SLA engine is ticket-side.
-   PRD says "first response in <5 min for high-ticket services"
-   applies to LEADS too. New cron OR enhancement to slaBreachEngine
-   (the engine just got 48 tests + a real bug fix; clean target).
-
-### Late-evening run (2026-04-30 evening → night) — what shipped
-
-**3 new specs (144 tests) + 3 pre-existing CI flakes fixed.** CI gate
-went from 13 specs / 467 tests to 16 specs / 611 tests. Two real
-production bugs (cpq + expenses) and one test-assertion bug surfaced
-+ fixed by the gate hardening — exactly the value we hoped for.
-
-| Commit  | What |
-|---------|------|
-| `5841202` | tasks-api + estimates-api specs (111 tests) wired into gate |
-| `108db42` | tasks-api offset test fix — drop non-deterministic id compare |
-| `a650c7e` | push-api spec (33 tests) wired into gate — 16 specs / 611 |
-| `ae92cda` | fix(cpq): normalize qty/unitPrice BEFORE computing line total. Pre-existing CI flake — POST /quotes returned 500 on missing quantity from undefined×price=NaN→Prisma reject. |
-| `da5ba56` | fix(expenses): nullable expenseDate (schema) + case-insensitive status assertions (test). Pre-existing CI flakes — null on non-nullable column → 500; row.status==='APPROVED' was case-sensitive vs MySQL's case-insensitive WHERE. |
-
-Demo schema follow-up needed: `prisma db push` on demo to apply the
-nullable expenseDate column (backwards-compatible). CI applies it
-automatically via the ephemeral container's `prisma db push` step.
-
-### Earlier run (2026-04-30 day) — preserved for context
-
-**~108 GitHub issues closed**, ~25 commits pushed, PR #400 (Callified
-SSO) merged, CI gate hardened to 13-spec / 467-test mandatory pipeline,
-coverage lifted +2.51 pt lines, two real production bugs caught.
-
-| Commit | Closes / What |
-|---|---|
-| `269244d` morning   | #300 P0 OTP leak in /portal/login/request-otp |
-| `4431e03`           | 22-issue P2 batch (RBAC + dashboard + lead routing + frontend) |
-| `277090f`           | 6 stale callified-migrated issue closures |
-| `2897b85`           | Round 2: orchestrator dedup, IST/UTC, AI score, autosave, inventory stub |
-| `6880d51`           | ci(deploy): pass commit message via env (footgun fix) |
-| `3cff373`           | #278 prescription detail modal + PDF download |
-| `2a143a9`           | #200 #201 #211 #241 login chips closed by product decision |
-| `ed23f5d`           | Final 3 multi-day: #227 #228 #137 |
-| ... PR #393 + many ... | active treatments, bug rounds, security hardening |
-| `4cda40c`           | #179 audit log expansion (PRD §11) — closed final issue |
-| `a7962b3`           | ci: pre-create empty playwright/.auth/user.json — gates green |
-| `f3a85b5`           | ci: api_tests promoted to MANDATORY |
-| `231dc27`           | ci: + sms-api  (4 → 48 tests) |
-| `bcf7b74`           | ci: + marketing + reports + sla-breach (189 tests) |
-| `57438f1`           | fix(sla): real bug surfaced by spec — Ticket.contactId removed from engine |
-| `6b98a71`           | + treatment-plans-api (229 tests) |
-| `4fce425`           | + sequence-engine-api (278 tests) |
-| `bbc2c6a`           | Merge PR #400 Callified SSO |
-| `46c01b6`           | chore: regen frontend lockfile (PR #400 build-job catch) |
-| `9a5dffc`           | gate bump 65→66, 50→52 |
-| `f7a240f`           | + expenses + projects + ai-scoring + contracts (412 tests) |
-| `19a23a9`           | + custom-objects + cpq (467 tests) |
-
-### Lessons learned (bake into next-session habits)
-
-1. **Mandatory CI gates pay for themselves.** Today the build+api_tests
-   gate caught:
-     - SLA engine `contactId` schema mismatch (had been silently failing
-       every cron tick in production for who-knows-how-long)
-     - PR #400 lockfile drift (would have broken the deploy pipeline)
-
-2. **`continue-on-error: true` is a soft gate.** With it, the deploy
-   job's `needs.api_tests.result == 'success'` evaluates to `failure`
-   even on green steps. Removing the flag flips api_tests to a real
-   gate. Today's promotion to mandatory was: remove
-   `continue-on-error`, restore the if-clause to require success on
-   needs.api_tests.
-
-3. **PR #400 lockfile drift teaches: never commit package.json without
-   a regenerated lockfile.** `npm install` (no flags) regenerates the
-   lockfile against the current package.json. CI uses `npm ci` which
-   strict-checks parity.
-
-4. **api-health.spec.js is unsuitable for CI.** It tries `admin/admin`
-   legacy bypass that was removed for security hardening. Use
-   `ci-smoke.spec.js` (purpose-built, 4 tests, no prod assumptions)
-   as the gate-baseline spec; api-health stays as a manual smoke vs
-   live demo.
-
-5. **Playwright `--no-deps` skips auth.setup but the chromium project
-   STILL loads `playwright/.auth/user.json` at fixture init.** Pre-
-   create an empty `{cookies:[],origins:[]}` file in CI before running
-   any spec. Same trick as the local coverage script.
-
-6. **Coverage delta interpretation: lines % can drop while net covered
-   lines rise.** Today added ~1850 lines of new code; only ~712 of
-   those got covered by new specs. Net ratio dropped 1.3 pt before
-   targeted specs lifted it back +2.5 pt.
-
-7. **Parallel agent file-affinity discipline still holds**: 4-5 agents
-   in parallel works reliably when each owns a disjoint set of files.
-   Same-file work is one agent.
-
-### CI gate snapshot (HEAD da5ba56)
-
-```
-build      mandatory  npm ci + prisma generate + node-check + vite build
-api_tests  mandatory  MySQL container + seed + 16 specs / 611 tests:
-                        ci-smoke.spec.js              ( 4 tests)
-                        sms-api.spec.js              (44 tests)
-                        marketing-api.spec.js        (41 tests)
-                        reports-api.spec.js          (52 tests)
-                        sla-breach-api.spec.js       (48 tests)
-                        treatment-plans-api.spec.js  (40 tests)
-                        sequence-engine-api.spec.js  (49 tests)
-                        expenses-api.spec.js         (37 tests)
-                        projects-api.spec.js         (37 tests)
-                        ai-scoring-api.spec.js       (23 tests)
-                        contracts-api.spec.js        (37 tests)
-                        custom-objects-api.spec.js   (29 tests)
-                        cpq-api.spec.js              (26 tests)
-                        tasks-api.spec.js            (53 tests)  NEW
-                        estimates-api.spec.js        (58 tests)  NEW
-                        push-api.spec.js             (33 tests)  NEW
-deploy     gated by both  pull → install → prisma → pm2 → health → vite →
-                          rsync → chown → smoke
-```
-
-Bypass available for emergency hotfixes: GitHub UI → Actions →
-Deploy workflow → Run workflow → check "skip_tests" input.
-
----
-
-### Older state — yesterday's 2026-04-27 inbox-zero handoff (preserved for context)
-
-Original "What to work on next" content from the 2026-04-27 wrap:
-
-
-   Top under-covered files (PRD-aligned): `cron/slaBreachEngine.js` (24%),
-   `routes/wellness.js` clinical sub-flows. Each spec adds 30-50 tests and
-   +2-3pt to global. Once ≥70%, bump gate `65 → 70` in `.c8rc.json`.
-
-2. **Mobile parity follow-up** (~1-2 days) — #228 shipped 80/20; complete
-   pass needs: per-page audit at 320/375/414/768 across all ~80 pages,
-   replace inline-style grid columns with classes, focus trap on drawer,
-   touch-target 44×44 audit, forms (PublicBooking, NewPatient, signature
-   canvas), Recharts narrow-screen tuning, real iOS/Android device test.
-   Listed in `frontend/src/styles/responsive.css` header comment.
-
-3. **Real sandbox infra** (~3-5 days) — #137 shipped foundation; complete
-   pass listed in `docs/wellness-client/SANDBOX.md §5`: admin cron-trigger
-   endpoints + engine refactor, 8 new cron specs (campaign, recurringInvoice,
-   scheduledEmail, retention, backup, appointmentReminders, wellnessOps,
-   lowStock — all currently zero-coverage), Stripe/Razorpay signed-payload
-   replayer, Mailgun/Twilio outbound capture, fake OAuth issuer, CI nightly
-   `sandbox-e2e` job.
-
-4. **Orchestrator depth audit** (PRD §6.7) — verify the engine actually
-   computes occupancy gap → recommends ad budget → drafts campaign vs being
-   a single-recommendation stub. The dedup work today fixed surface bugs
-   but didn't audit the recommendation logic itself.
-
-5. **Lead-side SLA** (PRD §6.4) — current SLA engine is ticket-side. PRD
-   says "first response in <5 min for high-ticket services" applies to
-   LEADS too. New cron or enhancement to slaBreachEngine.
-
-6. **External-blocked items** (waiting on partner teams):
-   - Callified webhook + silent SSO contract — biggest demo gap
-   - AdsGPT "Back to CRM" link — our SSO impersonation works one-way
-   - Rishu inputs — Superphone + Zylu CSVs (data migration), Aadhaar/PAN
-     scans (Android Play Store resubmit)
-
-### 🌱 Long-term wishlist — good-to-have, not urgent
-
-Park items here that aren't bugs, aren't on the next-30-day plan, and aren't
-external-blocked, but that we'd want to revisit when there's space. Don't
-work these unless the urgent + priority backlog is empty.
-
-- **Patient self-service portal as a first-class persona** (multi-week
-  dedicated push). PRD §5 currently lists 6 personas, all clinic-staff or
-  Globussoft-managed; the patient is the *subject* of the system, not a
-  *user*. Today `/wellness/portal` is a thin compliance + Rx-download
-  fallback. Promoting it to a real product would mean:
-  - Update PRD §5 to add a "Patient" persona with documented needs
-    (book directly, view loyalty points, pay invoices online, upload
-    before/after photos, manage reschedule, opt in/out of reminders)
-  - Dedicated security review for every new public endpoint (every portal
-    endpoint is internet-facing — see today's #292/#295/#300 for the kind
-    of P0 these surfaces produce)
-  - Mobile-first UI design (the only realistic patient device)
-  - Payment integration on the patient side (Stripe/Razorpay tokenized,
-    not the staff invoicing flow)
-  - Decide product positioning: does it compete with WhatsApp (which
-    Callified owns per PRD §6.5) or complement it?
-  - Estimate: 2-4 weeks dedicated work + ongoing security review cadence.
-  - Pickup trigger: when Rishu (or a future tenant) explicitly asks for
-    patient self-service AND staff-side CRM is in a steady state.
-
-- **Tighter input-time validation** (so the field rejects bad values BEFORE
-  Save, not just on submit). Came up 2026-04-29 when an automated QA agent
-  filed #349–#355 as duplicates of #331–#337: the QA tool observes "field
-  accepts value typed" without verifying "Save returns 400". The shipped
-  fixes are correct (server rejects, form re-validates on submit) but the
-  field itself doesn't paint inline-invalid until the user clicks Save.
-  Polish work, not a bug. Adoption pattern: extend `numberInput.jsx`'s
-  `<NumberInput>` to take `min`/`max`/`required` and paint a red ring +
-  inline error in real-time. Apply across LeadRouting Priority, Estimates
-  qty/unitPrice/discount, Patient/Lead name (whitespace check). Single
-  agent, half-day.
-
-- _(Add more good-to-haves here as they surface during normal work.)_
-
-### Apr-end demo criteria (PRD §14) — final state
-
-PRD says "if those six work end-to-end, Rishu signs":
-1. ✅ Login to Enhanced Wellness tenant
-2. ✅ Owner dashboard with realistic numbers (#277 fixed, #289 occupancy +
-   no-show calc fixed, #293 location filter fixed)
-3. ⚠️ AdsGPT creative push to Meta — verify the demo flow surfaces a stub
-4. ⚠️ WhatsApp chatbot booking → real appointment — needs Callified webhook
-5. ✅ Doctor enters Rx + captures consent on tablet (Rx PDF, consent canvas,
-   treatment plan all live; #278 added detail modal + PDF download today)
-6. ✅ Orchestrator surfaces one recommendation card (dedup fix shipped)
-
-The two ⚠️ items remain external-blocked.
-
-### Today's run (2026-04-27) — what shipped
-
-**50 GitHub issues closed**, 17 commits, 8 GH Actions deploys, 11 agents
-across 3 parallel rounds. Final commits in chronological order:
-
-| Commit | Closes | Notes |
-|--------|--------|-------|
-| `269244d` | #300 | P0 OTP leak in /portal/login/request-otp response body — solo, security-critical |
-| `4431e03` | #279 #281 #282 #289 #291 #293 #299 #301 #302 #240 #294 #296 #297 #303 #304 #236 #251 #255 #286 #288 #290 #298 | Round 1: 22 P2 issues, 5 parallel agents on disjoint files |
-| `277090f` | #141 #142 #147 #150 #152 #153 | Stale-issue cleanup — 6 callified-migrated issues with no repro, 3 days idle |
-| `2897b85` | #285 #261 #263 #287 #248 #239 #305 | Round 2: orchestrator dedup, IST/UTC dashboard mismatch, AI score variation, public-booking autosave, /wellness/inventory stub |
-| `6880d51` | (ci fix) | deploy.yml multi-line commit-message footgun — fixed by passing message via env var |
-| `3cff373` | #278 | Prescription detail modal + PDF download + Instructions in timeline |
-| `2a143a9` | #200 #201 #211 #241 | Login quick-login chips — closed by product decision (intentional for demo server) |
-| `ed23f5d` | #227 #228 #137 | Final 3: Reports CSV/PDF export, mobile responsive 80/20, sandbox foundation |
-
-Plus from morning session (`b1c1a88` and earlier): #292 #295 #280 #283 #284
-(P0/P1/PHI batch), #272 #271 #268 #267 #266 #250 (P3 cleanups), #265
-(duplicate patient merge).
-
-### Lessons learned (bake into next-session habits)
-
-1. **Prisma `contains: '_'` is a SQL LIKE wildcard match-all, not a literal
-   underscore filter.** Cleanup script's #267 first run was a no-op that
-   "modified" 473 rows without changing anything. Use `findMany` + JS
-   `.filter(r => r.field.includes('_'))`.
-
-2. **Don't `sudo rsync --delete dist/ /var/www/...` from a non-root user.**
-   It strips ownership; nginx 403s. Fix baked into `.github/workflows/deploy.yml`:
-   chown www-data + chmod 755/644 after every rsync.
-
-3. **GitHub Actions multi-line commit-message interpolation is a footgun.**
-   `${{ github.event.head_commit.message }}` pasted into bash echo breaks
-   on quotes/backticks/multiple lines. Use `env: COMMIT_MSG: ...` and
-   `printf '%s\n' "$COMMIT_MSG"`.
-
-4. **Referral schema uses `referrerPatientId` / `referredPatientId`**
-   (not `referrerId`). Both must be reattached during patient merge.
-
-5. **Parallel agent file-affinity discipline**: 4-5 agents in parallel works
-   reliably when each owns a disjoint set of files. Agents touching the
-   same file (e.g., routes/wellness.js) MUST be folded into one agent —
-   tried it both ways today, single-agent wins on the same-file case.
-
-### Older state — yesterday morning's prior state preserved below
-
-**HEAD at end of 2026-04-26**: `ef9a2ed` (now historical).
-
-### Afternoon session (2026-04-27) — what shipped today (DETAILED — kept for handoff context)
-
-- **Coverage rerun on server**: 64.76% → **66.65% lines** (21,484 → 22,181 / 33,170 → 33,277). Branches 50.03% → 51.97%. Functions 66.11% → 68.13%. 1,191 tests passed in 14.4 min (3 pre-existing flakies). Combined lift came from yesterday's 3 specs (reports / marketing / voice_transcription) maturing into the run.
-
-- **`e2e/tests/sms-api.spec.js`** (44 tests, ~530 lines) — full coverage of `routes/sms.js`: POST /send (validation + no-provider branch), GET /messages (pagination + direction/status/contactId filters + OTP-redaction filter from #254/#269), templates CRUD, /config ADMIN-only mask + isActive deactivates-others, /drain admin queue flush + no-provider FAIL, /webhook/twilio (inbound + status maps), /webhook/msg91 (status code 1/2/9/unknown maps), /webhook/<unknown> → 400, auth gates. Smoke run on demo: 44/44 passed in 2.4s. PRD §6.5 aligned.
-
-- **#292 [P0/PHI]**: Patient Portal hardcoded OTP `1234` worked for ANY existing patient. Fix in `backend/routes/wellness.js`: env-gate the `WELLNESS_DEMO_OTP` bypass to `NODE_ENV !== 'production'` (override `WELLNESS_DEMO_OTP_ALLOW_PROD=1`) AND restrict to phones in `WELLNESS_DEMO_OTP_PHONES` (default `9876500001`). **Verified live**: Kavita Reddy `+919811891334` rejected with `{"error":"Invalid or expired code"}`; demo `+919876500001` still works.
-
-- **#295 [P1]**: `/api/wellness/portal/login/request-otp` had zero rate limiting. Fix: two stacked `express-rate-limit` instances — 3/10min per phone (last-10 keyed) + 10/10min per IP (`ipKeyGenerator` for IPv6). **Verified live**: 5 sequential requests → 200, 200, 200, 429, 429.
-
-- **#280 [PHI]**: Stylists could read full doctor calendar (patient names + clinical service names). Fix: GET /wellness/visits scopes by `wellnessRole` — stylists/helpers see only their own column OR non-clinical-category visits. Clinical block-list: hair-transplant, skin, dermatology, body-contouring, etc. ADMIN/MANAGER keep full org oversight.
-
-- **#283 [wellness]**: Convert lead → Customer skipped Prospect AND didn't create a Patient. Two fixes: (a) `frontend/src/pages/Leads.jsx` Convert button now sends `Prospect` (one stage at a time, matches `ConvertedLeads.jsx` default tab); (b) `backend/routes/contacts.js` PUT detects `* → Customer` transitions on wellness tenants and idempotently creates a `Patient` row keyed by `contactId`, with phone-last-10 dedupe + audit log. Best-effort wrapper — never breaks the contact update.
-
-- **#284 [wellness]**: React app fails to mount on first navigation — blank screen until hard reload. Two fixes: (a) `lazyWithRetry.js` now retries 3× with 300ms/900ms exponential backoff before falling through to stale-chunk reload (handles transient chunk-fetch failures from cancelled in-flight requests); (b) `main.jsx` 4-second mount watchdog force-reloads once if `#root` empty, sessionStorage-guarded against reload loops. **Verified live**: `mountWatchdogReloaded` ships in `index-CrdQQG-V.js`.
-
-- **P3 cleanup script `backend/scripts/cleanup-p3-data-quality.js`** — single dry-run-default script that closed 6 P3 issues in one pass:
-  - **#272**: 7 `E2E Branch [id]` location dupes deleted (gated on zero visits/patients FK)
-  - **#271**: 34 non-Indian-phone Contacts soft-deleted
-  - **#268**: 11 Contact rows with `test-skip` / `test-junk` / `e2e-test` / `qa-test` sources updated to `other`
-  - **#267**: confirmed clean (script's initial `contains:'_'` filter was a SQL LIKE wildcard match-all bug — fixed in second pass with proper string-includes filter; verified 0 literal underscores in 267 patient + 206 contact source values)
-  - **#266**: 19 gender values normalized to canonical M/F/Other
-  - **#265**: detection-only — surfaced 150 dupe-name groups (sneha iyer ×21, reyansh kumar ×15, phi audit test patient ×8, etc.) for human-merge review. **Issue stays open.**
-  - **#250**: 1 ancient `1/1/1999` task soft-deleted
-
-- **c8 gate raised**: `60/60/45/60` → **`65/65/50/65`** (lines/functions/branches/statements). ~1.5pt headroom over baseline. Aspirational target stays 100%.
-
-### Lessons learned today (for the deploy script)
-
-1. **Prisma `contains: '_'` is not a literal-underscore filter.** Lowers to SQL `LIKE '%_%'` where `_` is a single-char wildcard, matching every non-empty string. Use `findMany` + JS `.filter(r => r.field.includes('_'))` instead — or `$queryRaw` with `LIKE '%\_%'` ESCAPE `'\\'`.
-
-2. **Don't `sudo rsync --delete dist/ /var/www/...` from a non-root user.** It strips ownership: the new directory ends up `empcloud-development:empcloud-development 700`, nginx (`www-data`) gets `Permission denied`, site 403s. Fix: `sudo chown -R www-data:www-data` + `chmod 755`/`644` after every rsync. The original `ssh_deploy.py` is missing this step — needs a permanent fix.
-
-### Open backlog at end of 2026-04-27 afternoon
-
-- **P1**: 0 open
-- **P2**: ~10 open (the wellness UI bugs filed overnight by QA: #285 #287 #288 #289 #290 #291 #293 #294 #296 #298 #299 + a few legacy)
-- **P3**: ~10 open (post-cleanup, the data-quality items removed but UI polish remain)
-- **wellness-tagged**: ~9 open
-- **Open total**: ~50 (was 50 at session start; closed 6 today, but ~6 new ones came in from overnight QA — net flat)
-
-### Next-session priority order (PRD-aligned)
-
-1. **15 min** — pull, glance at overnight commits, re-baseline
-2. **30 min — overnight QA P0**: `#295` rate-limit shipped today, but check if the in-memory rate-limiter survives PM2 restart (it doesn't — first request after a restart resets the bucket). If real prod risk, swap to a Redis store. Won't matter for demo.
-3. **1-2 hours — P2 wellness UI cluster**: #285 (6× duplicate auto-task), #287 (treatment plan label/service mismatch), #288 (estimates total mismatch), #289 (no-show 11 of 11 + occupancy 0% impossible), #290 (every telecaller lead shows SLA BREACH), #291 (smoke-test location name leaks to public booking), #293 (location filter not applying), #296 (CRITICAL_OMG raw enum)
-4. **30 min — fix `ssh_deploy.py`**: bake the `sudo chown www-data:www-data` + `chmod` into the rsync step; add a post-deploy `curl /api/health` AND `curl /` HTTP-200 sanity check.
-5. **1.5-2 hours — coverage push** on `cron/slaBreachEngine.js` (24%) and `routes/wellness.js` clinical sub-flows. Target: 66.65 → 70%+, then bump gate.
-6. **#137 + #228 + #227** — multi-day items still queued.
-7. **#265 dupe-patient merge** — needs human review of the 150 detected groups (sneha iyer, reyansh kumar, phi audit test patient are clearly e2e pollution; safe to bulk-soft-delete those at minimum).
-
-### Coverage state (HEAD post-bump)
-- **66.65% lines / 51.97% branches / 68.13% functions** (1,191 tests, 14.4 min)
-- Gate at HEAD: 65 lines / 65 functions / 50 branches / 65 statements
-- Top under-covered (PRD-aligned): `cron/slaBreachEngine.js` 24.50%, `routes/sms.js` will lift dramatically when the new spec is in the run, `lib/notificationService.js` 29.37%
-- ⛔ Skipped per PRD §6.5: `routes/whatsapp.js`, `routes/voice.js`, `routes/voice_transcription.js` (Callified.ai territory)
-
-### Coverage run cheat-sheet (still works)
-
-```bash
-ssh empcloud-development@163.227.174.141
-cd ~/globussoft-crm
-git pull
-cd backend
-DISABLE_CRONS=1 PORT=5098 ./node_modules/.bin/c8 \
-  --reporter=text-summary --reporter=json-summary \
-  --temp-directory=./.c8tmp --reports-dir=./coverage \
-  --exclude='node_modules/**,coverage/**,scripts/**,prisma/seed*.js,prisma/migrations/**' \
-  node server.js &
-
-cd ../e2e
-E2E_SKIP_SCRUB=1 BASE_URL=http://localhost:5098 \
-  npx playwright test --project=chromium --no-deps --reporter=list
-
-# back to backend dir, send SIGTERM to c8 process (pid in nohup output)
-# server.js graceful-shutdown handler flushes V8 coverage before exit
-```
-
-### Login quick-login chips — closed by product decision (2026-04-27 evening)
-
-The following 4 issues all describe the same surface: the login page renders
-quick-login chips for demo accounts and pre-fills the email field. Per the
-product decision on 2026-04-27, this is **intentional for the demo server**
-(crm.globusdemos.com is a publicly-accessible dev/sales-demo box, not a real
-production deployment of the CRM). The chips and prefill make the live demo
-fast for stakeholders and prospects — typing real credentials kills the
-narrative pace.
-
-If/when this codebase is deployed to a real production tenant (an actual
-clinic running their live operations), the chips + prefill should be
-env-gated behind `NODE_ENV === 'production'` (= hide them) — but that's a
-deployment-time concern for that tenant, not a CRM-codebase fix. The credit
-demo creds (`admin@globussoft.com / password123`) are intentionally public
-per CLAUDE.md.
-
-- **#200** Login form pre-fills real user creds (dup of #201)
-- **#201** Login form pre-fills real user creds
-- **#211** Login chips expose 6 real prod creds
-- **#241** Login missing wellness Doctor / Manager chips
-
-Closed as "won't fix — by design for demo server". Re-open with a clear
-production-deployment context if/when this codebase ships to a non-demo env.
-
-### Stale-issue cleanup (2026-04-27 evening)
-
-The following 6 issues were migrated from `Globussoft-Technologies/callified` on
-2026-04-24 with no repro steps, no console/network info, and only screenshots
-on prnt.sc / somup.com (third-party hosts). They reference functionality that
-is verified working in the current CRM v3.2.x (photo upload, click-to-dial,
-add lead, landing page builder all have shipping tests + are exercised on demo
-daily). 3 days idle with no further activity. Closing as stale; if any are
-still observed in v3.2.x, please re-file with: browser + OS, network panel
-screenshot, console errors, and a step-by-step repro.
-
-- **#141** patient detail upload-photo button — POST `/api/wellness/patients/:id/photos` is in ship-readiness suite, currently green
-- **#142** Unified Inbox dialer — Softphone component renders + dispatches `voice:start` events; verified
-- **#147** mobile dialing — same softphone, no platform-specific wiring exists for native mobile dial
-- **#150** "ui issue while navigating left bar" — too vague to act on; sidebar nav verified clean in `e2e/tests/navigation.spec.js`
-- **#152** add-lead button — `/leads` "Add Lead" button → POST `/api/contacts` with `status:'Lead'`, working
-- **#153** landing page builder blank when no format chosen — landing page builder ships happy-path; "no format chosen" branch should default to a blank canvas, not blank page (cosmetic at best, no repro to confirm)
-
-### Older state — yesterday morning's prior `3be74ca` baseline (preserved for context)
-
-**HEAD at end of 2026-04-27 morning**: `3be74ca`. Working tree clean.
-
-**Open backlog at end of 2026-04-27 evening:**
-- P1: **0** (all 8 closed today)
-- P2: **0** (all 11 closed today)
-- P3: **16** (mostly seed pollution + minor UX)
-- wellness-tagged: **19** (overlaps with P-tags + the P3 cluster + a few untagged)
-- untagged: **6** | Tracking: 1
-- **Total open: 42** (was 53 at start of day)
-
-### Next-session priority order (PRD-aligned)
-
-The Apr-end demo criteria from PRD §14 are 4-of-6 working (5 ⚠️ are external-blocked on Callified + AdsGPT teams). Remaining open issues are mostly polish + one architectural piece. Priority order:
-
-1. **Coverage gate bump** (5 min on the server) — pull, run `npm run coverage:start` + e2e suite + `npm run coverage:report`. If global lines % ≥ 70, bump `.c8rc.json` lines/functions/statements `60 → 70` (branches `45 → 55`). Combined forecast was ~71-72% from today's reports.js + marketing.js + voice_transcription.js coverage pushes.
-
-2. **`routes/sms.js` coverage spec** (1.5-2 hours, PRD §6.5 aligned) — currently 31.05% (141 / 454). Cover DLT compliance branches; Fast2SMS routing; the OTP-redaction + filter additions from #254 / #269. Patterns from `e2e/tests/marketing-api.spec.js` or `reports-api.spec.js`.
-
-3. **#227 Reports CSV/PDF export** (1-2 days, PRD §6.9 franchise-readiness) — backend export endpoints + frontend "Export" button per tab across P&L / Per-Pro / Per-Location / Attribution. PDFKit already in stack.
-
-4. **Wellness P3 cluster — quick wins (1 hour total)**:
-   - `#272`: 6 identical "E2E Branch [id]" location rows — one-shot cleanup script (mirror `cleanup-overflow-visit-amounts.js`)
-   - `#271`: telecaller queue UK phone "+447700900000" — same scrub script can pick this up (delete leads with non-Indian phones in wellness tenant)
-   - `#268`: "test-skip" / "test-junk" lead sources in marketing attribution — scrub script
-   - `#267`: patient Source column mixes kebab-case + snake_case — normalise on read OR migrate on write
-   - `#266`: patient Gender mixes "M"/"F"/"female"/"—" — same migration pattern
-   - `#265`: duplicate "Kavita Reddy" patients — merge
-   - `#250`: 1/1/1999 task with permanent OVERDUE — delete
-   - `#240`: root `/` should redirect to /login for unauthenticated — single line in App.jsx
-
-5. **Architectural / multi-day** (only when polish backlog is empty):
-   - **#228** mobile responsive overhaul — multi-day (breakpoints, hamburger drawer, ARIA, focus trap)
-   - **#137** external-integrations test sandbox infra
-   - **PRD §6.7 orchestrator depth** — verify the engine actually computes occupancy gap → recommends ad budget → drafts campaign vs being a single-recommendation stub
-   - **PRD §6.4 lead-side SLA** — current SLA engine is ticket-side; PRD says "first response in <5 min for high-ticket services" applies to LEADS
-
-6. **Vague — need fresh repro from tester**: #141 #142 #147 #150 #152 #153
-
-7. **Product decisions**: #200 / #201 / #211 (login quick-login chips + cred prefill — keep / env-gate / remove?)
-
-### State of demo criteria (PRD §14)
-1. ✅ Login to Enhanced Wellness tenant
-2. ✅ Owner dashboard with realistic numbers (overflow #277 fixed today)
-3. ⚠️ AdsGPT creative push to Meta — verify the demo flow surfaces a stub if API not live
-4. ⚠️ WhatsApp chatbot booking → real appointment — needs Callified webhook live
-5. ✅ Doctor enters Rx + captures consent on tablet (white strokes #231 fixed today)
-6. ✅ Orchestrator surfaces one recommendation card
-
-### State at end of 2026-04-27 session (HEAD `3be74ca`):
-
-### Backend coverage — gate at 60% (already live in `.c8rc.json`)
-- **Pre-spec full-suite measurement (2026-04-26): 64.76 % lines** (21,484 / 33,170)
-- **Gate as of HEAD**: lines/functions/statements 60%, branches 45%
-- **Aspirational target: 100%**
-
-### Shipped 2026-04-27 (full closure list — 24 user-facing bugs + class fixes + coverage)
-
-**P1 batch (8 closed, deployed `6624955` + `WELLNESS_DEMO_OTP` env var set on server):**
-- `#232` — Reports tabs (P&L / Per-Pro / Per-Location) all surface canonical visit count + revenue. Verified live: all three now show 117 visits / ₹12,90,414.93 / productCost ₹32,000 (was 87 / 80 / 111 / ₹0). New `totals.unbucketed` field exposes the data-quality delta.
-- `#235` — Clinic locations editable: pencil icon → prefilled form → PUT `/api/wellness/locations/:id`.
-- `#238` — Patient portal OTP: `WELLNESS_DEMO_OTP=1234` env-var bypass shipped + set on server; demo patient `+919876500001` seeded; verified end-to-end.
-- `#247` — Calendar grid no longer drops visits without `doctorId`; they render in an "Unassigned" column. Out-of-range visits clamp to boundary.
-- `#249` — Stale-chunk recovery for **all** lazy routes (`32771b8`): `lazyWithRetry` helper + `RouteErrorBoundary`. Class-wide frontend fix.
-- `#253` — Inbox Play Recording wired: native `<audio controls autoplay>`; falls back to "Recording not available" on load error.
-- `#259` — Closed not-reproducing (Owner now gets HTTP 200 from `/api/wellness/dashboard`).
-- `#260` — `/leads` row click navigates to `/contacts/:id`; pointer cursor; `e.stopPropagation` on interactive cells.
-
-**P2 batch (11 closed across `59277ac`, `3be74ca`):**
-- `#230` — closed as already fixed by #225 (90ff63f, debounced Add).
-- `#231` — Consent canvas strokes were hardcoded `#fff`; now reads `--text-primary` via `getComputedStyle` so they contrast on cream + dark.
-- `#234` — Off-by-one in `reportRange()`: `to=YYYY-MM-DD` was parsed as midnight UTC, dropping every visit/consumption later that day. Fix: when raw param is date-only, clamp `from` to start-of-day, `to` to end-of-day. Productive for all 4 reports tabs. Verified live: productCost went ₹0 → ₹32,000.
-- `#243` — Invoices ledger overflow: `table-layout: fixed` + `<colgroup>` widths + Contact cell ellipsis + opaque sticky Actions bg + zIndex.
-- `#246` — Closed as already fixed by #277 (Visit overflow cleanup).
-- `#252` — Inbox empty-state scoped to active tab: 'No emails yet' + sub-line listing other-tab counts when present.
-- `#257` — Estimates Drafts/Sent pills now real filter buttons (statusFilter state + aria-pressed).
-- `#258` — Lead Routing Apply All migrated from local toast to global notify; consistent UX.
-- `#262` — Calendar now shows ALL practitioners (doctors + professionals = 16 staff, was 3). Default view is "with visits today"; chip toggles to "All N".
-- `#264` — Dark mode toggle disabled with "coming soon" copy until a real dark theme stylesheet ships (multi-day work, not in PRD §8).
-- `#270` — Calendar empty-slot click opens "New visit" modal seeded with (practitioner, date, hour). Patient required, status='booked'.
-
-**Toast / silent-failure cluster (4 closed across `9c03cf4`, `dfe94b7`):**
-- `#273 #274 #276` — root cause was upstream `fetchApi` reading `errData.message` instead of `errData.error` (backend returns `{error, code}`). Every error toast surfaced the generic fallback "API Request Failed" — looked silent.
-- `#275` — closed as misdiagnosis: NotifyProvider HAS been mounted at App root with a working `useNotify()` API since launch. The toast container only mounts when toasts are active, which is why the bug reporter's DOM-scan found nothing. The real fix was the `fetchApi` rewrite.
-- **fetchApi rewrite class fix**: reads `errData.error || errData.message`; 403 / 404 / 5xx / network fallbacks; auto-toasts every error via `_globalNotify` registered by NotifyProvider on mount; throws Error with `.status` / `.code` / `.data` attached. Pages opt out with `{silent: true}`.
-- **Sweep across 9 wellness pages** (`dfe94b7`) — replaced 17 redundant `catch (err) { notify.error('Failed: ${err.message}') }` with `catch (_err) { /* fetchApi already toasted */ }` AND added missing success toasts on Locations create/update/toggle, Loyalty referral + reward, Patients create, Treatment plan create, Inventory consumption log, Services create, Waitlist add/status/remove, TelecallerQueue.
-
-**Visit overflow (1 closed, `233db7a` + cleanup script run on prod):**
-- `#277` — Owner Dashboard "Today's expected revenue" showed ₹20,000,000,030,000 (twenty trillion). Two Visit rows had `amountCharged=1e15` (residue from #218 era — "Z" service had basePrice=1e15). Fix: ₹50L per-visit cap on POST + PUT (matches Service.basePrice ceiling from #209). Cleanup script `backend/scripts/cleanup-overflow-visit-amounts.js` NULLed the 2 polluted rows. Verified live: now ₹30,000.
-
-**Coverage shipped earlier in the day:**
-- `routes/reports.js` (`4846adb`) — 52 tests. Was 14.17%; forecast ~85%.
-- `routes/marketing.js` (`612617f`) — 41 tests. Was 28.20%; forecast ~80%. Surfaced + fixed `/marketing/submit` openPaths bug.
-- `routes/voice_transcription.js` (`d7ed223`) — 20 tests. **⚠️ PRD drift in retrospect** — voice belongs to Callified per PRD §6.5. Tests already shipped; don't extend further. See guardrails section above.
-- **OpenPaths audit complete** — no further gaps (landing_pages mounted at `/p`, `/communications/tracking` and `/attribution/track` correctly require auth).
-
-Combined forecast: global coverage **64.76% → ~71-72%**.
-
-**Next move (5 min on the server)**: pull, run `npm run coverage:start` + the e2e suite + `npm run coverage:report`, read the new global lines %. If ≥ 70%, bump `.c8rc.json` lines/functions/statements to **70** (branches to 55). Don't over-bump — ratchet up, never down.
-
-### Top remaining coverage gaps (in priority order, PRD-aligned only)
-1. **`routes/sms.js`** — 31.05 % (141 / 454). PRD §6.5 keeps SMS in CRM (reminders + OTP). Cover DLT compliance branches; Fast2SMS routing; OTP-redaction + filter (#254 / #269) need dedicated spec branches.
-2. **`cron/slaBreachEngine.js`** — 24.50 % (37 / 151). Ticket SLA breach cron; recent feature. Per PRD §6.4 we ALSO need lead-side SLA — see PRD gap analysis below.
-3. **`routes/wellness.js`** + clinical sub-flows — biggest in the codebase, lots of branches; a focused pass on patient/visit/Rx/consent CRUD would lift global coverage AND directly back PRD §6.1.
-
-⛔ **Skipped per PRD scope (do NOT push coverage on these)**:
-- `routes/whatsapp.js` — Callified.ai handles WhatsApp (PRD §6.5)
-- `routes/voice.js` + Twilio click-to-call — Callified.ai (PRD §6.5)
-- `routes/voice_transcription.js` — already covered, but don't extend (Callified territory)
-
-Each one needs ~1 spec file (~200-400 lines) using the patterns from `e2e/tests/marketing-api.spec.js` (latest), `e2e/tests/reports-api.spec.js`, or `e2e/tests/billing-update.spec.js`.
-
-### What's open on GitHub (45 at session end, after closing 8 P1s today)
-
-**By priority bucket** (`gh issue list --state open` 2026-04-27 evening):
-- **P1** — 0 open (all 8 closed today: #232 #235 #238 #247 #249 #253 #259 #260)
-- **P2** — 11 open
-- **P3** — 16 open
-- **[wellness]** — 11 open (overlaps with P-tags; some wellness P2/P3 are double-tagged)
-- **untagged** — 6 open
-- **[Tracking]** — 1
-
-**P2 cluster (next priority after P1):**
-- #270 `/wellness/calendar` empty time-slot click is a no-op (no "Create visit" affordance)
-- #264 `/settings` Dark Mode toggle sets data-theme but CSS doesn't respond
-- #262 `/wellness/calendar` only 3 doctor columns (others have no schedule visible)
-- #258 `/lead-routing` "Apply All" button no UI feedback (200 OK but silent)
-- #257 `/estimates` Drafts/Sent status pills don't filter
-- #252 Unified Inbox shows empty-state on Emails tab while other tabs have data
-- ...
-
-**Wellness vertical bucket (PRD-priority):**
-- #275 [meta] No global toast/notification system mounted — root cause for many silent-failure bugs (#273, #274, #276) — **closes a class of issues if shipped**
-- #277 Owner Dashboard "Today's expected revenue" overflow (twenty trillion rupees)
-- #278 Prescription has no detail view, no PDF, instructions dropped from timeline
-- #276 `/wellness/recommendations` Reject button unwired
-- #274 `/wellness/services` Save returns 403 silently
-- #273 `/estimates` Convert button silent no-op
-- #272 / #271 / #268 / #267 / #266 / #265 / #263 / #261 — mostly seed pollution (P3) + minor UX gaps
-
-**Multi-day**: #228 (mobile responsive overhaul), #227 (CSV/PDF reports export — PRD §6.9 franchise-readiness), #137 (external-integrations sandbox)
-
-**Product decision**: #200 / #201 / #211 (login quick-login chips — keep / env-gate / remove)
-
-**Vague — need fresh repro**: #141 / #142 / #147 / #150 / #152 / #153
-
-### External-blocked (can't fix from inside CRM)
-- **Callified webhook + silent SSO** — biggest demo-narrative gap. Our `/api/v1/external/leads` already accepts X-API-Key POSTs. Their team owes the contract.
-- **AdsGPT "Back to CRM" link** — our SSO impersonation works one-way; their side pending
-- **Rishu inputs** — Superphone + Zylu CSVs (data migration), Aadhaar/PAN scans (Android Play Store resubmit)
-
-### Recommended order next session (PRD-aligned)
-1. **15 min** — pull, verify clean tree (HEAD `6624955`), glance at overnight commits
-2. **5 min** — re-run coverage on the server, capture combined lift; bump `.c8rc.json` lines/functions/statements `60 → 70` if data supports it
-3. **30 min — close the demo-blocker class:** `#275` global toast system. PRD §6.8 owner needs to know when something fails; right now Save errors are silent (root cause for #273 #274 #276). One commit, unblocks 3+ open issues.
-4. **30 min — `#277`** Owner Dashboard expected-revenue overflow (₹20T). PRD §6.8 demo criterion. Likely a unit-conversion bug or sum on an already-summed column.
-5. **1.5-2 hours — `routes/sms.js` coverage spec** (31% → 75%+, PRD §6.5 aligned, lifts global another ~2-3 pts)
-6. **Rest** — pick from open P2 (#270 calendar empty-slot, #262 doctor columns, #258 lead-routing feedback) or PRD §6.9 (#227 reports export). NOT whatsapp/voice — those are Callified.
-
-### Recent commits worth knowing about (2026-04-27, newest → oldest)
-- `3be74ca fix: P2 calendar — #262 #270` — practitioner columns expanded from 3 to 16; empty-slot click opens "New visit" modal seeded with (practitioner, date, hour).
-- `59277ac fix: P2 batch — #231 #234 #243 #252 #257 #258 #264` — consent stroke color, off-by-one date range in reports, invoice column overflow, inbox empty-state scoping, estimates filter pills wired, lead-routing toast migration, dark-mode toggle disabled until real theme ships.
-- `dfe94b7 fix(ui): #275 follow-up — sweep redundant notify.error catches across wellness pages` — 9 files, 17 call sites cleaned; success toasts added where missing.
-- `9c03cf4 fix: #275 #273 #274 #276 — global error toasts + success feedback` — fetchApi rewrite (reads errData.error not .message; 5xx + network fallbacks; auto-toasts via registered NotifyProvider). Closes the silent-failure class.
-- `233db7a fix: #277 cap Visit.amountCharged at ₹50L + cleanup script` — backend validator + one-shot cleanup of 2 polluted ₹1e15 visit rows.
-- `ed64825 docs: TODOS — P1 batch closed, PRD scope guardrails added`
-- `6624955 fix: P1 batch — #232 #235 #238 #247 #253 #260` — 6 P1s; reports canonical totals, location editing, OTP demo bypass, calendar Unassigned column, Play Recording, leads row click.
-- `32771b8 fix: #249 stale-chunk recovery for all lazy routes` — class-wide; lazyWithRetry + RouteErrorBoundary
-- `d7ed223 test(e2e): cover routes/voice_transcription.js — 20 tests across 5 endpoints` — **⚠️ retroactively flagged as PRD drift** (voice = Callified per PRD §6.5). Tests already shipped; don't extend.
-- `612617f fix(server)+test(e2e): cover routes/marketing.js + add /marketing/submit to openPaths` — 41 tests; real auth-gate bug fixed on the public form-ingest endpoint
-- `4846adb test(e2e): cover routes/reports.js — 52 tests across 7 endpoints` — biggest single coverage gap closed
-- `4846adb test(e2e): cover routes/reports.js — 52 tests across 7 endpoints` — biggest single gap closed; verified live
-- `9afee65 fix: #269 stronger OTP filter — exclude OTP SMSes from staff inbox entirely (was just redacting)` — closes the confirmed account-takeover chain; #254 redaction kept as belt-and-braces
-- `ac1fa1c fix(qa): cron batch — #254 #256` — SMS-OTP digit redaction in /api/sms/messages + estimates `$ ₹` cleanup
-- `fb3d63e docs: refresh all 6 doc files for v3.2.2`
-- `fff1dd6 test(e2e): cover lib/eventBus.js + services/landingPageRenderer.js` — 5 new specs (4 eventBus + 1 landing page); jumped lib from 67 % → 80.59 %, services from 51 % → 63.15 %
-- `d947e65 chore(coverage): wire c8 gate config + scripts; bump backend to v3.2.2` — `.c8rc.json` + npm scripts (`coverage:start`, `coverage:report`, `coverage:check`)
-- `3e6e829 chore(server): graceful SIGTERM/SIGINT shutdown` — required for V8 coverage to flush
-- `0c0cf3f chore(server): DISABLE_CRONS=1 env switch for side-by-side instances`
-
-### Coverage run pattern (cheat-sheet for tomorrow)
-```bash
-# On the server (163.227.174.141):
-cd ~/globussoft-crm
-git pull origin main
-
-# Free port + clean
-ss -tlnp | grep ':5098' | grep -oE 'pid=[0-9]+' | cut -d= -f2 | xargs -r kill -TERM
-cd backend && rm -rf coverage .c8tmp && mkdir -p coverage .c8tmp
-
-# Boot c8 backend in background
-nohup env DISABLE_CRONS=1 PORT=5098 node_modules/.bin/c8 \
-  --reporter=json-summary --reporter=text-summary --reporter=lcov \
-  --temp-directory=./.c8tmp --reports-dir=./coverage \
-  --exclude='node_modules/**,coverage/**,scripts/**,prisma/seed*.js,prisma/migrations/**' \
-  node server.js > /tmp/cov.log 2>&1 &
-
-# Wait healthy, run suite
-until curl -s http://127.0.0.1:5098/api/health | grep -q healthy; do sleep 2; done
-cd ../e2e
-echo '{"cookies":[],"origins":[]}' > playwright/.auth/user.json
-E2E_SKIP_SCRUB=1 BASE_URL=http://localhost:5098 \
-  npx playwright test --project=chromium --no-deps --reporter=list
-
-# Stop + report
-kill -TERM $(ss -tlnp | grep ':5098' | grep -oE 'pid=[0-9]+' | cut -d= -f2)
-sleep 5
-cd ../backend && node_modules/.bin/c8 report --temp-directory=./.c8tmp --reports-dir=./coverage \
-  --exclude='node_modules/**,coverage/**,scripts/**,prisma/seed*.js,prisma/migrations/**'
-```
-
----
-
-## 📋 Office handoff — what shipped overnight
-
-The 2026-04-26 overnight session closed **22 GitHub issues + 9 backlog items**. Highlights:
-
-- **9 architectural cron-skipped issues** closed: #167 #176 #179 #180 #182 #184 #186 #190 #191
-- **🟡 ship-this-month batch** done: #1+#2 (approvals auto-create), #12 (SLA breach cron), #20 (workflow conditions), #17 (last 3 dead triggers)
-- **🔴 bigger investments** all done: #21 (clinical no-delete policy), #7 (sequence reply detection), #9 (sequence engine + canvas rebuild)
-- **RBAC cluster** closed: #207 #214 #216 — wellnessRole-aware gates, JWT carries the claim, frontend landing/sidebar/dashboard guards. **20/20 RBAC e2e tests pass live.**
-- **Tester reports**: #200/#201/#202/#204/#206/#208/#211 cron-skipped (frontend/UX); #214/#215/#217/#225/#226/#227/#228/#229 cron-skipped (frontend/UX/UI redesign); #213/#218/#219/#220/#221/#224 closed.
-- **Test debt cleared**: 2 deep-flow flakes resolved + mysql2 install + global-teardown extended.
-
-What's left in the backlog (continue from here):
-
-1. **Frontend UI cluster** — 7 cron-skipped issues that all need real frontend work, not single-route patches. See section below.
-2. **41 pre-existing e2e brittleness failures** — non-blocking, pass rate is 93%, mostly UI-flow drift in old specs (theme toggle, navigation sidebar, dashboard percentage badges).
-3. **Backend coverage tool** — wire `c8` to instrument PM2 for line coverage. ~3 hours.
-4. **6 vague tester reports** (#137/#141/#142/#147/#150/#152/#153) — need repro from tester.
-
----
-
 ## 🟡 Ship this month — small/medium effort, real product impact
 
 ### [x] ~~#1 + #2 — Approvals: auto-create on threshold + side effects~~
@@ -1383,6 +288,9 @@ What's left in the backlog (continue from here):
 ---
 
 ## 🔴 Bigger investments — multi-day, may need legal/compliance signoff
+
+### [ ] #897 — Pipeline Kanban: sub-brand filter + a11y/mobile/virtualization hardening
+**PRD:** [docs/PRD_TRAVEL_PIPELINE_KANBAN.md](docs/PRD_TRAVEL_PIPELINE_KANBAN.md) (2026-05-23). The "redirects to dashboard" framing was phantom — Pipeline.jsx is a fully built Kanban shipped April 2026. Residual is sub-brand filter (~150 LOC) + mobile touch drag (`@dnd-kit/core` swap) + keyboard a11y + column virtualization. ~3-5 days. Likely also closes #887 (same root cause hypothesis).
 
 ### [x] ~~#21 — Clinical artefact soft-delete~~
 **RESOLVED BY POLICY (2026-04-26).** Clinical artefacts — Patient, Visit, Prescription, ConsentForm, AgentRecommendation, ServiceConsumption — are PERMANENT. No DELETE endpoints, no `deletedAt` column, no soft-delete. Corrections happen via PUT/PATCH (amendment trail captured in the audit log). Out-of-band ops scripts only for genuine data errors, with written justification in the audit log. Policy block lives at the top of the Clinical section in `backend/routes/wellness.js` (around line 134) so a future engineer doesn't accidentally add a DELETE endpoint. Compliance basis: HIPAA 164.312(c)(1), India MoHFW EMR Standards 2016, DPDP Act 2023.
@@ -1422,6 +330,7 @@ These were filed during cron runs and tagged `[cron-skip]` because they need des
 - [x] ~~**#220** POST /api/wellness/patients 500 for names 192-200 chars (utf8mb4 VARCHAR(191) overflow).~~ **Closed in 10b7c25** — validatePatientInput cap dropped from 200 → 191 to match the DB column.
 - [x] ~~**#221** Doctor dropdown empty in Log Visit form.~~ **Closed in 10b7c25** — /api/staff GET / select was missing wellnessRole; the wellness UI's filter `u.wellnessRole === 'doctor'` matched zero rows. Added wellnessRole to the select.
 - [x] ~~**#224** Case history shows raw ENC:v1:… ciphertext for visit notes and prescriptions.~~ **Closed in 10b7c25** — lib/prisma.js `$extends` hooks only ran on the outer query model. Made `decryptRecord` recursive: walks every nested relation and decrypts any field whose name is in the union of encrypted-field names AND whose value passes isEncrypted(). Plaintext sharing a field name is left alone (defense in depth).
+
 
 ---
 
@@ -1475,12 +384,6 @@ Set this release as v3.2.2 ships the first real measurement (33.20% wellness-onl
 - [x] ~~**`services/landingPageRenderer.js` — currently 2%.** Server-side renderer for the public `/p/:slug` landing pages; barely exercised by current specs. Dedicated spec file in this release: render variants, form-submission flow, analytics ping, error fallbacks.~~ **Already at 93.61% lines after #447 work + extended further in wave-3 Agent OO (2026-05-09)** — added 18 cases for `successRedirectUrl` validation (https/http accept, javascript:/mailto:/file:/malformed reject), Turnstile CAPTCHA (no-CAPTCHA default, enableCaptcha=true, per-form site-key override, HTML-escape protection), and safeUrl edge cases (percent-encoded XSS, CR-LF, webcal:/ftp:/chrome-extension:, unknown-kind fallback, case-insensitive scheme detection). Coverage 93.61% → 100% lines, 86.62% → 96.81% branches.
 - [x] ~~**`cron/slaBreachEngine.js` — currently 25%.** Shipped in v3.2.1 (#12); only the happy path is exercised. Add specs for: idempotency on already-breached tickets, multi-tenant isolation, status-precondition correctness, event payload shape.~~ **Already at 90.69% lines + extended further in wave-3 Agent OO (2026-05-09)** — added 8 cases for sla.breached payload shape, breachedBy arithmetic, multi-tenant isolation (same ticket id in two tenants), idempotency (second run finds zero candidates), terminal-status precondition (Resolved/Closed/Cancelled), firstResponseAt:null gate. Remaining ~9.3% lines is the `initSlaBreachCron` schedule registration body — intentionally skipped per the file header (covered by integration tests). Coverage 90.69% → 90.69% lines (cap reached for unit-level scope).
 
----
-
-## 🧹 One-time prod data fixes (run on dev server)
-
-- [x] **Deal stage migration** (#190) — `node scripts/migrate-deal-stage-lowercase.js` run on prod 2026-04-26. 32 deals scanned, 1 unmappable ('NotARealStage') skipped, no negative amounts.
-- [x] **Corrupt service cleanup** (#218) — `node scripts/cleanup-corrupt-services.js` run on prod 2026-04-26. Deleted 16 test-pollution rows (15 'Test Consultation' with 6030 min duration + 'Z' with ₹1e15 price). NOTE: an earlier run with a too-tight 480-min cap also deleted 5 legitimate Hair Transplant services (540-600 min); fixed by re-running `seed-wellness.js` and bumping the validator cap to 720 min in 64540fe.
 
 ---
 
@@ -1530,20 +433,6 @@ These are flagged in PRD §12 — track but don't act:
 
 ---
 
-## 🔐 RBAC cluster (#207 / #214 / #216) — closed in 850898a
-
-**Root cause:** wellness users carry the standard `role` field (ADMIN/MANAGER/USER) AND an orthogonal `wellnessRole` field (doctor/professional/telecaller/helper). The wellness routes only checked `role`, so users with `role=USER + wellnessRole=doctor` could hit Owner-Dashboard endpoints, the service catalog, recommendation approve/reject, etc.
-
-**Shipped:**
-- New `backend/middleware/wellnessRole.js` exporting `verifyWellnessRole(allowed)` — orthogonal to `verifyRole`, special tokens `'admin'`/`'manager'` for owner+manager override.
-- JWT now carries the `wellnessRole` claim — minted at register/signup/login/2fa-verify. `/me` selects + returns it. Login responses also expose `user.wellnessRole`. Backwards compat: pre-deploy JWTs without the claim → 403 on gated endpoints (correct — those users shouldn't have been hitting them).
-- **18 backend endpoints gated:** Owner Dashboard, reports (4), recommendation approve/reject/edit, service catalog POST/PUT, location POST/PUT (admin/manager only); prescription POST/PUT (doctor/admin); consent POST (doctor/professional/admin), consent PUT (admin); telecaller queue + dispose (telecaller/manager/admin).
-- **PHI reads (Patient/Visit list/detail) intentionally left open** to all wellness staff in tenant — a stylist legitimately needs their client's notes; audit log #179 records the read.
-- **Frontend:** Login redirects by `wellnessRole` (telecaller→/wellness/telecaller, doctor/professional→/wellness/calendar, helper→/wellness/patients). OwnerDashboard render-time guard bounces non-management. Sidebar hides Owner Dashboard / Recommendations / Service Catalog / Locations / Reports from clinical staff.
-- **20/20 e2e RBAC tests pass live** with rishu (admin) / Pooja (manager) / drharsh (doctor) / stylist1 (professional) / Ankita Verma (telecaller) fixtures.
-
----
-
 ## 📐 Conventions established this week
 
 These are decisions made during the deep-flow audit that should be applied consistently:
@@ -1556,74 +445,3 @@ These are decisions made during the deep-flow audit that should be applied consi
 6. **Event bus:** every state-changing route should `emitEvent(type, payload, tenantId, req.io)` after the mutation. Event names use `noun.verb` (e.g. `deal.stage_changed`, `invoice.paid`, `approval.approved`). Add to `TRIGGER_TYPES` in `workflows.js`.
 7. **Test-data names:** all fixtures use realistic Indian names (Priya Sharma, Arjun Patel, Vikram Mehta, etc.). No "E2E Test User" placeholders. Tag every created row `E2E_<purpose>_<timestamp>` for the global-teardown scrubber.
 
----
-
-## 🧪 e2e brittleness audit (2026-05-09 — Wave 3 Agent PP)
-
-Investigation pass on the carry-over from 2026-04-26 ("41 pre-existing e2e failures, mostly UI-flow drift"; CHANGELOG.md:1407, TODOS.md:3220 + 3316). Headline finding: **the "41" count is severely stale**. Today's actual brittleness is **9 distinct tests, of which 7 were already fixed in commit `0ad13a8` (2026-05-08)** — the 2 still-open items are unrelated infrastructure (gdpr export timeout) + a closed-issue residual (orchestrator-api pollution).
-
-### Methodology
-
-- **Phase 1 — find current failures.** Pulled the most-recent failed e2e-full run (id `25526512408`, against demo at commit `48e51b9`, 2026-05-07 22:54Z). Shards 1+2 red, shards 3+4 green. Extracted unique failing tests from `gh run view --log-failed` (deduped retries).
-- The most-recent run (id `25552906951`, 2026-05-08) failed at the health-check stage before any tests ran — no signal there. The last fully-green run was the v3.4.14 release-validation on 2026-05-06 (id `25451993492`).
-- **Phase 2 — static-analysis** of all 9 cited specs (`theme.spec.js`, `navigation.spec.js`, `audit-log.spec.js`, `email-templates.spec.js`, `notifications.spec.js`, `pipeline-stages.spec.js`, `pdf-export.spec.js`, `csv-import.spec.js`, `dashboard.spec.js`) for known drift patterns (hardcoded colors/icons, stale text matches, counter-stability violations, demo-state seed leaks, auth-status-code mismatches).
-- **Phase 3 — categorize** each failing test into Class A-E and recommend dispatch.
-
-### Total brittleness today
-
-**9 unique failing tests** observed in run `25526512408`. Plus a residual ~16 currently-skipped tests across `theme.spec.js` (5 — #264 dark-mode), `dashboard.spec.js` (1 — #567 trend badges), and 10 tolerant-on-auth specs that accept `[200, 404]` so legitimate route absences pass silently. None of the 9 cited specs run in the per-push gate (`deploy.yml`'s `api_tests` lists only ~50 `*-api.spec.js` files, none of which are in this audit's set); they only run in `e2e-full.yml` against demo.
-
-### Per-class breakdown
-
-**Class A — Stale UI assertion (UI/route surface drifted; one-line fix in spec):**  6 of 9 failures, ALL ALREADY FIXED in `0ad13a8`.
-- `e2e/tests/calendar_google.spec.js:54` — accept 404 (no Google OAuth configured on demo) ✅ fixed
-- `e2e/tests/calendar_outlook.spec.js:54` — accept 404 (no Outlook OAuth) ✅ fixed
-- `e2e/tests/dashboard.spec.js:37` — skip "percentage increase badges" (#567 fix removed the DOM these badges lived in) ✅ fixed
-- `e2e/tests/dashboard-filters.spec.js:16, 39, 52, 67` — 4 failures, dashboard date-range filter UI removed in #567 fix ✅ fixed in same commit
-
-**Class B — Real route-contract drift (route shape changed, backend may have a real gap):**  0 of 9. None of today's failures surface a real route-contract gap. (The dashboard-filters cluster is a UI-removal effect downstream of the #567 server-side stats migration — that was the route-contract change, already shipped + audited in commit `b232110`.)
-
-**Class C — Counter-stability violation (asserts exact counts that include demo background data):**  0 of 9 in current failure set. Legacy risk in 2 specs (`navigation.spec.js`, `dashboard.spec.js`) that count sidebar links / metric cards — both are presence/inequality assertions (`>= 1`, `count > 0`), not exact-equality on counts that grow with demo activity.
-
-**Class D — Demo-state seed leak (relies on specific seed rows that have changed):**  1 of 9.
-- `e2e/tests/orchestrator-api.spec.js:509` — current /recommendations rows carry no pollution markers (#319). This is a "demo seed has accumulated test pollution rows whose title/body matches `_amended_title_` / `Tenant B scoped` / `Lifecycle <n>` etc." case. ✅ fixed in `0ad13a8` by extending `backend/scripts/scrub-test-data-pollution.js`'s `scrubAgentRecommendations()` matcher list — the post-tag scrub-demo job now clears these rows before the test runs.
-
-**Class E — Genuinely flaky (timing / network / race):**  1 of 9, **✅ shipped (Wave 4 Agent QQ, `6ba0320`).**
-- `e2e/tests/gdpr.spec.js:85` — POST `/export/me` 15s timeout. The handler iterates 8+ Prisma models for the requesting user's data. On a demo box with thousands of audit + activity rows for `admin@globussoft.com`, the export legitimately takes >15s. ✅ Wave-4 Agent QQ refactored the spec to mint a fresh tenant + user via `/auth/register` in `beforeAll`, then export against THAT token (zero-row tenant). Per-call timeout dropped from 60s → 30s. Measured 3× consecutive runs against demo: **122 ms / 198 ms / 1.3 s** (vs the previous 4.8 s on admin's accumulated data — 25-300× margin under the new timeout). Falls back to seeded-admin token + 60s timeout if `/auth/register` is throttled. Audit drift note: the audit's "NOT fixed in 0ad13a8" line was already-stale at filing — `0ad13a8`'s diff DID raise the timeout to 60s. Agent QQ's refactor delivers the spirit of the audit's deeper recommendation (fresh fixture user) so the spec's timing stays bounded as demo data accumulates.
-
-### Top 5 highest-impact items
-
-Ranking by "if this stayed broken silently, what real product regression would slip through":
-
-1. **`gdpr.spec.js:85` (Class E)** — GDPR right-to-export is a compliance surface. A persistent timeout here masks "the route works but is slow" vs. "the route is silently broken for large users." Worth investing in a fast-path test fixture so the spec's signal is meaningful.
-2. **`orchestrator-api.spec.js:509` (Class D)** — pollution-free recommendation text is a genuine product invariant (#319). The `0ad13a8` fix patched the scrub script; long-term the spec should also assert against test-pattern detection rather than just clean state, so a regression in the scrub itself would surface.
-3. **`dashboard-filters.spec.js` (Class A)** — 4 failures all stemming from UI removal. The current `0ad13a8` fix skips them; if a new "trend vs prior period" feature lands per the dashboard.spec.js comment, these come back online wholesale.
-4. **`navigation.spec.js`** (no current failures, but high latent risk) — pins exact-text sidebar labels (`Dashboard`, `Inbox`, `Contacts`, etc.); any sidebar restructure (e.g. v3.4.12 wellness wave's slim nav) reds 22+ tests. A label-rename is one-line in code, 1-line per test in cleanup.
-5. **`theme.spec.js`** — 5 of 8 tests permanently `test.skip()` for #264. If the dark theme actually lands, these need un-skipping AND the new-theme assertions need to pin to real CSS variables, not the legacy `rgb(11, 12, 16)` literal currently in skipped code.
-
-### Effort to clear each class
-
-| Class | Count (current run) | Estimated fix per item | Total |
-|---|---|---|---|
-| A — Stale UI | 6 (all in `0ad13a8` already) | 5-10 min/test | ✅ shipped |
-| B — Route drift | 0 | n/a | n/a |
-| C — Counter | 0 | 15-30 min/test | n/a |
-| D — Demo seed | 1 (in `0ad13a8` already) | 30-60 min/test (scrub script + assertion tightening) | ✅ shipped |
-| E — Flaky timing | 1 (in Wave 4 Agent QQ) | 30-90 min (fixture user + raise timeout) | ✅ shipped |
-
-### GH issues filed
-
-**0 issues filed.** No Class B route-contract gaps surfaced; the 7 Class A/D items were already shipped in `0ad13a8` before this audit ran; the 1 Class E item is a known timing case, not a route bug.
-
-### Recommended next-wave dispatch
-
-A 4-agent parallel wave is **not warranted** — the queue here is now a 1-item residual (`gdpr.spec.js:85` timing fix) + one cleanup (verify `0ad13a8` fixes hold on the next e2e-full run). Recommendation: **single-agent task ~1 hour**:
-
-- **Agent QQ — gdpr-export timing fix.** Either raise per-call timeout in `gdpr.spec.js:85` to 30s + document in spec header why, OR refactor the spec to create+export a fresh user with `<10` audit rows + minimal seed so the export is bounded. Pair with a vitest unit test on the export handler asserting the result envelope shape so the spec's signal stays meaningful even if the timing increases further.
-
-If the user wants the autonomous loop to keep running this surface, the better dispatch is **trigger an e2e-full run on current main** (commit on top of `0ad13a8` should be ≥99% green) and update CHANGELOG.md's v3.4.14 entry: cross-reference `0ad13a8` against the "41 pre-existing" claim and re-state today's measured count as "8 known-fixed + 1 open timing case" — the stale "41" number propagates through CHANGELOG / TODOS / handoff blocks otherwise.
-
-### Audit drift findings (for the cron-learnings log)
-
-- **The "41" number was wrong from the moment it was written.** All 9 cited spec files together have only 48 `test()` declarations (3 + 9 + 11 + 4 + 4 + 7 + 2 + 3 + 5). For "41 of 48" to be failing, ~85% of the cited specs would have to be red — which would have blocked CI hard. The actual measured count from 2026-04-26 was likely conflating retries (each failure × 3 retries) or counting failures across other specs not on the cited list. Worth a one-liner standing-rule: "when a TODOS row cites a count of failing tests, also cite the e2e-full run id so the count is verifiable."
-- **`0ad13a8` shipped 7 fixes for an in-flight investigation.** This audit's discovery list (9 tests) substantially overlaps with the commit message's disposition list (7 tests) — suggesting Wave 2 already absorbed most of this surface. The 2 deltas are: (a) `dashboard-filters.spec.js` had 4 distinct failures vs. the commit's 1-line summary (multiple tests at different line numbers in the same spec); (b) `gdpr.spec.js:85` was acknowledged in the commit but left fix-deferred. The Wave-2 commit message could have linked to this CHANGELOG.md:1407 carry-over to make the closure trace explicit; not blocking.

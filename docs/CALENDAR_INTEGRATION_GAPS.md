@@ -1,7 +1,7 @@
 # Calendar Integration Gaps — Pickable Backlog
 
 > **Audience:** any dev/agent picking up Google Calendar or Outlook work.
-> **Snapshot date:** 2026-05-11
+> **Snapshot date:** 2026-05-25 (re-audited; all 7 items still open — zero calendar-file commits since 2026-05-11)
 > **Source of truth:** [backend/routes/calendar_google.js](../backend/routes/calendar_google.js) (403 lines), [backend/routes/calendar_outlook.js](../backend/routes/calendar_outlook.js) (428 lines), [backend/prisma/schema.prisma:1609-1650](../backend/prisma/schema.prisma#L1609-L1650), [frontend/src/pages/CalendarSync.jsx](../frontend/src/pages/CalendarSync.jsx) (1,302 lines), specs at [e2e/tests/calendar_google.spec.js](../e2e/tests/calendar_google.spec.js) (7 tests) + [e2e/tests/calendar_outlook.spec.js](../e2e/tests/calendar_outlook.spec.js) (8 tests).
 > **Companions:** [TODOS.md](../TODOS.md), [E2E_GAPS.md](E2E_GAPS.md), [PENDING_USER_AND_OPERATOR.md](PENDING_USER_AND_OPERATOR.md).
 
@@ -272,4 +272,4 @@ Both stored as plaintext. A DB dump or backup leak surfaces **every** user's liv
 
 **File this against:** an existing tracking issue or open a new one. Update this doc's status column on each close with the merge SHA.
 
-**Last reviewed:** 2026-05-11.
+**Last reviewed:** 2026-05-25 (verified 0/7 items shipped — see snapshot-date note above).

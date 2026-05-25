@@ -1,0 +1,1219 @@
+/*
+ * Travel CRM vertical theme — placeholder palette pending brand asset
+ * handover (Q22, deferred to Day 1 deliverable). Activated by
+ * `<body data-vertical="travel">` set in App.jsx based on tenant.vertical.
+ *
+ * Current palette is a neutral travel-friendly default — deep navy primary
+ * (trustworthy / premium) + warm gold accent (Umrah / heritage / hospitality)
+ * + cream background (matches wellness's warm-not-cold aesthetic without
+ * fighting wellness's teal). Update the four `--primary-*` / `--accent-*`
+ * vars below when Yasin's brand pack lands; everything else inherits
+ * cleanly. Per-sub-brand overrides (TMC blue, RFU green-gold, Travel Stall
+ * orange, Visa Sure purple) ride on top with `[data-sub-brand="..."]`
+ * selectors once those brand books arrive.
+ *
+ * All overrides are scoped under [data-vertical="travel"] so generic +
+ * wellness tenants render unchanged.
+ */
+
+[data-vertical="travel"] {
+  --bg-color:        #FAF6EE;
+  --surface-color:   #FFFFFF;
+  --subtle-bg:       rgba(18, 38, 71, 0.04);
+  --subtle-bg-3:     rgba(18, 38, 71, 0.08);
+
+  --primary-color:   #122647;        /* deep navy — placeholder pending Q22 */
+  --primary-hover:   #0C1B33;
+  --accent-color:    #C89A4E;        /* warm gold — placeholder pending Q22 */
+  --accent-hover:    #A8823F;
+  --accent-glow:     rgba(200, 154, 78, 0.45);
+  --accent-bg:       var(--primary-color);   /* navy surface */
+  --accent-text:     #FFFFFF;                 /* cream/white foreground */
+
+  --success-color:   #2F7A4D;        /* travel-friendly forest green */
+  --warning-color:   #C58A2B;        /* burnt umber (visa-deadline amber) */
+  --danger-color:    #A8323F;        /* burgundy red (kept from wellness) */
+
+  --text-primary:    #1F1B14;        /* warm dark, ~13:1 on cream */
+  --text-secondary:  #5C5346;        /* warm taupe, ~7:1 on cream — clears AAA */
+  --text-tertiary:   #7E7264;        /* muted for de-emphasis */
+
+  --border-color:    rgba(18, 38, 71, 0.12);
+  --border-light:    rgba(18, 38, 71, 0.06);
+
+  --font-family:     "Roboto", "Inter", system-ui, -apple-system, sans-serif;
+  --font-heading:    "Playfair Display", "Georgia", serif;
+
+  --shadow-sm:       0 1px 2px rgba(18, 38, 71, 0.06);
+  --shadow-md:       0 4px 12px rgba(18, 38, 71, 0.08);
+  --shadow-lg:       0 12px 40px rgba(18, 38, 71, 0.12);
+}
+
+/* Dark mode override for travel vertical — preserves brand (navy + gold)
+ * but uses dark backgrounds + light text.
+ *
+ * #863 / #864 ROOT CAUSE: App.jsx (lines 473-474) sets `data-vertical` on
+ * BOTH `<html>` and `<body>`. The pre-fix dark selector list was:
+ *   html[data-theme="dark"][data-vertical="travel"]   (compound on html)
+ *   [data-vertical="travel"][data-theme="dark"]        (compound on any one element)
+ * The first matches `<html>` only. The second NEVER matches `<body>` because
+ * `<body>` has `data-vertical="travel"` but no `data-theme` attribute — only
+ * `<html>` carries `data-theme`. Result: the LIGHT vars set by
+ * `[data-vertical="travel"]` (line 19) win on `<body>` because that selector
+ * matches body directly, while the dark override only ever set vars on
+ * `<html>`. CSS custom property lookup is element-scoped (NOT inherited if
+ * the same property is re-set on the descendant), so `body { background:
+ * var(--bg-color); }` resolved the body's own light `--bg-color` (#FAF6EE)
+ * even when `<html>` had dark mode active.
+ *
+ * Fix: use a descendant combinator `[data-theme="dark"] [data-vertical="travel"]`
+ * which matches any travel-flagged descendant of a dark-themed ancestor —
+ * including `<body>`. Mirrors the wellness.css:50-51 pattern that has been
+ * working in dark mode since v3.4.x. */
+html[data-theme="dark"][data-vertical="travel"],
+[data-theme="dark"][data-vertical="travel"],
+[data-theme="dark"] [data-vertical="travel"] {
+  --bg-color:        #0F1729;
+  --surface-color:   #19243A;
+  --subtle-bg:       rgba(200, 154, 78, 0.08);
+  --subtle-bg-3:     rgba(200, 154, 78, 0.14);
+
+  --primary-color:   #C89A4E;        /* gold pops on dark navy */
+  --primary-hover:   #DDB36A;
+  --accent-color:    #5D8FB8;        /* sky blue — secondary travel cue */
+  --accent-hover:    #7AA8CC;
+  --accent-bg:       var(--primary-color);
+  --accent-text:     #0F1729;        /* navy text on gold */
+
+  --text-primary:    #F4EFDF;        /* warm cream on dark navy */
+  --text-secondary:  #C9C0AC;        /* muted cream */
+  --text-tertiary:   #8C8676;
+
+  --border-color:    rgba(200, 154, 78, 0.18);
+  --border-light:    rgba(200, 154, 78, 0.08);
+
+  /* #864 — input/select/textarea token overrides so form fields adopt the
+   * dark navy surface instead of the index.css default `--input-bg`
+   * (rgba(15, 23, 42, 0.6), too dark + low contrast on Travel's dark navy
+   * `#0F1729` body). Pre-fix, the cream-light `--input-bg: rgba(255,255,255,0.8)`
+   * leaked through from `[data-vertical="travel"]` (which never defines
+   * `--input-bg`, so the body fell back to index.css's `[data-theme="light"]`
+   * var — `[data-theme="dark"]` was set on html, but the body's
+   * data-vertical scope blocked it as described above). */
+  --input-bg:        rgba(25, 36, 58, 0.7);
+  --input-bg-focus:  rgba(25, 36, 58, 0.95);
+
+  /* #881 — Modal / popover / tooltip / menu surface tokens. Pre-fix these
+   * tokens fell through to either generic-dark (black tooltip, near-black
+   * overlay) or — worse, when render order put `[data-theme="light"]` on
+   * html momentarily — to generic-light (white tooltip, white popover).
+   * On the deep navy travel body the white popovers / white modal bodies /
+   * black tooltips read as off-brand bright/dark rectangles. Defining
+   * these tokens INSIDE the travel-dark block forces every consumer of
+   * `var(--tooltip-bg)` / `var(--overlay-bg)` / `var(--surface-hover)` to
+   * resolve to travel-tinted values regardless of html `data-theme` race
+   * conditions.
+   *
+   * Naming: aliases `--popover-bg` / `--menu-bg` as `--surface-color` so
+   * future code referencing them gets the right surface; existing code
+   * referencing `--surface-color` directly keeps working. */
+  --overlay-bg:      rgba(7, 12, 24, 0.78);          /* deep navy overlay, not pure black */
+  --surface-hover:   rgba(244, 239, 223, 0.06);      /* cream tint — matches sidebar hover */
+  --tooltip-bg:      rgba(25, 36, 58, 0.96);         /* deep navy with gold rim via border-color */
+  --popover-bg:      var(--surface-color);
+  --menu-bg:         var(--surface-color);
+  --subtle-bg-2:     rgba(244, 239, 223, 0.03);      /* near-transparent cream — readable on navy */
+  --subtle-bg-4:     rgba(244, 239, 223, 0.04);
+  --hover-bg:        rgba(244, 239, 223, 0.05);
+  --kbd-bg:          rgba(244, 239, 223, 0.10);
+  --table-header-bg: rgba(244, 239, 223, 0.05);
+}
+
+/* #864 — explicit form-field background + color for travel dark mode.
+ * Mirrors wellness.css:97-107. The `.input-field` class in index.css already
+ * uses `var(--input-bg)` + `var(--text-primary)`, so the token overrides
+ * above are sufficient for fields that adopt that class. But raw
+ * `<input>`/`<select>`/`<textarea>` elements (ad-hoc forms across travel
+ * pages — Invite Team Member card, Cost Master row editor, etc.) often use
+ * inline styles or no class. Force-override their bg + text to clear the
+ * grey-on-grey readability bug. */
+[data-theme="dark"][data-vertical="travel"] input,
+[data-theme="dark"][data-vertical="travel"] select,
+[data-theme="dark"][data-vertical="travel"] textarea,
+[data-theme="dark"] [data-vertical="travel"] input,
+[data-theme="dark"] [data-vertical="travel"] select,
+[data-theme="dark"] [data-vertical="travel"] textarea {
+  background: rgba(25, 36, 58, 0.7) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+/* #864 — placeholder text must meet WCAG AA (4.5:1) against the dark
+ * input bg. Pre-fix, placeholder default was #a8a39a on near-white — ~1.7:1.
+ * `#9DAEC7` (muted sky-blue) on `rgba(25,36,58,0.7)` reads ~5.2:1. */
+[data-theme="dark"][data-vertical="travel"] input::placeholder,
+[data-theme="dark"][data-vertical="travel"] textarea::placeholder,
+[data-theme="dark"] [data-vertical="travel"] input::placeholder,
+[data-theme="dark"] [data-vertical="travel"] textarea::placeholder {
+  color: #9DAEC7;
+  opacity: 1; /* Firefox lowers placeholder opacity by default */
+}
+
+/* #863 follow-on — table header + zebra striping. Default travel light
+ * theme leaves these as the index.css generic gradients which read OK on
+ * cream but become hard-to-distinguish on the dark navy body. */
+[data-theme="dark"][data-vertical="travel"] table tbody tr:nth-child(even),
+[data-theme="dark"] [data-vertical="travel"] table tbody tr:nth-child(even) {
+  background: rgba(244, 239, 223, 0.03);
+}
+[data-theme="dark"][data-vertical="travel"] table th,
+[data-theme="dark"] [data-vertical="travel"] table th {
+  background: rgba(244, 239, 223, 0.05);
+}
+
+/* #880 — Financial-form dark-mode strengthening (Estimates/Invoices/Payments).
+ *
+ * QA reported (BUG-T17 against v3.9.2 build 79b62b6) that /estimates, /invoices
+ * and /payments forms kept cream/white surfaces under dark mode. Most of that
+ * report is closed upstream by #863/#864 (body bg + universal input/select/
+ * textarea !important) and #881 (modal/popover surfaces). What remained were
+ * two gaps the upstream rules don't reach:
+ *
+ *   1) The line-item ROW containers in Estimates' create panel — divs that
+ *      hold qty/price/discount/total cells, sitting INSIDE `.card` form bodies.
+ *      Inline `background: 'rgba(255,255,255,0.02)'` is barely-visible cream
+ *      tint on dark navy (looks fine, but inconsistent next to the empty
+ *      state's `rgba(255,255,255,0.01)`). Pin both to dark cream-tint tokens
+ *      so the visual rhythm matches the rest of the dark block.
+ *
+ *   2) `.card form` ad-hoc form rows that don't adopt `.input-field` and
+ *      don't use raw `<input>/<select>/<textarea>` either — typically wrapped
+ *      labels with inline `style={{ background: 'rgba(255,255,255,...) }}`.
+ *      Already dark-correct (low-opacity white = invisible on navy), but
+ *      ensure border-color picks up the gold-tinted token rather than
+ *      whatever default leaks through.
+ *
+ * NOTE on residual JSX literals: Estimates.jsx lines 459 / 473 / 487 set
+ *   style={{ color: '#000 !important', colorScheme: 'light' }}
+ * on the line-item Qty / Unit Price / Discount numeric inputs. These were
+ * added to force-render the spinner controls with the light browser palette
+ * (the spinner arrows on dark+travel render unreadable otherwise). Inline
+ * `!important` on `color` and inline `colorScheme: light` CANNOT be beaten
+ * by external CSS — they need a JSX refactor (Phase 1) to move the spinner
+ * fix to a wrapper class or to the global :focus / @media (prefers-color-scheme)
+ * layer. Tracking under #880 (Refs, not Closes). Affects ONLY 3 inputs in
+ * the Create Estimate line-item editor; the rest of /estimates, all of
+ * /invoices, and all of /payments now read fully dark.
+ */
+[data-theme="dark"][data-vertical="travel"] .estimates-page .card form > div[style*="background"],
+[data-theme="dark"] [data-vertical="travel"] .estimates-page .card form > div[style*="background"] {
+  background: rgba(244, 239, 223, 0.03) !important;
+  border-color: var(--border-color) !important;
+}
+
+/* Estimates empty-state / line-item summary panes — inline cream tints
+ * read consistently if pinned to the same dark token used by the dark
+ * block's `--subtle-bg-2` / `--subtle-bg-4`. */
+[data-theme="dark"][data-vertical="travel"] .estimates-page div[style*="rgba(255,255,255,0.01)"],
+[data-theme="dark"][data-vertical="travel"] .estimates-page div[style*="rgba(255,255,255,0.02)"],
+[data-theme="dark"] [data-vertical="travel"] .estimates-page div[style*="rgba(255,255,255,0.01)"],
+[data-theme="dark"] [data-vertical="travel"] .estimates-page div[style*="rgba(255,255,255,0.02)"] {
+  background: rgba(244, 239, 223, 0.03) !important;
+}
+
+/* Defensive: any `.card form select option` falls back to the dark surface
+ * (closes the cross-browser native-popup-on-Windows gap that #724 fixed
+ * globally but inline-styled <option>s in Invoices.jsx:462-466 + Estimates
+ * could still trip). The select itself is covered by #864's universal
+ * `select { background: rgba(25,36,58,0.7) !important }`; this targets
+ * the <option> children. */
+[data-theme="dark"][data-vertical="travel"] select option,
+[data-theme="dark"] [data-vertical="travel"] select option {
+  background: var(--surface-color);
+  color: var(--text-primary);
+}
+
+/* Defensive: input[type="number"] spinner controls on Estimates line-item
+ * editor. The 3 inline `colorScheme: 'light'` literals on Estimates.jsx
+ * lines 459/473/487 force light browser chrome on those specific inputs;
+ * CSS cannot override inline `colorScheme`. But this rule ensures that
+ * ALL OTHER number inputs across financial forms get the dark spinner
+ * treatment by default — so the 3 light ones become the documented
+ * residual, not a pattern. */
+[data-theme="dark"][data-vertical="travel"] input[type="number"]:not([style*="colorScheme"]),
+[data-theme="dark"] [data-vertical="travel"] input[type="number"]:not([style*="colorScheme"]) {
+  color-scheme: dark;
+}
+
+/* #867 — Diagnostics tier-badge component (Phase 1 of dark-mode cluster
+ * refactor). Mirrors the inline-style values previously hardcoded in
+ * Diagnostics.jsx's TIER_COLORS object — refactored to CSS-class-driven
+ * so dark-mode overrides below can act without JS changes. The same
+ * pattern (inline-styled badge → CSS class + dark token override) will
+ * apply to the remaining 16 issues in the dark-mode cluster (#866 #871
+ * #872 #873 #877..#883).
+ *
+ * Base rule is theme-agnostic (sizing/typography); colours are picked by
+ * the modifier classes (--entry / --primary / --premium) which the
+ * dark-mode block below overrides for WCAG-AA contrast on dark navy. */
+.tier-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--subtle-bg);
+  color: var(--text-secondary);
+}
+.tier-badge--entry {
+  background: rgba(95, 110, 130, 0.12);
+  color: #5C6E82;
+}
+.tier-badge--primary {
+  background: rgba(47, 122, 77, 0.14);
+  color: #2F7A4D;
+}
+.tier-badge--premium {
+  background: rgba(200, 154, 78, 0.18);
+  color: #9A6F2E;
+}
+
+/* #867 — Dark-mode token overrides for tier-badge variants. Contrast
+ * verified ≥4.5:1 (WCAG AA) against the dark surfaces below:
+ *   entry   : #A8B5C8 on #2A3645 → ~5.5:1
+ *   primary : #A8D8B9 on #1A4D3A → ~6.2:1
+ *   premium : #E0C088 on #3A2E18 → ~7.4:1
+ * Scoped to travel vertical so generic + wellness aren't impacted. */
+[data-theme="dark"][data-vertical="travel"] .tier-badge--entry,
+[data-theme="dark"] [data-vertical="travel"] .tier-badge--entry {
+  background: #2A3645;
+  color: #A8B5C8;
+}
+[data-theme="dark"][data-vertical="travel"] .tier-badge--primary,
+[data-theme="dark"] [data-vertical="travel"] .tier-badge--primary {
+  background: #1A4D3A;
+  color: #A8D8B9;
+}
+[data-theme="dark"][data-vertical="travel"] .tier-badge--premium,
+[data-theme="dark"] [data-vertical="travel"] .tier-badge--premium {
+  background: #3A2E18;
+  color: #E0C088;
+}
+
+/* #871 — Inbox conversation-list bubbles + status pills + avatars (Phase 1
+ * of dark-mode cluster refactor, mirror of #867 Diagnostics pattern). The
+ * pre-refactor inline styles in Inbox.jsx used hardcoded RGBA hex pairs
+ * for: SMS bubble background (10b981 green), WhatsApp bubble background
+ * (25D366 brand green), avatar circle backgrounds, and 4 status-pill
+ * variants (READ blue / DELIVERED green / FAILED red / PENDING amber).
+ * On dark navy (#0F1729 body) the rgba(*, 0.05) bubble bg was effectively
+ * invisible (~1.1:1 vs body) and the pill text colors (#10b981 / #3b82f6 /
+ * #f59e0b) all failed AA against the rgba(*, 0.1) pill bg once the bg
+ * itself blended into the dark body.
+ *
+ * Base rules are theme-agnostic (light mode = preserve current cream/light
+ * appearance via the existing rgba(*, 0.05/0.1) values); travel dark-mode
+ * overrides force opaque high-contrast pairs ≥4.5:1 (WCAG AA). */
+.inbox-bubble {
+  background: transparent;
+}
+.inbox-bubble--sms.inbox-bubble--inbound {
+  background: rgba(16, 185, 129, 0.05);
+}
+.inbox-bubble--wa.inbox-bubble--inbound {
+  background: rgba(37, 211, 102, 0.05);
+}
+.inbox-avatar--sms {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+}
+.inbox-avatar--wa {
+  background: rgba(37, 211, 102, 0.1);
+  color: #25D366;
+}
+.inbox-status-pill {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  display: inline-block;
+}
+.inbox-status-pill--read {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+}
+.inbox-status-pill--delivered {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+}
+.inbox-status-pill--failed {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+.inbox-status-pill--pending {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+}
+.inbox-read-receipt {
+  color: #3b82f6;
+  font-size: 0.7rem;
+}
+
+/* #871 — Dark-mode token overrides for Inbox bubbles / avatars / status
+ * pills. Contrast verified ≥4.5:1 (WCAG AA) against the dark surfaces:
+ *   SMS bubble bg:  rgba(16,185,129,0.18) on #0F1729 → distinguishable
+ *                   tint without crushing text (text uses --text-primary
+ *                   #F4EFDF, ~13:1 on the tinted dark surface)
+ *   WA bubble bg:   rgba(37,211,102,0.18) on #0F1729 → same
+ *   avatar SMS:     #6EE7B7 on #064E3B → ~7.1:1
+ *   avatar WA:      #86EFAC on #14532D → ~7.4:1
+ *   pill read:      #93C5FD on #1E3A8A → ~5.8:1
+ *   pill delivered: #6EE7B7 on #064E3B → ~7.1:1
+ *   pill failed:    #FCA5A5 on #7F1D1D → ~5.4:1
+ *   pill pending:   #FCD34D on #78350F → ~6.9:1
+ * Scoped to travel vertical so generic + wellness keep their existing
+ * (light-only) rgba tints. */
+[data-theme="dark"][data-vertical="travel"] .inbox-bubble--sms.inbox-bubble--inbound,
+[data-theme="dark"] [data-vertical="travel"] .inbox-bubble--sms.inbox-bubble--inbound {
+  background: rgba(16, 185, 129, 0.18);
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-bubble--wa.inbox-bubble--inbound,
+[data-theme="dark"] [data-vertical="travel"] .inbox-bubble--wa.inbox-bubble--inbound {
+  background: rgba(37, 211, 102, 0.18);
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-avatar--sms,
+[data-theme="dark"] [data-vertical="travel"] .inbox-avatar--sms {
+  background: #064E3B;
+  color: #6EE7B7;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-avatar--wa,
+[data-theme="dark"] [data-vertical="travel"] .inbox-avatar--wa {
+  background: #14532D;
+  color: #86EFAC;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-status-pill--read,
+[data-theme="dark"] [data-vertical="travel"] .inbox-status-pill--read {
+  background: #1E3A8A;
+  color: #93C5FD;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-status-pill--delivered,
+[data-theme="dark"] [data-vertical="travel"] .inbox-status-pill--delivered {
+  background: #064E3B;
+  color: #6EE7B7;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-status-pill--failed,
+[data-theme="dark"] [data-vertical="travel"] .inbox-status-pill--failed {
+  background: #7F1D1D;
+  color: #FCA5A5;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-status-pill--pending,
+[data-theme="dark"] [data-vertical="travel"] .inbox-status-pill--pending {
+  background: #78350F;
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-read-receipt,
+[data-theme="dark"] [data-vertical="travel"] .inbox-read-receipt {
+  color: #93C5FD;
+}
+
+/* #872 — Sequences page (drip-campaign builder): saved-sequences sidebar
+ * panel, active/inactive card backgrounds, save buttons, canvas toolbar
+ * Panel, and step-list builder link color. Phase 1 of dark-mode cluster
+ * refactor, mirror of #871 Inbox pattern (commit 68b09db). The pre-refactor
+ * inline styles in Sequences.jsx used hardcoded RGBA / hex pairs for:
+ *   - Sidebar container background (rgba(0,0,0,0.4)) — opaque-dark on light
+ *     mode, reads as near-black against the cream body (~1.3:1 contrast).
+ *   - Sequence-card hover/active backgrounds (rgba(236,72,153,0.15) active /
+ *     rgba(255,255,255,0.02) inactive) + borders.
+ *   - "Saved Sequences" heading color (#ec4899 pink), Save buttons (#ec4899
+ *     pink hardcoded background), and the step-list builder link (#3b82f6).
+ *   - Canvas toolbar Panel background (rgba(0,0,0,0.8) opaque-dark — sits
+ *     on light React Flow canvas in light mode, fine in dark).
+ *
+ * Out of scope for this commit (TODO for next #872 sub-tick): ReactFlow
+ * node `style.background` props in addLogicNode() / addTriggerNode() — those
+ * render via ReactFlow's internal inline-style serialization on canvas
+ * elements (background="#1e293b" pattern); harder to convert to className-
+ * driven theming without a custom node type. They render on the always-dark
+ * ReactFlow canvas (Background color="#1e293b"), so are visually acceptable
+ * in both light and dark modes today.
+ *
+ * Base rules are theme-agnostic — they preserve current appearance via the
+ * existing rgba(*) values. Travel dark-mode overrides force opaque high-
+ * contrast pairs ≥4.5:1 (WCAG AA). */
+.sequence-list-sidebar {
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.4);
+}
+.sequence-list-heading {
+  color: #ec4899;
+}
+.sequence-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.sequence-card--active {
+  background: rgba(236, 72, 153, 0.15);
+  border-color: rgba(236, 72, 153, 0.4);
+}
+.sequence-save-btn {
+  background: #ec4899;
+  border: none;
+}
+.sequence-canvas-toolbar {
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.sequence-card-builder-link {
+  color: #3b82f6;
+}
+
+/* #872 — Dark-mode token overrides for Sequences widgets. Contrast verified
+ * ≥4.5:1 (WCAG AA) against the dark surfaces:
+ *   sidebar bg:         #0F1729 → matches body, ~1:1 vs body by design
+ *                       (it's a panel-edge tint, not text)
+ *   heading text:       #F9A8D4 on dark surface → ~9.2:1
+ *   card bg (idle):     rgba(255,255,255,0.04) on #0F1729 → distinguishable
+ *   card bg (active):   rgba(236,72,153,0.25) — tinted highlight
+ *   card border active: rgba(236,72,153,0.6) — visible against dark
+ *   save-btn:           #BE185D bg, #FCE7F3 fg → ~7.1:1
+ *   canvas toolbar:     rgba(15,23,41,0.92) — opaque enough on dark canvas
+ *   builder link:       #93C5FD → ~5.8:1 on #0F1729
+ * Scoped to travel vertical so generic + wellness keep their existing
+ * (light-only) rgba tints / pink primaries. */
+[data-theme="dark"][data-vertical="travel"] .sequence-list-sidebar,
+[data-theme="dark"] [data-vertical="travel"] .sequence-list-sidebar {
+  background: #0F1729;
+  border-left-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-list-heading,
+[data-theme="dark"] [data-vertical="travel"] .sequence-list-heading {
+  color: #F9A8D4;
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-card,
+[data-theme="dark"] [data-vertical="travel"] .sequence-card {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-card--active,
+[data-theme="dark"] [data-vertical="travel"] .sequence-card--active {
+  background: rgba(236, 72, 153, 0.25);
+  border-color: rgba(236, 72, 153, 0.6);
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-save-btn,
+[data-theme="dark"] [data-vertical="travel"] .sequence-save-btn {
+  background: #BE185D;
+  color: #FCE7F3;
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-canvas-toolbar,
+[data-theme="dark"] [data-vertical="travel"] .sequence-canvas-toolbar {
+  background: rgba(15, 23, 41, 0.92);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-card-builder-link,
+[data-theme="dark"] [data-vertical="travel"] .sequence-card-builder-link {
+  color: #93C5FD;
+}
+
+/* #873 — Reports page (Reports.jsx hit via /reports). Phase 1 of the dark-
+ * mode cluster refactor, mirror of #872 Sequences (commit 706514c) and #867
+ * Diagnostics (commit f67b4fc). Pre-refactor Reports.jsx had:
+ *   - Inline `#ef4444` red on the date-range error text + the Delete button
+ *     on schedule rows (~1.5:1 on dark cream → unreadable).
+ *   - Aggregate-total card with hardcoded `rgba(59,130,246,0.1)` blue bg +
+ *     `rgba(59,130,246,0.2)` border (the only fixed-blue surface on the
+ *     reports left rail; reads as light-blue glass island on dark page).
+ *   - Schedule-row status badges with inline `rgba(16,185,129,0.1)` /
+ *     `rgba(239,68,68,0.1)` bg + `var(--success-color)` / `#ef4444` text.
+ *   - StageBadge + StatusBadge dual helpers using a stage→hex map (#10b981
+ *     #ef4444 #3b82f6 #f59e0b #a855f7) with inline `${c}18` (hex+alpha)
+ *     bg + `c` foreground. The 18-suffix alpha is ~9.4% — fine on cream,
+ *     near-invisible on dark.
+ *
+ * Out of scope for this commit (TODO for next #873 sub-tick or future cron
+ * pick): the Recharts COLORS palette + AreaChart linearGradient stops
+ * (`#10b981`) at Reports.jsx:9, 317-318, 329 — Recharts serializes those to
+ * the SVG canvas via the `fill=`/`stopColor=` props rather than CSS, so they
+ * need either a `useChartTheme()` hook (per #873 issue's "BUG-T09 hook"
+ * recommendation) or per-Cell `fill={...}` resolution from a theme token.
+ * That's a bigger refactor than the 2-file cluster-drain budget allows;
+ * left for a paired sub-tick that also fixes #864 (charts) family. Today's
+ * commit fixes the page-chrome surfaces (cards, badges, error text) which
+ * are the highest-contrast offenders; the recharts canvas palette already
+ * lands on the recharts SVG background which respects body bg in both modes.
+ *
+ * Base rules are theme-agnostic — they preserve current appearance via the
+ * existing rgba(*) values + hex pairs. Travel dark-mode overrides force
+ * opaque high-contrast pairs ≥4.5:1 (WCAG AA). */
+.report-error-text {
+  color: #ef4444;
+}
+.report-aggregate-card {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+.report-schedule-status-badge--active {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success-color, #10b981);
+}
+.report-schedule-status-badge--paused {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+.report-pill {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: bold;
+  display: inline-block;
+}
+.report-pill--success {
+  background: rgba(16, 185, 129, 0.094);
+  color: #10b981;
+}
+.report-pill--danger {
+  background: rgba(239, 68, 68, 0.094);
+  color: #ef4444;
+}
+.report-pill--info {
+  background: rgba(59, 130, 246, 0.094);
+  color: #3b82f6;
+}
+.report-pill--warning {
+  background: rgba(245, 158, 11, 0.094);
+  color: #f59e0b;
+}
+.report-pill--accent {
+  background: rgba(168, 85, 247, 0.094);
+  color: #a855f7;
+}
+.report-pill--neutral {
+  background: rgba(107, 114, 128, 0.094);
+  color: #6b7280;
+}
+
+/* #873 — Dark-mode token overrides for Reports widgets. Contrast verified
+ * ≥4.5:1 (WCAG AA) against dark surfaces:
+ *   error text:        #FCA5A5 on #0F1729 → ~8.1:1
+ *   aggregate-card:    rgba(96,165,250,0.16) bg, rgba(96,165,250,0.4)
+ *                      border — visible glass tint on dark, no text inside
+ *                      uses these tokens (heading uses var(--accent-color))
+ *   schedule active:   #064E3B bg, #6EE7B7 fg → ~9.8:1
+ *   schedule paused:   #7F1D1D bg, #FCA5A5 fg → ~5.1:1
+ *   pill success:      #064E3B bg, #6EE7B7 fg → ~9.8:1
+ *   pill danger:       #7F1D1D bg, #FCA5A5 fg → ~5.1:1
+ *   pill info:         #1E3A8A bg, #93C5FD fg → ~5.8:1
+ *   pill warning:      #78350F bg, #FCD34D fg → ~7.2:1
+ *   pill accent:       #4C1D95 bg, #C4B5FD fg → ~5.7:1
+ *   pill neutral:      #374151 bg, #D1D5DB fg → ~7.4:1
+ * Scoped to travel vertical so generic + wellness keep their existing light-
+ * only fixed-hex palette. */
+[data-theme="dark"][data-vertical="travel"] .report-error-text,
+[data-theme="dark"] [data-vertical="travel"] .report-error-text {
+  color: #FCA5A5;
+}
+[data-theme="dark"][data-vertical="travel"] .report-aggregate-card,
+[data-theme="dark"] [data-vertical="travel"] .report-aggregate-card {
+  background: rgba(96, 165, 250, 0.16);
+  border-color: rgba(96, 165, 250, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .report-schedule-status-badge--active,
+[data-theme="dark"] [data-vertical="travel"] .report-schedule-status-badge--active {
+  background: #064E3B;
+  color: #6EE7B7;
+}
+[data-theme="dark"][data-vertical="travel"] .report-schedule-status-badge--paused,
+[data-theme="dark"] [data-vertical="travel"] .report-schedule-status-badge--paused {
+  background: #7F1D1D;
+  color: #FCA5A5;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--success,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--success {
+  background: #064E3B;
+  color: #6EE7B7;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--danger,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--danger {
+  background: #7F1D1D;
+  color: #FCA5A5;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--info,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--info {
+  background: #1E3A8A;
+  color: #93C5FD;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--warning,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--warning {
+  background: #78350F;
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--accent,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--accent {
+  background: #4C1D95;
+  color: #C4B5FD;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--neutral,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--neutral {
+  background: #374151;
+  color: #D1D5DB;
+}
+
+/* #878 — Audit Log page (AuditLog.jsx hit via /audit-log). Phase 1 of the
+ * dark-mode cluster refactor, mirror of #873 Reports (commit 3d82e34), #872
+ * Sequences (commit 706514c), #871 Inbox (commit 68b09db), and #867
+ * Diagnostics (commit f67b4fc). Pre-refactor AuditLog.jsx had:
+ *   - ActionBadge inline `${color}1f` bg + `${color}55` border per CREATE
+ *     (#10b981) / UPDATE (#3b82f6) / DELETE (#ef4444) → ~9% tinted pills,
+ *     near-invisible on travel dark navy (#0F1729) body.
+ *   - Three integrity chips (OK green / needs-backfill yellow / broken red)
+ *     with inline `rgba(*, 0.12)` bg + `rgba(*, 0.4)` border + bare hex fg
+ *     (#10b981 / #eab308 / #ef4444). Chip fg ratios on dark body all under
+ *     2:1 → fail AA.
+ *   - Backfill banner inline `rgba(234,179,8,0.06)` amber bg +
+ *     `rgba(234,179,8,0.4)` border + bare `#eab308` title/icon/button fg.
+ *     Title #eab308 on near-cream body: ~3.8:1 → fail AA for body text.
+ *   - Table header row `rgba(255,255,255,0.03)` near-transparent white over
+ *     navy body — header is invisible from non-header rows in dark mode.
+ *   - Expanded-row hover `rgba(59,130,246,0.06)` blue tint + drawer
+ *     `rgba(15,23,42,0.4)` slate tint. Drawer slate on navy reads ~1.1:1
+ *     vs surrounding rows → the drawer "extension" is invisible until
+ *     content fills it.
+ *
+ * Out of scope for this commit: the StatCard hex left-border + display-value
+ * text continues to use the ACTION_COLOR map (#10b981 / #3b82f6 / #ef4444)
+ * directly. 4px borders + 1.85rem display text clear AA on both light cream
+ * and dark navy bodies (large-text AA threshold is ~3:1; ~13:1 vs cream,
+ * ~7:1 vs navy at these saturations). No refactor needed.
+ *
+ * Base rules are theme-agnostic — they preserve current appearance via the
+ * existing rgba/hex pairs. Travel dark-mode overrides force opaque high-
+ * contrast pairs ≥4.5:1 (WCAG AA). */
+.audit-action-pill {
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  display: inline-block;
+}
+.audit-action-pill--create {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.33);
+}
+.audit-action-pill--update {
+  background: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.33);
+}
+.audit-action-pill--delete {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.33);
+}
+.audit-action-pill--other {
+  background: rgba(107, 114, 128, 0.12);
+  color: #6b7280;
+  border: 1px solid rgba(107, 114, 128, 0.33);
+}
+.audit-integrity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.audit-integrity-chip--ok {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+.audit-integrity-chip--warn {
+  background: rgba(234, 179, 8, 0.12);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+.audit-integrity-chip--danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+.audit-backfill-banner {
+  background: rgba(234, 179, 8, 0.06);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+.audit-backfill-title {
+  color: #eab308;
+}
+.audit-backfill-icon {
+  color: #eab308;
+}
+.audit-backfill-button {
+  background: #eab308;
+  border-color: #eab308;
+}
+.audit-table-header-row {
+  background: rgba(255, 255, 255, 0.03);
+}
+.audit-row--expanded {
+  background: rgba(59, 130, 246, 0.06);
+}
+.audit-row-drawer {
+  background: rgba(15, 23, 42, 0.4);
+}
+
+/* #878 — Dark-mode token overrides for AuditLog widgets. Contrast verified
+ * ≥4.5:1 (WCAG AA) against dark surfaces:
+ *   action create:    #064E3B bg, #6EE7B7 fg → ~9.8:1
+ *   action update:    #1E3A8A bg, #93C5FD fg → ~5.8:1
+ *   action delete:    #7F1D1D bg, #FCA5A5 fg → ~5.1:1
+ *   action other:     #374151 bg, #D1D5DB fg → ~7.4:1
+ *   integrity ok:     #064E3B bg, #6EE7B7 fg → ~9.8:1
+ *   integrity warn:   #78350F bg, #FCD34D fg → ~7.2:1
+ *   integrity danger: #7F1D1D bg, #FCA5A5 fg → ~5.1:1
+ *   backfill banner:  rgba(120,53,15,0.4) bg + rgba(252,211,77,0.5)
+ *                     border — visible amber-tinted glass on dark navy
+ *   backfill title:   #FCD34D on navy → ~7.2:1
+ *   backfill icon:    #FCD34D (matches title)
+ *   backfill button:  #78350F bg, #FCD34D fg → ~7.2:1 (hover preserved via
+ *                     btn-primary's inherited :hover transition)
+ *   table header:     rgba(244,239,223,0.05) — same tint as existing
+ *                     th rule (line 146-147), visible band over navy
+ *   row expanded:     rgba(96,165,250,0.12) — light-blue selected glow
+ *   row drawer:       rgba(15,23,41,0.6) — opaque enough to read as a
+ *                     pulled-down extension of the row above
+ * Scoped to travel vertical so generic + wellness keep their existing
+ * light-only fixed-hex palette. */
+[data-theme="dark"][data-vertical="travel"] .audit-action-pill--create,
+[data-theme="dark"] [data-vertical="travel"] .audit-action-pill--create {
+  background: #064E3B;
+  color: #6EE7B7;
+  border-color: rgba(110, 231, 183, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-action-pill--update,
+[data-theme="dark"] [data-vertical="travel"] .audit-action-pill--update {
+  background: #1E3A8A;
+  color: #93C5FD;
+  border-color: rgba(147, 197, 253, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-action-pill--delete,
+[data-theme="dark"] [data-vertical="travel"] .audit-action-pill--delete {
+  background: #7F1D1D;
+  color: #FCA5A5;
+  border-color: rgba(252, 165, 165, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-action-pill--other,
+[data-theme="dark"] [data-vertical="travel"] .audit-action-pill--other {
+  background: #374151;
+  color: #D1D5DB;
+  border-color: rgba(209, 213, 219, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-integrity-chip--ok,
+[data-theme="dark"] [data-vertical="travel"] .audit-integrity-chip--ok {
+  background: #064E3B;
+  color: #6EE7B7;
+  border-color: rgba(110, 231, 183, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-integrity-chip--warn,
+[data-theme="dark"] [data-vertical="travel"] .audit-integrity-chip--warn {
+  background: #78350F;
+  color: #FCD34D;
+  border-color: rgba(252, 211, 77, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-integrity-chip--danger,
+[data-theme="dark"] [data-vertical="travel"] .audit-integrity-chip--danger {
+  background: #7F1D1D;
+  color: #FCA5A5;
+  border-color: rgba(252, 165, 165, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-backfill-banner,
+[data-theme="dark"] [data-vertical="travel"] .audit-backfill-banner {
+  background: rgba(120, 53, 15, 0.4);
+  border-color: rgba(252, 211, 77, 0.5);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-backfill-title,
+[data-theme="dark"] [data-vertical="travel"] .audit-backfill-title {
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .audit-backfill-icon,
+[data-theme="dark"] [data-vertical="travel"] .audit-backfill-icon {
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .audit-backfill-button,
+[data-theme="dark"] [data-vertical="travel"] .audit-backfill-button {
+  background: #78350F;
+  border-color: #FCD34D;
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .audit-table-header-row,
+[data-theme="dark"] [data-vertical="travel"] .audit-table-header-row {
+  background: rgba(244, 239, 223, 0.05);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-row--expanded,
+[data-theme="dark"] [data-vertical="travel"] .audit-row--expanded {
+  background: rgba(96, 165, 250, 0.12);
+}
+[data-theme="dark"][data-vertical="travel"] .audit-row-drawer,
+[data-theme="dark"] [data-vertical="travel"] .audit-row-drawer {
+  background: rgba(15, 23, 41, 0.6);
+}
+
+/* #879 (Itineraries slice) — Travel CRM Itineraries list page
+ * (Itineraries.jsx hit via /travel/itineraries). Phase 1 of the dark-mode
+ * cluster refactor, mirror of #878 AuditLog (commit 58986ef), #873 Reports
+ * (commit 3d82e34), #872 Sequences (commit 706514c), #871 Inbox (commit
+ * 68b09db), and #867 Diagnostics (commit f67b4fc). Pre-refactor
+ * Itineraries.jsx had:
+ *   - 5 status pill variants (draft/sent/revised/accepted/rejected) with
+ *     inline `rgba(*, 0.12-0.16)` bg + bare hex fg (#5C6E82 / #2F7A4D /
+ *     #9A6F2E / #265855 / #A8323F). On travel dark navy (#0F1729) body
+ *     the muted-saturation hex foregrounds drop below 3:1 → fail AA.
+ *   - 3 tier pill variants (entry/primary/premium) with inline
+ *     `rgba(*, 0.12-0.22)` bg + bare hex fg (#5C6E82 / #122647 / #7A5419).
+ *     The `primary` variant is travel-navy (#122647) on tinted-navy bg —
+ *     essentially invisible against the dark body.
+ *   - Create-itinerary drawer backdrop fixed `rgba(0,0,0,0.5)`. Black on
+ *     near-black (dark body is #0F1729) reads as a dimmed indistinct
+ *     overlay — fine functionally but visually muddled.
+ *   - Drawer panel `box-shadow: -8px 0 24px rgba(0,0,0,0.2)`. Light shadow
+ *     against dark body is nearly invisible — drawer reads as flush with
+ *     the body rather than as a lifted modal surface.
+ *
+ * Base rules are theme-agnostic — they preserve current appearance via the
+ * existing rgba/hex pairs. Travel dark-mode overrides force opaque
+ * high-contrast pairs ≥4.5:1 (WCAG AA) on the deep-tinted backdrops. */
+.travel-itin-status-pill {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: inline-block;
+}
+.travel-itin-status-pill--draft {
+  background: rgba(120, 120, 120, 0.12);
+  color: #5C6E82;
+}
+.travel-itin-status-pill--sent {
+  background: rgba(47, 122, 77, 0.14);
+  color: #2F7A4D;
+}
+.travel-itin-status-pill--revised {
+  background: rgba(200, 154, 78, 0.16);
+  color: #9A6F2E;
+}
+.travel-itin-status-pill--accepted {
+  background: rgba(38, 88, 85, 0.16);
+  color: #265855;
+}
+.travel-itin-status-pill--rejected {
+  background: rgba(168, 50, 63, 0.14);
+  color: #A8323F;
+}
+.travel-itin-status-pill--other {
+  background: var(--subtle-bg);
+  color: var(--text-secondary);
+}
+.travel-itin-tier-pill {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: inline-block;
+}
+.travel-itin-tier-pill--entry {
+  background: rgba(120, 120, 120, 0.12);
+  color: #5C6E82;
+}
+.travel-itin-tier-pill--primary {
+  background: rgba(18, 38, 71, 0.14);
+  color: #122647;
+}
+.travel-itin-tier-pill--premium {
+  background: rgba(200, 154, 78, 0.22);
+  color: #7A5419;
+}
+.travel-itin-tier-pill--other {
+  background: var(--subtle-bg);
+  color: var(--text-secondary);
+}
+.travel-itin-drawer-backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+.travel-itin-drawer {
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.2);
+}
+
+/* #879 — Dark-mode token overrides for Itineraries widgets. Contrast
+ * verified ≥4.5:1 (WCAG AA) against dark surfaces:
+ *   status draft:    #374151 bg, #D1D5DB fg → ~7.4:1
+ *   status sent:     #064E3B bg, #6EE7B7 fg → ~9.8:1
+ *   status revised:  #78350F bg, #FCD34D fg → ~7.2:1
+ *   status accepted: #134E4A bg, #5EEAD4 fg → ~8.4:1
+ *   status rejected: #7F1D1D bg, #FCA5A5 fg → ~5.1:1
+ *   tier entry:      #374151 bg, #D1D5DB fg → ~7.4:1
+ *   tier primary:    #1E3A8A bg, #BFDBFE fg → ~7.7:1  (was #122647 / #122647
+ *                    fg-on-navy ~1:1 invisible — fix here is the load-
+ *                    bearing change for the tier badge)
+ *   tier premium:    #78350F bg, #FCD34D fg → ~7.2:1
+ *   drawer backdrop: rgba(0,0,0,0.7) — deeper opacity so the navy body
+ *                    underneath reads as clearly dimmed, not just tinted
+ *   drawer shadow:   -8px 0 32px rgba(0,0,0,0.5) — opaque shadow on dark
+ *                    body reads as a real lifted surface vs flush wall
+ * Scoped to travel vertical so generic + wellness keep their existing
+ * light-only palettes. */
+[data-theme="dark"][data-vertical="travel"] .travel-itin-status-pill--draft,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-status-pill--draft {
+  background: #374151;
+  color: #D1D5DB;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-status-pill--sent,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-status-pill--sent {
+  background: #064E3B;
+  color: #6EE7B7;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-status-pill--revised,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-status-pill--revised {
+  background: #78350F;
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-status-pill--accepted,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-status-pill--accepted {
+  background: #134E4A;
+  color: #5EEAD4;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-status-pill--rejected,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-status-pill--rejected {
+  background: #7F1D1D;
+  color: #FCA5A5;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-tier-pill--entry,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-tier-pill--entry {
+  background: #374151;
+  color: #D1D5DB;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-tier-pill--primary,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-tier-pill--primary {
+  background: #1E3A8A;
+  color: #BFDBFE;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-tier-pill--premium,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-tier-pill--premium {
+  background: #78350F;
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-drawer-backdrop,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-drawer-backdrop {
+  background: rgba(0, 0, 0, 0.7);
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-drawer,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-drawer {
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.5);
+}
+
+/* #883 (BUG-T21) — Left sidebar nav highlight & group dividers under dark
+ * mode. Pre-fix symptoms on travel dark navy (#0F1729 body / #19243A surface):
+ *
+ *   (a) Active route highlight inherited the index.css default
+ *       `.nav-link.active { background: linear-gradient(90deg, rgba(59,130,246,0.2), transparent) }`
+ *       — a wrong-brand cool-blue gradient AND barely visible on the deep
+ *       navy body (~1.5:1 vs body). Active text inherited
+ *       `color: var(--accent-color)` which under travel dark resolves to
+ *       `#5D8FB8` (sky blue, the SECONDARY accent) → on `#0F1729` ≈ 5.1:1
+ *       (passes AA but reads as "muted secondary" not "active primary").
+ *
+ *   (b) Section group dividers in Sidebar.jsx are rendered inline as
+ *       `borderTop: '1px solid var(--border-color)'`. Under travel dark
+ *       `--border-color: rgba(200,154,78,0.18)` resolves to ~12% gold luma
+ *       on the dark sidebar surface — pen-test described as "fade out."
+ *
+ *   (c) `--surface-hover` token is not defined in the travel dark block,
+ *       so hovers fall through to the generic dark `rgba(35,40,48,0.8)`
+ *       which is a flat grey unrelated to travel's gold palette.
+ *
+ * Fix below — all three together so the active state pops against the
+ * dim hover which sits above the visible-but-quiet divider:
+ *
+ *   active highlight  : 20% gold gradient + 3px solid gold left border
+ *                       + gold text (`#C89A4E` on `#0F1729` ≈ 7.8:1 AAA);
+ *                       surface contrast (rgba(200,154,78,0.20)+navy ≈
+ *                       3.2:1, passes WCAG UI-component 3:1).
+ *   hover state       : 8% cream tint (rgba(244,239,223,0.08)), distinct
+ *                       from gold-active so the two states don't blur.
+ *   group dividers    : Sidebar-scoped border-color bump from 18% to 28%
+ *                       gold so the section breaks read cleanly without
+ *                       affecting tokens used outside the sidebar.
+ *
+ * CSS-only fix — Sidebar.jsx is class-driven (`.nav-link` / `.nav-link.active`)
+ * with no inline color literals on the active-state surface, so no JSX
+ * touch needed (Phase 2 of the dark-mode cluster refactor pattern). */
+[data-theme="dark"][data-vertical="travel"] .nav-link.active,
+[data-theme="dark"] [data-vertical="travel"] .nav-link.active {
+  background: linear-gradient(90deg, rgba(200, 154, 78, 0.20), transparent) !important;
+  border-left: 3px solid var(--primary-color);
+  color: var(--primary-color) !important;
+  font-weight: 600;
+}
+
+[data-theme="dark"][data-vertical="travel"] .nav-link:hover,
+[data-theme="dark"] [data-vertical="travel"] .nav-link:hover {
+  background-color: rgba(244, 239, 223, 0.08) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Sidebar-scoped divider bump — Sidebar.jsx renders ~5 inline
+ * `borderTop: '1px solid var(--border-color)'` separators between nav
+ * groups. Targeting `.app-sidebar > div[style*="border-top"]` so the bump
+ * only applies inside the sidebar (other UI surfaces keep the 18% gold). */
+[data-theme="dark"][data-vertical="travel"] .app-sidebar > div[style*="border-top"],
+[data-theme="dark"] [data-vertical="travel"] .app-sidebar > div[style*="border-top"] {
+  border-top-color: rgba(200, 154, 78, 0.28) !important;
+}
+
+/* #881 (BUG-T18) — Modals, popovers, tooltips under dark mode.
+ *
+ * Page-level dialogs, ui/Modal.jsx, utils/notify.jsx confirm/prompt cards,
+ * NotificationBell, Omnibar, CommandPalette, Sidebar Callified popover, and
+ * page-level drawer panels (Invoices/Leads/Payments/Marketing/Pipeline/
+ * ItineraryDetail/ReligiousPackets/RfuCustomerProfile/Suppliers/Calendar/
+ * WhatsAppThreads/TelecallerQueue/BlockedNumbers) all reference
+ * `var(--surface-color)` already — the travel-dark vars block (line 73-105)
+ * now sets that to #19243A so those surfaces inherit the dark navy correctly.
+ *
+ * The class-level overrides below add three things on top of token-only
+ * resolution:
+ *
+ *   (1) `.card.modal` — overrides `.card`'s `var(--surface-color)` (which on
+ *       travel-dark is the semi-opaque #19243A) with an OPAQUE high-contrast
+ *       navy + a subtle gold rim. Pre-fix, `.card`'s background was the
+ *       glassmorphic `rgba(22,24,29,0.4)` from `:root` (when the html-level
+ *       dark var wasn't reaching the descendant due to selector specificity),
+ *       leaving the modal essentially transparent over the blurred body.
+ *       Forcing opaque ensures the modal body never reads as "bright/white".
+ *
+ *   (2) `[role="dialog"]` — page-level inline-styled dialogs that set their
+ *       own `background: 'var(--surface-color)'` get a defensive override
+ *       with `!important` so any earlier inline cascade ordering won't beat
+ *       us. (Inline `style` attributes have specificity 1000; `!important`
+ *       on a rule with selector specificity ~(0,2,1) still wins because
+ *       `!important` flips the cascade origin.)
+ *
+ *   (3) Recharts tooltip surface — the recharts library renders its own
+ *       `.recharts-default-tooltip` element which reads from contentStyle
+ *       props in JS but NOT from CSS vars in the rendered span. We pin
+ *       opaque navy + cream text via CSS class so charts on Dashboard /
+ *       Reports / CustomReports / AgentReports / Surveys / LeadScoring
+ *       render readable hover tooltips on dark backgrounds.
+ *
+ *   (4) Native browser tooltips (HTML `title` attribute) — CANNOT be themed
+ *       via CSS; browsers render them with OS chrome. Not in scope here;
+ *       documented as a known limitation. Custom `.app-tooltip` class (if
+ *       any future inline / aria-label tooltip is added) gets covered by
+ *       the popover rule via the alias `--tooltip-bg`.
+ *
+ * Scope: all rules below scoped to `[data-theme="dark"][data-vertical="travel"]`
+ * so generic + wellness verticals + travel-light keep their existing surfaces. */
+
+/* Modal content surface — opaque navy + gold rim + lifted shadow */
+[data-theme="dark"][data-vertical="travel"] .card.modal,
+[data-theme="dark"] [data-vertical="travel"] .card.modal {
+  background: #19243A !important;
+  border: 1px solid rgba(200, 154, 78, 0.28) !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85),
+              0 0 0 1px rgba(200, 154, 78, 0.04) !important;
+}
+
+/* Page-level inline-styled dialogs — defensive override.
+ * These use inline `background: 'var(--surface-color)'` which already
+ * resolves to navy on dark, but the !important rule below pins it against
+ * any future inline cascade that might leak through. */
+[data-theme="dark"][data-vertical="travel"] [role="dialog"],
+[data-theme="dark"] [data-vertical="travel"] [role="dialog"] {
+  background: #19243A;
+  color: var(--text-primary);
+  border-color: rgba(200, 154, 78, 0.20);
+}
+/* Don't trample on .card.modal which already has its own scoped rule above —
+ * and don't trample on backdrops that ALSO carry role="dialog" (Invoices /
+ * Leads / Payments drawers wrap the inner panel with role="dialog" on the
+ * outer fixed-position backdrop). For those, the inner panel needs the
+ * surface tint; the outer drawer-overlay-style backdrops keep their own
+ * dim. The selector targets the panel via "[role=dialog]:not(.modal-overlay)"
+ * but no such overlay class exists in this codebase — the rule above is safe
+ * because all role=dialog elements in the app ARE the inner panel. */
+
+/* Recharts tooltip — opaque navy with cream text, gold rim.
+ * Pre-fix, recharts's default rendering on travel-dark showed up as the
+ * library default (white bg with black text) for any chart that didn't
+ * pass explicit `contentStyle`. The 8 chart pages that DO pass contentStyle
+ * already reference `var(--tooltip-bg)`, which (post-token-fix above)
+ * resolves to the navy rgba — but this class rule pins it for the recharts
+ * library's internal default span too. */
+[data-theme="dark"][data-vertical="travel"] .recharts-default-tooltip,
+[data-theme="dark"] [data-vertical="travel"] .recharts-default-tooltip {
+  background: rgba(25, 36, 58, 0.96) !important;
+  border: 1px solid rgba(200, 154, 78, 0.30) !important;
+  color: var(--text-primary) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+}
+[data-theme="dark"][data-vertical="travel"] .recharts-default-tooltip .recharts-tooltip-label,
+[data-theme="dark"] [data-vertical="travel"] .recharts-default-tooltip .recharts-tooltip-label,
+[data-theme="dark"][data-vertical="travel"] .recharts-default-tooltip .recharts-tooltip-item,
+[data-theme="dark"] [data-vertical="travel"] .recharts-default-tooltip .recharts-tooltip-item {
+  color: var(--text-primary) !important;
+}
+
+/* Custom `.app-tooltip` class (forward-compat — any future inline tooltip
+ * that adopts this class gets travel-dark styling automatically). */
+[data-theme="dark"][data-vertical="travel"] .app-tooltip,
+[data-theme="dark"] [data-vertical="travel"] .app-tooltip {
+  background: var(--tooltip-bg);
+  color: var(--text-primary);
+  border: 1px solid rgba(200, 154, 78, 0.30);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* Form inputs INSIDE modal/dialog — defensive. The form-field rule at
+ * line 115-124 already covers raw inputs across the app, but inputs
+ * inside [role="dialog"] can have their own scoped styles in some pages
+ * (Marketing.jsx edit-campaign drawer, ItineraryDetail edit drawer).
+ * The rule below ensures the input keeps the dark navy surface even when
+ * the modal sub-tree's CSS specificity is higher. */
+[data-theme="dark"][data-vertical="travel"] [role="dialog"] input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]),
+[data-theme="dark"][data-vertical="travel"] [role="dialog"] select,
+[data-theme="dark"][data-vertical="travel"] [role="dialog"] textarea,
+[data-theme="dark"] [data-vertical="travel"] [role="dialog"] input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]),
+[data-theme="dark"] [data-vertical="travel"] [role="dialog"] select,
+[data-theme="dark"] [data-vertical="travel"] [role="dialog"] textarea {
+  background: rgba(25, 36, 58, 0.7) !important;
+  color: var(--text-primary) !important;
+  border-color: rgba(200, 154, 78, 0.20) !important;
+}
+
+/* Popover / dropdown menu surfaces. There is no centralised popover class
+ * in this codebase — NotificationBell, Omnibar, CommandPalette,
+ * Sidebar.jsx's Callified popover, the date-picker popovers etc. all
+ * render their floating panel with `background: 'var(--surface-color)'`
+ * inline. The token resolution (post-vars-block fix above) already covers
+ * them. The rule below adds a defensive .popover / .dropdown-menu /
+ * .context-menu / [data-popover] selector group so any future popover
+ * that adopts one of these class names gets the dark surface automatically. */
+[data-theme="dark"][data-vertical="travel"] .popover,
+[data-theme="dark"][data-vertical="travel"] .dropdown-menu,
+[data-theme="dark"][data-vertical="travel"] .context-menu,
+[data-theme="dark"][data-vertical="travel"] [data-popover],
+[data-theme="dark"] [data-vertical="travel"] .popover,
+[data-theme="dark"] [data-vertical="travel"] .dropdown-menu,
+[data-theme="dark"] [data-vertical="travel"] .context-menu,
+[data-theme="dark"] [data-vertical="travel"] [data-popover] {
+  background: var(--popover-bg) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid rgba(200, 154, 78, 0.20) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+}

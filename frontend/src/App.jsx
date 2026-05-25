@@ -21,6 +21,7 @@ import Layout from "./components/Layout";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import RoleGuard from "./components/RoleGuard";
 import { NotifyProvider } from "./utils/notify";
+import { ActiveSubBrandProvider, useActiveSubBrand } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
 import {
   setAuthToken,
@@ -29,6 +30,7 @@ import {
   markAuthReady,
 } from "./utils/api";
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
+import "./theme/travel.css"; // travel vertical theme overrides (scoped, Day 1 placeholder palette)
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Contacts = lazy(() => import("./pages/Contacts"));
@@ -41,6 +43,9 @@ const Reports = lazy(() => import("./pages/Reports"));
 const AgentReports = lazy(() => import("./pages/AgentReports"));
 const Settings = lazy(() => import("./pages/Settings"));
 const UserSettings = lazy(() => import("./pages/UserSettings"));
+// #853 — full notifications inbox / history feed (paginated + filterable).
+// Bell dropdown deep-links here via the "View all notifications →" footer.
+const NotificationsCenter = lazy(() => import("./pages/NotificationsCenter"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
@@ -61,6 +66,7 @@ const Clients = lazy(() => import("./pages/Clients"));
 const Expenses = lazy(() => import("./pages/Expenses"));
 const Contracts = lazy(() => import("./pages/Contracts"));
 const Estimates = lazy(() => import("./pages/Estimates"));
+const QuotesComingSoon = lazy(() => import("./pages/QuotesComingSoon"));
 const Projects = lazy(() => import("./pages/Projects"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Pricing = lazy(() => import("./pages/Pricing"));
@@ -69,6 +75,11 @@ const Channels = lazy(() => import("./pages/Channels"));
 const LandingPages = lazy(() => import("./pages/LandingPages"));
 const LandingPageBuilder = lazy(() => import("./pages/LandingPageBuilder"));
 const AuditLog = lazy(() => import("./pages/AuditLog"));
+// Cron PRD Priority A #1 — ADMIN-only LLM spend dashboard. Surfaces
+// /api/admin/llm-spend (commit f5c9518) which aggregates LlmCallLog rows
+// produced by the 4 router consumers (talking-points / form-vs-call /
+// itinerary-draft / religious-guidance).
+const LlmSpend = lazy(() => import("./pages/LlmSpend"));
 const Privacy = lazy(() => import("./pages/Privacy"));
 const CalendarSync = lazy(() => import("./pages/CalendarSync"));
 const Profile2FA = lazy(() => import("./pages/Profile2FA"));
@@ -81,6 +92,40 @@ const Signatures = lazy(() => import("./pages/Signatures"));
 const KnowledgeBase = lazy(() => import("./pages/KnowledgeBase"));
 const Currencies = lazy(() => import("./pages/Currencies"));
 const FieldPermissions = lazy(() => import("./pages/FieldPermissions"));
+// Per-tenant cap-override admin UI — consumes /api/tenant-settings CRUD
+// (backend commit 1542b8e). Completes the per-tenant cap pattern end-to-end:
+// helper + 4 consumers + backend CRUD + admin UI.
+const TenantSettings = lazy(() => import("./pages/admin/TenantSettings"));
+// Per-sub-brand BrandKit admin UI — consumes /api/brand-kits CRUD
+// (backend route commit e4783e0). Operator manages logo / colors / font /
+// tagline per (subBrand, version) with one-active-per-sub-brand semantics.
+const BrandKits = lazy(() => import("./pages/admin/BrandKits"));
+// AdsGPT Reports admin UI — consumes /api/adsgpt (backend route commit
+// 0d66a74, tick #102). Operator views per-platform ad performance + cap
+// utilisation; stub-mode banner surfaces while Q1 cred-blocked.
+const AdsGPTReports = lazy(() => import("./pages/admin/AdsGPTReports"));
+// RateHawk hotel-search admin UI — consumes /api/ratehawk (backend route
+// commit be67789, tick #103). Operator searches RateHawk hotel inventory
+// + sees cap utilisation; stub-mode banner surfaces while Q19 cred-blocked.
+const RateHawkSearch = lazy(() => import("./pages/admin/RateHawkSearch"));
+// Callified AI calls admin UI — consumes /api/callified (backend route
+// commit cdad62d, tick #104). Operator initiates outbound AI calls + sees
+// cap utilisation + feature-flag state; stub-mode banner surfaces while Q1
+// cred-blocked (Yasin's Callified.ai handover).
+const CallifiedCalls = lazy(() => import("./pages/admin/CallifiedCalls"));
+// Booking.com / Expedia hotel-search admin UI — consumes /api/booking-expedia
+// (backend route commit bb33cbe, tick #105). 4th and FINAL cap-consumer UI.
+// Phase 2 deferred-by-design: Expedia returns 503 EXPEDIA_NOT_YET_ENABLED
+// until DC-4 flips; Booking.com (Phase 1) is stub-mode until Q-cluster B6/C
+// cred swap lands. Page mounts in a Phase-2-pending state by default.
+const BookingExpediaSearch = lazy(() =>
+  import("./pages/admin/BookingExpediaSearch"),
+);
+// Wallet bonus rule CRUD — Arc 1 D16 PRD_WALLET_TOPUP §3.6 (slice 5 PARTIAL,
+// scaffolds the operator UI ahead of Agent B's /api/wallet/rules route which
+// ships next tick at slice 3). Page is robust to the route's absence —
+// 404 surfaces as empty-state + a "backend not yet deployed" banner.
+const WalletRules = lazy(() => import("./pages/admin/WalletRules"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -111,6 +156,92 @@ const Zapier = lazy(() => import("./pages/Zapier"));
 const SsoReturn = lazy(() => import("./pages/SsoReturn"));
 const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
 const PaymentFailed = lazy(() => import("./pages/PaymentFailed"));
+// Travel vertical (Day 1 scaffolding — Phase 1 pages land per docs/TRAVEL_CRM_PRD.md §7)
+const TravelDashboard = lazy(() => import("./pages/travel/Dashboard"));
+const TravelDiagnostics = lazy(() => import("./pages/travel/Diagnostics"));
+const TravelDiagnosticWizard = lazy(() => import("./pages/travel/DiagnosticWizard"));
+const TravelDiagnosticBuilder = lazy(() => import("./pages/travel/DiagnosticBuilder"));
+const TravelDiagnosticDetail = lazy(() => import("./pages/travel/DiagnosticDetail"));
+const TravelItineraries = lazy(() => import("./pages/travel/Itineraries"));
+const TravelTrips = lazy(() => import("./pages/travel/Trips"));
+const TravelTripDetail = lazy(() => import("./pages/travel/TripDetail"));
+const TravelWebCheckinQueue = lazy(() => import("./pages/travel/WebCheckinQueue"));
+const TravelCostMaster = lazy(() => import("./pages/travel/CostMaster"));
+const TravelLeads = lazy(() => import("./pages/travel/Leads"));
+const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
+const TravelReports = lazy(() => import("./pages/travel/Reports"));
+const TravelRfuCustomerProfile = lazy(() => import("./pages/travel/RfuCustomerProfile"));
+const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
+const TravelSuppliersAdmin = lazy(() => import("./pages/travel/SuppliersAdmin"));
+const TravelQuotesAdmin = lazy(() => import("./pages/travel/QuotesAdmin"));
+// Arc 2 #900 slice 2 — operator-facing single-quote builder (line items +
+// totals panel + Save/Send/Duplicate/Download-PDF action cluster). Distinct
+// from TravelQuotesAdmin which is the CRUD list. PRD:
+// docs/PRD_TRAVEL_QUOTE_BUILDER.md §3. RoleGuard allow=[ADMIN,MANAGER]
+// mirrors backend write RBAC.
+const TravelQuoteBuilder = lazy(() => import("./pages/travel/QuoteBuilder"));
+const TravelInvoicesAdmin = lazy(() => import("./pages/travel/InvoicesAdmin"));
+// Arc 2 #901 slice 7 frontend consumer — cross-invoice payment-milestone
+// dashboard. Consumes /api/travel/payment-schedules/upcoming (backend commit
+// e4832fee). Operator surface for upcoming/overdue milestones across all
+// travel invoices; complements the per-invoice schedule view on InvoicesAdmin.
+const TravelMilestoneTracker = lazy(() => import("./pages/travel/MilestoneTracker"));
+// Arc 2 #903 frontend consumer — cross-supplier Payables (A/P) review page.
+// Aggregates every TravelSupplierPayable across every supplier into one
+// operator-facing month-end review surface; complements the per-supplier
+// expand panel on SuppliersAdmin (slice 4). Placeholder fan-out fetch today;
+// will swap to GET /api/travel/payables once slice 6 ships the consolidating
+// endpoint (shipped page commit 2a0b00ab).
+const TravelPayables = lazy(() => import("./pages/travel/Payables"));
+// #905 slice 3 frontend consumer — TravelCommissionProfile CRUD admin.
+// Consumes /api/travel/commission-profiles (backend slice 2 b5042743). GET
+// is verifyToken-only (any role can view); POST/PUT gated to ADMIN+MANAGER
+// and DELETE gated to ADMIN — mirrored client-side via canWrite + Delete
+// button gates inside the page. Shipped page commit 6c2805f9.
+const TravelCommissionProfilesAdmin = lazy(() => import("./pages/travel/CommissionProfilesAdmin"));
+// #908 slice 2 frontend consumer — TravelFlyerTemplate list page; companion
+// to MarketingFlyerStudio (the live composer). Lists operator-saved templates
+// with sub-brand filter, name search, palette-swatch preview, and a "Use as
+// starting point" handoff to the Studio. Backend slice 3 (TravelFlyerTemplate
+// CRUD at /api/travel/flyer-templates) shipped 5c2dd474. Shipped page commit
+// a64c1058.
+const TravelFlyerTemplates = lazy(() => import("./pages/travel/FlyerTemplates"));
+const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
+const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
+const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
+const TravelLeadDetail = lazy(() => import("./pages/travel/LeadDetail"));
+// Arc 2 #904 slice — InboundLeads admin page (STUB consumer). Operator-facing
+// list of inbound leads ingested via POST /api/travel/inbound/leads/:channel
+// (slice 1 webhook scaffold 8b562b0b + slice 4 HMAC/spam verification
+// 5bd46b2e). The dedicated GET listing endpoint is deferred to a future
+// slice — page currently fetches /api/contacts?limit=100 and filters
+// client-side for `source.startsWith('inbound:')`. Convert-to-Lead button
+// hands off to /leads/:contactId. Shipped page commit 56f549f7.
+const TravelInboundLeads = lazy(() => import("./pages/travel/InboundLeads"));
+// Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells only.
+// Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9.
+const TravelVisaDashboard = lazy(() => import("./pages/travel/visa/Dashboard"));
+const TravelVisaApplications = lazy(() => import("./pages/travel/visa/Applications"));
+const TravelVisaChecklists = lazy(() => import("./pages/travel/visa/Checklists"));
+const TravelVisaAdvisorDashboard = lazy(() => import("./pages/travel/visa/AdvisorDashboard"));
+const TravelVisaReports = lazy(() => import("./pages/travel/visa/Reports"));
+// Phase 3 Visa Sure embassy-rules admin (tick #178, consumes /api/embassy-rules
+// from backend commit 05587ac7). ADMIN-only mutation gate; route wrapped in
+// RoleGuard allow=["ADMIN"] mirroring backend POST/PUT/DELETE RBAC.
+const TravelVisaEmbassyRulesAdmin = lazy(() => import("./pages/travel/visa/EmbassyRulesAdmin"));
+// Phase 1 TMC curriculum-mappings admin (tick #181, consumes /api/travel-curriculum
+// from backend commit 6d5919a8 — tick #180). ADMIN-only mutation gate;
+// route wrapped in RoleGuard allow=["ADMIN"] mirroring backend
+// POST/PUT/DELETE RBAC. School-trip pitch-deck mappings (curriculum ×
+// grade × subject → destination) consumed by the diagnostic engine.
+const TravelCurriculumAdmin = lazy(() => import("./pages/travel/CurriculumAdmin"));
+// Phase 2 SHELL for #908 Marketing Flyer Studio (tick #186). Designed in
+// docs/PRD_TRAVEL_MARKETING_FLYER.md; this is a non-functional scaffold —
+// real implementation lands per PRD §8 dependency build order. ADMIN +
+// MANAGER only per RoleGuard on the route element.
+const TravelMarketingFlyerStudio = lazy(() => import("./pages/travel/MarketingFlyerStudio"));
+// Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
+const TravelStallDashboard = lazy(() => import("./pages/travel/TravelStallDashboard"));
 // Wellness vertical
 const WellnessOwnerDashboard = lazy(
   () => import("./pages/wellness/OwnerDashboard"),
@@ -135,10 +266,21 @@ const WellnessGiftCards = lazy(() => import("./pages/wellness/GiftCards"));
 const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
+// #832 — embedded Callified panel (iframe inside CRM shell) replaces the
+// previous new-tab launch from Sidebar + OwnerDashboard. SSO contract with
+// Callified is unchanged; only the surface that renders the auth URL is
+// different (iframe in-shell vs window.open new tab).
+const WellnessCallifiedEmbed = lazy(() => import("./pages/wellness/CallifiedEmbed"));
 const WellnessReports = lazy(() => import("./pages/wellness/Reports"));
 const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
 const WellnessPublicBooking = lazy(
   () => import("./pages/wellness/PublicBooking"),
+);
+const TravelStallQuiz = lazy(
+  () => import("./pages/public/TravelStallQuiz"),
+);
+const TripBooking = lazy(
+  () => import("./pages/public/TripBooking"),
 );
 const WellnessTelecallerQueue = lazy(
   () => import("./pages/wellness/TelecallerQueue"),
@@ -158,6 +300,11 @@ const WellnessInventory = lazy(() => import("./pages/wellness/Inventory"));
 // Wave 11 Agent HH — Inventory backbone admin pages (categories, vendors,
 // receipts, adjustments, auto-consumption rules). All ADMIN/MANAGER-only.
 const WellnessProductCategories = lazy(() => import("./pages/wellness/ProductCategories"));
+// Zylu-Gap #933 — Products admin list page. Precursor for #816 CSV Products
+// slice; backend GET /api/wellness/products exists in inventory.js but POST/
+// PUT/DELETE are not yet exposed at that mount, so create goes through
+// /api/cpq/products and bulk via /api/csv/products/{export,import}.csv.
+const WellnessProducts = lazy(() => import("./pages/wellness/Products"));
 const WellnessVendors = lazy(() => import("./pages/wellness/Vendors"));
 const WellnessInventoryReceipts = lazy(() => import("./pages/wellness/InventoryReceipts"));
 const WellnessInventoryAdjustments = lazy(() => import("./pages/wellness/InventoryAdjustments"));
@@ -197,6 +344,104 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
+
+// #876 — per-sub-brand theme resolver. Owns the `document.documentElement
+// .setAttribute("data-theme", ...)` write so the decision can consume the
+// active sub-brand from <ActiveSubBrandProvider> + the tenant's per-sub-brand
+// theme defaults from /api/tenant/sub-brand-themes. Resolution chain (DD-5.2):
+//   1. user.themePreference (explicit 'light'|'dark') — user wins.
+//   2. tenant.subBrandThemes[activeSubBrand] when user pref is 'system'
+//      AND there's an active sub-brand AND the tenant set a per-brand default.
+//   3. OS prefers-color-scheme as the final fallback.
+// Re-resolves on activeSubBrand switch (effect dep) so flipping the
+// "I'm working on TMC today" switcher repaints the chrome immediately.
+//
+// Defensive: the /api/tenant/sub-brand-themes fetch tolerates 404/401/network
+// errors as "no per-sub-brand override available" (empty {}). The backend
+// route lands as of tick #183 commit 9f6f561f; on older deploys the fetch
+// 404s and we silently degrade to the user-pref → OS-pref chain.
+function SubBrandThemeResolver() {
+  const { theme } = useContext(ThemeContext);
+  const { token } = useContext(AuthContext);
+  const { activeSubBrand } = useActiveSubBrand();
+  const [tenantSubBrandThemes, setTenantSubBrandThemes] = useState({});
+
+  // Fetch tenant's per-sub-brand defaults once per token. Re-fires on
+  // login/logout so a switched session doesn't carry over the prior tenant's
+  // overrides. Errors are swallowed — empty {} means "fall through to OS pref".
+  useEffect(() => {
+    if (!token) {
+      setTenantSubBrandThemes({});
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/tenant/sub-brand-themes", {
+          headers: { "Authorization": `Bearer ${token}` },
+        });
+        if (!res.ok) return; // 404 (pre-deploy) / 401 / 5xx — no override.
+        const data = await res.json();
+        if (cancelled) return;
+        const themes = data && typeof data.themes === "object" && data.themes !== null
+          ? data.themes
+          : {};
+        setTenantSubBrandThemes(themes);
+      } catch (err) {
+        // Network / parse error — silently degrade. The user-pref + OS-pref
+        // chain still works without per-sub-brand defaults.
+        console.warn("[Theme] sub-brand-themes fetch failed; no per-brand override:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  // Apply the effective theme to <html data-theme="..."> on every input change.
+  // Dependency array includes activeSubBrand so toggling the switcher repaints.
+  useEffect(() => {
+    let effectiveTheme = null;
+    // Step 1 — user pref wins when explicit (DD-5.2).
+    if (theme === "light" || theme === "dark") {
+      effectiveTheme = theme;
+    }
+    // Step 2 — user pref is 'system' (or unset): try the tenant's
+    // per-sub-brand default for the currently-active brand.
+    if (!effectiveTheme && activeSubBrand && tenantSubBrandThemes) {
+      const brandTheme = tenantSubBrandThemes[activeSubBrand];
+      if (brandTheme === "light" || brandTheme === "dark") {
+        effectiveTheme = brandTheme;
+      }
+      // brandTheme === "system" is treated as "no opinion" — fall through.
+    }
+    // Step 3 — OS prefers-color-scheme as the final fallback.
+    if (!effectiveTheme) {
+      effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    }
+    document.documentElement.setAttribute("data-theme", effectiveTheme);
+  }, [theme, token, activeSubBrand, tenantSubBrandThemes]);
+
+  // Live-react to the OS prefers-color-scheme flip only when we're actually
+  // bottoming out at Step 3 (no user pref, no sub-brand override). When
+  // effective is already "light" or "dark" via Step 1 or 2, the listener
+  // should NOT override.
+  useEffect(() => {
+    if (theme === "light" || theme === "dark") return undefined;
+    if (activeSubBrand && tenantSubBrandThemes) {
+      const brandTheme = tenantSubBrandThemes[activeSubBrand];
+      if (brandTheme === "light" || brandTheme === "dark") return undefined;
+    }
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (e) => {
+      document.documentElement.setAttribute("data-theme", e.matches ? "dark" : "light");
+    };
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, [theme, activeSubBrand, tenantSubBrandThemes]);
+
+  return null;
+}
 
 // Issue #207/#214/#216: wellness staff carry RBAC role=USER + an orthogonal
 // `wellnessRole` (doctor/professional/telecaller/helper/stylist). The Owner
@@ -240,6 +485,11 @@ function GenericOnly({ children }) {
   if (tenant?.vertical === 'wellness') {
     return <Navigate to={wellnessLandingFor(user)} replace />;
   }
+  if (tenant?.vertical === 'travel') {
+    // Travel vertical's landing route is /travel (no role-aware landing yet —
+    // Phase 1 will add per-sub-brand landings: TMC ops vs RFU advisor vs ...).
+    return <Navigate to="/travel" replace />;
+  }
   return children;
 }
 
@@ -267,6 +517,18 @@ function WellnessOwnerOnly({ children }) {
 function WellnessOnly({ children }) {
   const { tenant } = useContext(AuthContext);
   if (tenant && tenant.vertical !== "wellness") {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return children;
+}
+
+// Mirror of WellnessOnly for the travel vertical (Day 1 scaffolding). Non-
+// travel tenants get bounced to /dashboard rather than rendering empty
+// travel UI. API-level guard requireTravelTenant in backend/routes/travel.js
+// is the load-bearing check; this is just URL-bar hygiene.
+function TravelOnly({ children }) {
+  const { tenant } = useContext(AuthContext);
+  if (tenant && tenant.vertical !== "travel") {
     return <Navigate to="/dashboard" replace />;
   }
   return children;
@@ -395,28 +657,62 @@ export default function App() {
     }
   }, [token]);
 
+  // #870 — server-side theme hydration so the preference roams across
+  // browsers/devices. localStorage stays as a synchronous fast-path cache;
+  // the server value (when set) wins on login. Per DD-5.2: user pref wins
+  // over tenant default, so if the server returns 'system' that's the
+  // explicit "no choice yet" sentinel and we fall through to the existing
+  // OS-preference detection.
   useEffect(() => {
-    let effectiveTheme = theme;
-    if (theme === "system") {
-      effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light";
-    }
-    console.log('[Theme] Applying theme:', { selectedTheme: theme, effectiveTheme });
-    document.documentElement.setAttribute("data-theme", effectiveTheme);
-    localStorage.setItem("theme", theme);
-  }, [theme]);
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/user/theme", {
+          headers: { "Authorization": `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        if (data && typeof data.theme === "string" &&
+            ["light", "dark", "system"].includes(data.theme)) {
+          setTheme(data.theme);
+        }
+      } catch (err) {
+        // Server unavailable — keep whatever localStorage seeded us with.
+        console.warn("[Theme] Hydrate failed; falling back to localStorage cache:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
 
+  // #876 — DOM `data-theme` application moved into <SubBrandThemeResolver>
+  // (below) so the effective-theme decision can consume `activeSubBrand` from
+  // <ActiveSubBrandProvider> and the tenant's per-sub-brand defaults. The
+  // user-pref localStorage cache + server-PUT roam stay here because they
+  // depend only on the explicit user choice (DD-5.2: user pref wins), NOT on
+  // the active sub-brand. PRE-#876 this effect also set the data-theme
+  // attribute; SubBrandThemeResolver now owns that write.
   useEffect(() => {
-    if (theme !== "system") return;
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (e) => {
-      const effectiveTheme = e.matches ? "dark" : "light";
-      document.documentElement.setAttribute("data-theme", effectiveTheme);
-    };
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, [theme]);
+    // localStorage stays as a synchronous boot cache so the next page-load
+    // doesn't flash the wrong theme before /api/user/theme resolves.
+    localStorage.setItem("theme", theme);
+    // #870 — also persist server-side so the choice roams. Fire-and-forget;
+    // localStorage already covered the local UX in the line above. Skip when
+    // we have no token (pre-login: theme picker only writes localStorage).
+    if (token) {
+      fetch("/api/user/theme", {
+        method: "PUT",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ theme }),
+      }).catch((err) => {
+        console.warn("[Theme] Server persist failed (localStorage retained):", err);
+      });
+    }
+  }, [theme, token]);
 
   // Apply vertical-specific theme overrides (e.g. wellness gets Dr. Haror palette)
   useEffect(() => {
@@ -512,6 +808,8 @@ export default function App() {
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
       <AuthContext.Provider value={authValue}>
         <NotifyProvider>
+          <ActiveSubBrandProvider>
+          <SubBrandThemeResolver />
           <BrowserRouter>
             <RouteErrorBoundary>
               <Suspense
@@ -546,6 +844,23 @@ export default function App() {
                   <Route
                     path="/book/:slug"
                     element={<WellnessPublicBooking />}
+                  />
+                  {/* PRD §4.7 — Travel Stall public Family Travel Quiz wizard.
+                      Unauthenticated; calls /api/travel/diagnostics/public/*.
+                      Tenant slug optional via ?tenant=<slug>; defaults to
+                      "travel-stall" inside the page. */}
+                  <Route
+                    path="/travel-stall/quiz"
+                    element={<TravelStallQuiz />}
+                  />
+                  {/* PRD §4.7 — Travel Stall trip booking page. Customer
+                      receives the shareToken URL from advisor (WhatsApp /
+                      email), reviews the itinerary, pays the 50% advance.
+                      Backed by /api/travel/itineraries/public/* (commit
+                      8abf6f3). */}
+                  <Route
+                    path="/trip/:shareToken"
+                    element={<TripBooking />}
                   />
                   {/* #208: wellness patient portal lives under /wellness/portal so it
                 inherits the wellness theme + namespace. The generic /portal route
@@ -601,9 +916,22 @@ export default function App() {
                     <Route
                       path="pipeline"
                       element={
-                        <GenericOnly>
-                          <Pipeline />
-                        </GenericOnly>
+                        /* #887/#897: Pipeline.jsx is a fully-built Kanban (~386
+                           lines, shipped April 2026, hardened across 8
+                           commits) that only depends on cross-vertical APIs
+                           (/api/deals, /api/contacts, /api/pipeline_stages) —
+                           none of which are vertical-gated. The original
+                           <GenericOnly> wrapper bounced travel-vertical
+                           tenants (and wellness) to their respective landing
+                           routes, which made the Pipeline sidebar link a dead
+                           link for Travel Stall + the other 3 travel sub-
+                           brands. Travel sidebar (Sidebar.jsx:1102) already
+                           exposes the Pipeline affordance; the guard removal
+                           lets it actually work. Wellness has its own clinic-
+                           focused landing and doesn't expose this link in its
+                           slim nav, so the guard removal is travel-only in
+                           practice. */
+                        <Pipeline />
                       }
                     />
                     <Route path="inbox" element={<Inbox />} />
@@ -619,7 +947,19 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
+                    {/* #898: /campaigns deep-link alias. The Email / SMS / Push
+                        Campaign list lives at /marketing as the default tab
+                        (Marketing.jsx:82 — useState('campaigns')). Surfaces the
+                        Campaign entity in the sidebar without duplicating the
+                        UI. Mirrors the #822 /reports/pnl redirect pattern. */}
+                    <Route path="campaigns" element={<Navigate to="/marketing" replace />} />
                     <Route path="reports" element={<Reports />} />
+                    {/* #822: /reports/pnl deep-link alias. The P&L + Attribution
+                        report lives at /wellness/reports as the default tab
+                        (Reports.jsx:37 — useState('pnl')). External bookmarks /
+                        CS-team shared URLs that omit the /wellness prefix used
+                        to 404. Mirrors the #183/#406 redirect-alias pattern. */}
+                    <Route path="reports/pnl" element={<Navigate to="/wellness/reports" replace />} />
                     <Route path="agent-reports" element={<AgentReports />} />
                     <Route path="workflows" element={<Workflows />} />
                     <Route path="developer" element={<Developer />} />
@@ -669,6 +1009,13 @@ export default function App() {
                     <Route path="contracts" element={<Contracts />} />
                     <Route path="estimates" element={<Estimates />} />
                     <Route path="invoices" element={<Invoices />} />
+                    {/* #886 / BUG-T24: /quotes used to 404 because no Route
+                        was registered. Full Quotes module is multi-day work
+                        (cluster B2 in docs/MANUAL_CODING_BACKLOG.md). Until
+                        then, render a coming-soon stub that points users at
+                        Estimates (the existing Draft→Accepted→Converted
+                        analog) and the Pipeline. */}
+                    <Route path="quotes" element={<QuotesComingSoon />} />
                     <Route path="tickets" element={<Tickets />} />
                     <Route path="tasks" element={<Tasks />} />
                     <Route path="lead-scoring" element={<LeadScoring />} />
@@ -690,6 +1037,9 @@ export default function App() {
                     <Route path="profile" element={<Profile />} />
                     <Route path="profile/2fa" element={<Profile2FA />} />
                     <Route path="notification-settings" element={<UserSettings />} />
+                    {/* #853 — full notifications inbox. Bell dropdown's
+                        "View all notifications →" footer deep-links here. */}
+                    <Route path="notifications" element={<NotificationsCenter />} />
                     {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
                         adminOnly visibility + the "System Admin Required"
                         toast text). Pre-fix, USER + MANAGER navigation to
@@ -705,6 +1055,18 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Audit Log requires admin access.">
                           <AuditLog />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Cron PRD Priority A #1 — LLM observability surface
+                        for the /api/admin/llm-spend endpoint (commit
+                        f5c9518). ADMIN-only mirrors the backend gate
+                        (verifyRole(['ADMIN']) on the route). */}
+                    <Route
+                      path="llm-spend"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="LLM Spend requires admin access.">
+                          <LlmSpend />
                         </RoleGuard>
                       }
                     />
@@ -737,6 +1099,110 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Field Permissions requires admin access.">
                           <FieldPermissions />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Per-tenant cap-override admin UI. ADMIN-only mirrors the
+                        backend gate (verifyRole(['ADMIN']) on PUT/DELETE in
+                        backend/routes/tenant_settings.js commit 1542b8e). */}
+                    <Route
+                      path="admin/tenant-settings"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Tenant Settings requires admin access.">
+                          <TenantSettings />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Per-sub-brand BrandKit admin UI. ADMIN-only mirrors the
+                        backend gate (verifyRole(['ADMIN']) on POST/PUT/DELETE in
+                        backend/routes/brand_kits.js commit e4783e0). */}
+                    <Route
+                      path="admin/brand-kits"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Brand Kits requires admin access.">
+                          <BrandKits />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* AdsGPT Reports admin UI. ADMIN + MANAGER (analytics —
+                        not tenant-config). Consumes /api/adsgpt (backend route
+                        commit 0d66a74). Cap-status endpoint is ADMIN-only on
+                        the backend; MANAGER gets a 403 there which is swallowed
+                        silently (no pill renders). Report fetch works for both
+                        roles. */}
+                    <Route
+                      path="admin/adsgpt-reports"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="AdsGPT Reports requires admin or manager access.">
+                          <AdsGPTReports />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* RateHawk hotel-search admin UI. ADMIN + MANAGER (operator
+                        search, not tenant-config). Consumes /api/ratehawk
+                        (backend route commit be67789). Cap-status endpoint is
+                        ADMIN-only on the backend; MANAGER gets a 403 there which
+                        is swallowed silently (no pill renders). Search works
+                        for both roles. Stub-mode banner surfaces until Q19
+                        (RateHawk partner onboarding) cred swap lands. */}
+                    <Route
+                      path="admin/ratehawk-search"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="RateHawk Search requires admin or manager access.">
+                          <RateHawkSearch />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Callified AI Calls admin UI. ADMIN + MANAGER (outbound
+                        calls reach real customers + cost real money). Consumes
+                        /api/callified (backend route commit cdad62d). Cap-status
+                        endpoint is ADMIN-only on the backend; MANAGER gets a 403
+                        there which is swallowed silently (no pill renders).
+                        Initiate + result-fetch work for both roles. Stub-mode
+                        banner surfaces until Q1 (Yasin's Callified.ai handover)
+                        cred swap lands. Per-tenant feature flag (DC-7) — page
+                        renders a "disabled" state when GET /enabled returns
+                        { enabled: false }. */}
+                    <Route
+                      path="admin/callified-calls"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Callified AI Calls requires admin or manager access.">
+                          <CallifiedCalls />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Booking.com / Expedia hotel-search admin UI. ADMIN +
+                        MANAGER (operator search, not tenant-config). Consumes
+                        /api/booking-expedia (backend route commit bb33cbe,
+                        tick #105). Cap-status endpoint is ADMIN-only on the
+                        backend; MANAGER gets a 403 there which is swallowed
+                        silently (no pill renders). Phase 2 deferred-by-design:
+                        Expedia provider returns 503 EXPEDIA_NOT_YET_ENABLED
+                        until DC-4 flips the demand threshold + Q11 vendor
+                        handover lands. Booking.com (Phase 1) is itself
+                        stub-mode pending Q-cluster B6/C cred swap. The page
+                        renders a Phase-2-pending banner by default with a
+                        "Show form anyway" toggle for QA. */}
+                    <Route
+                      path="admin/booking-expedia-search"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Booking/Expedia Search requires admin or manager access.">
+                          <BookingExpediaSearch />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Wallet bonus rule CRUD admin UI. ADMIN-only mirrors the
+                        backend RBAC matrix from PRD_WALLET_TOPUP §3.9
+                        (MANAGER gets read on rules, ADMIN gets CRUD). Slice 5
+                        PARTIAL — frontend scaffolds ahead of Agent B's
+                        /api/wallet/rules route which lands next tick at slice
+                        3. Page handles route-not-deployed gracefully via 404
+                        → empty state + banner. */}
+                    <Route
+                      path="admin/wallet-rules"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} feature="Wallet Bonus Rules">
+                          <WalletRules />
                         </RoleGuard>
                       }
                     />
@@ -823,6 +1289,119 @@ export default function App() {
                   tenants get bounced to their themed calendar; everyone else sees
                   the calendar-sync page (which is the closest generic equivalent). */}
                     <Route path="calendar" element={<CalendarRedirect />} />
+                    {/* Travel vertical — Day 1 scaffolding. Gated by TravelOnly
+                  so generic + wellness tenants get bounced to /dashboard
+                  rather than rendering empty travel UI. Phase 1 sub-pages
+                  (diagnostics, itineraries, trips, visa, suppliers) mount
+                  under /travel/* per docs/TRAVEL_CRM_PRD.md §7. */}
+              <Route path="travel" element={<TravelOnly><TravelDashboard /></TravelOnly>} />
+              <Route path="travel/diagnostics" element={<TravelOnly><TravelDiagnostics /></TravelOnly>} />
+              <Route path="travel/diagnostics/new" element={<TravelOnly><TravelDiagnosticWizard /></TravelOnly>} />
+              <Route path="travel/diagnostics/banks/new" element={<TravelOnly><TravelDiagnosticBuilder /></TravelOnly>} />
+              <Route path="travel/diagnostics/:id" element={<TravelOnly><TravelDiagnosticDetail /></TravelOnly>} />
+              <Route path="travel/itineraries" element={<TravelOnly><TravelItineraries /></TravelOnly>} />
+              <Route path="travel/trips" element={<TravelOnly><TravelTrips /></TravelOnly>} />
+              <Route path="travel/trips/:id" element={<TravelOnly><TravelTripDetail /></TravelOnly>} />
+              {/* #912 — canonical kebab-case path matches sibling travel routes
+                  (cost-master, pricing-rules, religious-packets). The unhyphenated
+                  alias stays registered so existing bookmarks / sidebar links keep working. */}
+              <Route path="travel/web-checkins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
+              <Route path="travel/webcheckins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
+              <Route path="travel/cost-master" element={<TravelOnly><TravelCostMaster /></TravelOnly>} />
+              <Route path="travel/leads" element={<TravelOnly><TravelLeads /></TravelOnly>} />
+              <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />
+              <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />
+              <Route path="travel/reports" element={<TravelOnly><TravelReports /></TravelOnly>} />
+              <Route path="travel/suppliers" element={<TravelOnly><TravelSuppliers /></TravelOnly>} />
+              <Route path="travel/suppliers-admin" element={<TravelOnly><TravelSuppliersAdmin /></TravelOnly>} />
+              <Route path="travel/quotes-admin" element={<TravelOnly><TravelQuotesAdmin /></TravelOnly>} />
+              {/* Arc 2 #900 slice 2 — Quote Builder (line-items composition).
+                  Optional :id param (`/builder` = new; `/builder/:id` = edit).
+                  RoleGuard allow=[ADMIN,MANAGER] mirrors backend write RBAC. */}
+              <Route path="travel/quotes/builder" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
+              <Route path="travel/quotes/builder/:id" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
+              <Route path="travel/invoices-admin" element={<TravelOnly><TravelInvoicesAdmin /></TravelOnly>} />
+              {/* Arc 2 #901 slice 7 — cross-invoice milestone dashboard.
+                  Operator-facing aggregate of upcoming/overdue payment
+                  milestones across all travel invoices. */}
+              <Route path="travel/milestones" element={<TravelOnly><TravelMilestoneTracker /></TravelOnly>} />
+              {/* Arc 2 #903 — cross-supplier A/P review (all payables across
+                  all suppliers in one table, distinct from per-supplier expand
+                  on SuppliersAdmin). Placeholder client-side fan-out fetch
+                  until slice 6 consolidating endpoint ships. */}
+              <Route path="travel/payables" element={<TravelOnly><TravelPayables /></TravelOnly>} />
+              {/* #905 slice 3 — TravelCommissionProfile CRUD admin. Backend
+                  GET is verifyToken-only (any role can view); write gates are
+                  enforced client-side via canWrite (ADMIN/MANAGER) and the
+                  Delete button (ADMIN-only) inside the page. No RoleGuard
+                  wrap mirrors the MilestoneTracker / Payables pattern. */}
+              <Route path="travel/commission-profiles" element={<TravelOnly><TravelCommissionProfilesAdmin /></TravelOnly>} />
+              {/* #908 slice 2 — FlyerTemplates list page. Backend GET is
+                  verifyToken-only; write gates (canWrite) live inside the
+                  page. Same no-RoleGuard convention as the other view-by-
+                  default travel admin pages. */}
+              <Route path="travel/flyer-templates" element={<TravelOnly><TravelFlyerTemplates /></TravelOnly>} />
+              <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
+              <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
+              <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />
+              <Route path="travel/leads/:contactId" element={<TravelOnly><TravelLeadDetail /></TravelOnly>} />
+              {/* Arc 2 #904 slice — InboundLeads admin (STUB client-side
+                  filter pending dedicated GET endpoint). Operator surface
+                  for inbound webhook-ingested leads (Voyagr / web form /
+                  WhatsApp / ads / adsgpt / metaads / manual). No RoleGuard
+                  wrap — page is view-by-default and Convert-to-Lead routes
+                  to /leads/:contactId which carries its own gates. */}
+              <Route path="travel/inbound-leads" element={<TravelOnly><TravelInboundLeads /></TravelOnly>} />
+              {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells.
+                  Real implementation gated on product calls in
+                  docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}
+              <Route path="travel/visa" element={<TravelOnly><TravelVisaDashboard /></TravelOnly>} />
+              <Route path="travel/visa/applications" element={<TravelOnly><TravelVisaApplications /></TravelOnly>} />
+              {/* Phase 3 FR-4 advisor dashboard — per-application drilldown
+                  from the Applications list. SHELL only; backend GET
+                  /api/travel/visa/applications/:id (PRD §3 FR-5) pending. */}
+              <Route path="travel/visa/applications/:applicationId" element={<TravelOnly><TravelVisaAdvisorDashboard /></TravelOnly>} />
+              <Route path="travel/visa/checklists" element={<TravelOnly><TravelVisaChecklists /></TravelOnly>} />
+              {/* Phase 3 FR-7 analytics SHELL (V16-V18) — backend
+                  /api/travel/reports/visa wiring pending (cluster B3). */}
+              <Route path="travel/visa/reports" element={<TravelOnly><TravelVisaReports /></TravelOnly>} />
+              {/* Phase 3 Visa Sure embassy-rules admin (tick #178) — consumes
+                  /api/embassy-rules CRUD shipped tick #175 (commit 05587ac7).
+                  ADMIN-only per backend POST/PUT/DELETE gates. */}
+              <Route path="travel/visa/embassy-rules" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN"]} message="Embassy Rules admin requires admin access.">
+                    <TravelVisaEmbassyRulesAdmin />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
+              {/* Phase 1 TMC curriculum-mappings admin (tick #181) — consumes
+                  /api/travel-curriculum CRUD shipped tick #180 (commit 6d5919a8).
+                  ADMIN-only per backend POST/PUT/DELETE gates. TMC vertical
+                  (school-trip pitch deck), NOT under Visa Sure. */}
+              <Route path="travel/curriculum-mappings" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN"]} message="Curriculum Mappings admin requires admin access.">
+                    <TravelCurriculumAdmin />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
+              {/* Phase 2 SHELL for #908 Marketing Flyer Studio (tick #186) —
+                  designed in docs/PRD_TRAVEL_MARKETING_FLYER.md. Non-
+                  functional scaffold; real impl per PRD §8 build order
+                  (canvas editor, asset library, AI copy/image, PDF/PNG
+                  export, WhatsApp share). MANAGER+ per operator-facing
+                  marketing surface. */}
+              <Route path="travel/marketing/flyer-studio" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} feature="Marketing Flyer Studio">
+                    <TravelMarketingFlyerStudio />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
+              {/* Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
+                  Each card CTAs to an existing route filtered by ?subBrand=travelstall. */}
+              <Route path="travel-stall" element={<TravelOnly><TravelStallDashboard /></TravelOnly>} />
                     {/* Wellness vertical — gated by WellnessOnly so generic-CRM
                   tenants can't surface wellness pages by URL (#325). */}
               <Route path="wellness" element={<WellnessOnly><WellnessOwnerOnly><WellnessOwnerDashboard /></WellnessOwnerOnly></WellnessOnly>} />
@@ -901,6 +1480,13 @@ export default function App() {
                 </WellnessOnly>
               } />
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
+              {/* #832 — embedded Callified panel. Replaces the old window.open
+                  external-tab launch from the sidebar + Owner Dashboard card.
+                  Same SSO contract (signed JWT via /api/integrations/callified/
+                  auth-url); the page just renders that URL in an iframe so
+                  Callified lives inside the CRM shell like Unified Inbox /
+                  WhatsApp Threads do. */}
+              <Route path="wellness/callified" element={<WellnessOnly><WellnessCallifiedEmbed /></WellnessOnly>} />
               {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
               <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
               {/* Zylu-Gap #800 — Blocked Numbers admin (manages /opt-outs).
@@ -935,6 +1521,14 @@ export default function App() {
                 <WellnessOnly>
                   <RoleGuard allow={["ADMIN", "MANAGER"]} message="Product categories require manager access.">
                     <WellnessProductCategories />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              {/* Zylu-Gap #933 — Products admin list (precursor for #816). */}
+              <Route path="wellness/products" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Products require manager access.">
+                    <WellnessProducts />
                   </RoleGuard>
                 </WellnessOnly>
               } />
@@ -1005,6 +1599,13 @@ export default function App() {
                   </RoleGuard>
                 </WellnessOnly>
               } />
+              {/* #823: /pos direct-URL alias. Bookmarks, external deep-links,
+                  and operators who type the URL bare were hitting the 404
+                  catch-all because the canonical route is /wellness/pos.
+                  WellnessOnly on the canonical route still rejects non-
+                  wellness tenants downstream. Mirrors the #309/#305 alias
+                  patterns for /wellness/invoices and /wellness/inventory. */}
+              <Route path="pos" element={<Navigate to="/wellness/pos" replace />} />
               {/* Zylu-Gap #770/#779/#780/#781 — Cash Register admin page.
                   Lists registers, drills into per-register shift detail
                   (status header + open/close/deposit/withdraw + transactions).
@@ -1037,6 +1638,7 @@ export default function App() {
               </Suspense>
             </RouteErrorBoundary>
           </BrowserRouter>
+          </ActiveSubBrandProvider>
         </NotifyProvider>
       </AuthContext.Provider>
     </ThemeContext.Provider>

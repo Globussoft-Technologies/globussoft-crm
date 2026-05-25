@@ -308,8 +308,10 @@ describe('<PointOfSale /> — open-shift state', () => {
     await addLine({ refId: 100, name: 'Botox', quantity: 1, unitPrice: 500 });
     await waitFor(() => expect(screen.getByText('Botox')).toBeInTheDocument());
 
-    // The trash button has an aria-label="Remove line".
-    fireEvent.click(screen.getByRole('button', { name: /Remove line/i }));
+    // Per source (PointOfSale.jsx:1439) the trash button's aria-label is
+    // `Remove ${l.name}` — e.g. "Remove Botox" — not the generic "Remove
+    // line" the original test assumed. Match the dynamic shape.
+    fireEvent.click(screen.getByRole('button', { name: /^Remove Botox/i }));
 
     await waitFor(() => expect(screen.queryByText('Botox')).not.toBeInTheDocument());
     expect(screen.getByText(/No lines yet/i)).toBeInTheDocument();

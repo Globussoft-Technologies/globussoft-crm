@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, Copy, Edit, Trash2, Clock, Check, X as XIcon, Link as LinkIcon, Image, Upload, GripVertical, Phone, Mail, Code2 } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import { Calendar, Plus, Copy, Edit, Trash2, Clock, Check, X as XIcon, Link as LinkIcon, Image, Upload, GripVertical, Phone, Mail, Code2, Download } from 'lucide-react';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
 const DAYS = [
@@ -60,6 +60,39 @@ export default function BookingPages() {
   const [selected, setSelected] = useState(null); // page object opened in editor
   const [bookings, setBookings] = useState([]);
   const [copied, setCopied] = useState(null);
+  // #816 — Cross-page bookings CSV export. Backend at
+  // /api/csv/bookings/export.csv (server.js:679). Read-only — export-only
+  // per csv_io.js (no bookings import; bookings are created via the public
+  // page submission flow, not bulk uploads).
+  const [csvBusy, setCsvBusy] = useState(false);
+
+  // #816 — Download all bookings across every booking page as CSV. fetch+blob
+  // because plain <a href> can't set the Authorization header. Mirrors the
+  // Services.jsx pattern landed at 41d15f8.
+  const exportBookingsCsv = async () => {
+    setCsvBusy(true);
+    try {
+      const token = getAuthToken();
+      const res = await fetch('/api/csv/bookings/export.csv', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bookings-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify.success('Bookings exported.');
+    } catch (e) {
+      notify.error(e.message || 'CSV export failed.');
+    } finally {
+      setCsvBusy(false);
+    }
+  };
 
   const load = () => {
     setLoading(true);
@@ -123,13 +156,27 @@ export default function BookingPages() {
             </p>
           </div>
         </div>
-        <button
-          className="btn-primary"
-          onClick={() => setShowCreate(true)}
-          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}
-        >
-          <Plus size={18} /> Create Page
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {/* #816 — Cross-page bookings CSV export. Read-only — no Import
+              counterpart because bookings are created via the public page
+              submission flow, not bulk uploads (csv_io.js comment line 11). */}
+          <button
+            type="button"
+            onClick={exportBookingsCsv}
+            disabled={csvBusy}
+            title="Download every booking across all booking pages as CSV"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy ? 'not-allowed' : 'pointer', opacity: csvBusy ? 0.6 : 1 }}
+          >
+            <Download size={16} /> Export Bookings CSV
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => setShowCreate(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}
+          >
+            <Plus size={18} /> Create Page
+          </button>
+        </div>
       </header>
 
       {loading ? (

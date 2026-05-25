@@ -206,3 +206,38 @@ describe('Pipeline kanban stage grouping (#575)', () => {
     expect(screen.getAllByText('Mid-funnel Deal')).toHaveLength(1);
   });
 });
+
+// #897 (PRD_TRAVEL_PIPELINE_KANBAN FR-5) — sub-brand filter is only
+// rendered for Travel-vertical tenants. Pipeline.jsx reads
+// `user?.tenant?.vertical` from AuthContext; in test renders without
+// an AuthContext.Provider, `useContext(AuthContext) || {}` returns
+// `{}` so `isTravelTenant` is false and the dropdown stays hidden.
+// This is the same shape as production behavior for generic/wellness
+// tenants — pinning that the filter doesn't leak across verticals.
+describe('Pipeline sub-brand filter (#897)', () => {
+  it('does NOT render sub-brand selector for non-Travel tenants (default test context)', async () => {
+    mockApi({
+      stages: [
+        { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+      ],
+      deals: [
+        { id: 101, title: 'Generic Deal', amount: 1000, probability: 30, stage: 'lead' },
+      ],
+    });
+
+    renderPipeline();
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    // The aria-labeled sub-brand selector must be absent for non-Travel
+    // tenants. (Travel-vertical AuthContext-mocked rendering would
+    // require provider wrap — separate test scope.)
+    expect(screen.queryByLabelText('Filter by sub-brand')).not.toBeInTheDocument();
+
+    // Header still renders Sales Pipeline + Add Deal button (smoke).
+    expect(screen.getByText('Sales Pipeline', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('Add Deal')).toBeInTheDocument();
+  });
+});

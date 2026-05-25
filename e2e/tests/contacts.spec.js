@@ -129,8 +129,12 @@ test.describe('Contacts — Create contact', () => {
     // Modal should close
     await page.waitForTimeout(1000);
 
-    // New contact name should appear in the list
-    await expect(page.locator(`text=${TEST_CONTACT.name}`)).toBeVisible({ timeout: 8000 });
+    // New contact name should appear in the list. 8s was tight at 4 shards
+    // and times out under 8-shard demo contention — the create call + redirect-
+    // back-to-list + render fan-out occasionally crosses 8s when the demo is
+    // serving 16+ concurrent workers. 30s preserves the assertion semantics
+    // (the contact MUST appear in the list) without papering over a real bug.
+    await expect(page.locator(`text=${TEST_CONTACT.name}`)).toBeVisible({ timeout: 30000 });
 
     await page.screenshot({ path: 'playwright-results/contacts-created.png' });
   });

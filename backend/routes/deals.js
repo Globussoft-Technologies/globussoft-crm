@@ -38,13 +38,16 @@ async function audit(action, entityId, userId, tenantId, details) {
 // filtered (see follow-up note at end of file).
 router.get("/", async (req, res) => {
   try {
-    const { stage, ownerId, pipelineId, contactId, from, to } = req.query;
+    const { stage, ownerId, pipelineId, contactId, subBrand, from, to } = req.query;
     const where = { tenantId: req.user.tenantId };
 
     if (stage) where.stage = stage;
     if (ownerId) where.ownerId = parseInt(ownerId);
     if (pipelineId) where.pipelineId = parseInt(pipelineId);
     if (contactId) where.contactId = parseInt(contactId);
+    // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
+    // missing column on legacy tenants — Prisma matches by exact value.
+    if (subBrand) where.subBrand = String(subBrand);
     if (from || to) {
       where.createdAt = {};
       if (from) where.createdAt.gte = new Date(from);
@@ -227,7 +230,7 @@ router.post("/", async (req, res) => {
     // #464: strip write-restricted fields BEFORE destructuring so a USER
     // who has canWrite=false on Deal.amount can't push a value through.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency } = req.body;
+    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, subBrand } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
     // #162: validate amount, probability, stage so bad inputs return 400.
     const inputErr = validateDealInput(req.body, { isUpdate: false });
@@ -244,6 +247,7 @@ router.post("/", async (req, res) => {
     if (contactId) data.contactId = parseInt(contactId);
     if (pipelineId) data.pipelineId = parseInt(pipelineId);
     if (expectedClose) data.expectedClose = new Date(expectedClose);
+    if (subBrand) data.subBrand = String(subBrand);
     if (currency) {
       data.currency = currency;
     } else {

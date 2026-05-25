@@ -6,8 +6,8 @@
  * logic on row actions, Mark Paid + Void destructive flows, and the
  * create-invoice form POST shape.
  *
- *   1. Page renders heading "Invoices" + "Create Invoice" form + "Invoice
- *      Ledger" table.
+ *   1. Page renders heading "Invoices" + Create Invoice header CTA +
+ *      "Invoice Ledger" table.
  *   2. Renders one row per /api/billing entry with invoiceNum, amount
  *      (formatted), contact name, and status badge.
  *   3. Empty state: "No invoices yet. Create one to get started." renders
@@ -24,6 +24,14 @@
  *   8. The Outstanding pill renders a currency-formatted total from
  *      formatMoney() — wellness/INR tenants see ₹, generic/USD see $.
  *      Pinned at the formatMoney mock layer so the test is currency-agnostic.
+ *   9. (#894) "Create Invoice" header CTA is rendered; clicking it reveals
+ *      the form fields in a drawer (form is NOT inline-visible before).
+ *
+ * #894 — Create Invoice is no longer an always-visible inline form; it
+ * lives inside a drawer that opens via the "Create Invoice" header CTA.
+ * Every test that interacts with the form first calls `openDrawer()` to
+ * click the CTA and reveal the inputs. The fields + submit logic are
+ * unchanged; only the trigger surface moved.
  *
  * Drift note: invoice status flips through Pay Now/Razorpay (gateway flow)
  * are covered server-side by payments-api specs. This file pins the
@@ -81,6 +89,15 @@ function renderInvoices(user = ADMIN_USER) {
       </AuthContext.Provider>
     </MemoryRouter>
   );
+}
+
+// #894 — Create Invoice lives in a drawer now. Click the header CTA to
+// mount the form before any field interaction. The CTA has aria-label
+// "Create a new invoice" (which becomes the accessible-name); the visible
+// text is "Create Invoice". Match on the aria-label since it takes
+// precedence over inner text for accessible-name lookup.
+function openDrawer() {
+  fireEvent.click(screen.getByRole('button', { name: /Create a new invoice/i }));
 }
 
 const sampleInvoices = [
@@ -153,13 +170,19 @@ describe('<Invoices /> — page surface', () => {
     fetchApiMock.mockImplementation(defaultFetchMock);
   });
 
-  it('renders the heading + Create Invoice form + Invoice Ledger', async () => {
+  it('renders the heading + Create Invoice CTA + Invoice Ledger', async () => {
     renderInvoices();
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /^Invoices$/i })).toBeInTheDocument();
     });
-    expect(screen.getByText(/Create Invoice/i)).toBeInTheDocument();
+    // #894 — Create Invoice is a header CTA now. The visible text "Create
+    // Invoice" lives on the CTA button; the form (and its "Issue Invoice"
+    // submit) is only mounted after clicking.
+    expect(screen.getByRole('button', { name: /Create a new invoice/i })).toBeInTheDocument();
     expect(screen.getByText(/Invoice Ledger/i)).toBeInTheDocument();
+    // "Issue Invoice" is NOT in the DOM until the drawer opens.
+    expect(screen.queryByRole('button', { name: /Issue Invoice/i })).toBeNull();
+    openDrawer();
     expect(screen.getByRole('button', { name: /Issue Invoice/i })).toBeInTheDocument();
   });
 
@@ -295,6 +318,9 @@ describe('<Invoices /> — page surface', () => {
       return defaultFetchMock(url, opts);
     });
 
+    // #894 — open the Create drawer before interacting with form fields.
+    openDrawer();
+
     // Select the contact via the labeled Contact select.
     const contactSelect = screen.getByLabelText(/^Contact$/i);
     fireEvent.change(contactSelect, { target: { value: '1' } });
@@ -327,5 +353,31 @@ describe('<Invoices /> — page surface', () => {
     // Outstanding = UNPAID (1234.56) — PAID + VOIDED are excluded.
     // formatMoney mock returns `$<value>`, so the pill text contains "$1234.56".
     expect(screen.getByText(/Outstanding:\s*\$1234\.56/i)).toBeInTheDocument();
+  });
+
+  // #894 — pin the CTA + drawer surface. Pre-#894 the form was always
+  // visible as a left-column card above the ledger; post-#894 it lives
+  // inside a drawer that opens via the header CTA. Without this test, a
+  // future change that accidentally re-renders the form inline would not
+  // red the suite.
+  it('renders the "Create Invoice" CTA and the form is hidden until clicked', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+    // CTA exists in the header (aria-label "Create a new invoice").
+    expect(screen.getByRole('button', { name: /Create a new invoice/i })).toBeInTheDocument();
+
+    // The form fields are NOT mounted until the CTA opens the drawer.
+    expect(screen.queryByLabelText(/^Contact$/i)).toBeNull();
+    expect(screen.queryByPlaceholderText('0.00')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Issue Invoice/i })).toBeNull();
+
+    // Click the CTA → drawer opens → fields become reachable.
+    openDrawer();
+    expect(screen.getByLabelText(/^Contact$/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('0.00')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Issue Invoice/i })).toBeInTheDocument();
+    // Close button is rendered inside the drawer.
+    expect(screen.getByRole('button', { name: /^Close$/i })).toBeInTheDocument();
   });
 });

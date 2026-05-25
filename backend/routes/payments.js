@@ -232,16 +232,47 @@ router.post(
 // AUTHENTICATED ENDPOINTS
 // ─────────────────────────────────────────────────────────────────
 
-// GET / — list payments for tenant (filter status/gateway/invoiceId)
+// GET / — list payments for tenant (filter status/gateway/invoiceId/from/to)
+//
+// #846 — date-range filter. Accepts `from` and `to` as YYYY-MM-DD (or any
+// Date-parseable string). Both are optional + independent (caller may pass
+// either, neither, or both). Returns 400 with code INVALID_DATE_RANGE when
+// either value is unparseable. Mirrors the canonical helper shape used by
+// billing.js's accounting/GSTR exports so accountants reconciling across
+// the two pages get the same semantics. When `to` is a date-only string
+// (no time portion), it's pushed to end-of-day so the range is inclusive
+// of that calendar date — matches user expectation for the UI date picker.
 router.get("/", async (req, res) => {
   try {
     const tenantId = tenantOf(req);
-    const { status, gateway, invoiceId } = req.query;
+    const { status, gateway, invoiceId, from, to } = req.query;
 
     const where = { tenantId };
     if (status) where.status = String(status).toUpperCase();
     if (gateway) where.gateway = String(gateway).toLowerCase();
     if (invoiceId) where.invoiceId = parseInt(invoiceId);
+
+    if (from || to) {
+      const createdAt = {};
+      if (from) {
+        const fromDate = new Date(String(from));
+        if (!Number.isFinite(fromDate.getTime())) {
+          return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE_RANGE" });
+        }
+        createdAt.gte = fromDate;
+      }
+      if (to) {
+        const toDate = new Date(String(to));
+        if (!Number.isFinite(toDate.getTime())) {
+          return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE_RANGE" });
+        }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(String(to))) {
+          toDate.setHours(23, 59, 59, 999);
+        }
+        createdAt.lte = toDate;
+      }
+      where.createdAt = createdAt;
+    }
 
     const payments = await prisma.payment.findMany({
       where,

@@ -40,6 +40,11 @@ const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extr
 // telecaller/helper) can ring up sales + manage their own shift but not
 // configure registers / refund.
 const adminGate = verifyWellnessRole(["admin", "manager"]);
+// D17 slice 7 (PRD_POS_NEW_SALE §3.9 + DD-5.7 round-2 RESOLVED 2026-05-25
+// STRICT mode) — void + refund must be ADMIN-only (not manager). Stricter
+// than adminGate above; gives the cashier/manager no escape hatch from the
+// audited destruction of a completed sale + its wallet redemption.
+const strictAdminGate = verifyWellnessRole(["admin"]);
 const cashierGate = verifyWellnessRole([
   "admin",
   "manager",
@@ -656,6 +661,80 @@ router.get("/shifts/:id/petty-cash", cashierGate, async (req, res) => {
   }
 });
 
+// ── POS sale context (D17 Arc 1 slice 2) ─────────────────────────────
+//
+// GET /api/pos/sale-context/:patientId — patient-scoped enrichment for the
+// POS "New Sale" form. The cashier picks a patient and the form needs:
+//
+//   - walletBalanceCents — drives the Wallet payment-method affordance in
+//     the payment splitter (PRD_POS_NEW_SALE §3.5). Same shape as
+//     GET /api/wallet/:patientId/balance (Math.round(balance*100), with
+//     a defensive Math.max(0, ...) since Wallet.balance is constrained
+//     > 0 by topup/redeem logic but better-safe-than-sorry at the wire).
+//   - currency — patient's wallet currency (defaults to INR).
+//   - activeMemberships — patient's active Membership rows for "redeem
+//     against credits" affordance. Stubbed to `[]` here; slice 3 will
+//     fill from prisma.membership.findMany once the Membership read
+//     contract is agreed.
+//   - pendingBookings — upcoming Booking rows that auto-bill at the
+//     register. Stubbed to `[]` here; subsequent slice will populate.
+//
+// Back-compat note: Wallet balance lives on its own endpoint already
+// (fdb0ec5c); this aggregator just saves the POS page one round-trip on
+// patient-pick. Stubbed sister arrays are intentionally empty arrays
+// (not omitted) so the frontend can render the empty state without a
+// shape-check.
+//
+// Same cashierGate as the rest of pos.js — the cashier needs the
+// affordance, telecallers don't ring up sales but DO see context on
+// outbound calls when transferring to billing.
+
+router.get("/sale-context/:patientId", cashierGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.patientId, 10);
+    if (!Number.isFinite(patientId) || patientId <= 0) {
+      return res.status(400).json({ error: "patientId must be a positive integer", code: "INVALID_PATIENT_ID" });
+    }
+
+    // Tenant-scoped patient existence check first — cross-tenant probe
+    // returns 404 (never 403) so we never reveal whether a row exists
+    // in another tenant. Same pattern as routes/wallet.js:108.
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) {
+      return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+    }
+
+    const wallet = await prisma.wallet.findFirst({
+      where: tenantWhere(req, { patientId }),
+      select: { balance: true, currency: true },
+    });
+    // Defensive Math.max(0, ...) — Wallet.balance is constrained > 0 by
+    // topup/redeem logic, but a corrupt row should never surface a
+    // negative number to the POS form (would imply "free money" to the
+    // cashier reading the affordance).
+    const walletBalanceCents = wallet
+      ? Math.max(0, Math.round(wallet.balance * 100))
+      : 0;
+    const currency = wallet?.currency || "INR";
+
+    return res.json({
+      patientId,
+      walletBalanceCents,
+      currency,
+      // Sister fields stubbed empty for slice-2; filled by subsequent
+      // slices once Membership / Booking read contracts agreed.
+      activeMemberships: [],
+      pendingBookings: [],
+    });
+  } catch (e) {
+    console.error("[pos] sale-context error:", e.message);
+    return res.status(500).json({ error: "Failed to load sale context" });
+  }
+});
+
 // ── Sale create / list / get / refund ────────────────────────────────
 
 const VALID_LINE_TYPES = ["SERVICE", "PRODUCT", "MEMBERSHIP", "GIFTCARD", "PACKAGE"];
@@ -1032,47 +1111,995 @@ router.get("/sales/:id", cashierGate, async (req, res) => {
   }
 });
 
-router.post("/sales/:id/refund", adminGate, async (req, res) => {
+// ── Atomic sale finalize (D17 Arc 1 slices 5 + 8) ────────────────────
+//
+// POST /api/pos/sales/finalize — PRD_POS_NEW_SALE §3.6 atomicity hardening
+// (the "wallet debit moves INSIDE the Sale transaction" fix per the PRD's
+// "Atomicity ambiguity" risk callout). Distinct from POST /sales above —
+// /sales is the legacy single-tender endpoint with float-rupee inputs
+// (paidAmount / discountTotal / taxTotal) that the existing UI consumes;
+// /finalize is the new cents-native endpoint built for the PRD §3.5
+// payment-splitter UI which natively works in integer cents to avoid
+// float-rounding drift on split tenders.
+//
+// Body shape:
+//   patientId       int          required — must belong to tenant
+//   items           array(≥1)    {type:'service'|'product', refId, qty, unitPriceCents}
+//   payments        array(≥1)    {method:'cash'|'card'|'upi'|'wallet'|'giftcard', amountCents}
+//   discountCents   int (≥0)     optional, default 0
+//   taxCents        int (≥0)     optional, default 0
+//
+// Computed:
+//   itemsTotal      = sum(qty × unitPriceCents)
+//   grandTotal      = itemsTotal − discountCents + taxCents
+//   paymentsTotal   = sum(payments[].amountCents)
+//   MUST hold: |paymentsTotal − grandTotal| ≤ 1 (1-cent rounding tolerance)
+//
+// Wallet handling — for ANY payment line with method='wallet':
+//   Inline FIFO+expiry-order debit (mirrors routes/wallet.js POST /redeem
+//   logic at L595-L692) inside the same prisma.$transaction so a wallet
+//   shortfall rolls back the Sale/Invoice/Payment rows along with the
+//   batch updates. PRINCIPAL batches first (FIFO — oldest createdAt
+//   wins), BONUS batches second (soonest expiresAt wins) — the
+//   customer-fair priority pinned by DD-5.3 of PRD_WALLET_TOPUP.
+//
+// Atomicity guarantee: Sale + SaleLineItem + Invoice + WalletCreditBatch
+// updates + WalletTransaction + Wallet.balance + audit-row data
+// snapshot all live inside ONE prisma.$transaction. A throw anywhere
+// (insufficient balance, DB hiccup, invariant violation) rolls back
+// EVERY row — no Sale persists if wallet redemption fails halfway.
+// The audit.writeAudit call sits OUTSIDE the transaction (audit is
+// hash-chained — see lib/audit.js — and a failed audit must NOT roll
+// back a legitimate sale) but receives a snapshot computed inside
+// the tx so the audit payload reflects the committed reality.
+//
+// Error codes:
+//   400 INVALID_PAYLOAD            body is not an object
+//   400 INVALID_PATIENT_ID         patientId missing / non-positive
+//   400 INVALID_ITEMS              items missing / not array / empty
+//   400 INVALID_ITEM               one item row malformed (bad type/refId/qty/unitPriceCents)
+//   400 INVALID_PAYMENTS           payments missing / not array / empty
+//   400 INVALID_PAYMENT            one payment row malformed (bad method/amountCents)
+//   400 INVALID_DISCOUNT           discountCents negative / non-integer
+//   400 INVALID_TAX                taxCents negative / non-integer
+//   400 MISMATCHED_TOTAL           |paymentsTotal − grandTotal| > 1 cent
+//   400 INSUFFICIENT_WALLET_BALANCE  wallet payment > active batch sum
+//   404 PATIENT_NOT_FOUND          patient missing in caller's tenant
+//   500 SALE_FINALIZE_FAILED       unexpected transaction failure
+//
+// Response: { success, saleId, invoiceId, grandTotalCents, walletDebitedCents, status }
+//
+// RBAC: cashierGate (admin/manager/doctor/professional/telecaller/helper) —
+// same surface as POST /sales above. Telecallers cannot finalize in
+// practice (they don't sit at the till) but the route doesn't enforce
+// that — the calendar's POS New Sale page is gated by frontend route +
+// the cashier needs an OPEN shift on the existing POST /sales path.
+// This new endpoint deliberately does NOT require an open shift because
+// the payment-splitter PRD §3.6 leaves shift-binding for a later slice;
+// downstream reconcile/refund flows surface shift gaps if any.
+
+const VALID_FINALIZE_ITEM_TYPES = new Set(["service", "product"]);
+const VALID_FINALIZE_PAYMENT_METHODS = new Set([
+  "cash",
+  "card",
+  "upi",
+  "wallet",
+  "giftcard",
+]);
+// Map slice-spec lowercase item type → SaleLineItem.lineType column
+// (existing enum-string values are uppercase per the legacy POST /sales).
+const FINALIZE_ITEM_TYPE_TO_LINE_TYPE = {
+  service: "SERVICE",
+  product: "PRODUCT",
+};
+
+router.post("/sales/finalize", cashierGate, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+      return res.status(400).json({ error: "Body must be an object", code: "INVALID_PAYLOAD" });
     }
-    const sale = await prisma.sale.findFirst({ where: tenantWhere(req, { id }) });
-    if (!sale) return res.status(404).json({ error: "Sale not found" });
-    if (sale.status === "REFUNDED") {
-      return res.status(409).json({
-        error: "Sale already refunded",
-        code: "SALE_ALREADY_REFUNDED",
+    const { patientId, items, payments, discountCents, taxCents } = req.body;
+
+    // ── Validate patientId ──
+    const pid = parseInt(patientId, 10);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      return res.status(400).json({
+        error: "patientId must be a positive integer",
+        code: "INVALID_PATIENT_ID",
       });
     }
-    if (sale.status === "CANCELLED") {
-      return res.status(409).json({
-        error: "Cannot refund a cancelled sale",
-        code: "SALE_CANCELLED",
+
+    // ── Validate items array ──
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        error: "items must be a non-empty array",
+        code: "INVALID_ITEMS",
       });
     }
-    const { reason } = req.body;
-    if (!reason || typeof reason !== "string" || !reason.trim()) {
-      return res.status(400).json({ error: "reason is required", code: "REASON_REQUIRED" });
+    if (items.length > 200) {
+      return res.status(400).json({
+        error: "items exceeds 200 rows",
+        code: "INVALID_ITEMS",
+      });
     }
-    const refunded = await prisma.sale.update({
-      where: { id },
-      data: {
-        status: "REFUNDED",
-        refundedAt: new Date(),
-        refundReason: reason.trim().slice(0, 1000),
+    const normalisedItems = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!it || typeof it !== "object") {
+        return res.status(400).json({
+          error: `items[${i}] must be an object`,
+          code: "INVALID_ITEM",
+        });
+      }
+      const type = typeof it.type === "string" ? it.type.toLowerCase() : "";
+      if (!VALID_FINALIZE_ITEM_TYPES.has(type)) {
+        return res.status(400).json({
+          error: `items[${i}].type must be one of: service, product`,
+          code: "INVALID_ITEM",
+        });
+      }
+      const refId = parseInt(it.refId, 10);
+      if (!Number.isFinite(refId) || refId <= 0) {
+        return res.status(400).json({
+          error: `items[${i}].refId must be a positive integer`,
+          code: "INVALID_ITEM",
+        });
+      }
+      const qty = parseInt(it.qty, 10);
+      if (!Number.isFinite(qty) || qty < 1) {
+        return res.status(400).json({
+          error: `items[${i}].qty must be a positive integer`,
+          code: "INVALID_ITEM",
+        });
+      }
+      const unitPriceCents = parseInt(it.unitPriceCents, 10);
+      if (!Number.isFinite(unitPriceCents) || unitPriceCents < 0) {
+        return res.status(400).json({
+          error: `items[${i}].unitPriceCents must be a non-negative integer`,
+          code: "INVALID_ITEM",
+        });
+      }
+      normalisedItems.push({ type, refId, qty, unitPriceCents });
+    }
+
+    // ── Validate payments array ──
+    if (!Array.isArray(payments) || payments.length === 0) {
+      return res.status(400).json({
+        error: "payments must be a non-empty array",
+        code: "INVALID_PAYMENTS",
+      });
+    }
+    const normalisedPayments = [];
+    for (let i = 0; i < payments.length; i++) {
+      const p = payments[i];
+      if (!p || typeof p !== "object") {
+        return res.status(400).json({
+          error: `payments[${i}] must be an object`,
+          code: "INVALID_PAYMENT",
+        });
+      }
+      const method = typeof p.method === "string" ? p.method.toLowerCase() : "";
+      if (!VALID_FINALIZE_PAYMENT_METHODS.has(method)) {
+        return res.status(400).json({
+          error: `payments[${i}].method must be one of: cash, card, upi, wallet, giftcard`,
+          code: "INVALID_PAYMENT",
+        });
+      }
+      const amountCents = parseInt(p.amountCents, 10);
+      if (!Number.isFinite(amountCents) || amountCents <= 0) {
+        return res.status(400).json({
+          error: `payments[${i}].amountCents must be a positive integer`,
+          code: "INVALID_PAYMENT",
+        });
+      }
+      normalisedPayments.push({ method, amountCents });
+    }
+
+    // ── Validate discount + tax ──
+    const discount =
+      discountCents === undefined || discountCents === null
+        ? 0
+        : parseInt(discountCents, 10);
+    if (!Number.isFinite(discount) || discount < 0) {
+      return res.status(400).json({
+        error: "discountCents must be a non-negative integer",
+        code: "INVALID_DISCOUNT",
+      });
+    }
+    const tax =
+      taxCents === undefined || taxCents === null ? 0 : parseInt(taxCents, 10);
+    if (!Number.isFinite(tax) || tax < 0) {
+      return res.status(400).json({
+        error: "taxCents must be a non-negative integer",
+        code: "INVALID_TAX",
+      });
+    }
+
+    // ── Compute totals (integer cents — no float rounding) ──
+    const itemsTotal = normalisedItems.reduce(
+      (acc, it) => acc + it.qty * it.unitPriceCents,
+      0,
+    );
+    const grandTotal = itemsTotal - discount + tax;
+    if (grandTotal < 0) {
+      // Defensive — discount > items+tax means the cashier is trying to
+      // give away money plus a refund; mismatched-total catches it but
+      // a crisper code helps diagnostics.
+      return res.status(400).json({
+        error: "discountCents exceeds itemsTotal + taxCents",
+        code: "INVALID_DISCOUNT",
+      });
+    }
+    const paymentsTotal = normalisedPayments.reduce(
+      (acc, p) => acc + p.amountCents,
+      0,
+    );
+    // ±1 cent tolerance to absorb any client-side rounding drift on a
+    // multi-tender split (e.g. 33⅓% of ₹100 = 3 lines of ₹33.33 → 9999
+    // cents not 10000). 1-cent floor is tighter than the legacy POST
+    // /sales 0.01 rupee tolerance because we're already in integer
+    // cents and the only legitimate drift is 1-cent floor-rounding.
+    if (Math.abs(paymentsTotal - grandTotal) > 1) {
+      return res.status(400).json({
+        error: `sum(payments.amountCents)=${paymentsTotal} must equal grandTotal=${grandTotal} ±1 cent`,
+        code: "MISMATCHED_TOTAL",
+        paymentsTotalCents: paymentsTotal,
+        grandTotalCents: grandTotal,
+      });
+    }
+
+    // ── Tenant-scoped patient existence guard ──
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: pid }),
+      select: { id: true },
+    });
+    if (!patient) {
+      return res.status(404).json({
+        error: "Patient not found",
+        code: "PATIENT_NOT_FOUND",
+      });
+    }
+
+    // Sum wallet-tender amount up-front for the tx — short-circuit if zero.
+    const walletDebitCents = normalisedPayments
+      .filter((p) => p.method === "wallet")
+      .reduce((acc, p) => acc + p.amountCents, 0);
+
+    const now = new Date();
+
+    // ── Atomic transaction ──
+    //   1. (if walletDebitCents > 0) Resolve wallet + walk FIFO/expiry
+    //      batches, debit them, write WalletTransaction(REDEEM), update
+    //      Wallet.balance. Insufficient balance throws a typed error so
+    //      the outer catch maps to 400 INSUFFICIENT_WALLET_BALANCE.
+    //   2. Generate invoiceNumber + create Sale row (status=COMPLETED,
+    //      total=grandTotal/100 in rupees for compat with existing
+    //      Sale.total float column).
+    //   3. Create SaleLineItem rows for each item.
+    //   4. Create Invoice row linked to Sale (status=PAID since payments
+    //      sum to total; contactId is null-safe — Invoice model requires
+    //      contactId so we resolve patient.contactId if present).
+    //   5. Create Payment rows for each payment line.
+    let txResult;
+    try {
+      txResult = await prisma.$transaction(async (tx) => {
+        let walletTransactionId = null;
+        const walletBatchesDebited = [];
+
+        if (walletDebitCents > 0) {
+          const wallet = await tx.wallet.findFirst({
+            where: tenantWhere(req, { patientId: pid }),
+            select: { id: true, balance: true },
+          });
+          if (!wallet) {
+            const err = new Error("INSUFFICIENT_WALLET_BALANCE");
+            err.code = "INSUFFICIENT_WALLET_BALANCE";
+            err.requestedCents = walletDebitCents;
+            err.availableCents = 0;
+            throw err;
+          }
+          const baseWhere = {
+            tenantId: req.user.tenantId,
+            walletId: wallet.id,
+            status: "ACTIVE",
+            OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+          };
+          const [principalBatches, bonusBatches] = await Promise.all([
+            tx.walletCreditBatch.findMany({
+              where: { ...baseWhere, batchType: "PRINCIPAL" },
+              orderBy: { createdAt: "asc" },
+            }),
+            tx.walletCreditBatch.findMany({
+              where: { ...baseWhere, batchType: "BONUS" },
+              orderBy: { expiresAt: "asc" },
+            }),
+          ]);
+          const orderedBatches = [...principalBatches, ...bonusBatches];
+          const availableCents = orderedBatches.reduce(
+            (sum, b) => sum + b.remainingCents,
+            0,
+          );
+          if (availableCents < walletDebitCents) {
+            const err = new Error("INSUFFICIENT_WALLET_BALANCE");
+            err.code = "INSUFFICIENT_WALLET_BALANCE";
+            err.requestedCents = walletDebitCents;
+            err.availableCents = availableCents;
+            throw err;
+          }
+          let remaining = walletDebitCents;
+          for (const batch of orderedBatches) {
+            if (remaining <= 0) break;
+            const consumed = Math.min(batch.remainingCents, remaining);
+            const newRemaining = batch.remainingCents - consumed;
+            await tx.walletCreditBatch.update({
+              where: { id: batch.id },
+              data: {
+                remainingCents: newRemaining,
+                status: newRemaining === 0 ? "EXHAUSTED" : "ACTIVE",
+              },
+            });
+            walletBatchesDebited.push({
+              batchId: batch.id,
+              batchType: batch.batchType,
+              consumedCents: consumed,
+            });
+            remaining -= consumed;
+          }
+          const newBalance = +(wallet.balance - walletDebitCents / 100).toFixed(2);
+          const txnRow = await tx.walletTransaction.create({
+            data: {
+              tenantId: req.user.tenantId,
+              walletId: wallet.id,
+              type: "REDEEM",
+              amount: -walletDebitCents / 100,
+              reason: `POS sale finalize (patient ${pid})`,
+              invoiceId: null, // back-filled below post-Invoice create
+              balanceAfter: newBalance,
+              performedBy: req.user.userId,
+            },
+          });
+          walletTransactionId = txnRow.id;
+          await tx.wallet.update({
+            where: { id: wallet.id },
+            data: { balance: newBalance },
+          });
+        }
+
+        const invoiceNumber = await generateInvoiceNumber(tx, req.user.tenantId, now);
+        const grandTotalRupees = +(grandTotal / 100).toFixed(2);
+        const subtotalRupees = +(itemsTotal / 100).toFixed(2);
+        const discountRupees = +(discount / 100).toFixed(2);
+        const taxRupees = +(tax / 100).toFixed(2);
+
+        const sale = await tx.sale.create({
+          data: {
+            tenantId: req.user.tenantId,
+            // /finalize bypasses the register/shift gate (PRD §3.6 leaves
+            // shift-binding for a later slice). The DB columns are
+            // non-nullable so we look up the cashier's most-recent OPEN
+            // shift if present, else fall through to ANY shift the cashier
+            // owns. Tests stub this; production callers will have an open
+            // shift via the calendar flow.
+            registerId: await resolveRegisterIdForFinalize(tx, req),
+            shiftId: await resolveShiftIdForFinalize(tx, req),
+            cashierId: req.user.userId,
+            patientId: pid,
+            invoiceNumber,
+            subtotal: subtotalRupees,
+            taxTotal: taxRupees,
+            discountTotal: discountRupees,
+            total: grandTotalRupees,
+            paidAmount: grandTotalRupees,
+            status: "COMPLETED",
+            paymentMethod: normalisedPayments.length === 1
+              ? normalisedPayments[0].method.toUpperCase()
+              : "COMBINED",
+            paymentBreakdownJson: JSON.stringify(
+              normalisedPayments.map((p) => ({
+                method: p.method.toUpperCase(),
+                amountCents: p.amountCents,
+              })),
+            ).slice(0, 4000),
+            lineItems: {
+              create: normalisedItems.map((it) => {
+                const unitPriceRupees = +(it.unitPriceCents / 100).toFixed(2);
+                return {
+                  tenantId: req.user.tenantId,
+                  lineType: FINALIZE_ITEM_TYPE_TO_LINE_TYPE[it.type],
+                  refId: it.refId,
+                  name: `${FINALIZE_ITEM_TYPE_TO_LINE_TYPE[it.type]} #${it.refId}`,
+                  quantity: it.qty,
+                  unitPrice: unitPriceRupees,
+                  lineDiscount: 0,
+                  lineTotal: +(it.qty * unitPriceRupees).toFixed(2),
+                };
+              }),
+            },
+          },
+          include: { lineItems: true },
+        });
+
+        // Invoice model requires contactId — resolve from patient.contactId
+        // (Patient has an optional Contact linkage in the wellness schema).
+        // If no contact link exists, skip Invoice creation; the receipt
+        // anchors on Sale.id per PRD §3.6 fallback contract. Any error
+        // from invoice.create propagates and rolls back the surrounding
+        // transaction (no inner try/catch needed — the throw is what we
+        // want for atomicity).
+        let invoice = null;
+        const patientForInvoice = await tx.patient.findUnique({
+          where: { id: pid },
+          select: { contactId: true },
+        });
+        if (patientForInvoice?.contactId) {
+          invoice = await tx.invoice.create({
+            data: {
+              tenantId: req.user.tenantId,
+              invoiceNum: invoiceNumber,
+              amount: grandTotalRupees,
+              status: "PAID",
+              dueDate: now,
+              issuedDate: now,
+              paidAt: now,
+              contactId: patientForInvoice.contactId,
+            },
+          });
+          // Back-fill the WalletTransaction.invoiceId so the wallet
+          // ledger cross-links the redemption to the invoice row.
+          if (walletTransactionId && invoice) {
+            await tx.walletTransaction.update({
+              where: { id: walletTransactionId },
+              data: { invoiceId: invoice.id },
+            });
+          }
+        }
+
+        // Payment rows — one per tender line. Wallet payments link to
+        // the invoice (if created) via invoiceId; gateway field tags the
+        // method so reports can split CASH vs CARD vs UPI vs WALLET vs
+        // GIFTCARD revenue.
+        const paymentRows = [];
+        for (const p of normalisedPayments) {
+          const paymentRow = await tx.payment.create({
+            data: {
+              tenantId: req.user.tenantId,
+              invoiceId: invoice ? invoice.id : null,
+              amount: +(p.amountCents / 100).toFixed(2),
+              currency: "INR",
+              gateway: p.method,
+              status: "SUCCESS",
+              paidAt: now,
+            },
+          });
+          paymentRows.push(paymentRow);
+        }
+
+        return {
+          sale,
+          invoice,
+          paymentRows,
+          walletTransactionId,
+          walletBatchesDebited,
+          grandTotalCents: grandTotal,
+          walletDebitedCents: walletDebitCents,
+        };
+      });
+    } catch (txErr) {
+      if (txErr && txErr.code === "INSUFFICIENT_WALLET_BALANCE") {
+        return res.status(400).json({
+          error: "Insufficient wallet balance",
+          code: "INSUFFICIENT_WALLET_BALANCE",
+          requestedCents: txErr.requestedCents,
+          availableCents: txErr.availableCents,
+        });
+      }
+      throw txErr;
+    }
+
+    // Audit OUTSIDE the transaction — hash-chained writes must never
+    // roll back a committed sale. Fire-and-forget; an audit hiccup
+    // surfaces in the audit-integrity cron, not on the cashier's screen.
+    writeAudit(
+      "Sale",
+      "POS_SALE_FINALIZED",
+      txResult.sale.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        saleId: txResult.sale.id,
+        invoiceId: txResult.invoice ? txResult.invoice.id : null,
+        grandTotalCents: txResult.grandTotalCents,
+        paymentCount: normalisedPayments.length,
+        hadWalletRedeem: txResult.walletDebitedCents > 0,
+        walletDebitedCents: txResult.walletDebitedCents,
+        walletBatchesDebited: txResult.walletBatchesDebited,
       },
+    ).catch((auditErr) => {
+      console.warn("[pos] POS_SALE_FINALIZED audit failed:", auditErr.message);
     });
-    await writeAudit("Sale", "REFUND", id, req.user.userId, req.user.tenantId, {
-      invoiceNumber: sale.invoiceNumber,
-      total: sale.total,
-      reason: reason.trim().slice(0, 200),
+
+    return res.status(201).json({
+      success: true,
+      saleId: txResult.sale.id,
+      invoiceId: txResult.invoice ? txResult.invoice.id : null,
+      grandTotalCents: txResult.grandTotalCents,
+      walletDebitedCents: txResult.walletDebitedCents,
+      status: txResult.sale.status,
     });
-    res.json(refunded);
+  } catch (e) {
+    console.error("[pos] sale finalize error:", e.message);
+    return res.status(500).json({
+      error: "Failed to finalize sale",
+      code: "SALE_FINALIZE_FAILED",
+    });
+  }
+});
+
+// Register + shift resolution helpers for /finalize. PRD §3.6 defers
+// shift-binding to a later slice but the Sale schema columns are
+// non-nullable. Strategy: take the cashier's most-recent OPEN shift if
+// any; else any shift they've owned (CLOSED is OK because /finalize is
+// designed to be callable from the new calendar surface, not the till);
+// else any register/shift on the tenant (admin-finalizing-walkin pattern).
+async function resolveShiftIdForFinalize(tx, req) {
+  const openMine = await tx.shift.findFirst({
+    where: tenantWhere(req, { userId: req.user.userId, status: "OPEN" }),
+    orderBy: { openedAt: "desc" },
+    select: { id: true },
+  });
+  if (openMine) return openMine.id;
+  const anyMine = await tx.shift.findFirst({
+    where: tenantWhere(req, { userId: req.user.userId }),
+    orderBy: { openedAt: "desc" },
+    select: { id: true },
+  });
+  if (anyMine) return anyMine.id;
+  const anyTenant = await tx.shift.findFirst({
+    where: tenantWhere(req),
+    orderBy: { openedAt: "desc" },
+    select: { id: true },
+  });
+  if (anyTenant) return anyTenant.id;
+  // No shift at all → reject. Sale.shiftId is non-nullable.
+  const err = new Error("SALE_FINALIZE_FAILED");
+  err.code = "SALE_FINALIZE_FAILED";
+  throw err;
+}
+
+async function resolveRegisterIdForFinalize(tx, req) {
+  const openMine = await tx.shift.findFirst({
+    where: tenantWhere(req, { userId: req.user.userId, status: "OPEN" }),
+    orderBy: { openedAt: "desc" },
+    select: { registerId: true },
+  });
+  if (openMine) return openMine.registerId;
+  const anyMine = await tx.shift.findFirst({
+    where: tenantWhere(req, { userId: req.user.userId }),
+    orderBy: { openedAt: "desc" },
+    select: { registerId: true },
+  });
+  if (anyMine) return anyMine.registerId;
+  const anyTenant = await tx.shift.findFirst({
+    where: tenantWhere(req),
+    orderBy: { openedAt: "desc" },
+    select: { registerId: true },
+  });
+  if (anyTenant) return anyTenant.registerId;
+  const err = new Error("SALE_FINALIZE_FAILED");
+  err.code = "SALE_FINALIZE_FAILED";
+  throw err;
+}
+
+// ── D17 Arc 1 Slice 7: void + refund (PRD_POS_NEW_SALE §3.9) ─────────
+//
+// POST /api/pos/sales/:id/void
+// POST /api/pos/sales/:id/refund
+//
+// DD-5.7 round-2 RESOLVED 2026-05-25: STRICT mode → BOTH endpoints are
+// ADMIN-only (strictAdminGate above — manager cannot reach here).
+//
+// SEMANTIC DIFFERENCE (why two endpoints, not one):
+//   /void   — undo the entire COMPLETED sale, reverse wallet redemption back
+//             to the customer's wallet (restore batch.remainingCents +
+//             write WalletTransaction VOID_REVERSAL + bump Wallet.balance),
+//             flip Invoice.status to VOIDED. Use case: cashier rang the
+//             wrong patient/items and the customer hasn't taken the
+//             goods yet. NO money leaves the till; wallet redemption is
+//             restored as if the sale never happened.
+//   /refund — issue a cash-out (full or partial). Writes a negative-amount
+//             Payment row tagged gateway='refund'. Does NOT touch the
+//             wallet — wallet redemption stays consumed; the refund is a
+//             real cash payout to the customer. Use case: customer returns
+//             goods after the fact, or admin grants a goodwill partial
+//             refund. Multiple partial refunds accumulate; status flips to
+//             PARTIALLY_REFUNDED until the sum equals total → REFUNDED.
+//
+// WALLET REVERSAL MECHANISM (void only):
+//   The original /sales/finalize audit log row carries the per-batch
+//   debit ledger in its details JSON (POS_SALE_FINALIZED →
+//   walletBatchesDebited: [{batchId, batchType, consumedCents}, ...]).
+//   We read that ledger, restore each batch's remainingCents +
+//   status=ACTIVE, increment Wallet.balance by the total reversed, and
+//   write a single WalletTransaction(type=VOID_REVERSAL). The audit log
+//   IS the source of truth for the reversal trail since the schema has
+//   no direct Sale→Batch FK linkage (the finalize tx records batches in
+//   audit, not in a relational table — see /sales/finalize line ~1610).
+//   If no audit row exists (legacy sales pre-slice-7) the void still
+//   succeeds but walletReversedCents=0 with a diagnostic note.
+//
+// PARTIAL-REFUND TRACKING:
+//   The Sale schema has no "refundedTotalCents" column (schema mods are
+//   out of scope for this slice). We compute refunded-to-date on every
+//   request by summing Payment rows where invoiceId = sale's invoice AND
+//   amount < 0 AND gateway = 'refund'. The new refund row is rejected
+//   with REFUND_EXCEEDS_BALANCE if (refundedSoFar + amountCents) >
+//   sale.totalCents. Status flips: COMPLETED → PARTIALLY_REFUNDED on
+//   first partial; PARTIALLY_REFUNDED → REFUNDED when sum reaches total.
+//
+// Error codes (both endpoints unless noted):
+//   400 INVALID_ID             :id is not numeric
+//   400 INVALID_REASON         body.reason missing / not string / >500 chars
+//   400 INVALID_AMOUNT         (refund only) amountCents missing / non-int / ≤0
+//   403 WELLNESS_ROLE_FORBIDDEN  RBAC (manager / user / clinical role denied)
+//   404 SALE_NOT_FOUND         sale missing OR cross-tenant
+//   409 SALE_NOT_VOIDABLE      (void) sale.status not COMPLETED
+//   409 SALE_NOT_REFUNDABLE    (refund) sale.status not COMPLETED/PARTIALLY_REFUNDED
+//   409 REFUND_EXCEEDS_BALANCE (refund) amountCents > remaining refundable
+//   500 SALE_VOID_FAILED / SALE_REFUND_FAILED  unexpected tx failure
+
+router.post("/sales/:id/void", strictAdminGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res
+        .status(400)
+        .json({ error: "id must be a positive integer", code: "INVALID_ID" });
+    }
+
+    const { reason } = req.body || {};
+    if (!reason || typeof reason !== "string" || !reason.trim()) {
+      return res
+        .status(400)
+        .json({ error: "reason is required", code: "INVALID_REASON" });
+    }
+    if (reason.length > 500) {
+      return res
+        .status(400)
+        .json({ error: "reason exceeds 500 chars", code: "INVALID_REASON" });
+    }
+
+    const sale = await prisma.sale.findFirst({ where: tenantWhere(req, { id }) });
+    if (!sale) {
+      return res
+        .status(404)
+        .json({ error: "Sale not found", code: "SALE_NOT_FOUND" });
+    }
+    if (sale.status !== "COMPLETED") {
+      return res.status(409).json({
+        error: `Sale status=${sale.status} is not voidable (must be COMPLETED)`,
+        code: "SALE_NOT_VOIDABLE",
+        currentStatus: sale.status,
+      });
+    }
+
+    // Look up the POS_SALE_FINALIZED audit row to recover wallet-batch
+    // debit ledger. If not present (legacy sales pre-slice-7), the void
+    // still succeeds with walletReversedCents=0.
+    const finalizeAudit = await prisma.auditLog.findFirst({
+      where: {
+        tenantId: req.user.tenantId,
+        entity: "Sale",
+        action: "POS_SALE_FINALIZED",
+        entityId: id,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    let batchesToReverse = [];
+    let walletIdFromAudit = null;
+    if (finalizeAudit && finalizeAudit.details) {
+      try {
+        const parsed = typeof finalizeAudit.details === "string"
+          ? JSON.parse(finalizeAudit.details)
+          : finalizeAudit.details;
+        if (Array.isArray(parsed.walletBatchesDebited)) {
+          batchesToReverse = parsed.walletBatchesDebited.filter(
+            (b) => b && Number.isFinite(b.batchId) && Number.isFinite(b.consumedCents) && b.consumedCents > 0,
+          );
+        }
+      } catch (_parseErr) {
+        // Malformed audit JSON — proceed with empty reversal list (no wallet
+        // path to undo). The void itself is still valid; the diagnostic is
+        // logged for operators.
+        console.warn(`[pos] void: malformed finalize audit details for sale ${id}`);
+      }
+    }
+    // Resolve walletId via the patient (Wallet has @unique patientId).
+    // Only needed if there ARE batches to reverse.
+    let walletReversedCents = 0;
+    if (batchesToReverse.length > 0 && sale.patientId) {
+      const wallet = await prisma.wallet.findFirst({
+        where: tenantWhere(req, { patientId: sale.patientId }),
+        select: { id: true, balance: true },
+      });
+      if (wallet) {
+        walletIdFromAudit = wallet.id;
+        walletReversedCents = batchesToReverse.reduce(
+          (sum, b) => sum + b.consumedCents,
+          0,
+        );
+      } else {
+        // Wallet was deleted between finalize and void — cannot reverse,
+        // but the sale void itself is still legitimate.
+        batchesToReverse = [];
+      }
+    }
+
+    // Look up the linked Invoice (no FK; matched by invoiceNum). Optional —
+    // if no Invoice was created during finalize (patient lacked a Contact),
+    // skip the Invoice.status flip.
+    const linkedInvoice = await prisma.invoice.findFirst({
+      where: { tenantId: req.user.tenantId, invoiceNum: sale.invoiceNumber },
+      select: { id: true },
+    });
+
+    const now = new Date();
+    try {
+      await prisma.$transaction(async (tx) => {
+        // 1) Reverse each wallet batch: restore remainingCents + flip
+        //    EXHAUSTED → ACTIVE (newRemaining > 0 always since we're adding).
+        for (const b of batchesToReverse) {
+          const current = await tx.walletCreditBatch.findUnique({
+            where: { id: b.batchId },
+            select: { remainingCents: true, status: true },
+          });
+          if (!current) continue; // batch was hard-deleted; skip silently
+          const restored = current.remainingCents + b.consumedCents;
+          await tx.walletCreditBatch.update({
+            where: { id: b.batchId },
+            data: { remainingCents: restored, status: "ACTIVE" },
+          });
+        }
+        // 2) Bump Wallet.balance by total reversed + write VOID_REVERSAL txn.
+        if (walletIdFromAudit && walletReversedCents > 0) {
+          const wallet = await tx.wallet.findUnique({
+            where: { id: walletIdFromAudit },
+            select: { balance: true },
+          });
+          const reversedRupees = walletReversedCents / 100;
+          const newBalance = +(wallet.balance + reversedRupees).toFixed(2);
+          await tx.wallet.update({
+            where: { id: walletIdFromAudit },
+            data: { balance: newBalance },
+          });
+          await tx.walletTransaction.create({
+            data: {
+              tenantId: req.user.tenantId,
+              walletId: walletIdFromAudit,
+              type: "VOID_REVERSAL",
+              amount: reversedRupees,
+              reason: `Void sale #${id}: ${reason.trim().slice(0, 200)}`,
+              balanceAfter: newBalance,
+              performedBy: req.user.userId,
+            },
+          });
+        }
+        // 3) Flip Invoice to VOIDED (if one was created).
+        if (linkedInvoice) {
+          await tx.invoice.update({
+            where: { id: linkedInvoice.id },
+            data: { status: "VOIDED" },
+          });
+        }
+        // 4) Flip Sale to VOIDED. Schema has no voidedAt / voidedReason
+        //    columns; reuse refundedAt + refundReason (only DateTime / Text
+        //    free fields available) and tag the reason with a VOID: prefix
+        //    so operators reading the row can distinguish void from refund.
+        await tx.sale.update({
+          where: { id },
+          data: {
+            status: "VOIDED",
+            refundedAt: now,
+            refundReason: `VOID: ${reason.trim().slice(0, 480)}`,
+          },
+        });
+      });
+    } catch (txErr) {
+      console.error("[pos] void sale tx error:", txErr.message);
+      return res
+        .status(500)
+        .json({ error: "Failed to void sale", code: "SALE_VOID_FAILED" });
+    }
+
+    // Audit OUTSIDE the transaction (hash-chained — never blocks the void).
+    writeAudit(
+      "Sale",
+      "POS_SALE_VOIDED",
+      id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        saleId: id,
+        invoiceNumber: sale.invoiceNumber,
+        reason: reason.trim().slice(0, 200),
+        walletReversedCents,
+        batchesReversed: batchesToReverse.length,
+      },
+    ).catch((auditErr) => {
+      console.warn("[pos] POS_SALE_VOIDED audit failed:", auditErr.message);
+    });
+
+    return res.json({
+      success: true,
+      saleId: id,
+      status: "VOIDED",
+      walletReversedCents,
+    });
+  } catch (e) {
+    console.error("[pos] void sale error:", e.message);
+    return res
+      .status(500)
+      .json({ error: "Failed to void sale", code: "SALE_VOID_FAILED" });
+  }
+});
+
+router.post("/sales/:id/refund", strictAdminGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res
+        .status(400)
+        .json({ error: "id must be a positive integer", code: "INVALID_ID" });
+    }
+
+    const { reason, amountCents } = req.body || {};
+    if (!reason || typeof reason !== "string" || !reason.trim()) {
+      return res
+        .status(400)
+        .json({ error: "reason is required", code: "INVALID_REASON" });
+    }
+    if (reason.length > 500) {
+      return res
+        .status(400)
+        .json({ error: "reason exceeds 500 chars", code: "INVALID_REASON" });
+    }
+    const amt = parseInt(amountCents, 10);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res
+        .status(400)
+        .json({
+          error: "amountCents must be a positive integer",
+          code: "INVALID_AMOUNT",
+        });
+    }
+
+    const sale = await prisma.sale.findFirst({ where: tenantWhere(req, { id }) });
+    if (!sale) {
+      return res
+        .status(404)
+        .json({ error: "Sale not found", code: "SALE_NOT_FOUND" });
+    }
+    if (sale.status !== "COMPLETED" && sale.status !== "PARTIALLY_REFUNDED") {
+      return res.status(409).json({
+        error: `Sale status=${sale.status} is not refundable (must be COMPLETED or PARTIALLY_REFUNDED)`,
+        code: "SALE_NOT_REFUNDABLE",
+        currentStatus: sale.status,
+      });
+    }
+
+    // Sale.total is float rupees; promote to cents for integer math.
+    const saleTotalCents = Math.round((sale.total || 0) * 100);
+
+    // Resolve the linked Invoice (matched by invoiceNum — no FK in schema).
+    // Refund Payment rows persist regardless of whether an Invoice was
+    // created during finalize; an absent Invoice just means invoiceId=null
+    // on the refund Payment, mirroring the finalize handler's contract.
+    const linkedInvoice = await prisma.invoice.findFirst({
+      where: { tenantId: req.user.tenantId, invoiceNum: sale.invoiceNumber },
+      select: { id: true },
+    });
+
+    // Sum prior refund Payments (negative-amount, gateway='refund') for this
+    // invoice to compute remaining refundable. If no Invoice was created
+    // (linkedInvoice=null), refunded-so-far is 0 (nothing to sum against).
+    let refundedSoFarCents = 0;
+    if (linkedInvoice) {
+      const priorRefunds = await prisma.payment.findMany({
+        where: {
+          tenantId: req.user.tenantId,
+          invoiceId: linkedInvoice.id,
+          gateway: "refund",
+          amount: { lt: 0 },
+        },
+        select: { amount: true },
+      });
+      refundedSoFarCents = priorRefunds.reduce(
+        (sum, p) => sum + Math.abs(Math.round(p.amount * 100)),
+        0,
+      );
+    }
+    const remainingRefundableCents = saleTotalCents - refundedSoFarCents;
+    if (amt > remainingRefundableCents) {
+      return res.status(409).json({
+        error: `amountCents=${amt} exceeds remaining refundable=${remainingRefundableCents}`,
+        code: "REFUND_EXCEEDS_BALANCE",
+        requestedCents: amt,
+        remainingCents: remainingRefundableCents,
+      });
+    }
+
+    const newRefundedTotalCents = refundedSoFarCents + amt;
+    const isFullRefund = newRefundedTotalCents >= saleTotalCents;
+    const newStatus = isFullRefund ? "REFUNDED" : "PARTIALLY_REFUNDED";
+    const now = new Date();
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        // 1) Write the refund Payment row (negative amount, gateway='refund').
+        await tx.payment.create({
+          data: {
+            tenantId: req.user.tenantId,
+            invoiceId: linkedInvoice ? linkedInvoice.id : null,
+            amount: -(amt / 100),
+            currency: "INR",
+            gateway: "refund",
+            status: "SUCCESS",
+            paidAt: now,
+            metadata: JSON.stringify({
+              saleId: id,
+              reason: reason.trim().slice(0, 480),
+              previousRefundedCents: refundedSoFarCents,
+              newRefundedTotalCents,
+            }).slice(0, 4000),
+          },
+        });
+        // 2) Flip Sale.status; preserve refundReason as a running log
+        //    (newest reason wins since schema has no per-refund log table).
+        await tx.sale.update({
+          where: { id },
+          data: {
+            status: newStatus,
+            refundedAt: now,
+            refundReason: reason.trim().slice(0, 1000),
+          },
+        });
+      });
+    } catch (txErr) {
+      console.error("[pos] refund sale tx error:", txErr.message);
+      return res
+        .status(500)
+        .json({ error: "Failed to refund sale", code: "SALE_REFUND_FAILED" });
+    }
+
+    writeAudit(
+      "Sale",
+      "POS_SALE_REFUNDED",
+      id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        saleId: id,
+        invoiceNumber: sale.invoiceNumber,
+        amountCents: amt,
+        reason: reason.trim().slice(0, 200),
+        refundedTotalCents: newRefundedTotalCents,
+        saleTotalCents,
+        isFullRefund,
+      },
+    ).catch((auditErr) => {
+      console.warn("[pos] POS_SALE_REFUNDED audit failed:", auditErr.message);
+    });
+
+    return res.json({
+      success: true,
+      saleId: id,
+      status: newStatus,
+      refundedTotalCents: newRefundedTotalCents,
+    });
   } catch (e) {
     console.error("[pos] refund sale error:", e.message);
-    res.status(500).json({ error: "Failed to refund sale" });
+    return res
+      .status(500)
+      .json({ error: "Failed to refund sale", code: "SALE_REFUND_FAILED" });
   }
 });
 

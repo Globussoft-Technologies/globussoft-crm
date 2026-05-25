@@ -153,6 +153,24 @@ router.get('/', async (req, res) => {
     if (req.query.status) where.status = req.query.status;
     if (req.query.assignedToId) where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === 'true') where.assignedToId = null;
+    // Arc 2 #904 slice 8 — ?source=<prefix> server-side filter. Replaces the
+    // STUB client-side `source.startsWith('inbound:')` filter in
+    // InboundLeads.jsx (slice 7, 56f549f7) which was bounded by the
+    // ?limit=100 page-size + scanned the entire result. Server-side prefix
+    // match pushes the predicate into Prisma so the 500-row hard cap (#172)
+    // is no longer a coverage hole. Absent param = unfiltered (existing
+    // behaviour preserved).
+    if (req.query.source !== undefined) {
+      const prefix = typeof req.query.source === 'string' ? req.query.source : '';
+      if (prefix.length < 1 || prefix.length > 128) {
+        return res.status(400).json({
+          error: 'source must be a non-empty string ≤128 chars',
+          code: 'INVALID_SOURCE',
+          field: 'source',
+        });
+      }
+      where.source = { startsWith: prefix };
+    }
     // #167: hide soft-deleted rows by default; admin views can opt in.
     applyDeletedAtFilter(where, req.query.includeDeleted === 'true');
     // #588: USER role sees only contacts assigned to them; ADMIN/MANAGER see

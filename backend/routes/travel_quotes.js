@@ -195,6 +195,69 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
   }
 });
 
+// GET /api/travel/quotes/expired — any verified token (tenant + sub-brand-scoped).
+//
+// Slice 12 of #900 (PRD_TRAVEL_QUOTE_BUILDER OQ-9.7 — expiry workflow).
+// Surfaces quotes whose validUntil is in the past AND status is still
+// Draft or Sent — i.e. quotes that need operator attention (extend the
+// validity window, or move to terminal Accepted/Rejected). Read-only
+// derived list; no schema column for "Expired" status — the schema's
+// VALID_QUOTE_STATUSES intentionally has no Expired enum value (OQ-9.7
+// recommended a cron-driven status flip, but that requires schema work).
+// This slice ships the derived-list surface so operator dashboards can
+// render an "Expired quotes" tile + the sibling POST /:id/extend
+// endpoint lets operators rescue a quote by pushing validUntil forward.
+//
+// Sub-brand isolation: results are filtered to the caller's
+// subBrandAccess set. Operators without any grant get an empty list
+// (vs 403) — matches the GET /quotes index behaviour.
+//
+// Ordering: validUntil ASC (oldest expiry first — most-urgent at top).
+// Pagination: limit query-param (default 50, max 200) to keep the
+// payload bounded; no cursor since the use case is "dashboard tile"
+// not "infinite scroll".
+//
+// IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
+// doesn't match "expired" as a numeric :id (which would 400 INVALID_ID).
+router.get("/quotes/expired", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const limitRaw = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0
+      ? Math.min(limitRaw, 200)
+      : 50;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    // Empty access set = caller has no sub-brand grants; return [] rather
+    // than 403 so dashboard tiles render cleanly for not-yet-onboarded
+    // operators.
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({ quotes: [], count: 0 });
+    }
+
+    const where = {
+      tenantId: req.travelTenant.id,
+      status: { in: ["Draft", "Sent"] },
+      validUntil: { lt: new Date() },
+    };
+    // If allowed is a Set (not "all"), filter to those sub-brands.
+    if (allowed instanceof Set) {
+      where.subBrand = { in: Array.from(allowed) };
+    }
+
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      orderBy: [{ validUntil: "asc" }, { id: "asc" }],
+      take: limit,
+    });
+
+    res.json({ quotes, count: quotes.length });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] expired list error:", e.message);
+    res.status(500).json({ error: "Failed to list expired quotes" });
+  }
+});
+
 // GET /api/travel/quotes/:id
 router.get("/quotes/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {
@@ -1622,6 +1685,153 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] tax-preview error:", e.message);
       res.status(500).json({ error: "Failed to compute tax preview" });
+    }
+  },
+);
+
+// POST /api/travel/quotes/:id/extend — ADMIN/MANAGER only.
+//
+// Slice 12 of #900 (PRD_TRAVEL_QUOTE_BUILDER OQ-9.7 — expiry workflow,
+// extend-by-N-days manual rescue). Pushes a quote's validUntil forward
+// without touching status / lines / totals / contact. Body accepts
+// either { days: <positive int, ≤365> } (relative — adds N days to
+// max(validUntil || now)) OR { newValidUntil: <ISO date> } (absolute —
+// sets validUntil verbatim, must parse + must be future). Exactly one
+// of the two must be supplied (400 EXTEND_PARAMS otherwise).
+//
+// Transition guard (mirror of accept/decline): only Draft or Sent
+// quotes can be extended. Accepted or Rejected quotes are terminal
+// — extending a terminal quote is meaningless (operator must clone
+// via POST /duplicate to revive a rejected scope). 409
+// INVALID_TRANSITION.
+//
+// Sub-brand isolation: standard sub-brand-access guard. Tenant scope
+// via the findFirst where clause.
+//
+// Audit: TRAVEL_QUOTE_EXTENDED with previousValidUntil + newValidUntil
+// + extensionMode ("days" | "absolute") + days (if days mode) in the
+// details payload. The audit row is the source of truth for the
+// extension trail; no first-class "extension history" column on the
+// quote envelope.
+router.post(
+  "/quotes/:id/extend",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const body = req.body || {};
+      const hasDays = body.days !== undefined && body.days !== null && body.days !== "";
+      const hasAbs = body.newValidUntil !== undefined && body.newValidUntil !== null && body.newValidUntil !== "";
+
+      // Exactly one of days / newValidUntil required.
+      if (hasDays === hasAbs) {
+        return res.status(400).json({
+          error: "Provide exactly one of { days } or { newValidUntil }",
+          code: "EXTEND_PARAMS",
+        });
+      }
+
+      let extensionMode = null;
+      let parsedDays = null;
+      let parsedAbs = null;
+
+      if (hasDays) {
+        const n = Number(body.days);
+        if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 365) {
+          return res.status(400).json({
+            error: "days must be a positive integer between 1 and 365",
+            code: "INVALID_DAYS",
+          });
+        }
+        parsedDays = n;
+        extensionMode = "days";
+      } else {
+        const d = new Date(body.newValidUntil);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "newValidUntil must be a parseable date",
+            code: "INVALID_VALID_UNTIL",
+          });
+        }
+        const todayMidnight = new Date();
+        todayMidnight.setHours(0, 0, 0, 0);
+        if (d.getTime() < todayMidnight.getTime()) {
+          return res.status(400).json({
+            error: "newValidUntil must be today or a future date",
+            code: "INVALID_VALID_UNTIL",
+          });
+        }
+        parsedAbs = d;
+        extensionMode = "absolute";
+      }
+
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!quote) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Transition guard: only Draft or Sent can be extended.
+      if (quote.status !== "Draft" && quote.status !== "Sent") {
+        return res.status(409).json({
+          error: `Cannot extend a quote in status "${quote.status}". Only Draft or Sent quotes can be extended.`,
+          code: "INVALID_TRANSITION",
+        });
+      }
+
+      // Compute newValidUntil.
+      //   days mode: base = max(existing validUntil, now); add N days.
+      //   absolute mode: verbatim parsedAbs.
+      let newValidUntil;
+      if (extensionMode === "days") {
+        const now = Date.now();
+        const existingMs = quote.validUntil ? new Date(quote.validUntil).getTime() : 0;
+        const base = Math.max(existingMs, now);
+        newValidUntil = new Date(base + parsedDays * 24 * 60 * 60 * 1000);
+      } else {
+        newValidUntil = parsedAbs;
+      }
+
+      const updated = await prisma.travelQuote.update({
+        where: { id },
+        data: { validUntil: newValidUntil },
+      });
+
+      await writeAudit(
+        "TravelQuote",
+        "TRAVEL_QUOTE_EXTENDED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          quoteId: updated.id,
+          subBrand: updated.subBrand,
+          previousValidUntil: quote.validUntil
+            ? new Date(quote.validUntil).toISOString()
+            : null,
+          newValidUntil: newValidUntil.toISOString(),
+          extensionMode,
+          days: parsedDays,
+        },
+      );
+
+      res.status(200).json({ quote: updated, extensionMode, days: parsedDays });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] extend error:", e.message);
+      res.status(500).json({ error: "Failed to extend quote" });
     }
   },
 );

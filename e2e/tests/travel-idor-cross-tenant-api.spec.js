@@ -1910,3 +1910,213 @@ test.describe("IDOR #919 slice 8 — cross-resource IDOR probes (commission-prof
     ).toContain(res.status());
   });
 });
+
+// ─── Slice 9 ─────────────────────────────────────────────────────────
+// Extends the cross-resource IDOR audit to the two remaining big
+// aggregation surfaces — TravelFlyerTemplate sub-resources and
+// TravelSupplier sub-resources. Slice 8 covered commission-profile and
+// itinerary-item; slice 9 closes the loop on the next two large parent
+// /:id entities that fan out into multiple aggregation / mutation
+// sub-resources.
+//
+// Both parent entities are Travel-vertical only, so the contract is
+// the same as slice 8: a cross-vertical attacker (wellness/generic
+// admin) hits requireTravelTenant BEFORE the /:id lookup, returning
+// 403 WRONG_VERTICAL. Sentinel FAKE_ID is used for the parent — the
+// guard runs regardless of id existence, so the assertion is
+// [403, 404].toContain(status) (403 = vertical guard fired; 404 = a
+// post-guard tenant-scope miss if a future refactor demotes the guard
+// to per-handler tenant filtering).
+//
+// All 10 probe targets were verified to exist via grep against
+// backend/routes/travel_flyer_templates.js and travel_suppliers.js
+// before authoring. Flyer-template subset:
+//   GET    /flyer-templates/:id/usage-stats    (line 1762)
+//   GET    /flyer-templates/:id/audit-trail    (line 1923)
+//   GET    /flyer-templates/:id/clone-history  (line 2155, slice 20)
+//   POST   /flyer-templates/:id/duplicate      (line 1177)
+//   DELETE /flyer-templates/:id                (line 2030)
+// Supplier subset:
+//   GET    /suppliers/:id/payables/aging       (line 2580)
+//   GET    /suppliers/:id/payables/monthly     (line 2672)
+//   GET    /suppliers/:id/payables/quarterly   (line 2805)
+//   GET    /suppliers/:id/payables/yearly      (line 3607, slice 22)
+//   GET    /suppliers/:id/timeline             (line 2037)
+test.describe("IDOR #919 slice 9 — flyer-template + supplier cross-resource probes", () => {
+  // Flyer-template sub-resources — cross-vertical attacker hits
+  // requireTravelTenant BEFORE the /:id lookup. Sentinel FAKE_ID for
+  // the parent — guard fires regardless of id existence.
+  test("wellness admin GET /flyer-templates/:id/usage-stats → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/flyer-templates/${FAKE_ID}/usage-stats`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach flyer-template usage-stats: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /flyer-templates/:id/audit-trail → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/flyer-templates/${FAKE_ID}/audit-trail`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach flyer-template audit-trail: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /flyer-templates/:id/clone-history → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/flyer-templates/${FAKE_ID}/clone-history`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach flyer-template clone-history: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /flyer-templates/:id/duplicate → 403/404 (mutation vector)", async ({
+    request,
+  }) => {
+    // POST /duplicate is the mutation vector for flyer-templates — a
+    // missed guard would let attackers clone cross-tenant templates
+    // into their own tenant. Pinning 403/404 ensures the parent /:id
+    // guard fires before any clone-into-tenant Prisma create runs.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/flyer-templates/${FAKE_ID}/duplicate`,
+      { name: "IDOR-FLYER-DUPLICATE-PROBE-must-never-land" },
+    );
+    expect(
+      [403, 404],
+      `generic admin must not duplicate flyer-template: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin DELETE /flyer-templates/:id → 403/404 (destruction vector)", async ({
+    request,
+  }) => {
+    // DELETE /:id is the destruction vector — a missed guard would
+    // let attackers nuke cross-tenant flyer-templates by id
+    // enumeration. The vertical guard MUST fire before any Prisma
+    // delete runs.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await del(
+      request,
+      token,
+      `/api/travel/flyer-templates/${FAKE_ID}`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not DELETE flyer-template: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // Supplier sub-resources — same requireTravelTenant contract.
+  // Payables aggregation surfaces (/aging, /monthly, /quarterly,
+  // /yearly) plus the /timeline activity feed are all cross-tenant-
+  // sensitive: a missed guard would leak supplier-side financial
+  // exposure (payables breakdowns) and supplier-relationship history.
+  test("wellness admin GET /suppliers/:id/payables/aging → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/suppliers/${FAKE_ID}/payables/aging`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach supplier payables-aging: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /suppliers/:id/payables/monthly → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/suppliers/${FAKE_ID}/payables/monthly`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach supplier payables-monthly: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /suppliers/:id/payables/quarterly → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/suppliers/${FAKE_ID}/payables/quarterly`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach supplier payables-quarterly: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /suppliers/:id/payables/yearly → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/suppliers/${FAKE_ID}/payables/yearly`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach supplier payables-yearly: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /suppliers/:id/timeline → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/suppliers/${FAKE_ID}/timeline`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach supplier timeline: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+});

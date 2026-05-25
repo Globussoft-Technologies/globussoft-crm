@@ -1381,6 +1381,389 @@ router.get(
   },
 );
 
+// ============================================================================
+// Arc 2 #902 slice 18 — GET /api/travel/invoices/gstr-3b
+// (PRD_TRAVEL_GST_COMPLIANCE.md FR-3.4.2 GSTR-3B summary).
+//
+// Monthly GSTR-3B summary export — single govt-spec aggregate (5 sections)
+// per filing month. Bucket math reuses the SAC-bearing + interstate logic
+// established by gstr1-export (slice 10) + hsn-summary (slice 17).
+//
+// === Sections emitted ===
+//
+//   3.1.a  Outward taxable supplies (excl. zero-rated / nil-rated)
+//          — non-export INR invoices, lines with gstPercent > 0
+//   3.1.b  Outward zero-rated supplies
+//          — non-INR (export of service, NFR-4.4)
+//   3.1.c  Outward nil-rated / exempt
+//          — INR lines whose lineType maps to gstRateForCategory === 0
+//   3.1.d  Inward supplies liable to RCM (operator-side purchases)
+//          — placeholder 0 at launch (no inward RCM persistence yet;
+//          will land with DD-5.3 once operator-toggled per-invoice RCM
+//          flag schema lands; doc-comment + zeroed envelope so the
+//          shape is stable today)
+//   3.2    Inter-state to unregistered (b2cl + b2cs aggregate)
+//          — invoices where isInterstate AND contact has no GSTIN
+//          (Contact.gstin not in scope yet, so currently the gate
+//          collapses to "all inter-state non-export invoices" — when
+//          Contact.gstin lands per FR-3.3.4, the gate tightens)
+//   6.1    Net tax payable
+//          — sum(3.1.a CGST/SGST/IGST) + (3.1.d RCM, currently 0)
+//          minus ITC (not tracked here — 0)
+//
+// === Query params ===
+//
+//   ?month=YYYY-MM     REQUIRED   filing month (e.g. 2026-05)
+//   ?subBrand=tmc      OPTIONAL   narrow to one sub-brand
+//   ?format=json|csv   OPTIONAL   default json
+//
+// === Response (JSON) ===
+//
+//   {
+//     month: "2026-05",
+//     subBrand: "tmc" | "all",
+//     sections: {
+//       "3.1.a": { taxableValue, igst, cgst, sgst, totalTax, invoiceCount },
+//       "3.1.b": { taxableValue, invoiceCount },
+//       "3.1.c": { taxableValue, invoiceCount },
+//       "3.1.d": { taxableValue: 0, igst: 0, cgst: 0, sgst: 0 },
+//       "3.2":   { taxableValue, igst, invoiceCount },
+//       "6.1":   { netPayable, totalIgst, totalCgst, totalSgst }
+//     }
+//   }
+//
+// CSV format: BOM + CRLF, one section block per row group, filename
+// `gstr-3b-<month>-<subBrand|all>.csv`. Mirrors gstr1-export conventions.
+//
+// === Auth ===
+//
+//   verifyToken + verifyRole(ADMIN | MANAGER) + requireTravelTenant +
+//   sub-brand access narrowing via getSubBrandAccessSet.
+//
+// === Error codes ===
+//
+//   - INVALID_MONTH (400)
+//   - INVALID_SUB_BRAND (400)
+//   - INVALID_FORMAT (400)
+//
+// ============================================================================
+const GSTR3B_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
+
+router.get(
+  "/invoices/gstr-3b",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { year, month, start, end } = parseFilingMonth(req.query.month);
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      const format = req.query.format != null
+        ? String(req.query.format).trim().toLowerCase()
+        : "json";
+      if (format !== "json" && format !== "csv") {
+        return res.status(400).json({
+          error: "format must be 'json' or 'csv'",
+          code: "INVALID_FORMAT",
+        });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        createdAt: { gte: start, lt: end },
+        docType: { in: GSTR3B_DOC_TYPES },
+      };
+      if (subBrandFilter) where.subBrand = subBrandFilter;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+
+      const invoiceIds = invoices.map((i) => i.id);
+      const allLines =
+        invoiceIds.length > 0
+          ? await prisma.travelInvoiceLine.findMany({
+              where: {
+                invoiceId: { in: invoiceIds },
+                tenantId: req.travelTenant.id,
+              },
+              orderBy: [{ invoiceId: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
+            })
+          : [];
+      const linesByInvoice = new Map();
+      for (const l of allLines) {
+        if (!linesByInvoice.has(l.invoiceId)) linesByInvoice.set(l.invoiceId, []);
+        linesByInvoice.get(l.invoiceId).push(l);
+      }
+
+      // Cache state-code resolutions per contactId.
+      const stateCodeCache = new Map();
+      async function getInterstateForInvoice(invoice) {
+        if (stateCodeCache.has(invoice.contactId)) {
+          return stateCodeCache.get(invoice.contactId);
+        }
+        const codes = await resolveStateCodes({
+          prisma,
+          tenantId: req.travelTenant.id,
+          contactId: invoice.contactId,
+          operatorOverride: null,
+          customerOverride: null,
+        });
+        let isInterstate;
+        try {
+          isInterstate = isInterstateSupply(
+            codes.operatorStateCode,
+            codes.customerStateCode,
+          );
+        } catch (_e) {
+          isInterstate = false;
+        }
+        const result = { ...codes, isInterstate };
+        stateCodeCache.set(invoice.contactId, result);
+        return result;
+      }
+
+      // === Aggregate sections ===
+      // 3.1.a — taxable INR supplies (gstPercent > 0)
+      // 3.1.b — zero-rated (non-INR / export)
+      // 3.1.c — nil-rated (gstPercent === 0 on INR lines)
+      // 3.1.d — inward RCM (placeholder 0)
+      // 3.2   — inter-state to unregistered
+      const sec_3_1_a = {
+        taxableValue: 0,
+        igst: 0,
+        cgst: 0,
+        sgst: 0,
+        totalTax: 0,
+        invoiceCount: 0,
+      };
+      const sec_3_1_b = { taxableValue: 0, invoiceCount: 0 };
+      const sec_3_1_c = { taxableValue: 0, invoiceCount: 0 };
+      const sec_3_1_d = { taxableValue: 0, igst: 0, cgst: 0, sgst: 0 };
+      const sec_3_2 = { taxableValue: 0, igst: 0, invoiceCount: 0 };
+
+      for (const inv of invoices) {
+        const lines = linesByInvoice.get(inv.id) || [];
+        const invoiceCurrency = String(inv.currency || "INR").toUpperCase();
+        const isExport = invoiceCurrency !== "INR";
+        const { isInterstate } = isExport
+          ? { isInterstate: false }
+          : await getInterstateForInvoice(inv);
+
+        let invoiceContributedToA = false;
+        let invoiceContributedToB = false;
+        let invoiceContributedToC = false;
+        let invoiceContributedTo32 = false;
+        let invoiceTaxable32 = 0;
+        let invoiceIgst32 = 0;
+
+        for (const l of lines) {
+          // Skip non-SAC-bearing line types (tax / fee / tcs / tds —
+          // double-counted in parent gstPercent or withholding-only).
+          if (sacForLineType(l.lineType) === null) continue;
+          const amt = Number(l.amount || 0);
+
+          if (isExport) {
+            // 3.1.b — zero-rated. No CGST/SGST/IGST routing.
+            sec_3_1_b.taxableValue =
+              Math.round((sec_3_1_b.taxableValue + amt) * 100) / 100;
+            invoiceContributedToB = true;
+            continue;
+          }
+
+          const rate = gstRateForCategory(l.lineType);
+          if (rate === 0) {
+            // 3.1.c — nil-rated / exempt.
+            sec_3_1_c.taxableValue =
+              Math.round((sec_3_1_c.taxableValue + amt) * 100) / 100;
+            invoiceContributedToC = true;
+            continue;
+          }
+
+          // 3.1.a — outward taxable supplies (taxable INR with gstPercent > 0).
+          const tax = Math.round(((amt * rate) / 100) * 100) / 100;
+          sec_3_1_a.taxableValue =
+            Math.round((sec_3_1_a.taxableValue + amt) * 100) / 100;
+          if (isInterstate) {
+            sec_3_1_a.igst = Math.round((sec_3_1_a.igst + tax) * 100) / 100;
+            // 3.2 — inter-state to unregistered. At launch the
+            // "unregistered" gate is implicit (Contact.gstin doesn't
+            // exist in schema yet — FR-3.3.4 lands later); all
+            // inter-state non-export rows contribute.
+            invoiceTaxable32 = Math.round((invoiceTaxable32 + amt) * 100) / 100;
+            invoiceIgst32 = Math.round((invoiceIgst32 + tax) * 100) / 100;
+            invoiceContributedTo32 = true;
+          } else {
+            const half = Math.round((tax / 2) * 100) / 100;
+            sec_3_1_a.cgst = Math.round((sec_3_1_a.cgst + half) * 100) / 100;
+            sec_3_1_a.sgst = Math.round((sec_3_1_a.sgst + half) * 100) / 100;
+          }
+          invoiceContributedToA = true;
+        }
+
+        if (invoiceContributedToA) sec_3_1_a.invoiceCount += 1;
+        if (invoiceContributedToB) sec_3_1_b.invoiceCount += 1;
+        if (invoiceContributedToC) sec_3_1_c.invoiceCount += 1;
+        if (invoiceContributedTo32) {
+          sec_3_2.taxableValue =
+            Math.round((sec_3_2.taxableValue + invoiceTaxable32) * 100) / 100;
+          sec_3_2.igst = Math.round((sec_3_2.igst + invoiceIgst32) * 100) / 100;
+          sec_3_2.invoiceCount += 1;
+        }
+      }
+
+      sec_3_1_a.totalTax =
+        Math.round((sec_3_1_a.igst + sec_3_1_a.cgst + sec_3_1_a.sgst) * 100) /
+        100;
+
+      // 6.1 — net payable. Output tax (3.1.a + 3.1.d) minus ITC (0).
+      const sec_6_1 = {
+        netPayable:
+          Math.round((sec_3_1_a.totalTax + sec_3_1_d.igst + sec_3_1_d.cgst + sec_3_1_d.sgst) * 100) /
+          100,
+        totalIgst: Math.round((sec_3_1_a.igst + sec_3_1_d.igst) * 100) / 100,
+        totalCgst: Math.round((sec_3_1_a.cgst + sec_3_1_d.cgst) * 100) / 100,
+        totalSgst: Math.round((sec_3_1_a.sgst + sec_3_1_d.sgst) * 100) / 100,
+      };
+
+      const monthLabel = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+
+      const sections = {
+        "3.1.a": sec_3_1_a,
+        "3.1.b": sec_3_1_b,
+        "3.1.c": sec_3_1_c,
+        "3.1.d": sec_3_1_d,
+        "3.2": sec_3_2,
+        "6.1": sec_6_1,
+      };
+
+      if (format === "csv") {
+        const CRLF = "\r\n";
+        const BOM = "﻿";
+        const parts = [];
+        parts.push(
+          `# GSTR3B_SUMMARY month=${monthLabel} subBrand=${subBrandFilter || "ALL"}`,
+        );
+        parts.push("");
+        parts.push("# 3.1.a OUTWARD_TAXABLE");
+        parts.push(
+          ["Section", "Taxable_Value", "IGST", "CGST", "SGST", "Total_Tax", "Invoice_Count"]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push(
+          [
+            "3.1.a",
+            formatMoney(sec_3_1_a.taxableValue),
+            formatMoney(sec_3_1_a.igst),
+            formatMoney(sec_3_1_a.cgst),
+            formatMoney(sec_3_1_a.sgst),
+            formatMoney(sec_3_1_a.totalTax),
+            String(sec_3_1_a.invoiceCount),
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push("");
+        parts.push("# 3.1.b OUTWARD_ZERO_RATED");
+        parts.push(["Section", "Taxable_Value", "Invoice_Count"].map(csvEscape).join(","));
+        parts.push(
+          ["3.1.b", formatMoney(sec_3_1_b.taxableValue), String(sec_3_1_b.invoiceCount)]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push("");
+        parts.push("# 3.1.c OUTWARD_NIL_RATED");
+        parts.push(["Section", "Taxable_Value", "Invoice_Count"].map(csvEscape).join(","));
+        parts.push(
+          ["3.1.c", formatMoney(sec_3_1_c.taxableValue), String(sec_3_1_c.invoiceCount)]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push("");
+        parts.push("# 3.1.d INWARD_RCM");
+        parts.push(["Section", "Taxable_Value", "IGST", "CGST", "SGST"].map(csvEscape).join(","));
+        parts.push(
+          [
+            "3.1.d",
+            formatMoney(sec_3_1_d.taxableValue),
+            formatMoney(sec_3_1_d.igst),
+            formatMoney(sec_3_1_d.cgst),
+            formatMoney(sec_3_1_d.sgst),
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push("");
+        parts.push("# 3.2 INTER_STATE_UNREGISTERED");
+        parts.push(["Section", "Taxable_Value", "IGST", "Invoice_Count"].map(csvEscape).join(","));
+        parts.push(
+          [
+            "3.2",
+            formatMoney(sec_3_2.taxableValue),
+            formatMoney(sec_3_2.igst),
+            String(sec_3_2.invoiceCount),
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push("");
+        parts.push("# 6.1 NET_PAYABLE");
+        parts.push(["Section", "Net_Payable", "Total_IGST", "Total_CGST", "Total_SGST"].map(csvEscape).join(","));
+        parts.push(
+          [
+            "6.1",
+            formatMoney(sec_6_1.netPayable),
+            formatMoney(sec_6_1.totalIgst),
+            formatMoney(sec_6_1.totalCgst),
+            formatMoney(sec_6_1.totalSgst),
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+
+        const csv = BOM + parts.join(CRLF) + CRLF;
+        const filename = `gstr-3b-${monthLabel}-${subBrandFilter || "all"}.csv`;
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${filename}"`,
+        );
+        return res.status(200).send(csv);
+      }
+
+      return res.status(200).json({
+        month: monthLabel,
+        subBrand: subBrandFilter || "all",
+        sections,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] gstr-3b error:", e.message);
+      res.status(500).json({ error: "Failed to generate GSTR-3B summary" });
+    }
+  },
+);
+
 // GET /api/travel/invoices/:id
 //
 // #901 slice 3 (PRD_TRAVEL_BILLING UC-2.5): supports ?include=lines to return
@@ -4834,6 +5217,118 @@ router.post(
       }
       console.error("[travel-invoices] apply-penalty error:", e.message);
       res.status(500).json({ error: "Failed to apply late-payment penalty" });
+    }
+  },
+);
+
+// ============================================================================
+// POST /api/travel/invoices/:id/convert-to-tax-invoice — Arc 2 #901 slice 26.
+//
+// PRD_TRAVEL_BILLING FR-3.8 (doc-type taxonomy) + UC-2.6 (overseas TCS
+// estimation). Operator-action "Convert Proforma -> Tax Invoice": flips a
+// Draft Proforma to a Draft TaxInvoice in-place, reassigning invoiceNum
+// from the proforma-namespace to the regular sub-brand TaxInvoice serial.
+//
+// Why this exists: A Proforma is a non-binding price estimate (commonly
+// issued for visa application support, overseas package pre-quoting before
+// FX is finalized, customer-side internal approval). Once the price is
+// locked + customer commits, the operator converts to a TaxInvoice WITHOUT
+// re-entering line items + tax calculations. The conversion preserves:
+//   - lines (TravelInvoiceLine rows untouched)
+//   - totalAmount + currency + dueDate + contactId + subBrand
+//   - parentInvoiceId remains null (a Proforma is not a child of anything)
+// And mutates:
+//   - docType: Proforma -> TaxInvoice
+//   - invoiceNum: rewritten via nextSubBrandInvoiceNum() so the new
+//     TaxInvoice gets a gap-less per-sub-brand serial. The old proforma
+//     number is preserved in the audit log under prevInvoiceNum.
+// Status stays Draft — operator must explicitly call /issue to lock it
+// (matches the existing create-then-issue flow; conversion does NOT skip
+// the Draft -> Issued transition matrix).
+//
+// Auth: ADMIN/MANAGER only.
+//
+// Body: (empty — no input needed; conversion is a pure type-flip)
+//
+// Pre-conditions:
+//   1. Invoice exists, tenant-scoped, sub-brand-accessible.
+//   2. docType == 'Proforma' (NULL docType is treated as 'TaxInvoice' per
+//      the slice-11 back-compat convention; back-compat rows are NOT
+//      eligible for conversion since they're already TaxInvoice).
+//   3. status == 'Draft' (Issued/Partial/Paid/Voided are settled states
+//      — converting after issue would invalidate downstream audit trails;
+//      operator should issue a CreditNote + start fresh).
+//
+// Side effects:
+//   - In-place update of the TravelInvoice row (docType + invoiceNum).
+//   - Audit row stamped TRAVEL_INVOICE_CONVERTED_TO_TAX_INVOICE with
+//     details { prevInvoiceNum, newInvoiceNum, subBrand }.
+//
+// Returns: 200 + the updated invoice row.
+//
+// Error codes: INVALID_ID (400), INVOICE_NOT_FOUND (404),
+//   SUB_BRAND_DENIED (403), NOT_A_PROFORMA (400 — docType != 'Proforma'),
+//   INVALID_INVOICE_STATE (400 — status != 'Draft').
+// ============================================================================
+router.post(
+  "/invoices/:id/convert-to-tax-invoice",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      if (invoice.docType !== "Proforma") {
+        return res.status(400).json({
+          error: `Only Proforma invoices can be converted to TaxInvoice (current docType: ${invoice.docType || "TaxInvoice"})`,
+          code: "NOT_A_PROFORMA",
+        });
+      }
+
+      if (invoice.status !== "Draft") {
+        return res.status(400).json({
+          error: `Only Draft proformas can be converted (current status: ${invoice.status}). Settled proformas should be voided + reissued.`,
+          code: "INVALID_INVOICE_STATE",
+        });
+      }
+
+      const prevInvoiceNum = invoice.invoiceNum;
+      const newInvoiceNum = await nextSubBrandInvoiceNum(
+        req.travelTenant.id,
+        invoice.subBrand,
+      );
+
+      const updated = await prisma.travelInvoice.update({
+        where: { id: invoice.id },
+        data: {
+          docType: "TaxInvoice",
+          invoiceNum: newInvoiceNum,
+        },
+      });
+
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_CONVERTED_TO_TAX_INVOICE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          prevInvoiceNum,
+          newInvoiceNum,
+          subBrand: invoice.subBrand,
+        },
+      );
+
+      return res.status(200).json(updated);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] convert-to-tax-invoice error:", e.message);
+      res.status(500).json({ error: "Failed to convert proforma to tax invoice" });
     }
   },
 );

@@ -18,6 +18,7 @@
  *   POST   /api/travel/commission-profiles/:id/assign     — ADMIN/MANAGER bulk-assign to Contact rows (slice 6)
  *   POST   /api/travel/commission-profiles/:id/preview    — what-if commission preview (slice 7)
  *   GET    /api/travel/commission-profiles/:id/ledger     — operator-view commission ledger (slice 9)
+ *   GET    /api/travel/commission-profiles/:id/ledger.csv — operator CSV export of ledger (slice 11)
  *
  * Validation strictness (slice 2):
  *   - name required, non-empty trim                       → 400 MISSING_FIELDS
@@ -863,6 +864,170 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-commission-profiles] ledger error:", e.message);
       res.status(500).json({ error: "Failed to load commission ledger" });
+    }
+  },
+);
+
+// GET /api/travel/commission-profiles/:id/ledger.csv — CSV export of the same
+// ledger payload the JSON endpoint (slice 9) emits, in operator-downloadable
+// shape. Reuses the same Deal × Contact query + agentCommissionCalculator
+// computation so a row visible in the JSON ledger has the identical
+// commission/breakdown values in the CSV. Mirrors the GSTR-1 export precedent
+// (#902 slice 10): UTF-8 with BOM + CRLF line endings + double-quote escaping
+// for commas / quotes / newlines, so Excel auto-detects encoding and the
+// blob round-trips through any spreadsheet tool without mojibake.
+//
+// Columns (in order):
+//   Deal ID, Deal Title, Stage, Amount, Currency, Contact ID, Contact Name,
+//   Commission, Breakdown, Created At
+//
+// Sub-brand gate + tenant scope + soft-delete filter are identical to slice 9.
+// Optional ?stage=<deal stage> filter mirrors the JSON endpoint. Pagination
+// query params are intentionally NOT honored — operators downloading a CSV
+// want the full dataset for that profile, not a paginated slice. This is the
+// same posture as the GSTR-1 export: filing exports are always full-period.
+//
+// Response:
+//   200 text/csv; charset=utf-8 with Content-Disposition: attachment;
+//   filename="commission-ledger-<profileId>-<profileSlug>.csv" on success.
+//   Standard error envelopes (404 PROFILE_NOT_FOUND, 403 SUB_BRAND_DENIED,
+//   400 INVALID_ID) match slice 9 for callers that probe before downloading.
+router.get(
+  "/commission-profiles/:id/ledger.csv",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const profile = await prisma.travelCommissionProfile.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!profile) {
+        return res.status(404).json({
+          error: "Commission profile not found",
+          code: "PROFILE_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand gate — NULL subBrand profiles are tenant-wide.
+      if (profile.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, profile.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      const stageFilter = req.query.stage ? String(req.query.stage) : null;
+
+      const dealWhere = {
+        tenantId: req.travelTenant.id,
+        deletedAt: null,
+        contact: { commissionProfileId: id, tenantId: req.travelTenant.id },
+      };
+      if (stageFilter) dealWhere.stage = stageFilter;
+
+      const deals = await prisma.deal.findMany({
+        where: dealWhere,
+        include: { contact: { select: { id: true, name: true } } },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+
+      let parsedProfile = null;
+      let parseError = null;
+      try {
+        parsedProfile = JSON.parse(profile.profileJson);
+      } catch (e) {
+        parseError = e.message;
+      }
+
+      // Local CSV escape — wrap in double-quotes when the cell carries a comma,
+      // double-quote, or CR/LF. Mirrors travel_invoices.js#csvEscape so the
+      // two export endpoints share the same escaping contract.
+      const csvEscape = (s) => {
+        if (s == null) return "";
+        const str = String(s);
+        if (/[",\r\n]/.test(str)) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+
+      const CRLF = "\r\n";
+      const BOM = "﻿";
+
+      const header = [
+        "Deal ID",
+        "Deal Title",
+        "Stage",
+        "Amount",
+        "Currency",
+        "Contact ID",
+        "Contact Name",
+        "Commission",
+        "Breakdown",
+        "Created At",
+      ];
+
+      const rows = [header.map(csvEscape).join(",")];
+      for (const d of deals) {
+        let result;
+        if (parseError) {
+          result = {
+            commission: 0,
+            breakdown: `malformed profileJson: ${parseError}`,
+          };
+        } else {
+          result = computeCommission({
+            saleAmount: Number(d.amount) || 0,
+            paxCount: 1,
+            profile: parsedProfile,
+          });
+        }
+        rows.push(
+          [
+            d.id,
+            d.title || "",
+            d.stage || "",
+            d.amount == null ? "" : Number(d.amount),
+            d.currency || "",
+            d.contact ? d.contact.id : "",
+            d.contact && d.contact.name ? d.contact.name : "",
+            result.commission,
+            result.breakdown || "",
+            d.createdAt ? new Date(d.createdAt).toISOString() : "",
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+      }
+
+      const csv = BOM + rows.join(CRLF) + CRLF;
+
+      // Filename slug: profile name lowercased + spaces->hyphens, alpha-num only.
+      const slug = (profile.name || `profile-${profile.id}`)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 40) || `profile-${profile.id}`;
+      const filename = `commission-ledger-${profile.id}-${slug}.csv`;
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      );
+      return res.status(200).send(csv);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] ledger.csv error:", e.message);
+      res.status(500).json({ error: "Failed to export commission ledger CSV" });
     }
   },
 );

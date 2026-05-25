@@ -200,6 +200,172 @@ router.post(
   },
 );
 
+// ============================================================================
+// GET /api/travel/religious-packets/stats — tenant-wide content-library rollup
+//
+// Mirrors the broader stats family (#903 slice 23 /suppliers/stats, #905 slice
+// 18 /commission-profiles/stats, #908 slice 19 /flyer-templates/global-stats).
+// USER-readable anodyne aggregate that powers the Religious Guidance Packets
+// library page's header summary strip ("12 packets · 9 active · 3 archived ·
+// 7 rfu · 5 tmc · 1 day-0 / 4 day-1 / 3 day-3 / 4 day-7 · last edited 2h ago").
+// Without it the frontend has to fire {list, count by subBrand×4, count by
+// isActive, count by dayOffset bucket, count by channel} — N+1 round-trips for
+// a single visual surface.
+//
+// Behaviour:
+//   - Sub-brand-scoped: non-admin advisors with subBrandAccess narrow the
+//     visible set BEFORE counting. Mirrors the /religious-packets list
+//     endpoint's pattern (lines 97-106) so the two surfaces stay consistent.
+//   - Bucketing (all from prisma.religiousGuidancePacket.findMany):
+//       total                            — count of all visible rows
+//       active, archived                 — count by isActive flag
+//       bySubBrand: { <sb>: { count } }  — per-sub-brand counts
+//       byDayOffset: { "0":n, "1":n... } — per-dayOffset counts (string keys
+//                                          so JSON serialises cleanly + the
+//                                          UI can render in numeric order)
+//       byChannel: { wa, email, sms }    — count of packets ENABLING each
+//                                          channel (a packet with channels=
+//                                          "wa,email" contributes +1 to wa
+//                                          AND +1 to email, NOT +1 to a
+//                                          composite "wa,email" key)
+//       lastUpdatedAt                    — max(updatedAt) across visible rows
+//   - ?from / ?to (ISO date bounds) filter packet.createdAt before aggregation.
+//
+// USER-readable: anodyne aggregate (counts + timestamps); safe. No audit row:
+// read-only meta surface, mirrors /commission-profiles/stats and /suppliers/stats.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /religious-packets/:id family or `:id="stats"` would fail INVALID_ID before
+// reaching this handler.
+// ============================================================================
+
+router.get(
+  "/religious-packets/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const where = { tenantId };
+
+      // Optional ISO date bounds on packet.createdAt — same shape as the
+      // sibling /suppliers/stats endpoint.
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+      }
+
+      // Sub-brand narrowing — mirrors the list endpoint pattern. Non-admin
+      // advisors only contribute to the rollup over sub-brands they're
+      // entitled to. Empty allowed-set = deny everything (force zero rows).
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed !== null) {
+        if (allowed.size === 0) {
+          where.subBrand = "__none__"; // forces zero rows
+        } else {
+          where.subBrand = { in: [...allowed] };
+        }
+      }
+
+      const packets = await prisma.religiousGuidancePacket.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          dayOffset: true,
+          isActive: true,
+          channels: true,
+          updatedAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+      });
+
+      // Empty short-circuit — return zeroed shape with stable bucket maps.
+      if (packets.length === 0) {
+        return res.json({
+          total: 0,
+          active: 0,
+          archived: 0,
+          bySubBrand: {},
+          byDayOffset: {},
+          byChannel: { wa: 0, email: 0, sms: 0 },
+          lastUpdatedAt: null,
+        });
+      }
+
+      let active = 0;
+      let archived = 0;
+      let lastUpdatedAt = null;
+      const bySubBrand = {};
+      const byDayOffset = {};
+      const byChannel = { wa: 0, email: 0, sms: 0 };
+
+      for (const p of packets) {
+        if (p.isActive) active += 1;
+        else archived += 1;
+
+        const ts = p.updatedAt instanceof Date ? p.updatedAt : new Date(p.updatedAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+        }
+
+        // Schema has subBrand non-nullable but defensively coalesce falsy
+        // → '_tenant' for forward-compat (matches sibling /suppliers/stats).
+        const sbKey = p.subBrand ? String(p.subBrand) : "_tenant";
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+        bySubBrand[sbKey].count += 1;
+
+        // dayOffset bucket — string key so JSON serialises cleanly.
+        const doKey = String(p.dayOffset);
+        if (!byDayOffset[doKey]) byDayOffset[doKey] = { count: 0 };
+        byDayOffset[doKey].count += 1;
+
+        // channels is a CSV like "wa,email" — split + bump each channel.
+        // Defensive: handle null/empty/unknown tokens gracefully.
+        if (typeof p.channels === "string" && p.channels.length > 0) {
+          const tokens = p.channels.split(",").map((s) => s.trim());
+          for (const tok of tokens) {
+            if (tok === "wa" || tok === "email" || tok === "sms") {
+              byChannel[tok] += 1;
+            }
+          }
+        }
+      }
+
+      res.json({
+        total: packets.length,
+        active,
+        archived,
+        bySubBrand,
+        byDayOffset,
+        byChannel,
+        lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
+      });
+    } catch (e) {
+      console.error("[travel-religious] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise religious packets" });
+    }
+  },
+);
+
 // ─── Get + patch + delete ────────────────────────────────────────────
 
 router.get(

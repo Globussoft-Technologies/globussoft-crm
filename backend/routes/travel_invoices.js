@@ -251,6 +251,13 @@ router.get(
 );
 
 // GET /api/travel/invoices/:id
+//
+// #901 slice 3 (PRD_TRAVEL_BILLING UC-2.5): supports ?include=lines to return
+// the invoice's TravelInvoiceLine rows in the same response (single round-trip
+// composite document read). Multiple includes can be comma-separated for
+// forward compat (e.g. ?include=lines,payments), but only "lines" is honored
+// in this slice; unknown tokens are silently skipped. Omitting the param
+// preserves the original header-only response shape (no `lines` field added).
 router.get(
   "/invoices/:id",
   verifyToken,
@@ -278,7 +285,26 @@ router.get(
           .status(403)
           .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
-      res.json(invoice);
+
+      // Parse ?include=lines[,...]. Comma-separated, trimmed, case-sensitive.
+      // Only the "lines" token is honored in this slice — unknown tokens are
+      // silently skipped (forward-compat for future include=payments etc.).
+      const includeTokens = req.query.include
+        ? String(req.query.include)
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+
+      const payload = { ...invoice };
+      if (includeTokens.includes("lines")) {
+        const lines = await prisma.travelInvoiceLine.findMany({
+          where: { invoiceId: id, tenantId: req.travelTenant.id },
+          orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+        });
+        payload.lines = lines;
+      }
+      res.json(payload);
     } catch (e) {
       if (e.status) {
         return res.status(e.status).json({ error: e.message, code: e.code });

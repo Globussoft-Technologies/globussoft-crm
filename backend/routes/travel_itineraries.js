@@ -7,6 +7,7 @@
 //   PATCH  /api/travel/itineraries/:id                      — amend top-level fields (not items)
 //   POST   /api/travel/itineraries/:id/items                — append a polymorphic item
 //   POST   /api/travel/itineraries/:id/items/bulk-reorder   — atomic bulk reposition (#907 slice 8)
+//   GET    /api/travel/itineraries/:id/items/search         — item notes search/filter (#907 slice 10)
 //   PATCH  /api/travel/itineraries/:id/items/:itemId        — amend an item
 //   DELETE /api/travel/itineraries/:id/items/:itemId        — remove an item
 //   POST   /api/travel/itineraries/:id/draft/regen          — regen LLM-drafted summary (PRD §4.3 + §9.1)
@@ -513,6 +514,169 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-itin] bulk-reorder error:", e.message);
       res.status(500).json({ error: "Failed to bulk-reorder items" });
+    }
+  },
+);
+
+// ─── Items search / filter (#907 slice 10) ───────────────────────────
+//
+// GET /api/travel/itineraries/:id/items/search?q=<term>&itemType=<t>&dayOffset=<n>
+//
+// Operator-facing search across an itinerary's items. RFU 14N Umrah and
+// TMC 12N Europe packages routinely carry 50-100 items spread across many
+// days; locating a specific note ("vegetarian only", "Madinah 3-min walk")
+// by scrolling is painful. This endpoint searches case-insensitively
+// across description + notes-friendly keys inside detailsJson (notes,
+// specialRequests, dietaryNotes, mobility) and returns matches with a
+// short snippet + the matched-field list.
+//
+// Query params:
+//   q          required, ≥2 chars after trim; substring case-insensitive.
+//   itemType   optional; must be one of VALID_ITEM_TYPES if provided.
+//   dayOffset  optional; non-negative integer; filters via
+//              detailsJson.dayOffset (preferred) or (detailsJson.dayNumber - 1)
+//              fallback (slice-2 convention).
+//
+// Response:
+//   {
+//     itineraryId, query, itemType, dayOffset,  // echoed inputs
+//     matchCount,
+//     items: [{
+//       id, itemType, position, description, dayOffset,
+//       matchedFields: ["description"|"notes"|"specialRequests"|"dietaryNotes"|"mobility", ...],
+//       snippet,   // first ~80 chars surrounding the first match
+//     }, ...]
+//   }
+//
+// Express ordering: this sub-path sits BEFORE the PATCH/DELETE
+// /:id/items/:itemId verbs (different methods + the /:itemId param could
+// otherwise match "search" — but verb mismatch makes the collision moot).
+//
+// Tenant + sub-brand guard via loadItineraryWithGuard (mirrors slices
+// 2/5/6/7/8/9). Read-only — no audit log, no eventBus emit.
+//
+// PRD: docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3 (item search/filter
+// candidate).
+router.get(
+  "/itineraries/:id/items/search",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+
+      const qRaw = typeof req.query.q === "string" ? req.query.q : "";
+      const q = qRaw.trim();
+      if (q.length < 2) {
+        return res.status(400).json({
+          error: "q is required and must be at least 2 chars after trim",
+          code: "INVALID_QUERY",
+        });
+      }
+
+      let itemTypeFilter = null;
+      if (req.query.itemType != null && req.query.itemType !== "") {
+        if (!VALID_ITEM_TYPES.includes(req.query.itemType)) {
+          return res.status(400).json({
+            error: `itemType must be one of: ${VALID_ITEM_TYPES.join(", ")}`,
+            code: "INVALID_ITEM_TYPE",
+          });
+        }
+        itemTypeFilter = req.query.itemType;
+      }
+
+      let dayOffsetFilter = null;
+      if (req.query.dayOffset != null && req.query.dayOffset !== "") {
+        const n = parseInt(req.query.dayOffset, 10);
+        if (!Number.isFinite(n) || n < 0 || String(n) !== String(req.query.dayOffset)) {
+          return res.status(400).json({
+            error: "dayOffset must be a non-negative integer",
+            code: "INVALID_DAY_OFFSET",
+          });
+        }
+        dayOffsetFilter = n;
+      }
+
+      const where = { itineraryId: itin.id };
+      if (itemTypeFilter) where.itemType = itemTypeFilter;
+      const rows = await prisma.itineraryItem.findMany({
+        where,
+        orderBy: { position: "asc" },
+      });
+
+      const NOTE_KEYS = ["notes", "specialRequests", "dietaryNotes", "mobility"];
+      const needle = q.toLowerCase();
+
+      function resolveDayOffset(details) {
+        if (!details || typeof details !== "object") return null;
+        if (typeof details.dayOffset === "number") return details.dayOffset;
+        if (typeof details.dayNumber === "number") return details.dayNumber - 1;
+        return null;
+      }
+
+      function makeSnippet(text) {
+        const lower = String(text).toLowerCase();
+        const idx = lower.indexOf(needle);
+        if (idx < 0) return String(text).slice(0, 80);
+        const start = Math.max(0, idx - 30);
+        const end = Math.min(String(text).length, idx + needle.length + 30);
+        const prefix = start > 0 ? "…" : "";
+        const suffix = end < String(text).length ? "…" : "";
+        return prefix + String(text).slice(start, end) + suffix;
+      }
+
+      const matches = [];
+      for (const row of rows) {
+        let details = null;
+        if (row.detailsJson) {
+          try { details = JSON.parse(row.detailsJson); } catch { details = null; }
+        }
+
+        const rowDayOffset = resolveDayOffset(details);
+        if (dayOffsetFilter !== null && rowDayOffset !== dayOffsetFilter) continue;
+
+        const matchedFields = [];
+        let firstHitText = null;
+
+        if (row.description && row.description.toLowerCase().includes(needle)) {
+          matchedFields.push("description");
+          firstHitText = row.description;
+        }
+        if (details && typeof details === "object") {
+          for (const key of NOTE_KEYS) {
+            const val = details[key];
+            if (typeof val === "string" && val.toLowerCase().includes(needle)) {
+              matchedFields.push(key);
+              if (firstHitText === null) firstHitText = val;
+            }
+          }
+        }
+
+        if (matchedFields.length === 0) continue;
+
+        matches.push({
+          id: row.id,
+          itemType: row.itemType,
+          position: row.position,
+          description: row.description,
+          dayOffset: rowDayOffset,
+          matchedFields,
+          snippet: firstHitText !== null ? makeSnippet(firstHitText) : null,
+        });
+      }
+
+      res.json({
+        itineraryId: itin.id,
+        query: q,
+        itemType: itemTypeFilter,
+        dayOffset: dayOffsetFilter,
+        matchCount: matches.length,
+        items: matches,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] items search error:", e.message);
+      res.status(500).json({ error: "Failed to search items" });
     }
   },
 );

@@ -1376,6 +1376,250 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/:id/scorecard
+// (Arc 2 #903 slice 16 — PRD_TRAVEL_SUPPLIER_MASTER §3.7.a per-supplier
+// dashboard "operational metrics" block).
+//
+// Per-supplier performance scorecard derived entirely from existing
+// TravelSupplierPayable rows. Surfaces three operational signals that the
+// supplier detail page promised in §3.7.a ("live obligations, recent POs,
+// commission earned this FY, open disputes...") — the operational-quality
+// half of that block. No schema changes needed; everything is computed from
+// the status / dueDate / paidAt columns the slice-3 model already carries.
+//
+// Three metrics:
+//   - bookingVolume: total count of payables for this supplier (any status,
+//     within the optional date window). This is the proxy for "PO count" /
+//     "how often we transact with this supplier".
+//   - onTimeDeliveryRate: of the PAID payables, fraction where paidAt <= dueDate.
+//     Payables with no dueDate or no paidAt are excluded from the denominator.
+//     Mirrors the supplier-quality signal in §3.6 (chargeback / dispute prelude).
+//   - cancelRate: cancelled / total. The "supplier flakiness" signal — POs we
+//     opened and then had to void.
+//
+// MUST be registered BEFORE `GET /suppliers/:id` — Express matches in
+// declaration order and the 3-segment sub-path `:id/scorecard` should win
+// the `/suppliers/42/scorecard` shape. Same placement reasoning as slice
+// 13 (`:id/credentials`) and slice 15 (`:id/access-trail`).
+//
+// Auth: any verified token; tenant-scoped via req.travelTenant; sub-brand
+// access enforced via getSubBrandAccessSet on the parent supplier.
+//
+// Query params (all optional):
+//   ?from=ISODate   — lower bound on payable.createdAt (inclusive).
+//   ?to=ISODate     — upper bound on payable.createdAt (inclusive).
+//                     Default window: trailing 365 days from now if neither
+//                     bound provided. Bounds INVERTED (from > to) → 400
+//                     INVALID_DATE_RANGE.
+//
+// Response shape:
+//   {
+//     supplier: { id, name, supplierCategory, subBrand },
+//     window:   { from: <ISO>, to: <ISO> },
+//     metrics: {
+//       bookingVolume:      <int>,                   // total payables in window
+//       paidCount:          <int>,
+//       cancelledCount:     <int>,
+//       pendingCount:       <int>,
+//       scheduledCount:     <int>,
+//       onTimeCount:        <int>,                   // paid where paidAt <= dueDate
+//       lateCount:          <int>,                   // paid where paidAt  > dueDate
+//       onTimeDeliveryRate: <number|null>,           // onTime / (onTime + late); null if denom=0
+//       cancelRate:         <number|null>,           // cancelled / total; null if total=0
+//       totalAmountPaid:    <number>,                // sum of amount where status='paid'
+//     }
+//   }
+//
+// Decisions:
+//   - On-time denominator EXCLUDES paid rows without both dueDate AND paidAt.
+//     A row without dueDate has no contractual due-by so we cannot judge
+//     timeliness; a row without paidAt is by definition not paid so it
+//     shouldn't be in this calc anyway (defensive guard). Excluded rows show
+//     up in paidCount but NOT in onTimeCount + lateCount.
+//   - Rates rounded to 4dp half-up (mirrors slice 11 exposure utilization
+//     rounding via round4 helper). null when denominator is 0 — never NaN,
+//     never divide-by-zero. Frontend renders null as "—".
+//   - Default window: trailing 365 days. Operators looking at a supplier
+//     scorecard typically want "last year" — analogous to "Year-to-Date"
+//     financial dashboards. Explicit bounds always override.
+//   - All metrics computed from a single findMany returning the slim
+//     projection {status, dueDate, paidAt, amount}. ~500 payables/supplier/yr
+//     even for high-volume tenants → no need for groupBy here; the in-memory
+//     reduce is simpler and one round-trip cheaper than 4 separate groupBys.
+//   - Hard cap of 10_000 rows (same as slice 8 aging) as a sanity guard
+//     against pathological tenants.
+//   - Error codes: INVALID_ID, NOT_FOUND, SUB_BRAND_DENIED, INVALID_DATE,
+//     INVALID_DATE_RANGE.
+// ============================================================================
+
+const SCORECARD_MAX_ROWS = 10_000;
+const SCORECARD_DEFAULT_WINDOW_MS = 365 * 86_400_000;
+
+function round4Scorecard(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 10000) / 10000;
+}
+
+function round2Scorecard(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+router.get(
+  "/suppliers/:id/scorecard",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      // Window parsing — both bounds optional; if both omitted, default to
+      // trailing 365 days. Invalid date → 400 INVALID_DATE. Inverted bounds
+      // (from > to) → 400 INVALID_DATE_RANGE.
+      const now = new Date();
+      let from = null;
+      let to = null;
+      if (req.query.from != null && req.query.from !== "") {
+        const dt = new Date(String(req.query.from));
+        if (Number.isNaN(dt.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date / parseable date string",
+            code: "INVALID_DATE",
+          });
+        }
+        from = dt;
+      }
+      if (req.query.to != null && req.query.to !== "") {
+        const dt = new Date(String(req.query.to));
+        if (Number.isNaN(dt.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date / parseable date string",
+            code: "INVALID_DATE",
+          });
+        }
+        to = dt;
+      }
+      if (from && to && from.getTime() > to.getTime()) {
+        return res.status(400).json({
+          error: "from must not be after to",
+          code: "INVALID_DATE_RANGE",
+        });
+      }
+      if (!from && !to) {
+        to = now;
+        from = new Date(now.getTime() - SCORECARD_DEFAULT_WINDOW_MS);
+      } else if (!from) {
+        from = new Date(to.getTime() - SCORECARD_DEFAULT_WINDOW_MS);
+      } else if (!to) {
+        to = now;
+      }
+
+      const supplier = await prisma.travelSupplier.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true, name: true, supplierCategory: true, subBrand: true },
+      });
+      if (!supplier) {
+        return res
+          .status(404)
+          .json({ error: "Supplier not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, supplier.subBrand)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      const rows = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierId: id,
+          createdAt: { gte: from, lte: to },
+        },
+        select: {
+          status: true,
+          dueDate: true,
+          paidAt: true,
+          amount: true,
+        },
+        take: SCORECARD_MAX_ROWS,
+      });
+
+      let paidCount = 0;
+      let cancelledCount = 0;
+      let pendingCount = 0;
+      let scheduledCount = 0;
+      let onTimeCount = 0;
+      let lateCount = 0;
+      let totalAmountPaid = 0;
+
+      for (const r of rows) {
+        if (r.status === "paid") {
+          paidCount++;
+          totalAmountPaid += Number(r.amount || 0);
+          // On-time delivery requires BOTH dueDate AND paidAt — defensive.
+          if (r.dueDate && r.paidAt) {
+            const due = r.dueDate instanceof Date
+              ? r.dueDate.getTime()
+              : new Date(r.dueDate).getTime();
+            const paid = r.paidAt instanceof Date
+              ? r.paidAt.getTime()
+              : new Date(r.paidAt).getTime();
+            if (Number.isFinite(due) && Number.isFinite(paid)) {
+              if (paid <= due) onTimeCount++;
+              else lateCount++;
+            }
+          }
+        } else if (r.status === "cancelled") {
+          cancelledCount++;
+        } else if (r.status === "pending") {
+          pendingCount++;
+        } else if (r.status === "scheduled") {
+          scheduledCount++;
+        }
+      }
+
+      const bookingVolume = rows.length;
+      const onTimeDenom = onTimeCount + lateCount;
+      const onTimeDeliveryRate = onTimeDenom > 0
+        ? round4Scorecard(onTimeCount / onTimeDenom)
+        : null;
+      const cancelRate = bookingVolume > 0
+        ? round4Scorecard(cancelledCount / bookingVolume)
+        : null;
+
+      res.json({
+        supplier,
+        window: { from: from.toISOString(), to: to.toISOString() },
+        metrics: {
+          bookingVolume,
+          paidCount,
+          cancelledCount,
+          pendingCount,
+          scheduledCount,
+          onTimeCount,
+          lateCount,
+          onTimeDeliveryRate,
+          cancelRate,
+          totalAmountPaid: round2Scorecard(totalAmountPaid),
+        },
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] scorecard error:", e.message);
+      res.status(500).json({ error: "Failed to build supplier scorecard" });
+    }
+  },
+);
+
 // GET /api/travel/suppliers/:id
 router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

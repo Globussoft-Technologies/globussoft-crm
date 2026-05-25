@@ -21,6 +21,7 @@
  *   GET    /api/travel/commission-profiles/:id/ledger.csv — operator CSV export of ledger (slice 11)
  *   POST   /api/travel/commission-profiles/:id/duplicate  — ADMIN/MANAGER clone (slice 13)
  *   GET    /api/travel/commission-profiles/:id/summary/by-contact — per-contact aggregation (slice 14)
+ *   GET    /api/travel/commission-profiles/:id/summary/by-month — monthly time-series rollup (slice 15)
  *
  * Validation strictness (slice 2):
  *   - name required, non-empty trim                       → 400 MISSING_FIELDS
@@ -1370,6 +1371,260 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-commission-profiles] summary-by-contact error:", e.message);
       res.status(500).json({ error: "Failed to load commission summary" });
+    }
+  },
+);
+
+// GET /api/travel/commission-profiles/:id/summary/by-month — monthly time-series
+// rollup across the same Deal × Contact join the slice 9 ledger emits. One row
+// per YYYY-MM bucket present in the deal set, summarising the number of deals,
+// gross sale total, and total commission earned for that month. This is the
+// data shape the operator-facing "commission trend" chart consumes (per
+// PRD §3 FR-3.6.3 — per-FY summary with month-over-month trend) and the
+// month-input the eventual b2bCommissionEngine cron (FR-3.2.4, Phase 1-3)
+// reads when generating the per-month PDF statement. Shipping the read
+// endpoint now means UI chart + month-picker can be built ahead of the
+// stored-ledger swap, with no contract churn when the storage swap lands.
+//
+// Why a separate endpoint instead of extending /:id/summary/by-contact:
+//   - Different aggregation granularity (per-month, not per-Contact).
+//   - Different natural sort (chronological, not by total commission).
+//   - Pre-fills a different UI surface (time-series chart vs leaderboard
+//     table). Keeping the two reads disjoint lets each evolve independently.
+//
+// Bucket key shape: ISO YYYY-MM string (e.g. "2026-05") derived from
+// Deal.createdAt's UTC year + month. UTC chosen deliberately so the bucket
+// labels stay stable across operator timezones — finance reconciliation
+// works in calendar-month UTC for cross-border deal volume. If the FY
+// rollup needs tenant-locale month boundaries later, that's an additive
+// query param (?tz=Asia/Kolkata) on this same endpoint, no contract churn.
+//
+// Scope rules (mirror slices 9 + 14):
+//   - Tenant-scoped on Contact.tenantId AND Deal.tenantId.
+//   - Sub-brand-restricted callers must access the profile's sub-brand
+//     (NULL subBrand = tenant-wide, accessible to all authorised roles).
+//   - Soft-deleted deals (deletedAt != null) are excluded.
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   stage     optional Deal.stage filter (e.g. "won" for settled-only trend)
+//   from      optional inclusive lower bound on bucket (YYYY-MM); rows
+//             with month < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY-MM)
+//   orderBy   default "month:asc" (chronological); also accepts "month:desc",
+//             "totalCommission:desc", "totalCommission:asc", "dealCount:desc",
+//             "dealCount:asc", "totalSale:desc", "totalSale:asc". Unknown
+//             tokens degrade silently to default — same graceful posture
+//             slice 14 uses.
+//   limit     default 36 (3 years of months), max 120 (10 years). Smaller
+//             default than ledger because each bucket is one chart point.
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     profileId, profileName, profileType,
+//     months: [
+//       { month: "2026-05", dealCount, totalSale, totalCommission }
+//     ],
+//     totalMonths,
+//     grandTotalCommission,
+//     limit, offset
+//   }
+//
+// Defensive behaviour: malformed stored profileJson → every per-month row
+// reports totalCommission=0 (each underlying deal contributed 0) with the
+// per-row dealCount + totalSale still accurate. Mirrors slice 14 posture.
+router.get(
+  "/commission-profiles/:id/summary/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const profile = await prisma.travelCommissionProfile.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!profile) {
+        return res.status(404).json({
+          error: "Commission profile not found",
+          code: "PROFILE_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand gate — NULL subBrand profiles are tenant-wide.
+      if (profile.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, profile.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 36, 120);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const stageFilter = req.query.stage ? String(req.query.stage) : null;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation. Accept "YYYY-MM" form only; anything else is
+      // a 400 INVALID_MONTH_FORMAT — the bucket labels we emit follow this
+      // exact shape, so callers passing month-tokens to from/to should
+      // already be using it.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "totalCommission:desc",
+        "totalCommission:asc",
+        "dealCount:desc",
+        "dealCount:asc",
+        "totalSale:desc",
+        "totalSale:asc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Same Deal × Contact join as slices 9 + 14. No DB-level pagination —
+      // aggregation runs in-process so we can bucket by UTC YYYY-MM. Input
+      // size bound is the same as slice 14 (low thousands at platinum scale).
+      const dealWhere = {
+        tenantId: req.travelTenant.id,
+        deletedAt: null,
+        contact: { commissionProfileId: id, tenantId: req.travelTenant.id },
+      };
+      if (stageFilter) dealWhere.stage = stageFilter;
+
+      const deals = await prisma.deal.findMany({
+        where: dealWhere,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+
+      // Parse stored profileJson once; reuse across all rows.
+      let parsedProfile = null;
+      let parseError = null;
+      try {
+        parsedProfile = JSON.parse(profile.profileJson);
+      } catch (e) {
+        parseError = e.message;
+      }
+
+      // Half-up round to 2dp — matches lib/agentCommissionCalculator.round2.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { month, dealCount,
+      // totalSale, totalCommission }. Deals with a null/invalid createdAt
+      // are bucketed under "unknown" so the count surface stays accurate.
+      const byMonth = new Map();
+      for (const d of deals) {
+        let monthKey = "unknown";
+        if (d.createdAt) {
+          const dt = new Date(d.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let row = byMonth.get(monthKey);
+        if (!row) {
+          row = {
+            month: monthKey,
+            dealCount: 0,
+            totalSale: 0,
+            totalCommission: 0,
+          };
+          byMonth.set(monthKey, row);
+        }
+        row.dealCount += 1;
+        row.totalSale += Number(d.amount) || 0;
+
+        let commission = 0;
+        if (!parseError) {
+          const result = computeCommission({
+            saleAmount: Number(d.amount) || 0,
+            paxCount: 1,
+            profile: parsedProfile,
+          });
+          commission = Number(result.commission) || 0;
+        }
+        row.totalCommission += commission;
+      }
+
+      // Finalise rounding on per-row sums.
+      let months = [...byMonth.values()].map((r) => ({
+        ...r,
+        totalSale: round2(r.totalSale),
+        totalCommission: round2(r.totalCommission),
+      }));
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set (they have no comparable month token); when no
+      // bounds are set, "unknown" stays in the result so the deal-count
+      // surface remains complete.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM which is also
+      // chronological. "unknown" sorts last in asc / first in desc by
+      // virtue of being lexicographically > "9999-12" — acceptable for
+      // a defensive fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandTotalCommission = round2(
+        months.reduce((acc, r) => acc + (Number(r.totalCommission) || 0), 0),
+      );
+
+      // Pagination applied AFTER aggregation + sort + filter, same as slice 14.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        profileId: profile.id,
+        profileName: profile.name,
+        profileType: profile.profileType,
+        months: paged,
+        totalMonths,
+        grandTotalCommission,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] summary-by-month error:", e.message);
+      res.status(500).json({ error: "Failed to load commission monthly summary" });
     }
   },
 );

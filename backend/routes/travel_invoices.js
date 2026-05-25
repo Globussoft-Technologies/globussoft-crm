@@ -2880,4 +2880,247 @@ router.get(
   },
 );
 
+// ============================================================================
+// POST /api/travel/invoices/:id/clone-as-recurring — Arc 2 #901 slice 16.
+//
+// PRD_TRAVEL_BILLING §3.4 (recurring billing). Operator-action "Clone for
+// next cycle" against an Issued or Paid invoice: duplicates the source
+// invoice (header + lines) into a NEW Draft TravelInvoice that the
+// operator can review, tweak, and issue independently. Common usage:
+//   - Monthly retainer (corporate travel desk) — clone last month's
+//     issued invoice, update service-dates, issue.
+//   - Quarterly package re-billing — clone last quarter's paid invoice,
+//     refresh PNR/booking-ref, issue.
+//   - Ad-hoc operator convenience — duplicate any cleared invoice as a
+//     starting template instead of retyping line items.
+//
+// This is NOT the full recurring-cron engine — a separate slice (17)
+// ships the schedule-driven auto-clone. This slice gives operators the
+// manual "clone as template" surface; the cron will eventually call
+// the same flow on its schedule tick.
+//
+// === Design decisions ===
+//
+// parentInvoiceId stays NULL on the clone (distinct from slice 14/15
+// CreditNote/DebitNote which set the FK). Recurring invoices are
+// INDEPENDENT billing instruments — the relationship between cycle-N
+// and cycle-N+1 is informational (operator-tracked), not structural;
+// linking them via parentInvoiceId would corrupt the credit-note
+// subgraph semantics (we'd start seeing "recurring children" mixed in
+// with credit/debit notes when traversing parent.creditNotes).
+//
+// status = 'Draft' on the clone — never inherit the source's Issued/
+// Paid status. The new cycle's invoice needs to be reviewed (service
+// dates, PNRs, FX rates, customer state-code for GST) before being
+// issued; pre-issuing on clone would skip the operator's gate.
+//
+// invoiceNum is fresh (via nextInvoiceNum). The source's serial is
+// historical; the clone gets the next TINV-YYYY-NNNN slot (slice-5
+// per-sub-brand serial only applies at Draft→Issued transition).
+//
+// dueDate default = NOW + 30 days. Source's dueDate is historical and
+// likely past; recurring cycles need a fresh future due-date. Body
+// override accepted.
+//
+// clearTcs (default true): TCS Sec 206C(1G) depends on the buyer's
+// CURRENT-FY cumulative spend with the tenant — a clone that inherits
+// the source's tcsAmount would be wrong because the FY-cumulative
+// counter has advanced since source was issued. Default to clearing
+// (operator re-runs /tcs-preview + /apply-tcs on the new invoice when
+// they issue it). clearTcs=false is an escape hatch for the niche
+// case where the operator deliberately wants to inherit (e.g. cloning
+// within the same FY for the same buyer where TCS already applied).
+//
+// === Reject sources that aren't operator-cleared templates ===
+//
+// Source must be in [Issued, Paid] — Draft sources are still being
+// composed (not template-quality), Voided sources have no business
+// being reused, Partial sources are mid-collection (operator should
+// close them out first). CreditNote/DebitNote sources are rejected
+// outright (CANNOT_CLONE_NOTE) — those are adjustments, not standalone
+// templates; cloning a credit note would create an INR -200 Draft
+// invoice which is meaningless.
+//
+// === Auth: ADMIN/MANAGER only ===
+//
+// Operator-action surface — read-only roles can't create new invoices,
+// even from a template.
+//
+// === Body ===
+//   - dueDate (optional, parseable date) — overrides default (NOW+30d)
+//   - clearTcs (optional boolean) — default true; false inherits source TCS
+//
+// === Side effects ===
+//   - New TravelInvoice row (Draft, fresh invoiceNum, parentInvoiceId=NULL).
+//   - All source lines duplicated via createMany — preserves lineType,
+//     description, qty, unitPrice, amount, sortOrder, notes, PNR/bookingRef,
+//     service dates, currency, FX fields. New tenantId+invoiceId stamped.
+//   - Audit row stamped action='TRAVEL_INVOICE_CLONED_RECURRING' with
+//     details { sourceId, sourceInvoiceNum, lineCount, dueDate, clearTcs,
+//     subBrand }.
+//
+// === Returns ===
+//   - 201 + { invoice: <new row>, lineCount: <int> }
+//
+// === Error codes ===
+//   - INVALID_ID (400 — :id not a number)
+//   - INVOICE_NOT_FOUND (404 — cross-tenant or missing)
+//   - SUB_BRAND_DENIED (403 — caller can't access source's sub-brand)
+//   - INVALID_SOURCE_STATE (400 — source not in [Issued, Paid])
+//   - CANNOT_CLONE_NOTE (400 — source is CreditNote or DebitNote)
+//   - INVALID_DUE_DATE (400 — unparseable body.dueDate; from parseDueDate)
+// ============================================================================
+const CLONEABLE_SOURCE_STATUSES = ["Issued", "Paid"];
+
+router.post(
+  "/invoices/:id/clone-as-recurring",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const source = await loadParentInvoice(req, res, invoiceId);
+      if (!source) return;
+
+      // Reject CreditNote / DebitNote sources outright — adjustments
+      // aren't standalone templates. Cloning a CN with totalAmount=-200
+      // would produce a meaningless negative-Draft.
+      if (source.docType === "CreditNote" || source.docType === "DebitNote") {
+        return res.status(400).json({
+          error:
+            "Cannot clone a credit note or debit note as a recurring invoice",
+          code: "CANNOT_CLONE_NOTE",
+        });
+      }
+
+      // Source must be in a cloneable state — Issued or Paid only.
+      // Draft = still composing (not template-quality); Voided = no
+      // business reusing; Partial = still mid-collection (operator should
+      // close it out first via /receive-payment + /void or wait for Paid).
+      if (!CLONEABLE_SOURCE_STATUSES.includes(source.status)) {
+        return res.status(400).json({
+          error: `Source invoice must be in one of [${CLONEABLE_SOURCE_STATUSES.join(", ")}] to clone (current: ${source.status})`,
+          code: "INVALID_SOURCE_STATE",
+        });
+      }
+
+      const { dueDate: dueDateOverride, clearTcs } = req.body || {};
+      // clearTcs defaults to TRUE — TCS is FY-cumulative-spend-dependent
+      // and historical values are stale. Operator opts into inheritance
+      // by explicitly sending clearTcs=false.
+      const shouldClearTcs = clearTcs === false ? false : true;
+
+      // dueDate: body override (parseDueDate validates) → fallback to
+      // NOW + 30 days. Source's dueDate is historical and likely past;
+      // recurring cycles need a fresh future date.
+      const parsedOverride = parseDueDate(dueDateOverride);
+      const cloneDueDate =
+        parsedOverride != null
+          ? parsedOverride
+          : new Date(Date.now() + 30 * 86_400_000);
+
+      // Fresh invoice number — slice-5 per-sub-brand serial only applies
+      // at Draft→Issued; the clone is born Draft so we use the legacy
+      // nextInvoiceNum (TINV-YYYY-NNNN scheme).
+      const newInvoiceNum = await nextInvoiceNum(req.travelTenant.id);
+
+      // Load source lines BEFORE creating the new invoice — minimises
+      // the window where a half-cloned invoice could exist if the
+      // line duplication fails.
+      const sourceLines = await prisma.travelInvoiceLine.findMany({
+        where: { invoiceId: source.id, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+
+      const newInvoiceData = {
+        tenantId: req.travelTenant.id,
+        subBrand: source.subBrand,
+        contactId: source.contactId,
+        invoiceNum: newInvoiceNum,
+        status: "Draft",
+        totalAmount: source.totalAmount,
+        currency: source.currency,
+        dueDate: cloneDueDate,
+        // docType inherits from source (TaxInvoice / Proforma /
+        // TravelVoucher all OK — CreditNote/DebitNote rejected above).
+        docType: source.docType || "TaxInvoice",
+        // parentInvoiceId stays NULL — recurring cycles are independent
+        // billing instruments, not credit-note-style adjustments.
+        parentInvoiceId: null,
+      };
+
+      // TCS fields: clear by default (FY-cumulative dependency makes
+      // historical values stale). clearTcs=false inherits source values.
+      if (shouldClearTcs) {
+        newInvoiceData.tcsAmount = null;
+        newInvoiceData.tcsRate = null;
+        newInvoiceData.tcsExceedingAmount = null;
+        newInvoiceData.tcsAppliedAt = null;
+      } else {
+        newInvoiceData.tcsAmount = source.tcsAmount;
+        newInvoiceData.tcsRate = source.tcsRate;
+        newInvoiceData.tcsExceedingAmount = source.tcsExceedingAmount;
+        newInvoiceData.tcsAppliedAt = source.tcsAppliedAt;
+      }
+
+      const created = await prisma.travelInvoice.create({ data: newInvoiceData });
+
+      // Clone lines via createMany — preserves all per-line fields
+      // (lineType, description, qty, unitPrice, amount, currency,
+      // sortOrder, notes, PNR/bookingRef, service dates, FX fields).
+      // tenantId + invoiceId re-stamped to the new parent.
+      let lineCount = 0;
+      if (sourceLines.length > 0) {
+        const lineData = sourceLines.map((l) => ({
+          tenantId: req.travelTenant.id,
+          invoiceId: created.id,
+          lineType: l.lineType,
+          description: l.description,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          amount: l.amount,
+          currency: l.currency,
+          sortOrder: l.sortOrder,
+          notes: l.notes,
+          pnr: l.pnr,
+          bookingRef: l.bookingRef,
+          serviceStartDate: l.serviceStartDate,
+          serviceEndDate: l.serviceEndDate,
+          fxRateToBase: l.fxRateToBase,
+          baseAmount: l.baseAmount,
+        }));
+        const result = await prisma.travelInvoiceLine.createMany({
+          data: lineData,
+        });
+        lineCount = result.count != null ? result.count : sourceLines.length;
+      }
+
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_CLONED_RECURRING",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          sourceId: source.id,
+          sourceInvoiceNum: source.invoiceNum,
+          lineCount,
+          dueDate: cloneDueDate.toISOString(),
+          clearTcs: shouldClearTcs,
+          subBrand: source.subBrand,
+        },
+      );
+
+      return res.status(201).json({ invoice: created, lineCount });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] clone-as-recurring error:", e.message);
+      res.status(500).json({ error: "Failed to clone invoice as recurring" });
+    }
+  },
+);
+
 module.exports = router;

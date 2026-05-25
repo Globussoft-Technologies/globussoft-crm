@@ -31,6 +31,86 @@ const { writeAudit } = require("../lib/audit");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
 
+// PRD_TRAVEL_BILLING FR-3.1.a — line-type enum for invoice line items.
+// Extends the TravelQuoteLine enum (hotel/flight/transport/visa/service/other)
+// with billing-side classifications (tax/fee/addon/tcs/tds) needed for the
+// per-line tax + withholding ledger surface.
+const VALID_INVOICE_LINE_TYPES = [
+  "per_pax",
+  "per_room",
+  "per_night",
+  "per_trip",
+  "tax",
+  "fee",
+  "addon",
+  "tcs",
+  "tds",
+  "other",
+];
+
+function assertValidInvoiceLineType(t) {
+  if (t == null) return;
+  if (!VALID_INVOICE_LINE_TYPES.includes(t)) {
+    const err = new Error(
+      `lineType must be one of: ${VALID_INVOICE_LINE_TYPES.join(", ")}`,
+    );
+    err.status = 400;
+    err.code = "INVALID_LINE_TYPE";
+    throw err;
+  }
+}
+
+// Duplicated from travel_quotes.js intentionally — the rule-of-3 promotion
+// to a shared helper happens when a third caller lands (likely the upcoming
+// #903 Supplier Master line variant). Keeping locally for now keeps the
+// slice tight.
+function parsePositiveDecimal(input, fieldName) {
+  if (input == null || input === "") {
+    const err = new Error(`${fieldName} is required`);
+    err.status = 400;
+    err.code = "MISSING_FIELDS";
+    throw err;
+  }
+  const n = Number(input);
+  if (!Number.isFinite(n) || n < 0) {
+    const err = new Error(`${fieldName} must be a non-negative number`);
+    err.status = 400;
+    err.code = "INVALID_AMOUNT";
+    throw err;
+  }
+  return n;
+}
+
+function parsePositiveInt(input, fieldName, fallback) {
+  if (input == null || input === "") return fallback;
+  const n = parseInt(input, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    const err = new Error(`${fieldName} must be a positive integer`);
+    err.status = 400;
+    err.code = "INVALID_QUANTITY";
+    throw err;
+  }
+  return n;
+}
+
+// Recompute the invoice's totalAmount as the sum of its lines and persist.
+// Called from POST/PUT/DELETE /lines. Idempotent. Skipped if the lines
+// table is empty (totalAmount stays at whatever the operator typed at
+// invoice-create time — operators can author header-only invoices that
+// don't need line-itemisation).
+async function recomputeInvoiceTotal(invoiceId, tenantId) {
+  const lines = await prisma.travelInvoiceLine.findMany({
+    where: { invoiceId, tenantId },
+    select: { amount: true },
+  });
+  if (lines.length === 0) return;
+  const total = lines.reduce((acc, l) => acc + Number(l.amount || 0), 0);
+  await prisma.travelInvoice.update({
+    where: { id: invoiceId },
+    data: { totalAmount: total },
+  });
+}
+
 // Allowed forward-only status transitions (any status may also go to Voided).
 // Reject backward transitions (e.g. Paid -> Issued) with 422.
 const ALLOWED_TRANSITIONS = {
@@ -522,6 +602,277 @@ router.delete(
       }
       console.error("[travel-invoices] delete error:", e.message);
       res.status(500).json({ error: "Failed to delete invoice" });
+    }
+  },
+);
+
+// ============================================================================
+// /api/travel/invoices/:id/lines — line-item composition (PRD_TRAVEL_BILLING
+// FR-3.1.a). Mirrors travel_quotes.js /quotes/:id/lines (commit f7203b8e) —
+// same auth + sub-brand + audit conventions. Each write triggers an audit
+// row + recomputeInvoiceTotal to keep the invoice header consistent with
+// its composition. Lines inherit tenant + sub-brand scoping from their
+// parent invoice (no separate sub-brand column on the line — looked up
+// via the FK).
+//
+// Auth: read endpoints accept any verified token; write endpoints require
+// ADMIN/MANAGER. Same shape as the parent invoice routes.
+// ============================================================================
+
+// Helper: load the parent invoice tenant-scoped + sub-brand-scoped.
+// Returns the invoice on success or sends an HTTP response on failure
+// (caller short-circuits if !invoice).
+async function loadParentInvoice(req, res, invoiceId) {
+  if (!Number.isFinite(invoiceId)) {
+    res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    return null;
+  }
+  const invoice = await prisma.travelInvoice.findFirst({
+    where: { id: invoiceId, tenantId: req.travelTenant.id },
+  });
+  if (!invoice) {
+    res.status(404).json({ error: "Invoice not found", code: "INVOICE_NOT_FOUND" });
+    return null;
+  }
+  const allowed = await getSubBrandAccessSet(req.user.userId);
+  if (!canAccessSubBrand(allowed, invoice.subBrand)) {
+    res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    return null;
+  }
+  return invoice;
+}
+
+// GET /api/travel/invoices/:id/lines — list lines for an invoice.
+router.get(
+  "/invoices/:id/lines",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      const lines = await prisma.travelInvoiceLine.findMany({
+        where: { invoiceId, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+      res.json({ lines, total: lines.length });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-invoices] list lines error:", e.message);
+      res.status(500).json({ error: "Failed to list invoice lines" });
+    }
+  },
+);
+
+// POST /api/travel/invoices/:id/lines — ADMIN/MANAGER only.
+// Required: description, unitPrice. Optional: lineType (default "other"),
+// quantity (default 1), currency (default invoice currency), sortOrder, notes.
+router.post(
+  "/invoices/:id/lines",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      const {
+        lineType, description, quantity, unitPrice,
+        currency, sortOrder, notes,
+      } = req.body || {};
+
+      if (!description || typeof description !== "string" || !description.trim()) {
+        return res.status(400).json({
+          error: "description is required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      assertValidInvoiceLineType(lineType);
+      const qty = parsePositiveInt(quantity, "quantity", 1);
+      const unit = parsePositiveDecimal(unitPrice, "unitPrice");
+      const amount = qty * unit;
+
+      const created = await prisma.travelInvoiceLine.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          invoiceId,
+          lineType: lineType || "other",
+          description: description.trim(),
+          quantity: qty,
+          unitPrice: unit,
+          amount,
+          currency: currency ? String(currency) : invoice.currency,
+          sortOrder: Number.isFinite(parseInt(sortOrder, 10))
+            ? parseInt(sortOrder, 10) : 0,
+          notes: notes ? String(notes) : null,
+        },
+      });
+
+      await recomputeInvoiceTotal(invoiceId, req.travelTenant.id);
+
+      await writeAudit(
+        "TravelInvoiceLine",
+        "CREATE",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          invoiceId,
+          lineType: created.lineType,
+          amount: String(created.amount),
+        },
+      );
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-invoices] create line error:", e.message);
+      res.status(500).json({ error: "Failed to create line" });
+    }
+  },
+);
+
+// PUT /api/travel/invoices/:id/lines/:lineId — ADMIN/MANAGER only.
+router.put(
+  "/invoices/:id/lines/:lineId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const lineId = parseInt(req.params.lineId, 10);
+      if (!Number.isFinite(lineId)) {
+        return res.status(400).json({ error: "lineId must be a number", code: "INVALID_LINE_ID" });
+      }
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      const existing = await prisma.travelInvoiceLine.findFirst({
+        where: { id: lineId, invoiceId, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Line not found", code: "LINE_NOT_FOUND" });
+      }
+
+      const data = {};
+      const {
+        lineType, description, quantity, unitPrice,
+        currency, sortOrder, notes,
+      } = req.body || {};
+
+      if (lineType !== undefined) {
+        assertValidInvoiceLineType(lineType);
+        data.lineType = lineType;
+      }
+      if (description !== undefined) {
+        if (typeof description !== "string" || !description.trim()) {
+          return res.status(400).json({
+            error: "description must be non-empty",
+            code: "MISSING_FIELDS",
+          });
+        }
+        data.description = description.trim();
+      }
+      const nextQty = quantity !== undefined
+        ? parsePositiveInt(quantity, "quantity", existing.quantity)
+        : existing.quantity;
+      const nextUnit = unitPrice !== undefined
+        ? parsePositiveDecimal(unitPrice, "unitPrice")
+        : Number(existing.unitPrice);
+      if (quantity !== undefined) data.quantity = nextQty;
+      if (unitPrice !== undefined) data.unitPrice = nextUnit;
+      // Recompute amount whenever either qty or unitPrice changed.
+      if (quantity !== undefined || unitPrice !== undefined) {
+        data.amount = nextQty * nextUnit;
+      }
+      if (currency !== undefined) data.currency = String(currency);
+      if (sortOrder !== undefined) {
+        const so = parseInt(sortOrder, 10);
+        if (!Number.isFinite(so)) {
+          return res.status(400).json({
+            error: "sortOrder must be a number",
+            code: "INVALID_SORT_ORDER",
+          });
+        }
+        data.sortOrder = so;
+      }
+      if (notes !== undefined) data.notes = notes === null ? null : String(notes);
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+
+      const updated = await prisma.travelInvoiceLine.update({
+        where: { id: lineId },
+        data,
+      });
+
+      await recomputeInvoiceTotal(invoiceId, req.travelTenant.id);
+
+      await writeAudit(
+        "TravelInvoiceLine",
+        "UPDATE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { invoiceId, fields: Object.keys(data) },
+      );
+
+      res.json(updated);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-invoices] update line error:", e.message);
+      res.status(500).json({ error: "Failed to update line" });
+    }
+  },
+);
+
+// DELETE /api/travel/invoices/:id/lines/:lineId — ADMIN/MANAGER only.
+router.delete(
+  "/invoices/:id/lines/:lineId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const lineId = parseInt(req.params.lineId, 10);
+      if (!Number.isFinite(lineId)) {
+        return res.status(400).json({ error: "lineId must be a number", code: "INVALID_LINE_ID" });
+      }
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      const existing = await prisma.travelInvoiceLine.findFirst({
+        where: { id: lineId, invoiceId, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Line not found", code: "LINE_NOT_FOUND" });
+      }
+
+      // Audit BEFORE delete (same pattern as travel_quotes lines).
+      await writeAudit(
+        "TravelInvoiceLine",
+        "DELETE",
+        lineId,
+        req.user.userId,
+        req.travelTenant.id,
+        { invoiceId, lineType: existing.lineType, amount: String(existing.amount) },
+      );
+
+      await prisma.travelInvoiceLine.delete({ where: { id: lineId } });
+      await recomputeInvoiceTotal(invoiceId, req.travelTenant.id);
+
+      res.status(204).end();
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-invoices] delete line error:", e.message);
+      res.status(500).json({ error: "Failed to delete line" });
     }
   },
 );

@@ -1894,3 +1894,240 @@ describe('POST /api/travel/flyer-templates/bulk-archive (slice 15)', () => {
     expect(res.body.code).not.toBe('INVALID_ID');
   });
 });
+
+/**
+ * Slice 16 — POST /api/travel/flyer-templates/bulk-unarchive.
+ *
+ * Mirror of slice 15's bulk-archive contract. Pins:
+ *   - happy path: ADMIN restores 3 archived rows; an already-active row
+ *     lands in alreadyActive bucket (no update, no audit)
+ *   - 400 INVALID_IDS for non-array
+ *   - 400 EMPTY_IDS for empty array
+ *   - 400 TOO_MANY_IDS for >100 ids
+ *   - 400 INVALID_IDS for non-integer entry (whole batch rejected, no partial work)
+ *   - cross-tenant / missing ids → notFound bucket (no update, no audit)
+ *   - MANAGER restricted to ["rfu"]: tmc + travelstall ids land in denied
+ *     bucket; rfu + tenant-wide get unarchived
+ *   - USER role → 403 before any DB lookup fires
+ *   - duplicate ids de-duped before processing
+ *   - Express route ordering: /bulk-unarchive NOT captured by /:id family
+ *   - audit row carries the bulk:true marker + UNARCHIVED action
+ */
+describe('POST /api/travel/flyer-templates/bulk-unarchive (slice 16)', () => {
+  // Rows keyed by id so each test composes its own batch. Mirror of the
+  // bulk-archive fixture but with the isActive flags FLIPPED — the
+  // unarchive bucket targets archived (isActive=false) rows by default.
+  const rowsById = {
+    201: {
+      id: 201, tenantId: 1, name: 'TMC Spring Greece (archived)',
+      paletteJson: JSON.stringify(validPalette),
+      layoutJson: JSON.stringify(validLayout),
+      assetsJson: null, subBrand: 'tmc', isActive: false, notes: null,
+    },
+    202: {
+      id: 202, tenantId: 1, name: 'RFU Umrah Feb (archived)',
+      paletteJson: JSON.stringify(validPalette),
+      layoutJson: JSON.stringify(validLayout),
+      assetsJson: null, subBrand: 'rfu', isActive: false, notes: null,
+    },
+    203: {
+      id: 203, tenantId: 1, name: 'TS Bali Weekend (still active)',
+      paletteJson: JSON.stringify(validPalette),
+      layoutJson: JSON.stringify(validLayout),
+      assetsJson: null, subBrand: 'travelstall', isActive: true, notes: null,
+    },
+    204: {
+      id: 204, tenantId: 1, name: 'Tenant-wide Welcome (archived)',
+      paletteJson: JSON.stringify(validPalette),
+      layoutJson: JSON.stringify(validLayout),
+      assetsJson: null, subBrand: null, isActive: false, notes: null,
+    },
+  };
+
+  test('happy path: ADMIN restores 3 archived rows, partitions into unarchived/alreadyActive buckets', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockImplementation(({ where }) => {
+      return Promise.resolve(rowsById[where.id] || null);
+    });
+    prisma.travelFlyerTemplate.update.mockImplementation(({ where }) => {
+      return Promise.resolve({ ...rowsById[where.id], isActive: true });
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [201, 202, 203, 204] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      unarchived: expect.arrayContaining([201, 202, 204]),
+      alreadyActive: [203],
+      notFound: [],
+      denied: [],
+      total: 4,
+    });
+    expect(res.body.unarchived).toHaveLength(3);
+    // Three update calls (one per restored id); no update for the already-active row.
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalledTimes(3);
+    // One audit row per successful unarchive.
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(3);
+    const auditActions = prisma.auditLog.create.mock.calls.map(
+      (c) => c[0].data.action,
+    );
+    expect(auditActions.every((a) => a === 'TRAVEL_FLYER_TEMPLATE_UNARCHIVED')).toBe(true);
+    // Audit row carries the bulk:true marker so reports can distinguish.
+    const firstAuditDetails = JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details);
+    expect(firstAuditDetails.bulk).toBe(true);
+    // Update calls set isActive: true (not false — this is the unarchive surface).
+    const updateCalls = prisma.travelFlyerTemplate.update.mock.calls;
+    expect(updateCalls.every((c) => c[0].data.isActive === true)).toBe(true);
+  });
+
+  test('rejects non-array ids with 400 INVALID_IDS', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: 'not-an-array' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_IDS' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects empty ids array with 400 EMPTY_IDS', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [] });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'EMPTY_IDS' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('rejects ids array >100 with 400 TOO_MANY_IDS', async () => {
+    const tooMany = Array.from({ length: 101 }, (_, i) => i + 1);
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: tooMany });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'TOO_MANY_IDS' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('rejects ids array containing a non-integer with 400 INVALID_IDS (whole batch rejected, no partial work)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [201, 'notanid', 202] });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_IDS' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('cross-tenant / missing ids land in notFound bucket (no update, no audit)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockImplementation(({ where }) => {
+      if (where.id === 201) return Promise.resolve(rowsById[201]);
+      return Promise.resolve(null);
+    });
+    prisma.travelFlyerTemplate.update.mockResolvedValue({
+      ...rowsById[201],
+      isActive: true,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [201, 9998, 9999] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      unarchived: [201],
+      alreadyActive: [],
+      notFound: expect.arrayContaining([9998, 9999]),
+      denied: [],
+      total: 3,
+    });
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('MANAGER restricted to ["rfu"]: tmc + travelstall ids land in denied bucket; rfu + tenant-wide get unarchived', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelFlyerTemplate.findFirst.mockImplementation(({ where }) => {
+      return Promise.resolve(rowsById[where.id] || null);
+    });
+    prisma.travelFlyerTemplate.update.mockImplementation(({ where }) => {
+      return Promise.resolve({ ...rowsById[where.id], isActive: true });
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-unarchive')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
+      .send({ ids: [201, 202, 203, 204] }); // tmc / rfu / travelstall(already active) / tenant-wide
+
+    expect(res.status).toBe(200);
+    expect(res.body.unarchived).toEqual(expect.arrayContaining([202, 204]));
+    expect(res.body.unarchived).toHaveLength(2);
+    expect(res.body.denied).toEqual(expect.arrayContaining([201, 203]));
+    expect(res.body.denied).toHaveLength(2);
+    expect(res.body.alreadyActive).toEqual([]);
+    expect(res.body.notFound).toEqual([]);
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalledTimes(2);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+  });
+
+  test('USER role: 403 (route is ADMIN/MANAGER) before any DB lookup fires', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-unarchive')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ ids: [201, 202] });
+
+    expect(res.status).toBe(403);
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('duplicate ids are de-duped before processing (one unarchive, total reflects unique count)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockImplementation(({ where }) => {
+      return Promise.resolve(rowsById[where.id] || null);
+    });
+    prisma.travelFlyerTemplate.update.mockImplementation(({ where }) => {
+      return Promise.resolve({ ...rowsById[where.id], isActive: true });
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [201, 201, 201, 202] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2); // de-duped
+    expect(res.body.unarchived).toEqual(expect.arrayContaining([201, 202]));
+    expect(res.body.unarchived).toHaveLength(2);
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalledTimes(2);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+  });
+
+  test('Express route ordering: /bulk-unarchive is NOT captured by the /:id family (does not 400 INVALID_ID)', async () => {
+    // If the bulk-unarchive route were declared AFTER /:id-prefixed routes,
+    // the request would hit /:id/unarchive with id="bulk" and 400 INVALID_ID.
+    // This test pins the ordering — the request must reach the bulk handler
+    // and surface a 400 EMPTY_IDS (its own validator), not 400 INVALID_ID.
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('EMPTY_IDS');
+    expect(res.body.code).not.toBe('INVALID_ID');
+  });
+});

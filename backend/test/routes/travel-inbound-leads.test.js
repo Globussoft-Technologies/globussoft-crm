@@ -60,6 +60,8 @@ prisma.contact.create = vi.fn();
 // so legacy tests stay on the "created" branch unmodified.
 prisma.contact.findMany = vi.fn();
 prisma.contact.findUnique = vi.fn();
+// Slice 10 rollup surface — GET /inbound/leads/by-channel uses groupBy.
+prisma.contact.groupBy = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -92,6 +94,8 @@ beforeEach(() => {
   // branch is the default behavior for legacy tests.
   prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
+  // Slice 10 rollup default: empty groupBy result.
+  prisma.contact.groupBy.mockReset().mockResolvedValue([]);
 });
 
 // ─── Channel-enum gate ────────────────────────────────────────────────
@@ -804,5 +808,227 @@ describe('POST /api/travel/inbound/leads/:channel — slice 9 dedup on ingest', 
         }),
       }),
     );
+  });
+});
+
+// ─── Slice 10: per-channel attribution rollup ─────────────────────────
+//
+// Contracts asserted (slice-10 additions):
+//   - GET /api/travel/inbound/leads/by-channel?tenantSlug=… returns the
+//     per-channel inbound count over the requested window (default 30d
+//     retro). Buckets are seeded for every VALID_CHANNEL so the shape is
+//     stable even when a channel has 0 leads.
+//   - Unknown source suffixes (e.g. legacy 'inbound:indiamart' from
+//     before the enum tightened) bucket into 'unknown' so the total
+//     reconciles.
+//   - tenantSlug missing → 400 MISSING_TENANT_SLUG. Tenant miss → 404.
+//     Non-travel tenant → 400 WRONG_VERTICAL. Range inverted or beyond
+//     the 365d cap → 400 INVALID_RANGE.
+//   - groupBy predicate scopes to tenantId + inbound: source prefix +
+//     deletedAt:null + the requested createdAt window.
+//   - 500 generic envelope on prisma error.
+
+describe('GET /api/travel/inbound/leads/by-channel — slice 10 rollup', () => {
+  test('happy path: groupBy result mapped to byChannel array + total reconciles', async () => {
+    prisma.contact.groupBy.mockResolvedValueOnce([
+      { source: 'inbound:voyagr', _count: { _all: 12 } },
+      { source: 'inbound:webform', _count: { _all: 5 } },
+      { source: 'inbound:whatsapp', _count: { _all: 8 } },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({ tenantSlug: 'travel-stall' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      tenantId: 42,
+      tenantSlug: 'travel-stall',
+      total: 25,
+    });
+    // byChannel has one entry per VALID_CHANNEL (7), in the canonical
+    // enum order. Channels not in the groupBy result default to 0.
+    const expectedShape = [
+      { channel: 'voyagr', count: 12 },
+      { channel: 'webform', count: 5 },
+      { channel: 'whatsapp', count: 8 },
+      { channel: 'ads', count: 0 },
+      { channel: 'adsgpt', count: 0 },
+      { channel: 'metaads', count: 0 },
+      { channel: 'manual', count: 0 },
+    ];
+    expect(res.body.byChannel).toEqual(expectedShape);
+    // No unknown bucket when every source maps cleanly.
+    expect(res.body.byChannel.some((b) => b.channel === 'unknown')).toBe(false);
+  });
+
+  test('unknown source suffix buckets into "unknown" + total still reconciles', async () => {
+    // Legacy or future-enum source we don't recognize today.
+    prisma.contact.groupBy.mockResolvedValueOnce([
+      { source: 'inbound:voyagr', _count: { _all: 2 } },
+      { source: 'inbound:indiamart', _count: { _all: 3 } }, // not in VALID_CHANNELS
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({ tenantSlug: 'travel-stall' });
+
+    expect(res.status).toBe(200);
+    const unknown = res.body.byChannel.find((b) => b.channel === 'unknown');
+    expect(unknown).toEqual({ channel: 'unknown', count: 3 });
+    expect(res.body.total).toBe(5);
+  });
+
+  test('groupBy predicate scopes to tenantId + inbound: prefix + deletedAt + window', async () => {
+    await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({
+        tenantSlug: 'travel-stall',
+        since: '2026-05-01T00:00:00.000Z',
+        until: '2026-05-25T23:59:59.999Z',
+      });
+
+    expect(prisma.contact.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        by: ['source'],
+        where: expect.objectContaining({
+          tenantId: 42,
+          deletedAt: null,
+          source: { startsWith: 'inbound:' },
+          createdAt: expect.objectContaining({
+            gte: expect.any(Date),
+            lte: expect.any(Date),
+          }),
+        }),
+        _count: { _all: true },
+      }),
+    );
+    // since/until echoed back as ISO strings (timezone-safe contract).
+    const calledWith = prisma.contact.groupBy.mock.calls[0][0];
+    expect(calledWith.where.createdAt.gte.toISOString()).toBe('2026-05-01T00:00:00.000Z');
+    expect(calledWith.where.createdAt.lte.toISOString()).toBe('2026-05-25T23:59:59.999Z');
+  });
+
+  test('default window: no since/until → 30d retro from now', async () => {
+    const before = Date.now();
+    await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({ tenantSlug: 'travel-stall' });
+    const after = Date.now();
+
+    const calledWith = prisma.contact.groupBy.mock.calls[0][0];
+    const since = calledWith.where.createdAt.gte.getTime();
+    const until = calledWith.where.createdAt.lte.getTime();
+    // Window is ~30d; allow envelope for test execution latency.
+    expect(until - since).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 * 1000 - 5_000);
+    expect(until - since).toBeLessThanOrEqual(30 * 24 * 60 * 60 * 1000 + 5_000);
+    expect(until).toBeGreaterThanOrEqual(before);
+    expect(until).toBeLessThanOrEqual(after);
+  });
+
+  test('missing tenantSlug → 400 MISSING_TENANT_SLUG, no DB call', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_TENANT_SLUG' });
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+    expect(prisma.contact.groupBy).not.toHaveBeenCalled();
+  });
+
+  test('unknown tenantSlug → 404 TENANT_NOT_FOUND', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce(null);
+
+    const res = await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({ tenantSlug: 'no-such-tenant' });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'TENANT_NOT_FOUND' });
+    expect(prisma.contact.groupBy).not.toHaveBeenCalled();
+  });
+
+  test('non-travel tenant → 400 WRONG_VERTICAL', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      id: 7,
+      vertical: 'wellness',
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({ tenantSlug: 'wellness-tenant' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'WRONG_VERTICAL' });
+    expect(prisma.contact.groupBy).not.toHaveBeenCalled();
+  });
+
+  test('inverted range (until < since) → 400 INVALID_RANGE', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({
+        tenantSlug: 'travel-stall',
+        since: '2026-05-20T00:00:00.000Z',
+        until: '2026-05-01T00:00:00.000Z',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_RANGE' });
+    expect(prisma.contact.groupBy).not.toHaveBeenCalled();
+  });
+
+  test('range beyond 365d cap → 400 INVALID_RANGE', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({
+        tenantSlug: 'travel-stall',
+        since: '2024-01-01T00:00:00.000Z',
+        until: '2026-05-25T00:00:00.000Z', // ~875 days
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_RANGE' });
+    expect(prisma.contact.groupBy).not.toHaveBeenCalled();
+  });
+
+  test('non-parseable date → 400 INVALID_RANGE', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({
+        tenantSlug: 'travel-stall',
+        since: 'not-a-date',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_RANGE' });
+    expect(prisma.contact.groupBy).not.toHaveBeenCalled();
+  });
+
+  test('zero inbound leads → 200 with all-zero buckets + total=0', async () => {
+    // Default mock returns [] — no groupBy rows.
+    const res = await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({ tenantSlug: 'travel-stall' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(0);
+    expect(res.body.byChannel).toHaveLength(7); // VALID_CHANNELS.length, no unknown
+    expect(res.body.byChannel.every((b) => b.count === 0)).toBe(true);
+  });
+
+  test('500 generic envelope on prisma groupBy error (no stack leak)', async () => {
+    prisma.contact.groupBy.mockRejectedValueOnce(
+      new Error('P1001 cannot reach database'),
+    );
+
+    const res = await request(makeApp())
+      .get('/api/travel/inbound/leads/by-channel')
+      .query({ tenantSlug: 'travel-stall' });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({
+      error: 'Failed to roll up inbound leads by channel',
+    });
+    expect(res.body.error).not.toMatch(/P1001/);
   });
 });

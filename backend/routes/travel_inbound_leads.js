@@ -69,6 +69,13 @@ const VALID_CHANNELS = [
   "manual",
 ];
 
+// Slice 10 — clamp the date-range window inputs so a misconfigured caller
+// can't ask the DB to scan years of Contact history. 365d is the longest
+// any real Travel-Stall attribution rollup spans (annual review). The
+// envelope returns 400 INVALID_RANGE when the math says `until < since`
+// or the span exceeds the cap.
+const ROLLUP_MAX_SPAN_DAYS = 365;
+
 function assertValidChannel(c) {
   if (!c || !VALID_CHANNELS.includes(c)) {
     const err = new Error(
@@ -329,6 +336,171 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     }
     console.error("[travel-inbound-leads] create error:", e.message);
     return res.status(500).json({ error: "Failed to ingest inbound lead" });
+  }
+});
+
+// ─── Slice 10 — per-channel attribution rollup ───────────────────────
+//
+// GET /inbound/leads/by-channel?tenantSlug=<slug>&since=<ISO>&until=<ISO>
+//
+// Returns the per-channel inbound-lead count over the requested window,
+// scoped to a single travel tenant. Powers the per-channel filter
+// dropdown surface (PRD §3.6.2) + the per-channel conversion funnel
+// (PRD §3.5.3) — the InboundLeads admin page already client-side filters
+// the contact list, but the dashboard / settings surfaces need a
+// server-side aggregate so the math is correct beyond the limit=100
+// window. (See the standing rule "client-side aggregation over a
+// paginated endpoint is a structural correctness bug" — this is the
+// /stats endpoint that obviates the client-side reduce.)
+//
+// Query params:
+//   tenantSlug  REQUIRED — resolves to a travel tenant; 404 / 400 on miss.
+//   since       OPTIONAL — ISO8601 lower bound on Contact.createdAt
+//                          (inclusive). Defaults to 30d ago.
+//   until       OPTIONAL — ISO8601 upper bound on Contact.createdAt
+//                          (inclusive). Defaults to now.
+//
+// Response shape (200):
+//   {
+//     tenantId, tenantSlug,
+//     since, until,                       // both ISO strings
+//     byChannel: [ { channel, count }, … ],  // one row per VALID_CHANNEL,
+//                                            // plus an 'unknown' bucket if
+//                                            // any source is malformed
+//     total                               // sum across byChannel
+//   }
+//
+// Errors:
+//   400 MISSING_TENANT_SLUG  / INVALID_RANGE  / WRONG_VERTICAL
+//   404 TENANT_NOT_FOUND
+//   500 generic envelope
+//
+// STUB: no Touchpoint chain yet (PRD §3.5.1) — this slice rolls up the
+// Contact rows we already write with source='inbound:<channel>'. Once
+// Touchpoint lands, switch the source-prefix scan to a Touchpoint
+// channel groupBy + drop the 'unknown' fallback.
+router.get("/inbound/leads/by-channel", async (req, res) => {
+  try {
+    const { tenantSlug, since, until } = req.query || {};
+
+    if (!tenantSlug) {
+      return res.status(400).json({
+        error: "tenantSlug is required",
+        code: "MISSING_TENANT_SLUG",
+      });
+    }
+
+    // Window resolution — default 30d retro from now. Both bounds are
+    // inclusive (PRD §3.6.2's "Created from / Created to" filter shape).
+    const now = new Date();
+    const defaultSince = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const sinceDate = since ? new Date(since) : defaultSince;
+    const untilDate = until ? new Date(until) : now;
+    if (Number.isNaN(sinceDate.getTime()) || Number.isNaN(untilDate.getTime())) {
+      return res.status(400).json({
+        error: "since and until must be valid ISO8601 dates",
+        code: "INVALID_RANGE",
+      });
+    }
+    if (untilDate.getTime() < sinceDate.getTime()) {
+      return res.status(400).json({
+        error: "until must be greater than or equal to since",
+        code: "INVALID_RANGE",
+      });
+    }
+    const spanMs = untilDate.getTime() - sinceDate.getTime();
+    if (spanMs > ROLLUP_MAX_SPAN_DAYS * 24 * 60 * 60 * 1000) {
+      return res.status(400).json({
+        error: `range exceeds ${ROLLUP_MAX_SPAN_DAYS}-day maximum`,
+        code: "INVALID_RANGE",
+      });
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true, vertical: true },
+    });
+    if (!tenant) {
+      return res.status(404).json({
+        error: "Tenant not found",
+        code: "TENANT_NOT_FOUND",
+      });
+    }
+    if (tenant.vertical !== "travel") {
+      return res.status(400).json({
+        error: "Tenant is not a travel tenant",
+        code: "WRONG_VERTICAL",
+      });
+    }
+
+    // Pull inbound-source rows in the window, scoped to the tenant.
+    // Prisma groupBy on `source` would return one row per literal source
+    // string ("inbound:voyagr", "inbound:webform", …) — we collapse those
+    // into the channel suffix client-side so the response shape stays
+    // {channel, count} regardless of how the source field evolves.
+    const rows = await prisma.contact.groupBy({
+      by: ["source"],
+      where: {
+        tenantId: tenant.id,
+        deletedAt: null,
+        source: { startsWith: "inbound:" },
+        createdAt: {
+          gte: sinceDate,
+          lte: untilDate,
+        },
+      },
+      _count: { _all: true },
+    });
+
+    // Seed every VALID_CHANNEL bucket to 0 so the response shape is
+    // stable for downstream chart code (no "where did webform go?" when
+    // a tenant has 0 webform leads).
+    const buckets = Object.create(null);
+    for (const c of VALID_CHANNELS) buckets[c] = 0;
+
+    let unknownCount = 0;
+    for (const row of rows || []) {
+      const source = row.source || "";
+      const count = row._count?._all ?? 0;
+      if (!source.startsWith("inbound:")) {
+        unknownCount += count;
+        continue;
+      }
+      const suffix = source.slice("inbound:".length);
+      if (Object.prototype.hasOwnProperty.call(buckets, suffix)) {
+        buckets[suffix] += count;
+      } else {
+        // Source has the inbound: prefix but a channel value we don't
+        // know about (e.g. a future channel that hasn't been promoted
+        // into VALID_CHANNELS yet, or stale data from before the enum
+        // tightened). Surface in the unknown bucket so the total still
+        // reconciles.
+        unknownCount += count;
+      }
+    }
+
+    const byChannel = VALID_CHANNELS.map((channel) => ({
+      channel,
+      count: buckets[channel],
+    }));
+    if (unknownCount > 0) {
+      byChannel.push({ channel: "unknown", count: unknownCount });
+    }
+    const total = byChannel.reduce((acc, b) => acc + b.count, 0);
+
+    return res.status(200).json({
+      tenantId: tenant.id,
+      tenantSlug,
+      since: sinceDate.toISOString(),
+      until: untilDate.toISOString(),
+      byChannel,
+      total,
+    });
+  } catch (e) {
+    console.error("[travel-inbound-leads] rollup error:", e.message);
+    return res
+      .status(500)
+      .json({ error: "Failed to roll up inbound leads by channel" });
   }
 });
 

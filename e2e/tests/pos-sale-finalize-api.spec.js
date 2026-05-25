@@ -358,7 +358,8 @@ test.describe('POST /api/pos/sales/finalize', () => {
         { method: 'cash', amountCents: 100000 },
       ],
     });
-    expect(res.status(), `body: ${await res.text()}`).toBe(200);
+    // Route returns 201 Created (route at pos.js:1196 — semantically correct for sale creation)
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
     const body = await res.json();
     expect(body).toHaveProperty('saleId');
     expect(typeof body.saleId).toBe('number');
@@ -382,7 +383,7 @@ test.describe('POST /api/pos/sales/finalize', () => {
         { method: 'card', amountCents: 100000 },
       ],
     });
-    expect(res.status(), `body: ${await res.text()}`).toBe(200);
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
     const body = await res.json();
     expect(body.saleId).toBeGreaterThan(0);
   });
@@ -413,7 +414,7 @@ test.describe('POST /api/pos/sales/finalize', () => {
         { method: 'cash', amountCents: 50000 },
       ],
     });
-    expect(res.status(), `body: ${await res.text()}`).toBe(200);
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
     const body = await res.json();
     expect(body.saleId).toBeGreaterThan(0);
     // walletDebitedCents echoes the wallet portion in cents. ₹500 = 50000.

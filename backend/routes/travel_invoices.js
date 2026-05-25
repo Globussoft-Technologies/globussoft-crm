@@ -5705,4 +5705,156 @@ router.post(
   },
 );
 
+// ============================================================================
+// GET /api/travel/invoices/:id/timeline
+// Arc 2 #901 slice 28 — PRD_TRAVEL_BILLING NFR-4.3 (audit trail consumer).
+//
+// READ-ONLY. Returns the chronological event timeline for a single invoice,
+// reconstructed from AuditLog rows where:
+//   entity='TravelInvoice' AND entityId=invoiceId               (invoice events)
+//   entity='TravelInvoiceLine' AND details.invoiceId=invoiceId  (line events)
+//
+// Powers an "Activity" tab on the InvoiceDetail UI: a single chronological
+// feed of create / update / issue / mark-paid / apply-penalty / convert /
+// void / credit-note / debit-note / clone-as-recurring + per-line CRUD.
+// All events that the existing slice-19..27 handlers already write via
+// writeAudit() are surfaced — this endpoint adds zero new audit-event types;
+// it's purely a presentation layer over the existing chain.
+//
+// Auth: any verified token; tenant + sub-brand scoped via loadParentInvoice.
+//
+// Query params (all optional):
+//   ?limit=<int 1..200>   — page size (default 100; capped at 200).
+//   ?includeLines=true    — also pull TravelInvoiceLine audit rows whose
+//                            details.invoiceId matches (default true).
+//
+// Response: { invoiceId, count, events: [ { id, action, entity, at,
+//   userId, details } ] }. Sorted createdAt DESC (newest first).
+// Error codes: INVALID_ID, INVOICE_NOT_FOUND, SUB_BRAND_DENIED,
+//   INVALID_NUMERIC_QUERY.
+// ============================================================================
+router.get(
+  "/invoices/:id/timeline",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // Parse limit (1..200, default 100) BEFORE loading the invoice so the
+      // validation guard fires without a DB round-trip on malformed input.
+      let limit = 100;
+      if (req.query.limit != null && req.query.limit !== "") {
+        const n = Number(req.query.limit);
+        if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 200) {
+          return res.status(400).json({
+            error: "limit must be an integer in [1, 200]",
+            code: "INVALID_NUMERIC_QUERY",
+          });
+        }
+        limit = n;
+      }
+
+      // includeLines defaults true; only the literal string "false" disables.
+      const includeLines = req.query.includeLines !== "false";
+
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      // Pull invoice-level events directly via the indexed lookup.
+      const invoiceRows = await prisma.auditLog.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          entity: "TravelInvoice",
+          entityId: invoice.id,
+        },
+        orderBy: { createdAt: "desc" },
+        take: limit,
+        select: {
+          id: true,
+          action: true,
+          entity: true,
+          entityId: true,
+          createdAt: true,
+          userId: true,
+          details: true,
+        },
+      });
+
+      // Pull line-level events for this invoice, if requested. We can't
+      // directly index on details (it's a TEXT JSON column), so we pull the
+      // recent line audit rows for this tenant and post-filter by parsing
+      // details.invoiceId. Keep the prisma fetch bounded by 5x limit so the
+      // post-filter doesn't unbound — operators almost never have >500
+      // line edits on a single invoice anyway.
+      let lineRows = [];
+      if (includeLines) {
+        const rawLineRows = await prisma.auditLog.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            entity: "TravelInvoiceLine",
+          },
+          orderBy: { createdAt: "desc" },
+          take: limit * 5,
+          select: {
+            id: true,
+            action: true,
+            entity: true,
+            entityId: true,
+            createdAt: true,
+            userId: true,
+            details: true,
+          },
+        });
+        lineRows = rawLineRows.filter((r) => {
+          if (!r.details) return false;
+          try {
+            const parsed = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
+            return parsed && parsed.invoiceId === invoice.id;
+          } catch {
+            return false;
+          }
+        });
+      }
+
+      // Merge + sort + cap at limit. Each event normalises details JSON
+      // (string -> object) so the client doesn't have to re-parse.
+      const merged = [...invoiceRows, ...lineRows]
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit)
+        .map((r) => {
+          let details = r.details;
+          if (typeof details === "string") {
+            try {
+              details = JSON.parse(details);
+            } catch {
+              // Leave as string if it isn't JSON — legacy rows or
+              // free-form descriptions slip through here.
+            }
+          }
+          return {
+            id: r.id,
+            action: r.action,
+            entity: r.entity,
+            entityId: r.entityId,
+            at: r.createdAt,
+            userId: r.userId,
+            details,
+          };
+        });
+
+      return res.status(200).json({
+        invoiceId: invoice.id,
+        count: merged.length,
+        events: merged,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] timeline error:", e.message);
+      res.status(500).json({ error: "Failed to load invoice timeline" });
+    }
+  },
+);
+
 module.exports = router;

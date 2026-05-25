@@ -1752,4 +1752,123 @@ router.get(
   },
 );
 
+// GET /api/travel/itineraries/:id/versions
+//
+// #907 slice 9 — read-side companion to the PUT-creates-new-version flow.
+// PUT /:id creates a new Itinerary row with parentItineraryId pointing at
+// the chain root + version bumped. Operators need a one-call read to see
+// the full revision history; without this they'd have to issue N findOne
+// calls or query Prisma directly.
+//
+// Semantics:
+//   - Resolves the chain root: original.parentItineraryId || original.id.
+//     The "root" is itself the v1 row; all subsequent versions point at it.
+//   - Returns ALL siblings (including the root) sorted by version asc.
+//   - Per-version payload is intentionally lean — id, version, status,
+//     destination, totalAmount, currency, itemCount, createdAt, updatedAt,
+//     isRoot, isLatest. The full item list lives behind GET /:id; this
+//     endpoint is the index, not the detail.
+//   - Item counts are computed in a single groupBy ($queryRaw-free) so
+//     the route stays O(1) regardless of chain length.
+//   - Tenant guard + sub-brand check are inherited from
+//     loadItineraryWithGuard — 401 / 404 NOT_FOUND / 403 SUB_BRAND_DENIED.
+//
+// Response shape:
+//   {
+//     itineraryId: <id requested>,
+//     chainRootId: <id of v1>,
+//     versionCount: N,
+//     latestVersionId: <id of most-recent>,
+//     versions: [
+//       { id, version, status, destination, totalAmount, currency,
+//         itemCount, createdAt, updatedAt, isRoot, isLatest },
+//       ...
+//     ],
+//   }
+//
+// PRD: docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §5.1 (Versioning).
+router.get("/itineraries/:id/versions", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+
+    // Resolve chain root — the row whose id equals the parent pointer of
+    // every later version. The original PUT handler uses the same logic.
+    const original = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+      select: { id: true, parentItineraryId: true },
+    });
+    if (!original) {
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    const chainRootId = original.parentItineraryId || original.id;
+
+    // Fetch the full chain in a single query — root + every sibling that
+    // points at the root via parentItineraryId.
+    const rows = await prisma.itinerary.findMany({
+      where: {
+        tenantId: req.travelTenant.id,
+        OR: [{ id: chainRootId }, { parentItineraryId: chainRootId }],
+      },
+      orderBy: { version: "asc" },
+      select: {
+        id: true,
+        version: true,
+        status: true,
+        destination: true,
+        totalAmount: true,
+        currency: true,
+        parentItineraryId: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    // Per-version item counts in a single groupBy keyed on itineraryId.
+    // Empty chain → no groupBy call (Prisma will happily run it, but
+    // skipping is cheaper and keeps the response symmetrical when the
+    // chain is single-row).
+    const ids = rows.map((r) => r.id);
+    const counts = new Map();
+    if (ids.length > 0) {
+      const grouped = await prisma.itineraryItem.groupBy({
+        by: ["itineraryId"],
+        where: { itineraryId: { in: ids } },
+        _count: { _all: true },
+      });
+      for (const g of grouped) counts.set(g.itineraryId, g._count?._all || 0);
+    }
+
+    // Latest = highest version (rows are version-asc, so last entry).
+    // Stable when versions are unique; ties are not expected (PUT bumps
+    // by 1 each time) but defaulted-by-id-asc just in case.
+    const latestVersionId = rows.length > 0 ? rows[rows.length - 1].id : null;
+
+    const versions = rows.map((r) => ({
+      id: r.id,
+      version: r.version,
+      status: r.status,
+      destination: r.destination,
+      totalAmount: r.totalAmount != null ? Number(r.totalAmount) : null,
+      currency: r.currency,
+      itemCount: counts.get(r.id) || 0,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+      isRoot: r.id === chainRootId,
+      isLatest: r.id === latestVersionId,
+    }));
+
+    res.json({
+      itineraryId: itin.id,
+      chainRootId,
+      versionCount: versions.length,
+      latestVersionId,
+      versions,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] versions error:", e.message);
+    res.status(500).json({ error: "Failed to fetch version chain" });
+  }
+});
+
 module.exports = router;

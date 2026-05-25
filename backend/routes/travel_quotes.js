@@ -29,6 +29,7 @@ const {
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const { generateTravelQuotePdf } = require("../services/pdfRenderer");
+const { pickMarkup, mapCategoryToScope } = require("../lib/travelPricing");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
@@ -894,6 +895,122 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] pdf error:", e.message);
       res.status(500).json({ error: "Failed to generate quote PDF" });
+    }
+  },
+);
+
+// GET /api/travel/quotes/:id/pricing-preview — any verified token.
+//
+// READ-ONLY composition surface (PRD_TRAVEL_QUOTE_BUILDER FR-3.3.2 / FR-3.3.4).
+// Loads the parent quote + its lines, fetches active TravelMarkupRule rows
+// for the quote's sub-brand, and applies per-line markup using the pure
+// lib/travelPricing.js helpers (pickMarkup + mapCategoryToScope).
+//
+// Per-line strategy: each line carries a `lineType` ∈
+// {hotel, flight, transport, visa, service, other}. We map that to the
+// markup-rule `scope` via mapCategoryToScope (visa/service/other collapse
+// to "package"), then call pickMarkup to find the highest-priority active
+// rule whose scope matches. Per-line markup is the rule's % or flat
+// applied against the line's pre-markup amount. Aggregate markupApplied
+// dedupes by ruleId (a single rule that covered both hotel + package
+// lines surfaces as one entry with summed amount).
+//
+// Why not extend lib/travelPricing.js with a multi-line composer: the
+// existing pure quote() is per-cost-row (single baseRate * seasonMul +
+// markup). A multi-line aggregator with per-line season-date awareness +
+// per-line markup is a bigger contract decision (DD-5.x pending) that
+// belongs in its own slice. This endpoint composes the per-line shape
+// inline using the existing pickMarkup helper so the math stays
+// auditable and we don't fork the lib/ surface prematurely.
+// TODO(travel-quotes-pricing-aggregator): when the multi-line composer
+// lands in lib/travelPricing.js, replace the inline reduction below.
+router.get(
+  "/quotes/:id/pricing-preview",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const quoteId = parseInt(req.params.id, 10);
+      const quote = await loadParentQuote(req, res, quoteId);
+      if (!quote) return;
+
+      const lines = await prisma.travelQuoteLine.findMany({
+        where: { quoteId, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+
+      const rules = await prisma.travelMarkupRule.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          subBrand: quote.subBrand,
+          isActive: true,
+        },
+        orderBy: [{ priority: "asc" }, { id: "asc" }],
+      });
+
+      // Per-line markup composition. For each line:
+      //   1. Map lineType → markup scope.
+      //   2. pickMarkup against the line's pre-markup amount.
+      //   3. Capture the matched rule (if any) into the dedupe map.
+      // Round to 2 decimals at every step so subtotal+lineMarkups always
+      // == total to the cent (no floating-point drift in the envelope).
+      const round2 = (n) => Math.round(n * 100) / 100;
+      const decoratedLines = [];
+      const ruleAggregateById = new Map();
+      let subtotalAccum = 0;
+
+      for (const l of lines) {
+        const lineAmount = Number(l.amount || 0);
+        subtotalAccum += lineAmount;
+
+        const scope = mapCategoryToScope(l.lineType);
+        const { rule, markupAmount } = pickMarkup(
+          rules,
+          quote.subBrand,
+          scope,
+          lineAmount,
+        );
+
+        const amountWithMarkup = round2(lineAmount + markupAmount);
+        decoratedLines.push({
+          id: l.id,
+          lineType: l.lineType,
+          description: l.description,
+          amount: round2(lineAmount),
+          amountWithMarkup,
+        });
+
+        if (rule && markupAmount > 0) {
+          const prior = ruleAggregateById.get(rule.id);
+          if (prior) {
+            prior.amount = round2(prior.amount + markupAmount);
+          } else {
+            ruleAggregateById.set(rule.id, {
+              ruleId: rule.id,
+              ruleName: rule.matchKeyJson || `rule-${rule.id}`,
+              percent: rule.markupPct != null ? Number(rule.markupPct) : null,
+              amount: round2(markupAmount),
+            });
+          }
+        }
+      }
+
+      const subtotal = round2(subtotalAccum);
+      const markupApplied = Array.from(ruleAggregateById.values());
+      const totalMarkup = markupApplied.reduce((acc, r) => acc + r.amount, 0);
+      const total = round2(subtotal + totalMarkup);
+
+      res.json({
+        subtotal,
+        markupApplied,
+        total,
+        currency: quote.currency,
+        lines: decoratedLines,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] pricing-preview error:", e.message);
+      res.status(500).json({ error: "Failed to compute pricing preview" });
     }
   },
 );

@@ -2029,4 +2029,174 @@ router.get(
   },
 );
 
+// ============================================================================
+// POST /api/travel/invoices/:id/apply-tcs — Section 206C(1G) PERSISTENCE
+// (Arc 2 #901 slice 10 — PRD_TRAVEL_BILLING UC-2.6 + FR-3.5).
+//
+// Operator action: commits the TCS computed by /tcs-preview to the invoice
+// itself by writing the 4 additive nullable fields (tcsAmount, tcsRate,
+// tcsExceedingAmount, tcsAppliedAt). Mirrors the tcs-preview window-source
+// (createdAt-based prior-FY-spend scan, current-invoice excluded via
+// NOT: { id }) — pinning the same math at apply time guarantees the
+// preview-vs-applied invariant.
+//
+// Why a SEPARATE endpoint from /issue (not extending it):
+//   - /issue does the invoiceNum-reassignment + status flip (slice 5);
+//     keeping TCS persistence as its own operator action lets the operator
+//     issue an invoice and later "apply TCS" once filer-status is confirmed
+//     (e.g. customer's PAN/non-filer flag arrives after issuance).
+//   - Idempotency surface is local — tcsAppliedAt set → reject with 409
+//     TCS_ALREADY_APPLIED. Mixing into /issue would force re-issuance to
+//     undo, which is wrong (issuance is a one-way state transition).
+//
+// Auth: ADMIN/MANAGER only (writes).
+// Pre-conditions: invoice exists, tenant-scoped, sub-brand-accessible,
+//   tcsAppliedAt IS NULL (one-shot apply). Status is NOT checked — TCS can
+//   be applied to Draft / Issued / Partial / Paid alike; the operator may
+//   apply TCS after collection if the buyer's filer-status changed.
+//
+// Body (all optional):
+//   applyTcs              — default true. If false, runs the math + returns
+//                           the payload WITHOUT persisting (preview parity).
+//   isNonFiler            — default false (filer rate 5%).
+//   isOverseasPackage     — default true (TCS-eligible default for travel).
+//   customerCountryCode   — if provided, overrides isOverseasPackage via
+//                           isOverseasDestination heuristic.
+//
+// Side effects on applies===true + applyTcs===true:
+//   - travelInvoice.update sets the 4 TCS fields.
+//   - Audit row stamped action='TRAVEL_INVOICE_TCS_APPLIED' with details
+//     { tcsAmount, tcsRate, exceedingAmount, applies:true }.
+//
+// On applies===false (domestic, below-threshold, zero-amount):
+//   - NO update. 4 fields stay null.
+//   - NO audit row. (The decision-not-to-apply isn't worth a row; operator
+//     can re-call to recompute. Re-evaluate if Q-TCS-2 surfaces a need.)
+//   - Returns 200 with the computed payload + applied:false.
+//
+// Returns: 200 + { invoiceId, contactId, applied, applies, exceedingAmount,
+//   rate, tcsAmount, newFyTotal, tcsAppliedAt | null }.
+//
+// Error codes: INVALID_ID (400), INVOICE_NOT_FOUND (404), SUB_BRAND_DENIED
+//   (403), TCS_ALREADY_APPLIED (409).
+// ============================================================================
+router.post(
+  "/invoices/:id/apply-tcs",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      // Idempotency gate — once TCS has been persisted, the operator must
+      // not silently re-apply (would clobber the original tcsAppliedAt
+      // timestamp and rate, breaking the audit trail).
+      if (invoice.tcsAppliedAt != null) {
+        return res.status(409).json({
+          error: "TCS has already been applied to this invoice",
+          code: "TCS_ALREADY_APPLIED",
+        });
+      }
+
+      const body = req.body || {};
+      const applyTcs = body.applyTcs !== false; // default true
+      const isNonFiler = body.isNonFiler === true;
+
+      // Resolve isOverseasPackage — country-code heuristic wins when present,
+      // otherwise the explicit boolean, default true.
+      const ccRaw = body.customerCountryCode;
+      const hasCountryCode = typeof ccRaw === "string" && ccRaw.trim() !== "";
+      const isOverseasPackage = hasCountryCode
+        ? isOverseasDestination(ccRaw)
+        : body.isOverseasPackage === false
+          ? false
+          : true;
+
+      // Mirror the tcs-preview FY-window math (createdAt-based, current
+      // invoice excluded). Pinning the same math at apply time guarantees
+      // preview === applied for the same inputs.
+      const fyStart = fiscalYearStart(new Date());
+      const priorInvoices = await prisma.travelInvoice.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          contactId: invoice.contactId,
+          createdAt: { gte: fyStart },
+          NOT: { id: invoice.id },
+        },
+        select: { totalAmount: true },
+      });
+      const priorFySpend = priorInvoices.reduce(
+        (sum, inv) => sum + Number(inv.totalAmount || 0),
+        0,
+      );
+
+      const invoiceAmount = Number(invoice.totalAmount || 0);
+      const result = computeTcs({
+        invoiceAmount,
+        priorFySpend,
+        isNonFiler,
+        isOverseasPackage,
+      });
+
+      // Two branches: applies + applyTcs requested → persist; otherwise
+      // return the math without touching the row.
+      let applied = false;
+      let tcsAppliedAt = null;
+      if (result.applies && applyTcs) {
+        const now = new Date();
+        await prisma.travelInvoice.update({
+          where: { id: invoice.id },
+          data: {
+            tcsAmount: result.tcsAmount,
+            tcsRate: result.rate,
+            tcsExceedingAmount: result.exceedingAmount,
+            tcsAppliedAt: now,
+          },
+        });
+        applied = true;
+        tcsAppliedAt = now;
+
+        await writeAudit(
+          "TravelInvoice",
+          "TRAVEL_INVOICE_TCS_APPLIED",
+          invoice.id,
+          req.user.userId,
+          req.travelTenant.id,
+          {
+            tcsAmount: result.tcsAmount,
+            tcsRate: result.rate,
+            exceedingAmount: result.exceedingAmount,
+            applies: true,
+          },
+        );
+      }
+
+      return res.status(200).json({
+        invoiceId: invoice.id,
+        contactId: invoice.contactId,
+        invoiceAmount,
+        priorFySpend,
+        isOverseasPackage,
+        isNonFiler,
+        applies: result.applies,
+        exceedingAmount: result.exceedingAmount,
+        rate: result.rate,
+        tcsAmount: result.tcsAmount,
+        newFyTotal: result.newFyTotal,
+        applied,
+        tcsAppliedAt,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] apply-tcs error:", e.message);
+      res.status(500).json({ error: "Failed to apply TCS" });
+    }
+  },
+);
+
 module.exports = router;

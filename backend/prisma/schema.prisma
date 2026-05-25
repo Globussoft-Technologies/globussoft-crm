@@ -4909,27 +4909,37 @@ model TravelQuoteLine {
 }
 
 model TravelInvoice {
-  id          Int                     @id @default(autoincrement())
-  tenantId    Int                     @default(1)
-  subBrand    String
-  contactId   Int
+  id                 Int                     @id @default(autoincrement())
+  tenantId           Int                     @default(1)
+  subBrand           String
+  contactId          Int
   // Optional FK to TravelQuote — an invoice can be generated without a
   // prior quote (direct billing, supplier-passthrough scenarios).
-  quoteId     Int?
+  quoteId            Int?
   // Tenant-scoped human-readable identifier (e.g. "TINV-2026-0001"). The
   // route layer assigns sequentially per tenant + sub-brand at create time.
-  invoiceNum  String
-  status      String                  @default("Draft") // Draft | Issued | Partial | Paid | Voided
-  totalAmount Decimal?                @db.Decimal(15, 2)
-  currency    String                  @default("INR")
-  dueDate     DateTime?
-  paidAt      DateTime?
-  lines       TravelInvoiceLine[]
-  schedule    TravelPaymentSchedule[]
-  quote       TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
-  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt   DateTime                @default(now())
-  updatedAt   DateTime                @updatedAt
+  invoiceNum         String
+  status             String                  @default("Draft") // Draft | Issued | Partial | Paid | Voided
+  totalAmount        Decimal?                @db.Decimal(15, 2)
+  currency           String                  @default("INR")
+  dueDate            DateTime?
+  paidAt             DateTime?
+  // Arc 2 #901 slice 10 — Section 206C(1G) TCS persistence (PRD_TRAVEL_BILLING
+  // UC-2.6 + FR-3.5). All four fields nullable + additive — invoices that
+  // never get TCS applied (domestic, below-threshold, pre-slice-10 historical)
+  // leave them null. tcsAppliedAt doubles as the idempotency sentinel — once
+  // set, POST /:id/apply-tcs rejects with TCS_ALREADY_APPLIED. Line-level
+  // TCS persistence (separate TravelInvoiceLine row) is deferred to slice 11.
+  tcsAmount          Decimal?                @db.Decimal(15, 2)
+  tcsRate            Decimal?                @db.Decimal(5, 2)
+  tcsExceedingAmount Decimal?                @db.Decimal(15, 2)
+  tcsAppliedAt       DateTime?
+  lines              TravelInvoiceLine[]
+  schedule           TravelPaymentSchedule[]
+  quote              TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  tenant             Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
 
   @@unique([tenantId, invoiceNum])
   @@index([tenantId, subBrand])

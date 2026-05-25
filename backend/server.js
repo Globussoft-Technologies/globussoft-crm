@@ -116,6 +116,23 @@ app.use(cors({
   },
   credentials: true,
 }));
+// ─── WhatsApp webhook (P1 — must mount BEFORE express.json) ──────────────
+// Meta signs the raw request body with HMAC-SHA-256 using META_APP_SECRET.
+// Any JSON re-serialization would change the byte stream and break the
+// signature check. We therefore mount the webhook router here — earlier
+// than the global JSON body parser — with its own express.raw() so the
+// middleware in middleware/metaWebhook.js sees a Buffer.
+//
+// The router responds 200 immediately and processes events asynchronously
+// via setImmediate; downstream middlewares (express.json, helmet, auth
+// guard, etc.) never run for these requests because the response is
+// already flushed.
+//
+// Existing GET/POST /webhook stubs inside routes/whatsapp.js are tombstones
+// that log + 503 if they ever fire — that would indicate this mount-order
+// is wrong.
+app.use("/api/whatsapp/webhook", require("./routes/whatsapp_webhook"));
+
 app.use(express.json({ limit: "10mb" }));
 // Twilio voice/telephony/SMS webhooks and Mailgun/Razorpay form posts send
 // `application/x-www-form-urlencoded`. Without this parser req.body is empty
@@ -473,6 +490,10 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 app.use("/api", (req, res, next) => {
   const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
+  // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
+  // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
+  // by the route-level verifyToken+verifyRole middleware below.
+  if (req.method === 'GET' && req.path === '/subscriptions/plans') return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
     checkSubscription(req, res, next);
@@ -542,6 +563,11 @@ app.use("/api/audit", auditRoutes);
 app.use("/api/marketplace-leads", marketplaceLeadsRoutes);
 app.use("/api/sms", smsRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
+// P2: WhatsApp embedded-signup onboarding routes. Mounted as a separate
+// router under /api/whatsapp/onboard so the rate-limiter + auth guard
+// pipeline above applies, but the route handlers live in
+// routes/whatsapp_onboard.js. Feature-flagged via WHATSAPP_EMBEDDED_SIGNUP_ENABLED.
+app.use("/api/whatsapp/onboard", require("./routes/whatsapp_onboard"));
 app.use("/api/telephony", telephonyRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
@@ -812,6 +838,17 @@ server.listen(PORT, () => {
       }
     })
     .catch((err) => console.error('[rbac-boot] non-fatal error:', err && err.message ? err.message : err));
+
+  // Self-heal the SubscriptionPlan catalog so a fresh install / wiped DB /
+  // partial seed always has the 3 canonical plans on /pricing. Idempotent —
+  // existing rows are left alone (Owner edits via Manage Plans persist
+  // across restarts). Fire-and-forget; never crash boot on a DB hiccup.
+  // Set DISABLE_PLANS_BOOT_SYNC=1 to opt out.
+  if (process.env.DISABLE_PLANS_BOOT_SYNC !== '1') {
+    const ensureSubscriptionPlans = require('./lib/ensureSubscriptionPlans');
+    ensureSubscriptionPlans()
+      .catch((err) => console.error('[plans-boot] non-fatal error:', err && err.message ? err.message : err));
+  }
 });
 
 // Graceful shutdown — required for c8 / V8 line coverage to flush its temp
@@ -921,6 +958,27 @@ if (process.env.DISABLE_CRONS === '1') {
   // Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
   const { initSlaBreachCron } = require('./cron/slaBreachEngine');
   initSlaBreachCron();
+
+  // WhatsApp SaaS P3 — async outbound delivery (every 30s) + media download
+  // pipeline (every 60s). Both engines no-op gracefully when the underlying
+  // WhatsAppConfig is missing or token is unset, so they're safe to enable
+  // even before any tenant has completed onboarding. The outbound engine
+  // receives `io` to broadcast whatsapp:sent events back to the frontend
+  // as queued messages complete delivery.
+  const { initWhatsappOutboundCron } = require('./cron/whatsappOutboundEngine');
+  initWhatsappOutboundCron(io);
+  const { initWhatsappMediaCron } = require('./cron/whatsappMediaEngine');
+  initWhatsappMediaCron();
+
+  // WhatsApp SaaS P4 — daily token-refresh probe + template-sync safety net.
+  // Token refresh proactively extends short-lived tokens 7 days before expiry
+  // via fb_exchange_token; surfaces unrecoverable expiry via Notification +
+  // soft-disconnect. Template sync pulls every approved template from Meta
+  // nightly so the local table stays in sync even when webhook events drop.
+  const { initWhatsappTokenRefreshCron } = require('./cron/whatsappTokenRefreshEngine');
+  initWhatsappTokenRefreshCron();
+  const { initWhatsappTemplateSyncCron } = require('./cron/whatsappTemplateSyncEngine');
+  initWhatsappTemplateSyncCron();
 
   // #541 (OPS-1): Demo Hygiene — hourly purge of `_QA_PROBE_*` /
   // `E2E_FLOW_*` test residue from patient list + admin-config models.

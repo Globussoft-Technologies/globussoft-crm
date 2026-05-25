@@ -13,11 +13,14 @@ function getRazorpay() {
   return razorpayInstance;
 }
 
-async function createOrder(amount, planId) {
+async function createOrder(amount, planId, currency = 'INR') {
   const razorpay = getRazorpay();
+  // Razorpay expects the smallest unit of the currency (paise for INR,
+  // cents for USD). Both happen to be 1/100 of the major unit, so the
+  // *100 multiplier covers both.
   const order = await razorpay.orders.create({
-    amount: amount * 100, // Convert to paise
-    currency: 'INR',
+    amount: Math.round(amount * 100),
+    currency,
     notes: { planId: planId.toString() }
   });
   return order;

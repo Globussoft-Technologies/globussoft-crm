@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import WhatsAppEmbeddedSignup from '../../components/WhatsAppEmbeddedSignup';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All' },
@@ -298,9 +299,20 @@ export default function WhatsAppThreads() {
 
   return (
     <div style={{
-      display: 'flex', height: 'calc(100vh - var(--top-nav-height, 0px))',
-      gap: 0, animation: 'fadeIn 0.4s ease-out',
+      display: 'flex', flexDirection: 'column',
+      height: 'calc(100vh - var(--top-nav-height, 0px))',
+      animation: 'fadeIn 0.4s ease-out',
     }}>
+      {/* P2: WhatsApp connection panel — embedded above the threads grid.
+          Compact mode = slim status bar when CONNECTED, auto-expand on
+          any issue. Admin-only actions (Connect / Reconnect / Disconnect)
+          are RBAC-gated server-side; the UI surfaces buttons for everyone
+          but the API rejects non-admins. */}
+      <div style={{ padding: '0.75rem 1rem 0' }}>
+        <WhatsAppEmbeddedSignup compact />
+      </div>
+
+      <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}>
       {/* ─── Left rail ─── */}
       <aside style={{
         width: 360, borderRight: '1px solid var(--border-color)',
@@ -566,6 +578,7 @@ export default function WhatsAppThreads() {
           </>
         )}
       </main>
+      </div>
     </div>
   );
 }

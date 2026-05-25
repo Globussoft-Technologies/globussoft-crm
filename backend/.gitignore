@@ -1,3 +1,12 @@
 node_modules
 # Keep environment variables out of version control
 .env
+
+# Tenant-uploaded assets — branding logos, attachments, etc. These are
+# generated at runtime by tenant admins via /api/tenants/branding et al.
+# and live on the filesystem for the lifetime of the deploy. Should
+# never be in git: per-tenant PII (logos can be company-private), can be
+# many MB each, and re-committing a fresh dev-DB copy keeps stomping
+# over what the demo server has uploaded. See PR #938 review for the
+# tenant-1/logo.png recurrence that motivated this rule.
+uploads/

@@ -304,6 +304,12 @@ model Tenant {
 
   // Patient tag system — tenant-scoped labels assignable to many patients.
   tags Tag[]
+
+  // WhatsApp SaaS (P1+P3 scaffolding) — back-relations for multi-tenant routing,
+  // webhook idempotency, async outbound queue, and media-download pipeline.
+  webhookEvents    WebhookEvent[]
+  waOutboundJobs   WaOutboundJob[]
+  waMediaJobs      WaMediaJob[]
 }
 
 model User {
@@ -1406,8 +1412,26 @@ model WhatsAppMessage {
   threadId Int?
   thread   WhatsAppThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
 
+  // WhatsApp SaaS P3: 1:1 child rows for async outbound delivery + media download.
+  // Either can be null (templates with no media, status updates with no job, etc.).
+  outboundJob WaOutboundJob?
+  mediaJob    WaMediaJob?
+
+  // WhatsApp SaaS P3: metaType captures the original Meta payload shape so the
+  // client/UI can render image/document/interactive correctly without re-parsing
+  // the provider response. Distinct from `direction` (in/out) and `status`
+  // (lifecycle). Free-form to accommodate future Meta event types without
+  // schema churn.
+  metaType        String?
+  interactiveJson String? @db.Text
+
   @@index([tenantId, createdAt])
   @@index([threadId, createdAt])
+  // P1 hot path: webhook status updates filter by providerMsgId; current code
+  // does a full-tenant scan on every delivery status event. Indexing this
+  // closes a measurable latency leak.
+  @@index([providerMsgId])
+  @@index([tenantId, status, createdAt])
 }
 
 // -- WhatsApp 2-way: Thread aggregation + opt-out (Wave 2 Agent KK) --
@@ -1469,6 +1493,13 @@ model WhatsAppTemplate {
   buttons        String?  @db.Text // JSON
   status         String   @default("PENDING") // PENDING, APPROVED, REJECTED
   metaTemplateId String?
+  // WhatsApp SaaS P4: template-quality + sync tracking.
+  // qualityScore — driven by `message_template_quality_update` webhook.
+  // lastSyncedAt — bumped by /api/whatsapp/templates/sync (P4) and by the
+  //   nightly whatsappTemplateSyncEngine safety net for tenants whose webhook
+  //   delivery silently broke.
+  qualityScore   String? // 'HIGH' | 'MEDIUM' | 'LOW' | null
+  lastSyncedAt   DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -1482,7 +1513,14 @@ model WhatsAppTemplate {
 model WhatsAppConfig {
   id                 Int       @id @default(autoincrement())
   provider           String // "meta_cloud", "twilio_whatsapp", "gupshup"
-  phoneNumberId      String?
+  // WhatsApp SaaS P1: phoneNumberId is the inbound webhook tenant key.
+  // `value.metadata.phone_number_id` on every Meta webhook event is matched
+  // against this column to route to the owning tenant — replaces the old
+  // contact-phone-substring lookup that defaulted to tenantId=1 on miss.
+  // Nullable for legacy rows that pre-date onboarding; @unique enforces that
+  // no two tenants can claim the same Meta phone-number-id (which Meta itself
+  // forbids — one phone_number_id belongs to one WABA at a time).
+  phoneNumberId      String?   @unique
   businessAccountId  String?
   // #651 — accessToken widened to @db.Text for AES-256-GCM ciphertext.
   accessToken        String?   @db.Text
@@ -1491,6 +1529,29 @@ model WhatsAppConfig {
   settings           String?   @db.Text
   // #651 — see SmsConfig.lastRotatedAt
   lastRotatedAt      DateTime?
+
+  // WhatsApp SaaS P1+P4: integration lifecycle + health state.
+  // tokenExpiresAt — read from Graph /debug_token; null = "never expires"
+  //   (system-user-tied tokens issued via Embedded Signup Solution-Partner mode).
+  // qualityRating / messagingLimitTier — driven by Meta webhook events
+  //   `phone_number_quality_update` and `business_capability_update`.
+  // businessRestricted — set true on `account_update` webhook with restriction;
+  //   the outbound queue suspends sends for the tenant while this is true.
+  // webhookVerified — set true after the embedded-signup `subscribed_apps`
+  //   call confirms Meta will deliver webhooks to us for this WABA.
+  // disconnectedAt — soft-disconnect marker; set by /onboard/disconnect or by
+  //   the runtime auth-failure catch (code=190 from Meta).
+  // onboardedAt — first successful onboard timestamp; persists across reconnects.
+  // lastHealthCheckAt — daily /debug_token probe wakes this column.
+  tokenExpiresAt     DateTime?
+  qualityRating      String? // 'GREEN' | 'YELLOW' | 'RED' | 'UNKNOWN'
+  messagingLimitTier String? // 'TIER_50' | 'TIER_250' | 'TIER_1K' | 'TIER_10K' | 'TIER_100K' | 'UNLIMITED'
+  businessRestricted Boolean   @default(false)
+  webhookVerified    Boolean   @default(false)
+  disconnectedAt     DateTime?
+  onboardedAt        DateTime?
+  lastHealthCheckAt  DateTime?
+
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -1499,6 +1560,111 @@ model WhatsAppConfig {
 
   /// One WhatsApp credentials row per (tenant, provider). A tenant connects to Meta Cloud API once with their WABA + phone number ID. Different tenants own different WABAs and operate independently.
   @@unique([tenantId, provider])
+  @@index([businessAccountId])
+}
+
+// ── WhatsApp SaaS P1 — webhook idempotency + audit ───────────────────
+//
+// Every inbound Meta webhook event is recorded here BEFORE the handler runs.
+// The (source, metaEventId) unique index closes the duplicate-delivery hole:
+// Meta retries aggressively on any non-2xx, and the previous code path
+// would happily create duplicate WhatsAppMessage rows on retry. With this
+// table, the handler short-circuits on P2002 (unique violation) and returns
+// 200 immediately, telling Meta to stop retrying.
+//
+// `tenantId` is nullable because the routing layer determines tenant from
+// `value.metadata.phone_number_id` AFTER the event is recorded — events for
+// unknown phone-number-ids land here with tenantId=null + status=IGNORED so
+// you can audit what's being delivered to your webhook without a tenant
+// association.
+//
+// `rawPayload` is the full JSON for forensic replay. Kept @db.LongText so
+// large payloads (interactive messages, batched statuses) fit. Retention
+// policy: 14 days, swept by the existing retentionEngine cron.
+model WebhookEvent {
+  id           Int       @id @default(autoincrement())
+  source       String // 'meta_whatsapp', future: 'twilio_whatsapp', 'gupshup_whatsapp'
+  metaEventId  String?   @db.VarChar(200) // composite: phoneNumberId + ':' + (msg.id || status.id)
+  tenantId     Int?
+  tenant       Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  rawPayload   String    @db.LongText
+  signatureOk  Boolean
+  status       String    @default("RECEIVED") // RECEIVED, PROCESSED, FAILED, IGNORED, DUPLICATE
+  errorMessage String?   @db.Text
+  receivedAt   DateTime  @default(now())
+  processedAt  DateTime?
+
+  @@unique([source, metaEventId])
+  @@index([tenantId, receivedAt])
+  @@index([status, receivedAt])
+}
+
+// ── WhatsApp SaaS P3 — async outbound queue (DB-backed) ───────────────
+//
+// One row per outbound WhatsAppMessage. The whatsappOutboundEngine cron
+// (cron/whatsappOutboundEngine.js) claims PENDING rows whose runAt <= now,
+// calls Meta, and updates status + WhatsAppMessage.status atomically.
+//
+// `lockedAt` + `lockedBy` is the pessimistic claim — when this codebase
+// eventually scales past one PM2 instance, only one worker takes a given
+// job. Stale locks (>60s) get reclaimed at the next tick. This is the
+// poor-man's BullMQ until the queue-driver abstraction in
+// lib/whatsappQueue.js is swapped to a real broker.
+//
+// Status lifecycle:
+//   PENDING   → claimed → IN_FLIGHT → DONE | (retry → PENDING) | FAILED
+//   FAILED    → final on 4xx (auth/template/policy) — do not retry
+//   DEAD      → 5+ retry attempts on 5xx/network — manual replay required
+model WaOutboundJob {
+  id        Int      @id @default(autoincrement())
+  messageId Int      @unique
+  message   WhatsAppMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  tenantId  Int
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  status    String   @default("PENDING") // PENDING | IN_FLIGHT | DONE | FAILED | DEAD
+  attempts  Int      @default(0)
+  lastError String?  @db.Text
+  runAt     DateTime @default(now())
+  lockedAt  DateTime?
+  lockedBy  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, runAt])
+  @@index([tenantId, status])
+}
+
+// ── WhatsApp SaaS P3 — media download pipeline ────────────────────────
+//
+// Meta media URLs are short-lived (~5 min) and the underlying media itself
+// is retained for ~30 days. The webhook handler stores the bare media id;
+// the whatsappMediaEngine cron downloads it within minutes and uploads to
+// S3 under `whatsapp/{tenantId}/media/`, then rewrites the parent message's
+// `mediaUrl` column to the permanent S3 URL.
+//
+// Reuses the existing s3Service (backend/services/s3Service.js) — same
+// bucket, same credentials. Cleanup is bucket-side via lifecycle policy.
+model WaMediaJob {
+  id          Int      @id @default(autoincrement())
+  messageId   Int      @unique
+  message     WhatsAppMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  tenantId    Int
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  metaMediaId String
+  mimeType    String?
+  status      String   @default("PENDING") // PENDING | DONE | FAILED
+  attempts    Int      @default(0)
+  s3Url       String?  @db.Text
+  lastError   String?  @db.Text
+
+  createdAt   DateTime @default(now())
+  processedAt DateTime?
+
+  @@index([status, createdAt])
+  @@index([tenantId, status])
 }
 
 // ── Telephony ─────────────────────────────────────────────────────
@@ -3539,7 +3705,27 @@ model GiftCard {
   // display ("ending in WXYZ") and to narrow candidates during lookup.
   // Not redeemable on its own.
   codeLast4  String?
+  // `amount` = the redeemable "gift value" credited to the recipient on
+  // redemption. Kept as-is for back-compat with the existing /giftcards
+  // and /giftcards/redeem flows.
   amount     Float
+  // v3.7.17 additive fields, matching the Zylu-style "Add Gift Card"
+  // form (Name + Validity + Gift Value + Price + Color). All nullable —
+  // existing GiftCard rows + the legacy issue flow keep working with
+  // these unset; the new fields just enable richer template metadata.
+  //
+  // `name`         — display label, e.g. "New Year's Gift Card".
+  // `price`        — what the buyer paid (may be < amount for promo
+  //                  cards or > amount for charity / cause cards).
+  // `validityDays` — convenience field driving the Validity dropdown
+  //                  (90 = 3 months, 180 = 6 months, etc). expiresAt
+  //                  is still authoritative; this is just metadata so
+  //                  the UI can render the selection back consistently.
+  // `color`        — hex string for the on-card UI accent.
+  name         String?
+  price        Float?
+  validityDays Int?
+  color        String?
   currency   String    @default("INR")
   status     String    @default("active")
   expiresAt  DateTime?
@@ -4152,6 +4338,18 @@ model SubscriptionPlan {
   description         String?  @db.Text
   isActive            Boolean  @default(true)
   createdAt           DateTime @default(now())
+
+  // Marketing-page display fields. Editable from the admin "Manage Plans"
+  // UI so prices/features can change without a redeploy. `pricing` carries
+  // all 4 display prices (usd/inr × annual/monthly) as JSON; the canonical
+  // `price`+`currency` above stays as the legacy Razorpay charge fallback.
+  planKey       String?  @unique // stable slug: starter | pro | ent
+  displayOrder  Int      @default(0)
+  popular       Boolean  @default(false)
+  accentColor   String? // hex for card accent (e.g. #4f46e5)
+  cta           String? // CTA button label
+  featuresLabel String? // "Includes" or "Everything in Starter, plus"
+  pricing       String?  @db.Text // JSON: { usd: { annual, monthly, yearAnnualLabel, yearMonthlyLabel }, inr: {...} }
 
   subscriptions Subscription[]
 

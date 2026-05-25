@@ -85,7 +85,53 @@ router.get("/me", async (req, res) => {
   });
 });
 
-// ── Contacts: lookup + fetch ───────────────────────────────────────
+// ── Contacts: list + lookup + fetch ────────────────────────────────
+
+router.get("/contacts", async (req, res) => {
+  try {
+    const limit = parseLimit(req.query.limit);
+    const offset = parseOffset(req.query.offset);
+    const { status, source, createdSince, q } = req.query;
+
+    const where = tenantWhere(req, { deletedAt: null });
+    if (status) where.status = status;
+    if (source) where.source = source;
+    if (createdSince) {
+      const since = new Date(createdSince);
+      if (Number.isNaN(since.getTime())) {
+        return res.status(400).json({ error: "createdSince must be a valid ISO date", code: "INVALID_QUERY" });
+      }
+      where.createdAt = { gte: since };
+    }
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { email: { contains: q } },
+        { phone: { contains: q } },
+        { company: { contains: q } },
+      ];
+    }
+
+    const [data, total] = await Promise.all([
+      prisma.contact.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: limit,
+        skip: offset,
+        select: {
+          id: true, name: true, email: true, phone: true, status: true, source: true,
+          company: true, aiScore: true, assignedToId: true, createdAt: true,
+        },
+      }),
+      prisma.contact.count({ where }),
+    ]);
+
+    res.json({ data, total, limit, offset });
+  } catch (e) {
+    console.error("[external] contacts list:", e.message);
+    res.status(500).json({ error: "List failed" });
+  }
+});
 
 router.get("/contacts/lookup", async (req, res) => {
   try {

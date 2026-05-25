@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
-import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette, Monitor, Mail, FileSignature, Bell, Eye, EyeOff, Check, X, Loader, PhoneCall } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette, Monitor, Mail, FileSignature, Bell, Eye, EyeOff, Check, X, Loader, PhoneCall, CreditCard, ArrowRight } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { usePermissions } from '../hooks/usePermissions';
 import { ThemeContext, AuthContext } from '../App';
 
 // #391: single source of truth for the default brand color so the color
@@ -14,6 +16,7 @@ export default function Settings() {
   const notify = useNotify();
   const { theme, setTheme, toggleTheme } = useContext(ThemeContext);
   const { tenant: ctxTenant, setTenant } = useContext(AuthContext);
+  const { isOwner } = usePermissions();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'USER' });
@@ -382,6 +385,17 @@ export default function Settings() {
       <header style={{ marginBottom: '2.5rem' }}>
         <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Organization Settings</h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Manage team members, roles, and administrative security.</p>
+        {/* Owner-only quick-link to the subscription catalog editor. Hidden
+            for non-owners — the ManagePlans page itself also gates render
+            on isOwner so a direct URL hit shows the access-denied panel. */}
+        {isOwner && (
+          <Link
+            to="/manage-plans"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: '1rem', padding: '8px 14px', fontSize: '0.85rem', fontWeight: 600, background: 'var(--accent-color)', color: '#fff', borderRadius: 8, textDecoration: 'none' }}
+          >
+            <CreditCard size={14} /> Manage Subscription Plans <ArrowRight size={13} />
+          </Link>
+        )}
       </header>
 
       {/* #479/#484: outer two-column grid uses auto-fit + minmax so the

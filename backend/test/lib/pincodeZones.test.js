@@ -9,6 +9,7 @@ import {
   estimateTravelMinutes,
   metroOf,
   pinPrefix,
+  METRO_PREFIXES,
   SAME_ZONE_MINUTES,
   CROSS_ZONE_MINUTES,
   OUTSIDE_METRO_MINUTES,
@@ -124,5 +125,140 @@ describe('contract (load-bearing constants)', () => {
     // surfaces as a red unit test rather than a silent behaviour change in
     // every IN_HOME booking with a missing pincode.
     expect(FALLBACK_MINUTES).toBe(30);
+  });
+});
+
+describe('pinPrefix — input-coercion edge cases', () => {
+  test('numeric PIN input is coerced via String() and sliced', () => {
+    // String(560001) === '560001' → strip non-digits → '560001' → slice 0,3
+    expect(pinPrefix(560001)).toBe('560');
+    expect(pinPrefix(400001)).toBe('400');
+  });
+
+  test('PIN with letters mixed in strips letters before slicing', () => {
+    // 'a560abc001z' → strip → '560001' → slice 0,3 → '560'
+    expect(pinPrefix('560abc001')).toBe('560');
+    expect(pinPrefix('a560abc001z')).toBe('560');
+  });
+
+  test('7-digit PIN (longer than 6) still slices to first 3 digits', () => {
+    // Defensive: a malformed too-long PIN should not throw, just return the
+    // first 3 digits. The route layer is responsible for length validation;
+    // this helper degrades gracefully.
+    expect(pinPrefix('5600012')).toBe('560');
+    expect(pinPrefix('11000199')).toBe('110');
+  });
+
+  test('object input → String({}) yields no digits → null', () => {
+    // String({}) === '[object Object]' — no digits — strip yields '' — null.
+    expect(pinPrefix({})).toBeNull();
+    expect(pinPrefix({ pincode: '560001' })).toBeNull();
+  });
+
+  test('boolean input → no digits → null', () => {
+    // String(true) === 'true', String(false) === 'false' — no digits.
+    expect(pinPrefix(true)).toBeNull();
+    // pinPrefix(false) hits the `if (!pincode) return null` guard first;
+    // either way the contract is "no resolved prefix" → null.
+    expect(pinPrefix(false)).toBeNull();
+  });
+
+  test('float PIN input: decimal point stripped, fractional digits joined', () => {
+    // String(560001.5) === '560001.5' → strip '.' → '5600015' → '560'.
+    // Pins this defensive behaviour: float inputs do NOT round, they
+    // strip the point and concatenate. Length is still ≥6 so it slices.
+    expect(pinPrefix(560001.5)).toBe('560');
+    expect(pinPrefix(110001.25)).toBe('110');
+  });
+
+  test('PIN with only dashes / formatting → empty after strip → null', () => {
+    expect(pinPrefix('---')).toBeNull();
+    expect(pinPrefix('-- --')).toBeNull();
+    expect(pinPrefix('   ')).toBeNull();
+  });
+});
+
+describe('METRO_PREFIXES — export shape', () => {
+  test('table has 12 entries (10 metros + Mumbai 401 + Pune 412 sub-prefixes)', () => {
+    expect(Object.keys(METRO_PREFIXES).length).toBe(12);
+  });
+
+  test('canonical metro prefixes are wired correctly', () => {
+    expect(METRO_PREFIXES['560']).toBe('BLR');
+    expect(METRO_PREFIXES['400']).toBe('MUM');
+    expect(METRO_PREFIXES['401']).toBe('MUM');
+    expect(METRO_PREFIXES['411']).toBe('PUN');
+    expect(METRO_PREFIXES['412']).toBe('PUN');
+  });
+
+  test('non-mapped prefixes are undefined (Kalyan 421, Meerut 250)', () => {
+    expect(METRO_PREFIXES['421']).toBeUndefined();
+    expect(METRO_PREFIXES['250']).toBeUndefined();
+    expect(METRO_PREFIXES['670']).toBeUndefined();
+  });
+});
+
+describe('all 10 metros — pairwise sweep', () => {
+  // One canonical PIN per metro from PRD §4.6. Each must round-trip cleanly
+  // through metroOf, and same-PIN-twice must collapse to SAME_ZONE_MINUTES.
+  // If a future schema change drops a metro from METRO_PREFIXES, this sweep
+  // surfaces it as a red test for THAT metro rather than the cascade test.
+  const METROS = [
+    { pin: '560001', code: 'BLR', city: 'Bangalore' },
+    { pin: '400001', code: 'MUM', city: 'Mumbai' },
+    { pin: '110001', code: 'DEL', city: 'Delhi' },
+    { pin: '600001', code: 'CHE', city: 'Chennai' },
+    { pin: '500001', code: 'HYD', city: 'Hyderabad' },
+    { pin: '700001', code: 'KOL', city: 'Kolkata' },
+    { pin: '411001', code: 'PUN', city: 'Pune' },
+    { pin: '380001', code: 'AMD', city: 'Ahmedabad' },
+    { pin: '682001', code: 'COK', city: 'Kochi' },
+    { pin: '302001', code: 'JAI', city: 'Jaipur' },
+  ];
+
+  test.each(METROS)('$city ($pin) resolves to $code and same-PIN → SAME_ZONE_MINUTES', ({ pin, code }) => {
+    expect(metroOf(pin)).toBe(code);
+    expect(estimateTravelMinutes(pin, pin)).toBe(SAME_ZONE_MINUTES);
+  });
+
+  test('every metro pair (A != B) → CROSS_ZONE_MINUTES', () => {
+    for (let i = 0; i < METROS.length; i++) {
+      for (let j = i + 1; j < METROS.length; j++) {
+        const a = METROS[i];
+        const b = METROS[j];
+        expect(estimateTravelMinutes(a.pin, b.pin)).toBe(CROSS_ZONE_MINUTES);
+      }
+    }
+  });
+});
+
+describe('estimateTravelMinutes — cascade ordering + symmetry', () => {
+  test('one missing + one rural → FALLBACK_MINUTES (missing-check wins over rural)', () => {
+    // The function checks `!clinicPincode || !patientPincode` BEFORE
+    // running the metroOf cascade. So a null+rural pair returns FALLBACK
+    // (30), NOT OUTSIDE_METRO_MINUTES (90). This pins the precedence —
+    // a refactor that swaps the order would surface here.
+    expect(estimateTravelMinutes(null, '250001')).toBe(FALLBACK_MINUTES);
+    expect(estimateTravelMinutes('250001', null)).toBe(FALLBACK_MINUTES);
+    expect(estimateTravelMinutes(undefined, '670001')).toBe(FALLBACK_MINUTES);
+    expect(estimateTravelMinutes('', '670001')).toBe(FALLBACK_MINUTES);
+  });
+
+  test('symmetric: estimate(A, B) === estimate(B, A) across all cascade branches', () => {
+    // Metro-metro (same)
+    expect(estimateTravelMinutes('560001', '560100'))
+      .toBe(estimateTravelMinutes('560100', '560001'));
+    // Metro-metro (different)
+    expect(estimateTravelMinutes('560001', '400001'))
+      .toBe(estimateTravelMinutes('400001', '560001'));
+    // Metro-rural
+    expect(estimateTravelMinutes('560001', '250001'))
+      .toBe(estimateTravelMinutes('250001', '560001'));
+    // Rural-rural
+    expect(estimateTravelMinutes('250001', '670001'))
+      .toBe(estimateTravelMinutes('670001', '250001'));
+    // Missing-known
+    expect(estimateTravelMinutes(null, '560001'))
+      .toBe(estimateTravelMinutes('560001', null));
   });
 });

@@ -1106,6 +1106,585 @@ router.get("/sales/:id", cashierGate, async (req, res) => {
   }
 });
 
+// ── Atomic sale finalize (D17 Arc 1 slices 5 + 8) ────────────────────
+//
+// POST /api/pos/sales/finalize — PRD_POS_NEW_SALE §3.6 atomicity hardening
+// (the "wallet debit moves INSIDE the Sale transaction" fix per the PRD's
+// "Atomicity ambiguity" risk callout). Distinct from POST /sales above —
+// /sales is the legacy single-tender endpoint with float-rupee inputs
+// (paidAmount / discountTotal / taxTotal) that the existing UI consumes;
+// /finalize is the new cents-native endpoint built for the PRD §3.5
+// payment-splitter UI which natively works in integer cents to avoid
+// float-rounding drift on split tenders.
+//
+// Body shape:
+//   patientId       int          required — must belong to tenant
+//   items           array(≥1)    {type:'service'|'product', refId, qty, unitPriceCents}
+//   payments        array(≥1)    {method:'cash'|'card'|'upi'|'wallet'|'giftcard', amountCents}
+//   discountCents   int (≥0)     optional, default 0
+//   taxCents        int (≥0)     optional, default 0
+//
+// Computed:
+//   itemsTotal      = sum(qty × unitPriceCents)
+//   grandTotal      = itemsTotal − discountCents + taxCents
+//   paymentsTotal   = sum(payments[].amountCents)
+//   MUST hold: |paymentsTotal − grandTotal| ≤ 1 (1-cent rounding tolerance)
+//
+// Wallet handling — for ANY payment line with method='wallet':
+//   Inline FIFO+expiry-order debit (mirrors routes/wallet.js POST /redeem
+//   logic at L595-L692) inside the same prisma.$transaction so a wallet
+//   shortfall rolls back the Sale/Invoice/Payment rows along with the
+//   batch updates. PRINCIPAL batches first (FIFO — oldest createdAt
+//   wins), BONUS batches second (soonest expiresAt wins) — the
+//   customer-fair priority pinned by DD-5.3 of PRD_WALLET_TOPUP.
+//
+// Atomicity guarantee: Sale + SaleLineItem + Invoice + WalletCreditBatch
+// updates + WalletTransaction + Wallet.balance + audit-row data
+// snapshot all live inside ONE prisma.$transaction. A throw anywhere
+// (insufficient balance, DB hiccup, invariant violation) rolls back
+// EVERY row — no Sale persists if wallet redemption fails halfway.
+// The audit.writeAudit call sits OUTSIDE the transaction (audit is
+// hash-chained — see lib/audit.js — and a failed audit must NOT roll
+// back a legitimate sale) but receives a snapshot computed inside
+// the tx so the audit payload reflects the committed reality.
+//
+// Error codes:
+//   400 INVALID_PAYLOAD            body is not an object
+//   400 INVALID_PATIENT_ID         patientId missing / non-positive
+//   400 INVALID_ITEMS              items missing / not array / empty
+//   400 INVALID_ITEM               one item row malformed (bad type/refId/qty/unitPriceCents)
+//   400 INVALID_PAYMENTS           payments missing / not array / empty
+//   400 INVALID_PAYMENT            one payment row malformed (bad method/amountCents)
+//   400 INVALID_DISCOUNT           discountCents negative / non-integer
+//   400 INVALID_TAX                taxCents negative / non-integer
+//   400 MISMATCHED_TOTAL           |paymentsTotal − grandTotal| > 1 cent
+//   400 INSUFFICIENT_WALLET_BALANCE  wallet payment > active batch sum
+//   404 PATIENT_NOT_FOUND          patient missing in caller's tenant
+//   500 SALE_FINALIZE_FAILED       unexpected transaction failure
+//
+// Response: { success, saleId, invoiceId, grandTotalCents, walletDebitedCents, status }
+//
+// RBAC: cashierGate (admin/manager/doctor/professional/telecaller/helper) —
+// same surface as POST /sales above. Telecallers cannot finalize in
+// practice (they don't sit at the till) but the route doesn't enforce
+// that — the calendar's POS New Sale page is gated by frontend route +
+// the cashier needs an OPEN shift on the existing POST /sales path.
+// This new endpoint deliberately does NOT require an open shift because
+// the payment-splitter PRD §3.6 leaves shift-binding for a later slice;
+// downstream reconcile/refund flows surface shift gaps if any.
+
+const VALID_FINALIZE_ITEM_TYPES = new Set(["service", "product"]);
+const VALID_FINALIZE_PAYMENT_METHODS = new Set([
+  "cash",
+  "card",
+  "upi",
+  "wallet",
+  "giftcard",
+]);
+// Map slice-spec lowercase item type → SaleLineItem.lineType column
+// (existing enum-string values are uppercase per the legacy POST /sales).
+const FINALIZE_ITEM_TYPE_TO_LINE_TYPE = {
+  service: "SERVICE",
+  product: "PRODUCT",
+};
+
+router.post("/sales/finalize", cashierGate, async (req, res) => {
+  try {
+    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+      return res.status(400).json({ error: "Body must be an object", code: "INVALID_PAYLOAD" });
+    }
+    const { patientId, items, payments, discountCents, taxCents } = req.body;
+
+    // ── Validate patientId ──
+    const pid = parseInt(patientId, 10);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      return res.status(400).json({
+        error: "patientId must be a positive integer",
+        code: "INVALID_PATIENT_ID",
+      });
+    }
+
+    // ── Validate items array ──
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        error: "items must be a non-empty array",
+        code: "INVALID_ITEMS",
+      });
+    }
+    if (items.length > 200) {
+      return res.status(400).json({
+        error: "items exceeds 200 rows",
+        code: "INVALID_ITEMS",
+      });
+    }
+    const normalisedItems = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!it || typeof it !== "object") {
+        return res.status(400).json({
+          error: `items[${i}] must be an object`,
+          code: "INVALID_ITEM",
+        });
+      }
+      const type = typeof it.type === "string" ? it.type.toLowerCase() : "";
+      if (!VALID_FINALIZE_ITEM_TYPES.has(type)) {
+        return res.status(400).json({
+          error: `items[${i}].type must be one of: service, product`,
+          code: "INVALID_ITEM",
+        });
+      }
+      const refId = parseInt(it.refId, 10);
+      if (!Number.isFinite(refId) || refId <= 0) {
+        return res.status(400).json({
+          error: `items[${i}].refId must be a positive integer`,
+          code: "INVALID_ITEM",
+        });
+      }
+      const qty = parseInt(it.qty, 10);
+      if (!Number.isFinite(qty) || qty < 1) {
+        return res.status(400).json({
+          error: `items[${i}].qty must be a positive integer`,
+          code: "INVALID_ITEM",
+        });
+      }
+      const unitPriceCents = parseInt(it.unitPriceCents, 10);
+      if (!Number.isFinite(unitPriceCents) || unitPriceCents < 0) {
+        return res.status(400).json({
+          error: `items[${i}].unitPriceCents must be a non-negative integer`,
+          code: "INVALID_ITEM",
+        });
+      }
+      normalisedItems.push({ type, refId, qty, unitPriceCents });
+    }
+
+    // ── Validate payments array ──
+    if (!Array.isArray(payments) || payments.length === 0) {
+      return res.status(400).json({
+        error: "payments must be a non-empty array",
+        code: "INVALID_PAYMENTS",
+      });
+    }
+    const normalisedPayments = [];
+    for (let i = 0; i < payments.length; i++) {
+      const p = payments[i];
+      if (!p || typeof p !== "object") {
+        return res.status(400).json({
+          error: `payments[${i}] must be an object`,
+          code: "INVALID_PAYMENT",
+        });
+      }
+      const method = typeof p.method === "string" ? p.method.toLowerCase() : "";
+      if (!VALID_FINALIZE_PAYMENT_METHODS.has(method)) {
+        return res.status(400).json({
+          error: `payments[${i}].method must be one of: cash, card, upi, wallet, giftcard`,
+          code: "INVALID_PAYMENT",
+        });
+      }
+      const amountCents = parseInt(p.amountCents, 10);
+      if (!Number.isFinite(amountCents) || amountCents <= 0) {
+        return res.status(400).json({
+          error: `payments[${i}].amountCents must be a positive integer`,
+          code: "INVALID_PAYMENT",
+        });
+      }
+      normalisedPayments.push({ method, amountCents });
+    }
+
+    // ── Validate discount + tax ──
+    const discount =
+      discountCents === undefined || discountCents === null
+        ? 0
+        : parseInt(discountCents, 10);
+    if (!Number.isFinite(discount) || discount < 0) {
+      return res.status(400).json({
+        error: "discountCents must be a non-negative integer",
+        code: "INVALID_DISCOUNT",
+      });
+    }
+    const tax =
+      taxCents === undefined || taxCents === null ? 0 : parseInt(taxCents, 10);
+    if (!Number.isFinite(tax) || tax < 0) {
+      return res.status(400).json({
+        error: "taxCents must be a non-negative integer",
+        code: "INVALID_TAX",
+      });
+    }
+
+    // ── Compute totals (integer cents — no float rounding) ──
+    const itemsTotal = normalisedItems.reduce(
+      (acc, it) => acc + it.qty * it.unitPriceCents,
+      0,
+    );
+    const grandTotal = itemsTotal - discount + tax;
+    if (grandTotal < 0) {
+      // Defensive — discount > items+tax means the cashier is trying to
+      // give away money plus a refund; mismatched-total catches it but
+      // a crisper code helps diagnostics.
+      return res.status(400).json({
+        error: "discountCents exceeds itemsTotal + taxCents",
+        code: "INVALID_DISCOUNT",
+      });
+    }
+    const paymentsTotal = normalisedPayments.reduce(
+      (acc, p) => acc + p.amountCents,
+      0,
+    );
+    // ±1 cent tolerance to absorb any client-side rounding drift on a
+    // multi-tender split (e.g. 33⅓% of ₹100 = 3 lines of ₹33.33 → 9999
+    // cents not 10000). 1-cent floor is tighter than the legacy POST
+    // /sales 0.01 rupee tolerance because we're already in integer
+    // cents and the only legitimate drift is 1-cent floor-rounding.
+    if (Math.abs(paymentsTotal - grandTotal) > 1) {
+      return res.status(400).json({
+        error: `sum(payments.amountCents)=${paymentsTotal} must equal grandTotal=${grandTotal} ±1 cent`,
+        code: "MISMATCHED_TOTAL",
+        paymentsTotalCents: paymentsTotal,
+        grandTotalCents: grandTotal,
+      });
+    }
+
+    // ── Tenant-scoped patient existence guard ──
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: pid }),
+      select: { id: true },
+    });
+    if (!patient) {
+      return res.status(404).json({
+        error: "Patient not found",
+        code: "PATIENT_NOT_FOUND",
+      });
+    }
+
+    // Sum wallet-tender amount up-front for the tx — short-circuit if zero.
+    const walletDebitCents = normalisedPayments
+      .filter((p) => p.method === "wallet")
+      .reduce((acc, p) => acc + p.amountCents, 0);
+
+    const now = new Date();
+
+    // ── Atomic transaction ──
+    //   1. (if walletDebitCents > 0) Resolve wallet + walk FIFO/expiry
+    //      batches, debit them, write WalletTransaction(REDEEM), update
+    //      Wallet.balance. Insufficient balance throws a typed error so
+    //      the outer catch maps to 400 INSUFFICIENT_WALLET_BALANCE.
+    //   2. Generate invoiceNumber + create Sale row (status=COMPLETED,
+    //      total=grandTotal/100 in rupees for compat with existing
+    //      Sale.total float column).
+    //   3. Create SaleLineItem rows for each item.
+    //   4. Create Invoice row linked to Sale (status=PAID since payments
+    //      sum to total; contactId is null-safe — Invoice model requires
+    //      contactId so we resolve patient.contactId if present).
+    //   5. Create Payment rows for each payment line.
+    let txResult;
+    try {
+      txResult = await prisma.$transaction(async (tx) => {
+        let walletTransactionId = null;
+        const walletBatchesDebited = [];
+
+        if (walletDebitCents > 0) {
+          const wallet = await tx.wallet.findFirst({
+            where: tenantWhere(req, { patientId: pid }),
+            select: { id: true, balance: true },
+          });
+          if (!wallet) {
+            const err = new Error("INSUFFICIENT_WALLET_BALANCE");
+            err.code = "INSUFFICIENT_WALLET_BALANCE";
+            err.requestedCents = walletDebitCents;
+            err.availableCents = 0;
+            throw err;
+          }
+          const baseWhere = {
+            tenantId: req.user.tenantId,
+            walletId: wallet.id,
+            status: "ACTIVE",
+            OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+          };
+          const [principalBatches, bonusBatches] = await Promise.all([
+            tx.walletCreditBatch.findMany({
+              where: { ...baseWhere, batchType: "PRINCIPAL" },
+              orderBy: { createdAt: "asc" },
+            }),
+            tx.walletCreditBatch.findMany({
+              where: { ...baseWhere, batchType: "BONUS" },
+              orderBy: { expiresAt: "asc" },
+            }),
+          ]);
+          const orderedBatches = [...principalBatches, ...bonusBatches];
+          const availableCents = orderedBatches.reduce(
+            (sum, b) => sum + b.remainingCents,
+            0,
+          );
+          if (availableCents < walletDebitCents) {
+            const err = new Error("INSUFFICIENT_WALLET_BALANCE");
+            err.code = "INSUFFICIENT_WALLET_BALANCE";
+            err.requestedCents = walletDebitCents;
+            err.availableCents = availableCents;
+            throw err;
+          }
+          let remaining = walletDebitCents;
+          for (const batch of orderedBatches) {
+            if (remaining <= 0) break;
+            const consumed = Math.min(batch.remainingCents, remaining);
+            const newRemaining = batch.remainingCents - consumed;
+            await tx.walletCreditBatch.update({
+              where: { id: batch.id },
+              data: {
+                remainingCents: newRemaining,
+                status: newRemaining === 0 ? "EXHAUSTED" : "ACTIVE",
+              },
+            });
+            walletBatchesDebited.push({
+              batchId: batch.id,
+              batchType: batch.batchType,
+              consumedCents: consumed,
+            });
+            remaining -= consumed;
+          }
+          const newBalance = +(wallet.balance - walletDebitCents / 100).toFixed(2);
+          const txnRow = await tx.walletTransaction.create({
+            data: {
+              tenantId: req.user.tenantId,
+              walletId: wallet.id,
+              type: "REDEEM",
+              amount: -walletDebitCents / 100,
+              reason: `POS sale finalize (patient ${pid})`,
+              invoiceId: null, // back-filled below post-Invoice create
+              balanceAfter: newBalance,
+              performedBy: req.user.userId,
+            },
+          });
+          walletTransactionId = txnRow.id;
+          await tx.wallet.update({
+            where: { id: wallet.id },
+            data: { balance: newBalance },
+          });
+        }
+
+        const invoiceNumber = await generateInvoiceNumber(tx, req.user.tenantId, now);
+        const grandTotalRupees = +(grandTotal / 100).toFixed(2);
+        const subtotalRupees = +(itemsTotal / 100).toFixed(2);
+        const discountRupees = +(discount / 100).toFixed(2);
+        const taxRupees = +(tax / 100).toFixed(2);
+
+        const sale = await tx.sale.create({
+          data: {
+            tenantId: req.user.tenantId,
+            // /finalize bypasses the register/shift gate (PRD §3.6 leaves
+            // shift-binding for a later slice). The DB columns are
+            // non-nullable so we look up the cashier's most-recent OPEN
+            // shift if present, else fall through to ANY shift the cashier
+            // owns. Tests stub this; production callers will have an open
+            // shift via the calendar flow.
+            registerId: await resolveRegisterIdForFinalize(tx, req),
+            shiftId: await resolveShiftIdForFinalize(tx, req),
+            cashierId: req.user.userId,
+            patientId: pid,
+            invoiceNumber,
+            subtotal: subtotalRupees,
+            taxTotal: taxRupees,
+            discountTotal: discountRupees,
+            total: grandTotalRupees,
+            paidAmount: grandTotalRupees,
+            status: "COMPLETED",
+            paymentMethod: normalisedPayments.length === 1
+              ? normalisedPayments[0].method.toUpperCase()
+              : "COMBINED",
+            paymentBreakdownJson: JSON.stringify(
+              normalisedPayments.map((p) => ({
+                method: p.method.toUpperCase(),
+                amountCents: p.amountCents,
+              })),
+            ).slice(0, 4000),
+            lineItems: {
+              create: normalisedItems.map((it) => {
+                const unitPriceRupees = +(it.unitPriceCents / 100).toFixed(2);
+                return {
+                  tenantId: req.user.tenantId,
+                  lineType: FINALIZE_ITEM_TYPE_TO_LINE_TYPE[it.type],
+                  refId: it.refId,
+                  name: `${FINALIZE_ITEM_TYPE_TO_LINE_TYPE[it.type]} #${it.refId}`,
+                  quantity: it.qty,
+                  unitPrice: unitPriceRupees,
+                  lineDiscount: 0,
+                  lineTotal: +(it.qty * unitPriceRupees).toFixed(2),
+                };
+              }),
+            },
+          },
+          include: { lineItems: true },
+        });
+
+        // Invoice model requires contactId — resolve from patient.contactId
+        // (Patient has an optional Contact linkage in the wellness schema).
+        // If no contact link exists, skip Invoice creation; the receipt
+        // anchors on Sale.id per PRD §3.6 fallback contract. Any error
+        // from invoice.create propagates and rolls back the surrounding
+        // transaction (no inner try/catch needed — the throw is what we
+        // want for atomicity).
+        let invoice = null;
+        const patientForInvoice = await tx.patient.findUnique({
+          where: { id: pid },
+          select: { contactId: true },
+        });
+        if (patientForInvoice?.contactId) {
+          invoice = await tx.invoice.create({
+            data: {
+              tenantId: req.user.tenantId,
+              invoiceNum: invoiceNumber,
+              amount: grandTotalRupees,
+              status: "PAID",
+              dueDate: now,
+              issuedDate: now,
+              paidAt: now,
+              contactId: patientForInvoice.contactId,
+            },
+          });
+          // Back-fill the WalletTransaction.invoiceId so the wallet
+          // ledger cross-links the redemption to the invoice row.
+          if (walletTransactionId && invoice) {
+            await tx.walletTransaction.update({
+              where: { id: walletTransactionId },
+              data: { invoiceId: invoice.id },
+            });
+          }
+        }
+
+        // Payment rows — one per tender line. Wallet payments link to
+        // the invoice (if created) via invoiceId; gateway field tags the
+        // method so reports can split CASH vs CARD vs UPI vs WALLET vs
+        // GIFTCARD revenue.
+        const paymentRows = [];
+        for (const p of normalisedPayments) {
+          const paymentRow = await tx.payment.create({
+            data: {
+              tenantId: req.user.tenantId,
+              invoiceId: invoice ? invoice.id : null,
+              amount: +(p.amountCents / 100).toFixed(2),
+              currency: "INR",
+              gateway: p.method,
+              status: "SUCCESS",
+              paidAt: now,
+            },
+          });
+          paymentRows.push(paymentRow);
+        }
+
+        return {
+          sale,
+          invoice,
+          paymentRows,
+          walletTransactionId,
+          walletBatchesDebited,
+          grandTotalCents: grandTotal,
+          walletDebitedCents: walletDebitCents,
+        };
+      });
+    } catch (txErr) {
+      if (txErr && txErr.code === "INSUFFICIENT_WALLET_BALANCE") {
+        return res.status(400).json({
+          error: "Insufficient wallet balance",
+          code: "INSUFFICIENT_WALLET_BALANCE",
+          requestedCents: txErr.requestedCents,
+          availableCents: txErr.availableCents,
+        });
+      }
+      throw txErr;
+    }
+
+    // Audit OUTSIDE the transaction — hash-chained writes must never
+    // roll back a committed sale. Fire-and-forget; an audit hiccup
+    // surfaces in the audit-integrity cron, not on the cashier's screen.
+    writeAudit(
+      "Sale",
+      "POS_SALE_FINALIZED",
+      txResult.sale.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        saleId: txResult.sale.id,
+        invoiceId: txResult.invoice ? txResult.invoice.id : null,
+        grandTotalCents: txResult.grandTotalCents,
+        paymentCount: normalisedPayments.length,
+        hadWalletRedeem: txResult.walletDebitedCents > 0,
+        walletDebitedCents: txResult.walletDebitedCents,
+        walletBatchesDebited: txResult.walletBatchesDebited,
+      },
+    ).catch((auditErr) => {
+      console.warn("[pos] POS_SALE_FINALIZED audit failed:", auditErr.message);
+    });
+
+    return res.status(201).json({
+      success: true,
+      saleId: txResult.sale.id,
+      invoiceId: txResult.invoice ? txResult.invoice.id : null,
+      grandTotalCents: txResult.grandTotalCents,
+      walletDebitedCents: txResult.walletDebitedCents,
+      status: txResult.sale.status,
+    });
+  } catch (e) {
+    console.error("[pos] sale finalize error:", e.message);
+    return res.status(500).json({
+      error: "Failed to finalize sale",
+      code: "SALE_FINALIZE_FAILED",
+    });
+  }
+});
+
+// Register + shift resolution helpers for /finalize. PRD §3.6 defers
+// shift-binding to a later slice but the Sale schema columns are
+// non-nullable. Strategy: take the cashier's most-recent OPEN shift if
+// any; else any shift they've owned (CLOSED is OK because /finalize is
+// designed to be callable from the new calendar surface, not the till);
+// else any register/shift on the tenant (admin-finalizing-walkin pattern).
+async function resolveShiftIdForFinalize(tx, req) {
+  const openMine = await tx.shift.findFirst({
+    where: tenantWhere(req, { userId: req.user.userId, status: "OPEN" }),
+    orderBy: { openedAt: "desc" },
+    select: { id: true },
+  });
+  if (openMine) return openMine.id;
+  const anyMine = await tx.shift.findFirst({
+    where: tenantWhere(req, { userId: req.user.userId }),
+    orderBy: { openedAt: "desc" },
+    select: { id: true },
+  });
+  if (anyMine) return anyMine.id;
+  const anyTenant = await tx.shift.findFirst({
+    where: tenantWhere(req),
+    orderBy: { openedAt: "desc" },
+    select: { id: true },
+  });
+  if (anyTenant) return anyTenant.id;
+  // No shift at all → reject. Sale.shiftId is non-nullable.
+  const err = new Error("SALE_FINALIZE_FAILED");
+  err.code = "SALE_FINALIZE_FAILED";
+  throw err;
+}
+
+async function resolveRegisterIdForFinalize(tx, req) {
+  const openMine = await tx.shift.findFirst({
+    where: tenantWhere(req, { userId: req.user.userId, status: "OPEN" }),
+    orderBy: { openedAt: "desc" },
+    select: { registerId: true },
+  });
+  if (openMine) return openMine.registerId;
+  const anyMine = await tx.shift.findFirst({
+    where: tenantWhere(req, { userId: req.user.userId }),
+    orderBy: { openedAt: "desc" },
+    select: { registerId: true },
+  });
+  if (anyMine) return anyMine.registerId;
+  const anyTenant = await tx.shift.findFirst({
+    where: tenantWhere(req),
+    orderBy: { openedAt: "desc" },
+    select: { registerId: true },
+  });
+  if (anyTenant) return anyTenant.registerId;
+  const err = new Error("SALE_FINALIZE_FAILED");
+  err.code = "SALE_FINALIZE_FAILED";
+  throw err;
+}
+
 router.post("/sales/:id/refund", adminGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);

@@ -13,9 +13,19 @@
 //   - Slice 2 (commit 92b1682c): page chrome + local-only lines + actions.
 //   - Slice 3 (commit f7203b8e): backend TravelQuoteLine model + line CRUD
 //     endpoints + supplier picker query surface.
-//   - Slice 4 (THIS commit): wire QuoteBuilder to the persistent line
+//   - Slice 4 (commit 188d50c2): wire QuoteBuilder to the persistent line
 //     endpoints + add a per-line supplier picker fed by
 //     GET /api/travel/suppliers?subBrand=<sub>.
+//   - Slice 6 (THIS commit): add a "Send to customer" action button that
+//     opens a confirm modal explaining the Q9 (Wati WhatsApp) credential
+//     dependency. STUB-mode delivery: on confirm we mark the quote as
+//     "Sent" via PUT /api/travel/quotes/:id { status: "Sent" } so the
+//     status pill flips, and surface a notify.info "Send queued" message.
+//     Actual WhatsApp + email dispatch lives behind a Q9 cred drop (Meta
+//     System User token + 3×WABA ID + 3×phoneNumberId + webhook verify
+//     token). Once Q9 lands, wire the modal's confirm handler to POST
+//     /api/travel/quotes/:id/send (route to be added in a later slice)
+//     and remove the STUB marker.
 //
 // Backend contracts (all live as of f7203b8e):
 //   GET    /api/travel/quotes/:id                    → 200 { id, contactId, ... }
@@ -138,6 +148,9 @@ export default function QuoteBuilder() {
   const [suppliersLoading, setSuppliersLoading] = useState(false);
   // Delete-confirm modal target.
   const [deleteTarget, setDeleteTarget] = useState(null);
+  // Send-to-customer confirm modal flag (slice 6 — Q9 STUB).
+  const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
+  const [sending, setSending] = useState(false);
 
   // Re-fetch the parent quote (used after line writes — server recomputes
   // totalAmount and we don't want the UI to drift from what's persisted).
@@ -399,20 +412,47 @@ export default function QuoteBuilder() {
     }
   };
 
-  const handleSend = async () => {
+  // Slice 6: open the Send-to-customer confirm modal. Disabled when the
+  // quote has no saved id (NEW mode) or status is already past Draft.
+  const openSendConfirm = () => {
     if (!quoteId) {
       notify.error("Save the quote first before sending");
       return;
     }
+    setSendConfirmOpen(true);
+  };
+
+  // STUB: WhatsApp/email delivery integration pending Q9 (Wati creds).
+  // For now, confirming the modal flips the quote status to "Sent" via
+  // the existing PUT endpoint and shows a notify.info "Send queued"
+  // message. Once Q9 lands, swap this for POST /api/travel/quotes/:id/send
+  // (route TBD) which will fan out to the Wati WhatsApp client + email
+  // provider and return delivery receipts.
+  const confirmSend = async () => {
+    if (!quoteId) {
+      setSendConfirmOpen(false);
+      return;
+    }
+    const payload = buildPayload();
+    if (!payload) {
+      setSendConfirmOpen(false);
+      return;
+    }
+    setSending(true);
     try {
       await fetchApi(`/api/travel/quotes/${quoteId}`, {
         method: "PUT",
-        body: JSON.stringify({ ...buildPayload(), status: "Sent" }),
+        body: JSON.stringify({ ...payload, status: "Sent" }),
       });
       setStatus("Sent");
-      notify.success(`Quote #${quoteId} marked as Sent`);
+      notify.info(
+        "Send queued — will deliver via WhatsApp + email once Q9 credentials land.",
+      );
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Send failed");
+    } finally {
+      setSending(false);
+      setSendConfirmOpen(false);
     }
   };
 
@@ -524,12 +564,25 @@ export default function QuoteBuilder() {
             </button>
             <button
               type="button"
-              onClick={handleSend}
-              disabled={saving || !quoteId}
+              onClick={openSendConfirm}
+              disabled={
+                saving ||
+                sending ||
+                !quoteId ||
+                status === "Sent" ||
+                status === "Accepted" ||
+                status === "Rejected"
+              }
               style={secondaryBtn}
-              title={!quoteId ? "Save first" : "Mark as Sent"}
+              title={
+                !quoteId
+                  ? "Save first"
+                  : status !== "Draft"
+                    ? `Cannot resend — quote is ${status}`
+                    : "Send to customer (WhatsApp + email)"
+              }
             >
-              <Send size={14} /> Send
+              <Send size={14} /> Send to customer
             </button>
             <button
               type="button"
@@ -898,6 +951,66 @@ export default function QuoteBuilder() {
           </div>
         </div>
       </section>
+
+      {sendConfirmOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm send to customer"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            className="glass"
+            style={{
+              padding: 24,
+              minWidth: 320,
+              maxWidth: 520,
+              borderRadius: 8,
+            }}
+          >
+            <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>
+              Send quote #{quoteId} to customer?
+            </h3>
+            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
+              Send to customer (WhatsApp + email) — feature pending Q9 Wati
+              WhatsApp credentials. The quote will be ready to send once
+              integration is enabled.
+            </p>
+            <p style={{ color: "var(--text-secondary)", fontSize: 13, marginBottom: 16 }}>
+              Confirming will mark the quote as <strong>Sent</strong> and queue
+              it for delivery — actual WhatsApp + email dispatch will fire once
+              the Wati integration is live.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setSendConfirmOpen(false)}
+                style={secondaryBtn}
+                disabled={sending}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmSend}
+                style={primaryBtn}
+                aria-label="Confirm send to customer"
+                disabled={sending}
+              >
+                <Send size={14} /> {sending ? "Queuing…" : "Confirm send"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {deleteTarget && (
         <div

@@ -6,9 +6,16 @@
  *   - Slice 2 (commit 92b1682c): scaffold + local-only lines + actions.
  *   - Slice 3 (commit f7203b8e): backend TravelQuoteLine model + line CRUD
  *     endpoints + per-line supplier picker query surface.
- *   - Slice 4 (THIS commit): wire QuoteBuilder.jsx to the persistent line
- *     CRUD endpoints + per-line supplier picker (this test file extends
- *     to pin those flows).
+ *   - Slice 4 (commit 188d50c2): wire QuoteBuilder.jsx to the persistent
+ *     line CRUD endpoints + per-line supplier picker.
+ *   - Slice 6 (THIS commit): "Send to customer" action button + confirm
+ *     modal explaining the Q9 Wati WhatsApp credential dependency. STUB-
+ *     mode delivery — confirming flips the status to "Sent" + surfaces a
+ *     notify.info "Send queued" message. New test cases pin: button is
+ *     rendered for Draft quotes / disabled in NEW mode / disabled when
+ *     status is "Sent" / confirm modal opens with Q9 copy / cancel does
+ *     NOT fire notify.info / accept fires notify.info + PUT
+ *     /api/travel/quotes/:id { status: "Sent" }.
  *
  * Scope — pins the page-surface invariants for the line-items builder:
  *
@@ -163,7 +170,7 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
     expect(screen.getByLabelText(/Sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Valid until/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Save Draft/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Send$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Send to customer/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Duplicate/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Download PDF/i })).toBeInTheDocument();
   });
@@ -667,11 +674,139 @@ describe('<QuoteBuilder /> — RBAC USER role', () => {
     renderPage(USER_USER);
     await screen.findByRole('heading', { name: /Quote Builder/i });
     expect(screen.queryByRole('button', { name: /Save Draft/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /^Send$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Send to customer/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Duplicate/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Download PDF/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Add line/i })).toBeNull();
     // Header fields still render (USER can READ).
     expect(screen.getByLabelText(/Contact ID/i)).toBeInTheDocument();
+  });
+});
+
+describe('<QuoteBuilder /> — Send to customer (slice 6, STUB pending Q9)', () => {
+  // Helper: hydrate an EDIT-mode quote so the Send button is enabled.
+  // Default status is Draft (button enabled); override for other statuses.
+  function setupQuote(overrides = {}) {
+    mockRouteId = '42';
+    const quote = {
+      id: 42,
+      contactId: 5050,
+      status: 'Draft',
+      currency: 'INR',
+      subBrand: 'tmc',
+      ...overrides,
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/quotes/42' && method === 'GET') {
+        return Promise.resolve(quote);
+      }
+      if (url === '/api/travel/quotes/42/lines' && method === 'GET') {
+        return Promise.resolve({ lines: [], total: 0 });
+      }
+      if (url === '/api/travel/quotes/42' && method === 'PUT') {
+        return Promise.resolve({ ...quote, status: 'Sent' });
+      }
+      if (url.startsWith('/api/travel/suppliers')) {
+        return Promise.resolve({ suppliers: [], total: 0 });
+      }
+      return Promise.resolve(null);
+    });
+  }
+
+  it('Send-to-customer button renders in the actions row for a Draft quote', async () => {
+    setupQuote();
+    renderPage();
+    await screen.findByText(/#42/);
+    const btn = screen.getByRole('button', { name: /Send to customer/i });
+    expect(btn).toBeInTheDocument();
+    expect(btn.disabled).toBe(false);
+  });
+
+  it('Send button disabled in NEW mode (no saved quote id yet)', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: /Quote Builder/i });
+    const btn = screen.getByRole('button', { name: /Send to customer/i });
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('Send button disabled when status is "Sent"', async () => {
+    setupQuote({ status: 'Sent' });
+    renderPage();
+    await screen.findByText(/#42/);
+    const btn = screen.getByRole('button', { name: /Send to customer/i });
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('Confirm modal opens with Q9-mention copy on Send click', async () => {
+    setupQuote();
+    renderPage();
+    await screen.findByText(/#42/);
+    fireEvent.click(screen.getByRole('button', { name: /Send to customer/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Confirm send to customer/i });
+    expect(dialog).toBeInTheDocument();
+    // Q9 dependency is mentioned in the modal body copy.
+    expect(
+      screen.getByText(/feature pending Q9 Wati WhatsApp credentials/i),
+    ).toBeInTheDocument();
+  });
+
+  it('Confirm-Cancel closes the modal and does NOT fire notify.info', async () => {
+    setupQuote();
+    renderPage();
+    await screen.findByText(/#42/);
+    fireEvent.click(screen.getByRole('button', { name: /Send to customer/i }));
+    await screen.findByRole('dialog', { name: /Confirm send to customer/i });
+    // The send-confirm modal's Cancel button is the only ^Cancel$ button on
+    // screen at this point (the delete modal isn't open).
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('dialog', { name: /Confirm send to customer/i }),
+      ).toBeNull();
+    });
+    expect(notifyInfo).not.toHaveBeenCalledWith(
+      expect.stringMatching(/Send queued/i),
+    );
+    // No PUT fired against /quotes/42 either.
+    const puts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/quotes/42' && o?.method === 'PUT',
+    );
+    expect(puts.length).toBe(0);
+  });
+
+  it('Confirm-Accept fires notify.info with the queued message', async () => {
+    setupQuote();
+    renderPage();
+    await screen.findByText(/#42/);
+    fireEvent.click(screen.getByRole('button', { name: /Send to customer/i }));
+    await screen.findByRole('dialog', { name: /Confirm send to customer/i });
+    fireEvent.click(
+      screen.getByRole('button', { name: /^Confirm send to customer$/i }),
+    );
+    await waitFor(() => {
+      expect(notifyInfo).toHaveBeenCalledWith(
+        expect.stringMatching(/Send queued.*WhatsApp.*email.*Q9/i),
+      );
+    });
+  });
+
+  it('Confirm-Accept fires PUT /api/travel/quotes/:id with { status: "Sent" }', async () => {
+    setupQuote();
+    renderPage();
+    await screen.findByText(/#42/);
+    fireEvent.click(screen.getByRole('button', { name: /Send to customer/i }));
+    await screen.findByRole('dialog', { name: /Confirm send to customer/i });
+    fireEvent.click(
+      screen.getByRole('button', { name: /^Confirm send to customer$/i }),
+    );
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/quotes/42' && o?.method === 'PUT',
+      );
+      expect(put).toBeTruthy();
+      const body = JSON.parse(put[1].body);
+      expect(body.status).toBe('Sent');
+    });
   });
 });

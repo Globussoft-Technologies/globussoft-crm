@@ -1055,4 +1055,260 @@ router.delete(
   },
 );
 
+// ============================================================================
+// GET /api/travel/payables — cross-supplier consolidated payables endpoint
+// (Arc 2 #903 slice 5 — PRD_TRAVEL_BILLING UC-2.5 Aged Payables month-end close).
+//
+// Replaces the per-supplier fan-out in frontend/src/pages/travel/Payables.jsx
+// (TODO marker `#903 slice 6`). Previously the page hit /api/travel/suppliers
+// THEN /suppliers/:id/payables once per supplier (O(N) requests); this slice
+// ships the consolidated read so the page can do ONE request.
+//
+// Auth: any verified token; tenant-scoped via req.travelTenant; sub-brand
+// access enforced via getSubBrandAccessSet so a sub-brand-restricted MANAGER
+// only sees payables for suppliers in their allowed sub-brands.
+//
+// Query params (all optional):
+//   ?status=pending|scheduled|paid|cancelled       — filter (default: all)
+//   ?supplierCategory=hotel|flight|transport|      — filter via join on
+//                       visa-consul|other            TravelSupplier
+//   ?subBrand=tmc|rfu|travelstall|visasure         — filter to one sub-brand
+//                                                    (within the caller's
+//                                                    allowed set; outside-
+//                                                    allowed → empty)
+//   ?dueBefore=ISODate                             — dueDate <= input
+//   ?dueAfter=ISODate                              — dueDate >= input
+//   ?limit=N (default 100, clamped to [1, 500]).
+//   ?offset=N (default 0).
+//
+// Response shape:
+//   {
+//     payables: [
+//       { id, supplierId, supplierName, supplierCategory, subBrand,
+//         poNumber, description, amount, currency, dueDate, status,
+//         paidAt, daysUntilDue, createdAt }
+//     ],
+//     total,
+//     limit,
+//     offset,
+//     summary: {
+//       byStatus: { pending: <int>, scheduled, paid, cancelled },
+//       totalPending: "<decimal-string>",
+//       totalScheduled: "<decimal-string>",
+//       totalPaid: "<decimal-string>",
+//       currencyBreakdown: { INR: "<decimal-string>", USD: "..." }
+//     }
+//   }
+//
+// Decisions:
+//   - daysUntilDue is JS-computed (Math.floor((due - now) / 86_400_000)).
+//     Negative ⇒ overdue. NULL dueDate ⇒ daysUntilDue is null.
+//   - Sub-brand filtering joins through the parent supplier via
+//     supplier.is.subBrand (nested filter). Mirrors travel_invoices.js
+//     slice-7 `/payment-schedules/upcoming` (e4832fee) — restricted callers
+//     get a {in:[...allowed]} pushed in; forbidden ?subBrand silently
+//     substitutes "__none__" rather than 403'ing (consistent with the
+//     existing /invoices + /payment-schedules/upcoming patterns).
+//   - Summary is computed across the SAME page returned (post-limit/offset),
+//     not the full unpaginated set — operator pagers want current-page
+//     totals. Callers wanting full-population totals iterate pages or pass
+//     limit=500.
+//   - totalPending/Scheduled/Paid + currencyBreakdown emit as decimal
+//     STRINGS (toFixed(2)) for Prisma Decimal-string compatibility.
+//   - Error codes: INVALID_STATUS, INVALID_SUPPLIER_CATEGORY,
+//     INVALID_SUB_BRAND, INVALID_DATE, INVALID_LIMIT.
+// ============================================================================
+
+const PAYABLES_MAX_LIMIT = 500;
+const PAYABLES_DEFAULT_LIMIT = 100;
+
+function parsePayablesLimit(input) {
+  if (input == null || input === "") return PAYABLES_DEFAULT_LIMIT;
+  const v = Number(input);
+  if (!Number.isInteger(v) || v < 1) {
+    const err = new Error("limit must be a positive integer");
+    err.status = 400;
+    err.code = "INVALID_LIMIT";
+    throw err;
+  }
+  return Math.min(v, PAYABLES_MAX_LIMIT);
+}
+
+function parsePayablesOffset(input) {
+  if (input == null || input === "") return 0;
+  const v = Number(input);
+  if (!Number.isInteger(v) || v < 0) return 0;
+  return v;
+}
+
+function parseDateBoundOrThrow(d, label) {
+  if (d == null || d === "") return null;
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) {
+    const err = new Error(`${label} must be a valid ISO date / parseable date string`);
+    err.status = 400;
+    err.code = "INVALID_DATE";
+    throw err;
+  }
+  return dt;
+}
+
+// Add two decimal strings safely (same shape as slice-7 addDecimal). Both
+// inputs normalised to Number, summed, then toFixed(2). For the scales
+// here (per-tenant monthly payables totals — well below 1e15) Number
+// precision is fine; the toFixed sidesteps display artefacts.
+function addPayableDecimal(a, b) {
+  const x = Number(a == null ? 0 : a);
+  const y = Number(b == null ? 0 : b);
+  return (x + y).toFixed(2);
+}
+
+router.get(
+  "/payables",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const status = req.query.status ? String(req.query.status) : null;
+      if (status) assertValidPayableStatus(status);
+
+      const supplierCategory = req.query.supplierCategory
+        ? String(req.query.supplierCategory)
+        : null;
+      if (supplierCategory) assertValidSupplierCategory(supplierCategory);
+
+      const subBrand = req.query.subBrand ? String(req.query.subBrand) : null;
+      if (subBrand) assertValidSubBrand(subBrand);
+
+      const dueBefore = parseDateBoundOrThrow(req.query.dueBefore, "dueBefore");
+      const dueAfter = parseDateBoundOrThrow(req.query.dueAfter, "dueAfter");
+
+      const limit = parsePayablesLimit(req.query.limit);
+      const offset = parsePayablesOffset(req.query.offset);
+
+      const where = { tenantId: req.travelTenant.id };
+      if (status) where.status = status;
+
+      if (dueBefore || dueAfter) {
+        where.dueDate = {};
+        if (dueBefore) where.dueDate.lte = dueBefore;
+        if (dueAfter) where.dueDate.gte = dueAfter;
+      }
+
+      // Sub-brand + supplierCategory filtering joins through the parent
+      // supplier. Prisma can't filter on a related field's column inside
+      // a top-level findMany where-clause without `is:` — use the nested
+      // filter shape. Same pattern as travel_invoices.js slice-7.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const supplierFilter = {};
+      if (subBrand) {
+        if (allowed !== null && !canAccessSubBrand(allowed, subBrand)) {
+          // Filter requested a sub-brand the caller can't see — return
+          // empty silently (consistent with /payment-schedules/upcoming).
+          supplierFilter.subBrand = "__none__";
+        } else {
+          supplierFilter.subBrand = subBrand;
+        }
+      } else if (allowed !== null) {
+        supplierFilter.subBrand =
+          allowed.size > 0 ? { in: [...allowed] } : "__none__";
+      }
+      if (supplierCategory) supplierFilter.supplierCategory = supplierCategory;
+      if (Object.keys(supplierFilter).length > 0) {
+        where.supplier = { is: supplierFilter };
+      }
+
+      const [rows, total] = await Promise.all([
+        prisma.travelSupplierPayable.findMany({
+          where,
+          include: {
+            supplier: {
+              select: { name: true, supplierCategory: true, subBrand: true },
+            },
+          },
+          orderBy: [{ dueDate: "asc" }, { id: "asc" }],
+          take: limit,
+          skip: offset,
+        }),
+        prisma.travelSupplierPayable.count({ where }),
+      ]);
+
+      const now = new Date();
+      const nowMs = now.getTime();
+      const payables = rows.map((r) => {
+        const dueMs =
+          r.dueDate instanceof Date
+            ? r.dueDate.getTime()
+            : r.dueDate
+              ? new Date(r.dueDate).getTime()
+              : null;
+        const daysUntilDue =
+          dueMs == null ? null : Math.floor((dueMs - nowMs) / 86_400_000);
+        return {
+          id: r.id,
+          supplierId: r.supplierId,
+          supplierName: r.supplier ? r.supplier.name : null,
+          supplierCategory: r.supplier ? r.supplier.supplierCategory : null,
+          subBrand: r.supplier ? r.supplier.subBrand : null,
+          poNumber: r.poNumber,
+          description: r.description,
+          amount: r.amount,
+          currency: r.currency,
+          dueDate: r.dueDate,
+          status: r.status,
+          paidAt: r.paidAt,
+          daysUntilDue,
+          createdAt: r.createdAt,
+        };
+      });
+
+      // Summary aggregates over the returned page (see header note).
+      const byStatus = { pending: 0, scheduled: 0, paid: 0, cancelled: 0 };
+      const currencyBreakdown = {};
+      let totalPending = "0.00";
+      let totalScheduled = "0.00";
+      let totalPaid = "0.00";
+      for (const p of payables) {
+        if (Object.prototype.hasOwnProperty.call(byStatus, p.status)) {
+          byStatus[p.status] += 1;
+        } else {
+          byStatus[p.status] = (byStatus[p.status] || 0) + 1;
+        }
+        if (p.status === "pending") {
+          totalPending = addPayableDecimal(totalPending, p.amount);
+        } else if (p.status === "scheduled") {
+          totalScheduled = addPayableDecimal(totalScheduled, p.amount);
+        } else if (p.status === "paid") {
+          totalPaid = addPayableDecimal(totalPaid, p.amount);
+        }
+        const cur = p.currency || "INR";
+        currencyBreakdown[cur] = addPayableDecimal(
+          currencyBreakdown[cur] || "0.00",
+          p.amount,
+        );
+      }
+
+      res.json({
+        payables,
+        total,
+        limit,
+        offset,
+        summary: {
+          byStatus,
+          totalPending,
+          totalScheduled,
+          totalPaid,
+          currencyBreakdown,
+        },
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] cross-supplier payables error:", e.message);
+      res.status(500).json({ error: "Failed to list payables" });
+    }
+  },
+);
+
 module.exports = router;

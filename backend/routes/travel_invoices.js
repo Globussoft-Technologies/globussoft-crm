@@ -33,6 +33,13 @@ const { invoicePrefixFor, fiscalYearStart } = require("../lib/travelFiscalYear")
 const { computeTcs, isOverseasDestination } = require("../lib/tcsCalculation");
 // Arc 2 #901 slice 21 — TDS withholding sum from lines (lineType==='tds').
 const { computeTdsFromLines } = require("../lib/tdsCalculation");
+// Arc 2 #901 slice 24 — late-payment penalty math (pure compute, no Prisma).
+const {
+  computeLatePenalty,
+  DEFAULT_GRACE_DAYS,
+  DEFAULT_ANNUAL_RATE_PERCENT,
+  DEFAULT_FLAT_FEE_PERCENT,
+} = require("../lib/latePenaltyCalculation");
 // Arc 2 #902 slice 7 — GST tax-preview pipeline (CGST/SGST/IGST math +
 // state-code resolver + SAC codes + GSTR-1 HSN-summary grouping). The
 // invoice tax-preview endpoint mirrors backend/routes/travel_quotes.js
@@ -4157,4 +4164,119 @@ router.post(
     }
   },
 );
+
+// ============================================================================
+// GET /api/travel/invoices/:id/late-penalty
+// Arc 2 #901 slice 24 — PRD_TRAVEL_BILLING §3 late-payment penalty preview.
+//
+// READ-ONLY. Computes the penalty that WOULD apply if the operator were to
+// surcharge an overdue customer invoice as-of `asOf` (defaults to wall clock).
+// Pure compute — does NOT persist a penalty line, does NOT mutate state,
+// does NOT write audit. Operator turns this into a real charge by adding
+// a regular invoice line (lineType='fee') once they decide to enforce.
+//
+// Auth: any verified token, tenant + sub-brand scoped via loadParentInvoice.
+//
+// Query params (all optional):
+//   ?asOf=<ISO8601>             — reference "now"; defaults to wall clock.
+//                                  Parse failure → 400 INVALID_AS_OF.
+//   ?graceDays=<int>            — grace window override (default 7).
+//   ?annualRatePercent=<num>    — simple-mode annual rate override
+//                                  (default 18 — 1.5% / month, under RBI cap).
+//   ?flatFeePercent=<num>       — flat-mode % override (default 2).
+//   ?mode=simple|flat           — penalty model (default simple).
+//
+// Response envelope: { invoiceId, status, totalAmount, dueDate, asOf,
+//   applies, daysOverdue, chargeableDays, graceDays, mode, ratePercent,
+//   penalty, newBalance, reason }.
+//
+// Error codes: INVALID_ID, INVOICE_NOT_FOUND, SUB_BRAND_DENIED,
+//   INVALID_AS_OF, INVALID_NUMERIC_QUERY, INVALID_MODE.
+// ============================================================================
+router.get(
+  "/invoices/:id/late-penalty",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      // Parse asOf — wall-clock default, body override must be a valid date.
+      let asOf = new Date();
+      if (req.query.asOf != null && req.query.asOf !== "") {
+        const parsed = new Date(req.query.asOf);
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "asOf must be a valid ISO 8601 date string",
+            code: "INVALID_AS_OF",
+          });
+        }
+        asOf = parsed;
+      }
+
+      // Parse numeric overrides — each must coerce cleanly OR be absent.
+      function parseOptionalNonNeg(name) {
+        const raw = req.query[name];
+        if (raw == null || raw === "") return undefined;
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0) {
+          const err = new Error(`${name} must be a non-negative number`);
+          err.status = 400;
+          err.code = "INVALID_NUMERIC_QUERY";
+          throw err;
+        }
+        return n;
+      }
+
+      const graceDays = parseOptionalNonNeg("graceDays");
+      const annualRatePercent = parseOptionalNonNeg("annualRatePercent");
+      const flatFeePercent = parseOptionalNonNeg("flatFeePercent");
+
+      let mode;
+      if (req.query.mode != null && req.query.mode !== "") {
+        if (req.query.mode !== "simple" && req.query.mode !== "flat") {
+          return res.status(400).json({
+            error: "mode must be 'simple' or 'flat'",
+            code: "INVALID_MODE",
+          });
+        }
+        mode = req.query.mode;
+      }
+
+      const result = computeLatePenalty({
+        invoiceAmount: invoice.totalAmount,
+        dueDate: invoice.dueDate,
+        status: invoice.status,
+        asOf,
+        graceDays,
+        annualRatePercent,
+        flatFeePercent,
+        mode,
+      });
+
+      return res.status(200).json({
+        invoiceId: invoice.id,
+        status: invoice.status,
+        totalAmount: Number(invoice.totalAmount || 0),
+        dueDate: invoice.dueDate,
+        asOf: asOf.toISOString(),
+        defaults: {
+          graceDays: DEFAULT_GRACE_DAYS,
+          annualRatePercent: DEFAULT_ANNUAL_RATE_PERCENT,
+          flatFeePercent: DEFAULT_FLAT_FEE_PERCENT,
+        },
+        ...result,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] late-penalty error:", e.message);
+      res.status(500).json({ error: "Failed to compute late-payment penalty" });
+    }
+  },
+);
+
 module.exports = router;

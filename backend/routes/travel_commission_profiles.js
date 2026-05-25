@@ -53,6 +53,7 @@ const {
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
+const { computeCommission } = require("../lib/agentCommissionCalculator");
 
 const VALID_PROFILE_TYPES = ["flat_percent", "tiered", "per_pax_flat", "hybrid"];
 
@@ -561,6 +562,135 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-commission-profiles] assign error:", e.message);
       res.status(500).json({ error: "Failed to assign commission profile" });
+    }
+  },
+);
+
+// POST /api/travel/commission-profiles/:id/preview — operator-facing what-if
+// commission calculator. Given a profile id + sale amount (+ optional paxCount),
+// parses the stored profileJson, calls lib/agentCommissionCalculator.js, and
+// returns the commission that WOULD be paid out for this sale. Useful for UI
+// preview before assigning a profile to a contact, or for ad-hoc finance
+// sanity checks ("if I sell this Umrah package at ₹2.5L, what does the agent
+// earn?"). No mutation — read-only. Any verified token; sub-brand-scoped.
+//
+// Body:
+//   saleAmount  (required, positive number) — sale total in operator currency
+//   paxCount    (optional, default 1)       — only matters for per_pax_flat
+//
+// Returns:
+//   { profileId, profileName, profileType, saleAmount, paxCount,
+//     commission, breakdown }
+//
+// Defensive behaviour: if the stored profileJson is malformed (parse throws,
+// or parses to something the calculator can't interpret), the route still
+// returns 200 with commission=0 and a breakdown string surfacing the issue.
+// Same rationale as the deep-shape validation deferral at the file header —
+// a misconfigured profile should be operator-visible at use-time, not a 500
+// throw that the calling UI has to handle.
+//
+// Sub-brand gate: NULL subBrand profiles are tenant-wide and previewable by
+// any authorised caller; sub-brand-scoped profiles require caller access to
+// that sub-brand.
+router.post(
+  "/commission-profiles/:id/preview",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const { saleAmount, paxCount } = req.body || {};
+      if (saleAmount === undefined || saleAmount === null) {
+        return res.status(400).json({
+          error: "saleAmount required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      const saleNum = Number(saleAmount);
+      if (!Number.isFinite(saleNum) || saleNum < 0) {
+        return res.status(400).json({
+          error: "saleAmount must be a non-negative number",
+          code: "INVALID_SALE_AMOUNT",
+        });
+      }
+
+      let paxNum = 1;
+      if (paxCount !== undefined && paxCount !== null) {
+        const p = Number(paxCount);
+        if (!Number.isFinite(p) || p < 0 || !Number.isInteger(p)) {
+          return res.status(400).json({
+            error: "paxCount must be a non-negative integer",
+            code: "INVALID_PAX_COUNT",
+          });
+        }
+        paxNum = p;
+      }
+
+      const profile = await prisma.travelCommissionProfile.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!profile) {
+        return res.status(404).json({
+          error: "Commission profile not found",
+          code: "PROFILE_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand gate — NULL subBrand profiles are tenant-wide.
+      if (profile.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, profile.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      // Parse stored profileJson defensively. If parse throws (rare — POST/PUT
+      // validators reject unparseable JSON at write time, but legacy / hand-
+      // edited rows may slip through), surface as commission=0 with a
+      // diagnostic breakdown rather than a 500 throw.
+      let parsedProfile = null;
+      let parseError = null;
+      try {
+        parsedProfile = JSON.parse(profile.profileJson);
+      } catch (e) {
+        parseError = e.message;
+      }
+
+      let result;
+      if (parseError) {
+        result = {
+          commission: 0,
+          breakdown: `malformed profileJson: ${parseError}`,
+          profileType: profile.profileType,
+        };
+      } else {
+        result = computeCommission({
+          saleAmount: saleNum,
+          paxCount: paxNum,
+          profile: parsedProfile,
+        });
+      }
+
+      res.json({
+        profileId: profile.id,
+        profileName: profile.name,
+        profileType: profile.profileType,
+        saleAmount: saleNum,
+        paxCount: paxNum,
+        commission: result.commission,
+        breakdown: result.breakdown,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] preview error:", e.message);
+      res.status(500).json({ error: "Failed to preview commission" });
     }
   },
 );

@@ -1734,3 +1734,179 @@ test.describe("IDOR #919 — auth gate (no token never 200s)", () => {
     expect([401, 403]).toContain(res.status());
   });
 });
+
+// ─── Slice 8 — cross-resource IDOR probes ────────────────────────────
+// Slices 1-7 pinned cross-tenant defences at the per-resource /:id GET +
+// mutate + list surfaces. Slice 8 extends the audit to SUB-RESOURCE
+// endpoints — the URL shapes where a parent /:id is nested with a
+// child action verb (`/summary/by-month`, `/clone`, `/items`,
+// `/items/bulk-delete`). These are structurally distinct from the
+// flat /:id mutations slice 3 covered because:
+//
+//   (a) The handler does TWO lookups in sequence — first resolve the
+//       parent /:id (commission-profile or itinerary), THEN apply the
+//       child action / nested-resource lookup. A regression that drops
+//       the tenant filter on EITHER lookup would silently leak —
+//       the parent-resolve might 404 cross-tenant correctly but the
+//       child-action might side-effect on the wrong row.
+//   (b) Some sub-resources accept a body that itself carries ids
+//       (e.g. `/items/bulk-delete` takes `{ itemIds: [...] }`). A
+//       regression that read those id arrays without tenant-scoping
+//       would let cross-vertical attackers delete arbitrary items
+//       by id-enumeration.
+//
+// Slice 8 verified the actual route surface against
+// backend/routes/travel_commission_profiles.js + travel_itineraries.js:
+//   • /commission-profiles/:id/summary/by-month     — GET (1438)
+//   • /commission-profiles/:id/summary/by-quarter   — GET (1687)
+//   • /commission-profiles/:id/duplicate            — POST (1069) — the
+//     prompt named /clone; reality is /duplicate (gap-card drift; we
+//     PIN REALITY per .claude/skills/verifying-gap-card-claims/)
+//   • /commission-profiles/:id/assign               — POST (481) — the
+//     prompt named /bulk-payout; that route does NOT exist. We probe
+//     /assign instead (same severity: mutation-on-profile vector)
+//   • /itineraries/:id/items                        — POST (800)
+//   • /itineraries/:id/items/:itemId                — PATCH (843)
+//   • /itineraries/:id/items/:itemId                — DELETE (884) —
+//     already pinned in slice 3 with TWO-fake-ids; here we add a
+//     positive-itemId probe to round out the sub-resource matrix
+//   • /itineraries/:id/items/bulk-delete            — POST (558)
+//
+// Acceptance per probe: `expect([403, 404]).toContain(status)`. All
+// these routes mount requireTravelTenant FIRST, so cross-vertical
+// attackers SHOULD hit 403 WRONG_VERTICAL — but the spec stays robust
+// to a future refactor that demotes the cross-vertical gate to a 404
+// (e.g. unifying tenant + vertical scoping into the parent lookup).
+// Both are non-leaky from an IDOR standpoint; we accept either.
+
+test.describe("IDOR #919 slice 8 — cross-resource IDOR probes (commission-profile + itinerary-item sub-resources)", () => {
+  // Commission-profile sub-resources — cross-vertical attacker hits
+  // requireTravelTenant BEFORE the /:id lookup. Sentinel FAKE_ID for
+  // the parent — guard fires regardless of id existence.
+  test("wellness admin GET /commission-profiles/:id/summary/by-month → 403/404", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/commission-profiles/${FAKE_ID}/summary/by-month`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not reach commission-profile summary: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin GET /commission-profiles/:id/summary/by-quarter → 403/404", async ({
+    request,
+  }) => {
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/commission-profiles/${FAKE_ID}/summary/by-quarter`,
+    );
+    expect(
+      [403, 404],
+      `generic admin must not reach commission-profile quarter summary: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin POST /commission-profiles/:id/duplicate → 403/404 (mutation vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/commission-profiles/${FAKE_ID}/duplicate`,
+      { name: "IDOR-DUPLICATE-PROBE-must-never-land" },
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not duplicate commission-profile: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /commission-profiles/:id/assign → 403/404 (mutation vector)", async ({
+    request,
+  }) => {
+    // The prompt named /bulk-payout (doesn't exist) — we probe /assign
+    // instead (a real mutation sub-resource on the same parent /:id).
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/commission-profiles/${FAKE_ID}/assign`,
+      { staffIds: [1, 2] },
+    );
+    expect(
+      [403, 404],
+      `generic admin must not assign commission-profile: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // Itinerary item sub-resources — cross-vertical attacker. Same
+  // requireTravelTenant gate; sentinel FAKE_ID for both parent itinerary
+  // and child itemId so a regression that demoted the gate would surface
+  // as 404 (either lookup miss) rather than the expected 403.
+  test("wellness admin POST /itineraries/:id/items → 403/404 (item-create corruption vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/itineraries/${FAKE_ID}/items`,
+      { itemType: "flight", description: "IDOR-ITEM-CREATE-must-never-land" },
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not create itinerary item: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin PATCH /itineraries/:id/items/:itemId → 403/404 (item-corruption vector)", async ({
+    request,
+  }) => {
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await patch(
+      request,
+      token,
+      `/api/travel/itineraries/${FAKE_ID}/items/${FAKE_ID}`,
+      { description: "IDOR-ITEM-PATCH-must-never-land" },
+    );
+    expect(
+      [403, 404],
+      `generic admin must not PATCH itinerary item: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin POST /itineraries/:id/items/bulk-delete → 403/404 (bulk deletion vector)", async ({
+    request,
+  }) => {
+    // bulk-delete is the most dangerous sub-resource: a missed guard
+    // would let attackers nuke multiple items by id-enumeration in a
+    // single request. Pinning 403/404 here ensures the parent /:id
+    // guard fires before the array of itemIds is even parsed.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/itineraries/${FAKE_ID}/items/bulk-delete`,
+      { itemIds: [1, 2, 3] },
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not bulk-delete itinerary items: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+});

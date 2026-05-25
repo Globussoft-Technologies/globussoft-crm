@@ -380,4 +380,290 @@ describe('<Invoices /> — page surface', () => {
     // Close button is rendered inside the drawer.
     expect(screen.getByRole('button', { name: /^Close$/i })).toBeInTheDocument();
   });
+
+  // ---- Extension cases (2026-05-26) -----------------------------------
+  // Pin the remaining ledger surface: status filter, KPI stats, recur
+  // modal, payment modal, PDF download, drawer close behaviors (X / Cancel
+  // / Escape / overlay), nextInvoiceNum auto-generation, deal dropdown,
+  // error states. All additive — no existing test modified.
+
+  it('status filter narrows the ledger to a single status', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+    // All three rows visible initially.
+    expect(screen.getByText('INV-001')).toBeInTheDocument();
+    expect(screen.getByText('INV-002')).toBeInTheDocument();
+    expect(screen.getByText('INV-003')).toBeInTheDocument();
+
+    // Filter -> PAID: only INV-002 remains.
+    const filter = screen.getByLabelText(/Filter invoices by status/i);
+    fireEvent.change(filter, { target: { value: 'PAID' } });
+    expect(screen.queryByText('INV-001')).toBeNull();
+    expect(screen.getByText('INV-002')).toBeInTheDocument();
+    expect(screen.queryByText('INV-003')).toBeNull();
+
+    // Filter -> ALL: all three rows back.
+    fireEvent.change(filter, { target: { value: 'ALL' } });
+    expect(screen.getByText('INV-001')).toBeInTheDocument();
+    expect(screen.getByText('INV-002')).toBeInTheDocument();
+    expect(screen.getByText('INV-003')).toBeInTheDocument();
+  });
+
+  it('filter "no matches" state renders the dashed-card message', async () => {
+    // Seed only one UNPAID row, then flip the filter to PAID: nothing matches.
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/billing') return Promise.resolve([sampleInvoices[0]]);
+      if (url === '/api/contacts') return Promise.resolve(sampleContacts);
+      if (url === '/api/deals') return Promise.resolve(sampleDeals);
+      if (url === '/api/payments/config') return Promise.resolve(samplePaymentConfig);
+      return Promise.resolve(null);
+    });
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+    const filter = screen.getByLabelText(/Filter invoices by status/i);
+    fireEvent.change(filter, { target: { value: 'PAID' } });
+
+    // INV-001 (UNPAID) hidden by the filter.
+    expect(screen.queryByText('INV-001')).toBeNull();
+    // Filter empty-state message visible.
+    expect(screen.getByText(/No invoices match the/i)).toBeInTheDocument();
+  });
+
+  it('renders the KPI stats: Outstanding, Paid This Month, and total count', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    // Outstanding (UNPAID only): 1234.56 — PAID + VOIDED excluded.
+    expect(screen.getByText(/Outstanding:\s*\$1234\.56/i)).toBeInTheDocument();
+    // Paid This Month pill text always renders even when zero.
+    expect(screen.getByText(/Paid This Month:/i)).toBeInTheDocument();
+    // Total count pill: 3 invoices loaded.
+    expect(screen.getByText(/3 total invoices/i)).toBeInTheDocument();
+  });
+
+  it('OVERDUE invoices surface an overdue-count pill', async () => {
+    const withOverdue = [
+      { ...sampleInvoices[0], id: 10, invoiceNum: 'INV-010', status: 'OVERDUE' },
+      { ...sampleInvoices[0], id: 11, invoiceNum: 'INV-011', status: 'OVERDUE' },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/billing') return Promise.resolve(withOverdue);
+      if (url === '/api/contacts') return Promise.resolve(sampleContacts);
+      if (url === '/api/deals') return Promise.resolve(sampleDeals);
+      if (url === '/api/payments/config') return Promise.resolve(samplePaymentConfig);
+      return Promise.resolve(null);
+    });
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-010')).toBeInTheDocument());
+    // "2 Overdue" pill appears.
+    expect(screen.getByText(/2 Overdue/i)).toBeInTheDocument();
+    // Both rows render the Overdue badge.
+    expect(screen.getAllByText('Overdue').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('clicking "Pay Now" opens the payment modal scoped to that invoice', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+    const payNow = screen.getByRole('button', { name: /Pay invoice INV-001/i });
+    fireEvent.click(payNow);
+
+    // Modal heading + invoice reference both render.
+    expect(screen.getByText(/Pay Invoice/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Close payment dialog/i })).toBeInTheDocument();
+
+    // Close it again and ensure the modal closes.
+    fireEvent.click(screen.getByRole('button', { name: /Close payment dialog/i }));
+    expect(screen.queryByRole('button', { name: /Close payment dialog/i })).toBeNull();
+  });
+
+  it('payment modal disables both gateway buttons when neither is configured', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Pay invoice INV-001/i }));
+
+    // Both gateway buttons exist (Stripe + Razorpay) and both should be
+    // disabled because the default mock reports neither as configured.
+    const stripeBtn = screen.getByRole('button', { name: /Stripe/i });
+    const razorpayBtn = screen.getByRole('button', { name: /Razorpay/i });
+    expect(stripeBtn).toBeDisabled();
+    expect(razorpayBtn).toBeDisabled();
+  });
+
+  it('clicking "Recur" opens the recur modal with frequency options', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+    // The Recur button on the UNPAID row — labeled "Recur" since
+    // isRecurring is false. The button text content includes whitespace +
+    // icon + the visible label, so match by trimmed-text equality.
+    const recurBtns = screen
+      .getAllByRole('button')
+      .filter(b => (b.textContent || '').trim() === 'Recur');
+    expect(recurBtns.length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(recurBtns[0]);
+
+    // Modal heading + Frequency select rendered.
+    expect(screen.getByText(/Set up recurring billing/i)).toBeInTheDocument();
+    // Monthly/Quarterly/Yearly options exist as <option> in the select.
+    expect(screen.getByRole('button', { name: /Activate monthly/i })).toBeInTheDocument();
+  });
+
+  it('activating recurring PUTs /api/billing/<id>/recurring with isRecurring=true', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing/1/recurring' && opts?.method === 'PUT') {
+        return Promise.resolve({ id: 1, isRecurring: true });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    const recurBtns = screen
+      .getAllByRole('button')
+      .filter(b => (b.textContent || '').trim() === 'Recur');
+    fireEvent.click(recurBtns[0]);
+
+    fireEvent.click(screen.getByRole('button', { name: /Activate monthly/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/billing/1/recurring' && opts?.method === 'PUT'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.isRecurring).toBe(true);
+      expect(body.recurFrequency).toBe('monthly');
+    });
+  });
+
+  it('drawer closes when the Cancel button is clicked', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    openDrawer();
+    expect(screen.getByLabelText(/^Contact$/i)).toBeInTheDocument();
+
+    // The Cancel button (type=button) lives in the drawer footer.
+    const cancelBtn = screen.getByRole('button', { name: /^Cancel$/i });
+    fireEvent.click(cancelBtn);
+
+    // Drawer closes — form fields gone.
+    expect(screen.queryByLabelText(/^Contact$/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Issue Invoice/i })).toBeNull();
+  });
+
+  it('drawer closes when Escape is pressed', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    openDrawer();
+    expect(screen.getByLabelText(/^Contact$/i)).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    expect(screen.queryByLabelText(/^Contact$/i)).toBeNull();
+  });
+
+  it('drawer Invoice # field is read-only and seeded from nextInvoiceNum', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    openDrawer();
+
+    // Seed has INV-001, INV-002, INV-003 → next should be INV-004 (003 + 1
+    // = 004, zero-padded). The input value reflects the computed memo.
+    const invInput = screen.getByLabelText(/Invoice number/i);
+    expect(invInput.value).toMatch(/INV-004/);
+    // Field is marked readOnly so the user can't pre-set it.
+    expect(invInput).toHaveAttribute('readOnly');
+  });
+
+  it('drawer renders the optional Deal dropdown with seeded deals', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    openDrawer();
+
+    const dealSelect = screen.getByLabelText(/Associated deal/i);
+    expect(dealSelect).toBeInTheDocument();
+    // Includes the placeholder "-- No Deal --" + the one seeded deal.
+    expect(dealSelect.querySelectorAll('option').length).toBeGreaterThanOrEqual(2);
+    expect(dealSelect.textContent).toMatch(/Acme Renewal/);
+  });
+
+  it('create-form POST includes dealId when a deal is selected', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 99 });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    openDrawer();
+
+    fireEvent.change(screen.getByLabelText(/^Contact$/i), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText(/Associated deal/i), { target: { value: '1' } });
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '250.00' } });
+    fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-08-15' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Issue Invoice/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/billing' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.dealId).toBe('1');
+    });
+  });
+
+  it('create-form: failed POST surfaces a notify.error', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && opts?.method === 'POST') {
+        return Promise.reject(new Error('boom'));
+      }
+      return defaultFetchMock(url, opts);
+    });
+    openDrawer();
+
+    fireEvent.change(screen.getByLabelText(/^Contact$/i), { target: { value: '1' } });
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '10.00' } });
+    fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-07-01' } });
+    fireEvent.click(screen.getByRole('button', { name: /Issue Invoice/i }));
+
+    await waitFor(() => expect(notifyError).toHaveBeenCalled());
+    expect(notifyError.mock.calls[0][0]).toMatch(/Failed to create invoice/i);
+  });
+
+  it('Mark Paid failure surfaces a notify.error', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing/1/pay' && opts?.method === 'PUT') {
+        return Promise.reject(new Error('server-blew-up'));
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Mark invoice INV-001 as paid/i }));
+
+    await waitFor(() => expect(notifyError).toHaveBeenCalled());
+    expect(notifyError.mock.calls[0][0]).toMatch(/Failed to mark invoice as paid/i);
+  });
+
+  it('every row renders a PDF download button with the invoice number in its aria-label', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+    // 3 rows -> 3 PDF buttons (PDF action available on every row including
+    // VOIDED, since the audit trail PDF is preserved).
+    const pdfBtns = screen.getAllByRole('button', { name: /Download PDF for invoice/i });
+    expect(pdfBtns.length).toBe(3);
+    expect(pdfBtns[0].getAttribute('aria-label')).toMatch(/INV-001/);
+    expect(pdfBtns[2].getAttribute('aria-label')).toMatch(/INV-003/);
+  });
 });

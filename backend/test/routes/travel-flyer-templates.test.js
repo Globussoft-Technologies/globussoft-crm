@@ -370,6 +370,152 @@ describe('GET /api/travel/flyer-templates', () => {
   });
 });
 
+// Slice 13 — GET /api/travel/flyer-templates/sub-brands
+// Per-sub-brand counts meta endpoint. USER-readable; powers the library
+// UI's sub-brand filter chips. Sub-brand-restricted callers see only
+// their allowed sub-brand buckets PLUS the tenant-wide bucket.
+describe('GET /api/travel/flyer-templates/sub-brands (slice 13)', () => {
+  test('ADMIN with full access → buckets for tenant-wide + all 4 sub-brands', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([
+      { subBrand: 'tmc' },
+      { subBrand: 'tmc' },
+      { subBrand: 'rfu' },
+      { subBrand: 'travelstall' },
+      { subBrand: 'travelstall' },
+      { subBrand: 'travelstall' },
+      { subBrand: null },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/sub-brands')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    // Stable order: tenant-wide first, then sub-brands alphabetically
+    // (rfu, tmc, travelstall, visasure per VALID_SUB_BRANDS order).
+    expect(res.body.buckets).toEqual([
+      { subBrand: null, count: 1 },
+      { subBrand: 'tmc', count: 2 },
+      { subBrand: 'rfu', count: 1 },
+      { subBrand: 'travelstall', count: 3 },
+      { subBrand: 'visasure', count: 0 },
+    ]);
+    expect(res.body.total).toBe(7);
+    // findMany must have been called with the tenant scope; no
+    // sub-brand narrowing for an ADMIN with full access.
+    const callArgs = prisma.travelFlyerTemplate.findMany.mock.calls[0][0];
+    expect(callArgs.where.tenantId).toBe(1);
+    expect(callArgs.where.OR).toBeUndefined();
+    expect(callArgs.select).toEqual({ subBrand: true });
+  });
+
+  test('MANAGER restricted to ["rfu"] → only tenant-wide + rfu buckets, OR clause narrows where', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([
+      { subBrand: 'rfu' },
+      { subBrand: 'rfu' },
+      { subBrand: null },
+      { subBrand: null },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/sub-brands')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(200);
+    // Only buckets the caller can see: tenant-wide + rfu. tmc, travelstall,
+    // visasure are absent from the response — frontend never offers a
+    // filter chip for a sub-brand the user cannot access.
+    expect(res.body.buckets).toEqual([
+      { subBrand: null, count: 2 },
+      { subBrand: 'rfu', count: 2 },
+    ]);
+    expect(res.body.total).toBe(4);
+    // findMany must have been called with an OR clause narrowing to
+    // rfu-or-null rows so cross-sub-brand rows never reach the JS-side
+    // aggregator.
+    const callArgs = prisma.travelFlyerTemplate.findMany.mock.calls[0][0];
+    expect(callArgs.where.OR).toEqual([
+      { subBrand: { in: ['rfu'] } },
+      { subBrand: null },
+    ]);
+  });
+
+  test('USER role is allowed (read-only meta endpoint, mirrors /preview.pdf access)', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([]);
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/sub-brands')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    // Zero-count buckets are still surfaced so the frontend can render
+    // the full set of filter chips with their counts (including 0s).
+    expect(res.body.buckets.length).toBe(5); // null + 4 sub-brands
+    expect(res.body.total).toBe(0);
+  });
+
+  test('?isActive=true narrows the where clause + does not affect bucket order', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([
+      { subBrand: 'tmc' },
+      { subBrand: null },
+    ]);
+    await request(makeApp())
+      .get('/api/travel/flyer-templates/sub-brands?isActive=true')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    const callArgs = prisma.travelFlyerTemplate.findMany.mock.calls[0][0];
+    expect(callArgs.where).toMatchObject({ tenantId: 1, isActive: true });
+  });
+
+  test('?isActive=false narrows to archived rows', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/travel/flyer-templates/sub-brands?isActive=false')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    const callArgs = prisma.travelFlyerTemplate.findMany.mock.calls[0][0];
+    expect(callArgs.where.isActive).toBe(false);
+  });
+
+  test('does NOT collide with /:id route — string id "sub-brands" never reaches the :id handler', async () => {
+    // Belt-and-braces: confirm Express picks the /sub-brands route
+    // FIRST (mounted before /:id). If the wiring regressed and /:id
+    // ate this request first, the handler would parseInt('sub-brands')
+    // and 400 INVALID_ID. This test pins the route order.
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([]);
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/sub-brands')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('buckets');
+    expect(res.body).not.toMatchObject({ code: 'INVALID_ID' });
+    // /:id handler uses findFirst, not findMany — must NOT have fired.
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('rows with unknown subBrand values are dropped from the response (defensive — should never happen given the OR narrowing, but pinned)', async () => {
+    prisma.travelFlyerTemplate.findMany.mockResolvedValue([
+      { subBrand: 'tmc' },
+      { subBrand: 'unknown_subbrand_value' }, // shouldn't slip through
+      { subBrand: null },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/sub-brands')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const tmcBucket = res.body.buckets.find((b) => b.subBrand === 'tmc');
+    const tenantWideBucket = res.body.buckets.find((b) => b.subBrand === null);
+    expect(tmcBucket.count).toBe(1);
+    expect(tenantWideBucket.count).toBe(1);
+    // Total reflects only buckets the response includes (3 of 4 input rows).
+    expect(res.body.total).toBe(2);
+  });
+});
+
 describe('GET /api/travel/flyer-templates/:id', () => {
   test('cross-tenant lookup returns 404 TEMPLATE_NOT_FOUND', async () => {
     prisma.travelFlyerTemplate.findFirst.mockResolvedValue(null);

@@ -19,6 +19,7 @@
  *
  * Endpoints:
  *   GET    /api/travel/flyer-templates                — list (tenant + sub-brand scoped)
+ *   GET    /api/travel/flyer-templates/sub-brands     — USER+ per-sub-brand counts (slice 13)
  *   GET    /api/travel/flyer-templates/:id            — fetch one
  *   POST   /api/travel/flyer-templates                — ADMIN/MANAGER create
  *   POST   /api/travel/flyer-templates/:id/duplicate  — ADMIN/MANAGER clone (slice 6)
@@ -88,6 +89,7 @@ const {
   getSubBrandAccessSet,
   canAccessSubBrand,
   assertValidSubBrand,
+  VALID_SUB_BRANDS,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const { validateTemplate } = require("../lib/flyerTemplateValidator");
@@ -246,6 +248,114 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] list error:", e.message);
       res.status(500).json({ error: "Failed to list flyer templates" });
+    }
+  },
+);
+
+// GET /api/travel/flyer-templates/sub-brands — per-sub-brand template counts
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 13).
+//
+// USER-readable meta endpoint that powers the flyer-library UI's sub-brand
+// filter chips ("TMC (8) · RFU (6) · Travel Stall (12) · Tenant-wide (3)").
+// Without this, the frontend has to page through every flyer just to
+// populate the filter dropdown.
+//
+// PRD anchors:
+//   - §3.7.1 — curated per-sub-brand template library (TMC / RFU /
+//              Travel Stall / Visa Sure)
+//   - §3.7.4 — template marketplace search + filter by sub-brand
+//   - AC-6.6 — flyer library per sub-brand (cross-sub-brand leakage
+//              blocked at API + UI levels)
+//
+// Behaviour:
+//   - One bucket per VALID_SUB_BRANDS value the caller can see + a
+//     synthetic "(tenant-wide)" bucket for rows with subBrand=NULL.
+//   - Sub-brand-restricted callers (User.subBrandAccess narrows to a
+//     subset) see ONLY their allowed sub-brand buckets PLUS the
+//     tenant-wide bucket. The tenant-wide bucket is always visible —
+//     same rule the list endpoint enforces (NULL subBrand rows are
+//     visible to everyone).
+//   - Optional ?isActive=true|false narrows the counts to active /
+//     archived rows only. Default (no query) counts every row.
+//   - Response shape is a stable array (not a map) so callers can sort
+//     it for UI display. `subBrand: null` is the tenant-wide bucket;
+//     `total` is the convenience sum of all bucket counts.
+//
+// Implementation note: uses findMany over groupBy intentionally — the
+// total population (4 sub-brands + 1 tenant-wide) is bounded, the row
+// shape stays mock-friendly for vitest, and the JS-side aggregation
+// step is O(rows) on a per-tenant scale that maxes out in the low
+// thousands. groupBy would add a second mock surface for marginal
+// efficiency.
+//
+// No write side effects; no audit row (read-only meta, mirrors the
+// rationale on /:id/preview.pdf).
+router.get(
+  "/flyer-templates/sub-brands",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
+
+      if (req.query.isActive !== undefined) {
+        const v = String(req.query.isActive);
+        if (v === "true" || v === "1") where.isActive = true;
+        else if (v === "false" || v === "0") where.isActive = false;
+      }
+
+      // Sub-brand narrowing — same gate as the list endpoint above.
+      // Sub-brand-restricted callers see their allowed sub-brands plus
+      // the tenant-wide (NULL) rows.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.OR = [
+          { subBrand: { in: [...allowed] } },
+          { subBrand: null },
+        ];
+      }
+
+      const rows = await prisma.travelFlyerTemplate.findMany({
+        where,
+        select: { subBrand: true },
+      });
+
+      // Initialise a zero-count bucket for every VALID sub-brand the
+      // caller can see, PLUS the tenant-wide bucket. Pre-seeding with
+      // zeros means the frontend always sees the full set of filter
+      // chips (with zeros visually-distinct) rather than an unstable
+      // shape that grows / shrinks as templates appear / disappear.
+      const counts = new Map();
+      counts.set(null, 0); // tenant-wide bucket
+      for (const sb of VALID_SUB_BRANDS) {
+        if (!allowed || allowed.has(sb)) counts.set(sb, 0);
+      }
+
+      for (const row of rows) {
+        const key = row.subBrand ?? null;
+        // Defensive: skip a sub-brand row the caller shouldn't see
+        // (shouldn't happen given the where-clause narrowing above,
+        // but the cost of being explicit is one .has() check).
+        if (!counts.has(key)) continue;
+        counts.set(key, counts.get(key) + 1);
+      }
+
+      // Stable order: tenant-wide first, then sub-brands alphabetically.
+      const buckets = [];
+      buckets.push({ subBrand: null, count: counts.get(null) });
+      for (const sb of VALID_SUB_BRANDS) {
+        if (counts.has(sb)) {
+          buckets.push({ subBrand: sb, count: counts.get(sb) });
+        }
+      }
+
+      const total = buckets.reduce((sum, b) => sum + b.count, 0);
+
+      res.json({ buckets, total });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] sub-brands error:", e.message);
+      res.status(500).json({ error: "Failed to summarise flyer templates by sub-brand" });
     }
   },
 );

@@ -20,6 +20,7 @@
  *   GET    /api/travel/commission-profiles/:id/ledger     — operator-view commission ledger (slice 9)
  *   GET    /api/travel/commission-profiles/:id/ledger.csv — operator CSV export of ledger (slice 11)
  *   POST   /api/travel/commission-profiles/:id/duplicate  — ADMIN/MANAGER clone (slice 13)
+ *   GET    /api/travel/commission-profiles/:id/summary/by-contact — per-contact aggregation (slice 14)
  *
  * Validation strictness (slice 2):
  *   - name required, non-empty trim                       → 400 MISSING_FIELDS
@@ -1153,6 +1154,222 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-commission-profiles] duplicate error:", e.message);
       res.status(500).json({ error: "Failed to duplicate commission profile" });
+    }
+  },
+);
+
+// GET /api/travel/commission-profiles/:id/summary/by-contact — per-contact
+// commission aggregation across the same Deal × Contact join that powers the
+// ledger (slice 9) + CSV export (slice 11). One row per Contact that holds this
+// profile in commissionProfileId, summarising the number of deals, gross sale
+// total, and total commission earned for that contact. This is the data shape
+// the eventual monthly-statement cron (FR-3.2.4, b2bCommissionEngine — Phase 1-3
+// of PRD §10) will iterate over: each row maps 1:1 to a sub-agent's monthly
+// statement line item. Shipping the read endpoint now means the frontend
+// "Top Agents by Commission" table + operator's per-agent settlement view can
+// be built ahead of the stored-ledger swap, with no contract churn when the
+// storage swap lands.
+//
+// Why a separate endpoint instead of extending /:id/ledger:
+//   - Different aggregation granularity (per-Contact, not per-Deal).
+//   - Different sort key surface (operators want to sort by total commission
+//     desc, not by deal createdAt desc — which is the ledger's only order).
+//   - Different pagination shape (typically a small N of agents — bounded by
+//     the number of contacts on this profile, not the number of deals).
+//   Keeping the two reads disjoint lets each evolve independently.
+//
+// Scope rules (mirror slice 9 ledger):
+//   - Tenant-scoped on Contact.tenantId AND Deal.tenantId.
+//   - Sub-brand-restricted callers must access the profile's sub-brand
+//     (NULL subBrand = tenant-wide, accessible to all authorised roles).
+//   - Soft-deleted deals (deletedAt != null) are excluded.
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   stage   optional Deal.stage filter (e.g. "won" for settled-only summary)
+//   limit   default 50, max 200 — smaller default than ledger; per-contact
+//           rows are denser than per-deal rows
+//   offset  default 0
+//   orderBy default "totalCommission:desc"; also accepts "dealCount:desc",
+//           "contactName:asc", "totalSale:desc" (all client-side sort over
+//           the aggregated array — input size is bounded by Contact rows
+//           on this profile, so an in-process sort is cheap)
+//
+// Response shape:
+//   {
+//     profileId, profileName, profileType,
+//     contacts: [
+//       { contactId, contactName, dealCount, totalSale, totalCommission }
+//     ],
+//     totalContacts,
+//     grandTotalCommission,
+//     limit, offset
+//   }
+//
+// Defensive behaviour: malformed stored profileJson → every per-contact row
+// reports totalCommission=0 (each underlying deal contributed 0) with the
+// per-row dealCount + totalSale still accurate. Mirrors the ledger posture —
+// operator sees the misconfig at use-time without a 500 throw.
+router.get(
+  "/commission-profiles/:id/summary/by-contact",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const profile = await prisma.travelCommissionProfile.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!profile) {
+        return res.status(404).json({
+          error: "Commission profile not found",
+          code: "PROFILE_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand gate — NULL subBrand profiles are tenant-wide.
+      if (profile.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, profile.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const stageFilter = req.query.stage ? String(req.query.stage) : null;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "totalCommission:desc";
+
+      // Whitelist orderBy to four supported tokens; anything else falls back
+      // to the default. Done this way (vs throwing) so a stale frontend
+      // sending an outdated token gracefully degrades rather than 400-ing.
+      const VALID_ORDER_BY = new Set([
+        "totalCommission:desc",
+        "totalCommission:asc",
+        "dealCount:desc",
+        "dealCount:asc",
+        "contactName:asc",
+        "contactName:desc",
+        "totalSale:desc",
+        "totalSale:asc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "totalCommission:desc";
+
+      // Pull every deal that joins this profile through its Contact. We pull
+      // the full set (no DB-level pagination) because the aggregation is
+      // per-Contact, not per-Deal — pagination is applied to the AGGREGATED
+      // array below. Input size bound: number of deals across all contacts
+      // on this one profile. For platinum-scale tenants this stays in the
+      // low thousands at most; in-process aggregation is cheap.
+      const dealWhere = {
+        tenantId: req.travelTenant.id,
+        deletedAt: null,
+        contact: { commissionProfileId: id, tenantId: req.travelTenant.id },
+      };
+      if (stageFilter) dealWhere.stage = stageFilter;
+
+      const deals = await prisma.deal.findMany({
+        where: dealWhere,
+        include: { contact: { select: { id: true, name: true } } },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+
+      // Parse stored profileJson once; reuse across all rows. Malformed JSON
+      // → every per-deal contribution is 0 and we still report dealCount +
+      // totalSale accurately.
+      let parsedProfile = null;
+      let parseError = null;
+      try {
+        parsedProfile = JSON.parse(profile.profileJson);
+      } catch (e) {
+        parseError = e.message;
+      }
+
+      // Half-up round to 2dp — matches lib/agentCommissionCalculator.round2.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      // Aggregate per-Contact. Map contactId → { contactId, contactName,
+      // dealCount, totalSale, totalCommission }. Deals whose Contact link
+      // is missing (shouldn't happen given the where clause, but defensive)
+      // are bucketed under a synthetic contactId=null entry so the count
+      // surface stays accurate.
+      const byContact = new Map();
+      for (const d of deals) {
+        const cid = d.contact ? d.contact.id : null;
+        const cname = d.contact ? d.contact.name : null;
+        let row = byContact.get(cid);
+        if (!row) {
+          row = {
+            contactId: cid,
+            contactName: cname,
+            dealCount: 0,
+            totalSale: 0,
+            totalCommission: 0,
+          };
+          byContact.set(cid, row);
+        }
+        row.dealCount += 1;
+        row.totalSale += Number(d.amount) || 0;
+
+        let commission = 0;
+        if (!parseError) {
+          const result = computeCommission({
+            saleAmount: Number(d.amount) || 0,
+            paxCount: 1,
+            profile: parsedProfile,
+          });
+          commission = Number(result.commission) || 0;
+        }
+        row.totalCommission += commission;
+      }
+
+      // Finalise rounding on per-row sums + sort.
+      let contacts = [...byContact.values()].map((r) => ({
+        ...r,
+        totalSale: round2(r.totalSale),
+        totalCommission: round2(r.totalCommission),
+      }));
+
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      contacts.sort((a, b) => {
+        if (field === "contactName") {
+          const an = a.contactName || "";
+          const bn = b.contactName || "";
+          return an.localeCompare(bn) * mult;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalContacts = contacts.length;
+      const grandTotalCommission = round2(
+        contacts.reduce((acc, c) => acc + (Number(c.totalCommission) || 0), 0),
+      );
+
+      // Apply pagination AFTER aggregation + sort.
+      const paged = contacts.slice(skip, skip + take);
+
+      res.json({
+        profileId: profile.id,
+        profileName: profile.name,
+        profileType: profile.profileType,
+        contacts: paged,
+        totalContacts,
+        grandTotalCommission,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] summary-by-contact error:", e.message);
+      res.status(500).json({ error: "Failed to load commission summary" });
     }
   },
 );

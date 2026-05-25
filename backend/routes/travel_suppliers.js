@@ -2000,6 +2000,120 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/:id/payables/aging — Arc 2 #903 slice 17 —
+// per-supplier aged-payable report (PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.d +
+// FR-3.7.a per-supplier dashboard "credit utilization gauge").
+//
+// Mirrors the cross-supplier `/payables/aging` (slice 8) but scoped to ONE
+// supplier — feeds the per-supplier detail-page "month-end close" widget so
+// operators can pull a single supplier's aging without filtering through the
+// tenant-wide aging report.
+//
+// Consumes backend/lib/payableAging.js — same `computeAgingReport(payables,
+// { asOf })` helper used by slice 8. Bucket / exclusion rules enforced by
+// the lib (current / 1-30 / 31-60 / 61-90 / 90+; paid+cancelled+no-due-date
+// rows tallied as excluded with reason).
+//
+// Auth: any verified token; tenant + sub-brand access enforced via
+// loadParentSupplier (returns SUPPLIER_NOT_FOUND / SUB_BRAND_DENIED).
+//
+// Query params (all optional):
+//   ?asOf=ISODate     — age against this date (default: now). Invalid
+//                       parseable date → 400 INVALID_ASOF (mirrors slice 8).
+//
+// Response shape:
+//   {
+//     supplier: { id, name, supplierCategory, subBrand },
+//     asOf: "<ISO>",
+//     bucketTotals: {
+//       "current": { count, totalAmount },
+//       "1-30":    { count, totalAmount },
+//       "31-60":   { count, totalAmount },
+//       "61-90":   { count, totalAmount },
+//       "90+":     { count, totalAmount }
+//     },
+//     grandTotal: <number>,
+//     excludedCount: <int>,
+//     excludedReasons: { EXCLUDED_PAID: N, EXCLUDED_CANCELLED: N, ... }
+//   }
+//
+// Decisions:
+//   - Reuse loadParentSupplier so the 400/404/403 contract for parent
+//     supplier matches the sibling /payables / payables CRUD routes.
+//   - Same AGING_MAX_ROWS=10_000 sanity cap as slice 8.
+//   - bucketTotals + grandTotal pass through the lib's number shape (round2
+//     Numbers, not decimal strings).
+//   - Error codes: INVALID_ID, SUPPLIER_NOT_FOUND, SUB_BRAND_DENIED,
+//     INVALID_ASOF.
+//   - Route ordering: registered BEFORE /suppliers/:id/payables/:payableId
+//     (PUT/DELETE) so `aging` cannot be captured as a payableId — same
+//     sub-paths-before-:id discipline used by slices 13-16.
+// ============================================================================
+
+router.get(
+  "/suppliers/:id/payables/aging",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // asOf parsing — surface INVALID_ASOF (not INVALID_DATE) for caller
+      // clarity, mirroring slice 8's cross-supplier /payables/aging.
+      let asOf = new Date();
+      if (req.query.asOf != null && req.query.asOf !== "") {
+        const parsed = new Date(String(req.query.asOf));
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "asOf must be a valid ISO date / parseable date string",
+            code: "INVALID_ASOF",
+          });
+        }
+        asOf = parsed;
+      }
+
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const rows = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+        },
+        select: {
+          id: true,
+          dueDate: true,
+          paidAt: true,
+          status: true,
+          amount: true,
+        },
+        take: AGING_MAX_ROWS,
+      });
+
+      const report = computeAgingReport(rows, { asOf });
+
+      res.json({
+        supplier: {
+          id: supplier.id,
+          name: supplier.name,
+          supplierCategory: supplier.supplierCategory,
+          subBrand: supplier.subBrand,
+        },
+        asOf: report.asOf,
+        bucketTotals: report.bucketTotals,
+        grandTotal: report.grandTotal,
+        excludedCount: report.excludedCount,
+        excludedReasons: report.excludedReasons,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] per-supplier aging error:", e.message);
+      res.status(500).json({ error: "Failed to build per-supplier aging report" });
+    }
+  },
+);
+
 // POST /api/travel/suppliers/:id/payables — ADMIN/MANAGER only.
 // Required: description, amount. Optional: poNumber, currency, dueDate, notes, status.
 router.post(

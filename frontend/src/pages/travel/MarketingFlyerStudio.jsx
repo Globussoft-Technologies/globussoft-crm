@@ -1,57 +1,55 @@
 /**
- * MarketingFlyerStudio.jsx — Phase 2 SHELL for the Travel vertical
- * Marketing Flyer Studio (GH #908). This is a NON-FUNCTIONAL scaffold
- * that mounts under the Travel vertical and previews the upcoming
- * flyer-builder surface; the actual flyer authoring (canvas editor,
- * asset library, AI copy/image generation, PDF/PNG export, WhatsApp
- * share) ships in follow-up ticks per the PRD's §8 build-order.
+ * MarketingFlyerStudio.jsx — Phase 2 composer surface for the Travel
+ * vertical Marketing Flyer Studio (GH #908). Slice 5 wires the SHELL
+ * page to the /api/travel/flyer-templates CRUD endpoints shipped by
+ * slice 3 (commit 5c2dd474):
  *
- * PRD reference: docs/PRD_TRAVEL_MARKETING_FLYER.md
- *   - §3.1 — flyer template editor (block-builder; canonical
- *     LandingPageBuilder substrate to mirror; concurrent-edit lock)
- *   - §3.2 — asset library (per-tenant images, AI image gen STUB)
- *   - §3.3 — brand consistency (per-sub-brand kit, lock-to-brand)
- *   - §3.4 — output formats (A4 PDF / PNG aspects / watermark draft)
- *   - §3.5 — distribution flow (WhatsApp share, email attach, public
- *     signed URL, embed code)
- *   - §3.6 — AI assistance (llmRouter task classes — copy + layout +
- *     image)
- *   - §3.7 — templates marketplace (curated + operator-submitted)
+ *   - On mount: parse ?template=<id> from the URL. If present, GET
+ *     /api/travel/flyer-templates/:id and seed the composer's local
+ *     palette/layout/assets state from the parsed JSON columns.
+ *   - "Save as Template" button → modal with name + sub-brand → POSTs
+ *     to /api/travel/flyer-templates with palette/layout/assets
+ *     serialized as JSON-string @db.Text payloads (matching the
+ *     route's parseJsonColumn shape).
+ *
+ * The four sub-brand placeholder cards from the prior SHELL are kept
+ * (Phase 2 follow-up ticks layer the canvas editor / asset library /
+ * AI copy / PDF export onto this same page). The slice-5 surface is
+ * additive: load + save template lifecycle without disturbing the
+ * existing SHELL affordances.
+ *
+ * PRD reference: docs/PRD_TRAVEL_MARKETING_FLYER.md §3.1 (template
+ * editor) + §3.7 (templates marketplace). Companion: FlyerTemplates
+ * .jsx (commit a64c1058) is the saved-templates LIST page; the
+ * composer here is the load + save surface.
  *
  * Mount: /travel/marketing/flyer-studio — wrapped in <TravelOnly> +
  * <RoleGuard allow={['ADMIN','MANAGER']}/> per the PRD's NFR-4.8 RBAC
- * surface ("Asset upload + flyer create requires role ∈ {ADMIN,
- * MANAGER, USER}" — but this is an OPERATOR-FACING marketing surface,
- * so the SHELL gates at MANAGER+ until product calls in §5 / OQ-9.3
- * resolve the per-role workflow defaults).
+ * surface.
  *
  * Sub-brand pre-highlight: consumes useActiveSubBrand() so the
  * operator's session-scoped "I'm working on TMC today" preference
- * (set via the Sidebar switcher per PRD §4.10 / Q25) pre-highlights
- * the matching sub-brand card. Falls back gracefully to "no active
- * sub-brand" when the context is null (e.g. first-load + nothing
- * stored in sessionStorage).
+ * pre-highlights the matching sub-brand card AND pre-fills the "Save
+ * as Template" modal's sub-brand dropdown.
  *
- * Sub-brand cards: ONE card per Travel sub-brand (TMC / RFU /
- * Travel Stall / Visa Sure — the canonical 4 ids per
- * frontend/src/utils/travelSubBrand.js's SUB_BRAND_IDS array, kept
- * in sync with VALID_SUB_BRANDS in subBrand.jsx). Each card carries
- * a "Coming soon" overlay since the implementation hasn't shipped
- * yet — visible affordances per the SHELL-page convention used by
- * TravelStallDashboard.jsx (tick #154) + TravelVisaDashboard
- * (cluster B3 scaffolding).
- *
- * Implementation ordering (TODO chunks below map directly to PRD §3
- * functional-requirement groups; each chunk is a separate follow-up
- * tick so a future agent's grep on the TODO landmarks finds the
- * PRD section number).
+ * Save-template URL-update decision: on successful POST, the URL is
+ * updated to ?template=<newId> via setSearchParams({ template: id })
+ * so a subsequent page refresh re-loads the just-saved template
+ * (otherwise the operator loses their work on refresh). This is
+ * non-blocking — if setSearchParams isn't available (e.g. tests
+ * without Router mounted), the save still succeeds; the URL just
+ * stays as-is.
  *
  * Path: frontend/src/pages/travel/MarketingFlyerStudio.jsx — sibling
- * to CurriculumAdmin.jsx (tick #181) and TravelStallDashboard.jsx
- * (tick #154) in the Phase 2 Travel scaffold cohort.
+ * to FlyerTemplates.jsx (the list page) + the Phase 2 Travel scaffold
+ * cohort.
  */
-import { Sparkles, FileImage, Lock } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Sparkles, FileImage, Lock, Save, Loader } from 'lucide-react';
 import { useActiveSubBrand } from '../../utils/subBrand';
+import { useNotify } from '../../utils/notify';
+import { fetchApi } from '../../utils/api';
 
 // Canonical 4-sub-brand catalogue. Kept inline (rather than imported
 // from utils/travelSubBrand.js) so the SHELL is self-contained for
@@ -85,8 +83,203 @@ const SUB_BRAND_CARDS = [
   },
 ];
 
+// Sub-brand options for the "Save as Template" modal — the canonical
+// 4 ids plus "no sub-brand" (tenant-wide template).
+const SAVE_SUB_BRAND_OPTIONS = [
+  { value: '', label: 'Tenant-wide (no sub-brand)' },
+  { value: 'tmc', label: 'TMC (schools)' },
+  { value: 'rfu', label: 'RFU (Umrah)' },
+  { value: 'travelstall', label: 'Travel Stall' },
+  { value: 'visasure', label: 'Visa Sure' },
+];
+
+// Default composer state. Matches the slice-1 validator's minimum-
+// valid shape: 4 required hex colors + 1 placeholder text block. The
+// renderer requires at least one block, so the default is a single
+// "Tap to edit" text block; operators replace it via the (future)
+// canvas editor.
+const DEFAULT_PALETTE = {
+  primaryHex: '#122647',
+  secondaryHex: '#265855',
+  accentHex: '#C89A4E',
+  textHex: '#222222',
+  bgHex: '#FFFDF7',
+};
+
+const DEFAULT_LAYOUT = [
+  {
+    type: 'text',
+    x: 24,
+    y: 24,
+    width: 480,
+    height: 80,
+    content: 'Tap to edit headline',
+  },
+];
+
+const DEFAULT_ASSETS = {};
+
 export default function MarketingFlyerStudio() {
   const { activeSubBrand } = useActiveSubBrand() || { activeSubBrand: null };
+  const notify = useNotify();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Composer state — palette / layout / assets. Seeded from the
+  // template-load GET when ?template=<id> is present; otherwise
+  // initialised to the placeholder defaults above.
+  const [palette, setPalette] = useState(DEFAULT_PALETTE);
+  const [layout, setLayout] = useState(DEFAULT_LAYOUT);
+  const [assets, setAssets] = useState(DEFAULT_ASSETS);
+
+  // Loaded-template metadata (display only — the canvas editor reads
+  // palette/layout/assets directly).
+  const [loadedTemplate, setLoadedTemplate] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  // "Save as Template" modal state.
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveName, setSaveName] = useState('');
+  const [saveSubBrand, setSaveSubBrand] = useState(activeSubBrand || '');
+  const [saving, setSaving] = useState(false);
+
+  // Parse @db.Text JSON columns from the load-template response.
+  // Each column may arrive as either a JSON string (the canonical
+  // storage shape) or — defensively — an already-parsed object if
+  // the backend ever changes its mind. Helper handles both.
+  const parseJsonField = useCallback((field, fallback) => {
+    if (field == null) return fallback;
+    if (typeof field === 'object') return field;
+    if (typeof field === 'string') {
+      try {
+        return JSON.parse(field);
+      } catch (_e) {
+        return fallback;
+      }
+    }
+    return fallback;
+  }, []);
+
+  const loadTemplate = useCallback(
+    async (templateId) => {
+      setLoading(true);
+      try {
+        const data = await fetchApi(`/api/travel/flyer-templates/${templateId}`);
+        const parsedPalette = parseJsonField(data?.paletteJson, DEFAULT_PALETTE);
+        const parsedLayout = parseJsonField(data?.layoutJson, DEFAULT_LAYOUT);
+        const parsedAssets = parseJsonField(data?.assetsJson, DEFAULT_ASSETS);
+        setPalette(parsedPalette || DEFAULT_PALETTE);
+        setLayout(Array.isArray(parsedLayout) ? parsedLayout : DEFAULT_LAYOUT);
+        setAssets(parsedAssets && typeof parsedAssets === 'object' ? parsedAssets : DEFAULT_ASSETS);
+        setLoadedTemplate({
+          id: data?.id ?? templateId,
+          name: data?.name || `Template #${templateId}`,
+          subBrand: data?.subBrand || null,
+        });
+        // Pre-fill the save modal with the loaded template's metadata
+        // so "Save as Template" without rename overwrites cleanly
+        // (well — POST creates a new row; this is the suggested name).
+        setSaveName(data?.name ? `${data.name} (copy)` : '');
+        setSaveSubBrand(data?.subBrand || activeSubBrand || '');
+        notify?.info?.(`Loaded template: ${data?.name || `#${templateId}`}`);
+      } catch (err) {
+        // fetchApi already toasted via global notify on the 4xx/5xx
+        // path; the route-level handler here only needs to clear the
+        // loaded-template indicator and reset to defaults so the
+        // composer stays usable.
+        setLoadedTemplate(null);
+        if (!err?.status) {
+          // Non-HTTP error (parse / network race not handled by fetchApi).
+          notify?.error?.(err?.message || 'Failed to load template');
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [activeSubBrand, notify, parseJsonField],
+  );
+
+  // Mount effect: if ?template=<id> is in the URL, fire the load GET.
+  // Depends on the param VALUE (string), not the URLSearchParams
+  // object — useSearchParams returns a fresh object reference on
+  // every render, so depending on the object would re-fire the GET
+  // every render (thrashes the backend; also confuses tests).
+  const templateIdParam = searchParams?.get?.('template') || null;
+  useEffect(() => {
+    if (templateIdParam && /^\d+$/.test(templateIdParam)) {
+      loadTemplate(parseInt(templateIdParam, 10));
+    }
+    // Intentionally only depend on the param string. loadTemplate
+    // captures the latest notify + activeSubBrand via useCallback,
+    // but we don't want the effect re-firing when those change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateIdParam]);
+
+  const openSaveModal = () => {
+    setSaveName(loadedTemplate?.name ? `${loadedTemplate.name} (copy)` : '');
+    setSaveSubBrand(loadedTemplate?.subBrand || activeSubBrand || '');
+    setShowSaveModal(true);
+  };
+
+  const closeSaveModal = () => {
+    setShowSaveModal(false);
+  };
+
+  const handleSaveTemplate = async (e) => {
+    e?.preventDefault?.();
+    const trimmedName = (saveName || '').trim();
+    if (!trimmedName) {
+      notify?.error?.('Template name is required');
+      return;
+    }
+    setSaving(true);
+    try {
+      const body = {
+        name: trimmedName,
+        // Empty-string sub-brand sends as omitted — the backend
+        // treats absent subBrand as "tenant-wide" (NULL column).
+        paletteJson: JSON.stringify(palette),
+        layoutJson: JSON.stringify(layout),
+        assetsJson: JSON.stringify(assets),
+      };
+      if (saveSubBrand) body.subBrand = saveSubBrand;
+      const created = await fetchApi('/api/travel/flyer-templates', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      notify?.success?.(`Template "${trimmedName}" saved`);
+      setShowSaveModal(false);
+      // Update the URL so a refresh re-loads what was just saved
+      // (otherwise the operator loses their work on refresh). The
+      // try/catch guards against test environments without a router
+      // (setSearchParams may throw).
+      try {
+        if (created?.id && setSearchParams) {
+          setSearchParams({ template: String(created.id) });
+        }
+      } catch (_e) {
+        /* no-op — URL update is best-effort */
+      }
+      // Reflect the freshly-saved template as the active one so the
+      // next "Save as Template" pre-fills with the new name.
+      if (created?.id) {
+        setLoadedTemplate({
+          id: created.id,
+          name: created.name || trimmedName,
+          subBrand: created.subBrand || null,
+        });
+      }
+    } catch (err) {
+      // fetchApi auto-toasted any 4xx/5xx via global notify. Only
+      // re-surface here for non-HTTP errors (validator parse failures
+      // bubble through fetchApi's err.data.errors path; for the
+      // first-cut wire-in we surface the generic message).
+      if (!err?.status) {
+        notify?.error?.(err?.message || 'Failed to save template');
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div style={pageWrap} data-testid="marketing-flyer-studio">
@@ -101,23 +294,49 @@ export default function MarketingFlyerStudio() {
             (logo, palette, fonts) auto-loads from the tenant config.
           </p>
         </div>
-        <div style={comingSoonPill} aria-label="Feature status: coming soon">
-          <Sparkles size={14} aria-hidden /> Coming soon
+        <div style={headerActions}>
+          <button
+            type="button"
+            onClick={openSaveModal}
+            style={savePrimaryBtn}
+            data-testid="save-as-template-button"
+            aria-label="Save current composer state as a new template"
+          >
+            <Save size={14} aria-hidden /> Save as Template
+          </button>
+          <div style={comingSoonPill} aria-label="Feature status: coming soon">
+            <Sparkles size={14} aria-hidden /> Coming soon
+          </div>
         </div>
       </header>
 
-      {/* PRD §1 status banner — SHELL-page convention: visible affordance
-          that the surface is scaffolded, not implemented. Operators
-          landing here should understand the feature is announced + the
-          UI shape is locked, but the create/edit/export pipeline is
-          still building. */}
-      <div role="status" style={statusBanner}>
-        <strong>Phase 2 scaffold.</strong> The Marketing Flyer Studio is
-        designed in <code>docs/PRD_TRAVEL_MARKETING_FLYER.md</code>;
-        implementation lands in follow-up ticks (canvas editor, asset
-        library, AI copy/image generation, PDF/PNG export, WhatsApp
-        share). This page previews the surface only.
-      </div>
+      {/* Loaded-template indicator — visible affordance that the
+          composer state reflects a stored row, not the placeholder
+          defaults. */}
+      {loading && (
+        <div role="status" style={statusBanner} data-testid="loading-template">
+          <Loader size={14} aria-hidden /> Loading template&hellip;
+        </div>
+      )}
+      {!loading && loadedTemplate && (
+        <div
+          role="status"
+          style={statusBanner}
+          data-testid="loaded-template-banner"
+        >
+          <strong>Editing:</strong> {loadedTemplate.name}
+          {loadedTemplate.subBrand ? ` — ${loadedTemplate.subBrand.toUpperCase()}` : ''}
+        </div>
+      )}
+      {!loading && !loadedTemplate && (
+        <div role="status" style={statusBanner}>
+          <strong>Phase 2 scaffold.</strong> The Marketing Flyer Studio is
+          designed in <code>docs/PRD_TRAVEL_MARKETING_FLYER.md</code>;
+          implementation lands in follow-up ticks (canvas editor, asset
+          library, AI copy/image generation, PDF/PNG export, WhatsApp
+          share). This page previews the surface only.
+        </div>
+      )}
 
       <section
         aria-label="Sub-brand template cards"
@@ -158,6 +377,82 @@ export default function MarketingFlyerStudio() {
           );
         })}
       </section>
+
+      {/* "Save as Template" modal — minimal form with name + sub-brand.
+          Palette / layout / assets serialize from current composer
+          state. Full canvas editing lives in follow-up ticks. */}
+      {showSaveModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="save-template-heading"
+          style={modalOverlay}
+          data-testid="save-template-modal"
+        >
+          <form
+            onSubmit={handleSaveTemplate}
+            style={modalDialog}
+            data-testid="save-template-form"
+          >
+            <h2 id="save-template-heading" style={modalHeading}>
+              Save as Template
+            </h2>
+            <p style={modalHint}>
+              Capture the current palette + layout + assets as a reusable
+              template. You can find it later on the Flyer Templates list
+              page.
+            </p>
+            <label style={modalLabel}>
+              Template name *
+              <input
+                type="text"
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                style={modalInput}
+                aria-label="Template name"
+                data-testid="save-template-name"
+                placeholder="e.g. Summer Europe — Class IX-X"
+                autoFocus
+              />
+            </label>
+            <label style={modalLabel}>
+              Sub-brand
+              <select
+                value={saveSubBrand}
+                onChange={(e) => setSaveSubBrand(e.target.value)}
+                style={modalInput}
+                aria-label="Sub-brand"
+                data-testid="save-template-sub-brand"
+              >
+                {SAVE_SUB_BRAND_OPTIONS.map((opt) => (
+                  <option key={opt.value || 'none'} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div style={modalActions}>
+              <button
+                type="button"
+                onClick={closeSaveModal}
+                style={secondaryBtn}
+                disabled={saving}
+                data-testid="save-template-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                style={savePrimaryBtn}
+                data-testid="save-template-submit"
+              >
+                {saving ? 'Saving…' : 'Save Template'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* TODO chunks — each maps to a PRD §3 group. Follow-up ticks
           should pick these in §8 dependency order. Grep markers
@@ -254,6 +549,13 @@ const headerWrap = {
   marginBottom: 16,
 };
 
+const headerActions = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  flexWrap: 'wrap',
+};
+
 const headingStyle = {
   display: 'flex',
   alignItems: 'center',
@@ -292,6 +594,10 @@ const statusBanner = {
   fontSize: 13,
   lineHeight: 1.5,
   marginBottom: 20,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'wrap',
 };
 
 const cardsGrid = {
@@ -376,4 +682,94 @@ const comingSoonOverlay = {
   fontWeight: 600,
   letterSpacing: 0.3,
   textTransform: 'uppercase',
+};
+
+const savePrimaryBtn = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '8px 14px',
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 13,
+  background: 'var(--primary-color, var(--accent-color))',
+  color: 'var(--accent-text, #fff)',
+  border: 'none',
+  cursor: 'pointer',
+};
+
+const secondaryBtn = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '8px 14px',
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 13,
+  background: 'var(--surface-color)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border-color)',
+  cursor: 'pointer',
+};
+
+const modalOverlay = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(0, 0, 0, 0.5)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 1000,
+  padding: 16,
+};
+
+const modalDialog = {
+  background: 'var(--surface-color)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 10,
+  padding: 20,
+  width: '100%',
+  maxWidth: 480,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+};
+
+const modalHeading = {
+  margin: 0,
+  fontSize: 18,
+  fontWeight: 600,
+  color: 'var(--text-primary)',
+};
+
+const modalHint = {
+  margin: 0,
+  fontSize: 12,
+  color: 'var(--text-secondary)',
+  lineHeight: 1.4,
+};
+
+const modalLabel = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  fontSize: 12,
+  color: 'var(--text-secondary)',
+};
+
+const modalInput = {
+  padding: '8px 10px',
+  borderRadius: 6,
+  border: '1px solid var(--border-color)',
+  background: 'var(--bg-color, rgba(255,255,255,0.05))',
+  color: 'var(--text-primary)',
+  fontSize: 13,
+  outline: 'none',
+};
+
+const modalActions = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  gap: 8,
+  marginTop: 8,
 };

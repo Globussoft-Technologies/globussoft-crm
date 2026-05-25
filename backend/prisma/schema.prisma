@@ -4939,28 +4939,47 @@ model TravelInvoice {
 //
 // Future slices (NOT in this commit — land when downstream PRDs ship):
 //   - supplierId FK (lands with #903 Supplier Master wire-in)
-//   - PNR/booking-ref + service-dates (PRD §3 cross-PRD with itinerary)
 //   - cost-vs-sell + GST breakdown (PRD §3.5 TCS Sec 206C + tax engine)
+//
+// Slice 4 (this commit) — PRD_TRAVEL_BILLING FR-3.1.b + FR-3.1.d.
+//   PNR / booking-ref + service-dates. All NULLABLE — additive safe
+//   migration (no bless marker needed). Free-form strings; no FK to a
+//   PNR-master table because PNR is a vendor-side identifier and a single
+//   booking can carry multiple (airline PNR + GDS reference + supplier
+//   booking-ref) — operator picks which to record per line.
 //
 // onDelete: Cascade on invoiceId — if the parent invoice is hard-deleted
 // (TravelInvoice.delete is a hard-delete for Draft invoices per route
 // comment at the DELETE handler), the line rows go with it.
 model TravelInvoiceLine {
-  id          Int           @id @default(autoincrement())
-  tenantId    Int           @default(1)
-  invoiceId   Int
-  lineType    String        @default("other") // per_pax | per_room | per_night | per_trip | tax | fee | addon | tcs | tds | other
-  description String
-  quantity    Int           @default(1)
-  unitPrice   Decimal       @db.Decimal(15, 2)
-  amount      Decimal       @db.Decimal(15, 2)
-  currency    String        @default("INR")
-  sortOrder   Int           @default(0)
-  notes       String?       @db.Text
-  invoice     TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id               Int           @id @default(autoincrement())
+  tenantId         Int           @default(1)
+  invoiceId        Int
+  lineType         String        @default("other") // per_pax | per_room | per_night | per_trip | tax | fee | addon | tcs | tds | other
+  description      String
+  quantity         Int           @default(1)
+  unitPrice        Decimal       @db.Decimal(15, 2)
+  amount           Decimal       @db.Decimal(15, 2)
+  currency         String        @default("INR")
+  sortOrder        Int           @default(0)
+  notes            String?       @db.Text
+  // FR-3.1.b — per-line PNR / supplier booking-reference (free-form).
+  // pnr: 6-char airline/GDS PNR typically; cap at 20 to allow supplier
+  //   suffix variants (e.g. "ABC123-LEG2"). bookingRef is the alternative
+  //   confirmation number some suppliers (hotels, transfers) use; cap at
+  //   50 to accommodate longer hotel/cruise confirmation strings.
+  pnr              String?
+  bookingRef       String?
+  // FR-3.1.d — per-line service dates. Drives accrual-period reporting
+  // (revenue recognized when service rendered, not when invoiced).
+  // Inclusive range semantics: serviceEndDate >= serviceStartDate (same-day
+  // allowed for single-night stays / single-day transfers).
+  serviceStartDate DateTime?
+  serviceEndDate   DateTime?
+  invoice          TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   @@index([tenantId, invoiceId])
   @@index([invoiceId, sortOrder])

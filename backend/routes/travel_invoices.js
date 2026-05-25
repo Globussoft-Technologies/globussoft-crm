@@ -94,6 +94,61 @@ function parsePositiveInt(input, fieldName, fallback) {
   return n;
 }
 
+// PRD_TRAVEL_BILLING FR-3.1.b helpers — PNR / bookingRef caps.
+// Free-form strings; we cap lengths to avoid abuse but don't enforce a
+// shape (vendors vary: airline 6-char alphanumeric vs hotel CRS strings).
+// Empty string after trim returns null so the field stays clean.
+const PNR_MAX_LEN = 20;
+const BOOKING_REF_MAX_LEN = 50;
+
+function parseBookingRefField(input, fieldName, maxLen, errCode) {
+  if (input == null) return undefined;
+  // Explicit null clears the field on PUT.
+  if (input === null) return null;
+  const s = String(input).trim();
+  if (s === "") return null;
+  if (s.length > maxLen) {
+    const err = new Error(`${fieldName} must be <= ${maxLen} characters`);
+    err.status = 400;
+    err.code = errCode;
+    throw err;
+  }
+  return s;
+}
+
+// PRD_TRAVEL_BILLING FR-3.1.d helper — service-date parser.
+// Returns a Date instance or null (for explicit null). Returns undefined
+// if the field is absent from the body (so PUT partial-updates leave the
+// existing value alone). Throws 400 INVALID_SERVICE_DATE on unparseable
+// input.
+function parseServiceDate(input, fieldName) {
+  if (input === undefined) return undefined;
+  if (input === null || input === "") return null;
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) {
+    const err = new Error(`${fieldName} must be a valid date`);
+    err.status = 400;
+    err.code = "INVALID_SERVICE_DATE";
+    throw err;
+  }
+  return d;
+}
+
+// Validate the service-date range when BOTH ends are present.
+// Inclusive semantics — same-day single-night / single-day transfer is
+// legal (start === end). Throws 400 INVALID_SERVICE_DATE_RANGE on
+// inversion.
+function assertServiceDateRange(start, end) {
+  if (start == null || end == null) return;
+  if (!(start instanceof Date) || !(end instanceof Date)) return;
+  if (end.getTime() < start.getTime()) {
+    const err = new Error("serviceEndDate must be on or after serviceStartDate");
+    err.status = 400;
+    err.code = "INVALID_SERVICE_DATE_RANGE";
+    throw err;
+  }
+}
+
 // Recompute the invoice's totalAmount as the sum of its lines and persist.
 // Called from POST/PUT/DELETE /lines. Idempotent. Skipped if the lines
 // table is empty (totalAmount stays at whatever the operator typed at
@@ -695,7 +750,8 @@ router.get(
 
 // POST /api/travel/invoices/:id/lines — ADMIN/MANAGER only.
 // Required: description, unitPrice. Optional: lineType (default "other"),
-// quantity (default 1), currency (default invoice currency), sortOrder, notes.
+// quantity (default 1), currency (default invoice currency), sortOrder, notes,
+// pnr, bookingRef, serviceStartDate, serviceEndDate (PRD §3.1.b + §3.1.d).
 router.post(
   "/invoices/:id/lines",
   verifyToken,
@@ -710,6 +766,7 @@ router.post(
       const {
         lineType, description, quantity, unitPrice,
         currency, sortOrder, notes,
+        pnr, bookingRef, serviceStartDate, serviceEndDate,
       } = req.body || {};
 
       if (!description || typeof description !== "string" || !description.trim()) {
@@ -722,6 +779,15 @@ router.post(
       const qty = parsePositiveInt(quantity, "quantity", 1);
       const unit = parsePositiveDecimal(unitPrice, "unitPrice");
       const amount = qty * unit;
+      // PRD FR-3.1.b — PNR + bookingRef parsing (length-capped, empty→null).
+      const parsedPnr = parseBookingRefField(pnr, "pnr", PNR_MAX_LEN, "INVALID_PNR");
+      const parsedBookingRef = parseBookingRefField(
+        bookingRef, "bookingRef", BOOKING_REF_MAX_LEN, "INVALID_BOOKING_REF",
+      );
+      // PRD FR-3.1.d — service-date parsing + inversion check.
+      const parsedStart = parseServiceDate(serviceStartDate, "serviceStartDate");
+      const parsedEnd = parseServiceDate(serviceEndDate, "serviceEndDate");
+      assertServiceDateRange(parsedStart, parsedEnd);
 
       const created = await prisma.travelInvoiceLine.create({
         data: {
@@ -736,6 +802,12 @@ router.post(
           sortOrder: Number.isFinite(parseInt(sortOrder, 10))
             ? parseInt(sortOrder, 10) : 0,
           notes: notes ? String(notes) : null,
+          // Only persist the new fields when the body provided them — keeps
+          // the row null-friendly when operator doesn't supply them.
+          ...(parsedPnr !== undefined ? { pnr: parsedPnr } : {}),
+          ...(parsedBookingRef !== undefined ? { bookingRef: parsedBookingRef } : {}),
+          ...(parsedStart !== undefined ? { serviceStartDate: parsedStart } : {}),
+          ...(parsedEnd !== undefined ? { serviceEndDate: parsedEnd } : {}),
         },
       });
 
@@ -790,6 +862,7 @@ router.put(
       const {
         lineType, description, quantity, unitPrice,
         currency, sortOrder, notes,
+        pnr, bookingRef, serviceStartDate, serviceEndDate,
       } = req.body || {};
 
       if (lineType !== undefined) {
@@ -829,6 +902,36 @@ router.put(
         data.sortOrder = so;
       }
       if (notes !== undefined) data.notes = notes === null ? null : String(notes);
+
+      // PRD FR-3.1.b — PNR + bookingRef parsing on PUT.
+      if (pnr !== undefined) {
+        data.pnr = parseBookingRefField(pnr, "pnr", PNR_MAX_LEN, "INVALID_PNR");
+      }
+      if (bookingRef !== undefined) {
+        data.bookingRef = parseBookingRefField(
+          bookingRef, "bookingRef", BOOKING_REF_MAX_LEN, "INVALID_BOOKING_REF",
+        );
+      }
+      // PRD FR-3.1.d — service-date partial-update + range check against the
+      // existing DB row when only one end is being changed. We pull the
+      // "effective" start/end (incoming body if present, otherwise existing
+      // row's value) and validate; this catches the case where PUT sets only
+      // serviceEndDate and the new end is < the existing start.
+      let nextStart = existing.serviceStartDate || null;
+      let nextEnd = existing.serviceEndDate || null;
+      if (serviceStartDate !== undefined) {
+        const parsedStart = parseServiceDate(serviceStartDate, "serviceStartDate");
+        data.serviceStartDate = parsedStart;
+        nextStart = parsedStart;
+      }
+      if (serviceEndDate !== undefined) {
+        const parsedEnd = parseServiceDate(serviceEndDate, "serviceEndDate");
+        data.serviceEndDate = parsedEnd;
+        nextEnd = parsedEnd;
+      }
+      if (serviceStartDate !== undefined || serviceEndDate !== undefined) {
+        assertServiceDateRange(nextStart, nextEnd);
+      }
 
       if (Object.keys(data).length === 0) {
         return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });

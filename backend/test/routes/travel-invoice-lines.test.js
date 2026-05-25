@@ -520,3 +520,218 @@ describe('DELETE /api/travel/invoices/:id/lines/:lineId', () => {
     expect(res.body.code).toBe('SUB_BRAND_DENIED');
   });
 });
+
+// Arc 2 #901 slice 4 — PRD_TRAVEL_BILLING FR-3.1.b (PNR + bookingRef) +
+// FR-3.1.d (serviceStartDate + serviceEndDate).
+// Per-line PNR / booking reference is free-form (capped at 20 / 50 chars);
+// service-dates are nullable DateTime with inclusive-range semantics
+// (serviceEndDate >= serviceStartDate so a same-day single-night stay /
+// single-day transfer is allowed). Range check fires on POST whenever both
+// ends are provided, and on PUT whenever EITHER end changes (validated
+// against the existing DB row when only one end moves).
+describe('Slice 4 — POST /lines with PNR + service-dates', () => {
+  test('POST with valid pnr "ABC123" → 201, persisted', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(parentInvoice());
+    prisma.travelInvoiceLine.create.mockImplementation(async (args) => ({
+      id: 800, ...args.data, createdAt: new Date(), updatedAt: new Date(),
+    }));
+    prisma.travelInvoiceLine.findMany.mockResolvedValue([{ amount: '15000.00' }]);
+
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/100/lines')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        description: 'Air India BLR-BOM',
+        unitPrice: 5000,
+        quantity: 3,
+        pnr: 'ABC123',
+        bookingRef: 'AI-CONF-789456',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.pnr).toBe('ABC123');
+    expect(res.body.bookingRef).toBe('AI-CONF-789456');
+    expect(prisma.travelInvoiceLine.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          pnr: 'ABC123',
+          bookingRef: 'AI-CONF-789456',
+        }),
+      }),
+    );
+  });
+
+  test('POST with pnr >20 chars → 400 INVALID_PNR', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(parentInvoice());
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/100/lines')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        description: 'x',
+        unitPrice: 100,
+        pnr: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', // 26 chars > 20
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_PNR');
+    expect(prisma.travelInvoiceLine.create).not.toHaveBeenCalled();
+  });
+
+  test('POST with valid serviceStartDate + serviceEndDate → 201, both persisted as Date', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(parentInvoice());
+    prisma.travelInvoiceLine.create.mockImplementation(async (args) => ({
+      id: 801, ...args.data, createdAt: new Date(), updatedAt: new Date(),
+    }));
+    prisma.travelInvoiceLine.findMany.mockResolvedValue([{ amount: '15000.00' }]);
+
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/100/lines')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        description: 'Hilton Mumbai — 3 nights',
+        unitPrice: 5000,
+        quantity: 3,
+        serviceStartDate: '2026-06-15',
+        serviceEndDate: '2026-06-18',
+      });
+
+    expect(res.status).toBe(201);
+    // Persisted as Date instances (route parses via new Date()).
+    const callArgs = prisma.travelInvoiceLine.create.mock.calls[0][0];
+    expect(callArgs.data.serviceStartDate).toBeInstanceOf(Date);
+    expect(callArgs.data.serviceEndDate).toBeInstanceOf(Date);
+    expect(callArgs.data.serviceStartDate.toISOString().slice(0, 10)).toBe('2026-06-15');
+    expect(callArgs.data.serviceEndDate.toISOString().slice(0, 10)).toBe('2026-06-18');
+  });
+
+  test('POST with unparseable serviceStartDate "not-a-date" → 400 INVALID_SERVICE_DATE', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(parentInvoice());
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/100/lines')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        description: 'x',
+        unitPrice: 100,
+        serviceStartDate: 'not-a-date',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_SERVICE_DATE');
+    expect(prisma.travelInvoiceLine.create).not.toHaveBeenCalled();
+  });
+
+  test('POST with serviceEndDate < serviceStartDate → 400 INVALID_SERVICE_DATE_RANGE', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(parentInvoice());
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/100/lines')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        description: 'x',
+        unitPrice: 100,
+        serviceStartDate: '2026-06-20',
+        serviceEndDate: '2026-06-15', // inverted
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_SERVICE_DATE_RANGE');
+    expect(prisma.travelInvoiceLine.create).not.toHaveBeenCalled();
+  });
+
+  test('POST with same-day start/end → 201 (inclusive range, single-night stay)', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(parentInvoice());
+    prisma.travelInvoiceLine.create.mockImplementation(async (args) => ({
+      id: 802, ...args.data, createdAt: new Date(), updatedAt: new Date(),
+    }));
+    prisma.travelInvoiceLine.findMany.mockResolvedValue([{ amount: '5000.00' }]);
+
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/100/lines')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        description: 'Airport transfer (one-way)',
+        unitPrice: 5000,
+        serviceStartDate: '2026-06-15',
+        serviceEndDate: '2026-06-15',
+      });
+    expect(res.status).toBe(201);
+  });
+});
+
+describe('Slice 4 — PUT /lines/:lineId with PNR + service-dates', () => {
+  test('PUT adding pnr to existing line → 200, value updated', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(parentInvoice());
+    prisma.travelInvoiceLine.findFirst.mockResolvedValue(makeLine({ pnr: null }));
+    prisma.travelInvoiceLine.update.mockImplementation(async (args) => ({
+      ...makeLine(),
+      ...args.data,
+    }));
+    prisma.travelInvoiceLine.findMany.mockResolvedValue([{ amount: '15000.00' }]);
+
+    const res = await request(makeApp())
+      .put('/api/travel/invoices/100/lines/555')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ pnr: 'XYZ999' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.travelInvoiceLine.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 555 },
+        data: expect.objectContaining({ pnr: 'XYZ999' }),
+      }),
+    );
+  });
+
+  test('PUT changing only serviceEndDate validates against existing serviceStartDate from DB row → 400 if inverted', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(parentInvoice());
+    // Existing row has serviceStartDate = 2026-06-20; PUT tries to set
+    // serviceEndDate = 2026-06-15 → inversion against the DB row.
+    prisma.travelInvoiceLine.findFirst.mockResolvedValue(makeLine({
+      serviceStartDate: new Date('2026-06-20'),
+      serviceEndDate: null,
+    }));
+
+    const res = await request(makeApp())
+      .put('/api/travel/invoices/100/lines/555')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ serviceEndDate: '2026-06-15' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_SERVICE_DATE_RANGE');
+    expect(prisma.travelInvoiceLine.update).not.toHaveBeenCalled();
+  });
+
+  test('PUT changing only serviceEndDate to a later date than existing serviceStartDate → 200', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(parentInvoice());
+    prisma.travelInvoiceLine.findFirst.mockResolvedValue(makeLine({
+      serviceStartDate: new Date('2026-06-20'),
+      serviceEndDate: null,
+    }));
+    prisma.travelInvoiceLine.update.mockImplementation(async (args) => ({
+      ...makeLine(),
+      ...args.data,
+    }));
+    prisma.travelInvoiceLine.findMany.mockResolvedValue([{ amount: '15000.00' }]);
+
+    const res = await request(makeApp())
+      .put('/api/travel/invoices/100/lines/555')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ serviceEndDate: '2026-06-25' });
+
+    expect(res.status).toBe(200);
+    const callArgs = prisma.travelInvoiceLine.update.mock.calls[0][0];
+    expect(callArgs.data.serviceEndDate).toBeInstanceOf(Date);
+    expect(callArgs.data.serviceEndDate.toISOString().slice(0, 10)).toBe('2026-06-25');
+  });
+
+  test('PUT with bookingRef >50 chars → 400 INVALID_BOOKING_REF', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(parentInvoice());
+    prisma.travelInvoiceLine.findFirst.mockResolvedValue(makeLine());
+    const longRef = 'X'.repeat(51);
+
+    const res = await request(makeApp())
+      .put('/api/travel/invoices/100/lines/555')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ bookingRef: longRef });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_BOOKING_REF');
+    expect(prisma.travelInvoiceLine.update).not.toHaveBeenCalled();
+  });
+});

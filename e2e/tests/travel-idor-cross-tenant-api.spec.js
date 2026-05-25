@@ -1304,7 +1304,8 @@ test.describe("IDOR #919 slice 6 — /api/wellness/* cross-vertical (403 WELLNES
       expect(
         status,
         `generic admin must not reach ${method} ${path}: got ${status} (${await res.text()})`,
-      ).toBeOneOf([403, 404]);
+      ).toBeLessThan(500);
+      expect([403, 404]).toContain(status);
       if (!isDelete && status === 403) {
         const respBody = await res.json();
         expect(
@@ -1324,7 +1325,8 @@ test.describe("IDOR #919 slice 6 — /api/wellness/* cross-vertical (403 WELLNES
       expect(
         status,
         `travel admin must not reach ${method} ${path}: got ${status} (${await res.text()})`,
-      ).toBeOneOf([403, 404]);
+      ).toBeLessThan(500);
+      expect([403, 404]).toContain(status);
       if (!isDelete && status === 403) {
         const respBody = await res.json();
         expect(

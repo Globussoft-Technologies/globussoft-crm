@@ -186,6 +186,13 @@ const TravelInvoicesAdmin = lazy(() => import("./pages/travel/InvoicesAdmin"));
 // e4832fee). Operator surface for upcoming/overdue milestones across all
 // travel invoices; complements the per-invoice schedule view on InvoicesAdmin.
 const TravelMilestoneTracker = lazy(() => import("./pages/travel/MilestoneTracker"));
+// Arc 2 #903 frontend consumer — cross-supplier Payables (A/P) review page.
+// Aggregates every TravelSupplierPayable across every supplier into one
+// operator-facing month-end review surface; complements the per-supplier
+// expand panel on SuppliersAdmin (slice 4). Placeholder fan-out fetch today;
+// will swap to GET /api/travel/payables once slice 6 ships the consolidating
+// endpoint (shipped page commit 2a0b00ab).
+const TravelPayables = lazy(() => import("./pages/travel/Payables"));
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
@@ -1297,6 +1304,11 @@ export default function App() {
                   Operator-facing aggregate of upcoming/overdue payment
                   milestones across all travel invoices. */}
               <Route path="travel/milestones" element={<TravelOnly><TravelMilestoneTracker /></TravelOnly>} />
+              {/* Arc 2 #903 — cross-supplier A/P review (all payables across
+                  all suppliers in one table, distinct from per-supplier expand
+                  on SuppliersAdmin). Placeholder client-side fan-out fetch
+                  until slice 6 consolidating endpoint ships. */}
+              <Route path="travel/payables" element={<TravelOnly><TravelPayables /></TravelOnly>} />
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
               <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
               <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />

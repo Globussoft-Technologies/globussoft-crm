@@ -1103,6 +1103,11 @@ function renderTravelNav({
       {isAdmin && <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" />}
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />
       <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" />
+      {/* Arc 2 #903 — cross-supplier Payables (A/P) review. Operator surface
+          aggregating every TravelSupplierPayable across every supplier into
+          one table; complements the per-supplier expand on SuppliersAdmin.
+          Sits directly under Suppliers since payables are supplier-adjacent. */}
+      <Link to="/travel/payables" icon={CreditCard} label="Payables" />
       <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" />
       {/* Arc 2 #900 slice 2 — operator-facing Quote Builder (line items +
           totals + action cluster). Distinct from the CRUD list above.

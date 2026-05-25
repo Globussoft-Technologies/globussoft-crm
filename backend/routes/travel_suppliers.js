@@ -1311,4 +1311,154 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/payables/aging — aged-payable report (Arc 2 #903 slice 8 —
+// PRD_TRAVEL_BILLING UC-2.5 month-end-close aged-payable bucket report).
+//
+// Consumes backend/lib/payableAging.js (commit 7ba550d4) — the pure helper
+// `computeAgingReport(payables, { asOf })` does the bucketing math. This
+// route's job is just: load the right TravelSupplierPayable rows (tenant +
+// sub-brand-access scoped, optionally filtered by sub-brand / supplier
+// category), hand them to the helper, and surface its return shape.
+//
+// Buckets (lib enforces): current / 1-30 / 31-60 / 61-90 / 90+.
+// Excluded (lib enforces): paid + cancelled (settled / voided liabilities
+// do not appear on aged-payable reports) + missing/invalid dueDate.
+//
+// Auth: any verified token; tenant-scoped via req.travelTenant; sub-brand
+// access enforced via getSubBrandAccessSet so a sub-brand-restricted MANAGER
+// only sees payables for suppliers in their allowed sub-brands.
+//
+// Query params (all optional):
+//   ?asOf=ISODate                                  — age against this date
+//                                                    (default: now)
+//   ?subBrand=tmc|rfu|travelstall|visasure         — filter to one sub-brand
+//                                                    (within the caller's
+//                                                    allowed set; outside-
+//                                                    allowed → empty)
+//   ?supplierCategory=hotel|flight|transport|      — filter via join on
+//                       visa-consul|other            TravelSupplier
+//
+// Response shape (mirrors computeAgingReport + echoes filters):
+//   {
+//     asOf: "<ISO>",
+//     subBrand: "tmc" | null,
+//     supplierCategory: "hotel" | null,
+//     bucketTotals: {
+//       "current": { count, totalAmount },
+//       "1-30":    { count, totalAmount },
+//       "31-60":   { count, totalAmount },
+//       "61-90":   { count, totalAmount },
+//       "90+":     { count, totalAmount }
+//     },
+//     grandTotal: <number>,
+//     excludedCount: <int>,
+//     excludedReasons: { EXCLUDED_PAID: N, EXCLUDED_CANCELLED: N, NO_DUE_DATE: N, ... }
+//   }
+//
+// Decisions:
+//   - Sub-brand filtering mirrors the cross-supplier `/payables` endpoint
+//     above (slice 5): joins through supplier.is.subBrand, restricted
+//     callers requesting a sub-brand they can't see get "__none__"
+//     substituted (silent empty rather than 403). Same shape as slice-7
+//     /payment-schedules/upcoming + /payables.
+//   - Pagination is intentionally NOT exposed here: aging reports are
+//     aggregate-by-design. The lib's reducer iterates the full set; the
+//     route hard-caps the prisma findMany to a generous take=10_000 as a
+//     sanity guard against runaway tenants (a single travel tenant with
+//     >10K open payables would be an outlier — the cap surfaces such a
+//     case as a missing tail rather than a runaway query).
+//   - asOf parsing reuses parseDateBoundOrThrow shape but maps the
+//     thrown INVALID_DATE to INVALID_ASOF for caller clarity.
+//   - bucketTotals + grandTotal pass through the lib's number shape
+//     (round2'd Numbers, not decimal strings). Frontend tooltip + the
+//     planned month-end-close report consume the numeric form directly.
+//   - Error codes: INVALID_ASOF, INVALID_SUB_BRAND, INVALID_SUPPLIER_CATEGORY.
+// ============================================================================
+
+const { computeAgingReport } = require("../lib/payableAging");
+const AGING_MAX_ROWS = 10_000;
+
+router.get(
+  "/payables/aging",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // asOf — parse first so an invalid date surfaces INVALID_ASOF rather
+      // than INVALID_DATE (cleaner error mapping for the caller).
+      let asOf = new Date();
+      if (req.query.asOf != null && req.query.asOf !== "") {
+        const parsed = new Date(String(req.query.asOf));
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "asOf must be a valid ISO date / parseable date string",
+            code: "INVALID_ASOF",
+          });
+        }
+        asOf = parsed;
+      }
+
+      const subBrand = req.query.subBrand ? String(req.query.subBrand) : null;
+      if (subBrand) assertValidSubBrand(subBrand);
+
+      const supplierCategory = req.query.supplierCategory
+        ? String(req.query.supplierCategory)
+        : null;
+      if (supplierCategory) assertValidSupplierCategory(supplierCategory);
+
+      const where = { tenantId: req.travelTenant.id };
+
+      // Sub-brand + supplierCategory filtering joins through the parent
+      // supplier. Same pattern as cross-supplier /payables above.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const supplierFilter = {};
+      if (subBrand) {
+        if (allowed !== null && !canAccessSubBrand(allowed, subBrand)) {
+          supplierFilter.subBrand = "__none__";
+        } else {
+          supplierFilter.subBrand = subBrand;
+        }
+      } else if (allowed !== null) {
+        supplierFilter.subBrand =
+          allowed.size > 0 ? { in: [...allowed] } : "__none__";
+      }
+      if (supplierCategory) supplierFilter.supplierCategory = supplierCategory;
+      if (Object.keys(supplierFilter).length > 0) {
+        where.supplier = { is: supplierFilter };
+      }
+
+      const rows = await prisma.travelSupplierPayable.findMany({
+        where,
+        select: {
+          id: true,
+          dueDate: true,
+          paidAt: true,
+          status: true,
+          amount: true,
+        },
+        take: AGING_MAX_ROWS,
+      });
+
+      const report = computeAgingReport(rows, { asOf });
+
+      res.json({
+        asOf: report.asOf,
+        subBrand,
+        supplierCategory,
+        bucketTotals: report.bucketTotals,
+        grandTotal: report.grandTotal,
+        excludedCount: report.excludedCount,
+        excludedReasons: report.excludedReasons,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] aged payables error:", e.message);
+      res.status(500).json({ error: "Failed to build aged-payable report" });
+    }
+  },
+);
+
 module.exports = router;

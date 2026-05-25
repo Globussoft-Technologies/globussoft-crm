@@ -1506,6 +1506,214 @@ router.get(
 );
 
 // ============================================================================
+// GET /api/travel/suppliers/by-year — tenant-wide supplier annual rollup
+// (PRD_TRAVEL_SUPPLIER_MASTER §3 #903 slice 26).
+//
+// USER-readable meta endpoint. Returns one row per UTC calendar year for
+// the tenant-scoped (and sub-brand-narrowed) supplier population. Each
+// row carries count + activeCount + archivedCount so the operator
+// dashboard can render a multi-year "suppliers onboarded by year" trend
+// tile at the coarsest resolution alongside the /by-month (slice 24)
+// and /by-quarter (slice 25) siblings.
+//
+// Completes the by-month / by-quarter / by-year triplet. Calendar year
+// via `getUTCFullYear()`. Same defensive math (null/invalid createdAt
+// → "unknown" bucket; excluded when ?from / ?to is set, kept otherwise
+// so the count surface stays accurate), same orderBy semantics, same
+// active-vs-archived split as the by-month + by-quarter aggregators.
+//
+// Distinct from /suppliers/:id/payables/yearly (slice 22) which is the
+// per-supplier yearly payables rollup keyed by paidAt. THIS surface is
+// tenant-wide onboarded-count keyed by TravelSupplier.createdAt.
+//
+// PRD anchors:
+//   - §3 — tenant-wide supplier analytics (annual trend tile for the
+//          supplier-master dashboard; multi-year overview picker)
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY bounds; invalid →
+//                     400 INVALID_YEAR_FORMAT
+//   - ?orderBy      — default year:asc; accepts year:{asc|desc},
+//                     count:{asc|desc}, activeCount:{asc|desc};
+//                     unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 10 / 0; limit caps at 30 (years are
+//                       coarser than quarters, so a smaller cap suffices)
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' suppliers in the rollup. Same gate as
+//     /suppliers/by-month + /suppliers/by-quarter — TravelSupplier
+//     .subBrand is NON-nullable in the schema, so we do NOT add a
+//     `{ subBrand: null }` OR clause. Empty access set → forces
+//     `subBrand: "__none__"` so the response stays a clean zero-rollup
+//     envelope.
+//   - JS-side aggregation over a light findMany projection
+//     ({ isActive, createdAt }) — same rationale as the siblings.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so
+//     the count surface stays accurate. Excluded when ?from / ?to is
+//     set (no comparable year token); included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter —
+//     same posture as the siblings.
+//
+// No audit row written — read-only meta surface; matches /suppliers/stats
+// + /suppliers/by-month + /suppliers/by-quarter posture. USER-readable:
+// anodyne (counts + year tokens).
+//
+// Express route ordering: literal-path /by-year MUST be declared BEFORE
+// the /:id family or `:id="by-year"` would 400 INVALID_ID before
+// reaching this handler. Same convention as /suppliers/by-quarter,
+// /suppliers/by-month, /suppliers/stats, /suppliers/search.
+// ============================================================================
+router.get(
+  "/suppliers/by-year",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+      // YYYY validation. Match exactly 4 digits.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "count:asc",
+        "count:desc",
+        "activeCount:asc",
+        "activeCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors slice 24
+      // /suppliers/by-month + slice 25 /suppliers/by-quarter posture.
+      // TravelSupplier.subBrand is NON-nullable, so we use a single
+      // `subBrand: { in: [...] }` (no `{ subBrand: null }` OR clause).
+      // Empty allowed set returns the zero-rollup envelope.
+      const where = { tenantId: req.travelTenant.id };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          where.subBrand = { in: [...allowed] };
+        } else {
+          where.subBrand = "__none__";
+        }
+      }
+
+      // Light projection — isActive + createdAt is enough for the bucket
+      // totals.
+      const rows = await prisma.travelSupplier.findMany({
+        where,
+        select: { isActive: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-year. Map "YYYY" → { count, activeCount,
+      // archivedCount }. Null/invalid createdAt rows land in "unknown".
+      const byYear = new Map();
+      for (const r of rows) {
+        let yearKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let bucket = byYear.get(yearKey);
+        if (!bucket) {
+          bucket = {
+            year: yearKey,
+            count: 0,
+            activeCount: 0,
+            archivedCount: 0,
+          };
+          byYear.set(yearKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.isActive) bucket.activeCount += 1;
+        else bucket.archivedCount += 1;
+      }
+
+      let years = [...byYear.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. YYYY sorts lexicographically the same
+      // as chronologically (4-digit zero-padded).
+      if (fromRaw !== null) {
+        years = years.filter(
+          (r) => r.year !== "unknown" && r.year >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        years = years.filter(
+          (r) => r.year !== "unknown" && r.year <= toRaw,
+        );
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY (also chronological
+      // since 4-digit zero-padded). "unknown" sorts last in asc / first
+      // in desc (lexicographically > "9999") — acceptable for a defensive
+      // fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalYears = years.length;
+      const grandCount = years.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
+      const grandActiveCount = years.reduce(
+        (acc, r) => acc + (Number(r.activeCount) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as siblings.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        years: paged,
+        totalYears,
+        grandCount,
+        grandActiveCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute yearly rollup" });
+    }
+  },
+);
+
+// ============================================================================
 // GET /api/travel/suppliers/:id/credentials — per-supplier portal-logins view
 // (Arc 2 #903 slice 13 — PRD_TRAVEL_SUPPLIER_MASTER AC-6.8 "Supplier Portal
 // Logins" sub-tab under the SupplierMaster detail page).

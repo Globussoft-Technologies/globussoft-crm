@@ -172,6 +172,7 @@ model Tenant {
   travelInvoices           TravelInvoice[]
   travelInvoiceLines       TravelInvoiceLine[]
   travelSuppliers          TravelSupplier[]
+  travelSupplierPayables   TravelSupplierPayable[]
   // TMC curriculum→destination mapping (PRD_TMC_CURRICULUM_MAPPING PC-1
   // RESOLVED 2026-05-24). 100-200 starter rows seeded by GS; TMC academic
   // team validates + extends over 6-week window.
@@ -4986,8 +4987,8 @@ model TravelInvoiceLine {
 }
 
 model TravelSupplier {
-  id                 Int      @id @default(autoincrement())
-  tenantId           Int      @default(1)
+  id                 Int                     @id @default(autoincrement())
+  tenantId           Int                     @default(1)
   subBrand           String
   name               String
   contactPerson      String?
@@ -4996,8 +4997,8 @@ model TravelSupplier {
   gstin              String?
   addressLine        String?
   // hotel | flight | transport | visa-consul | other
-  supplierCategory   String   @default("other")
-  isActive           Boolean  @default(true)
+  supplierCategory   String                  @default("other")
+  isActive           Boolean                 @default(true)
   // PRD_TRAVEL_SUPPLIER_MASTER slice 1 (#903) — payment terms + credit tracking.
   // All NULLABLE — additive safe migration (no bless marker needed).
   // paymentTermsDays: free-form NET-N day count (e.g. 30 for NET-30, 45 for NET-45).
@@ -5007,17 +5008,51 @@ model TravelSupplier {
   // primaryContactRole: e.g. "Accounts payable" | "Sales rep" — distinct from contactPerson name.
   // notes:            unstructured operator notes blob.
   paymentTermsDays   Int?
-  creditLimit        Decimal? @db.Decimal(15, 2)
-  creditCurrency     String?  @default("INR")
+  creditLimit        Decimal?                @db.Decimal(15, 2)
+  creditCurrency     String?                 @default("INR")
   taxRegimeCode      String?
   primaryContactRole String?
-  notes              String?  @db.Text
-  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  notes              String?                 @db.Text
+  tenant             Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payables           TravelSupplierPayable[]
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, supplierCategory])
+}
+
+// PRD_TRAVEL_BILLING UC-2.3 — supplier-payable ledger.
+// Tracks A/P (accounts payable) entries: what we owe each supplier.
+// Status flow: pending → scheduled → paid (or cancelled).
+// Each row is a single payable obligation (one PO, one supplier).
+//
+// Slice 3 of #903 (Supplier Master). All NULLABLE / additive — new model,
+// no migration risk. Status enum enforced at the route layer
+// (pending | scheduled | paid | cancelled); status='paid' auto-sets
+// paidAt=now() if not already set. Sub-brand isolation is inherited via
+// the parent TravelSupplier — every payable is scoped through its
+// supplier's subBrand + tenantId.
+model TravelSupplierPayable {
+  id          Int            @id @default(autoincrement())
+  tenantId    Int            @default(1)
+  supplierId  Int
+  poNumber    String? // free-form purchase-order or booking reference
+  description String // "50 PNRs Apr 2026" / "Hotel block 25-28 May" etc.
+  amount      Decimal        @db.Decimal(15, 2)
+  currency    String         @default("INR")
+  dueDate     DateTime?
+  status      String         @default("pending") // pending | scheduled | paid | cancelled
+  paidAt      DateTime?
+  notes       String?        @db.Text
+  supplier    TravelSupplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([tenantId, supplierId])
+  @@index([tenantId, supplierId, status])
+  @@index([tenantId, dueDate])
 }
 
 // ── Per-sub-brand brand kit (PRD_TRAVEL_PER_SUBBRAND_BRANDING DD-5.2 [RESOLVED 2026-05-24]) ──

@@ -739,4 +739,320 @@ router.delete(
   },
 );
 
+// ─── Supplier-payable ledger (PRD_TRAVEL_BILLING UC-2.3 — #903 slice 3) ─
+//
+// CRUD scaffold for the A/P ledger. Each row tracks one obligation we owe
+// to a single supplier (one PO / one booking reference).
+//
+// Status flow:  pending → scheduled → paid       (happy path)
+//               pending → cancelled              (operator abort)
+//               scheduled → cancelled            (operator abort)
+//               * → paid                         (status='paid' auto-sets
+//                                                  paidAt=now() if absent)
+//
+// Sub-brand isolation: inherited via the PARENT TravelSupplier — every
+// list / create / update / delete first loads the parent and runs it
+// through canAccessSubBrand(). Cross-tenant + sub-brand-denied surface as
+// the parent's SUPPLIER_NOT_FOUND / SUB_BRAND_DENIED respectively.
+//
+// Error codes used by this block (in addition to the suppliers block):
+//   INVALID_ID, SUPPLIER_NOT_FOUND, PAYABLE_NOT_FOUND, SUB_BRAND_DENIED,
+//   MISSING_FIELDS, INVALID_AMOUNT, INVALID_STATUS, INVALID_DUE_DATE,
+//   EMPTY_BODY.
+
+const VALID_PAYABLE_STATUSES = ["pending", "scheduled", "paid", "cancelled"];
+
+function assertValidPayableStatus(s) {
+  if (s == null) return;
+  if (!VALID_PAYABLE_STATUSES.includes(s)) {
+    const err = new Error(`status must be one of: ${VALID_PAYABLE_STATUSES.join(", ")}`);
+    err.status = 400;
+    err.code = "INVALID_STATUS";
+    throw err;
+  }
+}
+
+function assertValidPayableAmount(a) {
+  if (a == null) return;
+  // Prisma Decimal accepts string or number; validate "finite, >= 0".
+  const v = typeof a === "number" ? a : Number(a);
+  if (!Number.isFinite(v) || v < 0) {
+    const err = new Error("amount must be a non-negative number");
+    err.status = 400;
+    err.code = "INVALID_AMOUNT";
+    throw err;
+  }
+}
+
+function parseDueDateOrThrow(d) {
+  if (d == null || d === "") return null;
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) {
+    const err = new Error("dueDate must be a valid ISO date / parseable date string");
+    err.status = 400;
+    err.code = "INVALID_DUE_DATE";
+    throw err;
+  }
+  return dt;
+}
+
+// Helper: load the parent supplier + enforce tenant + sub-brand access.
+// Returns the supplier row on success; sends a response + returns null on failure.
+async function loadParentSupplier(req, res) {
+  const supplierId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(supplierId)) {
+    res.status(400).json({ error: "supplier id must be a number", code: "INVALID_ID" });
+    return null;
+  }
+  const supplier = await prisma.travelSupplier.findFirst({
+    where: { id: supplierId, tenantId: req.travelTenant.id },
+  });
+  if (!supplier) {
+    res.status(404).json({ error: "Supplier not found", code: "SUPPLIER_NOT_FOUND" });
+    return null;
+  }
+  const allowed = await getSubBrandAccessSet(req.user.userId);
+  if (!canAccessSubBrand(allowed, supplier.subBrand)) {
+    res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    return null;
+  }
+  return supplier;
+}
+
+// GET /api/travel/suppliers/:id/payables — list payables for one supplier.
+// Optional ?status=pending|scheduled|paid|cancelled filter.
+router.get(
+  "/suppliers/:id/payables",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const where = { tenantId: req.travelTenant.id, supplierId: supplier.id };
+      if (req.query.status) {
+        assertValidPayableStatus(String(req.query.status));
+        where.status = String(req.query.status);
+      }
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+      const skip = parseInt(req.query.offset, 10) || 0;
+
+      const [payables, total] = await Promise.all([
+        prisma.travelSupplierPayable.findMany({
+          where,
+          orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+          take,
+          skip,
+        }),
+        prisma.travelSupplierPayable.count({ where }),
+      ]);
+      res.json({ payables, total, limit: take, offset: skip });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] list payables error:", e.message);
+      res.status(500).json({ error: "Failed to list payables" });
+    }
+  },
+);
+
+// POST /api/travel/suppliers/:id/payables — ADMIN/MANAGER only.
+// Required: description, amount. Optional: poNumber, currency, dueDate, notes, status.
+router.post(
+  "/suppliers/:id/payables",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const {
+        description, amount, poNumber, currency, dueDate, notes, status,
+      } = req.body || {};
+
+      if (!description || !String(description).trim() || amount == null) {
+        return res.status(400).json({
+          error: "description, amount required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      assertValidPayableAmount(amount);
+      assertValidPayableStatus(status);
+      const parsedDueDate = parseDueDateOrThrow(dueDate);
+
+      const created = await prisma.travelSupplierPayable.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+          description: String(description).trim(),
+          amount: String(amount),
+          poNumber: poNumber ? String(poNumber) : null,
+          currency: currency ? String(currency) : undefined,
+          dueDate: parsedDueDate,
+          notes: notes ? String(notes) : null,
+          status: status || undefined,
+        },
+      });
+
+      await writeAudit(
+        "TravelSupplierPayable",
+        "CREATE",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { supplierId: supplier.id, amount: String(amount), status: created.status },
+      );
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] create payable error:", e.message);
+      res.status(500).json({ error: "Failed to create payable" });
+    }
+  },
+);
+
+// PUT /api/travel/suppliers/:id/payables/:payableId — ADMIN/MANAGER only.
+// Partial update. Status='paid' auto-sets paidAt=now() if not already set.
+router.put(
+  "/suppliers/:id/payables/:payableId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const payableId = parseInt(req.params.payableId, 10);
+      if (!Number.isFinite(payableId)) {
+        return res.status(400).json({ error: "payable id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.travelSupplierPayable.findFirst({
+        where: {
+          id: payableId,
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+        },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Payable not found", code: "PAYABLE_NOT_FOUND" });
+      }
+
+      const data = {};
+      const {
+        description, amount, poNumber, currency, dueDate, notes, status, paidAt,
+      } = req.body || {};
+
+      if (description !== undefined) {
+        if (!String(description).trim()) {
+          return res.status(400).json({
+            error: "description must be non-empty",
+            code: "MISSING_FIELDS",
+          });
+        }
+        data.description = String(description).trim();
+      }
+      if (amount !== undefined) {
+        assertValidPayableAmount(amount);
+        data.amount = String(amount);
+      }
+      if (poNumber !== undefined) data.poNumber = poNumber ? String(poNumber) : null;
+      if (currency !== undefined) data.currency = currency ? String(currency) : "INR";
+      if (dueDate !== undefined) {
+        data.dueDate = parseDueDateOrThrow(dueDate);
+      }
+      if (notes !== undefined) data.notes = notes ? String(notes) : null;
+      if (status !== undefined) {
+        assertValidPayableStatus(status);
+        data.status = status;
+        // Auto-set paidAt when transitioning to 'paid' (and the caller
+        // didn't supply one). Operator can still override with explicit paidAt.
+        if (status === "paid" && paidAt === undefined && !existing.paidAt) {
+          data.paidAt = new Date();
+        }
+      }
+      if (paidAt !== undefined) {
+        data.paidAt = paidAt ? parseDueDateOrThrow(paidAt) : null;
+      }
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+
+      const updated = await prisma.travelSupplierPayable.update({
+        where: { id: payableId },
+        data,
+      });
+
+      await writeAudit(
+        "TravelSupplierPayable",
+        "UPDATE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { supplierId: supplier.id, fields: Object.keys(data) },
+      );
+
+      res.json(updated);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] update payable error:", e.message);
+      res.status(500).json({ error: "Failed to update payable" });
+    }
+  },
+);
+
+// DELETE /api/travel/suppliers/:id/payables/:payableId — ADMIN/MANAGER only.
+// Hard delete (no soft-delete column on the model — payables that were
+// cancelled but the operator wants to keep audit history can flip
+// status='cancelled' instead of issuing DELETE).
+router.delete(
+  "/suppliers/:id/payables/:payableId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const payableId = parseInt(req.params.payableId, 10);
+      if (!Number.isFinite(payableId)) {
+        return res.status(400).json({ error: "payable id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.travelSupplierPayable.findFirst({
+        where: {
+          id: payableId,
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+        },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Payable not found", code: "PAYABLE_NOT_FOUND" });
+      }
+
+      await prisma.travelSupplierPayable.delete({ where: { id: payableId } });
+
+      await writeAudit(
+        "TravelSupplierPayable",
+        "DELETE",
+        payableId,
+        req.user.userId,
+        req.travelTenant.id,
+        { supplierId: supplier.id, amount: String(existing.amount), status: existing.status },
+      );
+
+      res.status(204).end();
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] delete payable error:", e.message);
+      res.status(500).json({ error: "Failed to delete payable" });
+    }
+  },
+);
+
 module.exports = router;

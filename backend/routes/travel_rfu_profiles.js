@@ -323,6 +323,185 @@ router.get(
   },
 );
 
+// ─── By-month — tenant-wide RFU profile monthly rollup ──────────────
+//
+// GET /api/travel/rfu-profiles/by-month
+// (PRD_TRAVEL_RFU §3 — operator-facing dashboard trend chart).
+//
+// USER-readable meta endpoint (within RFU-gated callers). Returns one
+// row per UTC YYYY-MM bucket for the tenant-scoped RfuLeadProfile
+// population so the operator dashboard can render a "pilgrims onboarded
+// over time" trend chart without N round-trips per month.
+//
+// Mirrors #903 slice 24 (/suppliers/by-month) + #908 slice 21
+// (/flyer-templates/by-month) + #900 slice 16 (/quotes/by-month) — same
+// UTC YYYY-MM bucketing template, same defensive math (null/invalid
+// createdAt → "unknown" bucket; excluded when ?from / ?to is set, kept
+// otherwise so count surface stays accurate), same orderBy semantics.
+//
+// Distinct from /rfu-profiles/stats (sibling): /stats is a single
+// point-in-time KPI tile (total + byProductTier + byTravelStyle +
+// withPassport + expiringPassports + lastUpdatedAt). /by-month is the
+// per-month time series across the same population — the two endpoints
+// power the RFU pilgrim library page header (KPI strip + trend chart).
+//
+// Sub-brand handling: RFU is a SINGLE-SUB-BRAND surface
+// (requireRfuAccess gates everything in this file). RfuLeadProfile has
+// NO subBrand column (the model is RFU-exclusive by design — see
+// schema.prisma:4752). The where-clause therefore needs NO additional
+// subBrand narrowing — the middleware already gates access. No
+// bySubBrand bucket emitted; matches /rfu-profiles/stats posture.
+//
+// PRD anchors:
+//   - §3 — tenant-wide RFU analytics (trend chart for the RFU pilgrim
+//          dashboard; per-month drill-down picker)
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//                     400 INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// Behaviour:
+//   - JS-side aggregation over a light findMany projection
+//     ({ createdAt }) — the population is bounded by tenant scale (low
+//     thousands), and the mock-friendly JS aggregation matches the
+//     rationale on /suppliers/by-month + /rfu-profiles/stats. No groupBy
+//     for marginal efficiency.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so
+//     the count surface stays accurate. Excluded when ?from / ?to is
+//     set (no comparable month token); included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter —
+//     same posture as /suppliers/by-month.
+//
+// No audit row written — read-only meta surface; matches
+// /rfu-profiles/stats and /suppliers/by-month posture. USER-readable
+// (within RFU-gated callers): anodyne (counts + month-string tokens).
+//
+// Express route ordering: literal-path /by-month MUST be declared
+// BEFORE the /:id family (line 411+) or `:id="by-month"` would 400
+// INVALID_ID before reaching this handler. Same convention as
+// /rfu-profiles/stats, /rfu-profiles/check-duplicate,
+// /rfu-profiles/by-contact/:contactId.
+router.get(
+  "/rfu-profiles/by-month",
+  verifyToken,
+  requireTravelTenant,
+  requireRfuAccess,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors /suppliers/by-month.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Tenant-scoped where. NO sub-brand narrowing —
+      // requireRfuAccess already gated this caller, and
+      // RfuLeadProfile has no subBrand column.
+      const where = { tenantId: req.travelTenant.id };
+
+      // Light projection — createdAt is all we need for the bucket
+      // totals. No JSON columns pulled.
+      const rows = await prisma.rfuLeadProfile.findMany({
+        where,
+        select: { createdAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { month, count }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const r of rows) {
+        let monthKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = { month: monthKey, count: 0 };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. Mirrors /suppliers/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also
+      // chronological). "unknown" sorts last in asc / first in desc
+      // (lexicographically > "9999-12") — acceptable for a defensive
+      // fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = months.length;
+
+      // Pagination AFTER aggregation + sort + filter.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      console.error("[travel-rfu] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
+
 // ─── Phase 2 — preflight duplicate check (PRD §4.5) ──────────────────
 //
 // The Phase 2 "full pop-up flow with preferences" needs a check-without-

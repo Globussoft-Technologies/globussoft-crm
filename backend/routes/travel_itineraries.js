@@ -6,6 +6,7 @@
 //   GET    /api/travel/itineraries/:id                      — fetch one with items
 //   PATCH  /api/travel/itineraries/:id                      — amend top-level fields (not items)
 //   POST   /api/travel/itineraries/:id/items                — append a polymorphic item
+//   POST   /api/travel/itineraries/:id/items/bulk-reorder   — atomic bulk reposition (#907 slice 8)
 //   PATCH  /api/travel/itineraries/:id/items/:itemId        — amend an item
 //   DELETE /api/travel/itineraries/:id/items/:itemId        — remove an item
 //   POST   /api/travel/itineraries/:id/draft/regen          — regen LLM-drafted summary (PRD §4.3 + §9.1)
@@ -364,6 +365,157 @@ async function loadItineraryWithGuard(req) {
   }
   return itin;
 }
+
+// POST /api/travel/itineraries/:id/items/bulk-reorder
+//
+// #907 slice 8 — atomic bulk reposition of multiple ItineraryItem rows
+// in a single call. Visual editor (PRD §3.3) drags items across days; a
+// single drag operation can touch up to N items (renumber positions
+// within a day, optionally move across day-offsets). Without this
+// primitive, the editor would have to issue N PATCH calls — non-atomic
+// (partial-failure leaves items in inconsistent order) and chatty.
+//
+// Body shape:
+//   { updates: [ { itemId, position, dayOffset? }, ... ] }
+//
+// Semantics:
+//   - `position`     required per update (integer ≥ 0). Final position
+//                    after the bulk write — collisions are the operator's
+//                    responsibility; route does not auto-densify.
+//   - `dayOffset`    optional per update (non-negative integer). When
+//                    present, merges into the item's detailsJson under
+//                    key `dayOffset` (slice-2 convention). All other
+//                    detailsJson keys preserved; stale `dayNumber` key
+//                    removed to avoid dual-source confusion (mirrors the
+//                    clone-day endpoint's normalisation).
+//   - Atomic via prisma.$transaction — all updates land together or none
+//     do.
+//   - Hard cap of 200 updates per call (runaway-payload guard).
+//   - All itemIds must belong to the target itinerary; cross-itinerary
+//     ids → 400 ITEM_NOT_IN_ITINERARY with the offending id list.
+//   - Duplicate itemIds in the updates list → 400 DUPLICATE_ITEM_ID.
+//
+// Response: { updatedCount, items: [...] } where items reflect post-
+// update state sorted by position asc — convenient for the editor to
+// re-render without a follow-up GET.
+//
+// Sub-paths BEFORE /:id per Express ordering convention.
+router.post(
+  "/itineraries/:id/items/bulk-reorder",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const { updates } = req.body || {};
+
+      if (!Array.isArray(updates) || updates.length === 0) {
+        return res.status(400).json({
+          error: "updates must be a non-empty array",
+          code: "EMPTY_UPDATES",
+        });
+      }
+      if (updates.length > 200) {
+        return res.status(400).json({
+          error: "updates capped at 200 per call",
+          code: "TOO_MANY_UPDATES",
+        });
+      }
+
+      // Validate each update + detect dupes.
+      const itemIds = [];
+      const seenIds = new Set();
+      for (const upd of updates) {
+        const itemId = parseInt(upd?.itemId, 10);
+        if (!Number.isFinite(itemId)) {
+          return res.status(400).json({
+            error: "each update needs a numeric itemId",
+            code: "INVALID_ITEM_ID",
+          });
+        }
+        if (seenIds.has(itemId)) {
+          return res.status(400).json({
+            error: `itemId ${itemId} appears more than once in updates`,
+            code: "DUPLICATE_ITEM_ID",
+            itemId,
+          });
+        }
+        seenIds.add(itemId);
+        const pos = Number(upd.position);
+        if (!Number.isInteger(pos) || pos < 0) {
+          return res.status(400).json({
+            error: "each update needs an integer position ≥ 0",
+            code: "INVALID_POSITION",
+            itemId,
+          });
+        }
+        if (upd.dayOffset !== undefined) {
+          const d = Number(upd.dayOffset);
+          if (!Number.isInteger(d) || d < 0) {
+            return res.status(400).json({
+              error: "dayOffset must be a non-negative integer when supplied",
+              code: "INVALID_DAY_OFFSET",
+              itemId,
+            });
+          }
+        }
+        itemIds.push(itemId);
+      }
+
+      // Fetch current rows; verify all belong to target itinerary.
+      const existing = await prisma.itineraryItem.findMany({
+        where: { id: { in: itemIds }, itineraryId: itin.id },
+        select: { id: true, detailsJson: true },
+      });
+      if (existing.length !== itemIds.length) {
+        const foundIds = new Set(existing.map((r) => r.id));
+        const missing = itemIds.filter((id) => !foundIds.has(id));
+        return res.status(400).json({
+          error: "one or more itemIds do not belong to this itinerary",
+          code: "ITEM_NOT_IN_ITINERARY",
+          missing,
+        });
+      }
+
+      // Map current detailsJson by itemId for the dayOffset merge.
+      const existingById = new Map(existing.map((r) => [r.id, r]));
+
+      // Build prisma update ops; run as a single transaction.
+      const ops = updates.map((upd) => {
+        const itemId = parseInt(upd.itemId, 10);
+        const data = { position: Number(upd.position) };
+        if (upd.dayOffset !== undefined) {
+          // Merge into detailsJson; preserve other keys; drop stale dayNumber.
+          let details = {};
+          try {
+            const raw = existingById.get(itemId)?.detailsJson;
+            details = raw ? JSON.parse(raw) : {};
+          } catch {
+            details = {};
+          }
+          details.dayOffset = Number(upd.dayOffset);
+          delete details.dayNumber;
+          data.detailsJson = JSON.stringify(details);
+        }
+        return prisma.itineraryItem.update({ where: { id: itemId }, data });
+      });
+
+      await prisma.$transaction(ops);
+
+      // Re-fetch post-update so callers get the canonical row ordering.
+      const refreshed = await prisma.itineraryItem.findMany({
+        where: { id: { in: itemIds }, itineraryId: itin.id },
+        orderBy: { position: "asc" },
+      });
+
+      res.json({ updatedCount: refreshed.length, items: refreshed });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] bulk-reorder error:", e.message);
+      res.status(500).json({ error: "Failed to bulk-reorder items" });
+    }
+  },
+);
 
 // POST /api/travel/itineraries/:id/items
 router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (req, res) => {

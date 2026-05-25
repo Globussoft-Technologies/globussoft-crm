@@ -95,6 +95,7 @@ const {
   validateExportRequest,
   buildOutputCacheKey,
 } = require("../lib/flyerExport");
+const { renderFlyerPdf } = require("../lib/flyerPdfRender");
 
 /**
  * Parse a `@db.Text` column expected to contain JSON. Accepts:
@@ -662,26 +663,28 @@ router.post(
 
 // POST /api/travel/flyer-templates/:id/export — ADMIN/MANAGER only.
 //
-// PRD_TRAVEL_MARKETING_FLYER §3 (AC-6.3 export contract), slice 10.
+// PRD_TRAVEL_MARKETING_FLYER §3 (AC-6.3 / AC-6.4 export contract).
 //
-// Validates the export envelope via lib/flyerExport.validateExportRequest
-// (slice 8 commit 2390069b — `{ format: 'pdf'|'png', aspect }`); computes
-// the deterministic content-addressed cache key via
-// lib/flyerExport.buildOutputCacheKey({ format, aspect, hash }) where
-// `hash` is hashTemplateShape over the source row's parsed JSON columns.
+// Slice 10 validation + cache-key plumbing (commit f7d8311d):
+//   - Validates the export envelope via lib/flyerExport.validateExportRequest
+//     (`{ format: 'pdf'|'png', aspect }`).
+//   - Computes the deterministic content-addressed cache key via
+//     lib/flyerExport.buildOutputCacheKey({ format, aspect, hash }) where
+//     `hash` is hashTemplateShape over the source row's parsed JSON columns.
 //
-// THIS SLICE: validation + cache-key plumbing only. The actual rendering
-// step (Puppeteer for PNG, pdfkit-extended for PDF) is STUBBED — the
-// route returns 202 ACCEPTED with a queued-state envelope:
-//
-//   { format, aspect, hash, cacheKey, status: 'queued', queuedAt }
-//
-// A subsequent slice swaps the STUB block for the real renderer + a
-// `url` field on the response (cache hit returns 200 + `status: 'ready'`
-// + the cached URL; cache miss returns 202 + queued + a job id the
-// frontend polls). Pinning the validation + cache-key contract here
-// means the future renderer slot-in is a one-file diff: replace the
-// STUB block with the real call, add `url` to the response envelope.
+// Slice 11 PDF rendering (this commit):
+//   - For format='pdf' AND ?inline=1, calls lib/flyerPdfRender.renderFlyerPdf
+//     to materialise the template into a real pdfkit Buffer and streams it
+//     back with `Content-Type: application/pdf` + 200 OK. No file
+//     persistence — the inline-buffer path is the smaller slice that
+//     unblocks operators previewing PDFs while file-persistence + the
+//     cache plumbing land in a later slice.
+//   - For format='pdf' WITHOUT ?inline=1, stays on the slice-10 contract
+//     (202 queued + cacheKey) so the existing async polling surface keeps
+//     working untouched. Future slice swaps this for a real cache-lookup
+//     + a `url` field on cache hit.
+//   - For format='png', stays fully STUBBED (202 queued) — Puppeteer
+//     infrastructure is a separate blocker.
 //
 // Sub-brand isolation: the source row's sub-brand gate is enforced
 // before any computation runs (cross-sub-brand operators cannot enqueue
@@ -751,10 +754,45 @@ router.post(
       const hash = hashTemplateShape({ palette, layout, assets });
       const cacheKey = buildOutputCacheKey({ format, aspect, hash });
 
-      // STUB: Puppeteer (PNG) + pdfkit-extended (PDF) rendering pending
-      // headless-render infrastructure. Next slice swaps this block for
-      // the real renderer + a `url` field on the response envelope (and
-      // promotes status 'queued' → 'ready' when the cache hits).
+      // Slice 11 inline-PDF path: when caller passes `?inline=1` AND
+      // format='pdf', synchronously render the PDF via lib/flyerPdfRender
+      // and stream the Buffer back as `application/pdf` with status 200.
+      // PNG stays STUBBED (Puppeteer infra pending).
+      const wantsInline =
+        req.query &&
+        (req.query.inline === "1" ||
+          req.query.inline === 1 ||
+          req.query.inline === "true");
+
+      if (wantsInline && format === "pdf") {
+        const buffer = await renderFlyerPdf(
+          { palette, layout, assets },
+          { aspect, hash },
+        );
+
+        await writeAudit(
+          "TravelFlyerTemplate",
+          "TRAVEL_FLYER_TEMPLATE_EXPORTED",
+          source.id,
+          req.user.userId,
+          req.travelTenant.id,
+          { format, aspect, cacheKey, inline: true, bytes: buffer.length },
+        );
+
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `inline; filename="flyer-${source.id}-${aspect}.pdf"`,
+        );
+        res.setHeader("X-Flyer-Cache-Key", cacheKey);
+        res.setHeader("X-Flyer-Template-Hash", hash);
+        return res.status(200).send(buffer);
+      }
+
+      // STUB (PNG always, PDF without ?inline=1): rendering pipeline
+      // pending headless-render infrastructure. Returns the slice-10
+      // 202-queued envelope so existing async pollers stay unchanged.
+      // STUB: Puppeteer rendering pending
       const queuedAt = new Date().toISOString();
 
       await writeAudit(

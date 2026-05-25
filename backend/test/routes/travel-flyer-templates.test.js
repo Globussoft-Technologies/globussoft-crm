@@ -1027,6 +1027,92 @@ describe('POST /api/travel/flyer-templates/:id/export (slice 10)', () => {
     expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
   });
 
+  // ── Slice 11: inline-PDF path ──────────────────────────────────
+  // When ?inline=1 + format='pdf', the route synchronously renders the
+  // PDF via lib/flyerPdfRender and streams the Buffer back as
+  // `application/pdf` 200 OK (instead of the slice-10 202 queued
+  // envelope). Cache-key + template-hash surface in custom headers
+  // so the frontend can still index/dedupe on them.
+  test('slice 11: ?inline=1 + pdf returns 200 application/pdf with valid PDF bytes', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export?inline=1')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'pdf', aspect: 'a4' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/pdf/);
+    expect(res.headers['x-flyer-cache-key']).toMatch(/^pdf:a4:[0-9a-f]{64}$/);
+    expect(res.headers['x-flyer-template-hash']).toMatch(/^[0-9a-f]{64}$/);
+    // supertest collects the response body into res.body as a Buffer
+    // when Content-Type is application/pdf.
+    expect(Buffer.isBuffer(res.body)).toBe(true);
+    expect(res.body.length).toBeGreaterThan(500);
+    // PDF magic bytes %PDF.
+    expect(res.body[0]).toBe(0x25);
+    expect(res.body[1]).toBe(0x50);
+    expect(res.body[2]).toBe(0x44);
+    expect(res.body[3]).toBe(0x46);
+    // Audit row uses the EXPORTED action (vs QUEUED for the STUB path).
+    expect(prisma.auditLog.create).toHaveBeenCalled();
+    const auditArgs = prisma.auditLog.create.mock.calls[0][0];
+    expect(auditArgs.data).toMatchObject({
+      entity: 'TravelFlyerTemplate',
+      action: 'TRAVEL_FLYER_TEMPLATE_EXPORTED',
+      entityId: 21,
+      tenantId: 1,
+    });
+  });
+
+  test('slice 11: ?inline=1 + png stays on the STUB 202-queued contract (Puppeteer pending)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export?inline=1')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'png', aspect: 'square' });
+
+    // PNG is still STUB regardless of inline=1.
+    expect(res.status).toBe(202);
+    expect(res.body.status).toBe('queued');
+    expect(res.body.format).toBe('png');
+  });
+
+  test('slice 11: pdf without ?inline=1 stays on the slice-10 202-queued contract', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'pdf', aspect: 'a4' });
+
+    // Without ?inline=1, PDF stays async/queued — preserves the
+    // slice-10 contract for the future cache-lookup + url-field path.
+    expect(res.status).toBe(202);
+    expect(res.body.status).toBe('queued');
+    expect(res.body.format).toBe('pdf');
+  });
+
+  test('slice 11: ?inline=1 inherits the same INVALID_EXPORT_REQUEST + 404 + 403 gates', async () => {
+    // Mismatched format/aspect still fails the validator (PRE-DB).
+    const r1 = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export?inline=1')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'pdf', aspect: 'square' });
+    expect(r1.status).toBe(400);
+    expect(r1.body.code).toBe('INVALID_EXPORT_REQUEST');
+
+    // Cross-tenant still 404s.
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(null);
+    const r2 = await request(makeApp())
+      .post('/api/travel/flyer-templates/9999/export?inline=1')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'pdf', aspect: 'a4' });
+    expect(r2.status).toBe(404);
+    expect(r2.body.code).toBe('TEMPLATE_NOT_FOUND');
+  });
+
   test('same template + same {format, aspect} produces identical cacheKey across calls (content-addressed)', async () => {
     prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
 

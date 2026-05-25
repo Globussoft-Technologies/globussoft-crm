@@ -543,3 +543,345 @@ describe('Cross-cutting — every endpoint forwards req.user.tenantId to prisma'
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// EXTENDED COVERAGE — branches the original 15 cases missed.
+// Targets c8 12.85% line baseline: partial date filters, unknown stages,
+// missing-expectedClose terminal deals, deal-outside-trend-window branch,
+// error envelopes on every endpoint, and tenant pipelineStages that
+// already include "won" (no-append branch).
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('GET /stages — partial date filters + edge branches', () => {
+  test('?from alone yields where.createdAt with gte only (no lte)', async () => {
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/funnel/stages?from=2026-01-01');
+
+    expect(prisma.deal.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, createdAt: { gte: new Date('2026-01-01') } },
+    });
+  });
+
+  test('?to alone yields where.createdAt with lte only (no gte)', async () => {
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/funnel/stages?to=2026-06-30');
+
+    expect(prisma.deal.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, createdAt: { lte: new Date('2026-06-30') } },
+    });
+  });
+
+  test('no ?from + no ?to → no createdAt clause at all (buildDateFilter returns undefined)', async () => {
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/funnel/stages');
+
+    // No createdAt key in the where clause
+    expect(prisma.deal.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+    });
+  });
+
+  test('deals with unknown stage names are ignored (idx === -1 continue branch)', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'bogus-stage', amount: 999, createdAt: new Date(), expectedClose: null, tenantId: 1 },
+      { id: 2, stage: 'qualified',   amount: 999, createdAt: new Date(), expectedClose: null, tenantId: 1 },
+      { id: 3, stage: 'lead',        amount: 100, createdAt: new Date(), expectedClose: null, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/funnel/stages');
+
+    expect(res.status).toBe(200);
+    const byName = Object.fromEntries(res.body.stages.map((s) => [s.name, s]));
+    // Only the 'lead' deal counts; bogus + qualified silently dropped
+    expect(byName.lead.current).toBe(1);
+    expect(byName.lead.totalEntered).toBe(1);
+    expect(byName.lead.totalValue).toBe(100);
+  });
+
+  test('conversionToNext is null when current stage totalEntered === 0 (empty funnel division-by-zero guard)', async () => {
+    // Only proposal-stage deals — lead + contacted have totalEntered === 0
+    // Wait: ever-entered logic means a proposal deal bumps lead + contacted too.
+    // To exercise totalEntered===0, use ONLY a lost deal scoped to never-non-terminal
+    // OR: empty deal list — all buckets have totalEntered=0, so every conversionToNext=null.
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/funnel/stages');
+
+    expect(res.status).toBe(200);
+    // Every stage has totalEntered=0 → conversionToNext should be null for lead/contacted/proposal
+    // and null for won (no next bucket).
+    expect(res.body.stages.every((s) => s.conversionToNext === null)).toBe(true);
+    expect(res.body.stages.every((s) => s.avgDays === 0)).toBe(true);
+    expect(res.body.stages.every((s) => s.totalValue === 0)).toBe(true);
+  });
+
+  test('tenant pipelineStages already containing "won" do NOT get a second appended terminal bucket', async () => {
+    prisma.pipelineStage.findMany.mockResolvedValue([
+      { id: 1, name: 'Lead',     position: 0, tenantId: 1 },
+      { id: 2, name: 'Proposal', position: 1, tenantId: 1 },
+      { id: 3, name: 'Won',      position: 2, tenantId: 1 }, // already terminal
+    ]);
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/funnel/stages');
+
+    expect(res.status).toBe(200);
+    // 3 tenant stages — no extra "won" appended (the existing one stays singular)
+    expect(res.body.stages).toHaveLength(3);
+    expect(res.body.stages.map((s) => s.name)).toEqual(['lead', 'proposal', 'won']);
+    // No 'won' appears twice
+    const wonCount = res.body.stages.filter((s) => s.name === 'won').length;
+    expect(wonCount).toBe(1);
+  });
+
+  test('deals with amount=null treat as 0 in totalValue (Number(null) === 0)', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'lead', amount: null, createdAt: new Date(), expectedClose: null, tenantId: 1 },
+      { id: 2, stage: 'lead', amount: undefined, createdAt: new Date(), expectedClose: null, tenantId: 1 },
+      { id: 3, stage: 'lead', amount: 250, createdAt: new Date(), expectedClose: null, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/funnel/stages');
+
+    expect(res.status).toBe(200);
+    const lead = res.body.stages.find((s) => s.name === 'lead');
+    // Number(null) → 0, Number(undefined) → NaN → `|| 0` → 0; 250 stays
+    expect(lead.totalValue).toBe(250);
+    expect(lead.current).toBe(3);
+  });
+
+  test('500 error envelope when prisma.deal.findMany throws', async () => {
+    prisma.deal.findMany.mockRejectedValue(new Error('db boom'));
+
+    const res = await request(makeApp()).get('/api/funnel/stages');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'db boom' });
+  });
+});
+
+describe('GET /conversion-by-source — extended branches', () => {
+  test('?from + ?to date-range flows into where.createdAt', async () => {
+    prisma.contact.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/funnel/conversion-by-source?from=2026-01-01&to=2026-12-31');
+
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 1,
+        createdAt: { gte: new Date('2026-01-01'), lte: new Date('2026-12-31') },
+      },
+      select: { id: true, source: true, status: true },
+    });
+  });
+
+  test('case-insensitive customer match: status="CUSTOMER" counts as won', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 1, source: 'Website', status: 'CUSTOMER' },
+      { id: 2, source: 'Website', status: 'Customer' },
+      { id: 3, source: 'Website', status: 'lead' },
+    ]);
+
+    const res = await request(makeApp()).get('/api/funnel/conversion-by-source');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual({
+      source: 'Website',
+      count: 3,
+      won: 2,
+      conversionRate: 66.7,
+    });
+  });
+
+  test('contacts with null status treat as non-customer (won=0)', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 1, source: 'Email', status: null },
+      { id: 2, source: 'Email', status: undefined },
+    ]);
+
+    const res = await request(makeApp()).get('/api/funnel/conversion-by-source');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual({
+      source: 'Email',
+      count: 2,
+      won: 0,
+      conversionRate: 0,
+    });
+  });
+
+  test('500 error envelope when prisma.contact.findMany throws', async () => {
+    prisma.contact.findMany.mockRejectedValue(new Error('contact db boom'));
+
+    const res = await request(makeApp()).get('/api/funnel/conversion-by-source');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'contact db boom' });
+  });
+});
+
+describe('GET /by-rep — extended branches', () => {
+  test('owner with email-only (name null) falls back to email as label', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'won', amount: 1000, ownerId: 20,
+        owner: { id: 20, name: null, email: 'noname@example.com' },
+        createdAt: new Date(), expectedClose: null, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/funnel/by-rep');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual(expect.objectContaining({
+      owner: 'noname@example.com',
+      ownerId: 20,
+      won: 1,
+    }));
+  });
+
+  test('?from + ?to date-range flows into where.createdAt', async () => {
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/funnel/by-rep?from=2026-01-01&to=2026-12-31');
+
+    expect(prisma.deal.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 1,
+        createdAt: { gte: new Date('2026-01-01'), lte: new Date('2026-12-31') },
+      },
+      include: { owner: { select: { id: true, name: true, email: true } } },
+    });
+  });
+
+  test('deal with unknown stage still counts toward total + open (else branch), no stages[] bump', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'bogus', amount: 500, ownerId: 30,
+        owner: { id: 30, name: 'Carla', email: 'c@example.com' },
+        createdAt: new Date(), expectedClose: null, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/funnel/by-rep');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual(expect.objectContaining({
+      owner: 'Carla',
+      total: 1,
+      won: 0, lost: 0,
+      open: 1,        // bogus → not won, not lost → counted as open
+      winRate: 0,
+    }));
+    // stages map has all canonical buckets at 0 (bogus didn't match stageIndex)
+    expect(res.body[0].stages).toEqual({ lead: 0, contacted: 0, proposal: 0, won: 0 });
+  });
+
+  test('500 error envelope when prisma.deal.findMany throws', async () => {
+    prisma.deal.findMany.mockRejectedValue(new Error('rep db boom'));
+
+    const res = await request(makeApp()).get('/api/funnel/by-rep');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'rep db boom' });
+  });
+});
+
+describe('GET /velocity — extended branches', () => {
+  test('terminal-stage deal WITHOUT expectedClose falls through to now (no shortcut)', async () => {
+    const tenDaysAgo = new Date(Date.now() - 10 * DAY_MS);
+    prisma.deal.findMany.mockResolvedValue([
+      // Won but no expectedClose → uses now → ~10 days
+      { id: 1, stage: 'won', amount: 0, createdAt: tenDaysAgo, expectedClose: null, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/funnel/velocity');
+
+    expect(res.status).toBe(200);
+    const byStage = Object.fromEntries(res.body.map((r) => [r.stage, r.avgDaysInStage]));
+    // Won without expectedClose → createdAt → now ≈ 10 days
+    expect(byStage.won).toBeGreaterThan(9.5);
+    expect(byStage.won).toBeLessThan(10.5);
+  });
+
+  test('deal with unknown stage is ignored (buckets.has(stage) === false continue branch)', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'bogus', amount: 0, createdAt: new Date(Date.now() - 50 * DAY_MS),
+        expectedClose: null, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/funnel/velocity');
+
+    expect(res.status).toBe(200);
+    // Every canonical bucket stays at 0
+    for (const row of res.body) {
+      expect(row.avgDaysInStage).toBe(0);
+    }
+  });
+
+  test('empty deals list returns 0 for every stage (no division-by-zero)', async () => {
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/funnel/velocity');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(4);
+    for (const row of res.body) {
+      expect(row.avgDaysInStage).toBe(0);
+    }
+  });
+
+  test('500 error envelope when prisma.deal.findMany throws', async () => {
+    prisma.deal.findMany.mockRejectedValue(new Error('velocity db boom'));
+
+    const res = await request(makeApp()).get('/api/funnel/velocity');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'velocity db boom' });
+  });
+});
+
+describe('GET /trend — extended branches', () => {
+  test('"lost" deal in current month bumps every NON-terminal stage (won stays 0)', async () => {
+    const thisMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 10));
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'lost', amount: 0, createdAt: thisMonth, expectedClose: null, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/funnel/trend?months=1');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toEqual(expect.objectContaining({
+      lead: 1,
+      contacted: 1,
+      proposal: 1,
+      won: 0,        // terminal → lost deals don't bump 'won'
+    }));
+  });
+
+  test('deal at "won" stage bumps every stage including won', async () => {
+    const thisMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 10));
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'won', amount: 0, createdAt: thisMonth, expectedClose: null, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/funnel/trend?months=1');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual(expect.objectContaining({
+      lead: 1,
+      contacted: 1,
+      proposal: 1,
+      won: 1,
+    }));
+  });
+
+  test('500 error envelope when prisma.deal.findMany throws', async () => {
+    prisma.deal.findMany.mockRejectedValue(new Error('trend db boom'));
+
+    const res = await request(makeApp()).get('/api/funnel/trend?months=6');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'trend db boom' });
+  });
+});

@@ -126,6 +126,8 @@ const BookingExpediaSearch = lazy(() =>
 // ships next tick at slice 3). Page is robust to the route's absence —
 // 404 surfaces as empty-state + a "backend not yet deployed" banner.
 const WalletRules = lazy(() => import("./pages/admin/WalletRules"));
+// CSP violations operator-inspect — slice 4 of #917, consumes slice-3 GET /api/csp/violations.
+const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -1206,6 +1208,7 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
+                    <Route path="admin/csp-violations" element={<CSPViolations />} />
                     {/* PRD Gap §1.5 / §1.6 */}
                     <Route
                       path="commission-profiles"

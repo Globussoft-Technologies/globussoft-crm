@@ -13,6 +13,7 @@
 //   PATCH  /api/travel/itineraries/:id/items/:itemId        — amend an item
 //   DELETE /api/travel/itineraries/:id/items/:itemId        — remove an item
 //   POST   /api/travel/itineraries/:id/items/:itemId/duplicate — clone one item in place (#907 slice 12)
+//   POST   /api/travel/itineraries/:id/duplicate            — clone parent + all items (#907 slice 15)
 //   POST   /api/travel/itineraries/:id/draft/regen          — regen LLM-drafted summary (PRD §4.3 + §9.1)
 //
 // Mounted at /api/travel by server.js. Shares the requireTravelTenant
@@ -987,6 +988,147 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-itin] item duplicate error:", e.message);
       res.status(500).json({ error: "Failed to duplicate item" });
+    }
+  },
+);
+
+// POST /api/travel/itineraries/:id/duplicate
+//
+// #907 slice 15 — full-itinerary clone. The slice-12 handler above dups a
+// single ItineraryItem in place; this dups the parent Itinerary row plus
+// every child ItineraryItem in one atomic call. Mirrors the #900 slice 1
+// /quotes/:id/duplicate parent-level pattern (clone parent + clone all
+// line items in a single tenant-scoped transaction).
+//
+// Schema reality (Itinerary model — see prisma/schema.prisma:4348-4400):
+// the model has NO customerName/customerEmail/acceptedAt/rejectedAt/
+// advance_paid_at/fully_paid_at fields (the dispatch spec's field-name
+// list pre-dated the latest schema sweep and was generic). The actual
+// copyable fields are: subBrand, contactId, leadId, destination,
+// startDate, endDate, pricingJson, totalAmount, currency, productTier,
+// draftSummary. The defensive-rename body override targets `destination`
+// (slice 12's `description` analog at the parent level — semantically
+// "rename the clone"). pdfUrl is NOT copied (the clone has no PDF yet),
+// shareToken is reset to null (a clone shouldn't accidentally inherit
+// the source's public-share URL), advancePaidAmount/advancePaidAt/
+// paymentReference are nulled (the clone is a fresh draft, no money
+// recorded yet), parentItineraryId is NOT set (the dup is a separate
+// document, not a version revision — version-chain is the PUT /:id
+// path's job per the §4.3 + §6.1 comment block below).
+//
+// Status always resets to 'draft' so the clone enters the operator
+// queue cleanly (same convention as #900 slice 1 quotes/duplicate).
+//
+// Atomicity: parent create + items createMany are wrapped in
+// prisma.$transaction so a partial failure (e.g. the children
+// createMany throwing) doesn't leave an orphan parent row. Empty-items
+// source clones cleanly (no createMany call when there are zero items
+// — avoids the empty-array no-op).
+//
+// Response: 201 + the freshly-created itinerary row WITH its items
+// included (mirrors POST /itineraries response shape).
+//
+// Refs PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3 (FR-3.6 operator UX
+// — "clone a template in one click + optional rename"). The slice-12
+// JSDoc at line 919 anticipated this endpoint as "future copy-itinerary
+// for the full duplicate"; this closes that forward reference.
+router.post(
+  "/itineraries/:id/duplicate",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const source = await prisma.itinerary.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!source) {
+        return res.status(404).json({
+          error: "Itinerary not found",
+          code: "ITINERARY_NOT_FOUND",
+        });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, source.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Optional rename of `destination` — slice 12's `description`
+      // analog at the parent level. Empty/whitespace falls back to the
+      // source value (defensive: operator hitting Submit on a blank form
+      // shouldn't blow away the destination string).
+      let destination = source.destination;
+      if (req.body && typeof req.body.destination === "string") {
+        const trimmed = req.body.destination.trim();
+        if (trimmed.length > 0) destination = trimmed;
+      }
+
+      const sourceItems = await prisma.itineraryItem.findMany({
+        where: { itineraryId: source.id },
+        orderBy: { position: "asc" },
+      });
+
+      // Atomic: parent create + (optional) items createMany in one tx so
+      // a partial failure rolls back the parent. Empty-items source =>
+      // skip createMany entirely (no-op + no payload-shape ambiguity).
+      const created = await prisma.$transaction(async (tx) => {
+        const newItin = await tx.itinerary.create({
+          data: {
+            tenantId: req.travelTenant.id,
+            subBrand: source.subBrand,
+            contactId: source.contactId,
+            leadId: source.leadId,
+            status: "draft",
+            productTier: source.productTier,
+            destination,
+            startDate: source.startDate,
+            endDate: source.endDate,
+            pricingJson: source.pricingJson,
+            totalAmount: source.totalAmount,
+            currency: source.currency,
+            draftSummary: source.draftSummary,
+            // Reset clone-only fields — see header comment above.
+            shareToken: null,
+            pdfUrl: null,
+            advancePaidAmount: null,
+            advancePaidAt: null,
+            paymentReference: null,
+          },
+        });
+        if (sourceItems.length > 0) {
+          await tx.itineraryItem.createMany({
+            data: sourceItems.map((it) => ({
+              itineraryId: newItin.id,
+              itemType: it.itemType,
+              position: it.position,
+              description: it.description,
+              detailsJson: it.detailsJson, // raw passthrough — already JSON-stringified
+              supplierId: it.supplierId,
+              unitCost: it.unitCost,
+              markup: it.markup,
+              gstAmount: it.gstAmount,
+              totalPrice: it.totalPrice,
+            })),
+          });
+        }
+        return newItin;
+      });
+
+      // Re-fetch with items included so the 201 envelope matches the
+      // POST /itineraries shape (createMany doesn't return rows).
+      const withItems = await prisma.itinerary.findUnique({
+        where: { id: created.id },
+        include: { items: { orderBy: { position: "asc" } } },
+      });
+      res.status(201).json(withItems);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] itinerary duplicate error:", e.message);
+      res.status(500).json({ error: "Failed to duplicate itinerary" });
     }
   },
 );

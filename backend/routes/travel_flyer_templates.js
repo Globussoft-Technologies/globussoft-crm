@@ -29,6 +29,7 @@
  *   POST   /api/travel/flyer-templates/:id/unarchive  — ADMIN/MANAGER restore (slice 14)
  *   POST   /api/travel/flyer-templates/:id/export     — ADMIN/MANAGER queue render (slice 10)
  *   GET    /api/travel/flyer-templates/:id/preview.pdf — USER+ inline PDF preview (slice 12)
+ *   GET    /api/travel/flyer-templates/:id/usage-stats — USER+ per-template AuditLog rollup (slice 17)
  *   PUT    /api/travel/flyer-templates/:id            — ADMIN/MANAGER partial update
  *   DELETE /api/travel/flyer-templates/:id            — ADMIN-only hard delete
  *
@@ -1513,6 +1514,167 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] preview error:", e.message);
       res.status(500).json({ error: "Failed to render flyer preview" });
+    }
+  },
+);
+
+// GET /api/travel/flyer-templates/:id/usage-stats — per-template usage rollup
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 17).
+//
+// Read-only AuditLog aggregation surface. Powers the FlyerTemplates library
+// page's per-row meta strip ("Exports: 12 · Last exported 3h ago · Edited
+// 2x · Archived 0x"). Without this endpoint the frontend has to either
+// page the generic /api/audit feed and filter client-side (heavy + leaks
+// other entities), or fire N separate audit reads per row (N round-trips
+// just to render the library list).
+//
+// PRD anchors:
+//   - §3.7.2 — per-template metadata (usage count) feeds the marketplace
+//              list + future conversion-rate column
+//   - §3.6.4 — performance hint engine consumes per-template impression /
+//              export counts to surface optimisation suggestions
+//   - FR-3.4.5 — output URLs cached per format/aspect; the export-count
+//              rollup is the upstream signal for cache-hit analytics
+//
+// Behaviour:
+//   - Tenant + sub-brand scoped — the template id is resolved first via
+//     the same findFirst gate as GET /:id, returning 404 for cross-tenant
+//     and 403 for cross-sub-brand BEFORE any AuditLog read fires. Stops a
+//     fishing-rod attack that would otherwise leak the existence of a
+//     template id via the audit-count surface.
+//   - Counts every AuditLog row for this { tenantId, entity: 'TravelFlyerTemplate',
+//     entityId } tuple, grouped by action. Returns:
+//       { templateId, total, byAction, firstActionAt, lastActionAt,
+//         exports, lastExportedAt }
+//     Where `byAction` is a stable shape with one bucket per action verb
+//     used by this route file (CREATE / UPDATE / DELETE /
+//     TRAVEL_FLYER_TEMPLATE_DUPLICATED / TRAVEL_FLYER_TEMPLATE_ARCHIVED /
+//     TRAVEL_FLYER_TEMPLATE_UNARCHIVED / TRAVEL_FLYER_TEMPLATE_EXPORTED /
+//     TRAVEL_FLYER_TEMPLATE_EXPORT_QUEUED) zero-initialised so the
+//     frontend always sees the full set rather than a shape that grows
+//     as new action verbs first appear in a tenant's logs.
+//   - `exports` is the convenience sum of EXPORTED + EXPORT_QUEUED — both
+//     count as "an operator asked for a render" from the library-page
+//     perspective regardless of whether the renderer ran inline (PDF
+//     inline path, slice 11) or queued (PNG stub path, slice 10).
+//   - `firstActionAt` / `lastActionAt` are the min/max createdAt timestamps
+//     across all bucketed actions. `lastExportedAt` narrows to the export
+//     buckets only (matches the UI affordance "last exported X ago").
+//
+// USER-readable: any tenant operator with sub-brand access to the template
+// can fetch usage stats. The data is anodyne — counts + timestamps, no
+// payload bodies — and the library page is a USER-facing surface, not
+// admin-only. Matches the read-only-aid rationale on GET /:id/preview.pdf
+// (slice 12).
+//
+// No audit row: read-only meta surface. Mirrors slice 12 / slice 13.
+//
+// Implementation note: findMany over groupBy intentionally — the per-row
+// bucket-set is bounded (8 known action verbs), the rows themselves are
+// per-template (low cardinality even for heavily-used templates), and
+// the JS aggregation keeps the test surface mock-friendly without a
+// second prisma method to stub. Same trade made on /sub-brands (slice 13).
+router.get(
+  "/flyer-templates/:id/usage-stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      // Resolve + gate the template first so cross-tenant / cross-sub-brand
+      // callers can't enumerate audit-event existence via this surface.
+      const template = await prisma.travelFlyerTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!template) {
+        return res.status(404).json({
+          error: "Flyer template not found",
+          code: "TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      if (template.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, template.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      // Stable bucket set — one entry per known action verb the route
+      // file emits (incl. built-in CREATE/UPDATE/DELETE). Zero-init so
+      // the frontend never sees a missing key.
+      const KNOWN_ACTIONS = [
+        "CREATE",
+        "UPDATE",
+        "DELETE",
+        "TRAVEL_FLYER_TEMPLATE_DUPLICATED",
+        "TRAVEL_FLYER_TEMPLATE_ARCHIVED",
+        "TRAVEL_FLYER_TEMPLATE_UNARCHIVED",
+        "TRAVEL_FLYER_TEMPLATE_EXPORTED",
+        "TRAVEL_FLYER_TEMPLATE_EXPORT_QUEUED",
+      ];
+      const byAction = {};
+      for (const a of KNOWN_ACTIONS) byAction[a] = 0;
+
+      const rows = await prisma.auditLog.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          entity: "TravelFlyerTemplate",
+          entityId: id,
+        },
+        select: { action: true, createdAt: true },
+      });
+
+      let firstActionAt = null;
+      let lastActionAt = null;
+      let lastExportedAt = null;
+
+      for (const row of rows) {
+        if (Object.prototype.hasOwnProperty.call(byAction, row.action)) {
+          byAction[row.action] += 1;
+        } else {
+          // Unknown action — track in an `other` bucket so a future
+          // verb addition surfaces in the count even if it's not yet
+          // listed in KNOWN_ACTIONS.
+          byAction.other = (byAction.other || 0) + 1;
+        }
+        const ts = row.createdAt instanceof Date
+          ? row.createdAt
+          : new Date(row.createdAt);
+        if (!firstActionAt || ts < firstActionAt) firstActionAt = ts;
+        if (!lastActionAt || ts > lastActionAt) lastActionAt = ts;
+        if (
+          row.action === "TRAVEL_FLYER_TEMPLATE_EXPORTED" ||
+          row.action === "TRAVEL_FLYER_TEMPLATE_EXPORT_QUEUED"
+        ) {
+          if (!lastExportedAt || ts > lastExportedAt) lastExportedAt = ts;
+        }
+      }
+
+      const exports =
+        byAction.TRAVEL_FLYER_TEMPLATE_EXPORTED +
+        byAction.TRAVEL_FLYER_TEMPLATE_EXPORT_QUEUED;
+
+      res.json({
+        templateId: id,
+        total: rows.length,
+        byAction,
+        exports,
+        firstActionAt: firstActionAt ? firstActionAt.toISOString() : null,
+        lastActionAt: lastActionAt ? lastActionAt.toISOString() : null,
+        lastExportedAt: lastExportedAt ? lastExportedAt.toISOString() : null,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] usage-stats error:", e.message);
+      res.status(500).json({ error: "Failed to read flyer template usage stats" });
     }
   },
 );

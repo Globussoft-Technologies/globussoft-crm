@@ -20,6 +20,7 @@
  * Endpoints:
  *   GET    /api/travel/flyer-templates                — list (tenant + sub-brand scoped)
  *   GET    /api/travel/flyer-templates/sub-brands     — USER+ per-sub-brand counts (slice 13)
+ *   POST   /api/travel/flyer-templates/bulk-archive   — ADMIN/MANAGER batch archive (slice 15)
  *   GET    /api/travel/flyer-templates/:id            — fetch one
  *   POST   /api/travel/flyer-templates                — ADMIN/MANAGER create
  *   POST   /api/travel/flyer-templates/:id/duplicate  — ADMIN/MANAGER clone (slice 6)
@@ -358,6 +359,162 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] sub-brands error:", e.message);
       res.status(500).json({ error: "Failed to summarise flyer templates by sub-brand" });
+    }
+  },
+);
+
+// POST /api/travel/flyer-templates/bulk-archive — ADMIN/MANAGER batch archive
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 15).
+//
+// Accepts `{ ids: [int, ...] }` and archives every matching template the
+// caller can access. Per-id outcomes are bucketed into the response
+// envelope so operators driving the library page's "select N rows →
+// archive" affordance can render per-row feedback without N round-trips.
+//
+// Why a dedicated endpoint instead of looping POST /:id/archive on the
+// frontend:
+//   (1) One round-trip vs N (~5-50 templates is the realistic batch
+//       size for a library-page selection).
+//   (2) Atomic audit-batch — every successful archive shares the same
+//       requesting user + same wall-clock, so audit reports can correlate
+//       a bulk action as a single operator intent rather than N
+//       indistinguishable singletons.
+//   (3) Partial-success contract: a denied / not-found id inside the
+//       batch does NOT roll back the rest. Operators get { archived,
+//       alreadyArchived, notFound, denied } buckets in the response —
+//       same shape the future bulk-export / bulk-tag endpoints will use.
+//
+// Express route ordering: this route MUST be declared BEFORE the
+// `/flyer-templates/:id` family because `bulk-archive` would otherwise
+// be captured as `:id="bulk-archive"` and 400-INVALID_ID before reaching
+// the bulk handler. The literal-path-first convention is documented in
+// the file header and pinned by the slice-15 unit tests.
+//
+// Body limits: `ids` must be a non-empty array of finite integers; max
+// 100 ids per request (mirrors the bulk-tag / bulk-delete cap convention
+// in other routes — protects against accidental "select all 10k rows"
+// abuse and keeps the per-request prisma round-trips bounded).
+//
+// Per-id outcomes (returned in the response envelope):
+//   - archived[]            — ids successfully flipped to isActive=false
+//                             (one audit row each)
+//   - alreadyArchived[]     — ids whose row was already isActive=false
+//                             (no prisma.update, no audit — idempotent)
+//   - notFound[]            — ids that don't exist or live on another
+//                             tenant
+//   - denied[]              — ids whose row's sub-brand is outside the
+//                             caller's subBrandAccess
+//
+// Status: 200 even on partial success (the buckets carry the per-id
+// outcome). 400 INVALID_IDS / EMPTY_IDS / TOO_MANY_IDS for malformed
+// requests. 403 RBAC_DENIED via verifyRole if role !∈ {ADMIN, MANAGER}.
+router.post(
+  "/flyer-templates/bulk-archive",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { ids } = req.body || {};
+
+      if (!Array.isArray(ids)) {
+        return res.status(400).json({
+          error: "ids must be an array of template ids",
+          code: "INVALID_IDS",
+        });
+      }
+      if (ids.length === 0) {
+        return res.status(400).json({
+          error: "ids must contain at least one template id",
+          code: "EMPTY_IDS",
+        });
+      }
+      if (ids.length > 100) {
+        return res.status(400).json({
+          error: "ids must contain at most 100 template ids per request",
+          code: "TOO_MANY_IDS",
+        });
+      }
+
+      // Normalise + de-dupe. Reject the whole batch if ANY id is not a
+      // finite integer — silent-skip of non-numeric entries would mask
+      // upstream UI bugs.
+      const seen = new Set();
+      const normalised = [];
+      for (const raw of ids) {
+        const n =
+          typeof raw === "number" ? raw : parseInt(raw, 10);
+        if (!Number.isFinite(n) || !Number.isInteger(n)) {
+          return res.status(400).json({
+            error: "every id must be a finite integer",
+            code: "INVALID_IDS",
+          });
+        }
+        if (!seen.has(n)) {
+          seen.add(n);
+          normalised.push(n);
+        }
+      }
+
+      // Pre-fetch sub-brand access once for the whole batch — avoids
+      // N look-ups against the same User row.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+
+      const archived = [];
+      const alreadyArchived = [];
+      const notFound = [];
+      const denied = [];
+
+      // Per-id loop. Each id gets a tenant-scoped findFirst (mirrors
+      // single-id archive), then bucketed into the response envelope.
+      // The route deliberately does NOT short-circuit on first failure —
+      // bulk callers want every row's outcome surfaced.
+      for (const id of normalised) {
+        const row = await prisma.travelFlyerTemplate.findFirst({
+          where: { id, tenantId: req.travelTenant.id },
+        });
+        if (!row) {
+          notFound.push(id);
+          continue;
+        }
+        if (row.subBrand && !canAccessSubBrand(allowed, row.subBrand)) {
+          denied.push(id);
+          continue;
+        }
+        if (row.isActive === false) {
+          alreadyArchived.push(id);
+          continue;
+        }
+        await prisma.travelFlyerTemplate.update({
+          where: { id },
+          data: { isActive: false },
+        });
+        await writeAudit(
+          "TravelFlyerTemplate",
+          "TRAVEL_FLYER_TEMPLATE_ARCHIVED",
+          id,
+          req.user.userId,
+          req.travelTenant.id,
+          {
+            name: row.name,
+            subBrand: row.subBrand,
+            bulk: true,
+          },
+        );
+        archived.push(id);
+      }
+
+      res.status(200).json({
+        archived,
+        alreadyArchived,
+        notFound,
+        denied,
+        total: normalised.length,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] bulk-archive error:", e.message);
+      res.status(500).json({ error: "Failed to bulk-archive flyer templates" });
     }
   },
 );

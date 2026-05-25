@@ -1678,3 +1678,219 @@ describe('POST /api/travel/flyer-templates/:id/unarchive (slice 14)', () => {
     expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /api/travel/flyer-templates/bulk-archive (slice 15)', () => {
+  // Sample rows the per-id findFirst loop returns. Keyed by id so each
+  // test can compose its own batch by selecting from this fixture.
+  const rowsById = {
+    101: {
+      id: 101, tenantId: 1, name: 'TMC Summer Greece',
+      paletteJson: JSON.stringify(validPalette),
+      layoutJson: JSON.stringify(validLayout),
+      assetsJson: null, subBrand: 'tmc', isActive: true, notes: null,
+    },
+    102: {
+      id: 102, tenantId: 1, name: 'RFU Umrah May',
+      paletteJson: JSON.stringify(validPalette),
+      layoutJson: JSON.stringify(validLayout),
+      assetsJson: null, subBrand: 'rfu', isActive: true, notes: null,
+    },
+    103: {
+      id: 103, tenantId: 1, name: 'TS Bali Weekend',
+      paletteJson: JSON.stringify(validPalette),
+      layoutJson: JSON.stringify(validLayout),
+      assetsJson: null, subBrand: 'travelstall', isActive: false, notes: null,
+    },
+    104: {
+      id: 104, tenantId: 1, name: 'Tenant-wide Welcome',
+      paletteJson: JSON.stringify(validPalette),
+      layoutJson: JSON.stringify(validLayout),
+      assetsJson: null, subBrand: null, isActive: true, notes: null,
+    },
+  };
+
+  test('happy path: ADMIN archives 3 active rows, partitions into archived/alreadyArchived buckets', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockImplementation(({ where }) => {
+      return Promise.resolve(rowsById[where.id] || null);
+    });
+    prisma.travelFlyerTemplate.update.mockImplementation(({ where }) => {
+      return Promise.resolve({ ...rowsById[where.id], isActive: false });
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [101, 102, 103, 104] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      archived: expect.arrayContaining([101, 102, 104]),
+      alreadyArchived: [103],
+      notFound: [],
+      denied: [],
+      total: 4,
+    });
+    expect(res.body.archived).toHaveLength(3);
+    // Three update calls (one per archived id); no update for the already-archived row.
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalledTimes(3);
+    // One audit row per successful archive.
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(3);
+    const auditActions = prisma.auditLog.create.mock.calls.map(
+      (c) => c[0].data.action,
+    );
+    expect(auditActions.every((a) => a === 'TRAVEL_FLYER_TEMPLATE_ARCHIVED')).toBe(true);
+    // Audit row carries the bulk:true marker so reports can distinguish.
+    const firstAuditDetails = JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details);
+    expect(firstAuditDetails.bulk).toBe(true);
+  });
+
+  test('rejects non-array ids with 400 INVALID_IDS', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: 'not-an-array' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_IDS' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects empty ids array with 400 EMPTY_IDS', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [] });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'EMPTY_IDS' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('rejects ids array >100 with 400 TOO_MANY_IDS', async () => {
+    const tooMany = Array.from({ length: 101 }, (_, i) => i + 1);
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: tooMany });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'TOO_MANY_IDS' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('rejects ids array containing a non-integer with 400 INVALID_IDS (whole batch rejected, no partial work)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [101, 'notanid', 102] });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_IDS' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('cross-tenant / missing ids land in notFound bucket (no update, no audit)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockImplementation(({ where }) => {
+      // Only id=101 exists; 9998 + 9999 simulate cross-tenant / missing.
+      if (where.id === 101) return Promise.resolve(rowsById[101]);
+      return Promise.resolve(null);
+    });
+    prisma.travelFlyerTemplate.update.mockResolvedValue({
+      ...rowsById[101],
+      isActive: false,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [101, 9998, 9999] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      archived: [101],
+      alreadyArchived: [],
+      notFound: expect.arrayContaining([9998, 9999]),
+      denied: [],
+      total: 3,
+    });
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('MANAGER restricted to ["rfu"]: tmc + travelstall ids land in denied bucket; rfu + tenant-wide get archived', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelFlyerTemplate.findFirst.mockImplementation(({ where }) => {
+      return Promise.resolve(rowsById[where.id] || null);
+    });
+    prisma.travelFlyerTemplate.update.mockImplementation(({ where }) => {
+      return Promise.resolve({ ...rowsById[where.id], isActive: false });
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-archive')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
+      .send({ ids: [101, 102, 103, 104] }); // tmc / rfu / travelstall(already archived) / tenant-wide
+
+    expect(res.status).toBe(200);
+    expect(res.body.archived).toEqual(expect.arrayContaining([102, 104]));
+    expect(res.body.archived).toHaveLength(2);
+    expect(res.body.denied).toEqual(expect.arrayContaining([101, 103]));
+    expect(res.body.denied).toHaveLength(2);
+    expect(res.body.alreadyArchived).toEqual([]);
+    expect(res.body.notFound).toEqual([]);
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalledTimes(2);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+  });
+
+  test('USER role: 403 (route is ADMIN/MANAGER) before any DB lookup fires', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-archive')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ ids: [101, 102] });
+
+    expect(res.status).toBe(403);
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('duplicate ids are de-duped before processing (one archive, total reflects unique count)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockImplementation(({ where }) => {
+      return Promise.resolve(rowsById[where.id] || null);
+    });
+    prisma.travelFlyerTemplate.update.mockImplementation(({ where }) => {
+      return Promise.resolve({ ...rowsById[where.id], isActive: false });
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [101, 101, 101, 102] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2); // de-duped
+    expect(res.body.archived).toEqual(expect.arrayContaining([101, 102]));
+    expect(res.body.archived).toHaveLength(2);
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalledTimes(2);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+  });
+
+  test('Express route ordering: /bulk-archive is NOT captured by the /:id family (does not 400 INVALID_ID)', async () => {
+    // If the bulk-archive route were declared AFTER /:id-prefixed routes,
+    // the request would hit /:id/archive with id="bulk" and 400 INVALID_ID.
+    // This test pins the ordering — the request must reach the bulk handler
+    // and surface a 400 EMPTY_IDS (its own validator), not 400 INVALID_ID.
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/bulk-archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('EMPTY_IDS');
+    expect(res.body.code).not.toBe('INVALID_ID');
+  });
+});

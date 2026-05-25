@@ -1677,4 +1677,247 @@ router.delete(
   },
 );
 
+// ============================================================================
+// /api/travel/payment-schedules/upcoming — cross-invoice milestone summary
+// (PRD_TRAVEL_BILLING UC-2.5 month-end-close + DD-5.5 reminders cadence).
+//
+// Arc 2 #901 slice 7 — aggregate read endpoint over TravelPaymentSchedule
+// rows joined to their parent TravelInvoice (invoiceNum + subBrand + contactId).
+// Operator-facing "all milestones due in the next N days" / "all overdue
+// milestones across all customers" view. Slice 6 (commit af0c6709) shipped
+// the per-invoice CRUD; this slice ships the cross-invoice rollup.
+//
+// Auth: any verified token; tenant-scoped via req.travelTenant; sub-brand
+// access enforced via getSubBrandAccessSet so a sub-brand-restricted MANAGER
+// only sees milestones for invoices in their allowed sub-brands.
+//
+// Query params (all optional):
+//   ?status=pending|partial|paid|overdue|waived  — filter (default: all)
+//   ?within=7|14|30|60|90                        — dueDate within N days from
+//                                                  now (default: 30). Accepts
+//                                                  any positive integer; the
+//                                                  documented presets are
+//                                                  conveniences not constraints.
+//   ?subBrand=tmc|rfu|travelstall|visasure       — filter to one sub-brand
+//                                                  (within the caller's allowed
+//                                                  set; outside-allowed → empty).
+//   ?overdueOnly=true                            — dueDate < now (overrides
+//                                                  ?within when truthy).
+//   ?limit=N (default 100, clamped to [1, 500]).
+//   ?offset=N (default 0).
+//
+// Response shape:
+//   {
+//     milestones: [
+//       { id, invoiceId, invoiceNum, subBrand, contactId,
+//         milestoneOrder, dueDate, expectedAmount, expectedCurrency,
+//         status, receivedAmount, daysUntilDue, createdAt }
+//     ],
+//     total,
+//     limit,
+//     offset,
+//     summary: {
+//       byStatus: { pending: <int>, partial: <int>, ... },
+//       totalExpected: "<decimal-string>",
+//       totalReceived: "<decimal-string>",
+//       currencyBreakdown: { INR: "<decimal-string>", USD: "..." }
+//     }
+//   }
+//
+// Decisions:
+//   - daysUntilDue is JS-computed (Math.floor((due - now) / 86_400_000)).
+//     Negative ⇒ overdue. NULL dueDate ⇒ daysUntilDue is null.
+//   - summary is computed across the SAME page returned (post-limit/offset),
+//     not the full unpaginated set — operator pagers want the current-page
+//     totals. Callers wanting full-population totals should iterate pages
+//     or pass limit=500.
+//   - totalExpected/totalReceived/currencyBreakdown emit as decimal STRINGS
+//     (toFixed(2)) for Prisma Decimal-string compatibility; JS Number
+//     precision would round 60000.005 + 0.005 silently. Mirrors the
+//     `expectedAmount` shape on the milestone rows themselves.
+//   - Error codes: INVALID_STATUS, INVALID_WITHIN, INVALID_SUB_BRAND,
+//     INVALID_LIMIT.
+// ============================================================================
+
+const DEFAULT_WITHIN_DAYS = 30;
+const MAX_LIMIT = 500;
+const DEFAULT_LIMIT = 100;
+
+function parseWithinDays(input) {
+  if (input == null || input === "") return DEFAULT_WITHIN_DAYS;
+  const v = Number(input);
+  if (!Number.isInteger(v) || v <= 0) {
+    const err = new Error("within must be a positive integer (days)");
+    err.status = 400;
+    err.code = "INVALID_WITHIN";
+    throw err;
+  }
+  return v;
+}
+
+function parseLimitForSummary(input) {
+  if (input == null || input === "") return DEFAULT_LIMIT;
+  const v = Number(input);
+  if (!Number.isInteger(v) || v < 1) {
+    const err = new Error("limit must be a positive integer");
+    err.status = 400;
+    err.code = "INVALID_LIMIT";
+    throw err;
+  }
+  return Math.min(v, MAX_LIMIT);
+}
+
+function parseOffsetForSummary(input) {
+  if (input == null || input === "") return 0;
+  const v = Number(input);
+  if (!Number.isInteger(v) || v < 0) return 0;
+  return v;
+}
+
+// Add two decimal strings safely. Both inputs are normalised to Number,
+// summed, then toFixed(2)'d. For the scales we operate at (per-tenant
+// monthly milestone totals — well below 1e15) Number precision is fine;
+// the toFixed sidesteps the float-display artefact (60000 + 60000.01 →
+// "120000.01" not "120000.0099999...").
+function addDecimal(a, b) {
+  const x = Number(a == null ? 0 : a);
+  const y = Number(b == null ? 0 : b);
+  return (x + y).toFixed(2);
+}
+
+router.get(
+  "/payment-schedules/upcoming",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const status = req.query.status ? String(req.query.status) : null;
+      if (status) assertValidScheduleStatus(status);
+
+      const subBrand = req.query.subBrand ? String(req.query.subBrand) : null;
+      if (subBrand) assertValidSubBrand(subBrand);
+
+      const overdueOnly =
+        req.query.overdueOnly === "true" || req.query.overdueOnly === true;
+
+      const withinDays = parseWithinDays(req.query.within);
+      const limit = parseLimitForSummary(req.query.limit);
+      const offset = parseOffsetForSummary(req.query.offset);
+
+      const now = new Date();
+      const where = { tenantId: req.travelTenant.id };
+      if (status) where.status = status;
+
+      // Date window: overdueOnly overrides ?within.
+      if (overdueOnly) {
+        where.dueDate = { lt: now };
+      } else {
+        const upper = new Date(now.getTime() + withinDays * 86_400_000);
+        where.dueDate = { lte: upper };
+      }
+
+      // Sub-brand filtering joins through the parent invoice. Prisma can't
+      // filter on a related field's column inside a top-level findMany
+      // where-clause without `is:` — use the nested filter shape.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const invoiceFilter = {};
+      if (subBrand) {
+        if (allowed !== null && !canAccessSubBrand(allowed, subBrand)) {
+          // Filter requested a sub-brand the caller can't see — return
+          // empty silently (consistent with the existing /invoices list
+          // pattern: substitute a never-matching value instead of 403).
+          invoiceFilter.subBrand = "__none__";
+        } else {
+          invoiceFilter.subBrand = subBrand;
+        }
+      } else if (allowed !== null) {
+        // No explicit subBrand filter + restricted access ⇒ narrow to the
+        // allowed set. Empty set ⇒ never-match.
+        invoiceFilter.subBrand =
+          allowed.size > 0 ? { in: [...allowed] } : "__none__";
+      }
+      if (Object.keys(invoiceFilter).length > 0) {
+        where.invoice = { is: invoiceFilter };
+      }
+
+      const [rows, total] = await Promise.all([
+        prisma.travelPaymentSchedule.findMany({
+          where,
+          include: {
+            invoice: {
+              select: { invoiceNum: true, subBrand: true, contactId: true },
+            },
+          },
+          orderBy: [{ dueDate: "asc" }, { id: "asc" }],
+          take: limit,
+          skip: offset,
+        }),
+        prisma.travelPaymentSchedule.count({ where }),
+      ]);
+
+      const nowMs = now.getTime();
+      const milestones = rows.map((r) => {
+        const dueMs =
+          r.dueDate instanceof Date
+            ? r.dueDate.getTime()
+            : r.dueDate
+              ? new Date(r.dueDate).getTime()
+              : null;
+        const daysUntilDue =
+          dueMs == null ? null : Math.floor((dueMs - nowMs) / 86_400_000);
+        return {
+          id: r.id,
+          invoiceId: r.invoiceId,
+          invoiceNum: r.invoice ? r.invoice.invoiceNum : null,
+          subBrand: r.invoice ? r.invoice.subBrand : null,
+          contactId: r.invoice ? r.invoice.contactId : null,
+          milestoneOrder: r.milestoneOrder,
+          dueDate: r.dueDate,
+          expectedAmount: r.expectedAmount,
+          expectedCurrency: r.expectedCurrency,
+          status: r.status,
+          receivedAmount: r.receivedAmount,
+          daysUntilDue,
+          createdAt: r.createdAt,
+        };
+      });
+
+      // Summary aggregates — computed over the returned page (see header note).
+      const byStatus = {};
+      const currencyBreakdown = {};
+      let totalExpected = "0.00";
+      let totalReceived = "0.00";
+      for (const m of milestones) {
+        byStatus[m.status] = (byStatus[m.status] || 0) + 1;
+        totalExpected = addDecimal(totalExpected, m.expectedAmount);
+        totalReceived = addDecimal(totalReceived, m.receivedAmount);
+        const cur = m.expectedCurrency || "INR";
+        currencyBreakdown[cur] = addDecimal(
+          currencyBreakdown[cur] || "0.00",
+          m.expectedAmount,
+        );
+      }
+
+      res.json({
+        milestones,
+        total,
+        limit,
+        offset,
+        summary: {
+          byStatus,
+          totalExpected,
+          totalReceived,
+          currencyBreakdown,
+        },
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] schedule upcoming error:", e.message);
+      res.status(500).json({ error: "Failed to list upcoming milestones" });
+    }
+  },
+);
+
 module.exports = router;

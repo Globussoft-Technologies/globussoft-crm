@@ -2873,3 +2873,256 @@ test.describe("IDOR #919 slice 12 — rollup/stats endpoint cross-tenant probes"
     }
   });
 });
+
+test.describe("IDOR #919 slice 13 — by-year + expired-summary cross-tenant probes", () => {
+  // Slice 13 (this commit) extends slice 12's rollup-layer cross-tenant
+  // sweep to the BY-YEAR + EXPIRED-SUMMARY family of endpoints that
+  // landed across the Travel arc after slice 12 was authored:
+  //
+  //   • /quotes/by-year                       (travel_quotes.js:1148 — shipped)
+  //   • /quotes/expired-summary               (travel_quotes.js:322  — shipped)
+  //   • /invoices/by-year                     (travel_invoices.js:1765 — shipped)
+  //   • /commission-profiles/by-year          (travel_commission_profiles.js:1096 — shipped)
+  //   • /suppliers/by-year                    (travel_suppliers.js:1568 — shipped)
+  //   • /itineraries/by-year                  (travel_itineraries.js:861 — shipped)
+  //   • /trips/by-year                        (travel_trips.js:638 — shipped, TMC-gated)
+  //   • /flyer-templates/by-year              (travel_flyer_templates.js:1314 — shipped)
+  //   • /visa/analytics/by-year               (travel_visa_analytics.js:1006 — shipped, V21)
+  //   • /pricing/by-year                      (NOT YET SHIPPED per grep
+  //                                            of backend/routes/travel_pricing.js;
+  //                                            probe pins the no-side-channel
+  //                                            contract — 404 is the expected
+  //                                            response today, and the probe
+  //                                            will continue to pass when the
+  //                                            endpoint lands because [200, 403]
+  //                                            are also accepted.)
+  //
+  // Verifying-gap-card-claims (per .claude/skills/) — drift note: the
+  // slice-13 prompt named /invoices/expired-summary and /visa/applications/
+  // by-year as additional targets; grep on backend/routes/travel_invoices.js
+  // + travel_visa.js confirms neither is shipped today. Only /quotes/
+  // expired-summary is shipped, so the expired-summary family has a single
+  // probe in slice 13. Future expansion when invoices/expired-summary
+  // ships: clone the /quotes/expired-summary probe with /invoices/
+  // expired-summary as the path.
+  //
+  // Contract: `expect([200, 403, 404]).toContain(status)`. Same shape as
+  // slice 12 — [200] valid for USER-readable rollups that return an
+  // empty/zero envelope for non-travel callers (no cross-tenant data
+  // leak); [403] valid where requireTravelTenant fires the WRONG_VERTICAL
+  // guard before the aggregate query runs; [404] valid where the endpoint
+  // hasn't shipped yet (e.g. /pricing/by-year today) or returns the
+  // tenant-filter not-found path. A future regression returning 200 with
+  // non-empty buckets containing another tenant's data is the actual IDOR
+  // leak that route-level *-api.spec.js catches; slice 13 pins the broad
+  // surface no-5xx + no-leak signal.
+
+  test("wellness admin GET /api/travel/quotes/by-year → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/quotes/by-year`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /quotes/by-year: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      // by-year rollup typically returns an array of yearly buckets.
+      // Empty array for non-travel tenant is the valid no-leak signal.
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel/quotes/expired-summary → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/quotes/expired-summary`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /quotes/expired-summary: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      // Expired-summary returns counts + value of soon-to-expire / already-
+      // expired quotes scoped to the caller's tenant. Non-travel tenant
+      // should see zero counts (or 403 from requireTravelTenant).
+      const body = await res.json();
+      if (typeof body.total === "number") expect(body.total).toBe(0);
+      if (typeof body.count === "number") expect(body.count).toBe(0);
+      if (typeof body.expired === "number") expect(body.expired).toBe(0);
+    }
+  });
+
+  test("wellness admin GET /api/travel/invoices/by-year → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/invoices/by-year`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /invoices/by-year: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel/commission-profiles/by-year → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/commission-profiles/by-year`,
+    );
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /commission-profiles/by-year: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      if (typeof body.total === "number") expect(body.total).toBe(0);
+      if (typeof body.count === "number") expect(body.count).toBe(0);
+    }
+  });
+
+  test("wellness admin GET /api/travel/suppliers/by-year → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/suppliers/by-year`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /suppliers/by-year: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      if (typeof body.total === "number") expect(body.total).toBe(0);
+      if (typeof body.count === "number") expect(body.count).toBe(0);
+    }
+  });
+
+  test("wellness admin GET /api/travel/itineraries/by-year → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/itineraries/by-year`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /itineraries/by-year: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      // No travel-tenant itinerary leak.
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel/trips/by-year → [200, 403, 404]", async ({
+    request,
+  }) => {
+    // Trips/by-year is TMC-only (requireTmcAccess gate at
+    // travel_trips.js:638). Cross-vertical wellness admin hits either
+    // 403 WRONG_VERTICAL (requireTravelTenant) or 403 FORBIDDEN_TMC
+    // (requireTmcAccess). Both are acceptable under the [200, 403, 404]
+    // contract.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/trips/by-year`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /trips/by-year: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /api/travel/flyer-templates/by-year → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/flyer-templates/by-year`,
+    );
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /flyer-templates/by-year: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      if (typeof body.total === "number") expect(body.total).toBe(0);
+      if (typeof body.count === "number") expect(body.count).toBe(0);
+    }
+  });
+
+  test("wellness admin GET /api/travel/visa/analytics/by-year → [200, 403, 404]", async ({
+    request,
+  }) => {
+    // Phase 3 Visa Sure V21 by-year aggregate. Mount at
+    // backend/routes/travel_visa_analytics.js:1006. Gated behind
+    // requireTravelTenant + visa-sub-brand access — cross-vertical
+    // wellness admin hits 403 WRONG_VERTICAL.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/visa/analytics/by-year`,
+    );
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /visa/analytics/by-year: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      // No visa-app PII leak across tenants.
+      expect(blob.toLowerCase()).not.toMatch(
+        /passport|aadhaar|yasin@travelstall/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel/pricing/by-year → [200, 403, 404]", async ({
+    request,
+  }) => {
+    // NOT YET SHIPPED today (grep of backend/routes/travel_pricing.js
+    // returned zero hits for /by-year). 404 is the expected status today.
+    // Probe stays in slice 13 as a forward-compat pin: when /pricing/
+    // by-year ships, this probe automatically asserts the no-leak contract
+    // without any spec change (200 with empty-envelope is also accepted).
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/pricing/by-year`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /pricing/by-year: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+});

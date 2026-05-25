@@ -3503,4 +3503,254 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/:id/payables/yearly — Arc 2 #903 slice 22 —
+// per-supplier annual payable rollup (PRD_TRAVEL_SUPPLIER_MASTER §3.7).
+//
+// Completes the time-series triplet alongside slice 18's
+// /:id/payables/monthly and slice 20's /:id/payables/quarterly. Returns
+// calendar-year buckets (YYYY, UTC) so a per-supplier dashboard can show
+// "what did we owe / pay this supplier each year" for the standard
+// 10-year decade lookback widget.
+//
+// Same parent-supplier guard (loadParentSupplier) — same 400 INVALID_ID /
+// 404 SUPPLIER_NOT_FOUND / 403 SUB_BRAND_DENIED contract.
+//
+// Aggregation differs intentionally from monthly/quarterly:
+//   - Bucket key is `createdAt` UTC year (when the payable was BOOKED),
+//     not `dueDate`. Yearly rollups are the historical "supplier spend
+//     report" surface; finance teams care when the obligation was
+//     INCURRED for that year's budget reconciliation, not when it was
+//     due. Monthly/quarterly use dueDate because they feed cash-flow
+//     planning ("what's owed THIS month" vs "what was booked LAST
+//     year").
+//   - Paid-vs-open split via `paidAt non-null` rather than a 4-way
+//     status break. Matches the timeline event (slice 21) + payable
+//     PATCH (slice 6) conventions: status=paid implies paidAt=now() if
+//     unset, so paidAt is the canonical paid signal.
+//   - `unknown` bucket for null/invalid createdAt — defensive against
+//     rows where the createdAt column was stripped by an old import.
+//     Sorted lexicographically; "unknown" sorts after numeric years
+//     when ASC.
+//
+// Query surface (all optional):
+//   ?from=YYYY / ?to=YYYY   — inclusive year bounds (regex /^\d{4}$/).
+//                             Unparseable → 400 INVALID_YEAR_FORMAT
+//                             (supplier lookup NOT attempted).
+//   ?orderBy=<field>:<dir>  — default year:asc. Valid fields:
+//                             year, totalAmount, payableCount.
+//                             Valid dirs: asc, desc. Unknown token
+//                             silently degrades to default.
+//   ?limit=N                — default 10 (a decade), max 30.
+//   ?offset=N               — default 0.
+//
+// Response shape:
+//   {
+//     supplierId, supplierName,
+//     years: [ { year, payableCount, totalAmount, paidAmount, openAmount } ],
+//     totalYears,             // count BEFORE limit/offset, AFTER from/to
+//     grandTotalAmount,       // sum across windowed years
+//     grandPaidAmount,
+//     grandOpenAmount,
+//     limit, offset,
+//   }
+//
+// Defensive math: null/NaN/non-finite `amount` → 0 contribution. Sort is
+// AFTER aggregate + from/to filter; pagination is the final step.
+//
+// Route ordering: placed at end-of-file is safe because the colliding
+// candidate /:id/payables/:payableId is PUT/DELETE-only (no GET shape).
+// ============================================================================
+
+const YEARLY_MAX_ROWS = 10_000;
+const YEARLY_DEFAULT_LIMIT = 10;
+const YEARLY_MAX_LIMIT = 30;
+const YEARLY_VALID_ORDER_FIELDS = new Set(["year", "totalAmount", "payableCount"]);
+const YEARLY_VALID_ORDER_DIRS = new Set(["asc", "desc"]);
+const YEARLY_DEFAULT_ORDER_FIELD = "year";
+const YEARLY_DEFAULT_ORDER_DIR = "asc";
+const YEAR_FORMAT_RE = /^\d{4}$/;
+
+function parseYearlyOrderBy(input) {
+  if (input == null || String(input).trim() === "") {
+    return { field: YEARLY_DEFAULT_ORDER_FIELD, dir: YEARLY_DEFAULT_ORDER_DIR };
+  }
+  const raw = String(input).trim();
+  const parts = raw.split(":");
+  if (parts.length !== 2) {
+    return { field: YEARLY_DEFAULT_ORDER_FIELD, dir: YEARLY_DEFAULT_ORDER_DIR };
+  }
+  const [field, dir] = parts;
+  if (!YEARLY_VALID_ORDER_FIELDS.has(field) || !YEARLY_VALID_ORDER_DIRS.has(dir)) {
+    return { field: YEARLY_DEFAULT_ORDER_FIELD, dir: YEARLY_DEFAULT_ORDER_DIR };
+  }
+  return { field, dir };
+}
+
+function safeAmount(v) {
+  if (v == null) return 0;
+  // Prisma Decimal serializes to string in some configurations; Number()
+  // handles both number + numeric-string inputs.
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return n;
+}
+
+function yearKeyOf(createdAt) {
+  if (createdAt == null) return "unknown";
+  const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  if (Number.isNaN(d.getTime())) return "unknown";
+  return String(d.getUTCFullYear());
+}
+
+router.get(
+  "/suppliers/:id/payables/yearly",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // Year-format validation runs BEFORE loadParentSupplier so invalid
+      // bounds surface 400 without a DB round-trip.
+      let fromYear = null;
+      let toYear = null;
+      if (req.query.from != null && req.query.from !== "") {
+        const raw = String(req.query.from).trim();
+        if (!YEAR_FORMAT_RE.test(raw)) {
+          return res.status(400).json({
+            error: "from must be a 4-digit year (YYYY)",
+            code: "INVALID_YEAR_FORMAT",
+          });
+        }
+        fromYear = raw;
+      }
+      if (req.query.to != null && req.query.to !== "") {
+        const raw = String(req.query.to).trim();
+        if (!YEAR_FORMAT_RE.test(raw)) {
+          return res.status(400).json({
+            error: "to must be a 4-digit year (YYYY)",
+            code: "INVALID_YEAR_FORMAT",
+          });
+        }
+        toYear = raw;
+      }
+
+      const { field: orderField, dir: orderDir } = parseYearlyOrderBy(req.query.orderBy);
+
+      let limit = YEARLY_DEFAULT_LIMIT;
+      if (req.query.limit != null && req.query.limit !== "") {
+        const v = Number(req.query.limit);
+        if (Number.isInteger(v) && v >= 1) {
+          limit = Math.min(v, YEARLY_MAX_LIMIT);
+        }
+      }
+      let offset = 0;
+      if (req.query.offset != null && req.query.offset !== "") {
+        const v = Number(req.query.offset);
+        if (Number.isInteger(v) && v >= 0) {
+          offset = v;
+        }
+      }
+
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const rows = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+        },
+        select: {
+          id: true,
+          createdAt: true,
+          paidAt: true,
+          amount: true,
+        },
+        take: YEARLY_MAX_ROWS,
+      });
+
+      // Aggregate per year.
+      const byYear = new Map();
+      for (const r of rows) {
+        const yk = yearKeyOf(r.createdAt);
+        if (!byYear.has(yk)) {
+          byYear.set(yk, {
+            year: yk,
+            payableCount: 0,
+            totalAmount: 0,
+            paidAmount: 0,
+            openAmount: 0,
+          });
+        }
+        const bucket = byYear.get(yk);
+        const amt = safeAmount(r.amount);
+        bucket.payableCount += 1;
+        bucket.totalAmount = Math.round((bucket.totalAmount + amt + Number.EPSILON) * 100) / 100;
+        if (r.paidAt != null) {
+          bucket.paidAmount = Math.round((bucket.paidAmount + amt + Number.EPSILON) * 100) / 100;
+        } else {
+          bucket.openAmount = Math.round((bucket.openAmount + amt + Number.EPSILON) * 100) / 100;
+        }
+      }
+
+      // Apply from/to filter (string compare — "2026" >= "2024" is correct
+      // for YYYY zero-padded strings; "unknown" is excluded from any
+      // bounded window since it doesn't satisfy /^\d{4}$/).
+      let years = Array.from(byYear.values());
+      if (fromYear) years = years.filter((y) => y.year !== "unknown" && y.year >= fromYear);
+      if (toYear) years = years.filter((y) => y.year !== "unknown" && y.year <= toYear);
+
+      // Sort AFTER filter, BEFORE pagination. Lexicographic for `year`
+      // (numeric YYYY sorts correctly as strings; "unknown" sorts after
+      // numeric in ASC, before in DESC).
+      years.sort((a, b) => {
+        let cmp;
+        if (orderField === "year") {
+          cmp = a.year < b.year ? -1 : a.year > b.year ? 1 : 0;
+        } else {
+          // numeric fields
+          const av = a[orderField];
+          const bv = b[orderField];
+          cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        }
+        return orderDir === "desc" ? -cmp : cmp;
+      });
+
+      const totalYears = years.length;
+
+      // Compute grand totals over the filtered window (BEFORE pagination
+      // so the grand totals reflect the full filtered set, not just the
+      // current page).
+      let grandTotalAmount = 0;
+      let grandPaidAmount = 0;
+      let grandOpenAmount = 0;
+      for (const y of years) {
+        grandTotalAmount = Math.round((grandTotalAmount + y.totalAmount + Number.EPSILON) * 100) / 100;
+        grandPaidAmount = Math.round((grandPaidAmount + y.paidAmount + Number.EPSILON) * 100) / 100;
+        grandOpenAmount = Math.round((grandOpenAmount + y.openAmount + Number.EPSILON) * 100) / 100;
+      }
+
+      // Paginate.
+      const paged = years.slice(offset, offset + limit);
+
+      res.json({
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        years: paged,
+        totalYears,
+        grandTotalAmount,
+        grandPaidAmount,
+        grandOpenAmount,
+        limit,
+        offset,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] per-supplier yearly rollup error:", e.message);
+      res.status(500).json({ error: "Failed to build per-supplier yearly rollup" });
+    }
+  },
+);
+
 module.exports = router;

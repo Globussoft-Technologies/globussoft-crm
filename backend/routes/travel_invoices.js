@@ -5333,4 +5333,78 @@ router.post(
   },
 );
 
+// POST /api/travel/invoices/:id/void — dedicated audit-logged void action.
+// Body: { reason: string (required, 5..500 chars) }
+// Mirrors the action-endpoint pattern used by mark-paid, apply-penalty,
+// convert-to-tax-invoice. ADMIN/MANAGER only. PRD_TRAVEL_BILLING FR-3.7
+// (cancellation/refund flow — voiding is a precondition for reissuance).
+//
+// Behaviour:
+//   - Any non-Voided status flips to "Voided" (the existing PUT /:id allows
+//     this too, but doesn't require a reason and doesn't carry one in audit).
+//   - Already-Voided returns 400 ALREADY_VOIDED (idempotent guard so callers
+//     don't accidentally overwrite the original void reason).
+//   - Paid invoices CAN be voided here (mirrors the PUT-status transition map
+//     which permits Paid -> Voided) — needed for refund/cancellation flow.
+//   - Reason persisted in the audit log only (TravelInvoice has no `notes`
+//     column; the audit-row is the authoritative reason record).
+router.post(
+  "/invoices/:id/void",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (reason.length < 5 || reason.length > 500) {
+        return res.status(400).json({
+          error: "reason must be 5..500 characters",
+          code: "INVALID_VOID_REASON",
+        });
+      }
+
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      if (invoice.status === "Voided") {
+        return res.status(400).json({
+          error: "Invoice already voided",
+          code: "ALREADY_VOIDED",
+        });
+      }
+
+      const prevStatus = invoice.status;
+
+      const updated = await prisma.travelInvoice.update({
+        where: { id: invoice.id },
+        data: { status: "Voided" },
+      });
+
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_VOIDED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          prevStatus,
+          reason,
+          invoiceNum: invoice.invoiceNum,
+          subBrand: invoice.subBrand,
+        },
+      );
+
+      return res.status(200).json(updated);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] void error:", e.message);
+      res.status(500).json({ error: "Failed to void invoice" });
+    }
+  },
+);
+
 module.exports = router;

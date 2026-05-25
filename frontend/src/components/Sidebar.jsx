@@ -1109,6 +1109,11 @@ function renderTravelNav({
           MANAGER+ per RoleGuard on the route element. */}
       {isManager && <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" />}
       <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" />
+      {/* Arc 2 #901 slice 7 — cross-invoice payment-milestone dashboard
+          (consumes /api/travel/payment-schedules/upcoming). Billing-adjacent
+          slot under Invoices is the right home: operator surface for
+          upcoming/overdue milestones across all travel invoices. */}
+      <Link to="/travel/milestones" icon={Clock} label="Milestones" />
       {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />}
       {isAdmin && <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" />}
       {/* tick #181 — curriculum-mappings CRUD admin (consumes

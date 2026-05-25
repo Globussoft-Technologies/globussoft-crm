@@ -181,6 +181,11 @@ const TravelQuotesAdmin = lazy(() => import("./pages/travel/QuotesAdmin"));
 // mirrors backend write RBAC.
 const TravelQuoteBuilder = lazy(() => import("./pages/travel/QuoteBuilder"));
 const TravelInvoicesAdmin = lazy(() => import("./pages/travel/InvoicesAdmin"));
+// Arc 2 #901 slice 7 frontend consumer — cross-invoice payment-milestone
+// dashboard. Consumes /api/travel/payment-schedules/upcoming (backend commit
+// e4832fee). Operator surface for upcoming/overdue milestones across all
+// travel invoices; complements the per-invoice schedule view on InvoicesAdmin.
+const TravelMilestoneTracker = lazy(() => import("./pages/travel/MilestoneTracker"));
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
@@ -1288,6 +1293,10 @@ export default function App() {
               <Route path="travel/quotes/builder" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
               <Route path="travel/quotes/builder/:id" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
               <Route path="travel/invoices-admin" element={<TravelOnly><TravelInvoicesAdmin /></TravelOnly>} />
+              {/* Arc 2 #901 slice 7 — cross-invoice milestone dashboard.
+                  Operator-facing aggregate of upcoming/overdue payment
+                  milestones across all travel invoices. */}
+              <Route path="travel/milestones" element={<TravelOnly><TravelMilestoneTracker /></TravelOnly>} />
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
               <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
               <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />

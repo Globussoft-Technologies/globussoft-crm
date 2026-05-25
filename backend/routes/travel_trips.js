@@ -4,6 +4,7 @@
 //   GET    /api/travel/trips                                   — list trips
 //   POST   /api/travel/trips                                   — create trip
 //   GET    /api/travel/trips/by-month                          — tenant-wide monthly rollup
+//   GET    /api/travel/trips/by-quarter                        — tenant-wide quarterly rollup
 //   GET    /api/travel/trips/:id                               — fetch with children
 //   PATCH  /api/travel/trips/:id                               — amend trip
 //   DELETE /api/travel/trips/:id                               — ADMIN only (cascades)
@@ -375,6 +376,208 @@ router.get("/trips/by-month", verifyToken, requireTravelTenant, requireTmcAccess
   } catch (e) {
     console.error("[travel-trips] by-month error:", e.message);
     res.status(500).json({ error: "Failed to compute monthly rollup" });
+  }
+});
+
+// ─── Tenant-wide quarterly rollup ─────────────────────────────────────
+
+// GET /api/travel/trips/by-quarter — TMC-only, tenant + sub-brand scoped.
+//
+// Quarter-resolution sibling of GET /trips/by-month above (commit
+// 4b0f7e36). Same UTC bucketing template, same defensive math
+// (null/invalid createdAt → "unknown" bucket, excluded when ?from/?to
+// is set), same orderBy semantics. One row per UTC-calendar-quarter
+// present in the scoped trip set, summarising count + 4-status splits
+// for that quarter.
+//
+// Calendar-quarter derivation: Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep,
+// Q4=Oct-Dec — `Math.floor(month/3)+1` over UTC months [0..11].
+//
+// 4-status TMC envelope:
+//   confirmed / in-trip / completed / cancelled
+//
+// Read-only; consumed by the operator-facing "trips by quarter" chart
+// on the Travel dashboard (quarterly trends, seasonality view).
+//
+// Scope rules:
+//   - Tenant-scoped on TmcTrip.tenantId.
+//   - TMC-only: requireTmcAccess guard already ensures the caller has
+//     "tmc" in subBrandAccess[] (or full access via ADMIN).
+//   - Any verified token; no further RBAC narrowing — operator-readable
+//     read.
+//
+// Query string:
+//   status   optional TmcTrip.status filter (one of VALID_TRIP_STATUSES);
+//            invalid → 400 INVALID_STATUS.
+//   from     optional inclusive lower bound on bucket (YYYY-Qn); rows
+//            with quarter < from are excluded.
+//   to       optional inclusive upper bound on bucket (YYYY-Qn); rows
+//            with quarter > to are excluded.
+//   orderBy  default "quarter:asc" (chronological); also accepts
+//            "quarter:desc", "count:asc|desc", "completedCount:asc|desc".
+//            Unknown tokens degrade silently to the default.
+//   limit    default 12 (3 years of quarters), max 40 (10 years).
+//   offset   default 0
+//
+// Response shape:
+//   {
+//     quarters: [ {
+//       quarter: "2026-Q2",
+//       count,
+//       confirmedCount, inTripCount, completedCount, cancelledCount,
+//     } ],
+//     totalQuarters,
+//     grandCount,
+//     grandCompletedCount,
+//     limit, offset
+//   }
+//
+// Route ordering: declared BEFORE GET /trips/:id so Express doesn't try
+// to parse "by-quarter" as a numeric :id (which would 400 INVALID_ID).
+router.get("/trips/by-quarter", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+    if (statusFilter && !VALID_TRIP_STATUSES.includes(statusFilter)) {
+      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+    }
+
+    // YYYY-Qn validation — n ∈ {1,2,3,4}.
+    const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+    if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "quarter:asc",
+      "quarter:desc",
+      "count:asc",
+      "count:desc",
+      "completedCount:asc",
+      "completedCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-Qn.
+    const trips = await prisma.tmcTrip.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        createdAt: true,
+      },
+    });
+
+    // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate.
+    const byQuarter = new Map();
+    for (const t of trips) {
+      let quarterKey = "unknown";
+      if (t.createdAt) {
+        const dt = t.createdAt instanceof Date
+          ? t.createdAt
+          : new Date(t.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+          quarterKey = `${yyyy}-Q${q}`;
+        }
+      }
+
+      let row = byQuarter.get(quarterKey);
+      if (!row) {
+        row = {
+          quarter: quarterKey,
+          count: 0,
+          confirmedCount: 0,
+          inTripCount: 0,
+          completedCount: 0,
+          cancelledCount: 0,
+        };
+        byQuarter.set(quarterKey, row);
+      }
+
+      row.count += 1;
+      switch (t.status) {
+        case "confirmed": row.confirmedCount += 1; break;
+        case "in-trip": row.inTripCount += 1; break;
+        case "completed": row.completedCount += 1; break;
+        case "cancelled": row.cancelledCount += 1; break;
+        default: break;
+      }
+    }
+
+    let quarters = [...byQuarter.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable quarter token); when
+    // no bounds are set, "unknown" stays so the count surface remains
+    // complete. YYYY-Qn sorts lexicographically AND chronologically
+    // (Q1 < Q2 < Q3 < Q4 within the same year).
+    if (fromRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+    }
+    if (toRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+    }
+
+    // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+    // chronological. "unknown" sorts last in asc / first in desc by
+    // virtue of being lexicographically > "9999-Q4".
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    quarters.sort((a, b) => {
+      if (field === "quarter") {
+        if (a.quarter < b.quarter) return -1 * mult;
+        if (a.quarter > b.quarter) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalQuarters = quarters.length;
+    const grandCount = quarters.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandCompletedCount = quarters.reduce(
+      (acc, r) => acc + (Number(r.completedCount) || 0),
+      0,
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter.
+    const paged = quarters.slice(skip, skip + take);
+
+    res.json({
+      quarters: paged,
+      totalQuarters,
+      grandCount,
+      grandCompletedCount,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    console.error("[travel-trips] by-quarter error:", e.message);
+    res.status(500).json({ error: "Failed to compute quarterly rollup" });
   }
 });
 

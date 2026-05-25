@@ -4,7 +4,7 @@
 // returns it to the issuer (one-time view — display the code prominently
 // so the operator can copy + send to the recipient channel of their choice).
 import { useEffect, useRef, useState } from 'react';
-import { Gift, Copy, Plus, UserPlus, Search } from 'lucide-react';
+import { Gift, Copy, Plus, Search, Ban, RefreshCw } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
@@ -14,9 +14,17 @@ export default function GiftCardsPage() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [issueOpen, setIssueOpen] = useState(false);
-  const [applyTarget, setApplyTarget] = useState(null);
+  // v3.7.17 — `Apply to patient` row action retired. It mapped to the
+  // POS-style "credit this card into a specific wallet right now" flow,
+  // which doesn't match the user-facing "customer buys, then redeems"
+  // lifecycle. Row actions now only flip status (cancel / reactivate)
+  // and copy the masked code; the underlying /apply endpoint stays on
+  // the backend for downstream POS use but is no longer surfaced here.
   const [statusFilter, setStatusFilter] = useState('');
   const [latestCode, setLatestCode] = useState(null);
+  // Tracks per-row "in flight" state so the Cancel/Reactivate button
+  // disables itself + shows a spinner while the PATCH is round-tripping.
+  const [pendingStatusId, setPendingStatusId] = useState(null);
   const notify = useNotify();
 
   const load = async () => {
@@ -36,6 +44,44 @@ export default function GiftCardsPage() {
 
   useEffect(() => { load(); }, [statusFilter]);
 
+  // Copy the masked code to the clipboard. Note: this is the MASKED
+  // display value (e.g. "B9XT****FYQZ") that the list returns — the
+  // redeemable plaintext is only ever shown once at issue time in the
+  // `latestCode` toast above.
+  const copyCode = async (code) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      notify.success('Code copied');
+    } catch {
+      notify.error('Could not copy to clipboard');
+    }
+  };
+
+  // Flip a row between active ↔ cancelled. Redeemed is terminal — the
+  // backend returns 409 STATUS_TERMINAL for any change on a redeemed
+  // row, so the UI hides the button for that state.
+  const toggleStatus = async (gift) => {
+    const nextStatus = gift.status === 'active' ? 'cancelled' : 'active';
+    const verb = nextStatus === 'cancelled' ? 'cancel' : 'reactivate';
+    const ok = await notify.confirm(
+      `${verb === 'cancel' ? 'Cancel' : 'Reactivate'} gift card ${gift.code}?`
+    );
+    if (!ok) return;
+    setPendingStatusId(gift.id);
+    try {
+      await fetchApi(`/api/wellness/giftcards/${gift.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      notify.success(`Gift card ${verb}ed`);
+      await load();
+    } catch (e) {
+      notify.error(e?.data?.error || e.message || `Failed to ${verb} gift card`);
+    } finally {
+      setPendingStatusId(null);
+    }
+  };
+
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -53,11 +99,47 @@ export default function GiftCardsPage() {
       </header>
 
       {latestCode && (
-        <div className="glass" style={{ padding: '1rem', marginBottom: '1rem', background: 'var(--success-bg, #ecfdf5)' }}>
+        // Theme-aware toast — pre-fix this used a hardcoded `#ecfdf5`
+        // (light green) bg with no explicit text color, so the
+        // surrounding theme's light text inherited into a light-green
+        // surface = unreadable in dark mode. The semi-transparent
+        // emerald tint + explicit `--text-primary` works in both
+        // light and dark themes (same pattern used by the
+        // `mq-submission-recipient-card` and other status surfaces).
+        <div
+          className="glass"
+          style={{
+            padding: '1rem',
+            marginBottom: '1rem',
+            background: 'rgba(16,185,129,0.12)',
+            border: '1px solid rgba(16,185,129,0.35)',
+            borderRadius: 8,
+            color: 'var(--text-primary)',
+            display: 'flex',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '0.5rem',
+          }}
+        >
           <strong>New gift card issued:</strong>{' '}
-          <code style={{ fontSize: '1.2rem' }}>{latestCode.code}</code> ·{' '}
-          {formatMoney(latestCode.amount, { currency: latestCode.currency })}{' '}
-          <button onClick={() => { navigator.clipboard.writeText(latestCode.code); notify.success('Code copied'); }} style={{ marginLeft: '0.5rem', background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 4, padding: '0.25rem 0.5rem', cursor: 'pointer' }}>
+          <code style={{ fontSize: '1.1rem', color: 'var(--text-primary)' }}>{latestCode.code}</code> ·{' '}
+          <span>{formatMoney(latestCode.amount, { currency: latestCode.currency })}</span>
+          <button
+            onClick={() => { navigator.clipboard.writeText(latestCode.code); notify.success('Code copied'); }}
+            style={{
+              marginLeft: 'auto',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              background: 'transparent',
+              border: '1px solid var(--border-color)',
+              borderRadius: 6,
+              padding: '0.3rem 0.6rem',
+              cursor: 'pointer',
+              color: 'var(--text-primary)',
+              fontSize: '0.85rem',
+            }}
+          >
             <Copy size={12} /> Copy
           </button>
         </div>
@@ -92,29 +174,70 @@ export default function GiftCardsPage() {
             </tr>
           </thead>
           <tbody>
-            {list.map((g) => (
-              <tr key={g.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                <td style={td}><code>{g.code}</code></td>
-                <td style={td}>{formatMoney(g.amount, { currency: g.currency })}</td>
-                <td style={td}><span style={statusPill(g.status)}>{g.status}</span></td>
-                <td style={td}>{formatDate(g.createdAt)}</td>
-                <td style={td}>{g.expiresAt ? formatDate(g.expiresAt) : '—'}</td>
-                <td style={td}>{g.redeemedAt ? formatDate(g.redeemedAt) : '—'}</td>
-                <td style={td}>
-                  {g.status === 'active' ? (
-                    <button
-                      onClick={() => setApplyTarget(g)}
-                      style={btnRowAction}
-                      title="Apply this gift card to a patient's wallet"
-                    >
-                      <UserPlus size={12} /> Apply to patient
-                    </button>
-                  ) : (
-                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>—</span>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {list.map((g) => {
+              const inFlight = pendingStatusId === g.id;
+              const isActive = g.status === 'active';
+              const isCancelled = g.status === 'cancelled';
+              const isRedeemed = g.status === 'redeemed';
+              return (
+                <tr key={g.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                  <td style={td}>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <code>{g.code}</code>
+                      <button
+                        type="button"
+                        onClick={() => copyCode(g.code)}
+                        title="Copy code"
+                        aria-label={`Copy gift card code ${g.code}`}
+                        data-testid={`giftcard-copy-${g.id}`}
+                        style={btnIconGhost}
+                      >
+                        <Copy size={12} />
+                      </button>
+                    </div>
+                  </td>
+                  <td style={td}>{formatMoney(g.amount, { currency: g.currency })}</td>
+                  <td style={td}><span style={statusPill(g.status)}>{g.status}</span></td>
+                  <td style={td}>{formatDate(g.createdAt)}</td>
+                  <td style={td}>{g.expiresAt ? formatDate(g.expiresAt) : '—'}</td>
+                  <td style={td}>{g.redeemedAt ? formatDate(g.redeemedAt) : '—'}</td>
+                  <td style={td}>
+                    {isRedeemed ? (
+                      // Redeemed = terminal; nothing to flip. Match
+                      // expired's existing UX so the column never reads
+                      // empty for completed cards.
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>—</span>
+                    ) : isActive ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleStatus(g)}
+                        disabled={inFlight}
+                        style={{ ...btnRowAction, opacity: inFlight ? 0.6 : 1 }}
+                        title="Cancel this gift card (recipient can no longer redeem)"
+                        data-testid={`giftcard-cancel-${g.id}`}
+                      >
+                        <Ban size={12} /> {inFlight ? 'Cancelling…' : 'Cancel'}
+                      </button>
+                    ) : isCancelled ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleStatus(g)}
+                        disabled={inFlight}
+                        style={{ ...btnRowAction, opacity: inFlight ? 0.6 : 1 }}
+                        title="Reactivate this gift card"
+                        data-testid={`giftcard-reactivate-${g.id}`}
+                      >
+                        <RefreshCw size={12} /> {inFlight ? 'Reactivating…' : 'Reactivate'}
+                      </button>
+                    ) : (
+                      // Expired or other non-flippable state — keep the
+                      // column rendered with a dash for consistent layout.
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -126,32 +249,66 @@ export default function GiftCardsPage() {
         />
       )}
 
-      {applyTarget && (
-        <ApplyModal
-          giftCard={applyTarget}
-          onDone={() => { setApplyTarget(null); load(); }}
-          onCancel={() => setApplyTarget(null)}
-        />
-      )}
     </div>
   );
 }
 
+// Validity dropdown options. The integer value is `validityDays` —
+// stored verbatim on GiftCard so the UI can re-render the user's
+// selection. The backend ALSO computes expiresAt from this when an
+// explicit expiresAt isn't sent, so a card with `validityDays=90` has
+// `expiresAt = createdAt + 90d` by default.
+const VALIDITY_OPTIONS = [
+  { value: '',    label: 'No expiry' },
+  { value: '30',  label: '1 month' },
+  { value: '60',  label: '2 months' },
+  { value: '90',  label: '3 months' },
+  { value: '180', label: '6 months' },
+  { value: '365', label: '1 year' },
+  { value: '730', label: '2 years' },
+];
+
+// Default color swatches the admin picks from. Stored as a 7-char hex
+// on the GiftCard row; rendered as a chip on the card UI later.
+const COLOR_SWATCHES = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f472b6', '#64748b'];
+
 function IssueModal({ onDone, onCancel }) {
-  const [amount, setAmount] = useState('');
-  const [expiresAt, setExpiresAt] = useState('');
-  const [issuedTo, setIssuedTo] = useState('');
+  // v3.7.17 — Zylu-style fields. `name` is the friendly label,
+  // `validity` drives the expiresAt computation, `giftValue` is what
+  // the recipient gets credited (maps to backend `amount`), `price` is
+  // what the buyer paid (different from gift value when discounted /
+  // marked up). Color is a UI accent only.
+  const [name, setName] = useState('');
+  const [validity, setValidity] = useState('');
+  const [giftValue, setGiftValue] = useState('');
+  const [price, setPrice] = useState('');
+  const [color, setColor] = useState(COLOR_SWATCHES[0]);
+  // v3.7.17 — the "Recipient patient id" field was dropped from this
+  // modal: this form is for an admin adding a gift-card SKU/template
+  // (something a customer later BUYS), not directly issuing one to a
+  // specific patient. The backend `issuedTo` column stays available
+  // for downstream POS / purchase flows that tie the eventually-bought
+  // card to its recipient.
   const [submitting, setSubmitting] = useState(false);
   const notify = useNotify();
 
   const submit = async () => {
-    const a = Number(amount);
-    if (!Number.isFinite(a) || a <= 0) return notify.error('Enter a positive amount.');
+    if (!name.trim()) return notify.error('Enter a name for the gift card.');
+    const gv = Number(giftValue);
+    if (!Number.isFinite(gv) || gv <= 0) return notify.error('Gift value must be a positive number.');
+    const p = price === '' ? null : Number(price);
+    if (price !== '' && (!Number.isFinite(p) || p < 0)) {
+      return notify.error('Price must be a non-negative number.');
+    }
     setSubmitting(true);
     try {
-      const body = { amount: a };
-      if (expiresAt) body.expiresAt = expiresAt;
-      if (issuedTo) body.issuedTo = parseInt(issuedTo, 10);
+      const body = {
+        name: name.trim(),
+        amount: gv,           // backend's existing field — the redeemable value
+        price: p,             // new field — what the buyer paid
+        color,
+      };
+      if (validity) body.validityDays = parseInt(validity, 10);
       const row = await fetchApi('/api/wellness/giftcards', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -168,19 +325,99 @@ function IssueModal({ onDone, onCancel }) {
   return (
     <div style={modalOverlay}>
       <div style={modalCard}>
-        <h3>Issue gift card</h3>
-        <label style={lbl}>Amount
-          <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} style={inp} min="0" step="0.01" />
+        <h3>Add gift card</h3>
+        <label style={lbl}>
+          <span><span style={{ color: 'var(--danger-color, #ef4444)' }}>* </span>Name</span>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="New year's gift card"
+            style={inp}
+            data-testid="giftcard-name-input"
+          />
         </label>
-        <label style={lbl}>Expires (optional)
-          <input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} style={inp} />
+        <label style={lbl}>
+          <span>Validity</span>
+          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
+            Period of time the gift card is valid after purchase
+          </span>
+          <select
+            value={validity}
+            onChange={(e) => setValidity(e.target.value)}
+            style={inp}
+            data-testid="giftcard-validity-select"
+          >
+            {VALIDITY_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
         </label>
-        <label style={lbl}>Recipient patient id (optional, "to:" line)
-          <input type="number" value={issuedTo} onChange={(e) => setIssuedTo(e.target.value)} style={inp} />
+        <label style={lbl}>
+          <span><span style={{ color: 'var(--danger-color, #ef4444)' }}>* </span>Gift value</span>
+          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
+            The amount your gift recipient can use
+          </span>
+          <input
+            type="number"
+            value={giftValue}
+            onChange={(e) => setGiftValue(e.target.value)}
+            style={inp}
+            min="0"
+            step="0.01"
+            placeholder="100"
+            data-testid="giftcard-giftvalue-input"
+          />
+        </label>
+        <label style={lbl}>
+          <span><span style={{ color: 'var(--danger-color, #ef4444)' }}>* </span>Price</span>
+          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
+            What you'll pay to buy this gift card
+          </span>
+          <input
+            type="number"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            style={inp}
+            min="0"
+            step="0.01"
+            placeholder="90"
+            data-testid="giftcard-price-input"
+          />
+        </label>
+        <label style={lbl}>
+          <span><span style={{ color: 'var(--danger-color, #ef4444)' }}>* </span>Color</span>
+          <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }} data-testid="giftcard-color-swatches">
+            {COLOR_SWATCHES.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setColor(c)}
+                aria-label={`Pick color ${c}`}
+                data-testid={`giftcard-color-${c}`}
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
+                  background: c,
+                  border: c === color ? '2px solid var(--text-primary)' : '1px solid var(--border-color)',
+                  cursor: 'pointer',
+                  outline: 'none',
+                }}
+              />
+            ))}
+          </div>
         </label>
         <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
           <button onClick={onCancel} style={btnSecondary} disabled={submitting}>Cancel</button>
-          <button onClick={submit} style={btnPrimary} disabled={submitting}>{submitting ? 'Issuing…' : 'Issue'}</button>
+          <button
+            onClick={submit}
+            style={btnPrimary}
+            disabled={submitting}
+            data-testid="giftcard-save-btn"
+          >
+            {submitting ? 'Saving…' : 'Save'}
+          </button>
         </div>
       </div>
     </div>
@@ -285,7 +522,10 @@ function ApplyModal({ giftCard, onDone, onCancel }) {
         )}
 
         {selected && (
-          <div style={{ padding: '0.6rem 0.75rem', background: 'var(--success-bg, #ecfdf5)', borderRadius: 6, marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          // Theme-aware "selected patient" chip — same emerald tint as
+          // the top-of-page New-Gift-Card-Issued toast so the page has
+          // a single consistent success surface in both modes.
+          <div style={{ padding: '0.6rem 0.75rem', background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.35)', color: 'var(--text-primary)', borderRadius: 6, marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontWeight: 500 }}>{selected.name || `Patient #${selected.id}`}</div>
               <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
@@ -312,8 +552,36 @@ const td = { padding: '0.5rem', fontSize: '0.9rem' };
 const btnPrimary = { padding: '0.6rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' };
 const btnSecondary = { padding: '0.6rem 1rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer' };
 const btnRowAction = { padding: '0.35rem 0.65rem', background: 'transparent', color: 'var(--primary-color, var(--accent-color))', border: '1px solid var(--primary-color, var(--accent-color))', borderRadius: 6, cursor: 'pointer', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' };
+// Tiny icon-only ghost button — used for the inline Copy code action
+// next to each row's masked code. Stays theme-neutral by inheriting
+// the parent's text color through `currentColor` borders + transparent
+// background, so it reads correctly in both light and dark modes.
+const btnIconGhost = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '0.2rem',
+  background: 'transparent',
+  border: '1px solid var(--border-color)',
+  borderRadius: 4,
+  cursor: 'pointer',
+  color: 'var(--text-secondary)',
+};
 const modalOverlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 };
-const modalCard = { background: 'var(--bg-color, #fff)', padding: '1.5rem', borderRadius: 12, minWidth: 360, maxWidth: 500 };
+// `var(--bg-color)` resolves to the active theme's app background
+// (cream in wellness light, near-black in dark). Falling back to a
+// hardcoded `#fff` would render a glaring white card in dark mode if
+// the var ever goes unset; `var(--surface-color)` is the codebase's
+// standard "elevated card" fallback in that case.
+const modalCard = {
+  background: 'var(--bg-color, var(--surface-color, #1f2937))',
+  color: 'var(--text-primary)',
+  padding: '1.5rem',
+  borderRadius: 12,
+  minWidth: 360,
+  maxWidth: 500,
+  border: '1px solid var(--border-color)',
+};
 const lbl = { display: 'block', marginBottom: '0.75rem', fontSize: '0.9rem' };
 const inp = { width: '100%', padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', marginTop: '0.25rem', boxSizing: 'border-box' };
 

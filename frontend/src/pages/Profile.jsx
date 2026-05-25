@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { User, Mail, Key, Save, Stethoscope } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import { User, Mail, Key, Save, Stethoscope, Download, FileText } from 'lucide-react';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { AuthContext } from '../App';
+import { useNotify } from '../utils/notify';
 import { formatDateLong } from '../utils/date';
 
 // #641 — practitioner-specific profile sections (specialty, license, etc.)
@@ -19,6 +20,7 @@ function isPractitioner(profile) {
 
 const Profile = () => {
   const { user: authUser, setUser: setAuthUser, subscription } = useContext(AuthContext);
+  const notify = useNotify();
   const [profile, setProfile] = useState(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -30,10 +32,51 @@ const Profile = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
+  // Billing history — paid subscriptions tied to this admin. ADMIN-only on
+  // the backend; we still call it from any role's Profile page and just
+  // render nothing on 403 so the page itself doesn't error.
+  const [invoices, setInvoices] = useState([]);
+  const [invoicesLoaded, setInvoicesLoaded] = useState(false);
+  const [downloadingId, setDownloadingId] = useState(null);
 
   useEffect(() => {
     loadProfile();
+    loadInvoices();
   }, []);
+
+  const loadInvoices = async () => {
+    try {
+      const data = await fetchApi('/api/subscriptions/invoices', { silent: true });
+      setInvoices(Array.isArray(data) ? data : []);
+    } catch {
+      // Non-admin role gets 403 → just leave invoices empty, hide the
+      // section. Network errors also silently no-op.
+      setInvoices([]);
+    } finally {
+      setInvoicesLoaded(true);
+    }
+  };
+
+  const downloadInvoicePdf = async (subId, invoiceNum) => {
+    setDownloadingId(subId);
+    try {
+      const token = getAuthToken();
+      const baseUrl = import.meta.env.VITE_API_URL || '';
+      const url = `${baseUrl}/api/subscriptions/${subId}/invoice.pdf`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`Download failed (${res.status})`);
+      const blob = await res.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${invoiceNum || `subscription-${subId}`}.pdf`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (err) {
+      notify.error(`Could not download invoice: ${err.message || 'unknown error'}`);
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const loadProfile = async () => {
     try {
@@ -176,7 +219,9 @@ const Profile = () => {
           marginBottom: '1.5rem',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center'
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap',
         }}>
           <div>
             <div style={{ fontSize: '12px', color: '#888' }}>Current Plan</div>
@@ -184,14 +229,97 @@ const Profile = () => {
               {subscription.subscription.planName}
             </div>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '12px', color: '#888' }}>Expires</div>
-            <div style={{ fontSize: '16px', color: '#22c55e', fontWeight: '600' }}>
-              {formatDate(subscription.subscription.endDate)}
+          <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div>
+              <div style={{ fontSize: '12px', color: '#888' }}>Expires</div>
+              <div style={{ fontSize: '16px', color: '#22c55e', fontWeight: '600' }}>
+                {formatDate(subscription.subscription.endDate)}
+              </div>
             </div>
+            {/* Download the most recent paid invoice. Invoices list is
+                pre-sorted newest-first so [0] is always the latest payment
+                that produced the current ACTIVE subscription. Hidden for
+                non-admin roles (the invoices fetch silently 403s for them
+                and `invoices` stays empty). */}
+            {invoices.length > 0 && (
+              <button
+                onClick={() => downloadInvoicePdf(invoices[0].id, invoices[0].invoiceNum)}
+                disabled={downloadingId === invoices[0].id}
+                title="Download the latest invoice as PDF"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '8px 14px', fontSize: '13px', fontWeight: 600,
+                  background: '#22c55e', color: '#fff', border: 'none',
+                  borderRadius: 6, cursor: downloadingId === invoices[0].id ? 'wait' : 'pointer',
+                  opacity: downloadingId === invoices[0].id ? 0.7 : 1,
+                  fontFamily: 'inherit',
+                }}
+              >
+                <Download size={14} />
+                {downloadingId === invoices[0].id ? 'Generating…' : 'Invoice PDF'}
+              </button>
+            )}
           </div>
         </div>
       ) : null}
+
+      {/* Billing history — full list of past subscription payments, each
+          with its own PDF download. Hidden when invoices list is empty
+          (anonymous + non-admin roles + brand-new users on TRIAL). */}
+      {invoicesLoaded && invoices.length > 0 && (
+        <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '1rem' }}>
+            <FileText size={18} color="var(--accent-color)" />
+            <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Billing History</h3>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {invoices.map((inv) => (
+              <div
+                key={inv.id}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '12px 14px', borderRadius: 8,
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--subtle-bg-1, transparent)',
+                  gap: 12, flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {inv.invoiceNum} · {inv.planName}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                    {formatDate(inv.startDate)}
+                    {inv.endDate ? ` → ${formatDate(inv.endDate)}` : ''} · {inv.status}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {inv.currency === 'INR' ? '₹' : (inv.currency === 'USD' ? '$' : '')}
+                    {Number(inv.amount).toLocaleString()}
+                  </div>
+                  <button
+                    onClick={() => downloadInvoicePdf(inv.id, inv.invoiceNum)}
+                    disabled={downloadingId === inv.id}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      padding: '6px 12px', fontSize: '0.78rem', fontWeight: 600,
+                      background: 'transparent', color: 'var(--accent-color)',
+                      border: '1px solid var(--accent-color)', borderRadius: 6,
+                      cursor: downloadingId === inv.id ? 'wait' : 'pointer',
+                      opacity: downloadingId === inv.id ? 0.7 : 1,
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    <Download size={12} />
+                    {downloadingId === inv.id ? 'Generating…' : 'PDF'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Profile Info Card */}
       <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>

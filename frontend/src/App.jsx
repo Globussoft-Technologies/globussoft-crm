@@ -66,6 +66,7 @@ const Estimates = lazy(() => import("./pages/Estimates"));
 const Projects = lazy(() => import("./pages/Projects"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Pricing = lazy(() => import("./pages/Pricing"));
+const ManagePlans = lazy(() => import("./pages/ManagePlans"));
 const MarketplaceLeads = lazy(() => import("./pages/MarketplaceLeads"));
 const Channels = lazy(() => import("./pages/Channels"));
 const LandingPages = lazy(() => import("./pages/LandingPages"));
@@ -726,6 +727,11 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
+                    {/* Manage Subscription Plans — Owner-only catalog editor.
+                        The page itself gates render on usePermissions().isOwner,
+                        so no RoleGuard wrap (RoleGuard reads user.role which is
+                        ADMIN/MANAGER/USER; OWNER lives on the isOwner flag). */}
+                    <Route path="manage-plans" element={<ManagePlans />} />
                     <Route
                       path="data-import-export"
                       element={

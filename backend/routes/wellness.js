@@ -10369,13 +10369,48 @@ router.post(
           .status(400)
           .json({ error: "amount must be a positive number" });
       }
-      const expiresAt = req.body.expiresAt
+      // v3.7.17 — optional template-style fields. All nullable, all
+      // tolerant of missing values to keep the legacy /giftcards POST
+      // contract working for existing callers (wallet-giftcard spec,
+      // PointOfSale issue flow). validityDays takes precedence over
+      // an explicit expiresAt — if both are sent we honor expiresAt.
+      const name = typeof req.body.name === "string" && req.body.name.trim()
+        ? req.body.name.trim()
+        : null;
+      let price = null;
+      if (req.body.price != null && req.body.price !== "") {
+        const p = Number(req.body.price);
+        if (!Number.isFinite(p) || p < 0) {
+          return res.status(400).json({ error: "price must be a non-negative number" });
+        }
+        price = p;
+      }
+      let validityDays = null;
+      if (req.body.validityDays != null && req.body.validityDays !== "") {
+        const v = parseInt(req.body.validityDays, 10);
+        if (!Number.isInteger(v) || v <= 0 || v > 3650) {
+          return res.status(400).json({ error: "validityDays must be an integer between 1 and 3650" });
+        }
+        validityDays = v;
+      }
+      const color = typeof req.body.color === "string" && /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
+        ? req.body.color.trim()
+        : null;
+
+      let expiresAt = req.body.expiresAt
         ? new Date(req.body.expiresAt)
         : null;
       if (expiresAt && Number.isNaN(expiresAt.getTime())) {
         return res
           .status(400)
           .json({ error: "expiresAt must be a valid date" });
+      }
+      // Derive expiresAt from validityDays when the caller didn't send
+      // an explicit one. The expiresAt column stays authoritative; the
+      // validityDays metadata persists alongside so the UI can re-show
+      // "Validity: 3 months" when editing.
+      if (!expiresAt && validityDays) {
+        expiresAt = new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000);
       }
       if (expiresAt && expiresAt.getTime() < Date.now()) {
         return res
@@ -10408,6 +10443,10 @@ router.post(
               codeHash, // bcrypt at rest
               codeLast4, // last-4 for UI + lookup narrowing
               amount,
+              name,
+              price,
+              validityDays,
+              color,
               currency: req.body.currency || "INR",
               expiresAt,
               issuedTo,
@@ -10473,6 +10512,69 @@ router.post(
     } catch (e) {
       console.error("[wellness] giftcard create error:", e.message);
       res.status(500).json({ error: "Failed to issue gift card" });
+    }
+  },
+);
+
+// v3.7.17 — PATCH /giftcards/:id for admin-driven status transitions.
+//
+// Allowed flips:
+//   active     ⇄ cancelled
+//
+// Disallowed:
+//   * Flipping TO or FROM `redeemed` (that's a redeemer-driven terminal
+//     state — only POST /giftcards/redeem can set it).
+//   * Flipping TO `expired` (computed from expiresAt; an admin who
+//     wants to retire a card uses `cancelled`).
+//
+// Audited like every other GiftCard mutation so a tamper trail exists.
+router.patch(
+  "/giftcards/:id",
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: "Invalid gift card id" });
+      }
+      const nextStatus = String(req.body.status || "").toLowerCase();
+      if (nextStatus !== "active" && nextStatus !== "cancelled") {
+        return res.status(400).json({
+          error: "status must be one of: active, cancelled",
+          code: "STATUS_INVALID",
+        });
+      }
+      const existing = await prisma.giftCard.findFirst({
+        where: tenantWhere(req, { id }),
+      });
+      if (!existing) return res.status(404).json({ error: "Gift card not found" });
+      // Redeemed cards are terminal — admins can't reactivate them.
+      if (existing.status === "redeemed") {
+        return res.status(409).json({
+          error: "Redeemed gift cards cannot change status",
+          code: "STATUS_TERMINAL",
+        });
+      }
+      // No-op when the requested status matches the current one.
+      if (existing.status === nextStatus) {
+        return res.json(existing);
+      }
+      const updated = await prisma.giftCard.update({
+        where: { id },
+        data: { status: nextStatus },
+      });
+      await writeAudit(
+        "GiftCard",
+        nextStatus === "cancelled" ? "CANCEL" : "REACTIVATE",
+        id,
+        req.user.userId,
+        req.user.tenantId,
+        { from: existing.status, to: nextStatus, codeLast4: existing.codeLast4 },
+      );
+      res.json(updated);
+    } catch (e) {
+      console.error("[wellness] giftcard patch error:", e.message);
+      res.status(500).json({ error: "Failed to update gift card status" });
     }
   },
 );

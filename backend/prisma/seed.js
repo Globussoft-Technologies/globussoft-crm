@@ -66,37 +66,73 @@ async function main() {
   // ══════════════════════════════════════════════════════════════
   // STEP 2: SUBSCRIPTION PLANS
   // ══════════════════════════════════════════════════════════════
+  // Plans drive the public /pricing page AND the Razorpay checkout. The
+  // `pricing` JSON carries all 4 display prices (usd/inr × annual/monthly)
+  // the marketing page needs; the legacy `price`+`currency` columns stay as
+  // the Razorpay charge fallback when /create-order is called without a
+  // currency+period preference. Owner can edit any of this from the in-app
+  // "Manage Subscription Plans" page — no redeploy needed.
   const plans = await Promise.all([
     prisma.subscriptionPlan.create({
       data: {
         name: 'Starter',
+        planKey: 'starter',
+        displayOrder: 0,
+        popular: false,
+        accentColor: '#4f46e5',
+        cta: 'Start Free Trial',
+        featuresLabel: 'Includes',
         price: 499,
         currency: 'INR',
         billingIntervalDays: 30,
         description: 'For startups & SMBs seeking efficient pipeline management.',
         features: JSON.stringify(['Contact, Account & Deal Management', 'Contact Lifecycle Stages', 'Built-in Chat, Email & Phone', 'Email Templates & Tracking', 'Custom Fields & Kanban Views', 'Basic Workflows (20)', 'Visual Sales Pipeline', 'Product Catalog', 'Curated Reports & Dashboards', 'Slack Integration & Marketplace', 'Mobile App & 24×5 Support']),
+        pricing: JSON.stringify({
+          usd: { annual: 6, monthly: 8, yearAnnualLabel: '$72 /user/year', yearMonthlyLabel: '$96 /user/year' },
+          inr: { annual: 499, monthly: 649, yearAnnualLabel: '₹5,988 /user/year', yearMonthlyLabel: '₹7,788 /user/year' },
+        }),
         isActive: true,
       }
     }),
     prisma.subscriptionPlan.create({
       data: {
         name: 'Professional',
+        planKey: 'pro',
+        displayOrder: 1,
+        popular: true,
+        accentColor: '#7c3aed',
+        cta: 'Start Free Trial',
+        featuresLabel: 'Everything in Starter, plus',
         price: 1499,
         currency: 'INR',
         billingIntervalDays: 30,
         description: 'For growing teams needing AI, automation & multi-pipeline.',
         features: JSON.stringify(['AI-Powered Contact Scoring', 'Multiple Sales Pipelines', 'Sales Sequences & Automation', 'Territory Management', 'Auto-assignment Rules', 'AI Email Writing & Enhancement', 'Deal Insights by AI', 'Advanced Workflows (50)', 'Custom Reports & Dashboards', 'Account Hierarchy & BYOC']),
+        pricing: JSON.stringify({
+          usd: { annual: 18, monthly: 22, yearAnnualLabel: '$216 /user/year', yearMonthlyLabel: '$264 /user/year' },
+          inr: { annual: '1,499', monthly: '1,899', yearAnnualLabel: '₹17,988 /user/year', yearMonthlyLabel: '₹22,788 /user/year' },
+        }),
         isActive: true,
       }
     }),
     prisma.subscriptionPlan.create({
       data: {
         name: 'Enterprise',
+        planKey: 'ent',
+        displayOrder: 2,
+        popular: false,
+        accentColor: '#d97706',
+        cta: 'Contact Sales',
+        featuresLabel: 'Everything in Professional, plus',
         price: 2499,
         currency: 'INR',
         billingIntervalDays: 30,
         description: 'For large teams needing customization, governance & AI forecasting.',
         features: JSON.stringify(['Custom Modules', 'AI Forecasting Insights', 'Field-level Permissions', 'Sandbox Environment', 'Audit Logs & Compliance', 'Auto Profile Enrichment', 'Deal Teams & Advanced Metrics', '5,000 Bulk Emails/user/day', '100 GB Storage/user', 'Dedicated Account Manager', 'Priority 24×7 Support']),
+        pricing: JSON.stringify({
+          usd: { annual: 29, monthly: 36, yearAnnualLabel: '$348 /user/year', yearMonthlyLabel: '$432 /user/year' },
+          inr: { annual: '2,499', monthly: '2,999', yearAnnualLabel: '₹29,988 /user/year', yearMonthlyLabel: '₹35,988 /user/year' },
+        }),
         isActive: true,
       }
     }),

@@ -107,7 +107,12 @@ describe('whatsappProvider — sendTemplate', () => {
     // Inspect the outbound HTTPS call
     const { options, payload } = httpsState.lastRequest;
     expect(options.hostname).toBe('graph.facebook.com');
-    expect(options.path).toBe('/v18.0/PNID_42/messages');
+    // P1: GRAPH_API_VERSION now reads from process.env.META_GRAPH_VERSION
+    // (default 'v22.0'). The exact version is informational; the SUT just
+    // composes the Graph URL with whatever is configured. We use the module
+    // export so the test stays in sync with bumps to the default.
+    const { GRAPH_API_VERSION } = require('../../services/whatsappProvider');
+    expect(options.path).toBe(`/${GRAPH_API_VERSION}/PNID_42/messages`);
     expect(options.method).toBe('POST');
     expect(options.headers['Content-Type']).toBe('application/json');
     expect(options.headers.Authorization).toBe('Bearer EAA_test_token');
@@ -326,7 +331,8 @@ describe('whatsappProvider — sendText (free-form session message)', () => {
 
     const { options, payload } = httpsState.lastRequest;
     expect(options.hostname).toBe('graph.facebook.com');
-    expect(options.path).toBe('/v18.0/PNID_T/messages');
+    const { GRAPH_API_VERSION: GAV2 } = require('../../services/whatsappProvider');
+    expect(options.path).toBe(`/${GAV2}/PNID_T/messages`);
     expect(options.headers.Authorization).toBe('Bearer TOK_T');
 
     const body = JSON.parse(payload);

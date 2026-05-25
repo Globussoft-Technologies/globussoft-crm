@@ -13,7 +13,11 @@ import Softphone from './Softphone';
 import NotificationBell from './NotificationBell';
 import Avatar from './Avatar';
 import TrialBanner from './TrialBanner';
-import SubscriptionExpiryModal from './SubscriptionExpiryModal';
+// SubscriptionExpiryModal removed — its dismissible "Remind Later" escape
+// violated the hard-paywall contract. Once the trial / subscription is
+// actually expired the new SubscriptionGate component takes over and the
+// user cannot dismiss it until they pay (or sign out).
+import SubscriptionGate from './SubscriptionGate';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { setupPush } from '../utils/pushSetup';
@@ -133,7 +137,8 @@ const Layout = () => {
   const showSmsBanner = isStaff && user?.features?.smsConfigured === false;
 
   const [daysRemaining, setDaysRemaining] = useState(null);
-  const [trialEndsAt, setTrialEndsAt] = useState(null);
+  // trialEndsAt state was consumed by the old SubscriptionExpiryModal —
+  // removed alongside the move to the hard SubscriptionGate paywall.
 
   // Auto-register push notifications after login (silent failures OK)
   useEffect(() => {
@@ -158,7 +163,6 @@ const Layout = () => {
         const data = await fetchApi('/api/subscriptions/status', { silent: true });
         if (data) {
           setDaysRemaining(data.daysRemaining);
-          setTrialEndsAt(data.trialEndsAt);
         }
       } catch (err) {
         // silently fail
@@ -314,10 +318,16 @@ const Layout = () => {
         {daysRemaining > 0 && (
           <TrialBanner daysRemaining={daysRemaining} />
         )}
-        <SubscriptionExpiryModal daysRemaining={daysRemaining} trialEndsAt={trialEndsAt} />
         <main className="animate-fade-in" style={{ flex: 1, overflowY: 'auto', padding: '0', backgroundColor: 'transparent' }}>
           <Outlet />
         </main>
+        {/* Hard subscription paywall — renders a non-dismissable overlay
+            over the entire app when the trial has ended or the paid
+            subscription has expired/been cancelled. Mounted via position:
+            fixed + z-index, so it visually sits above header/sidebar/main.
+            Allow-listed routes (/pricing, /payment-success, /payment-failed)
+            render through it so the admin can actually complete checkout. */}
+        <SubscriptionGate />
         {/* #634: build identifier — small, low-contrast, app-shell footer.
             Version is sourced from backend/package.json at build time (see
             vite.config.js define block) so it stays aligned with /api/health.

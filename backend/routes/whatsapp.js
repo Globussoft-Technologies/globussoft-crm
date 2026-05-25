@@ -188,7 +188,16 @@ router.post("/send", verifyToken, async (req, res) => {
       }
     }
 
-    // Create message record
+    // P3: persist the message in QUEUED state and enqueue a WaOutboundJob.
+    // The whatsappOutboundEngine cron picks it up within 30s, sends via
+    // Meta, retries on transient failures, marks status=SENT/FAILED, and
+    // broadcasts via Socket.io. The route returns 202 immediately so the
+    // caller is not blocked on Meta's HTTPS round-trip — better UX, better
+    // protection against Meta latency, and the queue provides retry on
+    // transient failures (5xx, 429) which the old synchronous path could
+    // not. Internal callers needing direct-send still call the provider
+    // helpers (`sendText`, `sendTemplate`) directly — only this route
+    // (the operator-facing surface) goes async.
     const message = await prisma.whatsAppMessage.create({
       data: {
         to,
@@ -204,49 +213,45 @@ router.post("/send", verifyToken, async (req, res) => {
       },
     });
 
-    let result;
-
-    // #651 — decrypt on-read; no-op for legacy plaintext rows.
-    const accessTokenPlain = decryptCredential(config.accessToken);
-    if (templateName) {
-      // Look up template within tenant
-      const tpl = await prisma.whatsAppTemplate.findFirst({ where: { name: templateName, tenantId: req.user.tenantId } });
-      result = await sendTemplate({
-        to,
-        templateName,
-        language: tpl?.language || "en_US",
-        parameters: parameters || [],
-        phoneNumberId: config.phoneNumberId,
-        accessToken: accessTokenPlain,
+    // Enqueue. Failure here is fatal — we already wrote the message row,
+    // so without a job the cron will never pick it up. Mark the message
+    // FAILED and return 500 in that case so the caller knows their send
+    // didn't actually queue.
+    try {
+      const { getQueue } = require("../lib/whatsappQueue");
+      await getQueue().enqueueSend({
+        messageId: message.id,
+        tenantId: req.user.tenantId,
       });
-    } else {
-      result = await sendText({
-        to,
-        body,
-        phoneNumberId: config.phoneNumberId,
-        accessToken: accessTokenPlain,
+    } catch (enqueueErr) {
+      console.error("[whatsapp /send] enqueue failed:", enqueueErr);
+      await prisma.whatsAppMessage.update({
+        where: { id: message.id },
+        data: { status: "FAILED", errorMessage: `enqueue failed: ${enqueueErr.message}` },
+      }).catch(() => {});
+      return res.status(500).json({
+        success: false,
+        messageId: message.id,
+        error: "Failed to enqueue send",
+        code: "ENQUEUE_FAILED",
       });
     }
-
-    // Update message status
-    await prisma.whatsAppMessage.update({
-      where: { id: message.id },
-      data: {
-        status: result.success ? "SENT" : "FAILED",
-        providerMsgId: result.providerMsgId || null,
-        errorMessage: result.error || null,
-      },
-    });
 
     if (req.io) {
-      req.io.emit("whatsapp:sent", { messageId: message.id, to, status: result.success ? "SENT" : "FAILED" });
+      req.io.emit("whatsapp:queued", { messageId: message.id, to, threadId: thread?.id || null });
     }
 
-    if (result.success) {
-      res.json({ success: true, messageId: message.id, providerMsgId: result.providerMsgId, threadId: thread?.id || null });
-    } else {
-      res.status(500).json({ success: false, messageId: message.id, error: result.error });
-    }
+    // 202 Accepted — the message is QUEUED. Caller polls /api/whatsapp/messages
+    // or listens on Socket.io 'whatsapp:sent' / 'whatsapp:status' for the
+    // eventual SENT / DELIVERED / READ / FAILED transitions.
+    res.status(202).json({
+      success: true,
+      messageId: message.id,
+      status: "QUEUED",
+      threadId: thread?.id || null,
+    });
+    // unused legacy reference — kept to satisfy a require() warning silencer
+    void sendText; void sendTemplate; void decryptCredential;
   } catch (err) {
     console.error("WhatsApp send error:", err);
     res.status(500).json({ error: "Failed to send WhatsApp message" });
@@ -830,7 +835,26 @@ router.delete("/templates/:id", verifyToken, async (req, res) => {
   }
 });
 
-// ─── Sync Template Status from Meta ────────────────────────────────────────
+// ─── Bulk Sync ALL Templates from Meta (P4) ────────────────────────────────
+//
+// Pulls every template for this tenant's WABA and upserts. Manual trigger
+// for the same routine the daily whatsappTemplateSyncEngine cron runs.
+router.post("/templates/sync", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const { syncTemplatesForTenant } = require("../cron/whatsappTemplateSyncEngine");
+    const r = await syncTemplatesForTenant(req.user.tenantId);
+    if (!r.ok) {
+      const status = r.code === "NOT_CONNECTED" ? 404 : r.code === "GRAPH_ERROR" ? 502 : 400;
+      return res.status(status).json({ error: r.code, detail: r.error });
+    }
+    res.json({ success: true, synced: r.synced, total: r.total });
+  } catch (err) {
+    console.error("WhatsApp templates bulk sync error:", err);
+    res.status(500).json({ error: "Failed to sync templates" });
+  }
+});
+
+// ─── Sync Single Template Status from Meta ─────────────────────────────────
 router.post("/templates/:id/sync", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -983,39 +1007,56 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
   }
 });
 
-// ─── Meta Webhook Verification (GET, NO AUTH) ──────────────────────────────
+// ─── Meta Webhook (TOMBSTONE) ──────────────────────────────────────────────
+//
+// P1: The GET /webhook and POST /webhook handlers were extracted to
+// routes/whatsapp_webhook.js and are mounted in server.js BEFORE the
+// global express.json() so the raw body survives for X-Hub-Signature-256
+// verification.
+//
+// The pre-P1 implementation here was removed for two correctness reasons:
+//   1. It used `whatsAppConfig.findFirst({ isActive: true })` for the GET
+//      verify, which broke multi-tenant: tenant B's webhook verify would
+//      succeed against tenant A's token if A was created first.
+//   2. The POST handler used `contact.findFirst({ phone: contains last10 })`
+//      across ALL tenants then defaulted to `tenantId=1` if no match —
+//      a cross-tenant data leak surface.
+//
+// Both issues are fixed in routes/whatsapp_webhook.js + middleware/metaWebhook.js.
+// These stubs only fire if the mount order in server.js is wrong (in which
+// case they LOG a clear error so the operator can fix it).
 router.get("/webhook", async (req, res) => {
-  try {
-    // Match against any active WhatsApp config across all tenants
-    const config = await prisma.whatsAppConfig.findFirst({ where: { isActive: true } });
-    // #651 — decrypt on-read; no-op for plaintext / env-var fallback.
-    const token = decryptCredential(config?.webhookVerifyToken) || process.env.WHATSAPP_VERIFY_TOKEN || "";
-
-    const result = verifyWebhook(req, token);
-    if (result.verified) {
-      res.status(200).send(result.challenge);
-    } else {
-      res.status(403).json({ error: "Verification failed" });
-    }
-  } catch (err) {
-    console.error("WhatsApp webhook verify error:", err);
-    res.status(500).json({ error: "Webhook verification failed" });
-  }
+  console.error(
+    "[whatsapp routes/whatsapp.js] LEGACY GET /webhook reached — " +
+    "mount order is wrong; routes/whatsapp_webhook.js must be mounted " +
+    "BEFORE express.json() in server.js.",
+  );
+  res.status(503).json({
+    error: "Webhook routing misconfigured — operator action required",
+    code: "WEBHOOK_MOUNT_ORDER",
+  });
 });
 
-// ─── Meta Webhook (POST, NO AUTH) ──────────────────────────────────────────
-//
-// Tenant inferred from matched contact, defaults to 1.
-//
-// Wave 2 Agent KK 2-way completion:
-//   - Every inbound message upserts a WhatsAppThread for (tenantId, normalizedPhone).
-//   - Second inbound on same phone reuses the existing thread; lastMessageAt
-//     and lastInboundAt are bumped; unreadCount increments only when no agent
-//     is assigned (assigned threads zero-out via the mark-read endpoint).
-//   - "STOP" / "UNSUBSCRIBE" keyword auto-creates a WhatsAppOptOut row +
-//     enqueues a confirmation reply (best-effort; logs failure).
+// ─── Meta Webhook POST (TOMBSTONE) ─────────────────────────────────────────
+// See the GET /webhook stub above for the full P1 explanation.
 router.post("/webhook", async (req, res) => {
-  try {
+  console.error(
+    "[whatsapp routes/whatsapp.js] LEGACY POST /webhook reached — " +
+    "mount order is wrong; routes/whatsapp_webhook.js must be mounted " +
+    "BEFORE express.json() in server.js.",
+  );
+  res.status(503).json({
+    error: "Webhook routing misconfigured — operator action required",
+    code: "WEBHOOK_MOUNT_ORDER",
+  });
+});
+
+// Legacy webhook POST processing — KEPT AS DEAD CODE inside an unreachable
+// branch so a follow-up reviewer can verify P1's webhook handler captures
+// every behavior the old code had. Once the new handler has run a full
+// release cycle without regression, this block can be deleted.
+async function _legacyPostWebhookDeadCode(req, res) {
+  if (false) {
     const { object, entry } = req.body;
 
     res.status(200).json({ received: true });
@@ -1197,9 +1238,9 @@ router.post("/webhook", async (req, res) => {
         }
       }
     }
-  } catch (err) {
-    console.error("WhatsApp webhook error:", err);
   }
-});
+}
+// Make eslint happy — _legacyPostWebhookDeadCode is intentionally unreferenced.
+void _legacyPostWebhookDeadCode;
 
 module.exports = router;

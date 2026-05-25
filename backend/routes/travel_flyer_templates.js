@@ -32,6 +32,7 @@
  *   GET    /api/travel/flyer-templates/:id/preview.pdf — USER+ inline PDF preview (slice 12)
  *   GET    /api/travel/flyer-templates/:id/usage-stats — USER+ per-template AuditLog rollup (slice 17)
  *   GET    /api/travel/flyer-templates/:id/audit-trail  — USER+ ordered per-template audit list (slice 18)
+ *   GET    /api/travel/flyer-templates/:id/clone-history — USER+ chronological per-source clone history (slice 20)
  *   PUT    /api/travel/flyer-templates/:id            — ADMIN/MANAGER partial update
  *   DELETE /api/travel/flyer-templates/:id            — ADMIN-only hard delete
  *
@@ -2075,6 +2076,208 @@ router.delete(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] delete error:", e.message);
       res.status(500).json({ error: "Failed to delete flyer template" });
+    }
+  },
+);
+
+// GET /api/travel/flyer-templates/:id/clone-history — per-source clone feed
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 20).
+//
+// Read-only AuditLog-derived endpoint. Returns the chronological list of
+// CLONES spawned FROM this template (children), distinct from slice 18's
+// /audit-trail (which is the ordered list of EVENTS that happened TO this
+// template). The two surfaces overlap on the template's own
+// TRAVEL_FLYER_TEMPLATE_DUPLICATED row when the template ITSELF was the
+// child of a clone — audit-trail surfaces "I was created as a clone of X"
+// (entityId = me); clone-history surfaces "X spawned from me" (sourceId
+// inside details = me).
+//
+// Why a separate endpoint:
+//   - The library page's per-template "Variants" / "Family tree" drawer
+//     needs the FORWARD list of children to render the "Clones spawned"
+//     count (PRD §3.7.2 marketplace metadata; PRD §3.6.4 performance hint
+//     engine consumes child-count as a "popular template" signal). Doing
+//     this via /audit-trail + client-side filter is wrong: audit-trail's
+//     where clause pins entityId = source.id, but the clone's audit row's
+//     entityId is the NEW (child) template id, not the source. The two
+//     queries hit different entityIds entirely.
+//   - Tenant + sub-brand gate fires BEFORE the AuditLog read so cross-
+//     tenant / cross-sub-brand callers can't enumerate clone-counts via
+//     a 200-with-empty-rows reply (same fishing-rod stop as slice 18).
+//
+// Behaviour:
+//   - Tenant + sub-brand scoped on the SOURCE template id. 404
+//     TEMPLATE_NOT_FOUND when source missing; 403 SUB_BRAND_DENIED when
+//     caller can't read the source's sub-brand.
+//   - Loads AuditLog where { entity: 'TravelFlyerTemplate', action:
+//     'TRAVEL_FLYER_TEMPLATE_DUPLICATED', tenantId: req.travelTenant.id }
+//     — these are the rows the slice 6 duplicate handler writes. The
+//     entityId on those rows is the NEW template id (the clone), so we
+//     filter post-parse on `details.sourceId === <id>` (the field the
+//     duplicate handler stores).
+//   - Defensive against field-name drift: the post-parse filter accepts
+//     `details.sourceId` (today's emit), `details.clonedFromId` (an
+//     alternative name some sister modules use), and `details.parentId`
+//     (a third common convention). If a future refactor changes the
+//     stored field name, the per-source filter keeps working without
+//     having to refactor this endpoint in lockstep.
+//   - Empty list (0 matching rows) is a NORMAL response: 200 with
+//     history: []. NOT a 404. The source template existing without any
+//     children is the most common state.
+//   - Defensive against malformed details JSON: rows whose details column
+//     fails JSON.parse are silently skipped (NOT 500). The row's existence
+//     without a parseable parent-id reference can't satisfy the filter
+//     either way, so dropping it is the right call.
+//   - Limit clamp: default 100, max 500. Optional ?from / ?to ISO date
+//     bounds threaded into the AuditLog `createdAt` where clause. Optional
+//     ?orderBy=at:asc | at:desc — default `at:asc` (chronological — the
+//     library page renders the family tree top-to-bottom from oldest
+//     clone to newest).
+//
+// Per-entry shape:
+//   { at: ISO, clonedById: int|null, newTemplateId: int|null, details: object }
+//   - `clonedById` comes from `row.userId` (the actor who ran the
+//     duplicate) — surface null when missing.
+//   - `newTemplateId` comes from `details.newId` (the child template id
+//     written by the duplicate handler) — fall back to `row.entityId`
+//     when details doesn't carry it (older rows from before the
+//     stored-payload extended).
+//   - `details` is the parsed details JSON in full (no narrowing) so
+//     the UI can render `subBrand`, `name`, or any future field the
+//     duplicate handler adds without an endpoint change.
+//
+// Response envelope:
+//   { templateId, totalClones, history: [...] }
+//
+// USER-readable: mirrors slice 18 / 17 read-only-aid contract. No audit
+// row written by this read-only endpoint.
+router.get(
+  "/flyer-templates/:id/clone-history",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      // Resolve + gate the source template first.
+      const source = await prisma.travelFlyerTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!source) {
+        return res.status(404).json({
+          error: "Flyer template not found",
+          code: "TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      if (source.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, source.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      // Clamp limit: default 100, max 500.
+      const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+
+      // Order: default chronological asc, accept desc.
+      const orderParam = String(req.query.orderBy || "at:asc").toLowerCase();
+      const orderDir = orderParam === "at:desc" ? "desc" : "asc";
+
+      // Optional ?from / ?to ISO date bounds.
+      const where = {
+        tenantId: req.travelTenant.id,
+        entity: "TravelFlyerTemplate",
+        action: "TRAVEL_FLYER_TEMPLATE_DUPLICATED",
+      };
+      if (req.query.from || req.query.to) {
+        where.createdAt = {};
+        if (req.query.from) {
+          const fromDate = new Date(String(req.query.from));
+          if (!isNaN(fromDate.getTime())) where.createdAt.gte = fromDate;
+        }
+        if (req.query.to) {
+          const toDate = new Date(String(req.query.to));
+          if (!isNaN(toDate.getTime())) where.createdAt.lte = toDate;
+        }
+      }
+
+      // Fetch a generous superset — the post-parse per-source filter
+      // narrows further. We take up to 4x the limit to absorb the filter
+      // shrinkage, capped at 2000 to keep round-trips bounded.
+      const fetchTake = Math.min(take * 4, 2000);
+
+      const rows = await prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: orderDir },
+        take: fetchTake,
+        select: {
+          id: true,
+          createdAt: true,
+          userId: true,
+          entityId: true,
+          details: true,
+        },
+      });
+
+      const history = [];
+      for (const row of rows) {
+        let parsed = null;
+        if (row.details != null) {
+          if (typeof row.details === "string") {
+            try { parsed = JSON.parse(row.details); }
+            catch (_e) { parsed = null; }
+          } else if (typeof row.details === "object") {
+            parsed = row.details;
+          }
+        }
+        // Skip rows we can't parse — without details we can't confirm
+        // this clone descended from THIS source.
+        if (parsed == null) continue;
+
+        // Field-name drift defence: accept any of the three conventions.
+        const parentId =
+          parsed.sourceId != null ? parsed.sourceId :
+          parsed.clonedFromId != null ? parsed.clonedFromId :
+          parsed.parentId != null ? parsed.parentId :
+          null;
+
+        if (parentId !== id) continue;
+
+        const ts = row.createdAt instanceof Date
+          ? row.createdAt
+          : new Date(row.createdAt);
+
+        const newTemplateId =
+          parsed.newId != null ? parsed.newId :
+          row.entityId != null ? row.entityId :
+          null;
+
+        history.push({
+          at: ts.toISOString(),
+          clonedById: row.userId ?? null,
+          newTemplateId,
+          details: parsed,
+        });
+
+        if (history.length >= take) break;
+      }
+
+      res.json({
+        templateId: id,
+        totalClones: history.length,
+        history,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] clone-history error:", e.message);
+      res.status(500).json({ error: "Failed to read flyer template clone history" });
     }
   },
 );

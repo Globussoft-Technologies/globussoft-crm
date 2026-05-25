@@ -1083,6 +1083,313 @@ router.get(
   },
 );
 
+// GET /api/travel/invoices/by-month — any verified token (tenant + sub-brand scoped).
+//
+// Slice 29 of #901 (PRD_TRAVEL_BILLING §3 — tenant-wide invoice
+// analytics rolled up by calendar month). Mirrors #900 slice 16
+// (/quotes/by-month) — same UTC YYYY-MM bucketing template, same
+// defensive math, same orderBy semantics, swapping TravelQuote for
+// TravelInvoice. One row per UTC-month present in the scoped invoice
+// set, summarising the count + status splits across all 5 TravelInvoice
+// statuses (Draft/Issued/Partial/Paid/Voided) for that month plus
+// totalValue + paidValue + openValue sums. Read-only; consumed by the
+// operator-facing "invoices trend" chart on the billing dashboard and
+// the per-month picker for drill-downs into the underlying /invoices
+// list.
+//
+// Why a separate endpoint instead of extending /invoices/aged-receivable:
+//   - Different aggregation granularity (per-month time-series, not
+//     per-bucket-age-band).
+//   - Different lifecycle posture (covers Draft + Voided too — open
+//     receivable only spans Issued + Partial).
+//   - Pre-fills a different UI surface (line/bar trend chart vs the
+//     aged-receivable table).
+//
+// Bucket key shape: ISO YYYY-MM string (e.g. "2026-05") derived from
+// TravelInvoice.createdAt's UTC year + month. UTC chosen deliberately
+// so bucket labels stay stable across operator timezones — finance
+// reconciliation works in calendar-month UTC for cross-border volume.
+//
+// Scope rules:
+//   - Tenant-scoped on TravelInvoice.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//     (Differs from aged-receivable's ADMIN/MANAGER gate because this
+//     surface is a high-level trend chart, not a per-customer balance
+//     report that warrants role narrowing.)
+//
+// Query string:
+//   status    optional TravelInvoice.status filter
+//             (Draft/Issued/Partial/Paid/Voided)
+//   from      optional inclusive lower bound on bucket (YYYY-MM); rows
+//             with month < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY-MM); rows
+//             with month > to are excluded
+//   orderBy   default "month:asc" (chronological); also accepts
+//             "month:desc", "totalValue:asc|desc", "invoiceCount:asc|desc",
+//             "paidCount:asc|desc". Unknown tokens degrade silently
+//             to default (same graceful posture as slice 16).
+//   limit     default 12 (one year of months), max 60 (5 years).
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     months: [ {
+//       month: "2026-05",
+//       invoiceCount, totalValue,
+//       draftCount, issuedCount, partialCount, paidCount, voidedCount,
+//       paidValue, openValue
+//     } ],
+//     totalMonths,
+//     grandInvoiceCount,
+//     grandTotalValue,
+//     grandPaidValue,
+//     grandOpenValue,
+//     limit, offset
+//   }
+//
+// openValue per row = totalValue - paidValue - voidedValue (where
+// voidedValue is the sum of totalAmount on Voided rows — voided
+// invoices contribute to totalValue but neither paid nor open).
+// grandOpenValue is the sum of per-row openValue, half-up rounded.
+//
+// Defensive behaviour: null/invalid TravelInvoice.totalAmount contributes
+// 0 (no NaN poisoning); null/invalid createdAt → "unknown" bucket
+// (excluded when ?from / ?to is set, kept otherwise so the count surface
+// stays accurate). Half-up 2dp rounding via Number.EPSILON, matching
+// the canonical round2 used in slice 16.
+//
+// Route ordering: declared BEFORE GET /invoices/:id so Express doesn't
+// try to parse "by-month" as a numeric :id (which would 400 INVALID_ID).
+router.get("/invoices/by-month", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    if (statusFilter) {
+      try {
+        assertValidStatus(statusFilter);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+    }
+
+    // YYYY-MM validation — same regex slice 16 uses. Bucket labels we
+    // emit follow this exact shape so callers passing month-tokens to
+    // from/to should already be using it.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+      "invoiceCount:asc",
+      "invoiceCount:desc",
+      "paidCount:asc",
+      "paidCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /invoices list handler — empty access set → all-zeros rollup (not
+    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+    // operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        months: [],
+        totalMonths: 0,
+        grandInvoiceCount: 0,
+        grandTotalValue: 0,
+        grandPaidValue: 0,
+        grandOpenValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-MM. Input size bound is the same as
+    // /invoices/aged-receivable (low thousands at platinum scale).
+    const invoices = await prisma.travelInvoice.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) =>
+      Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts/sums }.
+    // Invoices with null/invalid createdAt go into "unknown" so counts
+    // stay accurate. Null/invalid totalAmount contributes 0. voidedValue
+    // is tracked separately so openValue can subtract it (voided rows
+    // contribute to totalValue but are neither paid nor open).
+    const byMonth = new Map();
+    for (const inv of invoices) {
+      let monthKey = "unknown";
+      if (inv.createdAt) {
+        const dt = new Date(inv.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let row = byMonth.get(monthKey);
+      if (!row) {
+        row = {
+          month: monthKey,
+          invoiceCount: 0,
+          totalValue: 0,
+          draftCount: 0,
+          issuedCount: 0,
+          partialCount: 0,
+          paidCount: 0,
+          voidedCount: 0,
+          paidValue: 0,
+          voidedValue: 0,
+        };
+        byMonth.set(monthKey, row);
+      }
+
+      row.invoiceCount += 1;
+      const amt = Number(inv.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (inv.status) {
+        case "Draft":
+          row.draftCount += 1;
+          break;
+        case "Issued":
+          row.issuedCount += 1;
+          break;
+        case "Partial":
+          row.partialCount += 1;
+          break;
+        case "Paid":
+          row.paidCount += 1;
+          row.paidValue += safeAmt;
+          break;
+        case "Voided":
+          row.voidedCount += 1;
+          row.voidedValue += safeAmt;
+          break;
+        default:
+          break;
+      }
+    }
+
+    // Finalise rounding on per-row sums + compute openValue.
+    // openValue = totalValue - paidValue - voidedValue (the
+    // customer-owed-but-not-yet-paid surface).
+    let months = [...byMonth.values()].map((r) => {
+      const openValue = r.totalValue - r.paidValue - r.voidedValue;
+      return {
+        month: r.month,
+        invoiceCount: r.invoiceCount,
+        totalValue: round2(r.totalValue),
+        draftCount: r.draftCount,
+        issuedCount: r.issuedCount,
+        partialCount: r.partialCount,
+        paidCount: r.paidCount,
+        voidedCount: r.voidedCount,
+        paidValue: round2(r.paidValue),
+        openValue: round2(openValue),
+      };
+    });
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable month token); when
+    // no bounds are set, "unknown" stays so the count surface remains
+    // complete. Mirrors slice 16's posture.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM which is also
+    // chronological. "unknown" sorts last in asc / first in desc by
+    // virtue of being lexicographically > "9999-12" — acceptable for
+    // a defensive fallback bucket that should rarely appear.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalMonths = months.length;
+    const grandInvoiceCount = months.reduce(
+      (acc, r) => acc + (Number(r.invoiceCount) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandPaidValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.paidValue) || 0), 0),
+    );
+    const grandOpenValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.openValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as slice 16.
+    const paged = months.slice(skip, skip + take);
+
+    res.json({
+      months: paged,
+      totalMonths,
+      grandInvoiceCount,
+      grandTotalValue,
+      grandPaidValue,
+      grandOpenValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-invoices] by-month error:", e.message);
+    res.status(500).json({ error: "Failed to compute monthly rollup" });
+  }
+});
+
 // ============================================================================
 // GET /api/travel/invoices/hsn-summary — Arc 2 #902 slice 17.
 //

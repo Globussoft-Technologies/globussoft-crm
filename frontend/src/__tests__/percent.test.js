@@ -62,12 +62,11 @@ describe('formatPercent', () => {
     expect(formatPercent(123456.78)).toBe('123456.8%');
   });
 
-  // SUT bug: Infinity / -Infinity leak as "Infinity%" / "-Infinity%" — user-hostile.
-  // Filed as #974. Skipped until source adds a Number.isFinite guard.
-  test.skip('Infinity should render as em-dash (currently leaks as "Infinity%") — TODO #974', () => {
+  // Infinity / -Infinity render as em-dash (Number.isFinite guard, #974 fix).
+  test('Infinity renders as em-dash', () => {
     expect(formatPercent(Infinity)).toBe('—');
   });
-  test.skip('-Infinity should render as em-dash (currently leaks as "-Infinity%") — TODO #974', () => {
+  test('-Infinity renders as em-dash', () => {
     expect(formatPercent(-Infinity)).toBe('—');
   });
 

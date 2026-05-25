@@ -94,7 +94,7 @@
 
 import { useEffect, useState, useContext, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp } from "lucide-react";
+import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
@@ -558,6 +558,47 @@ export default function QuoteBuilder() {
 
   const dismissPricingPreview = () => setPricingPreview(null);
 
+  // Slice 10: convert this quote to a Draft TravelInvoice via
+  // POST /api/travel/quotes/:id/convert-to-invoice. Server-side is
+  // idempotent — a second click returns the existing invoice with
+  // alreadyConverted=true. We surface that explicitly so the operator
+  // knows they're navigating to an existing invoice rather than creating
+  // a duplicate. The created/existing invoice id is announced in the
+  // toast; once the InvoicesAdmin route lands a router push could deep-
+  // link there, but for now operators copy the id from the toast.
+  const handleConvertToInvoice = async () => {
+    if (!quoteId) {
+      notify.error("Save the quote first before converting to invoice");
+      return;
+    }
+    try {
+      const resp = await fetchApi(
+        `/api/travel/quotes/${quoteId}/convert-to-invoice`,
+        { method: "POST" },
+      );
+      const invoice = resp?.invoice;
+      const invId = invoice?.id;
+      const invNum = invoice?.invoiceNum;
+      if (resp?.alreadyConverted) {
+        notify.info(
+          `Already converted — invoice #${invId}${invNum ? ` (${invNum})` : ""}`,
+        );
+      } else {
+        notify.success(
+          `Invoice #${invId}${invNum ? ` (${invNum})` : ""} created from quote #${quoteId}`,
+        );
+      }
+    } catch (err) {
+      if (err?.status === 404) {
+        notify.info(
+          "Convert-to-invoice endpoint not yet available — try again after backend deploy",
+        );
+        return;
+      }
+      notify.error(err?.body?.error || err?.message || "Convert to invoice failed");
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
@@ -684,6 +725,20 @@ export default function QuoteBuilder() {
             >
               <TrendingUp size={14} />{" "}
               {previewLoading ? "Calculating…" : "Calculate with markups"}
+            </button>
+            <button
+              type="button"
+              onClick={handleConvertToInvoice}
+              disabled={!quoteId}
+              style={secondaryBtn}
+              title={
+                !quoteId
+                  ? "Save first"
+                  : "Convert this quote to a draft invoice"
+              }
+              aria-label="Convert to invoice"
+            >
+              <FileText size={14} /> Convert to invoice
             </button>
           </div>
         )}

@@ -910,6 +910,194 @@ router.get(
   },
 );
 
+// POST /api/travel/quotes/:id/convert-to-invoice — ADMIN/MANAGER only.
+//
+// Slice 10 of #900 (PRD_TRAVEL_QUOTE_BUILDER FR-3.9 + AC-6.6 + AC-6.11).
+// One-click conversion from an existing TravelQuote to a Draft
+// TravelInvoice. Copies the quote's contactId / subBrand / currency /
+// totalAmount + line items into TravelInvoice + TravelInvoiceLine
+// (lines copied not referenced per OQ-9.4 — invoice line items are
+// immutable from accept onwards; quote may still be revised post-accept).
+//
+// Idempotency (FR-3.9.3 + AC-6.11): a TravelInvoice with
+// `quoteId === this.id` already on file short-circuits with 200 +
+// the existing invoice envelope. Second click never creates a duplicate
+// invoice; the operator's UI navigates to the existing one instead.
+//
+// Default dueDate: today + 30 days (operator can edit on the invoice
+// before issuing; matches the "Draft so operator can review before
+// sending" contract in FR-3.9.1). The TravelInvoice schema requires
+// dueDate at create time; we default it server-side rather than asking
+// the operator to pre-pick on the quote side.
+//
+// invoiceNum generation: inlined here (mirror of nextInvoiceNum in
+// routes/travel_invoices.js which is module-local and not exported).
+// The 15-line $transaction is acceptable duplication to preserve file
+// boundaries (this tick only edits travel_quotes.js + its test +
+// QuoteBuilder.jsx + its test). The @@unique([tenantId, invoiceNum])
+// constraint is the second-line backstop if two converts race on the
+// same tenant.
+//
+// Reverse-link: TravelInvoice.quoteId FK persists the back-reference
+// per FR-3.9.2; downstream Invoice detail pages can render a "From
+// quote #N" badge by reading this column.
+//
+// Audit: stamps "TRAVEL_QUOTE_CONVERTED" on the TravelQuote (sourceId
+// + newInvoiceId + linesCloned in details). The invoice CREATE audit
+// fires under its own action via writeAudit("TravelInvoice", "CREATE"),
+// so both rows stay greppable in the audit-viewer surface.
+router.post(
+  "/quotes/:id/convert-to-invoice",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!quote) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Idempotency check (AC-6.11): if an invoice already references
+      // this quote, return it instead of creating a second one. The
+      // operator's UI sees a 200 + ALREADY_CONVERTED code so it can
+      // navigate to the existing invoice rather than show a spurious
+      // "created" toast.
+      const existing = await prisma.travelInvoice.findFirst({
+        where: { tenantId: req.travelTenant.id, quoteId: quote.id },
+        orderBy: { id: "asc" },
+      });
+      if (existing) {
+        return res.status(200).json({
+          invoice: existing,
+          alreadyConverted: true,
+          code: "ALREADY_CONVERTED",
+        });
+      }
+
+      // Generate invoiceNum (mirror nextInvoiceNum in travel_invoices.js).
+      const year = new Date().getFullYear();
+      const invoiceNum = await prisma.$transaction(async (tx) => {
+        const latest = await tx.travelInvoice.findFirst({
+          where: {
+            tenantId: req.travelTenant.id,
+            invoiceNum: { startsWith: `TINV-${year}-` },
+          },
+          orderBy: { invoiceNum: "desc" },
+          select: { invoiceNum: true },
+        });
+        const latestSerial = latest
+          ? parseInt(latest.invoiceNum.split("-")[2], 10)
+          : 0;
+        const next = String(latestSerial + 1).padStart(4, "0");
+        return `TINV-${year}-${next}`;
+      });
+
+      // Default dueDate = today + 30 days; operator edits later on
+      // the invoice surface before issuing.
+      const dueDate = new Date(Date.now() + 30 * 86_400_000);
+
+      const created = await prisma.travelInvoice.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          subBrand: quote.subBrand,
+          contactId: quote.contactId,
+          quoteId: quote.id,
+          invoiceNum,
+          status: "Draft",
+          totalAmount: quote.totalAmount,
+          currency: quote.currency,
+          dueDate,
+        },
+      });
+
+      // Copy line items from the quote into the new invoice. The two
+      // line tables have parallel shapes (lineType / description /
+      // quantity / unitPrice / amount / currency / sortOrder / notes),
+      // so the mapping is direct. TravelInvoiceLine has additional
+      // optional columns (pnr / bookingRef / serviceStartDate /
+      // serviceEndDate / fxRateToBase / baseAmount) which stay NULL on
+      // convert — the operator fills them in post-issue when the actual
+      // bookings land.
+      const sourceLines = await prisma.travelQuoteLine.findMany({
+        where: { quoteId: quote.id, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+      if (sourceLines.length > 0) {
+        await prisma.travelInvoiceLine.createMany({
+          data: sourceLines.map((l) => ({
+            tenantId: req.travelTenant.id,
+            invoiceId: created.id,
+            lineType: l.lineType,
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            amount: l.amount,
+            currency: l.currency,
+            sortOrder: l.sortOrder,
+            notes: l.notes,
+          })),
+        });
+      }
+
+      // Audit the source-side conversion. The newly-created invoice
+      // gets its own CREATE audit row via writeAudit on the invoice
+      // model so both rows appear in the audit-viewer surface.
+      await writeAudit(
+        "TravelQuote",
+        "TRAVEL_QUOTE_CONVERTED",
+        quote.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          quoteId: quote.id,
+          invoiceId: created.id,
+          invoiceNum: created.invoiceNum,
+          linesCloned: sourceLines.length,
+          subBrand: quote.subBrand,
+        },
+      );
+
+      await writeAudit(
+        "TravelInvoice",
+        "CREATE",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          subBrand: created.subBrand,
+          contactId: created.contactId,
+          quoteId: created.quoteId,
+          invoiceNum: created.invoiceNum,
+          status: created.status,
+          currency: created.currency,
+          convertedFromQuoteId: quote.id,
+        },
+      );
+
+      res.status(201).json({
+        invoice: created,
+        linesCloned: sourceLines.length,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] convert-to-invoice error:", e.message);
+      res.status(500).json({ error: "Failed to convert quote to invoice" });
+    }
+  },
+);
+
 // GET /api/travel/quotes/:id/pricing-preview — any verified token.
 //
 // READ-ONLY composition surface (PRD_TRAVEL_QUOTE_BUILDER FR-3.3.2 / FR-3.3.4).

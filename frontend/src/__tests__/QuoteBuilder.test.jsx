@@ -1039,3 +1039,110 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     });
   });
 });
+
+// Slice 10 (PRD_TRAVEL_QUOTE_BUILDER FR-3.9 + AC-6.6 + AC-6.11) — convert
+// the current quote to a Draft TravelInvoice via POST /:id/convert-to-
+// invoice. UI pins: button rendered in action cluster, disabled in NEW
+// mode, success path fires notify.success with the new invoice id, the
+// idempotency path (server returns alreadyConverted=true) fires
+// notify.info instead.
+describe('<QuoteBuilder /> — Convert to invoice (slice 10)', () => {
+  it('renders Convert-to-invoice button in action cluster; disabled in NEW mode', async () => {
+    renderPage();
+    const btn = await screen.findByRole('button', { name: /Convert to invoice/i });
+    expect(btn).toBeInTheDocument();
+    // NEW mode (no route id) → button disabled until save.
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('EDIT mode happy path: POSTs convert-to-invoice + notifies success with new invoice id', async () => {
+    mockRouteId = '42';
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/quotes/42' && (!opts || opts.method === undefined || opts.method === 'GET')) {
+        return Promise.resolve({
+          id: 42, contactId: 5001, status: 'Draft', currency: 'INR', subBrand: 'tmc',
+        });
+      }
+      if (url === '/api/travel/quotes/42/lines') {
+        return Promise.resolve({ lines: [], total: 0 });
+      }
+      if (url.startsWith('/api/travel/suppliers')) {
+        return Promise.resolve({ suppliers: [], total: 0 });
+      }
+      if (
+        url === '/api/travel/quotes/42/convert-to-invoice' &&
+        opts?.method === 'POST'
+      ) {
+        return Promise.resolve({
+          invoice: {
+            id: 7777, quoteId: 42, invoiceNum: 'TINV-2026-0001',
+            status: 'Draft', totalAmount: '12500.00', currency: 'INR',
+          },
+          linesCloned: 2,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    // Wait for hydration so the button is enabled.
+    await screen.findByRole('heading', { name: /Quote Builder/i });
+    const btn = await screen.findByRole('button', { name: /Convert to invoice/i });
+    await waitFor(() => expect(btn.disabled).toBe(false));
+    fireEvent.click(btn);
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/quotes/42/convert-to-invoice' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Invoice #7777.*from quote #42/i),
+      );
+    });
+  });
+
+  it('EDIT mode idempotency: alreadyConverted=true → notify.info, NOT notify.success', async () => {
+    mockRouteId = '42';
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/quotes/42' && (!opts || opts.method === undefined || opts.method === 'GET')) {
+        return Promise.resolve({
+          id: 42, contactId: 5001, status: 'Draft', currency: 'INR', subBrand: 'tmc',
+        });
+      }
+      if (url === '/api/travel/quotes/42/lines') {
+        return Promise.resolve({ lines: [], total: 0 });
+      }
+      if (url.startsWith('/api/travel/suppliers')) {
+        return Promise.resolve({ suppliers: [], total: 0 });
+      }
+      if (
+        url === '/api/travel/quotes/42/convert-to-invoice' &&
+        opts?.method === 'POST'
+      ) {
+        return Promise.resolve({
+          invoice: {
+            id: 7000, quoteId: 42, invoiceNum: 'TINV-2026-0042', status: 'Draft',
+          },
+          alreadyConverted: true,
+          code: 'ALREADY_CONVERTED',
+        });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Quote Builder/i });
+    const btn = await screen.findByRole('button', { name: /Convert to invoice/i });
+    await waitFor(() => expect(btn.disabled).toBe(false));
+    fireEvent.click(btn);
+    await waitFor(() => {
+      expect(notifyInfo).toHaveBeenCalledWith(
+        expect.stringMatching(/Already converted.*invoice #7000/i),
+      );
+    });
+    // Success path NOT taken.
+    expect(notifySuccess).not.toHaveBeenCalledWith(
+      expect.stringMatching(/created from quote/i),
+    );
+  });
+});

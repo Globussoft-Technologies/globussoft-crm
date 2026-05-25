@@ -581,6 +581,204 @@ router.get("/trips/by-quarter", verifyToken, requireTravelTenant, requireTmcAcce
   }
 });
 
+// ─── Tenant-wide yearly rollup ────────────────────────────────────────
+
+// GET /api/travel/trips/by-year — TMC-only, tenant + sub-brand scoped.
+//
+// Year-resolution sibling of GET /trips/by-month + /trips/by-quarter
+// above. Same UTC bucketing template, same defensive math
+// (null/invalid createdAt → "unknown" bucket, excluded when ?from/?to
+// is set), same orderBy semantics. One row per UTC-calendar-year
+// present in the scoped trip set, summarising count + 4-status splits
+// for that year.
+//
+// Calendar-year derivation: `dt.getUTCFullYear()` over UTC instants.
+//
+// 4-status TMC envelope:
+//   confirmed / in-trip / completed / cancelled
+//
+// Read-only; consumed by the operator-facing "trips by year" chart
+// on the Travel dashboard (annual trends, year-on-year comparison).
+//
+// Scope rules:
+//   - Tenant-scoped on TmcTrip.tenantId.
+//   - TMC-only: requireTmcAccess guard already ensures the caller has
+//     "tmc" in subBrandAccess[] (or full access via ADMIN).
+//   - Any verified token; no further RBAC narrowing — operator-readable
+//     read.
+//
+// Query string:
+//   status   optional TmcTrip.status filter (one of VALID_TRIP_STATUSES);
+//            invalid → 400 INVALID_STATUS.
+//   from     optional inclusive lower bound on bucket (YYYY); rows
+//            with year < from are excluded.
+//   to       optional inclusive upper bound on bucket (YYYY); rows
+//            with year > to are excluded.
+//   orderBy  default "year:asc" (chronological); also accepts
+//            "year:desc", "count:asc|desc", "completedCount:asc|desc".
+//            Unknown tokens degrade silently to the default.
+//   limit    default 10 (10 years of history), max 30.
+//   offset   default 0
+//
+// Response shape:
+//   {
+//     years: [ {
+//       year: "2026",
+//       count,
+//       confirmedCount, inTripCount, completedCount, cancelledCount,
+//     } ],
+//     totalYears,
+//     grandCount,
+//     grandCompletedCount,
+//     limit, offset
+//   }
+//
+// Route ordering: declared BEFORE GET /trips/:id so Express doesn't try
+// to parse "by-year" as a numeric :id (which would 400 INVALID_ID).
+router.get("/trips/by-year", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+    if (statusFilter && !VALID_TRIP_STATUSES.includes(statusFilter)) {
+      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+    }
+
+    // YYYY validation — 4-digit calendar year.
+    const YEAR_RE = /^\d{4}$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+    if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "year:asc",
+      "year:desc",
+      "count:asc",
+      "count:desc",
+      "completedCount:asc",
+      "completedCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY.
+    const trips = await prisma.tmcTrip.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        createdAt: true,
+      },
+    });
+
+    // Aggregate per-UTC-year. Map "YYYY" → { ...row counts }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate.
+    const byYear = new Map();
+    for (const t of trips) {
+      let yearKey = "unknown";
+      if (t.createdAt) {
+        const dt = t.createdAt instanceof Date
+          ? t.createdAt
+          : new Date(t.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          yearKey = String(dt.getUTCFullYear());
+        }
+      }
+
+      let row = byYear.get(yearKey);
+      if (!row) {
+        row = {
+          year: yearKey,
+          count: 0,
+          confirmedCount: 0,
+          inTripCount: 0,
+          completedCount: 0,
+          cancelledCount: 0,
+        };
+        byYear.set(yearKey, row);
+      }
+
+      row.count += 1;
+      switch (t.status) {
+        case "confirmed": row.confirmedCount += 1; break;
+        case "in-trip": row.inTripCount += 1; break;
+        case "completed": row.completedCount += 1; break;
+        case "cancelled": row.cancelledCount += 1; break;
+        default: break;
+      }
+    }
+
+    let years = [...byYear.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable year token); when
+    // no bounds are set, "unknown" stays so the count surface remains
+    // complete. YYYY sorts lexicographically AND chronologically.
+    if (fromRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+    }
+    if (toRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+    }
+
+    // Sort. "year" sorts lexicographically on YYYY which is also
+    // chronological. "unknown" sorts last in asc / first in desc by
+    // virtue of being lexicographically > "9999".
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    years.sort((a, b) => {
+      if (field === "year") {
+        if (a.year < b.year) return -1 * mult;
+        if (a.year > b.year) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalYears = years.length;
+    const grandCount = years.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandCompletedCount = years.reduce(
+      (acc, r) => acc + (Number(r.completedCount) || 0),
+      0,
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter.
+    const paged = years.slice(skip, skip + take);
+
+    res.json({
+      years: paged,
+      totalYears,
+      grandCount,
+      grandCompletedCount,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    console.error("[travel-trips] by-year error:", e.message);
+    res.status(500).json({ error: "Failed to compute yearly rollup" });
+  }
+});
+
 // GET /api/travel/trips/:id
 router.get("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {

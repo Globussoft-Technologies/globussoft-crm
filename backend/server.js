@@ -729,6 +729,7 @@ app.use("/api/travel", travelPricingRoutes);
 app.use("/api/travel", travelTripBillingRoutes);
 app.use("/api/travel", travelWebcheckinRoutes);
 app.use("/api/travel", travelTravelStallRoutes);
+app.use("/api/travel", require("./routes/travel_inbound_leads"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
 app.use("/api/travel-personalised-destinations", travelPersonalisedDestinationsRoutes);

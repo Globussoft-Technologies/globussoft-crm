@@ -1083,6 +1083,22 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initReligiousGuidanceCron } = require('./cron/religiousGuidanceEngine');
   initReligiousGuidanceCron();
 
+  // #902 GST slice 12 — daily GSTR filing reminder sweep (05:00 UTC = 10:30 IST).
+  // Iterates active tenants and emits a tiered reminder (T-7d / T-3d / T-1d / T-0)
+  // for each one whose prior-month GSTR filing is approaching its deadline. Notify
+  // half is a console-log stub today; real WhatsApp / email dispatch lands when
+  // Q9 creds drop. Respects DISABLE_CRONS=1 via the outer guard.
+  const { runGstrFilingReminderEngine } = require('./cron/gstrFilingReminderEngine');
+  _cron.schedule('0 5 * * *', async () => {
+    try {
+      const result = await runGstrFilingReminderEngine();
+      console.log('[gstr-filing-reminder]', result);
+    } catch (e) {
+      console.error('[gstr-filing-reminder] cron failed:', e.message);
+    }
+  });
+  console.log('[gstr-filing-reminder] cron initialized (daily 05:00 UTC / 10:30 IST)');
+
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require('./cron/lowStockEngine');
   initLowStockCron();

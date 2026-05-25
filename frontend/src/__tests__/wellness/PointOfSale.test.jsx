@@ -38,8 +38,30 @@
  *   7. qty +/- buttons update lineTotal correctly (qty × unitPrice).
  *   8. Empty input does not fire fetches; results are cleared.
  *
- * Slices 4-7 (payment splitter, atomic finalize, receipt, void/refund,
- * etc.) will extend this file as they land.
+ * D17 Arc 1 slice 4 scope (this extension): pins the payment splitter UI
+ * per PRD §3.5 + DD-5.x ("one button per payment method"). The splitter
+ * lets the cashier ring up a multi-tender sale (e.g. ₹500 cash + ₹2500
+ * UPI for a ₹3000 invoice). 5 method buttons (Cash | Card | UPI |
+ * Wallet | Gift Card) — clicking adds a new payment line with amount=0;
+ * the cashier types the amount in rupees. Live Paid / Balance label
+ * updates as the cashier types. Wallet button is gated on the patient's
+ * walletBalanceCents (via GET /api/pos/sale-context/:patientId, tick #4
+ * 617b6e26). Finalize button is gated on (basket non-empty AND
+ * payments non-empty AND |sum − grandTotal| ≤ 1¢ AND non-guest
+ * patient). Successful finalize POSTs the cents-native body to
+ * /api/pos/sales/finalize (tick #9 93bf816b), fires notify.success
+ * "Sale #N finalized", resets the draft, and dispatches a
+ * window-level 'sidebar:counts-changed' CustomEvent.
+ *
+ * Slice 4 pinned invariants:
+ *   9. Each payment method button renders + adds a payment line on click.
+ *  10. Total / Paid / Balance live-updates when payment amount changes.
+ *  11. Wallet button is disabled when walletBalanceCents=0 (from sale-context).
+ *  12. Finalize button is disabled until items + payments sum match
+ *      grandTotal; enabled when match.
+ *  13. Successful finalize fires POST + notify.success + resets the draft.
+ *
+ * Slices 5-7 (atomic finalize, receipt, void/refund) will extend this file as they land.
  *
  * Discipline (per CLAUDE.md standing rules):
  *   - Stable mock object refs for useNotify so useCallback-dep recomputes
@@ -495,5 +517,275 @@ describe('<wellness/PointOfSale /> — D17 Arc 1 slice 3 items picker autocomple
     expect(catalogueCall).toBeFalsy();
     // Dropdown is absent when the input is empty.
     expect(screen.queryByTestId('pos-items-dropdown')).not.toBeInTheDocument();
+  });
+});
+
+describe('<wellness/PointOfSale /> — D17 Arc 1 slice 4 payment splitter', () => {
+  // Slice 4 cases assume an OPEN shift so the basket-bearing builder
+  // surface is rendered (the splitter card sits inside the open-shift
+  // gate). The fetch mock returns a default walletBalanceCents per the
+  // sale-context contract (tick #4 617b6e26).
+  const sampleServices = [
+    { id: 21, name: 'Hydrafacial Deluxe', category: 'skin', basePrice: 3500, durationMin: 60 },
+  ];
+
+  function slice4Fetch(walletBalanceCents = 0) {
+    return (url, opts) => {
+      if (typeof url === 'string') {
+        if (url.startsWith('/api/pos/registers')) {
+          return Promise.resolve([{ id: 1, name: 'Front Desk', location: { name: 'Main' } }]);
+        }
+        if (url.startsWith('/api/pos/shifts/current')) {
+          return Promise.resolve({
+            id: 99,
+            registerId: 1,
+            openingFloat: 500,
+            register: { id: 1, name: 'Front Desk', location: { name: 'Main' } },
+          });
+        }
+        if (url.startsWith('/api/wellness/services')) {
+          return Promise.resolve(sampleServices);
+        }
+        if (url.startsWith('/api/wellness/products')) {
+          return Promise.resolve([]);
+        }
+        if (url.startsWith('/api/pos/sale-context/')) {
+          return Promise.resolve({
+            patientId: 11,
+            walletBalanceCents,
+            currency: 'INR',
+            activeMemberships: [],
+            pendingBookings: [],
+          });
+        }
+        if (url === '/api/pos/sales/finalize' && opts?.method === 'POST') {
+          return Promise.resolve({
+            success: true,
+            saleId: 7777,
+            invoiceId: 8888,
+            grandTotalCents: 350000,
+            walletDebitedCents: 0,
+            status: 'PAID',
+          });
+        }
+      }
+      return Promise.resolve(null);
+    };
+  }
+
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(slice4Fetch(0));
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    notifyInfo.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Stage a basket line via the catalogue picker. Returns once the line
+  // is present in the DOM. Used by tests below so each test starts with
+  // a non-empty basket without re-deriving the keystroke sequence.
+  async function stageOneServiceLine() {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fireEvent.change(screen.getByTestId('pos-items-search-input'), { target: { value: 'hydra' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    vi.useRealTimers();
+    const btn = await screen.findByTestId('pos-items-result-service-21');
+    fireEvent.click(btn);
+    await screen.findByTestId('pos-line-total-0');
+  }
+
+  it('renders all 5 payment method buttons (Cash | Card | UPI | Wallet | Gift Card) + appends a payment line per click', async () => {
+    fetchApiMock.mockImplementation(slice4Fetch(50000)); // ₹500 wallet so Wallet is enabled
+    renderPOS();
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-payment-splitter')).toBeInTheDocument();
+    });
+    // All 5 method buttons present, in order.
+    const cash = screen.getByTestId('pos-split-method-cash');
+    const card = screen.getByTestId('pos-split-method-card');
+    const upi = screen.getByTestId('pos-split-method-upi');
+    const wallet = screen.getByTestId('pos-split-method-wallet');
+    const gift = screen.getByTestId('pos-split-method-giftcard');
+    expect(cash).toBeInTheDocument();
+    expect(card).toBeInTheDocument();
+    expect(upi).toBeInTheDocument();
+    expect(wallet).toBeInTheDocument();
+    expect(gift).toBeInTheDocument();
+    // Initially no lines.
+    expect(screen.queryByTestId('pos-split-line-0')).not.toBeInTheDocument();
+    expect(screen.getByText(/No payment lines yet/i)).toBeInTheDocument();
+    // Click Cash — line 0 appears.
+    fireEvent.click(cash);
+    expect(await screen.findByTestId('pos-split-line-0')).toBeInTheDocument();
+    // Click UPI — line 1 appears (multi-tender split).
+    fireEvent.click(upi);
+    expect(await screen.findByTestId('pos-split-line-1')).toBeInTheDocument();
+    // Each line has its own amount input + remove button.
+    expect(screen.getByTestId('pos-split-amount-0')).toBeInTheDocument();
+    expect(screen.getByTestId('pos-split-remove-0')).toBeInTheDocument();
+    expect(screen.getByTestId('pos-split-amount-1')).toBeInTheDocument();
+    expect(screen.getByTestId('pos-split-remove-1')).toBeInTheDocument();
+  });
+
+  it('Total / Paid / Balance live-updates as the cashier types payment amounts', async () => {
+    fetchApiMock.mockImplementation(slice4Fetch(0));
+    renderPOS();
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-items-search-input')).toBeInTheDocument();
+    });
+    await stageOneServiceLine(); // basket has 1 line @ ₹3500
+
+    // Add a cash payment line.
+    fireEvent.click(screen.getByTestId('pos-split-method-cash'));
+    const amountInput = await screen.findByTestId('pos-split-amount-0');
+    // Initial paid = 0, balance = 3500.
+    expect(screen.getByTestId('pos-split-balance')).toHaveTextContent('₹3500.00');
+
+    // Type 1500 — paid 1500, balance 2000.
+    fireEvent.change(amountInput, { target: { value: '1500' } });
+    expect(screen.getByTestId('pos-split-balance')).toHaveTextContent('₹2000.00');
+    expect(screen.getByTestId('pos-split-totals')).toHaveTextContent('₹1500.00');
+
+    // Add a UPI line + type 2000 — paid 3500, balance 0.
+    fireEvent.click(screen.getByTestId('pos-split-method-upi'));
+    fireEvent.change(screen.getByTestId('pos-split-amount-1'), { target: { value: '2000' } });
+    expect(screen.getByTestId('pos-split-balance')).toHaveTextContent('₹0.00');
+  });
+
+  it('Wallet button is disabled when walletBalanceCents=0; enabled when balance>0', async () => {
+    // Patient must be set for sale-context to fire. Default render leaves
+    // patientId empty (guest off, but no id) — so the saleContext effect
+    // does NOT fire and walletBalanceCents falls back to 0 → wallet
+    // disabled. Then we set a patientId and the mock returns >0 → wallet
+    // becomes enabled.
+    fetchApiMock.mockImplementation(slice4Fetch(0));
+    renderPOS();
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-payment-splitter')).toBeInTheDocument();
+    });
+    // With no patientId set, sale-context never fires → walletBalanceCents
+    // defaults to 0 → wallet button disabled.
+    expect(screen.getByTestId('pos-split-method-wallet')).toBeDisabled();
+    // Cash should NOT be disabled.
+    expect(screen.getByTestId('pos-split-method-cash')).not.toBeDisabled();
+
+    // Re-render with a patientId and a balance=50000 mock.
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(slice4Fetch(50000));
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    notifyInfo.mockReset();
+
+    // Find the Patient ID input (rendered when guestCheckout is false,
+    // which is the default).
+    const patientInput = screen.getByPlaceholderText('e.g. 42');
+    fireEvent.change(patientInput, { target: { value: '11' } });
+    // sale-context fetch fires; once it resolves, wallet becomes enabled.
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-split-method-wallet')).not.toBeDisabled();
+    });
+    // Wallet balance label reflects the new balance.
+    expect(screen.getByTestId('pos-split-wallet-balance-hint')).toHaveTextContent('₹500.00');
+  });
+
+  it('Finalize button is disabled until items + payments sum match grandTotal; enabled when match', async () => {
+    fetchApiMock.mockImplementation(slice4Fetch(0));
+    renderPOS();
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-items-search-input')).toBeInTheDocument();
+    });
+    // 1) Empty basket → finalize disabled.
+    expect(screen.getByTestId('pos-split-finalize')).toBeDisabled();
+
+    // 2) Stage one basket line @ ₹3500. Still disabled (no payments, no patient).
+    await stageOneServiceLine();
+    expect(screen.getByTestId('pos-split-finalize')).toBeDisabled();
+
+    // 3) Add a cash payment of 3500. Still disabled (no patient).
+    fireEvent.click(screen.getByTestId('pos-split-method-cash'));
+    fireEvent.change(screen.getByTestId('pos-split-amount-0'), { target: { value: '3500' } });
+    expect(screen.getByTestId('pos-split-finalize')).toBeDisabled();
+
+    // 4) Set a patientId — finalize becomes enabled (matched + patient set).
+    fireEvent.change(screen.getByPlaceholderText('e.g. 42'), { target: { value: '11' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-split-finalize')).not.toBeDisabled();
+    });
+
+    // 5) Bump payment amount past the target → mismatch > 1¢ → disabled again.
+    fireEvent.change(screen.getByTestId('pos-split-amount-0'), { target: { value: '4000' } });
+    expect(screen.getByTestId('pos-split-finalize')).toBeDisabled();
+
+    // 6) Bring it back into 1¢ tolerance.
+    fireEvent.change(screen.getByTestId('pos-split-amount-0'), { target: { value: '3500' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-split-finalize')).not.toBeDisabled();
+    });
+  });
+
+  it('successful finalize POSTs cents-native body, fires notify.success "Sale #N finalized", resets draft, dispatches sidebar:counts-changed', async () => {
+    fetchApiMock.mockImplementation(slice4Fetch(0));
+    renderPOS();
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-items-search-input')).toBeInTheDocument();
+    });
+    await stageOneServiceLine(); // ₹3500
+    fireEvent.click(screen.getByTestId('pos-split-method-cash'));
+    fireEvent.change(screen.getByTestId('pos-split-amount-0'), { target: { value: '3500' } });
+    fireEvent.change(screen.getByPlaceholderText('e.g. 42'), { target: { value: '11' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-split-finalize')).not.toBeDisabled();
+    });
+
+    // Listen for the sidebar event the finalize should dispatch.
+    const sidebarListener = vi.fn();
+    window.addEventListener('sidebar:counts-changed', sidebarListener);
+
+    fireEvent.click(screen.getByTestId('pos-split-finalize'));
+
+    // Assert the POST landed with the cents-native body.
+    await waitFor(() => {
+      const finalizeCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/pos/sales/finalize' && o?.method === 'POST',
+      );
+      expect(finalizeCall).toBeTruthy();
+      const body = JSON.parse(finalizeCall[1].body);
+      expect(body.patientId).toBe(11);
+      expect(body.items).toHaveLength(1);
+      expect(body.items[0]).toMatchObject({
+        type: 'service',
+        refId: 21,
+        qty: 1,
+        unitPriceCents: 350000,
+      });
+      expect(body.payments).toHaveLength(1);
+      expect(body.payments[0]).toMatchObject({
+        method: 'cash',
+        amountCents: 350000,
+      });
+    });
+
+    // Success toast with the saleId from the mock.
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Sale #7777 finalized/i));
+    });
+
+    // Draft reset — payment line gone, basket cleared, patient cleared.
+    await waitFor(() => {
+      expect(screen.queryByTestId('pos-split-line-0')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('pos-line-total-0')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('e.g. 42')).toHaveValue(null);
+
+    // Sidebar event fired.
+    expect(sidebarListener).toHaveBeenCalled();
+
+    window.removeEventListener('sidebar:counts-changed', sidebarListener);
   });
 });

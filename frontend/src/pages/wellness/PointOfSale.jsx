@@ -85,6 +85,20 @@ const PAYMENT_METHODS = [
   { value: 'ONLINE', label: 'Online (payment link)' },
 ];
 
+// D17 Arc 1 slice 4 — Payment splitter method buttons. Drives the new
+// cents-native POST /api/pos/sales/finalize endpoint (separate from the
+// legacy single-select dropdown above which drives POST /api/pos/sales).
+// Order is most-common-first per PRD §3.5 — the dominant 1-tap cash
+// flow stays leftmost. Values are lowercase per the /finalize wire
+// contract (VALID_FINALIZE_PAYMENT_METHODS in backend/routes/pos.js).
+const SPLIT_PAYMENT_METHODS = [
+  { value: 'cash', label: 'Cash' },
+  { value: 'card', label: 'Card' },
+  { value: 'upi', label: 'UPI' },
+  { value: 'wallet', label: 'Wallet' },
+  { value: 'giftcard', label: 'Gift Card' },
+];
+
 export default function PointOfSale() {
   const { user } = useContext(AuthContext) || {};
   const isAdminOrManager = user && (user.role === 'ADMIN' || user.role === 'MANAGER');
@@ -186,6 +200,65 @@ export default function PointOfSale() {
   const [walletBusy, setWalletBusy] = useState(false);
   const [giftCardCode, setGiftCardCode] = useState('');
   const [giftCardBusy, setGiftCardBusy] = useState(false);
+
+  // ── D17 Arc 1 slice 4 — Payment splitter state (PRD §3.5, DD-5.x round 2).
+  //
+  // DD-5.x resolved: one button per payment method (fastest UX for the
+  // typical 1-2 method splits). Click a method button → appends a new
+  // payment line for that method with amount=0; cashier types the ₹ amount.
+  // Live Paid / Balance label updates as they type. Drives the cents-native
+  // POST /api/pos/sales/finalize endpoint (tick #9 93bf816b).
+  //
+  // Wallet-button gate: pulled from GET /api/pos/sale-context/:patientId
+  // (tick #4 617b6e26) which returns walletBalanceCents.
+  //
+  // Computed deps (splitPaymentsTotal / splitBalance / canFinalize) +
+  // the finalizeSplitSale handler live BELOW the grandTotal useMemo block
+  // since they read grandTotal. State + handlers that don't depend on
+  // grandTotal sit here so the patientId effect chain stays compact.
+  const [splitPayments, setSplitPayments] = useState([]); // [{method, amountRupees}]
+  const [saleContext, setSaleContext] = useState(null); // {walletBalanceCents, currency}
+  const [finalizeBusy, setFinalizeBusy] = useState(false);
+
+  // Load sale-context whenever a non-guest patientId is set. Drives the
+  // Wallet-button-disabled affordance + the "Wallet balance: ₹X.XX" label.
+  useEffect(() => {
+    const pid = guestCheckout
+      ? null
+      : (patientId && Number.isFinite(parseInt(patientId)) ? parseInt(patientId) : null);
+    if (!pid) {
+      setSaleContext(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const ctx = await fetchApi(`/api/pos/sale-context/${pid}`);
+        if (!cancelled) setSaleContext(ctx);
+      } catch (_e) {
+        if (!cancelled) setSaleContext(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [patientId, guestCheckout]);
+
+  const addSplitPayment = (method) => {
+    setSplitPayments((p) => [...p, { method, amountRupees: '' }]);
+  };
+  const updateSplitPaymentAmount = (idx, amountRupees) => {
+    setSplitPayments((p) => p.map((row, i) => (i === idx ? { ...row, amountRupees } : row)));
+  };
+  const removeSplitPayment = (idx) => {
+    setSplitPayments((p) => p.filter((_, i) => i !== idx));
+  };
+
+  // splitPaymentsTotal does NOT depend on grandTotal, so it can stay here.
+  // Sum across the splitter lines, in RUPEES (UI native), for the live
+  // Paid / Balance label. Convert to cents on submit only.
+  const splitPaymentsTotal = useMemo(
+    () => splitPayments.reduce((acc, p) => acc + (Number(p.amountRupees) || 0), 0),
+    [splitPayments],
+  );
 
   // ── D17 Arc 1 slice 3 — Items picker autocomplete (DD-5.2 resolved →
   //    autocomplete, not modal, not sidebar drawer).
@@ -449,6 +522,87 @@ export default function PointOfSale() {
     // Auto-fill paidAmount when grandTotal changes (cashier overrides if needed)
     setPaidAmount(grandTotal);
   }, [grandTotal]);
+
+  // D17 Arc 1 slice 4 — derived splitter computations + finalize handler
+  // (grandTotal-dependent — must live AFTER the grandTotal useMemo).
+  const splitBalance = useMemo(
+    () => Number((grandTotal - splitPaymentsTotal).toFixed(2)),
+    [grandTotal, splitPaymentsTotal],
+  );
+  // Finalize-button gate:
+  //   - basket non-empty
+  //   - at least one payment line
+  //   - |sum(payments) − grandTotal| ≤ 1 cent (= ₹0.01)
+  //   - non-guest patient required (backend requires positive patientId)
+  // The 1-cent floor mirrors the backend's MISMATCHED_TOTAL tolerance.
+  const canFinalize = useMemo(() => {
+    if (basket.length === 0) return false;
+    if (splitPayments.length === 0) return false;
+    const pid = guestCheckout
+      ? null
+      : (patientId && Number.isFinite(parseInt(patientId)) ? parseInt(patientId) : null);
+    if (!pid) return false;
+    if (Math.abs(splitPaymentsTotal - grandTotal) > 0.01) return false;
+    return true;
+  }, [basket.length, splitPayments.length, splitPaymentsTotal, grandTotal, patientId, guestCheckout]);
+
+  const finalizeSplitSale = async () => {
+    if (!canFinalize) return;
+    const pid = parseInt(patientId, 10);
+    // Convert rupees → cents for the wire payload. Math.round to absorb
+    // float-rounding artifacts (e.g. 33.33 * 100 = 3332.9999999...).
+    const items = basket.map((l) => ({
+      // Only SERVICE + PRODUCT are accepted by /finalize; MEMBERSHIP /
+      // GIFTCARD / PACKAGE basket lines fall through to PRODUCT as the
+      // best available type. (Slice 5 hardens the basket builder to only
+      // expose SERVICE + PRODUCT for /finalize flow.)
+      type: l.lineType === 'SERVICE' ? 'service' : 'product',
+      refId: Number(l.refId),
+      qty: Number(l.quantity || 1),
+      unitPriceCents: Math.round(Number(l.unitPrice || 0) * 100),
+    }));
+    const payments = splitPayments.map((p) => ({
+      method: p.method,
+      amountCents: Math.round(Number(p.amountRupees || 0) * 100),
+    }));
+    const body = {
+      patientId: pid,
+      items,
+      payments,
+      discountCents: Math.round(Number(resolvedOrderDiscount || 0) * 100),
+      taxCents: Math.round(Number(taxTotal || 0) * 100),
+    };
+    setFinalizeBusy(true);
+    try {
+      const result = await fetchApi('/api/pos/sales/finalize', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      notify.success(`Sale #${result.saleId} finalized`);
+      // Reset the sale draft so the cashier can ring up the next one.
+      setBasket([]);
+      setSplitPayments([]);
+      setDiscountTotal(0);
+      setDiscountPercent('');
+      setCouponCode('');
+      setCouponPreview(null);
+      setTaxTotal(0);
+      setPatientId('');
+      setGuestCheckout(false);
+      setOverrideEnabled(false);
+      setOverrideAmount('');
+      setOverrideReason('');
+      setSaleContext(null);
+      // Notify the sidebar so the POS / sales-of-day counter refreshes.
+      try {
+        window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
+      } catch (_) { /* SSR / jsdom edge */ }
+    } catch (e) {
+      notify.error(e.message || 'Failed to finalize sale');
+    } finally {
+      setFinalizeBusy(false);
+    }
+  };
 
   // ── Coupon preview (Wave 7C / PRD §2 item 10) ──────────────────────
   // Calls /api/wellness/coupons/preview to compute the discount the backend
@@ -1624,6 +1778,160 @@ export default function PointOfSale() {
                 }}
               >
                 <CheckCircle2 size={16} /> Complete sale
+              </button>
+            </div>
+          </div>
+
+          {/* D17 Arc 1 slice 4 — Payment splitter (PRD §3.5, DD-5.x →
+              "one button per method"). Drives the cents-native POST
+              /api/pos/sales/finalize endpoint. Distinct from the legacy
+              single-tender block above which targets POST /sales. */}
+          <div style={cardStyle} data-testid="pos-payment-splitter">
+            <h2 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1.05rem' }}>
+              Payments
+            </h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.75rem 0' }}>
+              Tap a method to add a payment line, then enter the ₹ amount. Multiple lines per method
+              allowed; finalize once the total matches the grand total ({formatMoney(grandTotal, 'INR', 'en-IN')}).
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+              {SPLIT_PAYMENT_METHODS.map((m) => {
+                const isWallet = m.value === 'wallet';
+                const walletBalanceCents = saleContext?.walletBalanceCents || 0;
+                const walletDisabled = isWallet && walletBalanceCents <= 0;
+                return (
+                  <div key={m.value} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.25rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => addSplitPayment(m.value)}
+                      disabled={walletDisabled}
+                      data-testid={`pos-split-method-${m.value}`}
+                      aria-label={`Add ${m.label} payment line`}
+                      style={{
+                        padding: '0.55rem 0.9rem',
+                        background: walletDisabled
+                          ? 'var(--surface-2, #f7f7f8)'
+                          : 'var(--primary-color, var(--accent-color))',
+                        color: walletDisabled ? 'var(--text-secondary)' : '#fff',
+                        border: 'none',
+                        borderRadius: 8,
+                        cursor: walletDisabled ? 'not-allowed' : 'pointer',
+                        fontWeight: 600,
+                        opacity: walletDisabled ? 0.6 : 1,
+                        minWidth: '5rem',
+                      }}
+                    >
+                      + {m.label}
+                    </button>
+                    {isWallet && (
+                      <span
+                        style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}
+                        data-testid="pos-split-wallet-balance-hint"
+                      >
+                        Wallet balance: {formatMoney(walletBalanceCents / 100, 'INR', 'en-IN')}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {splitPayments.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: '0.5rem 0 0 0' }}>
+                No payment lines yet — tap a method button above to add one.
+              </p>
+            ) : (
+              <div style={{ marginBottom: '0.75rem' }}>
+                {splitPayments.map((p, i) => {
+                  const methodLabel = SPLIT_PAYMENT_METHODS.find((m) => m.value === p.method)?.label || p.method;
+                  return (
+                    <div
+                      key={i}
+                      data-testid={`pos-split-line-${i}`}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr) auto',
+                        gap: '0.5rem',
+                        alignItems: 'center',
+                        padding: '0.4rem 0',
+                        borderBottom: '1px solid var(--border-color)',
+                      }}
+                    >
+                      <strong style={{ fontSize: '0.95rem' }}>{methodLabel}</strong>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        style={inputStyle}
+                        value={p.amountRupees}
+                        onChange={(e) => updateSplitPaymentAmount(i, e.target.value)}
+                        placeholder="₹ amount"
+                        aria-label={`${methodLabel} payment amount in rupees`}
+                        data-testid={`pos-split-amount-${i}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeSplitPayment(i)}
+                        aria-label={`Remove ${methodLabel} payment line`}
+                        data-testid={`pos-split-remove-${i}`}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: 'var(--danger-color, #c44)',
+                          padding: '0.25rem 0.4rem',
+                        }}
+                      >
+                        <XIcon size={16} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div
+              style={{ marginTop: '0.75rem', fontSize: '0.95rem' }}
+              data-testid="pos-split-totals"
+            >
+              Paid: <strong>{formatMoney(splitPaymentsTotal, 'INR', 'en-IN')}</strong>{' '}
+              of <strong>{formatMoney(grandTotal, 'INR', 'en-IN')}</strong>{' '}
+              (Balance:{' '}
+              <strong
+                style={{
+                  color:
+                    Math.abs(splitBalance) <= 0.01
+                      ? 'var(--success-color, #2a8a3e)'
+                      : splitBalance > 0
+                      ? 'var(--warning-color, #b16a00)'
+                      : 'var(--danger-color, #c44)',
+                }}
+                data-testid="pos-split-balance"
+              >
+                {formatMoney(splitBalance, 'INR', 'en-IN')}
+              </strong>
+              )
+            </div>
+
+            <div style={{ marginTop: '0.75rem' }}>
+              <button
+                type="button"
+                onClick={finalizeSplitSale}
+                disabled={!canFinalize || finalizeBusy}
+                data-testid="pos-split-finalize"
+                style={{
+                  ...primaryBtnStyle,
+                  fontSize: '1rem',
+                  padding: '0.75rem 1.5rem',
+                  opacity: !canFinalize || finalizeBusy ? 0.5 : 1,
+                  cursor: !canFinalize || finalizeBusy ? 'not-allowed' : 'pointer',
+                  background:
+                    !canFinalize || finalizeBusy
+                      ? 'var(--surface-2, #cccccc)'
+                      : 'var(--primary-color, var(--accent-color))',
+                }}
+              >
+                <CheckCircle2 size={16} /> {finalizeBusy ? 'Finalizing…' : 'Finalize Sale'}
               </button>
             </div>
           </div>

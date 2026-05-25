@@ -29,7 +29,8 @@ const {
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const pdfRenderer = require("../services/pdfRenderer");
-const { invoicePrefixFor } = require("../lib/travelFiscalYear");
+const { invoicePrefixFor, fiscalYearStart } = require("../lib/travelFiscalYear");
+const { computeTcs, isOverseasDestination } = require("../lib/tcsCalculation");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
 
@@ -1916,6 +1917,114 @@ router.get(
       }
       console.error("[travel-invoices] schedule upcoming error:", e.message);
       res.status(500).json({ error: "Failed to list upcoming milestones" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/invoices/:id/tcs-preview — Section 206C(1G) preview
+// (Arc 2 #901 slice 9 — PRD_TRAVEL_BILLING UC-2.6 + FR-3.5).
+//
+// READ-ONLY endpoint. Returns the TCS that WOULD apply if this invoice were
+// issued today, factoring in the customer's cumulative FY spend across all
+// other TravelInvoice rows for the same contactId + tenant. Does NOT mutate
+// the invoice or persist a TCS line — persistence on a TravelInvoiceLine
+// row lands in slice 10 (needs a schema field for `tcsAmount` cache).
+//
+// Auth: any verified token, tenant + sub-brand scoped via loadParentInvoice.
+//
+// Query params (all optional):
+//   ?isOverseasPackage=true|false   — default true (TCS-eligible by default
+//                                     since travel is overseas-leaning)
+//   ?isNonFiler=true|false          — default false (filer; 5% rate)
+//   ?customerCountryCode=AE         — if provided, overrides isOverseasPackage
+//                                     via the isOverseasDestination heuristic
+//
+// FY-window source: TravelInvoice has no dedicated issuedAt column today
+// (see the slice-5 NOTE near the /issue handler). Falls back to `createdAt`
+// for the priorFySpend filter — additive schema change to introduce a
+// dedicated issue-timestamp column is deferred to a later slice.
+//
+// Response: {
+//   invoiceId, contactId, invoiceAmount, priorFySpend,
+//   isOverseasPackage, isNonFiler,
+//   applies, exceedingAmount, rate, tcsAmount, newFyTotal
+// }
+//
+// Error codes: INVALID_ID, INVOICE_NOT_FOUND, SUB_BRAND_DENIED.
+// ============================================================================
+router.get(
+  "/invoices/:id/tcs-preview",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      // ---- Resolve isOverseasPackage ----
+      // If customerCountryCode is provided, the destination-heuristic
+      // overrides the explicit boolean (a "IN" destination always wins,
+      // even when isOverseasPackage=true was passed by mistake). If absent,
+      // the boolean defaults to TRUE (TCS-eligible default for travel).
+      const ccRaw = req.query.customerCountryCode;
+      const hasCountryCode = typeof ccRaw === "string" && ccRaw.trim() !== "";
+      const isOverseasPackage = hasCountryCode
+        ? isOverseasDestination(ccRaw)
+        : req.query.isOverseasPackage === "false"
+          ? false
+          : true;
+
+      const isNonFiler = req.query.isNonFiler === "true";
+
+      // ---- Compute priorFySpend ----
+      // Sum totalAmount across all OTHER TravelInvoice rows belonging to
+      // the same contactId + tenant whose createdAt falls within the
+      // current FY window. Excludes the current invoice (so the preview
+      // is "what would TCS be IF this invoice were the marginal one").
+      const fyStart = fiscalYearStart(new Date());
+      const priorInvoices = await prisma.travelInvoice.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          contactId: invoice.contactId,
+          createdAt: { gte: fyStart },
+          NOT: { id: invoice.id },
+        },
+        select: { totalAmount: true },
+      });
+      const priorFySpend = priorInvoices.reduce(
+        (sum, inv) => sum + Number(inv.totalAmount || 0),
+        0,
+      );
+
+      const invoiceAmount = Number(invoice.totalAmount || 0);
+      const result = computeTcs({
+        invoiceAmount,
+        priorFySpend,
+        isNonFiler,
+        isOverseasPackage,
+      });
+
+      return res.status(200).json({
+        invoiceId: invoice.id,
+        contactId: invoice.contactId,
+        invoiceAmount,
+        priorFySpend,
+        isOverseasPackage,
+        isNonFiler,
+        applies: result.applies,
+        exceedingAmount: result.exceedingAmount,
+        rate: result.rate,
+        tcsAmount: result.tcsAmount,
+        newFyTotal: result.newFyTotal,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] tcs-preview error:", e.message);
+      res.status(500).json({ error: "Failed to compute TCS preview" });
     }
   },
 );

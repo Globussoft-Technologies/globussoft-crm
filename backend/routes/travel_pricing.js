@@ -11,6 +11,7 @@
 //   PATCH  /api/travel/markup-rules/:id                 ADMIN+MGR
 //   DELETE /api/travel/markup-rules/:id                 ADMIN
 //
+//   GET    /api/travel/pricing/stats                    — tenant-wide rollup
 //   POST   /api/travel/pricing/quote                    — compose a quote
 //
 // /pricing/quote takes (subBrand, category, routeOrSku, tripDate,
@@ -356,6 +357,192 @@ router.delete(
     }
   },
 );
+
+// ─── /pricing/stats ──────────────────────────────────────────────────
+
+// GET /api/travel/pricing/stats — tenant-wide pricing-config rollup.
+//
+// Mirrors #903 slice 23 /suppliers/stats + #905 slice 18
+// /commission-profiles/stats + #908 slice 19 /flyer-templates/global-stats.
+// USER-readable anodyne aggregate that powers the Pricing Config library
+// page header summary strip ("12 seasons · 4 active · 18 markup rules ·
+// 15 active · 8 flight · 5 hotel · last edit 2h ago"). Without this,
+// the frontend has to fire {seasons list, markupRules list, count by
+// scope×4, count by subBrand×4, max(updatedAt) probe} — N+1 round-trips
+// for a single visual surface.
+//
+// Aggregates across BOTH TravelSeasonCalendar AND TravelMarkupRule rows.
+// "Active" semantics differ per model:
+//   - seasons: startDate <= now <= endDate (no isActive field on schema)
+//   - markupRules: isActive=true (explicit column)
+//
+// PRD anchors:
+//   - PRD_TRAVEL_PRICING §3 — operator-facing pricing-config dashboard
+//     surfaces "how many seasons and markup rules do I have, of what
+//     shape, currently active vs scheduled" — this endpoint feeds those
+//     KPI tiles in one round-trip.
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' rows in the counts. Same gate as the
+//     sibling /seasons + /markup-rules list endpoints.
+//   - Season rollup (from prisma.travelSeasonCalendar.findMany):
+//       total, active, bySubBrand: { <sb>: { count } }
+//   - Markup rollup (from prisma.travelMarkupRule.findMany):
+//       total, active, bySubBrand: { <sb>: { count } },
+//       byScope: { flight|hotel|transport|package: { count } }
+//   - lastUpdatedAt: max(updatedAt) across both findMany result sets.
+//   - ?from / ?to (ISO date bounds) filter createdAt on both models
+//     before aggregation.
+//
+// USER-readable: anodyne aggregate (counts + timestamps); safe.
+// No audit row: read-only meta surface, mirrors sibling stats endpoints.
+//
+// Express route ordering: this literal-path route lives in the same file
+// as /seasons/:id + /markup-rules/:id but doesn't collide because the
+// path is fully distinct (/pricing/stats, not /seasons/stats or /markup-rules/stats).
+router.get("/pricing/stats", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const tenantId = req.travelTenant.id;
+
+    // Optional ISO date bounds on createdAt — applied to both models.
+    const dateFilter = {};
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      dateFilter.gte = d;
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      dateFilter.lte = d;
+    }
+
+    // Sub-brand narrowing — same gate as sibling list endpoints.
+    // MANAGER subBrandAccess restricts the visible-set BEFORE counting.
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+
+    const seasonWhere = { tenantId };
+    const ruleWhere = { tenantId };
+    if (Object.keys(dateFilter).length > 0) {
+      seasonWhere.createdAt = { ...dateFilter };
+      ruleWhere.createdAt = { ...dateFilter };
+    }
+    if (allowed) {
+      if (allowed.size > 0) {
+        const brandList = [...allowed];
+        seasonWhere.subBrand = { in: brandList };
+        ruleWhere.subBrand = { in: brandList };
+      } else {
+        // Empty allowed set = deny everything; force-empty query.
+        seasonWhere.subBrand = "__none__";
+        ruleWhere.subBrand = "__none__";
+      }
+    }
+
+    const [seasons, rules] = await Promise.all([
+      prisma.travelSeasonCalendar.findMany({
+        where: seasonWhere,
+        select: {
+          id: true,
+          subBrand: true,
+          startDate: true,
+          endDate: true,
+          updatedAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+        take: 2000,
+      }),
+      prisma.travelMarkupRule.findMany({
+        where: ruleWhere,
+        select: {
+          id: true,
+          subBrand: true,
+          scope: true,
+          isActive: true,
+          updatedAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+        take: 2000,
+      }),
+    ]);
+
+    const now = new Date();
+    let lastUpdatedAt = null;
+
+    // Seasons rollup.
+    let seasonsActive = 0;
+    const seasonsBySubBrand = {};
+    for (const s of seasons) {
+      const start = s.startDate instanceof Date ? s.startDate : new Date(s.startDate);
+      const end = s.endDate instanceof Date ? s.endDate : new Date(s.endDate);
+      if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+        if (start <= now && now <= end) seasonsActive += 1;
+      }
+
+      const sbKey = s.subBrand ? String(s.subBrand) : "_tenant";
+      if (!seasonsBySubBrand[sbKey]) seasonsBySubBrand[sbKey] = { count: 0 };
+      seasonsBySubBrand[sbKey].count += 1;
+
+      const ts = s.updatedAt instanceof Date ? s.updatedAt : new Date(s.updatedAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+      }
+    }
+
+    // Markup rules rollup.
+    let rulesActive = 0;
+    const rulesBySubBrand = {};
+    const rulesByScope = {};
+    for (const r of rules) {
+      if (r.isActive) rulesActive += 1;
+
+      const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+      if (!rulesBySubBrand[sbKey]) rulesBySubBrand[sbKey] = { count: 0 };
+      rulesBySubBrand[sbKey].count += 1;
+
+      const scopeKey = r.scope ? String(r.scope) : "other";
+      if (!rulesByScope[scopeKey]) rulesByScope[scopeKey] = { count: 0 };
+      rulesByScope[scopeKey].count += 1;
+
+      const ts = r.updatedAt instanceof Date ? r.updatedAt : new Date(r.updatedAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+      }
+    }
+
+    res.json({
+      seasons: {
+        total: seasons.length,
+        active: seasonsActive,
+        bySubBrand: seasonsBySubBrand,
+      },
+      markupRules: {
+        total: rules.length,
+        active: rulesActive,
+        bySubBrand: rulesBySubBrand,
+        byScope: rulesByScope,
+      },
+      lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-pricing] stats error:", e.message);
+    res.status(500).json({ error: "Failed to summarise pricing config" });
+  }
+});
 
 // ─── /pricing/quote ──────────────────────────────────────────────────
 

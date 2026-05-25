@@ -776,3 +776,386 @@ describe('<SuppliersAdmin /> — slice 2 (#903) payment-terms + credit + GSTIN h
     expect(sub.textContent).not.toMatch(/credit/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 4 (#903) — payables panel (expand / list / add / mark-paid / cancel /
+// delete). Consumes backend endpoints shipped in commit 59336ab7:
+//   GET    /api/travel/suppliers/:id/payables           list + ?status filter
+//   POST   /api/travel/suppliers/:id/payables           ADMIN+MANAGER create
+//   PUT    /api/travel/suppliers/:id/payables/:pid      ADMIN+MANAGER patch
+//   DELETE /api/travel/suppliers/:id/payables/:pid      ADMIN+MANAGER hard-delete
+//
+// UX decisions encoded by the assertions below:
+//   - Single-expanded UX: only one supplier's panel is open at a time
+//     (toggling a different supplier closes the prior). Keeps DOM tight on
+//     the list page; operators who need side-by-side comparison can open
+//     the supplier detail in a new tab.
+//   - Status badges: pending → yellow, scheduled → blue, paid → green,
+//     cancelled → grey with strike-through line on the row.
+//   - notify.confirm for the delete action (matches the rest of the modern
+//     CRM surface; the older window.confirm path is reserved for the parent
+//     supplier delete which predates the notify.confirm migration).
+//   - Empty state copy: "No payables recorded yet — add the first one below."
+// ─────────────────────────────────────────────────────────────────────────────
+function makePayable(overrides = {}) {
+  return {
+    id: 401,
+    tenantId: 1,
+    supplierId: 201,
+    description: 'PO-2026-0123 batch 1',
+    amount: '450000.00',
+    currency: 'INR',
+    dueDate: '2026-06-15T00:00:00.000Z',
+    status: 'pending',
+    poNumber: 'PO-2026-0123',
+    paidAt: null,
+    notes: 'Awaiting GST inv',
+    createdAt: '2026-05-25T08:00:00.000Z',
+    updatedAt: '2026-05-25T08:00:00.000Z',
+    ...overrides,
+  };
+}
+
+// Install fetch mock that ALSO routes the nested payables endpoints. Keeps
+// the base supplier-list response identical to installFetchMock so existing
+// cases (and the panel-open cases) coexist.
+function installFetchMockWithPayables({
+  list = { suppliers: SUPPLIERS_DEFAULT, total: SUPPLIERS_DEFAULT.length, limit: 100, offset: 0 },
+  payables = { payables: [], total: 0, limit: 100, offset: 0 },
+  payablesCreate = null,
+  payablesUpdate = null,
+  payablesDelete = null,
+} = {}) {
+  fetchApiMock.mockImplementation((url, opts) => {
+    const method = opts?.method || 'GET';
+    // Nested payables match BEFORE the supplier-level patterns (URL prefix overlap).
+    if (/^\/api\/travel\/suppliers\/\d+\/payables$/.test(url) && method === 'GET') {
+      if (payables instanceof Error) return Promise.reject(payables);
+      return Promise.resolve(payables);
+    }
+    if (/^\/api\/travel\/suppliers\/\d+\/payables$/.test(url) && method === 'POST') {
+      if (payablesCreate instanceof Error) return Promise.reject(payablesCreate);
+      return Promise.resolve(payablesCreate || makePayable({ id: 9001 }));
+    }
+    if (/^\/api\/travel\/suppliers\/\d+\/payables\/\d+$/.test(url) && method === 'PUT') {
+      if (payablesUpdate instanceof Error) return Promise.reject(payablesUpdate);
+      return Promise.resolve(payablesUpdate || makePayable({ id: 401 }));
+    }
+    if (/^\/api\/travel\/suppliers\/\d+\/payables\/\d+$/.test(url) && method === 'DELETE') {
+      if (payablesDelete instanceof Error) return Promise.reject(payablesDelete);
+      return Promise.resolve(null);
+    }
+    // Fall-through to supplier-level handlers (same shape as installFetchMock).
+    if (url.startsWith('/api/travel/suppliers') && method === 'GET') {
+      if (list instanceof Error) return Promise.reject(list);
+      return Promise.resolve(list);
+    }
+    if (url === '/api/travel/suppliers' && method === 'POST') {
+      return Promise.resolve(makeSupplier({ id: 999 }));
+    }
+    if (/^\/api\/travel\/suppliers\/\d+$/.test(url) && method === 'PUT') {
+      return Promise.resolve(makeSupplier({ id: 201 }));
+    }
+    if (/^\/api\/travel\/suppliers\/\d+$/.test(url) && method === 'DELETE') {
+      return Promise.resolve(null);
+    }
+    return Promise.resolve(null);
+  });
+}
+
+describe('<SuppliersAdmin /> — slice 4 (#903) payables panel', () => {
+  it('expand toggle renders on EVERY supplier row (read-only USER role too)', async () => {
+    installFetchMockWithPayables();
+    renderPage(USER_USER);
+    await screen.findByText('Acme Hotels');
+    // All 3 default suppliers have a toggle button — verifies the toggle is
+    // not gated on canWrite (operators in read-only mode can still view the
+    // A/P ledger to answer "what do we owe X?" questions).
+    expect(
+      screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Toggle payables for Saudi Flights/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Toggle payables for Old Visa Consul/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking expand fires GET /api/travel/suppliers/:id/payables and reveals the panel', async () => {
+    installFetchMockWithPayables();
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    // Panel not in DOM before click.
+    expect(screen.queryByTestId('payables-panel-201')).toBeNull();
+    fetchApiMock.mockClear();
+    installFetchMockWithPayables();
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+    await waitFor(() => {
+      const get = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers/201/payables' && (!o?.method || o.method === 'GET'),
+      );
+      expect(get).toBeTruthy();
+    });
+    expect(await screen.findByTestId('payables-panel-201')).toBeInTheDocument();
+  });
+
+  it('empty state: "No payables recorded yet — add the first one below." when list is empty', async () => {
+    installFetchMockWithPayables({ payables: { payables: [], total: 0 } });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+    expect(
+      await screen.findByText(/No payables recorded yet — add the first one below\./i),
+    ).toBeInTheDocument();
+  });
+
+  it('populated rows render description, amount + currency, dueDate, status badge', async () => {
+    installFetchMockWithPayables({
+      payables: {
+        payables: [
+          makePayable({
+            id: 401,
+            description: 'PO-2026-0123 batch 1',
+            amount: '450000.00',
+            currency: 'INR',
+            dueDate: '2026-06-15T00:00:00.000Z',
+            status: 'pending',
+          }),
+          makePayable({
+            id: 402,
+            description: 'Hotel rooms Apr 2026',
+            amount: '120000.50',
+            currency: 'INR',
+            dueDate: '2026-04-30T00:00:00.000Z',
+            status: 'paid',
+          }),
+          makePayable({
+            id: 403,
+            description: 'Cancelled airline batch',
+            amount: '90000.00',
+            currency: 'USD',
+            dueDate: null,
+            status: 'cancelled',
+          }),
+        ],
+        total: 3,
+      },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+    const row401 = (await screen.findByTestId('payable-row-401'));
+    expect(within(row401).getByText('PO-2026-0123 batch 1')).toBeInTheDocument();
+    // Amount + currency rendered together in the row.
+    expect(within(row401).getByText(/450000\.00.*INR/)).toBeInTheDocument();
+    expect(within(row401).getByText('2026-06-15')).toBeInTheDocument();
+    // Status badge per row (status label appears both in row + may appear in
+    // future filter chrome; use the data-testid to disambiguate).
+    expect(within(row401).getByTestId('payable-status-401').textContent).toMatch(/pending/i);
+    expect(within(screen.getByTestId('payable-row-402')).getByTestId('payable-status-402').textContent).toMatch(/paid/i);
+    expect(within(screen.getByTestId('payable-row-403')).getByTestId('payable-status-403').textContent).toMatch(/cancelled/i);
+  });
+
+  it('"Mark paid" button fires PUT with { status: "paid" } + re-fetches list', async () => {
+    installFetchMockWithPayables({
+      payables: { payables: [makePayable({ id: 411, status: 'pending' })], total: 1 },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+    await screen.findByTestId('payable-row-411');
+    fetchApiMock.mockClear();
+    installFetchMockWithPayables({
+      payables: { payables: [makePayable({ id: 411, status: 'paid', paidAt: '2026-05-25T09:00:00.000Z' })], total: 1 },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Mark paid payable 411/i }));
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers/201/payables/411' && o?.method === 'PUT',
+      );
+      expect(put).toBeTruthy();
+      const body = JSON.parse(put[1].body);
+      expect(body.status).toBe('paid');
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/paid/i));
+  });
+
+  it('"Cancel" button fires PUT with { status: "cancelled" }', async () => {
+    installFetchMockWithPayables({
+      payables: { payables: [makePayable({ id: 421, status: 'pending' })], total: 1 },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+    await screen.findByTestId('payable-row-421');
+    fetchApiMock.mockClear();
+    installFetchMockWithPayables({
+      payables: { payables: [makePayable({ id: 421, status: 'cancelled' })], total: 1 },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Cancel payable 421/i }));
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers/201/payables/421' && o?.method === 'PUT',
+      );
+      expect(put).toBeTruthy();
+      const body = JSON.parse(put[1].body);
+      expect(body.status).toBe('cancelled');
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/cancel/i));
+  });
+
+  it('"Delete" fires notify.confirm + DELETE on confirm-yes; no DELETE on confirm-no', async () => {
+    installFetchMockWithPayables({
+      payables: { payables: [makePayable({ id: 431, status: 'pending' })], total: 1 },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+    await screen.findByTestId('payable-row-431');
+
+    // Confirm-no path: stub notify.confirm to resolve false.
+    notifyConfirm.mockResolvedValueOnce(false);
+    fetchApiMock.mockClear();
+    installFetchMockWithPayables({
+      payables: { payables: [makePayable({ id: 431, status: 'pending' })], total: 1 },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Delete payable 431/i }));
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalled();
+    });
+    const deletesA = fetchApiMock.mock.calls.filter(([u, o]) =>
+      typeof u === 'string' && /\/payables\/\d+$/.test(u) && o?.method === 'DELETE',
+    );
+    expect(deletesA.length).toBe(0);
+
+    // Confirm-yes path: default mockResolvedValue is true (beforeEach).
+    notifyConfirm.mockResolvedValueOnce(true);
+    fetchApiMock.mockClear();
+    installFetchMockWithPayables({ payables: { payables: [], total: 0 } });
+    fireEvent.click(screen.getByRole('button', { name: /Delete payable 431/i }));
+    await waitFor(() => {
+      const del = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers/201/payables/431' && o?.method === 'DELETE',
+      );
+      expect(del).toBeTruthy();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/delete/i));
+  });
+
+  it('add-payable form: submit with required fields → POST /api/travel/suppliers/:id/payables + list refresh', async () => {
+    installFetchMockWithPayables({
+      payables: { payables: [], total: 0 },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+    await screen.findByText(/No payables recorded yet/i);
+    const descInput = screen.getByLabelText(/Payable description for Acme Hotels/i);
+    const amountInput = screen.getByLabelText(/Payable amount for Acme Hotels/i);
+    const dueInput = screen.getByLabelText(/Payable due date for Acme Hotels/i);
+    const poInput = screen.getByLabelText(/Payable PO number for Acme Hotels/i);
+    const notesInput = screen.getByLabelText(/Payable notes for Acme Hotels/i);
+    fireEvent.change(descInput, { target: { value: '  Airline batch  ' } });
+    fireEvent.change(amountInput, { target: { value: '125000.00' } });
+    fireEvent.change(dueInput, { target: { value: '2026-07-15' } });
+    fireEvent.change(poInput, { target: { value: 'PO-2026-0200' } });
+    fireEvent.change(notesInput, { target: { value: 'Net-30 after ticketing' } });
+
+    fetchApiMock.mockClear();
+    installFetchMockWithPayables({
+      payables: { payables: [makePayable({ id: 999 })], total: 1 },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add payable/i }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers/201/payables' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.description).toBe('Airline batch'); // trimmed
+      expect(body.amount).toBe(125000);
+      expect(body.dueDate).toBe('2026-07-15');
+      expect(body.poNumber).toBe('PO-2026-0200');
+      expect(body.notes).toBe('Net-30 after ticketing');
+    });
+    // After success, list re-fetched (second GET fires after POST).
+    await waitFor(() => {
+      const refetch = fetchApiMock.mock.calls.filter(([u, o]) =>
+        u === '/api/travel/suppliers/201/payables' && (!o?.method || o.method === 'GET'),
+      );
+      expect(refetch.length).toBeGreaterThan(0);
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/added/i));
+  });
+
+  it('add-payable form: missing description → notify.error, no POST fires', async () => {
+    installFetchMockWithPayables({ payables: { payables: [], total: 0 } });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+    await screen.findByText(/No payables recorded yet/i);
+    // Description blank, amount populated.
+    fireEvent.change(screen.getByLabelText(/Payable amount for Acme Hotels/i), { target: { value: '10000' } });
+    const form = screen.getByTestId('payable-add-form-201');
+    fetchApiMock.mockClear();
+    installFetchMockWithPayables({ payables: { payables: [], total: 0 } });
+    fireEvent.submit(form);
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/description.*required/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(([u, o]) =>
+      typeof u === 'string' && /\/payables$/.test(u) && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('add-payable form: negative amount → notify.error, no POST fires', async () => {
+    installFetchMockWithPayables({ payables: { payables: [], total: 0 } });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+    await screen.findByText(/No payables recorded yet/i);
+    fireEvent.change(screen.getByLabelText(/Payable description for Acme Hotels/i), { target: { value: 'Bad amount row' } });
+    // jsdom's <input type="number" min="0"> sanitises a "-50" input to "" on
+    // change (per the HTML5 spec for invalid number-input values). The SUT's
+    // first validation branch ("Amount is required") catches this; the second
+    // branch ("non-negative number") catches truly-numeric negative input
+    // (e.g. via a JS state-set bypass). Both paths block the POST + surface
+    // a notify.error — the contract pinned here is "negative input does not
+    // fire POST AND surfaces an error", with either error message acceptable.
+    const amountInput = screen.getByLabelText(/Payable amount for Acme Hotels/i);
+    fireEvent.change(amountInput, { target: { value: '-50' } });
+    // Submit via direct form event so we bypass HTML5 native validation
+    // (the type="number" min="0" input would block a click-submit on
+    // negative values). The SUT's JS-level validation MUST hold its own.
+    const form = screen.getByTestId('payable-add-form-201');
+    fetchApiMock.mockClear();
+    installFetchMockWithPayables({ payables: { payables: [], total: 0 } });
+    fireEvent.submit(form);
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalled();
+      const msg = notifyError.mock.calls[notifyError.mock.calls.length - 1][0];
+      expect(msg).toMatch(/non-negative number|Amount is required/i);
+    });
+    const posts = fetchApiMock.mock.calls.filter(([u, o]) =>
+      typeof u === 'string' && /\/payables$/.test(u) && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('single-expanded UX: opening a second supplier closes the first panel', async () => {
+    installFetchMockWithPayables({ payables: { payables: [], total: 0 } });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+    expect(await screen.findByTestId('payables-panel-201')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Saudi Flights/i }));
+    // Second opens; first closes (single-expanded contract).
+    expect(await screen.findByTestId('payables-panel-202')).toBeInTheDocument();
+    expect(screen.queryByTestId('payables-panel-201')).toBeNull();
+  });
+});

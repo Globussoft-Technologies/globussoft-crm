@@ -18,8 +18,8 @@
 // canonical header + table + add/edit modal pattern). Empty-state
 // honors the #829 permission-denied vs no-rows distinction.
 
-import { useEffect, useState, useContext } from "react";
-import { Building2, Plus, Pencil, Trash2 } from "lucide-react";
+import { useEffect, useState, useContext, Fragment } from "react";
+import { Building2, Plus, Pencil, Trash2, ChevronDown, ChevronRight, CheckCircle2, XCircle, Wallet } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
@@ -87,6 +87,33 @@ const CURRENCY_SYMBOL = {
   SAR: "﷼",
 };
 
+// PRD_TRAVEL_SUPPLIER_MASTER #903 slice 4 — payables panel.
+// Operator-facing A/P ledger surfaced inline per supplier row. Backend
+// contract pinned from commit 59336ab7:
+//   GET    /api/travel/suppliers/:id/payables          list + ?status filter
+//   POST   /api/travel/suppliers/:id/payables          ADMIN+MANAGER create
+//   PUT    /api/travel/suppliers/:id/payables/:pid     ADMIN+MANAGER patch
+//   DELETE /api/travel/suppliers/:id/payables/:pid     ADMIN+MANAGER hard-delete
+// Status enum: pending | scheduled | paid | cancelled.
+// PUT status='paid' auto-sets paidAt=now() server-side; no client-side dance
+// required.
+const PAYABLE_STATUS_STYLE = {
+  pending: { bg: "rgba(245, 158, 11, 0.18)", fg: "var(--warning-color, #f59e0b)" },
+  scheduled: { bg: "rgba(59, 130, 246, 0.18)", fg: "#3b82f6" },
+  paid: { bg: "rgba(34, 197, 94, 0.18)", fg: "var(--success-color, #22c55e)" },
+  cancelled: { bg: "rgba(148, 163, 184, 0.18)", fg: "var(--text-secondary)" },
+};
+
+// Slice-4 add-payable form initial state. Empty strings normalise to null
+// on submit (description + amount required, the rest optional).
+const EMPTY_PAYABLE_FORM = {
+  description: "",
+  amount: "",
+  dueDate: "",
+  poNumber: "",
+  notes: "",
+};
+
 const EMPTY_FORM = {
   name: "",
   contactPerson: "",
@@ -126,6 +153,18 @@ export default function SuppliersAdmin() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+
+  // Slice 4 (#903) — payables panel state. Single-expanded UX (only one
+  // supplier's panel open at a time) keeps DOM + outbound fetches tight on
+  // the suppliers list page; if an operator needs side-by-side comparison
+  // they can open the supplier detail in a new tab. Per-supplier slot maps
+  // keyed by supplier id avoid cross-row state collisions during expand/
+  // collapse churn.
+  const [expandedSupplierId, setExpandedSupplierId] = useState(null);
+  const [payablesBySupplier, setPayablesBySupplier] = useState({}); // { [supplierId]: [rows] }
+  const [payablesLoadingBy, setPayablesLoadingBy] = useState({});   // { [supplierId]: bool }
+  const [payableForm, setPayableForm] = useState({});               // { [supplierId]: form }
+  const [payableSaving, setPayableSaving] = useState({});           // { [supplierId]: bool }
 
   const load = () => {
     setLoading(true);
@@ -262,6 +301,129 @@ export default function SuppliersAdmin() {
       load();
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Delete failed");
+    }
+  };
+
+  // Slice 4 (#903) — payables panel handlers. Each takes a supplierId so the
+  // map-key state shape stays clean.
+  const loadPayables = (supplierId) => {
+    setPayablesLoadingBy((m) => ({ ...m, [supplierId]: true }));
+    fetchApi(`/api/travel/suppliers/${supplierId}/payables`)
+      .then((d) => {
+        setPayablesBySupplier((m) => ({
+          ...m,
+          [supplierId]: Array.isArray(d?.payables) ? d.payables : [],
+        }));
+      })
+      .catch((err) => {
+        setPayablesBySupplier((m) => ({ ...m, [supplierId]: [] }));
+        notify.error(err?.body?.error || err?.message || "Failed to load payables");
+      })
+      .finally(() => {
+        setPayablesLoadingBy((m) => ({ ...m, [supplierId]: false }));
+      });
+  };
+
+  const togglePayablesPanel = (supplierId) => {
+    if (expandedSupplierId === supplierId) {
+      setExpandedSupplierId(null);
+      return;
+    }
+    setExpandedSupplierId(supplierId);
+    // Always re-fetch on open — payables state shifts often (mark-paid,
+    // cancel, third-party reconciliation), so stale-while-revalidate would
+    // mislead the operator. Fresh GET on every expand is the safe default.
+    if (!payableForm[supplierId]) {
+      setPayableForm((m) => ({ ...m, [supplierId]: EMPTY_PAYABLE_FORM }));
+    }
+    loadPayables(supplierId);
+  };
+
+  const updatePayableForm = (supplierId, patch) => {
+    setPayableForm((m) => ({
+      ...m,
+      [supplierId]: { ...(m[supplierId] || EMPTY_PAYABLE_FORM), ...patch },
+    }));
+  };
+
+  const handleAddPayable = async (e, supplierId) => {
+    e.preventDefault();
+    const f = payableForm[supplierId] || EMPTY_PAYABLE_FORM;
+    const descTrimmed = (f.description || "").trim();
+    if (!descTrimmed) {
+      notify.error("Description is required");
+      return;
+    }
+    if (f.amount === "" || f.amount == null) {
+      notify.error("Amount is required");
+      return;
+    }
+    const amountNum = Number(f.amount);
+    if (!Number.isFinite(amountNum) || amountNum < 0) {
+      notify.error("Amount must be a non-negative number");
+      return;
+    }
+    setPayableSaving((m) => ({ ...m, [supplierId]: true }));
+    try {
+      await fetchApi(`/api/travel/suppliers/${supplierId}/payables`, {
+        method: "POST",
+        body: JSON.stringify({
+          description: descTrimmed,
+          amount: amountNum,
+          dueDate: f.dueDate || null,
+          poNumber: f.poNumber || null,
+          notes: f.notes || null,
+        }),
+      });
+      notify.success("Payable added");
+      setPayableForm((m) => ({ ...m, [supplierId]: EMPTY_PAYABLE_FORM }));
+      loadPayables(supplierId);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to add payable");
+    } finally {
+      setPayableSaving((m) => ({ ...m, [supplierId]: false }));
+    }
+  };
+
+  const handleMarkPayablePaid = async (supplierId, payable) => {
+    try {
+      await fetchApi(`/api/travel/suppliers/${supplierId}/payables/${payable.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ status: "paid" }),
+      });
+      notify.success("Payable marked paid");
+      loadPayables(supplierId);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to mark paid");
+    }
+  };
+
+  const handleCancelPayable = async (supplierId, payable) => {
+    try {
+      await fetchApi(`/api/travel/suppliers/${supplierId}/payables/${payable.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ status: "cancelled" }),
+      });
+      notify.success("Payable cancelled");
+      loadPayables(supplierId);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to cancel payable");
+    }
+  };
+
+  const handleDeletePayable = async (supplierId, payable) => {
+    const ok = await notify.confirm(
+      `Delete payable "${payable.description}"? This cannot be undone.`,
+    );
+    if (!ok) return;
+    try {
+      await fetchApi(`/api/travel/suppliers/${supplierId}/payables/${payable.id}`, {
+        method: "DELETE",
+      });
+      notify.success("Payable deleted");
+      loadPayables(supplierId);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to delete payable");
     }
   };
 
@@ -549,10 +711,29 @@ export default function SuppliersAdmin() {
                   }
                 }
                 const subLine = [ptToken, clToken].filter(Boolean).join(" · ");
+                const isExpanded = expandedSupplierId === s.id;
                 return (
-                <tr key={s.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+                <Fragment key={s.id}>
+                <tr style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                   <td style={td}>
-                    <strong>{s.name}</strong>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button
+                        type="button"
+                        onClick={() => togglePayablesPanel(s.id)}
+                        title={isExpanded ? `Hide payables for ${s.name}` : `Show payables for ${s.name}`}
+                        aria-label={`Toggle payables for ${s.name}`}
+                        aria-expanded={isExpanded}
+                        style={{
+                          ...iconBtn,
+                          padding: 2,
+                          marginRight: 0,
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </button>
+                      <strong>{s.name}</strong>
+                    </div>
                     {subLine && (
                       <div
                         data-testid={`supplier-finance-sub-${s.id}`}
@@ -614,6 +795,29 @@ export default function SuppliersAdmin() {
                     </td>
                   )}
                 </tr>
+                {isExpanded && (
+                  <tr
+                    data-testid={`payables-panel-${s.id}`}
+                    style={{ borderTop: "1px solid rgba(255,255,255,0.04)", background: "rgba(255,255,255,0.02)" }}
+                  >
+                    <td colSpan={canWrite ? 9 : 8} style={{ padding: "12px 16px" }}>
+                      {renderPayablesPanel({
+                        supplier: s,
+                        canWrite,
+                        loading: !!payablesLoadingBy[s.id],
+                        payables: payablesBySupplier[s.id] || [],
+                        form: payableForm[s.id] || EMPTY_PAYABLE_FORM,
+                        saving: !!payableSaving[s.id],
+                        onFormChange: (patch) => updatePayableForm(s.id, patch),
+                        onSubmit: (e) => handleAddPayable(e, s.id),
+                        onMarkPaid: (p) => handleMarkPayablePaid(s.id, p),
+                        onCancel: (p) => handleCancelPayable(s.id, p),
+                        onDelete: (p) => handleDeletePayable(s.id, p),
+                      })}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
                 );
               })}
               {suppliers.length === 0 && (
@@ -651,6 +855,217 @@ export default function SuppliersAdmin() {
     </div>
   );
 }
+
+// Slice 4 (#903) — payables panel render. Pure function (no hooks); accepts
+// every callback explicitly so the parent owns all state. Renders four
+// regions:
+//   1. Header: "Payables for <supplier name>" + a tiny help blurb.
+//   2. List: data-testid="payable-row-<id>" rows with status badge +
+//      mark-paid/cancel/delete actions (canWrite-gated). Strike-through on
+//      cancelled rows. Empty list → empty-state copy.
+//   3. Add form (canWrite only): description/amount required, plus dueDate,
+//      poNumber, notes optional. Submit dispatches the POST callback.
+//   4. Loading indicator: replaces (2) until the initial GET resolves.
+function renderPayablesPanel({
+  supplier,
+  canWrite,
+  loading,
+  payables,
+  form,
+  saving,
+  onFormChange,
+  onSubmit,
+  onMarkPaid,
+  onCancel,
+  onDelete,
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <Wallet size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
+        <strong style={{ fontSize: 13 }}>Payables for {supplier.name}</strong>
+        <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+          A/P ledger — track invoices owed to this supplier.
+        </span>
+      </div>
+
+      {loading ? (
+        <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>Loading payables&hellip;</div>
+      ) : payables.length === 0 ? (
+        <div style={{ fontSize: 13, color: "var(--text-secondary)", fontStyle: "italic" }}>
+          No payables recorded yet — add the first one below.
+        </div>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <th style={{ ...payableTh }}>Description</th>
+              <th style={{ ...payableTh }}>Amount</th>
+              <th style={{ ...payableTh }}>Due</th>
+              <th style={{ ...payableTh }}>Status</th>
+              <th style={{ ...payableTh }}>PO #</th>
+              <th style={{ ...payableTh }}>Notes</th>
+              {canWrite && <th style={{ ...payableTh, textAlign: "center" }}>Actions</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {payables.map((p) => {
+              const statusKey = p.status || "pending";
+              const style = PAYABLE_STATUS_STYLE[statusKey] || PAYABLE_STATUS_STYLE.pending;
+              const isCancelled = statusKey === "cancelled";
+              const isPaid = statusKey === "paid";
+              const dueDisplay = p.dueDate ? new Date(p.dueDate).toISOString().slice(0, 10) : "—";
+              const amountDisplay = p.amount != null ? String(p.amount) : "—";
+              const currency = p.currency || "INR";
+              return (
+                <tr
+                  key={p.id}
+                  data-testid={`payable-row-${p.id}`}
+                  style={{
+                    borderTop: "1px solid rgba(255,255,255,0.04)",
+                    textDecoration: isCancelled ? "line-through" : "none",
+                    opacity: isCancelled ? 0.6 : 1,
+                  }}
+                >
+                  <td style={payableTd}>{p.description || "—"}</td>
+                  <td style={payableTd}>
+                    {amountDisplay} {currency}
+                  </td>
+                  <td style={payableTd}>{dueDisplay}</td>
+                  <td style={payableTd}>
+                    <span
+                      data-testid={`payable-status-${p.id}`}
+                      style={{
+                        ...statusBadge,
+                        background: style.bg,
+                        color: style.fg,
+                        textTransform: "capitalize",
+                      }}
+                    >
+                      {statusKey}
+                    </span>
+                  </td>
+                  <td style={payableTd}>{p.poNumber || "—"}</td>
+                  <td style={{ ...payableTd, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {p.notes || "—"}
+                  </td>
+                  {canWrite && (
+                    <td style={{ ...payableTd, textAlign: "center", whiteSpace: "nowrap" }}>
+                      {!isPaid && !isCancelled && (
+                        <button
+                          type="button"
+                          onClick={() => onMarkPaid(p)}
+                          title={`Mark paid: ${p.description}`}
+                          aria-label={`Mark paid payable ${p.id}`}
+                          style={{ ...iconBtn, color: "var(--success-color, #22c55e)" }}
+                        >
+                          <CheckCircle2 size={15} />
+                        </button>
+                      )}
+                      {!isCancelled && !isPaid && (
+                        <button
+                          type="button"
+                          onClick={() => onCancel(p)}
+                          title={`Cancel: ${p.description}`}
+                          aria-label={`Cancel payable ${p.id}`}
+                          style={{ ...iconBtn, color: "var(--text-secondary)" }}
+                        >
+                          <XCircle size={15} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => onDelete(p)}
+                        title={`Delete: ${p.description}`}
+                        aria-label={`Delete payable ${p.id}`}
+                        style={{ ...iconBtn, color: "var(--danger-color, #f43f5e)" }}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {canWrite && (
+        <form
+          onSubmit={onSubmit}
+          data-testid={`payable-add-form-${supplier.id}`}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))",
+            gap: 8,
+            alignItems: "end",
+            paddingTop: 8,
+            borderTop: "1px dashed var(--border-color)",
+          }}
+        >
+          <input
+            placeholder="Description *"
+            value={form.description}
+            onChange={(e) => onFormChange({ description: e.target.value })}
+            style={inputStyle}
+            aria-label={`Payable description for ${supplier.name}`}
+          />
+          <input
+            placeholder="Amount *"
+            type="number"
+            min="0"
+            step="0.01"
+            value={form.amount}
+            onChange={(e) => onFormChange({ amount: e.target.value })}
+            style={inputStyle}
+            aria-label={`Payable amount for ${supplier.name}`}
+          />
+          <input
+            placeholder="Due date"
+            type="date"
+            value={form.dueDate}
+            onChange={(e) => onFormChange({ dueDate: e.target.value })}
+            style={inputStyle}
+            aria-label={`Payable due date for ${supplier.name}`}
+          />
+          <input
+            placeholder="PO #"
+            value={form.poNumber}
+            onChange={(e) => onFormChange({ poNumber: e.target.value })}
+            style={inputStyle}
+            aria-label={`Payable PO number for ${supplier.name}`}
+          />
+          <input
+            placeholder="Notes"
+            value={form.notes}
+            onChange={(e) => onFormChange({ notes: e.target.value })}
+            style={inputStyle}
+            aria-label={`Payable notes for ${supplier.name}`}
+          />
+          <button
+            type="submit"
+            disabled={saving}
+            style={{ ...primaryBtn, background: "var(--success-color, var(--primary-color))" }}
+          >
+            <Plus size={13} /> {saving ? "Saving…" : "Add payable"}
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+const payableTh = {
+  textAlign: "left",
+  padding: "6px 8px",
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+  color: "var(--text-secondary)",
+  fontWeight: 600,
+};
+const payableTd = { padding: "6px 8px", fontSize: 13, color: "var(--text-primary)" };
 
 const th = {
   textAlign: "left",

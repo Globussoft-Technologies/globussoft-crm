@@ -3166,6 +3166,241 @@ router.get("/invoices/stats", verifyToken, requireTravelTenant, async (req, res)
   }
 });
 
+// GET /api/travel/invoices/expired-summary — any verified token (tenant + sub-brand-scoped).
+//
+// Arc 2 #901 (PRD_TRAVEL_BILLING §3 — overdue-collections rollup).
+// Mirrors /quotes/expired-summary (commit c6b169f2) for TravelInvoice
+// rows. Companion to /invoices/aged-receivable (full row list + dueDate
+// bucketing) + /invoices/stats (single overdueCount aggregate). This
+// endpoint returns an ACTIONABLE tenant-wide rollup of currently-overdue
+// invoices (status IN Issued|Partial AND dueDate < now) grouped by
+// sub-brand, overdue-age range, and top customers — the shape an
+// operator dashboard "collections-recovery" tile needs to prioritise
+// outreach.
+//
+// Response shape:
+//   {
+//     total,                          // count of currently-overdue invoices
+//     totalValue,                     // sum of totalAmount (half-up 2dp)
+//     totalOpenValue,                 // sum of (totalAmount - sum(schedule.receivedAmount))
+//     bySubBrand: { tmc|rfu|...|_tenant: {count, value, openValue} },
+//     byAgeRange: {
+//       "0-7d":   {count, value, openValue},   // overdue 0-7 days
+//       "8-30d":  {count, value, openValue},   // overdue 8-30 days
+//       "31-90d": {count, value, openValue},
+//       "90+d":   {count, value, openValue},
+//     },
+//     topCustomers: [                 // top-5 by overdue count
+//       { contactId, count, totalValue, openValue }, ...
+//     ],
+//     generatedAt,                    // ISO timestamp
+//   }
+//
+// Scope rules:
+//   - Tenant-scoped on TravelInvoice.tenantId.
+//   - Sub-brand restricted: MANAGER with subBrandAccess narrowed via
+//     getSubBrandAccessSet — empty set → zeroed shape (not 403) so
+//     dashboard tiles render cleanly for not-yet-onboarded operators.
+//   - USER-readable (anodyne aggregate; no invoice bodies leak — only
+//     counts + sums + contactIds, no customer names).
+//
+// openValue derivation: TravelInvoice has NO `paidAmount` column. The
+// outstanding balance is computed as totalAmount - sum(schedule.receivedAmount)
+// per the existing /invoices/aged-receivable pattern (slice 23). Invoices
+// with no TravelPaymentSchedule rows treat the entire totalAmount as
+// outstanding. This keeps the rollup actionable without depending on a
+// non-existent schema field.
+//
+// Defensive: null/non-numeric totalAmount → 0 (no NaN poisoning);
+// null subBrand coalesces to "_tenant" (matches /invoices/stats shape);
+// invoices with null dueDate are skipped (not "overdue" without a due
+// date); half-up 2dp rounding via Number.EPSILON.
+//
+// Age-range buckets are inclusive at the low bound:
+//   "0-7d"   → 0 <= overdueDays <= 7
+//   "8-30d"  → 8 <= overdueDays <= 30
+//   "31-90d" → 31 <= overdueDays <= 90
+//   "90+d"   → 91 <= overdueDays
+//
+// IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
+// doesn't match "expired-summary" as a numeric :id (which would 400
+// INVALID_ID).
+router.get(
+  "/invoices/expired-summary",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const round2 = (n) =>
+        Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+      const zeroBucket = () => ({ count: 0, value: 0, openValue: 0 });
+      const zeroed = () => ({
+        total: 0,
+        totalValue: 0,
+        totalOpenValue: 0,
+        bySubBrand: {},
+        byAgeRange: {
+          "0-7d": zeroBucket(),
+          "8-30d": zeroBucket(),
+          "31-90d": zeroBucket(),
+          "90+d": zeroBucket(),
+        },
+        topCustomers: [],
+        generatedAt: new Date().toISOString(),
+      });
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      // Empty access set → zeroed shape (not 403).
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json(zeroed());
+      }
+
+      const now = new Date();
+      const where = {
+        tenantId: req.travelTenant.id,
+        status: { in: ["Issued", "Partial"] },
+        dueDate: { lt: now },
+      };
+      if (allowed instanceof Set) {
+        where.subBrand = { in: [...allowed] };
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          contactId: true,
+          totalAmount: true,
+          dueDate: true,
+          schedule: { select: { receivedAmount: true } },
+        },
+      });
+
+      if (invoices.length === 0) {
+        return res.json(zeroed());
+      }
+
+      const bySubBrand = {};
+      const byAgeRange = {
+        "0-7d": zeroBucket(),
+        "8-30d": zeroBucket(),
+        "31-90d": zeroBucket(),
+        "90+d": zeroBucket(),
+      };
+      const perContact = new Map();
+      let total = 0;
+      let totalValue = 0;
+      let totalOpenValue = 0;
+      const nowMs = now.getTime();
+
+      for (const inv of invoices) {
+        // Defensive: skip rows whose dueDate failed Prisma's lt filter
+        // (shouldn't happen, but the test mock returns whatever it likes).
+        if (!inv.dueDate) continue;
+        const dd =
+          inv.dueDate instanceof Date ? inv.dueDate : new Date(inv.dueDate);
+        if (Number.isNaN(dd.getTime()) || dd.getTime() >= nowMs) continue;
+
+        const amt = Number(inv.totalAmount);
+        const safeAmt = Number.isFinite(amt) ? amt : 0;
+
+        // openValue = totalAmount - sum(schedule.receivedAmount). No
+        // schedule rows → entire totalAmount is outstanding (matches
+        // /invoices/aged-receivable slice 23 semantics).
+        const sched = Array.isArray(inv.schedule) ? inv.schedule : [];
+        let received = 0;
+        for (const s of sched) {
+          const r = Number(s.receivedAmount);
+          if (Number.isFinite(r)) received += r;
+        }
+        const openAmt = safeAmt - received;
+
+        total += 1;
+        totalValue += safeAmt;
+        totalOpenValue += openAmt;
+
+        // bySubBrand: null subBrand → "_tenant" (matches /invoices/stats shape).
+        const sbKey = inv.subBrand ? String(inv.subBrand) : "_tenant";
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = zeroBucket();
+        bySubBrand[sbKey].count += 1;
+        bySubBrand[sbKey].value += safeAmt;
+        bySubBrand[sbKey].openValue += openAmt;
+
+        // byAgeRange: how long ago did the invoice fall due (in days).
+        const ageDays = Math.floor((nowMs - dd.getTime()) / 86_400_000);
+        let bucket;
+        if (ageDays <= 7) bucket = "0-7d";
+        else if (ageDays <= 30) bucket = "8-30d";
+        else if (ageDays <= 90) bucket = "31-90d";
+        else bucket = "90+d";
+        byAgeRange[bucket].count += 1;
+        byAgeRange[bucket].value += safeAmt;
+        byAgeRange[bucket].openValue += openAmt;
+
+        // perContact tally for topCustomers.
+        if (inv.contactId != null) {
+          const cid = inv.contactId;
+          if (!perContact.has(cid)) {
+            perContact.set(cid, {
+              contactId: cid,
+              count: 0,
+              totalValue: 0,
+              openValue: 0,
+            });
+          }
+          const entry = perContact.get(cid);
+          entry.count += 1;
+          entry.totalValue += safeAmt;
+          entry.openValue += openAmt;
+        }
+      }
+
+      // Round per-bucket sums.
+      for (const sb of Object.keys(bySubBrand)) {
+        bySubBrand[sb].value = round2(bySubBrand[sb].value);
+        bySubBrand[sb].openValue = round2(bySubBrand[sb].openValue);
+      }
+      for (const ar of Object.keys(byAgeRange)) {
+        byAgeRange[ar].value = round2(byAgeRange[ar].value);
+        byAgeRange[ar].openValue = round2(byAgeRange[ar].openValue);
+      }
+
+      // topCustomers: sort desc by count (tie-break by openValue desc, then
+      // totalValue desc), top 5.
+      const topCustomers = [...perContact.values()]
+        .sort((a, b) => {
+          if (b.count !== a.count) return b.count - a.count;
+          if (b.openValue !== a.openValue) return b.openValue - a.openValue;
+          return b.totalValue - a.totalValue;
+        })
+        .slice(0, 5)
+        .map((c) => ({
+          contactId: c.contactId,
+          count: c.count,
+          totalValue: round2(c.totalValue),
+          openValue: round2(c.openValue),
+        }));
+
+      res.json({
+        total,
+        totalValue: round2(totalValue),
+        totalOpenValue: round2(totalOpenValue),
+        bySubBrand,
+        byAgeRange,
+        topCustomers,
+        generatedAt: now.toISOString(),
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] expired-summary error:", e.message);
+      res.status(500).json({ error: "Failed to summarise overdue invoices" });
+    }
+  },
+);
+
 // GET /api/travel/invoices/:id
 //
 // #901 slice 3 (PRD_TRAVEL_BILLING UC-2.5): supports ?include=lines to return

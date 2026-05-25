@@ -31,12 +31,12 @@
 //     reason; reason is logged into Sale.notes and AuditLog (server-side
 //     audit row written by routes/pos.js → writeAudit).
 
-import { useCallback, useEffect, useMemo, useState, useContext } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useContext } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Calculator,
   Plus,
-  Trash2,
+  Minus,
   Lock,
   Unlock,
   Receipt,
@@ -48,6 +48,8 @@ import {
   Gift,
   CalendarCheck,
   User as UserIcon,
+  Search,
+  X as XIcon,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -184,6 +186,128 @@ export default function PointOfSale() {
   const [walletBusy, setWalletBusy] = useState(false);
   const [giftCardCode, setGiftCardCode] = useState('');
   const [giftCardBusy, setGiftCardBusy] = useState(false);
+
+  // ── D17 Arc 1 slice 3 — Items picker autocomplete (DD-5.2 resolved →
+  //    autocomplete, not modal, not sidebar drawer).
+  //
+  // PRD_POS_NEW_SALE.md §3.4: a single search input that fans out to the
+  // existing Service + Product catalogues, debounced ~300ms, with a
+  // grouped dropdown of results. Clicking a result appends a line to the
+  // basket pre-filled with the catalogue's price + name + refId; the
+  // cashier can still tweak qty inline via row-level +/- buttons. Cuts
+  // the keystroke cost of the manual lineType/refId/name/unitPrice
+  // builder by a factor of ~6 for catalogue items (per the PRD's
+  // "current friction" measurement) while leaving the manual builder
+  // untouched as a fallback for one-off / ad-hoc charges.
+  //
+  // Endpoints:
+  //   GET /api/wellness/services           — all-active services
+  //   GET /api/wellness/products           — products (admin-gated today)
+  // Server-side ?q= filter is a no-op on both today (Agent A's backend
+  // slice will add it later); we filter client-side by name `includes`
+  // case-insensitively in the meantime. The products endpoint is
+  // admin/manager gated so plain USERs (cashiers) will see 403 — we
+  // swallow that to a silent empty-products result so the dropdown
+  // still surfaces services for cashier-level operators (acceptable
+  // degraded mode pending RBAC review in slice 5+).
+  const [itemsQuery, setItemsQuery] = useState('');
+  const [itemsResults, setItemsResults] = useState({ services: [], products: [] });
+  const [itemsBusy, setItemsBusy] = useState(false);
+  const [itemsDropdownOpen, setItemsDropdownOpen] = useState(false);
+  const itemsDebounceRef = useRef(null);
+
+  const fetchItemsCatalogue = useCallback(async (term) => {
+    const q = (term || '').trim();
+    if (!q) {
+      setItemsResults({ services: [], products: [] });
+      setItemsBusy(false);
+      return;
+    }
+    setItemsBusy(true);
+    try {
+      const qEnc = encodeURIComponent(q);
+      const [servicesRaw, productsRaw] = await Promise.all([
+        // Server doesn't currently honour ?q= (Agent A backend slice will
+        // wire it); send it anyway so the contract is forward-compatible.
+        fetchApi(`/api/wellness/services?q=${qEnc}`).catch(() => []),
+        // Products endpoint is admin/manager gated — swallow 403 to []
+        // so the picker still shows services for cashier-level users.
+        fetchApi(`/api/wellness/products?q=${qEnc}`).catch(() => []),
+      ]);
+      const needle = q.toLowerCase();
+      const services = Array.isArray(servicesRaw)
+        ? servicesRaw.filter((s) => s && typeof s.name === 'string' && s.name.toLowerCase().includes(needle)).slice(0, 10)
+        : [];
+      const products = Array.isArray(productsRaw)
+        ? productsRaw.filter((p) => p && typeof p.name === 'string' && p.name.toLowerCase().includes(needle)).slice(0, 10)
+        : [];
+      setItemsResults({ services, products });
+      setItemsDropdownOpen(true);
+    } catch (e) {
+      // Silent — the picker's empty-state messaging covers it; an error
+      // toast would be noisy on every keystroke if the network flapped.
+      setItemsResults({ services: [], products: [] });
+    } finally {
+      setItemsBusy(false);
+    }
+  }, []);
+
+  // Debounce the keystroke → fetch by ~300ms so typing "hydraf" doesn't
+  // fan out six parallel pairs of requests. Cleared on unmount + on
+  // every new keystroke.
+  useEffect(() => {
+    if (itemsDebounceRef.current) {
+      clearTimeout(itemsDebounceRef.current);
+    }
+    if (!itemsQuery.trim()) {
+      setItemsResults({ services: [], products: [] });
+      setItemsDropdownOpen(false);
+      return undefined;
+    }
+    itemsDebounceRef.current = setTimeout(() => {
+      fetchItemsCatalogue(itemsQuery);
+    }, 300);
+    return () => {
+      if (itemsDebounceRef.current) clearTimeout(itemsDebounceRef.current);
+    };
+  }, [itemsQuery, fetchItemsCatalogue]);
+
+  // Append a catalogue row to the basket. We map Service.basePrice and
+  // Product.price → the line's unitPrice (rupees, matching the existing
+  // manual builder convention — NOT cents; the prompt's `unitPriceCents`
+  // wording was a slice-level shorthand, the existing schema is rupees).
+  const addCatalogueLine = (kind, row) => {
+    if (!row || !row.id) return;
+    const unitPrice =
+      kind === 'SERVICE'
+        ? Number(row.basePrice || 0)
+        : Number(row.price || 0);
+    const line = {
+      lineType: kind,
+      refId: Number(row.id),
+      name: row.name || `${kind} #${row.id}`,
+      quantity: 1,
+      unitPrice,
+      lineDiscount: 0,
+      lineTotal: Math.max(0, 1 * unitPrice),
+    };
+    setBasket((b) => [...b, line]);
+    setItemsQuery('');
+    setItemsResults({ services: [], products: [] });
+    setItemsDropdownOpen(false);
+    notify.success(`Added ${line.name}`);
+  };
+
+  // Row-level qty controls — +/- buttons that recompute lineTotal in
+  // place. Qty cannot go below 1 (removal is via the × button).
+  const updateLineQty = useCallback((idx, delta) => {
+    setBasket((b) => b.map((l, i) => {
+      if (i !== idx) return l;
+      const nextQty = Math.max(1, Number(l.quantity || 1) + delta);
+      const lineTotal = Math.max(0, nextQty * Number(l.unitPrice || 0) - Number(l.lineDiscount || 0));
+      return { ...l, quantity: nextQty, lineTotal };
+    }));
+  }, []);
 
   const loadRegisters = async () => {
     try {
@@ -869,6 +993,141 @@ export default function PointOfSale() {
       {/* New Sale builder — only when shift OPEN */}
       {currentShift && (
         <>
+          {/* D17 Arc 1 slice 3 — Items picker autocomplete (DD-5.2 →
+              autocomplete). Single input, parallel fan-out to services
+              + products, grouped dropdown. The manual builder below
+              stays as the fallback for ad-hoc / one-off charges that
+              aren't in the catalogue. */}
+          <div style={cardStyle} data-testid="pos-items-picker">
+            <h2 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Search size={18} /> Add from catalogue
+            </h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.75rem 0' }}>
+              Type to search services + products. Click a result to add it to the sale at the catalogue price.
+            </p>
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                style={inputStyle}
+                value={itemsQuery}
+                onChange={(e) => setItemsQuery(e.target.value)}
+                onFocus={() => {
+                  if (itemsQuery.trim() && (itemsResults.services.length > 0 || itemsResults.products.length > 0)) {
+                    setItemsDropdownOpen(true);
+                  }
+                }}
+                placeholder="Add service or product..."
+                aria-label="Search services and products"
+                data-testid="pos-items-search-input"
+                autoComplete="off"
+              />
+              {itemsDropdownOpen && itemsQuery.trim() && (
+                <div
+                  role="listbox"
+                  aria-label="Catalogue search results"
+                  data-testid="pos-items-dropdown"
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 4px)',
+                    left: 0,
+                    right: 0,
+                    background: 'var(--surface-color, #fff)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 8,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+                    maxHeight: 320,
+                    overflowY: 'auto',
+                    zIndex: 10,
+                  }}
+                >
+                  {itemsBusy && (
+                    <div style={{ padding: '0.6rem 0.8rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                      Searching…
+                    </div>
+                  )}
+                  {!itemsBusy && itemsResults.services.length === 0 && itemsResults.products.length === 0 && (
+                    <div style={{ padding: '0.6rem 0.8rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                      No matches. Try a different term or use the manual builder below.
+                    </div>
+                  )}
+                  {itemsResults.services.length > 0 && (
+                    <div role="group" aria-label="Services">
+                      <div style={{ padding: '0.4rem 0.8rem', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)', background: 'var(--surface-2, #f7f7f8)' }}>
+                        Services
+                      </div>
+                      {itemsResults.services.map((s) => (
+                        <button
+                          key={`svc-${s.id}`}
+                          type="button"
+                          role="option"
+                          aria-selected="false"
+                          onClick={() => addCatalogueLine('SERVICE', s)}
+                          data-testid={`pos-items-result-service-${s.id}`}
+                          style={{
+                            display: 'flex',
+                            width: '100%',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            padding: '0.55rem 0.8rem',
+                            background: 'transparent',
+                            border: 'none',
+                            borderTop: '1px solid var(--border-color)',
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                            fontSize: '0.9rem',
+                          }}
+                        >
+                          <span>{s.name}{s.category ? <span style={{ color: 'var(--text-secondary)', marginLeft: '0.4rem', fontSize: '0.8rem' }}>· {s.category}</span> : null}</span>
+                          <strong>{formatMoney(s.basePrice || 0, 'INR', 'en-IN')}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {itemsResults.products.length > 0 && (
+                    <div role="group" aria-label="Products">
+                      <div style={{ padding: '0.4rem 0.8rem', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)', background: 'var(--surface-2, #f7f7f8)' }}>
+                        Products
+                      </div>
+                      {itemsResults.products.map((p) => (
+                        <button
+                          key={`prd-${p.id}`}
+                          type="button"
+                          role="option"
+                          aria-selected="false"
+                          onClick={() => addCatalogueLine('PRODUCT', p)}
+                          data-testid={`pos-items-result-product-${p.id}`}
+                          style={{
+                            display: 'flex',
+                            width: '100%',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            padding: '0.55rem 0.8rem',
+                            background: 'transparent',
+                            border: 'none',
+                            borderTop: '1px solid var(--border-color)',
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                            fontSize: '0.9rem',
+                          }}
+                        >
+                          <span>
+                            {p.name}
+                            {typeof p.currentStock === 'number' && (
+                              <span style={{ color: p.currentStock <= 0 ? 'var(--danger-color, #c44)' : 'var(--text-secondary)', marginLeft: '0.4rem', fontSize: '0.8rem' }}>
+                                · stock {p.currentStock}
+                              </span>
+                            )}
+                          </span>
+                          <strong>{formatMoney(p.price || 0, 'INR', 'en-IN')}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
           <div style={cardStyle}>
             <h2 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.05rem' }}>Add line item</h2>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: '0.5rem', alignItems: 'end' }}>
@@ -971,17 +1230,61 @@ export default function PointOfSale() {
                     <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
                       <td style={tdStyle}>{l.lineType}</td>
                       <td style={tdStyle}>{l.name}</td>
-                      <td style={tdStyle}>{l.quantity}</td>
+                      <td style={tdStyle}>
+                        {/* D17 Arc 1 slice 3 — qty +/- buttons. Replaces
+                            the read-only qty cell so catalogue-picked
+                            lines can be tweaked without re-opening the
+                            manual builder. Qty floor is 1 — removal goes
+                            through the × button to keep the destructive
+                            action explicit + audited. */}
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }} data-testid={`pos-line-qty-${i}`}>
+                          <button
+                            type="button"
+                            onClick={() => updateLineQty(i, -1)}
+                            disabled={Number(l.quantity || 1) <= 1}
+                            aria-label={`Decrease quantity for ${l.name}`}
+                            style={{
+                              padding: '0.2rem 0.35rem',
+                              border: '1px solid var(--border-color)',
+                              background: 'var(--surface-color, #fff)',
+                              borderRadius: 4,
+                              cursor: Number(l.quantity || 1) <= 1 ? 'not-allowed' : 'pointer',
+                              opacity: Number(l.quantity || 1) <= 1 ? 0.5 : 1,
+                            }}
+                          >
+                            <Minus size={12} />
+                          </button>
+                          <span style={{ minWidth: '1.5rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
+                            {l.quantity}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => updateLineQty(i, +1)}
+                            aria-label={`Increase quantity for ${l.name}`}
+                            style={{
+                              padding: '0.2rem 0.35rem',
+                              border: '1px solid var(--border-color)',
+                              background: 'var(--surface-color, #fff)',
+                              borderRadius: 4,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <Plus size={12} />
+                          </button>
+                        </div>
+                      </td>
                       <td style={tdStyle}>{formatMoney(l.unitPrice, 'INR', 'en-IN')}</td>
                       <td style={tdStyle}>{formatMoney(l.lineDiscount, 'INR', 'en-IN')}</td>
-                      <td style={tdStyle}>{formatMoney(l.lineTotal, 'INR', 'en-IN')}</td>
+                      <td style={tdStyle} data-testid={`pos-line-total-${i}`}>
+                        {formatMoney(l.lineTotal, 'INR', 'en-IN')}
+                      </td>
                       <td style={tdStyle}>
                         <button
                           onClick={() => removeLine(i)}
                           style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--danger-color, #c44)' }}
-                          aria-label="Remove line"
+                          aria-label={`Remove ${l.name}`}
                         >
-                          <Trash2 size={14} />
+                          <XIcon size={14} />
                         </button>
                       </td>
                     </tr>

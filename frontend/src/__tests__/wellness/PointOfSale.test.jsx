@@ -22,17 +22,35 @@
  *      Booking + back to Walk-in, and asserting the shift card is still
  *      open.
  *
- * Slices 2-7 (items picker, payment splitter, atomic finalize, receipt,
- * void/refund, etc.) will extend this file as they land.
+ * D17 Arc 1 slice 3 scope (this extension): pins the items picker
+ * autocomplete (DD-5.2 → autocomplete, not modal, not sidebar drawer)
+ * per PRD §3.4. The picker fans out parallel fetches to
+ * /api/wellness/services + /api/wellness/products on a 300ms debounce,
+ * surfaces a grouped dropdown (services + products), appends a basket
+ * line on selection, and exposes row-level qty +/- buttons that
+ * recompute lineTotal in place.
+ *
+ * Slice 3 pinned invariants:
+ *   5. Typing in the items input fires parallel /services + /products
+ *      fetches after the 300ms debounce (not before).
+ *   6. Selecting an autocomplete result appends a line to the basket
+ *      pre-filled from the catalogue (refId, name, unitPrice).
+ *   7. qty +/- buttons update lineTotal correctly (qty × unitPrice).
+ *   8. Empty input does not fire fetches; results are cleared.
+ *
+ * Slices 4-7 (payment splitter, atomic finalize, receipt, void/refund,
+ * etc.) will extend this file as they land.
  *
  * Discipline (per CLAUDE.md standing rules):
  *   - Stable mock object refs for useNotify so useCallback-dep recomputes
  *     don't loop. notifyObj is module-scoped + reused across tests.
  *   - findByText / waitFor for async data-dependent text.
  *   - MemoryRouter with initialEntries to seed `?tab=…` URL state.
+ *   - vi.useFakeTimers() for the 300ms-debounce assertions so we don't
+ *     pay 300ms of real wall-clock per case.
  */
-import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import React, { act } from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -280,5 +298,202 @@ describe('<wellness/PointOfSale /> — D17 Arc 1 slice 1 Booking | Walk-in tabs'
     // The "Current sale" card now lists 1 line (the pre-filled service).
     expect(await screen.findByText(/Current sale \(1 line\)/i)).toBeInTheDocument();
     expect(screen.getByText('Hydrafacial Deluxe')).toBeInTheDocument();
+  });
+});
+
+describe('<wellness/PointOfSale /> — D17 Arc 1 slice 3 items picker autocomplete', () => {
+  // Slice 3 cases assume an OPEN shift so the basket-bearing builder
+  // surface (incl. the items picker card) is rendered. The fetch mock
+  // returns sampleServices + sampleProducts for the catalogue endpoints.
+  const sampleServices = [
+    { id: 21, name: 'Hydrafacial Deluxe', category: 'skin', basePrice: 3500, durationMin: 60 },
+    { id: 22, name: 'Laser Hair Removal', category: 'aesthetics', basePrice: 8000, durationMin: 45 },
+    { id: 23, name: 'Botox Touch-up', category: 'aesthetics', basePrice: 12000, durationMin: 30 },
+  ];
+  const sampleProducts = [
+    { id: 41, name: 'Hyaluronic Acid Serum', sku: 'HAS-30ML', currentStock: 12, price: 1800 },
+    { id: 42, name: 'Sunscreen SPF 50', sku: 'SUN-100', currentStock: 0, price: 950 },
+  ];
+
+  function slice3Fetch(url) {
+    if (typeof url === 'string') {
+      if (url.startsWith('/api/pos/registers')) {
+        return Promise.resolve([{ id: 1, name: 'Front Desk', location: { name: 'Main' } }]);
+      }
+      if (url.startsWith('/api/pos/shifts/current')) {
+        return Promise.resolve({
+          id: 99,
+          registerId: 1,
+          openingFloat: 500,
+          register: { id: 1, name: 'Front Desk', location: { name: 'Main' } },
+        });
+      }
+      if (url.startsWith('/api/wellness/services')) {
+        return Promise.resolve(sampleServices);
+      }
+      if (url.startsWith('/api/wellness/products')) {
+        return Promise.resolve(sampleProducts);
+      }
+    }
+    return Promise.resolve(null);
+  }
+
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(slice3Fetch);
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    notifyInfo.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('typing in the items input fires parallel /services + /products fetches after the 300ms debounce', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPOS();
+    // Wait for the open-shift surface to render (drives the items picker
+    // card into the DOM).
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-items-search-input')).toBeInTheDocument();
+    });
+    // Clear initial mount calls so we can assert only the debounced fans.
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(slice3Fetch);
+
+    const input = screen.getByTestId('pos-items-search-input');
+    fireEvent.change(input, { target: { value: 'hydra' } });
+
+    // Pre-debounce: no fetches yet.
+    expect(
+      fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && (u.startsWith('/api/wellness/services?q=') || u.startsWith('/api/wellness/products?q=')),
+      ),
+    ).toBeFalsy();
+
+    // Advance past the 300ms debounce window.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+
+    // Both parallel fetches fired.
+    const servicesCall = fetchApiMock.mock.calls.find(([u]) =>
+      typeof u === 'string' && u.startsWith('/api/wellness/services?q=hydra'),
+    );
+    const productsCall = fetchApiMock.mock.calls.find(([u]) =>
+      typeof u === 'string' && u.startsWith('/api/wellness/products?q=hydra'),
+    );
+    expect(servicesCall).toBeTruthy();
+    expect(productsCall).toBeTruthy();
+
+    // Drop fake timers so findByText doesn't stall on promise microtasks.
+    vi.useRealTimers();
+    // Dropdown renders the filtered service (case-insensitive `includes`
+    // catches "Hydrafacial Deluxe").
+    expect(await screen.findByText('Hydrafacial Deluxe')).toBeInTheDocument();
+    // Product matches "hydra" too — Hyaluronic Acid Serum does NOT,
+    // but "hydra" only matches the service so the products group is
+    // empty for this query.
+    expect(screen.queryByText('Hyaluronic Acid Serum')).not.toBeInTheDocument();
+  });
+
+  it('selecting an autocomplete result appends a basket line pre-filled from the catalogue', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPOS();
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-items-search-input')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('pos-items-search-input'), { target: { value: 'serum' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    vi.useRealTimers();
+
+    // "serum" matches the Hyaluronic Acid Serum product (case-insensitive).
+    const productBtn = await screen.findByTestId('pos-items-result-product-41');
+    expect(productBtn).toBeInTheDocument();
+    fireEvent.click(productBtn);
+
+    // Toast fired naming the catalogue item.
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Added Hyaluronic Acid Serum/i),
+      );
+    });
+    // Basket header reflects the new line count.
+    expect(await screen.findByText(/Current sale \(1 line\)/i)).toBeInTheDocument();
+    // Catalogue price (1800) flowed through into the line — formatMoney
+    // mock renders "₹1800.00".
+    expect(screen.getByTestId('pos-line-total-0')).toHaveTextContent('₹1800.00');
+    // Dropdown collapsed + input cleared.
+    expect(screen.queryByTestId('pos-items-dropdown')).not.toBeInTheDocument();
+    expect(screen.getByTestId('pos-items-search-input')).toHaveValue('');
+  });
+
+  it('qty +/- buttons update lineTotal correctly (qty × unitPrice)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPOS();
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-items-search-input')).toBeInTheDocument();
+    });
+
+    // Stage a line via the picker — Hydrafacial Deluxe @ ₹3500.
+    fireEvent.change(screen.getByTestId('pos-items-search-input'), { target: { value: 'hydrafacial' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    vi.useRealTimers();
+
+    fireEvent.click(await screen.findByTestId('pos-items-result-service-21'));
+    expect(await screen.findByTestId('pos-line-total-0')).toHaveTextContent('₹3500.00');
+
+    // Increment qty — total becomes 3500 × 2 = 7000.
+    const qtyCell = screen.getByTestId('pos-line-qty-0');
+    const plusBtn = qtyCell.querySelector('button[aria-label^="Increase"]');
+    fireEvent.click(plusBtn);
+    expect(screen.getByTestId('pos-line-total-0')).toHaveTextContent('₹7000.00');
+
+    // One more increment — total becomes 3500 × 3 = 10500.
+    fireEvent.click(plusBtn);
+    expect(screen.getByTestId('pos-line-total-0')).toHaveTextContent('₹10500.00');
+
+    // Decrement once — back to 3500 × 2 = 7000.
+    const minusBtn = qtyCell.querySelector('button[aria-label^="Decrease"]');
+    fireEvent.click(minusBtn);
+    expect(screen.getByTestId('pos-line-total-0')).toHaveTextContent('₹7000.00');
+
+    // Floor at qty=1 — decrement twice should stop at 1, total stays 3500.
+    fireEvent.click(minusBtn);
+    expect(screen.getByTestId('pos-line-total-0')).toHaveTextContent('₹3500.00');
+    expect(minusBtn).toBeDisabled();
+  });
+
+  it('empty input does not fire fetches and renders no dropdown', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPOS();
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-items-search-input')).toBeInTheDocument();
+    });
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(slice3Fetch);
+
+    const input = screen.getByTestId('pos-items-search-input');
+    // Type then erase — should NOT keep a dropdown open and should
+    // NOT have fired any /services or /products call.
+    fireEvent.change(input, { target: { value: 'hy' } });
+    fireEvent.change(input, { target: { value: '' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+
+    // No catalogue fetches landed (empty input short-circuits the debounce).
+    const catalogueCall = fetchApiMock.mock.calls.find(([u]) =>
+      typeof u === 'string' && (u.startsWith('/api/wellness/services?q=') || u.startsWith('/api/wellness/products?q=')),
+    );
+    expect(catalogueCall).toBeFalsy();
+    // Dropdown is absent when the input is empty.
+    expect(screen.queryByTestId('pos-items-dropdown')).not.toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@
 //   POST   /api/travel/itineraries                          — create itinerary (+ optional items)
 //   GET    /api/travel/itineraries/by-month                  — tenant-wide monthly rollup (#907 slice 16)
 //   GET    /api/travel/itineraries/by-quarter                — tenant-wide quarterly rollup (#907 slice 17)
+//   GET    /api/travel/itineraries/by-year                   — tenant-wide annual rollup (#907 slice 18)
 //   GET    /api/travel/itineraries/:id                      — fetch one with items
 //   PATCH  /api/travel/itineraries/:id                      — amend top-level fields (not items)
 //   POST   /api/travel/itineraries/:id/items                — append a polymorphic item
@@ -789,6 +790,274 @@ router.get("/itineraries/by-quarter", verifyToken, requireTravelTenant, async (r
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-itin] by-quarter error:", e.message);
     res.status(500).json({ error: "Failed to compute quarterly rollup" });
+  }
+});
+
+// ─── Tenant-wide annual rollup (slice 18) ─────────────────────────────
+
+// GET /api/travel/itineraries/by-year — any verified token (tenant + sub-brand scoped).
+//
+// Slice 18 of #907 (PRD_TRAVEL_ITINERARY_UPGRADES.md §3 — tenant-wide
+// itinerary analytics rolled up by calendar year). Completes the
+// by-month/by-quarter/by-year triplet (slices 16/17/18). Mirrors slice
+// 17 by-quarter exactly — same 7-status envelope, same defensive math,
+// same orderBy semantics, same half-up 2dp rounding — at year
+// resolution instead of quarter. One row per UTC YYYY present in the
+// scoped itinerary set, summarising count + 7-status splits + value
+// sums for that calendar year.
+//
+// 7-status envelope (PRD §4.7 Phase 2 50%-advance booking):
+//   draft / sent / revised / accepted / rejected / advance_paid / fully_paid
+// The acceptedValue rollup sums totalAmount across the THREE
+// "agreement-secured" statuses {accepted, advance_paid, fully_paid} —
+// mirrors slices 16/17 exactly.
+//
+// Why year granularity in addition to month + quarter: annual reviews
+// (year-end CFO close, year-over-year trend lines, fiscal-year
+// reporting, RFU Umrah season-on-season comparisons) need a single
+// endpoint hit instead of summing 12 month rows or 4 quarter rows
+// client-side. Also feeds multi-year trend charts directly.
+//
+// Bucket key shape: "YYYY" — 4-digit UTC calendar year via
+// `dt.getUTCFullYear()`. UTC chosen deliberately so bucket labels stay
+// stable across operator timezones (matches slices 16/17 posture).
+//
+// Scope rules: identical to slices 16/17 — tenant-scoped on
+// Itinerary.tenantId, sub-brand-restricted via subBrandAccess
+// (Itinerary.subBrand is non-nullable → narrowing uses { in: [...] }
+// with NO NULL OR-clause), any verified token, no RBAC narrowing.
+//
+// Query string:
+//   status   optional Itinerary.status filter; invalid → 400 INVALID_STATUS.
+//   from     optional inclusive lower bound on bucket (YYYY); rows with
+//            year < from are excluded. Invalid → 400 INVALID_YEAR_FORMAT.
+//   to       optional inclusive upper bound on bucket (YYYY); rows with
+//            year > to are excluded. Invalid → 400 INVALID_YEAR_FORMAT.
+//   orderBy  default "year:asc" (chronological); also accepts
+//            "year:desc", "count:asc|desc", "acceptedCount:asc|desc",
+//            "totalValue:asc|desc". Unknown tokens degrade silently to
+//            the default.
+//   limit    default 10 years, max 30 years.
+//   offset   default 0
+//
+// Response shape:
+//   {
+//     years: [ {
+//       year: "2026",
+//       count, totalValue,
+//       draftCount, sentCount, revisedCount, acceptedCount, rejectedCount,
+//       advancePaidCount, fullyPaidCount,
+//       acceptedValue
+//     } ],
+//     totalYears,
+//     grandCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-year" as a numeric :id (which would 400 INVALID_ID).
+router.get("/itineraries/by-year", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+    if (statusFilter && !VALID_STATUSES.includes(statusFilter)) {
+      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+    }
+
+    // YYYY validation — exactly 4 digits. Bucket labels we emit follow
+    // this shape so callers passing year-tokens to from/to should
+    // already be using it.
+    const YEAR_RE = /^\d{4}$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+    if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "year:asc",
+      "year:desc",
+      "count:asc",
+      "count:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /itineraries list handler — empty access set → all-zeros rollup
+    // (not 403) so the dashboard tile renders cleanly for
+    // not-yet-onboarded operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        years: [],
+        totalYears: 0,
+        grandCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY. Input size bound is the same as the list
+    // endpoint (low thousands at platinum scale).
+    const itineraries = await prisma.itinerary.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Statuses whose totalAmount counts toward acceptedValue — the
+    // "agreement-secured" set. Mirrors slices 16/17 exactly.
+    const ACCEPTED_VALUE_STATUSES = new Set(["accepted", "advance_paid", "fully_paid"]);
+
+    // Aggregate per-UTC-year. Map "YYYY" → { ...row counts/sums }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate. Null/invalid totalAmount contributes 0.
+    const byYear = new Map();
+    for (const it of itineraries) {
+      let yearKey = "unknown";
+      if (it.createdAt) {
+        const dt = it.createdAt instanceof Date
+          ? it.createdAt
+          : new Date(it.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          yearKey = String(dt.getUTCFullYear());
+        }
+      }
+
+      let row = byYear.get(yearKey);
+      if (!row) {
+        row = {
+          year: yearKey,
+          count: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          revisedCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          advancePaidCount: 0,
+          fullyPaidCount: 0,
+          acceptedValue: 0,
+        };
+        byYear.set(yearKey, row);
+      }
+
+      row.count += 1;
+      const amt = Number(it.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (it.status) {
+        case "draft": row.draftCount += 1; break;
+        case "sent": row.sentCount += 1; break;
+        case "revised": row.revisedCount += 1; break;
+        case "accepted": row.acceptedCount += 1; break;
+        case "rejected": row.rejectedCount += 1; break;
+        case "advance_paid": row.advancePaidCount += 1; break;
+        case "fully_paid": row.fullyPaidCount += 1; break;
+        default: break;
+      }
+      if (ACCEPTED_VALUE_STATUSES.has(it.status)) {
+        row.acceptedValue += safeAmt;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let years = [...byYear.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable year token); when no
+    // bounds are set, "unknown" stays so the count surface remains
+    // complete. Mirrors slices 16/17 posture.
+    if (fromRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+    }
+    if (toRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+    }
+
+    // Sort. "year" sorts lexicographically on YYYY which is also
+    // chronological (4-digit zero-padded years naturally ordered).
+    // "unknown" sorts last in asc / first in desc by virtue of being
+    // lexicographically > "9999" — acceptable for a defensive fallback
+    // bucket that should rarely appear.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    years.sort((a, b) => {
+      if (field === "year") {
+        if (a.year < b.year) return -1 * mult;
+        if (a.year > b.year) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalYears = years.length;
+    const grandCount = years.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as
+    // slices 16/17.
+    const paged = years.slice(skip, skip + take);
+
+    res.json({
+      years: paged,
+      totalYears,
+      grandCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] by-year error:", e.message);
+    res.status(500).json({ error: "Failed to compute annual rollup" });
   }
 });
 

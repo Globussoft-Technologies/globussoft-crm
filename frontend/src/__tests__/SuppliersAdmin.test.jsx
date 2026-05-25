@@ -102,6 +102,31 @@
  *
  * Path: flat __tests__/ — sibling Agent B owns TmcMicrositePreview.test.jsx
  * in the same flat dir; no path collision.
+ *
+ * Slice 2 (#903) extension — payment terms + credit limit + GSTIN hint:
+ *   Add suite "<SuppliersAdmin /> — slice 2 (#903) payment-terms + credit" that
+ *   pins:
+ *     - Create modal renders the 6 new fields (paymentTermsDays /
+ *       creditLimit / creditCurrency / taxRegimeCode / primaryContactRole /
+ *       notes) plus the GSTIN format hint.
+ *     - Edit modal pre-fills the new fields from the row.
+ *     - Submit body: paymentTermsDays parsed to int; creditLimit parsed to
+ *       Number; empty optionals → null; explicit creditCurrency sent.
+ *     - GSTIN client-side soft-validation: invalid non-empty GSTIN blocks
+ *       POST + surfaces notify.error; empty GSTIN allowed (matches backend
+ *       contract: null OK, non-null must match GSTIN_REGEX).
+ *     - List sub-line: row renders "NET-30 · ₹50K credit" only when fields
+ *       populated; absent when both null.
+ *
+ *   Empty-string-vs-null contract for optional fields: empty strings on the
+ *   form → null in the POST/PUT body (matches the pre-slice contract for
+ *   contactPerson/phone/email/gstin/addressLine and stays consistent for
+ *   the new fields). Numeric fields: empty input → null; non-empty input →
+ *   parsed Number (paymentTermsDays via parseInt base-10, creditLimit via
+ *   Number to preserve decimals like 50000.50). Currency is special-cased:
+ *   defaults to "INR" (preserves the backend slice-1 @default("INR")), so
+ *   on a fresh create with no edit the body sends creditCurrency:"INR" (the
+ *   default), NOT null.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
@@ -498,5 +523,256 @@ describe('<SuppliersAdmin /> — create + edit + delete', () => {
       expect(deletes.length).toBe(1);
     });
     expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Acme Hotels.*deactivated/));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 2 (#903) — payment terms + credit + GSTIN hint
+// Pins the operator UX shape that surfaces the slice-1 backend fields shipped
+// in commit effdf40e (paymentTermsDays, creditLimit, creditCurrency,
+// taxRegimeCode, primaryContactRole, notes + GSTIN format validation).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('<SuppliersAdmin /> — slice 2 (#903) payment-terms + credit + GSTIN hint', () => {
+  it('create modal renders the 6 new fields + GSTIN format hint', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /New Supplier/i }));
+    // New form fields surfaced by their aria-labels.
+    expect(screen.getByLabelText(/^Payment terms days$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Credit limit$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Credit currency$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Tax regime$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Primary contact role$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Notes$/i)).toBeInTheDocument();
+    // GSTIN format hint inline below the GSTIN input.
+    expect(screen.getByText(/Format: 22ABCDE1234F1Z5/i)).toBeInTheDocument();
+  });
+
+  it('edit modal pre-fills the 6 new fields from the row', async () => {
+    // Override the default list so Acme Hotels carries slice-2 fields populated.
+    installFetchMock({
+      list: {
+        suppliers: [
+          makeSupplier({
+            id: 201,
+            name: 'Acme Hotels',
+            paymentTermsDays: 30,
+            creditLimit: '50000.00',
+            creditCurrency: 'INR',
+            taxRegimeCode: 'regular',
+            primaryContactRole: 'Accounts payable',
+            notes: 'Prefer NEFT; quarterly reconcile.',
+          }),
+        ],
+        total: 1,
+      },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /^Edit Acme Hotels$/ }));
+    expect(screen.getByLabelText(/^Payment terms days$/i).value).toBe('30');
+    expect(screen.getByLabelText(/^Credit limit$/i).value).toBe('50000.00');
+    expect(screen.getByLabelText(/^Credit currency$/i).value).toBe('INR');
+    expect(screen.getByLabelText(/^Tax regime$/i).value).toBe('regular');
+    expect(screen.getByLabelText(/^Primary contact role$/i).value).toBe('Accounts payable');
+    expect(screen.getByLabelText(/^Notes$/i).value).toBe('Prefer NEFT; quarterly reconcile.');
+  });
+
+  it('submit body: paymentTermsDays parsed to int; creditLimit parsed to Number; currency sent', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /New Supplier/i }));
+    fireEvent.change(screen.getByLabelText(/^Supplier name$/i), { target: { value: 'New Co' } });
+    fireEvent.change(screen.getByLabelText(/^Payment terms days$/i), { target: { value: '45' } });
+    fireEvent.change(screen.getByLabelText(/^Credit limit$/i), { target: { value: '75000.50' } });
+    fireEvent.change(screen.getByLabelText(/^Credit currency$/i), { target: { value: 'USD' } });
+    fireEvent.change(screen.getByLabelText(/^Tax regime$/i), { target: { value: 'composite' } });
+    fireEvent.change(screen.getByLabelText(/^Primary contact role$/i), { target: { value: 'Owner' } });
+    fireEvent.change(screen.getByLabelText(/^Notes$/i), { target: { value: 'Bulk discount available' } });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      // Numeric fields parsed.
+      expect(body.paymentTermsDays).toBe(45);
+      expect(typeof body.paymentTermsDays).toBe('number');
+      expect(body.creditLimit).toBe(75000.5);
+      expect(typeof body.creditLimit).toBe('number');
+      // Selects + free-form text passed through.
+      expect(body.creditCurrency).toBe('USD');
+      expect(body.taxRegimeCode).toBe('composite');
+      expect(body.primaryContactRole).toBe('Owner');
+      expect(body.notes).toBe('Bulk discount available');
+    });
+  });
+
+  it('submit body: empty optional new fields → null (except creditCurrency which defaults to "INR")', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /New Supplier/i }));
+    fireEvent.change(screen.getByLabelText(/^Supplier name$/i), { target: { value: 'Minimal Co' } });
+    // Don't touch the new fields — they should serialise to null (except
+    // creditCurrency which carries the "INR" form default).
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.paymentTermsDays).toBeNull();
+      expect(body.creditLimit).toBeNull();
+      // creditCurrency default is "INR" (form initial state) — sent as
+      // string, NOT null. The backend treats this as the default-tracking
+      // currency; sending null would erase a previously set value on PUT.
+      expect(body.creditCurrency).toBe('INR');
+      expect(body.taxRegimeCode).toBeNull();
+      expect(body.primaryContactRole).toBeNull();
+      expect(body.notes).toBeNull();
+    });
+  });
+
+  it('client-side GSTIN soft-validation: invalid non-empty GSTIN blocks POST + surfaces notify.error', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /New Supplier/i }));
+    fireEvent.change(screen.getByLabelText(/^Supplier name$/i), { target: { value: 'BadGstin Co' } });
+    // Invalid GSTIN — wrong length / wrong char positions.
+    fireEvent.change(screen.getByLabelText(/^GSTIN$/i), { target: { value: 'NOTAGOODGSTIN' } });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Invalid GSTIN/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/suppliers' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('client-side GSTIN soft-validation: empty GSTIN allowed (null on submit)', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /New Supplier/i }));
+    fireEvent.change(screen.getByLabelText(/^Supplier name$/i), { target: { value: 'NoGstin Co' } });
+    // GSTIN left empty.
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.gstin).toBeNull();
+    });
+    // No GSTIN-related error.
+    const gstinErrors = notifyError.mock.calls.filter(([m]) =>
+      typeof m === 'string' && /GSTIN/i.test(m),
+    );
+    expect(gstinErrors.length).toBe(0);
+  });
+
+  it('client-side GSTIN soft-validation: valid 15-char GSTIN passes (case-insensitive input upper-cased)', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /New Supplier/i }));
+    fireEvent.change(screen.getByLabelText(/^Supplier name$/i), { target: { value: 'GoodGstin Co' } });
+    // Type lowercase; SUT upper-cases on change so the input ends with uppercase.
+    fireEvent.change(screen.getByLabelText(/^GSTIN$/i), { target: { value: '27aaacr4849r1zw' } });
+    expect(screen.getByLabelText(/^GSTIN$/i).value).toBe('27AAACR4849R1ZW');
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/suppliers' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.gstin).toBe('27AAACR4849R1ZW');
+    });
+    const gstinErrors = notifyError.mock.calls.filter(([m]) =>
+      typeof m === 'string' && /Invalid GSTIN/i.test(m),
+    );
+    expect(gstinErrors.length).toBe(0);
+  });
+
+  it('list sub-line: row renders "NET-30 · ₹50K credit" when paymentTermsDays + creditLimit populated', async () => {
+    installFetchMock({
+      list: {
+        suppliers: [
+          makeSupplier({
+            id: 301,
+            name: 'Finance-Equipped Co',
+            paymentTermsDays: 30,
+            creditLimit: '50000',
+            creditCurrency: 'INR',
+          }),
+        ],
+        total: 1,
+      },
+    });
+    renderPage();
+    const row = (await screen.findByText('Finance-Equipped Co')).closest('tr');
+    const sub = within(row).getByTestId('supplier-finance-sub-301');
+    expect(sub.textContent).toMatch(/NET-30/);
+    expect(sub.textContent).toMatch(/credit/);
+    // INR symbol prefix on the credit token.
+    expect(sub.textContent).toMatch(/₹/);
+  });
+
+  it('list sub-line: row does NOT render sub-line when both paymentTermsDays + creditLimit are null', async () => {
+    installFetchMock({
+      list: {
+        suppliers: [
+          makeSupplier({
+            id: 302,
+            name: 'No-Finance Co',
+            paymentTermsDays: null,
+            creditLimit: null,
+            creditCurrency: null,
+          }),
+        ],
+        total: 1,
+      },
+    });
+    renderPage();
+    await screen.findByText('No-Finance Co');
+    // No data-testid="supplier-finance-sub-302" anywhere.
+    expect(screen.queryByTestId('supplier-finance-sub-302')).toBeNull();
+  });
+
+  it('list sub-line: row renders only "NET-N" when paymentTerms set but creditLimit null', async () => {
+    installFetchMock({
+      list: {
+        suppliers: [
+          makeSupplier({
+            id: 303,
+            name: 'PT-Only Co',
+            paymentTermsDays: 45,
+            creditLimit: null,
+            creditCurrency: null,
+          }),
+        ],
+        total: 1,
+      },
+    });
+    renderPage();
+    const row = (await screen.findByText('PT-Only Co')).closest('tr');
+    const sub = within(row).getByTestId('supplier-finance-sub-303');
+    expect(sub.textContent).toMatch(/NET-45/);
+    expect(sub.textContent).not.toMatch(/credit/);
   });
 });

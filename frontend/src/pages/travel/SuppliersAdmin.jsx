@@ -47,6 +47,46 @@ const SUPPLIER_CATEGORIES = [
 // commit 08ebe5e, then cloned into QuotesAdmin/InvoicesAdmin; promoted to
 // the shared util once the third caller landed).
 
+// PRD_TRAVEL_SUPPLIER_MASTER #903 slice 1 — GSTIN format (pinned from
+// backend/routes/travel_suppliers.js GSTIN_REGEX). Used here for the
+// client-side hint + soft-validation (the backend re-validates regardless).
+const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z][Z][0-9A-Z]$/;
+const GSTIN_HINT = "Format: 22ABCDE1234F1Z5";
+
+// Credit-currency dropdown choices — per slice prompt + Tenant.defaultCurrency
+// canon (INR/USD/EUR/GBP/AED/SAR). Default INR matches backend slice 1 default.
+const CREDIT_CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SAR"];
+
+// Tax regime choices — per backend slice 1 (no enum, free String? — but the
+// PRD's enumerated set is "regular" | "composite" | "exempt"). "" = unset.
+const TAX_REGIMES = [
+  { value: "", label: "(unset)" },
+  { value: "regular", label: "Regular" },
+  { value: "composite", label: "Composite" },
+  { value: "exempt", label: "Exempt" },
+];
+
+// Suggested primary-contact roles (datalist autocomplete). Free-form string.
+const CONTACT_ROLE_SUGGESTIONS = [
+  "Accounts payable",
+  "Sales rep",
+  "Reservations",
+  "Operations",
+  "Owner",
+  "Branch manager",
+];
+
+// Per-currency display symbol — rendered as a small prefix beside the credit
+// limit field when the currency is set. INR is the default expected case.
+const CURRENCY_SYMBOL = {
+  INR: "₹",
+  USD: "$",
+  EUR: "€",
+  GBP: "£",
+  AED: "د.إ",
+  SAR: "﷼",
+};
+
 const EMPTY_FORM = {
   name: "",
   contactPerson: "",
@@ -56,6 +96,14 @@ const EMPTY_FORM = {
   addressLine: "",
   supplierCategory: "other",
   subBrand: "tmc",
+  // Slice 2 (#903) — payment terms + credit-tracking + metadata, surfaced
+  // in the modal form. Empty strings normalise to null at submit time.
+  paymentTermsDays: "",
+  creditLimit: "",
+  creditCurrency: "INR",
+  taxRegimeCode: "",
+  primaryContactRole: "",
+  notes: "",
 };
 
 export default function SuppliersAdmin() {
@@ -122,6 +170,15 @@ export default function SuppliersAdmin() {
       addressLine: s.addressLine || "",
       supplierCategory: s.supplierCategory || "other",
       subBrand: s.subBrand || "tmc",
+      // Slice 2 (#903) — prefill the new fields from the row. Coerce
+      // numeric DB values back to strings so the controlled <input> stays
+      // consistent (empty-string === unset).
+      paymentTermsDays: s.paymentTermsDays != null ? String(s.paymentTermsDays) : "",
+      creditLimit: s.creditLimit != null ? String(s.creditLimit) : "",
+      creditCurrency: s.creditCurrency || "INR",
+      taxRegimeCode: s.taxRegimeCode || "",
+      primaryContactRole: s.primaryContactRole || "",
+      notes: s.notes || "",
     });
     setEditingId(s.id);
     setShowForm(true);
@@ -134,8 +191,29 @@ export default function SuppliersAdmin() {
       notify.error("Name is required");
       return;
     }
+    // Slice 2 (#903) — client-side GSTIN soft-validation. Backend re-validates
+    // either way; this just catches the typo before the round-trip. Empty
+    // is allowed (the backend treats null/missing as "unset"); non-empty
+    // must match the 15-char regex.
+    const gstinTrimmed = form.gstin ? form.gstin.toUpperCase().trim() : "";
+    if (gstinTrimmed && !GSTIN_REGEX.test(gstinTrimmed)) {
+      notify.error(`Invalid GSTIN. ${GSTIN_HINT}`);
+      return;
+    }
     setSaving(true);
     try {
+      // Slice 2 (#903) — empty optional STRINGS serialise to null (matching
+      // the original contact/phone/email/gstin pattern). Numeric fields
+      // (paymentTermsDays / creditLimit) parse to numbers when present,
+      // null when empty.
+      const paymentTermsDaysVal =
+        form.paymentTermsDays === "" || form.paymentTermsDays == null
+          ? null
+          : parseInt(form.paymentTermsDays, 10);
+      const creditLimitVal =
+        form.creditLimit === "" || form.creditLimit == null
+          ? null
+          : Number(form.creditLimit);
       const payload = {
         ...form,
         name: trimmedName,
@@ -143,8 +221,15 @@ export default function SuppliersAdmin() {
         contactPerson: form.contactPerson || null,
         phone: form.phone || null,
         email: form.email || null,
-        gstin: form.gstin ? form.gstin.toUpperCase() : null,
+        gstin: gstinTrimmed || null,
         addressLine: form.addressLine || null,
+        // Slice 2 (#903) — new optional fields.
+        paymentTermsDays: paymentTermsDaysVal,
+        creditLimit: creditLimitVal,
+        creditCurrency: form.creditCurrency || null,
+        taxRegimeCode: form.taxRegimeCode || null,
+        primaryContactRole: form.primaryContactRole || null,
+        notes: form.notes || null,
       };
       if (editingId) {
         await fetchApi(`/api/travel/suppliers/${editingId}`, {
@@ -278,15 +363,25 @@ export default function SuppliersAdmin() {
             style={inputStyle}
             aria-label="Email"
           />
-          <input
-            placeholder="GSTIN (15 chars)"
-            type="text"
-            maxLength={15}
-            value={form.gstin}
-            onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })}
-            style={inputStyle}
-            aria-label="GSTIN"
-          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <input
+              placeholder="GSTIN (15 chars)"
+              type="text"
+              maxLength={15}
+              value={form.gstin}
+              onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })}
+              style={inputStyle}
+              aria-label="GSTIN"
+              aria-describedby="gstin-hint"
+            />
+            {/* PRD_TRAVEL_SUPPLIER_MASTER #903 slice 2 — inline format hint. */}
+            <span
+              id="gstin-hint"
+              style={{ fontSize: 11, color: "var(--text-secondary)", paddingLeft: 2 }}
+            >
+              {GSTIN_HINT}
+            </span>
+          </div>
           <input
             placeholder="Address"
             value={form.addressLine}
@@ -314,6 +409,84 @@ export default function SuppliersAdmin() {
               <option key={s.value} value={s.value}>{s.label}</option>
             ))}
           </select>
+          {/* Slice 2 (#903) — payment terms (days). NET-30 / NET-45 style. */}
+          <input
+            placeholder="Payment terms (days)"
+            type="number"
+            min="0"
+            value={form.paymentTermsDays}
+            onChange={(e) => setForm({ ...form, paymentTermsDays: e.target.value })}
+            style={inputStyle}
+            aria-label="Payment terms days"
+          />
+          {/* Slice 2 (#903) — credit limit + currency. Currency symbol prefix
+              rendered for INR (the default) and other recognised currencies. */}
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <span
+              aria-hidden
+              style={{
+                fontSize: 13,
+                color: "var(--text-secondary)",
+                minWidth: 16,
+                textAlign: "center",
+              }}
+            >
+              {CURRENCY_SYMBOL[form.creditCurrency] || ""}
+            </span>
+            <input
+              placeholder="Credit limit"
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.creditLimit}
+              onChange={(e) => setForm({ ...form, creditLimit: e.target.value })}
+              style={{ ...inputStyle, flex: 1 }}
+              aria-label="Credit limit"
+            />
+          </div>
+          <select
+            value={form.creditCurrency}
+            onChange={(e) => setForm({ ...form, creditCurrency: e.target.value })}
+            style={inputStyle}
+            aria-label="Credit currency"
+          >
+            {CREDIT_CURRENCIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          {/* Slice 2 (#903) — tax regime (regular / composite / exempt). */}
+          <select
+            value={form.taxRegimeCode}
+            onChange={(e) => setForm({ ...form, taxRegimeCode: e.target.value })}
+            style={inputStyle}
+            aria-label="Tax regime"
+          >
+            {TAX_REGIMES.map((r) => (
+              <option key={r.value || "unset"} value={r.value}>{r.label}</option>
+            ))}
+          </select>
+          {/* Slice 2 (#903) — primary contact role (free-form with suggestions). */}
+          <input
+            placeholder="Primary contact role"
+            type="text"
+            list="primary-contact-role-suggestions"
+            value={form.primaryContactRole}
+            onChange={(e) => setForm({ ...form, primaryContactRole: e.target.value })}
+            style={inputStyle}
+            aria-label="Primary contact role"
+          />
+          <datalist id="primary-contact-role-suggestions">
+            {CONTACT_ROLE_SUGGESTIONS.map((r) => <option key={r} value={r} />)}
+          </datalist>
+          {/* Slice 2 (#903) — operator notes (multi-line). Spans full row width. */}
+          <textarea
+            placeholder="Notes (free-form)"
+            rows={4}
+            value={form.notes}
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}
+            style={{ ...inputStyle, gridColumn: "1 / -1", resize: "vertical" }}
+            aria-label="Notes"
+          />
           <div style={{ display: "flex", gap: 8 }}>
             <button type="submit" disabled={saving} style={{ ...primaryBtn, background: "var(--success-color, var(--primary-color))" }}>
               {saving ? "Saving…" : editingId ? "Save Changes" : "Save"}
@@ -351,9 +524,48 @@ export default function SuppliersAdmin() {
               </tr>
             </thead>
             <tbody>
-              {suppliers.map((s) => (
+              {suppliers.map((s) => {
+                // Slice 2 (#903) — "PT/CL" sub-line under each supplier name,
+                // surfacing payment-terms + credit-limit when populated.
+                // Renders as "NET-30 · ₹50K credit". Either token may be
+                // omitted when its source field is null/undefined; the
+                // whole sub-line is absent when both are null (no empty
+                // div, no flicker).
+                const ptToken =
+                  s.paymentTermsDays != null && Number.isFinite(Number(s.paymentTermsDays))
+                    ? `NET-${s.paymentTermsDays}`
+                    : null;
+                let clToken = null;
+                if (s.creditLimit != null && s.creditLimit !== "") {
+                  const clNum = Number(s.creditLimit);
+                  if (Number.isFinite(clNum) && clNum > 0) {
+                    const sym = CURRENCY_SYMBOL[s.creditCurrency] || "";
+                    // Render in K when ≥ 1000, otherwise full value.
+                    const display =
+                      clNum >= 1000
+                        ? `${(clNum / 1000).toFixed(clNum >= 10000 ? 0 : 1)}K`
+                        : String(clNum);
+                    clToken = `${sym}${display} credit`;
+                  }
+                }
+                const subLine = [ptToken, clToken].filter(Boolean).join(" · ");
+                return (
                 <tr key={s.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-                  <td style={td}><strong>{s.name}</strong></td>
+                  <td style={td}>
+                    <strong>{s.name}</strong>
+                    {subLine && (
+                      <div
+                        data-testid={`supplier-finance-sub-${s.id}`}
+                        style={{
+                          fontSize: 11,
+                          color: "var(--text-secondary)",
+                          marginTop: 2,
+                        }}
+                      >
+                        {subLine}
+                      </div>
+                    )}
+                  </td>
                   <td style={td}>{s.contactPerson || "—"}</td>
                   <td style={td}>{s.phone || "—"}</td>
                   <td style={td}>{s.email || "—"}</td>
@@ -402,7 +614,8 @@ export default function SuppliersAdmin() {
                     </td>
                   )}
                 </tr>
-              ))}
+                );
+              })}
               {suppliers.length === 0 && (
                 <tr>
                   <td

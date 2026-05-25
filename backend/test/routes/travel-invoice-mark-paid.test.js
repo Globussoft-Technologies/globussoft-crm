@@ -40,6 +40,28 @@
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
+import { createRequire } from 'node:module';
+
+// ─── Monkey-patch eventBus BEFORE requiring the router (closes #937) ──
+//
+// The mark-paid handler emits `travel.invoice.paid` via the real eventBus
+// on the all-installments-paid path. eventBus.emitEvent then calls
+// `prisma.automationRule.findMany()` against the real Prisma client — but
+// no DATABASE_URL is set in the vitest env, so the call throws
+// PrismaClientInitializationError. The handler does NOT await the emit
+// (best-effort fire-and-forget at routes/travel_invoices.js:2548), so the
+// rejection leaks AFTER the test completes — every test reports green but
+// vitest exits with code 1 → deploy gate RED.
+//
+// vi.mock('../../lib/eventBus') does NOT intercept the route's inline
+// `require("../lib/eventBus").emitEvent(...)` in this CJS codebase
+// (confirmed pattern in test/routes/travel-visa.test.js + multiple cron
+// test files). Load the real module first, overwrite its `module.exports`
+// in place so the cached singleton picks up the mock.
+const requireCJS_init = createRequire(import.meta.url);
+const eventBusModule = requireCJS_init('../../lib/eventBus');
+eventBusModule.emitEvent = vi.fn().mockResolvedValue(undefined);
+eventBusModule.safeEmitEvent = vi.fn().mockResolvedValue(undefined);
 
 // Patch prisma BEFORE requiring the router.
 prisma.travelInvoice = {
@@ -89,11 +111,9 @@ prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
-import { createRequire } from 'node:module';
 
-const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
-const travelInvoicesRouter = requireCJS('../../routes/travel_invoices');
+const travelInvoicesRouter = requireCJS_init('../../routes/travel_invoices');
 
 function makeApp() {
   const app = express();

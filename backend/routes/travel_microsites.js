@@ -332,6 +332,175 @@ router.delete(
   },
 );
 
+// ============================================================================
+// GET /api/travel/microsites/stats — tenant-wide microsite rollup
+// (PRD_TRAVEL_TMC §3 microsites).
+//
+// Mirrors travel_suppliers.js /suppliers/stats pattern (#903 slice 23) —
+// anodyne aggregate that powers the Microsites library page's KPI header
+// strip ("12 microsites · 8 published · 4 unpublished · 2 expired · last
+// published 3h ago"). Without this, the frontend has to fire {list, count
+// by publishedAt, count by expiresAt} — N+1 round-trips for a single
+// visual surface.
+//
+// PRD anchors:
+//   - §3 — TMC operator dashboard surfaces "how many microsites have I
+//          published, how many are still drafts, how many have expired" —
+//          this endpoint feeds those KPI tiles
+//
+// Behaviour:
+//   - Tenant-scoped count + breakdown across TripMicrosite rows
+//   - USER-readable (anodyne aggregate; same contract as sibling /stats endpoints)
+//   - Sub-brand: TripMicrosite is TMC-only by design (microsites live on
+//     tmc.travelstall.in per Q21; the parent TmcTrip has no subBrand field).
+//     So we DO NOT expose a bySubBrand bucket — would always be { tmc: ... }
+//     and the field would mislead future readers into thinking sub-brand
+//     scoping exists where it doesn't.
+//   - Buckets returned (schema-driven):
+//       total            — count of all microsites for the tenant
+//       published        — where publishedAt is non-null
+//       unpublished      — remainder (publishedAt is null)
+//       expired          — where expiresAt is set AND in the past
+//       withFaq          — where faqJson is non-empty
+//       lastPublishedAt  — max(publishedAt) across rows (ISO string or null)
+//       lastActivityAt   — max(updatedAt) across rows (ISO string or null)
+//   - ?from / ?to (ISO date bounds) filter microsite.createdAt before aggregation.
+//
+// Safety cap: process at most 2000 microsites per call; if matching total >
+// 2000, return counts but mark aggregateExceedsCap=true.
+//
+// USER-readable: anodyne aggregate (counts + timestamps); safe.
+// No audit row: read-only meta surface, mirrors /suppliers/stats.
+//
+// Express route ordering: literal-path /microsites/stats MUST be declared
+// BEFORE the /microsites/public/:publicUuid family so the regex-checked
+// UUID parser doesn't first 400 INVALID_UUID against the literal "stats".
+// ============================================================================
+const MICROSITES_STATS_CAP = 2000;
+
+router.get(
+  "/microsites/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Optional ISO date bounds on microsite.createdAt
+      const micrositeWhere = { tenantId };
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        micrositeWhere.createdAt = Object.assign(
+          micrositeWhere.createdAt || {},
+          { gte: d },
+        );
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        micrositeWhere.createdAt = Object.assign(
+          micrositeWhere.createdAt || {},
+          { lte: d },
+        );
+      }
+
+      // Bounded fetch to keep in-process aggregation safe.
+      const microsites = await prisma.tripMicrosite.findMany({
+        where: micrositeWhere,
+        select: {
+          id: true,
+          publishedAt: true,
+          expiresAt: true,
+          faqJson: true,
+          updatedAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+        take: MICROSITES_STATS_CAP,
+      });
+
+      // Get the true total so callers know if aggregation is bounded.
+      const totalMatching = await prisma.tripMicrosite.count({
+        where: micrositeWhere,
+      });
+      const aggregateExceedsCap = totalMatching > MICROSITES_STATS_CAP;
+
+      // Empty short-circuit — return zeroed shape.
+      if (microsites.length === 0) {
+        return res.json({
+          total: 0,
+          published: 0,
+          unpublished: 0,
+          expired: 0,
+          withFaq: 0,
+          lastPublishedAt: null,
+          lastActivityAt: null,
+          aggregateExceedsCap: false,
+        });
+      }
+
+      const now = new Date();
+      let published = 0;
+      let unpublished = 0;
+      let expired = 0;
+      let withFaq = 0;
+      let lastPublishedAt = null;
+      let lastActivityAt = null;
+
+      for (const ms of microsites) {
+        if (ms.publishedAt) {
+          published += 1;
+          const ts = ms.publishedAt instanceof Date ? ms.publishedAt : new Date(ms.publishedAt);
+          if (!Number.isNaN(ts.getTime())) {
+            if (!lastPublishedAt || ts > lastPublishedAt) lastPublishedAt = ts;
+          }
+        } else {
+          unpublished += 1;
+        }
+
+        if (ms.expiresAt) {
+          const exp = ms.expiresAt instanceof Date ? ms.expiresAt : new Date(ms.expiresAt);
+          if (!Number.isNaN(exp.getTime()) && exp < now) expired += 1;
+        }
+
+        if (ms.faqJson && String(ms.faqJson).trim().length > 0) withFaq += 1;
+
+        const upd = ms.updatedAt instanceof Date ? ms.updatedAt : new Date(ms.updatedAt);
+        if (!Number.isNaN(upd.getTime())) {
+          if (!lastActivityAt || upd > lastActivityAt) lastActivityAt = upd;
+        }
+      }
+
+      res.json({
+        total: microsites.length,
+        published,
+        unpublished,
+        expired,
+        withFaq,
+        lastPublishedAt: lastPublishedAt ? lastPublishedAt.toISOString() : null,
+        lastActivityAt: lastActivityAt ? lastActivityAt.toISOString() : null,
+        aggregateExceedsCap,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-microsite] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise microsites" });
+    }
+  },
+);
+
 // ─── PUBLIC info endpoint (no auth) ──────────────────────────────────
 
 // GET /api/travel/microsites/public/:publicUuid

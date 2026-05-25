@@ -7,6 +7,7 @@
 //   PATCH  /api/travel/itineraries/:id                      — amend top-level fields (not items)
 //   POST   /api/travel/itineraries/:id/items                — append a polymorphic item
 //   POST   /api/travel/itineraries/:id/items/bulk-reorder   — atomic bulk reposition (#907 slice 8)
+//   POST   /api/travel/itineraries/:id/items/bulk-delete    — atomic bulk delete (#907 slice 11)
 //   GET    /api/travel/itineraries/:id/items/search         — item notes search/filter (#907 slice 10)
 //   PATCH  /api/travel/itineraries/:id/items/:itemId        — amend an item
 //   DELETE /api/travel/itineraries/:id/items/:itemId        — remove an item
@@ -514,6 +515,118 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-itin] bulk-reorder error:", e.message);
       res.status(500).json({ error: "Failed to bulk-reorder items" });
+    }
+  },
+);
+
+// POST /api/travel/itineraries/:id/items/bulk-delete
+//
+// #907 slice 11 — atomic bulk delete of multiple ItineraryItem rows in a
+// single call. Visual editor (PRD §3.3) operator workflow includes "delete
+// all items on day N" (collapse-day) and "remove selected items"
+// (multi-select bulk-delete) primitives; without a bulk-delete endpoint
+// the editor must issue N DELETE calls — non-atomic (partial failure
+// leaves the itinerary in a torn state where the operator can't tell
+// which items survived) and chatty.
+//
+// Body shape:
+//   { itemIds: [1, 2, 3, ...] }
+//
+// Semantics:
+//   - itemIds required (non-empty integer array, each ≥ 0).
+//   - All itemIds must belong to the target itinerary; cross-itinerary
+//     ids → 400 ITEM_NOT_IN_ITINERARY with the offending id list.
+//   - Atomic via prisma.itineraryItem.deleteMany — backed by a single
+//     SQL DELETE; all rows removed together or none.
+//   - Hard cap of 200 ids per call (runaway-payload guard — matches
+//     bulk-reorder's cap so the operator's bulk-select UX has a single
+//     consistent ceiling).
+//   - Duplicate itemIds in the input list → 400 DUPLICATE_ITEM_ID. The
+//     operator's editor should de-dupe before submitting; surfacing the
+//     dupe explicitly catches client-side bugs early rather than
+//     silently accepting a noisy payload.
+//
+// Response: { deletedCount, deletedIds } — deletedIds reflects the
+// canonical id set that was just removed (sorted asc for stable
+// caller-side assertions). No `items` echo because the rows no longer
+// exist; the caller is expected to refetch the itinerary list if it
+// needs the post-delete state.
+//
+// Sub-paths BEFORE /:id per Express ordering convention.
+router.post(
+  "/itineraries/:id/items/bulk-delete",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const { itemIds } = req.body || {};
+
+      if (!Array.isArray(itemIds) || itemIds.length === 0) {
+        return res.status(400).json({
+          error: "itemIds must be a non-empty array",
+          code: "EMPTY_ITEM_IDS",
+        });
+      }
+      if (itemIds.length > 200) {
+        return res.status(400).json({
+          error: "itemIds capped at 200 per call",
+          code: "TOO_MANY_ITEM_IDS",
+        });
+      }
+
+      // Validate each id is a non-negative integer + detect dupes.
+      const parsedIds = [];
+      const seenIds = new Set();
+      for (const raw of itemIds) {
+        const itemId = parseInt(raw, 10);
+        if (!Number.isInteger(itemId) || itemId < 0) {
+          return res.status(400).json({
+            error: "each itemId must be a non-negative integer",
+            code: "INVALID_ITEM_ID",
+          });
+        }
+        if (seenIds.has(itemId)) {
+          return res.status(400).json({
+            error: `itemId ${itemId} appears more than once in itemIds`,
+            code: "DUPLICATE_ITEM_ID",
+            itemId,
+          });
+        }
+        seenIds.add(itemId);
+        parsedIds.push(itemId);
+      }
+
+      // Verify every id belongs to the target itinerary BEFORE deleting.
+      // A blind deleteMany scoped on itineraryId would silently swallow
+      // unknown / cross-itinerary ids (returns count 0 for missing rows),
+      // hiding caller-side bugs. Explicit pre-flight makes the contract
+      // strict: partial set → 400, all-present → atomic delete.
+      const existing = await prisma.itineraryItem.findMany({
+        where: { id: { in: parsedIds }, itineraryId: itin.id },
+        select: { id: true },
+      });
+      if (existing.length !== parsedIds.length) {
+        const foundIds = new Set(existing.map((r) => r.id));
+        const missing = parsedIds.filter((id) => !foundIds.has(id));
+        return res.status(400).json({
+          error: "one or more itemIds do not belong to this itinerary",
+          code: "ITEM_NOT_IN_ITINERARY",
+          missing,
+        });
+      }
+
+      const result = await prisma.itineraryItem.deleteMany({
+        where: { id: { in: parsedIds }, itineraryId: itin.id },
+      });
+
+      // deletedIds sorted asc for stable caller-side assertion shape.
+      const deletedIds = [...parsedIds].sort((a, b) => a - b);
+      res.json({ deletedCount: result.count, deletedIds });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] bulk-delete error:", e.message);
+      res.status(500).json({ error: "Failed to bulk-delete items" });
     }
   },
 );

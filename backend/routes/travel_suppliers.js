@@ -856,6 +856,224 @@ router.get(
 );
 
 // ============================================================================
+// GET /api/travel/suppliers/stats — tenant-wide supplier rollup
+// (PRD_TRAVEL_SUPPLIER_MASTER §3 #903 slice 23).
+//
+// Mirrors #905 slice 18 /commission-profiles/stats + #908 slice 19
+// /flyer-templates/global-stats. USER-readable anodyne aggregate. Powers
+// the Supplier Master library page's header summary strip ("42 suppliers
+// · 35 active · 7 archived · 18 hotels · 12 flights ... · ₹4.2L payables ·
+// last activity 3h ago"). Without this, the frontend has to fire {list,
+// count by category×5, count by subBrand×4, /payables count + sum} —
+// N+1 round-trips for a single visual surface.
+//
+// Distinct from /:id/payables/{month,quarter,year} (per-supplier time
+// series), /suppliers/exposure (per-supplier credit-utilization), and
+// /:id/scorecard (per-supplier KPI page). This is the tenant-wide rollup
+// across BOTH the supplier-count summary (status + category + sub-brand)
+// AND the payable-derived activity (count + sum + paid-sum + lastActivityAt).
+//
+// PRD anchors:
+//   - §3 — operator-facing supplier dashboard surfaces "how many
+//          suppliers do I have, of what shape, with what payable burden" —
+//          this endpoint feeds those KPI tiles
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' suppliers in the counts. Same gate as
+//     the /suppliers list endpoint. TravelSupplier.subBrand is
+//     non-nullable in the schema, but the bucketing code defensively
+//     coalesces null/empty → '_tenant' for forward-compat (and to match
+//     the sibling /commission-profiles/stats shape, where subBrand IS
+//     nullable).
+//   - Supplier-count rollup (from prisma.travelSupplier.findMany):
+//       total, active, archived             — overall + by isActive
+//       bySubBrand: { <sb|_tenant>: { count } }
+//       byCategory: { <cat>: { count } }    — using TravelSupplier.supplierCategory
+//   - Payable-derived activity (from prisma.travelSupplierPayable findMany over
+//     supplierId IN visibleSet):
+//       totalPayables                       — count of all payable rows
+//       totalPayableAmount                  — sum of amount (defensive null→0)
+//       paidPayableAmount                   — sum where paidAt non-null
+//       lastActivityAt                      — max(updatedAt) across all
+//                                             matching suppliers
+//   - ?from / ?to (ISO date bounds) filter supplier.createdAt before aggregation.
+//
+// Safety cap: process at most 2000 suppliers per call; if matching total >
+// 2000, return counts but mark aggregateExceedsCap=true (payable sums
+// would be incomplete past the cap).
+//
+// USER-readable: anodyne aggregate (counts + sums + timestamps); safe.
+// No audit row: read-only meta surface, mirrors /commission-profiles/stats.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family or `:id="stats"` would 400 INVALID_ID before reaching this
+// handler.
+// ============================================================================
+const SUPPLIERS_STATS_CAP = 2000;
+
+router.get(
+  "/suppliers/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Optional ISO date bounds on supplier.createdAt
+      const supplierWhere = { tenantId };
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        supplierWhere.createdAt = Object.assign(
+          supplierWhere.createdAt || {},
+          { gte: d },
+        );
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        supplierWhere.createdAt = Object.assign(
+          supplierWhere.createdAt || {},
+          { lte: d },
+        );
+      }
+
+      // Sub-brand narrowing — same gate as the /suppliers list endpoint.
+      // MANAGER subBrandAccess restricts the visible-set BEFORE counting.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          supplierWhere.subBrand = { in: [...allowed] };
+        } else {
+          // Empty allowed set = deny everything; force-empty query.
+          supplierWhere.subBrand = "__none__";
+        }
+      }
+
+      // Bounded fetch to keep in-process aggregation safe.
+      const suppliers = await prisma.travelSupplier.findMany({
+        where: supplierWhere,
+        select: {
+          id: true,
+          subBrand: true,
+          supplierCategory: true,
+          isActive: true,
+          updatedAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+        take: SUPPLIERS_STATS_CAP,
+      });
+
+      // Get the true total so callers know if aggregation is bounded.
+      const totalMatching = await prisma.travelSupplier.count({
+        where: supplierWhere,
+      });
+      const aggregateExceedsCap = totalMatching > SUPPLIERS_STATS_CAP;
+
+      // Empty short-circuit — return zeroed shape.
+      if (suppliers.length === 0) {
+        return res.json({
+          total: 0,
+          active: 0,
+          archived: 0,
+          bySubBrand: {},
+          byCategory: {},
+          totalPayables: 0,
+          totalPayableAmount: 0,
+          paidPayableAmount: 0,
+          lastActivityAt: null,
+          aggregateExceedsCap: false,
+        });
+      }
+
+      // Counts overall + per-bucket pre-seeding (so categories/sub-brands
+      // with zero payables still appear with count populated).
+      let active = 0;
+      let archived = 0;
+      let lastActivityAt = null;
+      const bySubBrand = {};
+      const byCategory = {};
+
+      for (const s of suppliers) {
+        if (s.isActive) active += 1;
+        else archived += 1;
+
+        const ts = s.updatedAt instanceof Date ? s.updatedAt : new Date(s.updatedAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastActivityAt || ts > lastActivityAt) lastActivityAt = ts;
+        }
+
+        // TravelSupplier.subBrand is non-nullable in schema, but defensively
+        // coalesce falsy → '_tenant' to match the sibling stats endpoint
+        // shape and forward-compat with any future nullable migration.
+        const sbKey = s.subBrand ? String(s.subBrand) : "_tenant";
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+        bySubBrand[sbKey].count += 1;
+
+        const catKey = s.supplierCategory || "other";
+        if (!byCategory[catKey]) byCategory[catKey] = { count: 0 };
+        byCategory[catKey].count += 1;
+      }
+
+      // Payable-derived aggregation. groupBy isn't ideal here — we just
+      // need the sum + paid-subset-sum + count across ALL payables for the
+      // visible supplier set, plus we want the per-row paidAt check.
+      // findMany keeps the math straightforward.
+      const supplierIds = suppliers.map((s) => s.id);
+      const payables = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId,
+          supplierId: { in: supplierIds },
+        },
+        select: { id: true, amount: true, paidAt: true },
+      });
+
+      // Half-up round to 2dp — matches sibling stats endpoints.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      let totalPayableAmount = 0;
+      let paidPayableAmount = 0;
+      for (const p of payables) {
+        const amt = Number(p.amount);
+        if (!Number.isFinite(amt)) continue; // defensive null/invalid → 0
+        totalPayableAmount += amt;
+        if (p.paidAt != null) paidPayableAmount += amt;
+      }
+
+      res.json({
+        total: suppliers.length,
+        active,
+        archived,
+        bySubBrand,
+        byCategory,
+        totalPayables: payables.length,
+        totalPayableAmount: round2(totalPayableAmount),
+        paidPayableAmount: round2(paidPayableAmount),
+        lastActivityAt: lastActivityAt ? lastActivityAt.toISOString() : null,
+        aggregateExceedsCap,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise suppliers" });
+    }
+  },
+);
+
+// ============================================================================
 // GET /api/travel/suppliers/:id/credentials — per-supplier portal-logins view
 // (Arc 2 #903 slice 13 — PRD_TRAVEL_SUPPLIER_MASTER AC-6.8 "Supplier Portal
 // Logins" sub-tab under the SupplierMaster detail page).

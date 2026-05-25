@@ -16,6 +16,8 @@
  *   PUT    /api/travel/commission-profiles/:id            — ADMIN/MANAGER partial update
  *   DELETE /api/travel/commission-profiles/:id            — ADMIN-only hard delete
  *   POST   /api/travel/commission-profiles/:id/assign     — ADMIN/MANAGER bulk-assign to Contact rows (slice 6)
+ *   POST   /api/travel/commission-profiles/:id/preview    — what-if commission preview (slice 7)
+ *   GET    /api/travel/commission-profiles/:id/ledger     — operator-view commission ledger (slice 9)
  *
  * Validation strictness (slice 2):
  *   - name required, non-empty trim                       → 400 MISSING_FIELDS
@@ -691,6 +693,176 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-commission-profiles] preview error:", e.message);
       res.status(500).json({ error: "Failed to preview commission" });
+    }
+  },
+);
+
+// GET /api/travel/commission-profiles/:id/ledger — operator-view commission
+// ledger for one profile. Derives a per-Deal commission row for every Deal
+// whose linked Contact carries this profile's id in commissionProfileId
+// (slice 6's bulk-assign endpoint is what writes that link). For each Deal
+// we run the same lib/agentCommissionCalculator.js logic the preview route
+// uses (slice 7), so what an operator saw in "preview" becomes the same
+// number that appears in the ledger row once the deal exists.
+//
+// Why this is "derived" not "stored": the dedicated SubAgentCommission table
+// (PRD §3 FR-3.2.2) is Phase 1-3 work — multi-day, blocked on DD-5.3 (commission
+// settlement timing) and the b2bCommissionEngine cron. Until that lands, the
+// ledger is a pure read over Deal × Contact joined on commissionProfileId.
+// Frontend can be built against this contract today; the storage swap
+// (Phase 1 lands) is a backend-only change that keeps the response shape.
+//
+// Scope rules:
+//   - Tenant-scoped via Contact.tenantId AND Deal.tenantId (defence in depth).
+//   - Sub-brand-restricted callers must be able to access the profile's sub-brand
+//     (NULL subBrand is tenant-wide, accessible to all authorised roles).
+//   - Soft-deleted Deals (deletedAt != null) are excluded.
+//   - Any verified token; no RBAC narrowing — the ledger is operator-readable
+//     for any role allowed to see the profile. Read-only endpoint.
+//
+// Query string:
+//   limit   default 50, max 200 (smaller default than list — ledger rows
+//           are richer; keeps UI table snappy by default)
+//   offset  default 0 — standard pagination
+//   stage   optional Deal.stage filter (e.g. "won" for settled-only view)
+//
+// Response shape:
+//   {
+//     profileId, profileName, profileType,
+//     entries: [
+//       { dealId, dealTitle, dealStage, dealAmount, dealCurrency,
+//         contactId, contactName, commission, breakdown, createdAt }
+//     ],
+//     totalEntries,
+//     totalCommission,   // sum of commission across the FILTERED page
+//     limit, offset
+//   }
+//
+// Defensive behaviour: if the stored profileJson is malformed (parse throws,
+// or yields an uninterpretable shape), every ledger row reports commission=0
+// with a diagnostic breakdown — same posture as the preview route. Operators
+// see the misconfig at use-time rather than a 500 crashing the page.
+router.get(
+  "/commission-profiles/:id/ledger",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const profile = await prisma.travelCommissionProfile.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!profile) {
+        return res.status(404).json({
+          error: "Commission profile not found",
+          code: "PROFILE_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand gate — NULL subBrand profiles are tenant-wide.
+      if (profile.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, profile.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const stageFilter = req.query.stage ? String(req.query.stage) : null;
+
+      // Build the where for Deals whose Contact carries this profileId.
+      // Use Deal.contact -> Contact.commissionProfileId because that's where
+      // slice 6's bulk-assign writes — Deal itself doesn't carry a direct
+      // profile FK (intentional; profile assignment is on the Contact /
+      // agent principal, not the individual deal).
+      const dealWhere = {
+        tenantId: req.travelTenant.id,
+        deletedAt: null,
+        contact: { commissionProfileId: id, tenantId: req.travelTenant.id },
+      };
+      if (stageFilter) dealWhere.stage = stageFilter;
+
+      const [deals, totalEntries] = await Promise.all([
+        prisma.deal.findMany({
+          where: dealWhere,
+          include: {
+            contact: { select: { id: true, name: true } },
+          },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take,
+          skip,
+        }),
+        prisma.deal.count({ where: dealWhere }),
+      ]);
+
+      // Parse stored profileJson once; reuse across all rows. Defensive:
+      // malformed JSON → every row reports commission=0 with a diagnostic.
+      let parsedProfile = null;
+      let parseError = null;
+      try {
+        parsedProfile = JSON.parse(profile.profileJson);
+      } catch (e) {
+        parseError = e.message;
+      }
+
+      const entries = deals.map((d) => {
+        let result;
+        if (parseError) {
+          result = {
+            commission: 0,
+            breakdown: `malformed profileJson: ${parseError}`,
+          };
+        } else {
+          result = computeCommission({
+            saleAmount: Number(d.amount) || 0,
+            paxCount: 1, // ledger does not carry per-deal paxCount yet
+            profile: parsedProfile,
+          });
+        }
+        return {
+          dealId: d.id,
+          dealTitle: d.title,
+          dealStage: d.stage,
+          dealAmount: d.amount,
+          dealCurrency: d.currency,
+          contactId: d.contact ? d.contact.id : null,
+          contactName: d.contact ? d.contact.name : null,
+          commission: result.commission,
+          breakdown: result.breakdown,
+          createdAt: d.createdAt,
+        };
+      });
+
+      const totalCommission = entries.reduce(
+        (acc, e) => acc + (Number(e.commission) || 0),
+        0,
+      );
+      // Half-up round to 2dp — matches lib/agentCommissionCalculator's round2.
+      const totalCommissionRounded =
+        Math.round((totalCommission + Number.EPSILON) * 100) / 100;
+
+      res.json({
+        profileId: profile.id,
+        profileName: profile.name,
+        profileType: profile.profileType,
+        entries,
+        totalEntries,
+        totalCommission: totalCommissionRounded,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] ledger error:", e.message);
+      res.status(500).json({ error: "Failed to load commission ledger" });
     }
   },
 );

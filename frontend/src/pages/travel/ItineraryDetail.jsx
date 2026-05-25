@@ -1,6 +1,6 @@
 // Travel CRM — Itinerary detail page.
 //
-// Mounts at /travel/itineraries/:id. Three sections:
+// Mounts at /travel/itineraries/:id. Four sections:
 //   1. Header bar — destination + status + sub-brand badge + admin/manager
 //      action cluster (accept/reject/regen/share/PDF).
 //   2. Draft summary — LLM-generated prose from
@@ -10,12 +10,18 @@
 //   3. Items table — flight / hotel / transfer / activity / visa /
 //      insurance rows with edit + delete (admin/manager). "Add item"
 //      inline form.
+//   4. Day costs panel (#907 slice 4) — collapsible section consuming
+//      GET /api/travel/itineraries/:id/day-costs (slice 2, commit
+//      5ca25585). Shows summary tiles (totalDays / grandTotal /
+//      averageDailyCost) + per-day breakdown table with byType chips.
+//      Lazy-loads on first expand; cached for the page lifetime.
 
 import { useEffect, useState, useContext } from "react";
 import { useParams } from "react-router-dom";
 import {
   Map as MapIcon, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Plus, Pencil, Trash2, X, Sparkles, Share2, Download, Check, XCircle, Copy,
+  Calendar, ChevronDown, ChevronRight,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -117,6 +123,10 @@ export default function ItineraryDetail() {
   const [adding, setAdding] = useState(false);
   const [newItem, setNewItem] = useState(EMPTY_ITEM);
   const [editing, setEditing] = useState(null);
+  // Day costs panel (#907 slice 4) — collapsible + lazy-fetched.
+  const [dayCostsOpen, setDayCostsOpen] = useState(false);
+  const [dayCosts, setDayCosts] = useState(null); // { days, grandTotal, totalDays, averageDailyCost }
+  const [dayCostsLoading, setDayCostsLoading] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -262,6 +272,32 @@ export default function ItineraryDetail() {
       load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to delete item");
+    }
+  };
+
+  // Day costs panel (#907 slice 4) — lazy fetch on first expand.
+  // Consumes GET /api/travel/itineraries/:id/day-costs (slice 2 / 5ca25585).
+  // Response envelope: { itineraryId, days[], grandTotal, totalDays, averageDailyCost }
+  // where each day = { dayOffset, items[], totalCost, itemCount, byType }.
+  const loadDayCosts = async () => {
+    setDayCostsLoading(true);
+    try {
+      const res = await fetchApi(`/api/travel/itineraries/${id}/day-costs`);
+      setDayCosts(res || null);
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to load day costs");
+      setDayCosts(null);
+    } finally {
+      setDayCostsLoading(false);
+    }
+  };
+
+  const toggleDayCosts = () => {
+    const next = !dayCostsOpen;
+    setDayCostsOpen(next);
+    // Lazy fetch on first expand; refetch only via explicit refresh action.
+    if (next && dayCosts == null && !dayCostsLoading) {
+      loadDayCosts();
     }
   };
 
@@ -452,6 +488,115 @@ export default function ItineraryDetail() {
         </div>
       </section>
 
+      <section style={{ marginTop: 20 }}>
+        <button
+          type="button"
+          onClick={toggleDayCosts}
+          aria-expanded={dayCostsOpen}
+          aria-controls="day-costs-panel"
+          style={{
+            display: "flex", alignItems: "center", gap: 8, width: "100%",
+            justifyContent: "flex-start", padding: "10px 12px",
+            background: "var(--subtle-bg)", border: "1px solid var(--border-color)",
+            borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 600,
+            color: "var(--text-primary)",
+          }}
+        >
+          {dayCostsOpen ? <ChevronDown size={16} aria-hidden /> : <ChevronRight size={16} aria-hidden />}
+          <Calendar size={16} aria-hidden style={{ color: "var(--primary-color, var(--accent-color))" }} />
+          Day costs
+          <span style={{ flex: 1 }} />
+          {dayCosts && (
+            <span style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 400 }}>
+              {dayCosts.totalDays} day{dayCosts.totalDays === 1 ? "" : "s"} · {fmtMoney(dayCosts.grandTotal, itin.currency)}
+            </span>
+          )}
+        </button>
+
+        {dayCostsOpen && (
+          <div
+            id="day-costs-panel"
+            role="region"
+            aria-label="Day costs breakdown"
+            style={{
+              marginTop: 8, background: "var(--surface-color)",
+              border: "1px solid var(--border-color)", borderRadius: 8,
+              padding: 16,
+            }}
+          >
+            {dayCostsLoading ? (
+              <div style={empty}>Loading day costs&hellip;</div>
+            ) : !dayCosts ? (
+              <div style={empty}>Day costs unavailable.</div>
+            ) : !dayCosts.days || dayCosts.days.length === 0 ? (
+              <div style={empty}>No items in this itinerary &mdash; add items to see day-by-day costs.</div>
+            ) : (
+              <>
+                <div style={{
+                  display: "grid", gap: 12,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
+                  marginBottom: 16,
+                }}>
+                  <SummaryTile label="Total days" value={String(dayCosts.totalDays)} />
+                  <SummaryTile label="Grand total" value={fmtMoney(dayCosts.grandTotal, itin.currency)} />
+                  <SummaryTile label="Avg daily cost" value={fmtMoney(dayCosts.averageDailyCost, itin.currency)} />
+                </div>
+
+                <div style={{
+                  background: "var(--bg-color)", borderRadius: 6,
+                  border: "1px solid var(--border-light, var(--border-color))",
+                  overflowX: "auto",
+                }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        <th style={th}>Day</th>
+                        <th style={th}>Items</th>
+                        <th style={th}>Total</th>
+                        <th style={th}>By type</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dayCosts.days.map((d) => (
+                        <tr key={d.dayOffset} style={{ borderTop: "1px solid var(--border-light)" }}>
+                          <td style={td}>
+                            <strong>Day {d.dayOffset + 1}</strong>
+                          </td>
+                          <td style={td}>{d.itemCount}</td>
+                          <td style={td}>{fmtMoney(d.totalCost, itin.currency)}</td>
+                          <td style={td}>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                              {Object.entries(d.byType || {}).map(([type, amount]) => {
+                                const Icon = ITEM_ICONS[type] || Briefcase;
+                                return (
+                                  <span
+                                    key={type}
+                                    title={`${type}: ${fmtMoney(amount, itin.currency)}`}
+                                    style={{
+                                      display: "inline-flex", alignItems: "center", gap: 4,
+                                      padding: "2px 8px", borderRadius: 12, fontSize: 11,
+                                      background: "var(--subtle-bg)", color: "var(--text-primary)",
+                                      border: "1px solid var(--border-light, var(--border-color))",
+                                    }}
+                                  >
+                                    <Icon size={11} aria-hidden style={{ color: "var(--text-secondary)" }} />
+                                    {type} · {fmtMoney(amount, itin.currency)}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </section>
+
       {editing && (
         <div
           role="dialog"
@@ -484,6 +629,25 @@ export default function ItineraryDetail() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function SummaryTile({ label, value }) {
+  return (
+    <div style={{
+      background: "var(--bg-color)", padding: 12, borderRadius: 6,
+      border: "1px solid var(--border-light, var(--border-color))",
+    }}>
+      <div style={{
+        fontSize: 11, color: "var(--text-secondary)",
+        textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4,
+      }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text-primary)" }}>
+        {value}
+      </div>
     </div>
   );
 }

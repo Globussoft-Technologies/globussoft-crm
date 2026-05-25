@@ -12,6 +12,11 @@
  *   - Add item form POSTs the right shape (itemType + description +
  *     unitCost coerced to number).
  *   - Delete icon confirms + DELETEs the item.
+ *   - Day costs panel (#907 slice 4) — collapsible section calls GET
+ *     /day-costs lazily on first expand and renders the summary tiles
+ *     + per-day breakdown with byType chips. Verifies happy path,
+ *     loading + empty + 5xx error states, and that the GET fires only
+ *     when the panel opens.
  *
  * Mock stability: useNotify, fetchApi, and AuthContext are stable
  * references per CLAUDE.md feedback rule. AuthContext uses the real
@@ -92,9 +97,52 @@ const ITIN_EMPTY = {
   items: [],
 };
 
-function makeFetchImpl(getResponse = ITIN_WITH_ITEMS) {
-  return (url, opts) => {
-    const method = (opts?.method || "GET").toUpperCase();
+// Day-costs envelope from GET /api/travel/itineraries/:id/day-costs
+// (slice 2, commit 5ca25585). Shape: { itineraryId, days[], grandTotal,
+// totalDays, averageDailyCost } where each day =
+// { dayOffset, items[], totalCost, itemCount, byType }.
+const DAY_COSTS_RESPONSE = {
+  itineraryId: 42,
+  days: [
+    {
+      dayOffset: 0,
+      itemCount: 2,
+      totalCost: 23530,
+      byType: { flight: 9450, hotel: 14080 },
+      items: [],
+    },
+    {
+      dayOffset: 1,
+      itemCount: 1,
+      totalCost: 5500,
+      byType: { activity: 5500 },
+      items: [],
+    },
+  ],
+  grandTotal: 29030,
+  totalDays: 2,
+  averageDailyCost: 14515,
+};
+
+const DAY_COSTS_EMPTY_RESPONSE = {
+  itineraryId: 43,
+  days: [],
+  grandTotal: 0,
+  totalDays: 0,
+  averageDailyCost: 0,
+};
+
+function makeFetchImpl(getResponse = ITIN_WITH_ITEMS, opts = {}) {
+  const dayCostsResp = opts.dayCosts !== undefined ? opts.dayCosts : DAY_COSTS_RESPONSE;
+  const dayCostsError = opts.dayCostsError; // truthy → reject with shape { status, body }
+  return (url, opts2) => {
+    const method = (opts2?.method || "GET").toUpperCase();
+    if (url.match(/^\/api\/travel\/itineraries\/\d+\/day-costs$/) && method === "GET") {
+      if (dayCostsError) {
+        return Promise.reject(dayCostsError);
+      }
+      return Promise.resolve(dayCostsResp);
+    }
     if (url.match(/^\/api\/travel\/itineraries\/\d+$/) && method === "GET") {
       return Promise.resolve(getResponse);
     }
@@ -108,11 +156,11 @@ function makeFetchImpl(getResponse = ITIN_WITH_ITEMS) {
       });
     }
     if (url.match(/\/api\/travel\/itineraries\/\d+\/items$/) && method === "POST") {
-      const body = JSON.parse(opts.body);
+      const body = JSON.parse(opts2.body);
       return Promise.resolve({ id: 999, itineraryId: 42, position: 2, ...body });
     }
     if (url.match(/\/api\/travel\/itineraries\/\d+\/items\/\d+$/) && method === "PATCH") {
-      return Promise.resolve({ id: 101, ...JSON.parse(opts.body) });
+      return Promise.resolve({ id: 101, ...JSON.parse(opts2.body) });
     }
     if (url.match(/\/api\/travel\/itineraries\/\d+\/items\/\d+$/) && method === "DELETE") {
       return Promise.resolve({ deleted: true, id: 101 });
@@ -291,5 +339,145 @@ describe("ItineraryDetail — page contract", () => {
       expect(body.itemType).toBe("flight");
     });
     expect(notifyObj.success).toHaveBeenCalledWith("Item saved");
+  });
+});
+
+// ─── Day costs panel (#907 slice 4) ─────────────────────────────────
+//
+// Consumes GET /api/travel/itineraries/:id/day-costs (slice 2,
+// commit 5ca25585). The panel is a collapsible section that fetches
+// lazily on first expand. These tests pin:
+//   - Section is present in the rendered DOM (Day costs toggle button).
+//   - GET fires only AFTER the toggle button is clicked (lazy).
+//   - Summary tiles render totalDays / grandTotal / averageDailyCost.
+//   - Per-day table shows Day index (1-based for display), itemCount,
+//     totalCost, and byType chips for each grouped item type.
+//   - Empty envelope (totalDays=0) shows the "No items in this
+//     itinerary" empty state.
+//   - 5xx from the endpoint fires notify.error.
+//   - byType chips render one per type per day.
+describe("ItineraryDetail — day costs panel (#907 slice 4)", () => {
+  it("renders the Day costs toggle button", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+    expect(screen.getByRole("button", { name: /Day costs/i })).toBeTruthy();
+  });
+
+  it("does NOT call /day-costs until the panel is expanded", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    // Before clicking, /day-costs should not have been called.
+    const preCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === "/api/travel/itineraries/42/day-costs",
+    );
+    expect(preCalls.length).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+
+    await waitFor(() => {
+      const postCalls = fetchApiMock.mock.calls.filter(
+        (c) => c[0] === "/api/travel/itineraries/42/day-costs",
+      );
+      expect(postCalls.length).toBe(1);
+    });
+  });
+
+  it("renders summary tiles + per-day breakdown after fetch resolves", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+
+    // Summary tiles — labels match (uppercase via CSS, DOM text is mixed-case):
+    expect(await screen.findByText(/Total days/i)).toBeTruthy();
+    expect(screen.getByText(/Grand total/i)).toBeTruthy();
+    expect(screen.getByText(/Avg daily cost/i)).toBeTruthy();
+
+    // Per-day rows: Day 1 + Day 2 (1-based for display, dayOffset 0/1).
+    expect(screen.getByText("Day 1")).toBeTruthy();
+    expect(screen.getByText("Day 2")).toBeTruthy();
+  });
+
+  it("renders byType chips for each day's grouped item types", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+
+    // Day 0 has flight + hotel; Day 1 has activity. Chips render
+    // "<type> · <fmtMoney(amount)>" inside a span — partial regex match.
+    await screen.findByText("Day 1");
+    expect(screen.getByText(/flight ·/i)).toBeTruthy();
+    expect(screen.getByText(/hotel ·/i)).toBeTruthy();
+    expect(screen.getByText(/activity ·/i)).toBeTruthy();
+  });
+
+  it("shows day count summary in the toggle header once loaded", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+
+    // Toggle header annotates "<N> days · <grand total>" once loaded.
+    await waitFor(() => {
+      expect(screen.getByText(/2 days/i)).toBeTruthy();
+    });
+  });
+
+  it("shows the empty state when totalDays === 0", async () => {
+    fetchApiMock.mockImplementation(
+      makeFetchImpl(ITIN_EMPTY, { dayCosts: DAY_COSTS_EMPTY_RESPONSE }),
+    );
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+
+    expect(
+      await screen.findByText(/No items in this itinerary/i),
+    ).toBeTruthy();
+  });
+
+  it("fires notify.error when the endpoint returns 5xx", async () => {
+    const err = { status: 500, body: { error: "Internal server error" } };
+    fetchApiMock.mockImplementation(
+      makeFetchImpl(ITIN_WITH_ITEMS, { dayCostsError: err }),
+    );
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith("Internal server error");
+    });
+  });
+
+  it("does NOT re-fetch on a second toggle (lazy + cached)", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    // First expand fires the GET.
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+    await screen.findByText("Day 1");
+    const afterFirstOpen = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === "/api/travel/itineraries/42/day-costs",
+    ).length;
+    expect(afterFirstOpen).toBe(1);
+
+    // Collapse then re-expand — page should NOT refetch.
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+    const afterReopen = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === "/api/travel/itineraries/42/day-costs",
+    ).length;
+    expect(afterReopen).toBe(1);
   });
 });

@@ -1273,4 +1273,146 @@ router.get("/itineraries/:id/day-costs", verifyToken, requireTravelTenant, async
   }
 });
 
+// ─── Bulk-clone day across itineraries (#907 slice 6) ───────────────
+//
+// POST /api/travel/itineraries/:id/clone-day
+// Body: { sourceItineraryId: Int, sourceDayOffset: Int, targetDayOffset: Int }
+//
+// Copies all ItineraryItem rows from the source itinerary's specified day
+// into the receiving (path-param) itinerary's target day. Day-source
+// resolution mirrors the day-costs endpoint convention (#907 slice 2):
+// the day-source lives in each item's detailsJson (`dayOffset` preferred,
+// `dayNumber` fallback). The cloned rows have their detailsJson rewritten
+// with `dayOffset: targetDayOffset` so the new home is unambiguous.
+//
+// Position assignment: append after the target itinerary's current max
+// position (same pattern as POST /items).
+//
+// Tenant + sub-brand guard: BOTH itineraries must belong to the requester's
+// tenant; the operator must have sub-brand access to BOTH (source via
+// SUB_BRAND_DENIED on source-load, target via loadItineraryWithGuard).
+// Sub-brands are NOT required to match — an admin authoring across TMC and
+// Travel Stall can lift a Day-3 sightseeing block from one and drop it on
+// the other.
+//
+// Returns 201 + `{ clonedCount, items: [...] }` where items are the freshly
+// created rows. clonedCount = 0 (with empty items array) when the source
+// day has no matching items — not an error.
+//
+// Refs PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3 + §6.5.
+router.post("/itineraries/:id/clone-day", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const target = await loadItineraryWithGuard(req);
+    const { sourceItineraryId, sourceDayOffset, targetDayOffset } = req.body || {};
+
+    const sourceId = parseInt(sourceItineraryId, 10);
+    if (!Number.isFinite(sourceId)) {
+      return res.status(400).json({
+        error: "sourceItineraryId is required and must be numeric",
+        code: "INVALID_SOURCE_ID",
+      });
+    }
+    const srcDay = parseInt(sourceDayOffset, 10);
+    const tgtDay = parseInt(targetDayOffset, 10);
+    if (!Number.isFinite(srcDay) || srcDay < 0) {
+      return res.status(400).json({
+        error: "sourceDayOffset must be a non-negative integer",
+        code: "INVALID_SOURCE_DAY",
+      });
+    }
+    if (!Number.isFinite(tgtDay) || tgtDay < 0) {
+      return res.status(400).json({
+        error: "targetDayOffset must be a non-negative integer",
+        code: "INVALID_TARGET_DAY",
+      });
+    }
+
+    // Same-itinerary same-day clone would silently duplicate every line.
+    // Reject explicitly to surface operator intent (vs typo).
+    if (sourceId === target.id && srcDay === tgtDay) {
+      return res.status(400).json({
+        error: "source and target day are identical; use POST /items to duplicate",
+        code: "SAME_DAY_CLONE",
+      });
+    }
+
+    // Tenant-scope the source load. SUB_BRAND_DENIED check below.
+    const source = await prisma.itinerary.findFirst({
+      where: { id: sourceId, tenantId: req.travelTenant.id },
+      select: { id: true, subBrand: true },
+    });
+    if (!source) {
+      return res.status(404).json({
+        error: "Source itinerary not found",
+        code: "SOURCE_NOT_FOUND",
+      });
+    }
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, source.subBrand)) {
+      return res.status(403).json({
+        error: "Sub-brand access denied for source itinerary",
+        code: "SOURCE_SUB_BRAND_DENIED",
+      });
+    }
+
+    // Pull all source items, filter to the requested source day via
+    // detailsJson.dayOffset / dayNumber (#907 slice 2 convention).
+    const sourceItems = await prisma.itineraryItem.findMany({
+      where: { itineraryId: source.id },
+      orderBy: { position: "asc" },
+    });
+    const matching = sourceItems.filter((row) => {
+      if (!row.detailsJson) return false;
+      let details;
+      try { details = JSON.parse(row.detailsJson); } catch { return false; }
+      if (typeof details.dayOffset === "number") return details.dayOffset === srcDay;
+      if (typeof details.dayNumber === "number") return (details.dayNumber - 1) === srcDay;
+      return false;
+    });
+
+    if (matching.length === 0) {
+      return res.status(201).json({ clonedCount: 0, items: [] });
+    }
+
+    // Append after the target itinerary's current max position.
+    const maxRow = await prisma.itineraryItem.findFirst({
+      where: { itineraryId: target.id },
+      orderBy: { position: "desc" },
+      select: { position: true },
+    });
+    let nextPos = (maxRow?.position ?? -1) + 1;
+
+    const cloned = [];
+    for (const row of matching) {
+      // Rewrite detailsJson with the new dayOffset; preserve all other keys.
+      let details = {};
+      try { details = row.detailsJson ? JSON.parse(row.detailsJson) : {}; } catch { details = {}; }
+      details.dayOffset = tgtDay;
+      delete details.dayNumber; // avoid stale dual-source conflicts.
+
+      const created = await prisma.itineraryItem.create({
+        data: {
+          itineraryId: target.id,
+          itemType: row.itemType,
+          position: nextPos++,
+          description: row.description,
+          detailsJson: JSON.stringify(details),
+          supplierId: row.supplierId,
+          unitCost: row.unitCost != null ? Number(row.unitCost) : null,
+          markup: row.markup != null ? Number(row.markup) : null,
+          gstAmount: row.gstAmount != null ? Number(row.gstAmount) : null,
+          totalPrice: row.totalPrice != null ? Number(row.totalPrice) : null,
+        },
+      });
+      cloned.push(created);
+    }
+
+    res.status(201).json({ clonedCount: cloned.length, items: cloned });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] clone-day error:", e.message);
+    res.status(500).json({ error: "Failed to clone day" });
+  }
+});
+
 module.exports = router;

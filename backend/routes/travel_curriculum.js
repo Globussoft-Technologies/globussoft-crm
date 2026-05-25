@@ -299,6 +299,164 @@ router.get("/stats", verifyToken, async (req, res) => {
   }
 });
 
+// ============================================================================
+// GET /api/travel-curriculum/by-month — tenant-wide curriculum-mapping
+// monthly rollup (PRD_TRAVEL_TMC §3, Arc 2 Travel Gap).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-MM bucket for
+// the tenant-scoped TravelCurriculumMapping population, with a count of
+// rows authored that month. Powers the per-month creation trend chart on
+// the Curriculum admin dashboard alongside the /stats KPI strip.
+//
+// Sibling pattern: mirrors /api/travel/suppliers/by-month (#903 slice 24)
+// + /flyer-templates/by-month (#908 slice 21) + /quotes/by-month (#900
+// slice 16). Same UTC YYYY-MM bucketing template, same defensive math
+// (null/invalid createdAt → "unknown" bucket; excluded when ?from / ?to
+// is set, kept otherwise so count surface stays accurate), same orderBy
+// semantics, same pagination-after-aggregation posture.
+//
+// Distinct from /stats (sibling slice): /stats is a single point-in-time
+// KPI surface (totals + per-curriculum / per-grade / per-subject buckets);
+// /by-month is the per-month time series across the same population.
+//
+// Why no sub-brand bucket
+// -----------------------
+// Per the route file's header (L11-15) and the existing /stats handler:
+// curriculum authoring is tenant-wide ADMIN, not sub-brand-scoped. The
+// route mounts at /api/travel-curriculum (sibling-flat with
+// /api/embassy-rules) rather than under /api/travel/*, and there is no
+// requireTravelTenant / getSubBrandAccessSet machinery in this route
+// file. The /by-month endpoint follows the same posture — no bySubBrand
+// surface, no MANAGER narrowing, no sub-brand gate. The TravelCurriculum
+// Mapping model has no subBrand column.
+//
+// Query params (all optional):
+//   - ?from / ?to       — inclusive YYYY-MM bounds; invalid →
+//                         400 INVALID_MONTH_FORMAT
+//   - ?orderBy          — default month:asc; accepts month:{asc|desc},
+//                         count:{asc|desc}; unknown tokens degrade silently
+//   - ?limit / ?offset  — default 12 / 0; limit caps at 60
+//
+// Response envelope:
+//   {
+//     total: <pre-pagination bucket count>,
+//     rows: [{ month: "2026-05", count: 3 }, ...]
+//   }
+//
+// No audit row written — read-only meta surface; matches /stats posture.
+// USER-readable: anodyne (counts + month-string tokens).
+//
+// Express route ordering: literal-path /by-month MUST be declared BEFORE
+// the /:id family or `:id="by-month"` would 400 INVALID_ID before
+// reaching this handler. Same convention as /stats above.
+// ============================================================================
+router.get("/by-month", verifyToken, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    // YYYY-MM validation — mirrors slice 24 /suppliers/by-month.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "count:asc",
+      "count:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Tenant-scoped where. No sub-brand narrowing — curriculum authoring
+    // is tenant-wide ADMIN; the model has no subBrand column.
+    const where = { tenantId: req.user.tenantId };
+
+    // Light projection — createdAt is enough for the bucket totals.
+    const rows = await prisma.travelCurriculumMapping.findMany({
+      where,
+      select: { createdAt: true },
+    });
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → { month, count }.
+    // Null/invalid createdAt rows land in "unknown".
+    const byMonth = new Map();
+    for (const r of rows) {
+      let monthKey = "unknown";
+      if (r.createdAt) {
+        const dt = r.createdAt instanceof Date
+          ? r.createdAt
+          : new Date(r.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let bucket = byMonth.get(monthKey);
+      if (!bucket) {
+        bucket = { month: monthKey, count: 0 };
+        byMonth.set(monthKey, bucket);
+      }
+      bucket.count += 1;
+    }
+
+    let months = [...byMonth.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" excluded when either
+    // bound is set (no comparable token); kept otherwise so the count
+    // surface remains complete. Mirrors slice 24 /suppliers/by-month.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
+    // "unknown" sorts last in asc / first in desc (lexicographically >
+    // "9999-12") — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const total = months.length;
+
+    // Pagination AFTER aggregation + sort + filter, same as slice 24.
+    const paged = months.slice(skip, skip + take);
+
+    res.json({
+      total,
+      rows: paged,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-curriculum] by-month error:", e.message);
+    res.status(500).json({ error: "Failed to compute monthly rollup" });
+  }
+});
+
 // GET /api/travel-curriculum/:id — single mapping (tenant-scoped).
 router.get("/:id", verifyToken, async (req, res) => {
   try {

@@ -3,6 +3,7 @@
 // Endpoints:
 //   GET    /api/travel/trips                                   — list trips
 //   POST   /api/travel/trips                                   — create trip
+//   GET    /api/travel/trips/by-month                          — tenant-wide monthly rollup
 //   GET    /api/travel/trips/:id                               — fetch with children
 //   PATCH  /api/travel/trips/:id                               — amend trip
 //   DELETE /api/travel/trips/:id                               — ADMIN only (cascades)
@@ -174,6 +175,206 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
     }
     console.error("[travel-trips] create error:", e.message);
     res.status(500).json({ error: "Failed to create trip" });
+  }
+});
+
+// ─── Tenant-wide monthly rollup ───────────────────────────────────────
+
+// GET /api/travel/trips/by-month — TMC-only, tenant + sub-brand scoped.
+//
+// Mirrors the Travel arc's established by-month pattern (#900 slice 16
+// /quotes/by-month, #901 slice 29 /invoices/by-month, #907 slice 16
+// /itineraries/by-month, #908 slice 21 /flyer-templates/by-month) —
+// same UTC YYYY-MM bucketing template, same defensive math (null/invalid
+// createdAt → "unknown" bucket, excluded when ?from/?to is set), same
+// orderBy semantics. One row per UTC-month present in the scoped trip
+// set, summarising count + 4-status splits for that month.
+//
+// 4-status TMC envelope:
+//   confirmed / in-trip / completed / cancelled
+//
+// Read-only; consumed by the operator-facing "trips trend" chart on the
+// Travel dashboard and the per-month drill-down picker into the
+// underlying /trips list.
+//
+// Scope rules:
+//   - Tenant-scoped on TmcTrip.tenantId.
+//   - TMC-only: requireTmcAccess guard already ensures the caller has
+//     "tmc" in subBrandAccess[] (or full access via ADMIN).
+//   - Any verified token; no further RBAC narrowing — operator-readable
+//     read.
+//
+// Query string:
+//   status   optional TmcTrip.status filter (one of VALID_TRIP_STATUSES);
+//            invalid → 400 INVALID_STATUS.
+//   from     optional inclusive lower bound on bucket (YYYY-MM); rows
+//            with month < from are excluded.
+//   to       optional inclusive upper bound on bucket (YYYY-MM); rows
+//            with month > to are excluded.
+//   orderBy  default "month:asc" (chronological); also accepts
+//            "month:desc", "count:asc|desc", "completedCount:asc|desc".
+//            Unknown tokens degrade silently to the default.
+//   limit    default 12 (one year of months), max 60 (5 years).
+//   offset   default 0
+//
+// Response shape:
+//   {
+//     months: [ {
+//       month: "2026-05",
+//       count,
+//       confirmedCount, inTripCount, completedCount, cancelledCount,
+//     } ],
+//     totalMonths,
+//     grandCount,
+//     grandCompletedCount,
+//     limit, offset
+//   }
+//
+// Route ordering: declared BEFORE GET /trips/:id so Express doesn't try
+// to parse "by-month" as a numeric :id (which would 400 INVALID_ID).
+router.get("/trips/by-month", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    if (statusFilter && !VALID_TRIP_STATUSES.includes(statusFilter)) {
+      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+    }
+
+    // YYYY-MM validation — same regex slice 16 / 29 / 21 use.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "count:asc",
+      "count:desc",
+      "completedCount:asc",
+      "completedCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-MM.
+    const trips = await prisma.tmcTrip.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        createdAt: true,
+      },
+    });
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate.
+    const byMonth = new Map();
+    for (const t of trips) {
+      let monthKey = "unknown";
+      if (t.createdAt) {
+        const dt = t.createdAt instanceof Date
+          ? t.createdAt
+          : new Date(t.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let row = byMonth.get(monthKey);
+      if (!row) {
+        row = {
+          month: monthKey,
+          count: 0,
+          confirmedCount: 0,
+          inTripCount: 0,
+          completedCount: 0,
+          cancelledCount: 0,
+        };
+        byMonth.set(monthKey, row);
+      }
+
+      row.count += 1;
+      switch (t.status) {
+        case "confirmed": row.confirmedCount += 1; break;
+        case "in-trip": row.inTripCount += 1; break;
+        case "completed": row.completedCount += 1; break;
+        case "cancelled": row.cancelledCount += 1; break;
+        default: break;
+      }
+    }
+
+    let months = [...byMonth.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable month token); when no
+    // bounds are set, "unknown" stays so the count surface remains
+    // complete.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM which is also
+    // chronological. "unknown" sorts last in asc / first in desc by
+    // virtue of being lexicographically > "9999-12".
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalMonths = months.length;
+    const grandCount = months.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandCompletedCount = months.reduce(
+      (acc, r) => acc + (Number(r.completedCount) || 0),
+      0,
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter.
+    const paged = months.slice(skip, skip + take);
+
+    res.json({
+      months: paged,
+      totalMonths,
+      grandCount,
+      grandCompletedCount,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    console.error("[travel-trips] by-month error:", e.message);
+    res.status(500).json({ error: "Failed to compute monthly rollup" });
   }
 });
 

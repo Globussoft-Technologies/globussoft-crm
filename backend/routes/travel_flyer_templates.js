@@ -21,6 +21,7 @@
  *   GET    /api/travel/flyer-templates                — list (tenant + sub-brand scoped)
  *   GET    /api/travel/flyer-templates/sub-brands     — USER+ per-sub-brand counts (slice 13)
  *   GET    /api/travel/flyer-templates/global-stats   — USER+ tenant-wide rollup (slice 19)
+ *   GET    /api/travel/flyer-templates/by-month       — USER+ tenant-wide monthly rollup (slice 21)
  *   POST   /api/travel/flyer-templates/bulk-archive   — ADMIN/MANAGER batch archive (slice 15)
  *   POST   /api/travel/flyer-templates/bulk-unarchive — ADMIN/MANAGER batch restore (slice 16)
  *   GET    /api/travel/flyer-templates/:id            — fetch one
@@ -852,6 +853,218 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] bulk-unarchive error:", e.message);
       res.status(500).json({ error: "Failed to bulk-unarchive flyer templates" });
+    }
+  },
+);
+
+// GET /api/travel/flyer-templates/by-month — tenant-wide monthly rollup
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 21).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-MM bucket
+// for the tenant-scoped (and sub-brand-narrowed) flyer-template
+// population. Each row carries count + activeCount + archivedCount so
+// the operator dashboard can render a "templates created over time"
+// trend chart without N round-trips per month.
+//
+// Mirrors #900 slice 16 (/quotes/by-month) + #901 slice 29
+// (/invoices/by-month) — same UTC YYYY-MM bucketing template, same
+// defensive math (null/invalid createdAt → "unknown" bucket; excluded
+// when ?from / ?to is set, kept otherwise so count surface stays
+// accurate), same orderBy semantics. The activeCount/archivedCount
+// split is the flyer-templates analogue of the by-month quote-status
+// breakdown — templates flip between active and archived via slice 14
+// archive/unarchive and slice 15/16 bulk handlers, and the rollup makes
+// the "lifetime population vs. currently-active" delta visible at a
+// glance.
+//
+// PRD anchors:
+//   - §3 — tenant-wide flyer-template analytics (trend chart for the
+//          marketing-ops dashboard; per-month drill-down picker)
+//   - §3.6.4 — performance hint engine consumes per-month template
+//              counts to surface "cadence dropped this month" hints
+//   - §3.7.4 — template marketplace UI consumes the by-month rollup
+//              for its time-series header strip
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//                     400 INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}, activeCount:{asc|desc};
+//                     unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' templates in the rollup, plus
+//     tenant-wide (subBrand=NULL) rows. Same gate as the list endpoint
+//     above. Empty access set → all-zeros rollup (not 403) so the
+//     dashboard tile renders cleanly for not-yet-onboarded operators.
+//   - JS-side aggregation over a light findMany projection
+//     ({ isActive, createdAt }) — the population is bounded by tenant
+//     scale (low thousands), and the mock-friendly JS aggregation
+//     matches the rationale on /quotes/by-month + /invoices/by-month +
+//     /global-stats. No groupBy for marginal efficiency.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so
+//     the count surface stays accurate. Excluded when ?from / ?to is
+//     set (no comparable month token); included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter —
+//     same posture as /quotes/by-month slice 16.
+//
+// No audit row written — read-only meta surface; matches /global-stats
+// and /quotes/by-month posture. USER-readable: anodyne (counts +
+// month-string tokens).
+//
+// Express route ordering: literal-path /by-month MUST be declared
+// BEFORE the /:id family or `:id="by-month"` would 400 INVALID_ID
+// before reaching this handler. Same convention as /sub-brands +
+// /global-stats + /bulk-archive + /bulk-unarchive.
+router.get(
+  "/flyer-templates/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors slice 16 /quotes/by-month.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+        "activeCount:asc",
+        "activeCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors /global-stats
+      // slice 19: subBrand-restricted callers see allowed sub-brands +
+      // tenant-wide (NULL) rows; admins without subBrandAccess see all.
+      // Empty allowed set returns the zero-rollup envelope (not 403).
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json({
+          months: [],
+          totalMonths: 0,
+          grandCount: 0,
+          grandActiveCount: 0,
+          limit: take,
+          offset: skip,
+        });
+      }
+      const where = { tenantId: req.travelTenant.id };
+      if (allowed instanceof Set) {
+        where.OR = [
+          { subBrand: { in: [...allowed] } },
+          { subBrand: null },
+        ];
+      }
+
+      // Light projection — isActive + createdAt is enough for the
+      // bucket totals. No JSON columns pulled.
+      const rows = await prisma.travelFlyerTemplate.findMany({
+        where,
+        select: { isActive: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { count, activeCount,
+      // archivedCount }. Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const r of rows) {
+        let monthKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            month: monthKey,
+            count: 0,
+            activeCount: 0,
+            archivedCount: 0,
+          };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.isActive) bucket.activeCount += 1;
+        else bucket.archivedCount += 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. Mirrors slice 16 /quotes/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also
+      // chronological). "unknown" sorts last in asc / first in desc
+      // (lexicographically > "9999-12") — acceptable for a defensive
+      // fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandCount = months.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+      const grandActiveCount = months.reduce(
+        (acc, r) => acc + (Number(r.activeCount) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as slice 16.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        months: paged,
+        totalMonths,
+        grandCount,
+        grandActiveCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
     }
   },
 );

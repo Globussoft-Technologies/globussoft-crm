@@ -5006,6 +5006,17 @@ model TravelInvoiceLine {
   // allowed for single-night stays / single-day transfers).
   serviceStartDate DateTime?
   serviceEndDate   DateTime?
+  // Arc 2 #901 slice 12 — UC-2.1 multi-currency support.
+  // Operator captures the day's FX rate when entering a line in a non-base
+  // currency (e.g. USD line on an INR invoice). baseAmount = amount *
+  // fxRateToBase, server-computed + persisted for accrual reporting.
+  // NULL means the line is single-currency (no FX conversion needed;
+  // baseAmount === amount). Live FX-rate lookup deferred (Q-blocker).
+  // 6dp precision on the rate accommodates inverse-quote pairs like
+  // USD→INR=0.012048 (1 / 83.00); 2dp on baseAmount matches the existing
+  // Decimal(15,2) convention used across TravelInvoice + TravelQuote.
+  fxRateToBase     Decimal?      @db.Decimal(15, 6)
+  baseAmount       Decimal?      @db.Decimal(15, 2)
   invoice          TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt        DateTime      @default(now())

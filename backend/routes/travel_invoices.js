@@ -164,6 +164,42 @@ function parseServiceDate(input, fieldName) {
   return d;
 }
 
+// Arc 2 #901 slice 12 — PRD_TRAVEL_BILLING UC-2.1 multi-currency helpers.
+// fxRateToBase is the operator-captured conversion rate from the line's
+// currency to the parent invoice's base currency at the time of entry.
+// baseAmount = amount * fxRateToBase, computed + persisted (round-half-up
+// at 2dp to match the existing Decimal(15,2) convention).
+//
+// Three semantic states across POST + PUT:
+//   undefined → field absent from body; on POST persist null, on PUT
+//               leave existing value alone.
+//   null      → operator explicitly clearing the field; line becomes
+//               single-currency, baseAmount cleared in lockstep.
+//   number>0  → valid rate; baseAmount recomputed.
+//
+// Live FX-rate lookup against an external API is deferred (Q-blocker —
+// pending exchange-rate-provider decision).
+function parseFxRateToBase(input) {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  if (typeof input === "string" && input.trim() === "") return null;
+  const n = Number(input);
+  if (!Number.isFinite(n) || n <= 0) {
+    const err = new Error("fxRateToBase must be a positive number");
+    err.status = 400;
+    err.code = "INVALID_FX_RATE";
+    throw err;
+  }
+  return n;
+}
+
+// Round to 2dp using half-up semantics (JavaScript's Math.round is
+// half-to-even for negatives in some engines but half-up for positives,
+// which is what we want for monetary values).
+function round2(n) {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
 // Validate the service-date range when BOTH ends are present.
 // Inclusive semantics — same-day single-night / single-day transfer is
 // legal (start === end). Throws 400 INVALID_SERVICE_DATE_RANGE on
@@ -964,6 +1000,7 @@ router.post(
         lineType, description, quantity, unitPrice,
         currency, sortOrder, notes,
         pnr, bookingRef, serviceStartDate, serviceEndDate,
+        fxRateToBase,
       } = req.body || {};
 
       if (!description || typeof description !== "string" || !description.trim()) {
@@ -985,6 +1022,13 @@ router.post(
       const parsedStart = parseServiceDate(serviceStartDate, "serviceStartDate");
       const parsedEnd = parseServiceDate(serviceEndDate, "serviceEndDate");
       assertServiceDateRange(parsedStart, parsedEnd);
+      // Arc 2 #901 slice 12 — UC-2.1 FX-aware multi-currency line.
+      // null / undefined → single-currency line (baseAmount stays null);
+      // positive number → server computes baseAmount = round2(amount * fx).
+      const parsedFx = parseFxRateToBase(fxRateToBase);
+      const fxFields = parsedFx == null
+        ? { fxRateToBase: null, baseAmount: null }
+        : { fxRateToBase: parsedFx, baseAmount: round2(amount * parsedFx) };
 
       const created = await prisma.travelInvoiceLine.create({
         data: {
@@ -1005,6 +1049,10 @@ router.post(
           ...(parsedBookingRef !== undefined ? { bookingRef: parsedBookingRef } : {}),
           ...(parsedStart !== undefined ? { serviceStartDate: parsedStart } : {}),
           ...(parsedEnd !== undefined ? { serviceEndDate: parsedEnd } : {}),
+          // FX fields always written — null for single-currency, computed
+          // baseAmount for multi-currency. No `parsedFx !== undefined` gate
+          // because both null and a real number are valid persisted states.
+          ...fxFields,
         },
       });
 
@@ -1060,6 +1108,7 @@ router.put(
         lineType, description, quantity, unitPrice,
         currency, sortOrder, notes,
         pnr, bookingRef, serviceStartDate, serviceEndDate,
+        fxRateToBase,
       } = req.body || {};
 
       if (lineType !== undefined) {
@@ -1128,6 +1177,36 @@ router.put(
       }
       if (serviceStartDate !== undefined || serviceEndDate !== undefined) {
         assertServiceDateRange(nextStart, nextEnd);
+      }
+
+      // Arc 2 #901 slice 12 — UC-2.1 FX-aware PUT partial-update.
+      // Three cases that touch the FX pair (fxRateToBase + baseAmount):
+      //  (a) fxRateToBase explicit null → operator clears multi-currency;
+      //      baseAmount cleared in lockstep regardless of amount.
+      //  (b) fxRateToBase positive number → set rate + recompute baseAmount
+      //      from the EFFECTIVE amount (incoming body if qty/unitPrice
+      //      changed, otherwise the existing row's amount).
+      //  (c) fxRateToBase undefined BUT amount changed (qty or unitPrice)
+      //      AND existing row already had a non-null fxRateToBase →
+      //      recompute baseAmount using the existing rate + new amount.
+      // The effective-amount pattern mirrors the service-date partial-update
+      // pattern above (incoming body if present, otherwise existing).
+      const parsedFx = parseFxRateToBase(fxRateToBase);
+      const effectiveAmount = (quantity !== undefined || unitPrice !== undefined)
+        ? nextQty * nextUnit
+        : Number(existing.amount);
+      if (parsedFx === null) {
+        // Case (a) — explicit clear.
+        data.fxRateToBase = null;
+        data.baseAmount = null;
+      } else if (parsedFx !== undefined) {
+        // Case (b) — explicit set.
+        data.fxRateToBase = parsedFx;
+        data.baseAmount = round2(effectiveAmount * parsedFx);
+      } else if ((quantity !== undefined || unitPrice !== undefined)
+                 && existing.fxRateToBase != null) {
+        // Case (c) — amount changed, fxRateToBase unchanged but present.
+        data.baseAmount = round2(effectiveAmount * Number(existing.fxRateToBase));
       }
 
       if (Object.keys(data).length === 0) {

@@ -214,6 +214,55 @@ function stateCodeFromGstin(gstin) {
   return gstin.trim().toUpperCase().slice(0, 2);
 }
 
+// State-NAME → state-CODE reverse lookup.  Powers slice 16's operator-facing
+// /api/travel/utils/state-code-lookup endpoint (PRD §3.5 place-of-supply
+// data entry — operator types a state in the Contact billing form or in
+// the Tenant.gstStateCode admin field; this returns the CBIC 2-digit code).
+//
+// Matching rules (case + whitespace insensitive):
+//   1. EXACT — input matches a canonical STATE_NAMES value exactly
+//      (after lowercase + trim + collapsing internal whitespace).
+//      EXACT hits short-circuit — operator typed the full name, no
+//      reason to surface partial-prefix lookalikes alongside.
+//   2. PREFIX — STATE_NAMES value starts with input.  e.g. "tamil"
+//      → "Tamil Nadu" (33).  Returns ALL prefix hits.
+//   3. SUBSTRING — STATE_NAMES value contains input anywhere.  e.g.
+//      "pradesh" → Himachal/Andhra/Madhya/Arunachal/Uttar Pradesh.
+//      Only surfaced when there are no EXACT or PREFIX hits — keeps
+//      the result list short under common operator queries.
+//
+// Returns: sorted array of { stateCode, stateName, matchType }.  Sort key
+// = stateCode ascending (matches the hsn-lookup contract for reuse).
+// Empty array on no-hit (the route layer surfaces this as count:0).
+// Returns [] on nullish / non-string / empty input — never throws.
+function lookupStateByName(query) {
+  if (query == null || typeof query !== "string") return [];
+  const normalised = query.trim().toLowerCase().replace(/\s+/g, " ");
+  if (normalised === "") return [];
+  const exact = [];
+  const prefix = [];
+  const substring = [];
+  for (const [code, name] of Object.entries(STATE_NAMES)) {
+    const nameLower = name.toLowerCase();
+    if (nameLower === normalised) {
+      exact.push({ stateCode: code, stateName: name, matchType: "EXACT" });
+    } else if (nameLower.startsWith(normalised)) {
+      prefix.push({ stateCode: code, stateName: name, matchType: "PREFIX" });
+    } else if (nameLower.includes(normalised)) {
+      substring.push({ stateCode: code, stateName: name, matchType: "SUBSTRING" });
+    }
+  }
+  // Promote tiers: EXACT short-circuits (returned alone).  Otherwise PREFIX
+  // alone if any.  SUBSTRING only when both higher tiers are empty.
+  let hits;
+  if (exact.length > 0) hits = exact;
+  else if (prefix.length > 0) hits = prefix;
+  else hits = substring;
+  // Stable sort by stateCode ascending (string-compare keeps "01" before "10").
+  hits.sort((a, b) => a.stateCode.localeCompare(b.stateCode));
+  return hits;
+}
+
 module.exports = {
   validateGstinFormat,
   isValidGstin,
@@ -222,6 +271,9 @@ module.exports = {
   // Slice 14: state-code → state-name decoder for the operator-facing
   // /api/travel/utils/validate-gstin endpoint.
   stateNameFromCode,
+  // Slice 16: state-name → state-code reverse lookup for the operator-facing
+  // /api/travel/utils/state-code-lookup endpoint.
+  lookupStateByName,
   STATE_NAMES,
   // Exposed for tests + future tax-rate-master seeders.
   STATE_CODES,

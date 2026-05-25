@@ -21,6 +21,7 @@ const {
   validateGstinFormat,
   normaliseGstin,
   stateNameFromCode,
+  lookupStateByName,
 } = require("../lib/gstinValidator");
 const { lookupSacByKeyword } = require("../lib/hsnSacMapper");
 
@@ -180,6 +181,61 @@ router.get(
     }
     const normalised = raw.trim().toLowerCase();
     const results = lookupSacByKeyword(normalised);
+    return res.json({
+      query: normalised,
+      count: results.length,
+      results,
+    });
+  }
+);
+
+// ─── GET /api/travel/utils/state-code-lookup ───────────────────────────
+//
+// Slice 16 of the #902 GST & Compliance arc (PRD:
+// docs/PRD_TRAVEL_GST_COMPLIANCE.md §3.5 place-of-supply rules — operator
+// data entry needs a state-name → state-code resolver to populate
+// Contact.stateCode + Tenant.gstStateCode fields without operators having
+// to memorise the CBIC 2-digit codes).  Wraps the slice-16
+// `backend/lib/gstinValidator.js` `lookupStateByName` reverse-lookup in a
+// read-only HTTP surface.  Complements slice 14 (validate-gstin decodes
+// code→name) by providing the encode direction (name→code).
+//
+// ADMIN+MANAGER gate (same shape as the other /utils/* endpoints — low-
+// cost pure-function lookup used by the Contact + Tenant settings forms).
+//
+// Query: `?q=<name-or-prefix>`  e.g.  ?q=tamil  ?q=Maharashtra  ?q=Pradesh
+//
+// Response shape (200 always; empty result is `{results:[], count:0}` —
+// the operator UI surfaces a "no match" state rather than 404):
+//
+//   { query:   <normalised lowercase, whitespace-collapsed>,
+//     count:   <number>,
+//     results: [ { stateCode: "33",
+//                  stateName: "Tamil Nadu",
+//                  matchType: "EXACT" | "PREFIX" | "SUBSTRING" } ] }
+//
+// Match-tier semantics: EXACT (full-name match) short-circuits; PREFIX
+// (state-name starts-with input) returns all prefix hits; SUBSTRING only
+// surfaces when both higher tiers are empty.  Keeps result lists short
+// for common operator queries (e.g. "tamil" returns 1 hit, not all 38).
+//
+// Error envelope (400) only when the `q` query parameter is missing /
+// non-string / empty — same shape as hsn-lookup for consistency.
+router.get(
+  "/utils/state-code-lookup",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  (req, res) => {
+    const raw = req.query.q;
+    if (raw == null || typeof raw !== "string" || raw.trim() === "") {
+      return res.status(400).json({
+        error: "Query parameter `q` is required",
+        code: "MISSING_QUERY",
+      });
+    }
+    const normalised = raw.trim().toLowerCase().replace(/\s+/g, " ");
+    const results = lookupStateByName(normalised);
     return res.json({
       query: normalised,
       count: results.length,

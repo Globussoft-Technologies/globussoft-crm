@@ -1479,6 +1479,47 @@ const generateTravelQuotePdf = renderTravelQuotePdf;
 // glyphs for INR/USD/GBP, otherwise bare ISO code prefix.
 //
 // @returns {Promise<Buffer>}
+// ── docType taxonomy (Arc 2 #901 slice 13) ─────────────────────────
+//
+// TravelInvoice.docType (added in slice 11, `7c54451c`) classifies an
+// invoice into one of five legal-document shapes. The renderer flips
+// the header title strip + the legal-text footer line so the printed
+// document is unambiguous about its tax-legal status.
+//
+// Unknown docType values fall back to the TaxInvoice shape — defensive
+// against a future schema-enum expansion where a new value reaches the
+// renderer before the renderer learns to format it. TaxInvoice is the
+// safest fallback (it carries the strictest legal interpretation; the
+// reader sees standard tax-invoice framing rather than a misleading
+// proforma/voucher label).
+function docTypeHeader(docType) {
+  switch (docType) {
+    case "Proforma": return "PROFORMA INVOICE";
+    case "CreditNote": return "CREDIT NOTE";
+    case "DebitNote": return "DEBIT NOTE";
+    case "TravelVoucher": return "TRAVEL VOUCHER";
+    case "TaxInvoice":
+    default:
+      return "TAX INVOICE";
+  }
+}
+
+function docTypeFooter(docType) {
+  switch (docType) {
+    case "Proforma":
+      return "This is a Proforma Invoice — not a tax invoice. No GST credit allowed.";
+    case "CreditNote":
+      return "Credit Note — reduces customer payable";
+    case "DebitNote":
+      return "Debit Note — increases customer payable";
+    case "TravelVoucher":
+      return "Voucher — non-billable; document of service entitlement";
+    case "TaxInvoice":
+    default:
+      return "This is a Tax Invoice as per GST Rules";
+  }
+}
+
 function renderTravelInvoicePdf(opts) {
   // Accept either the row-with-attached-lines form or the explicit
   // { invoice, lines, tenant } form. The first is friendlier for
@@ -1498,6 +1539,12 @@ function renderTravelInvoicePdf(opts) {
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
   const accent = SUB_BRAND_ACCENT[sub] || "#111111";
   const currency = invoice.currency || "INR";
+  // docType drives both the main header title strip ("TAX INVOICE" vs
+  // "PROFORMA INVOICE" etc.) and the legal-text footer line. Nullable
+  // (back-compat with rows predating slice 11); default = TaxInvoice.
+  const docType = invoice.docType || "TaxInvoice";
+  const docHeaderTitle = docTypeHeader(docType);
+  const docFooterText = docTypeFooter(docType);
 
   // Money formatter mirrored from renderTravelQuotePdf (same currency
   // glyph set + same fallback to bare ISO code prefix).
@@ -1516,13 +1563,19 @@ function renderTravelInvoicePdf(opts) {
   doc.rect(0, 0, doc.page.width, 60).fill(accent);
   doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
     .text(brandLabel, 50, 22, { align: "left" });
-  doc.fillColor("#fff").fontSize(10).text("Invoice", 50, 42, { align: "left" });
+  // Sub-label in the colored header band mirrors the docType
+  // (e.g. "Tax Invoice" / "Proforma Invoice") — title-case for the
+  // narrow band so it reads as a label rather than a heading.
+  const bandSubLabel = docHeaderTitle
+    .toLowerCase()
+    .replace(/(^|\s)\S/g, (c) => c.toUpperCase());
+  doc.fillColor("#fff").fontSize(10).text(bandSubLabel, 50, 42, { align: "left" });
   doc.fillColor("#111").moveDown(2);
 
   // ── Invoice meta (right column) + bill-to block (left column) ─────
   const metaTop = 80;
   doc.font("Helvetica-Bold").fontSize(18).fillColor("#111")
-    .text("INVOICE", 380, metaTop, { width: 165, align: "right" });
+    .text(docHeaderTitle, 380, metaTop, { width: 165, align: "right" });
   doc.font("Helvetica").fontSize(10).fillColor("#333");
   doc.text(
     `Invoice #: ${invoice.invoiceNum || invoice.id || "—"}`,
@@ -1632,12 +1685,23 @@ function renderTravelInvoicePdf(opts) {
     50, termsY + 14, { width: 495 },
   );
 
+  // ── docType legal-text line ───────────────────────────────────────
+  // Slice 13: prints the per-docType legal disclosure ABOVE the footer
+  // band. Sits in the body of the page (not the chrome footer) so it
+  // reads as a legal-status declaration tied to the document, not as a
+  // page-margin annotation.
+  doc.moveDown(1);
+  doc.font("Helvetica-Oblique").fontSize(9).fillColor("#444").text(
+    docFooterText,
+    50, doc.y, { width: 495 },
+  );
+
   // ── Footer band ───────────────────────────────────────────────────
   const footerY = doc.page.height - doc.page.margins.bottom - 24;
   doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.4).strokeColor("#bbb").stroke();
   const tenantLine = tenant && tenant.name ? `${tenant.name} — ` : "";
   doc.font("Helvetica").fontSize(8).fillColor("#777").text(
-    `${tenantLine}${brandLabel} — Invoice #${invoice.invoiceNum || invoice.id || "?"}.`,
+    `${tenantLine}${brandLabel} — ${docHeaderTitle} #${invoice.invoiceNum || invoice.id || "?"}.`,
     50, footerY + 6, { width: doc.page.width - 100, align: "center" },
   );
 

@@ -225,3 +225,342 @@ describe('<Privacy /> — Clinical / Medical Records retention (#576)', () => {
     expect(screen.getByText(/Digital Personal Data Protection Act 2023/i)).toBeInTheDocument();
   });
 });
+
+// ── Extension: Retention policy CRUD, Data Export, RBAC, states ──
+//
+// Augments the original #584 modal + #576 clinical-retention pins with
+// coverage of the rest of Privacy.jsx's surface:
+//   - Retention policies list rendered on mount (fetchApi GET wires through)
+//   - Server-returned policies merge over defaults (#389 — coerce zero to default)
+//   - Save Policies fires fetchApi PUT with the serialized policy array
+//   - Edit retain-days input updates state before save (PUT body picks it up)
+//   - Edit "Active" checkbox toggles isActive in the PUT body
+//   - Export My Data fires POST /api/gdpr/export/me and triggers download
+//   - Export failure surfaces notify.error
+//   - RBAC: USER role → retention-policies section NOT rendered + no GET fired
+//   - Loading state: "Loading policies..." copy renders before fetch resolves
+//   - Error state: fetchApi reject falls back to defaults (no crash; defaults visible)
+//
+// Vitest pattern compliance:
+//   - stable mock-object refs at module scope (notifyError, notifySuccess shared)
+//   - getAllByText / scoped within(getByTestId(...)) for ambiguity (labels appear
+//     both in table chrome and may collide with copy elsewhere)
+//   - run from frontend/ via `npx vitest run src/__tests__/Privacy.test.jsx`
+describe('<Privacy /> — Retention policy CRUD + data export + RBAC + states', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockResolvedValue([]);
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+  });
+
+  it('admin: retention policy list renders the 5 CRM messaging entities by label', async () => {
+    renderPrivacy();
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/gdpr/retention-policies');
+    });
+    // All 5 CRM messaging entity labels are visible. Defaults-only path
+    // because mock returns [].
+    await waitFor(() => {
+      expect(screen.getByText('Email Messages')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Call Logs')).toBeInTheDocument();
+    expect(screen.getByText('Activities')).toBeInTheDocument();
+    expect(screen.getByText('SMS Messages')).toBeInTheDocument();
+    expect(screen.getByText('WhatsApp Messages')).toBeInTheDocument();
+  });
+
+  it('admin: server-returned retainDays overrides defaults (positive values applied)', async () => {
+    // First call (mount) returns persisted policies overriding defaults.
+    fetchApiMock.mockResolvedValueOnce([
+      { entity: 'EmailMessage', retainDays: 90, isActive: true },
+      { entity: 'CallLog', retainDays: 30, isActive: false },
+    ]);
+
+    renderPrivacy();
+    await waitFor(() => {
+      expect(screen.getByText('Email Messages')).toBeInTheDocument();
+    });
+
+    const numberInputs = document.querySelectorAll('input[type="number"]');
+    const values = Array.from(numberInputs).map((i) => Number(i.value));
+    // EmailMessage = 90, CallLog = 30, rest default (1095, 365, 365).
+    expect(values).toContain(90);
+    expect(values).toContain(30);
+  });
+
+  it('admin: zero / NaN / empty retainDays from server falls back to defaults (#389 coercion)', async () => {
+    // Regression for #389: server returning retainDays === 0 / "" / null
+    // previously rendered as blank input. Coercion must restore defaults.
+    fetchApiMock.mockResolvedValueOnce([
+      { entity: 'EmailMessage', retainDays: 0, isActive: false },
+      { entity: 'CallLog', retainDays: '', isActive: false },
+      { entity: 'Activity', retainDays: null, isActive: false },
+    ]);
+
+    renderPrivacy();
+    await waitFor(() => {
+      expect(screen.getByText('Email Messages')).toBeInTheDocument();
+    });
+
+    const numberInputs = document.querySelectorAll('input[type="number"]');
+    const values = Array.from(numberInputs).map((i) => Number(i.value));
+    // EmailMessage default 730, CallLog default 365, Activity default 1095.
+    expect(values).toContain(730);
+    expect(values).toContain(365);
+    expect(values).toContain(1095);
+    // No blank or zero input slipped through.
+    expect(values.every((v) => v > 0)).toBe(true);
+  });
+
+  it('admin: clicking Save Policies fires fetchApi PUT with serialized retention array', async () => {
+    const user = userEvent.setup();
+    renderPrivacy();
+    await waitFor(() => {
+      expect(screen.getByText('Email Messages')).toBeInTheDocument();
+    });
+
+    // Save Policies button. fetchApi for PUT resolves successfully.
+    fetchApiMock.mockResolvedValueOnce({ ok: true });
+    await user.click(screen.getByRole('button', { name: /Save Policies/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/gdpr/retention-policies',
+        expect.objectContaining({
+          method: 'PUT',
+          body: expect.any(String),
+        }),
+      );
+    });
+
+    // Body is a JSON-stringified array of {entity, retainDays, isActive}.
+    const putCall = fetchApiMock.mock.calls.find(
+      (c) => c[0] === '/api/gdpr/retention-policies' && c[1]?.method === 'PUT',
+    );
+    expect(putCall).toBeDefined();
+    const parsed = JSON.parse(putCall[1].body);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBe(5); // 5 CRM messaging entities
+    expect(parsed[0]).toMatchObject({
+      entity: expect.any(String),
+      retainDays: expect.any(Number),
+      isActive: expect.any(Boolean),
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Retention policy saved');
+  });
+
+  it('admin: editing retainDays input then saving sends the new value in the PUT body', async () => {
+    const user = userEvent.setup();
+    renderPrivacy();
+    await waitFor(() => {
+      expect(screen.getByText('Email Messages')).toBeInTheDocument();
+    });
+
+    // First number input corresponds to the first row (EmailMessage).
+    const numberInputs = document.querySelectorAll('input[type="number"]');
+    expect(numberInputs.length).toBeGreaterThan(0);
+    const emailInput = numberInputs[0];
+
+    fireEvent.change(emailInput, { target: { value: '180' } });
+    expect(emailInput.value).toBe('180');
+
+    fetchApiMock.mockResolvedValueOnce({ ok: true });
+    await user.click(screen.getByRole('button', { name: /Save Policies/i }));
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        (c) => c[0] === '/api/gdpr/retention-policies' && c[1]?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      const parsed = JSON.parse(putCall[1].body);
+      // EmailMessage is the first CRM entity; updated retainDays is 180.
+      const email = parsed.find((p) => p.entity === 'EmailMessage');
+      expect(email).toBeDefined();
+      expect(email.retainDays).toBe(180);
+    });
+  });
+
+  it('admin: toggling Active checkbox is persisted in the PUT body isActive flag', async () => {
+    const user = userEvent.setup();
+    renderPrivacy();
+    await waitFor(() => {
+      expect(screen.getByText('Email Messages')).toBeInTheDocument();
+    });
+
+    // Find checkboxes inside the retention table. First one toggles
+    // EmailMessage row's isActive flag.
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+    expect(checkboxes.length).toBeGreaterThan(0);
+    const firstCheckbox = checkboxes[0];
+    expect(firstCheckbox.checked).toBe(false);
+
+    fireEvent.click(firstCheckbox);
+    expect(firstCheckbox.checked).toBe(true);
+
+    fetchApiMock.mockResolvedValueOnce({ ok: true });
+    await user.click(screen.getByRole('button', { name: /Save Policies/i }));
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        (c) => c[0] === '/api/gdpr/retention-policies' && c[1]?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      const parsed = JSON.parse(putCall[1].body);
+      // At least one entity now has isActive === true.
+      expect(parsed.some((p) => p.isActive === true)).toBe(true);
+    });
+  });
+
+  it('admin: save failure surfaces notify.error and does NOT toast success', async () => {
+    const user = userEvent.setup();
+    renderPrivacy();
+    await waitFor(() => {
+      expect(screen.getByText('Email Messages')).toBeInTheDocument();
+    });
+
+    fetchApiMock.mockRejectedValueOnce(new Error('boom'));
+    await user.click(screen.getByRole('button', { name: /Save Policies/i }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to save policies'),
+      );
+    });
+    expect(notifySuccess).not.toHaveBeenCalled();
+  });
+
+  it('Export My Data: clicking the button fires POST /api/gdpr/export/me with bearer token', async () => {
+    const user = userEvent.setup();
+    // Mock global fetch (the export uses raw fetch, not fetchApi, because it
+    // needs the raw blob response).
+    const blob = new Blob(['{"deals":[]}'], { type: 'application/json' });
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      blob: () => Promise.resolve(blob),
+    });
+    // URL.createObjectURL doesn't exist in jsdom by default.
+    const origCreate = window.URL.createObjectURL;
+    const origRevoke = window.URL.revokeObjectURL;
+    window.URL.createObjectURL = vi.fn(() => 'blob:fake-url');
+    window.URL.revokeObjectURL = vi.fn();
+
+    renderPrivacy();
+    await user.click(
+      screen.getByRole('button', { name: /Download My Data \(JSON\)/i }),
+    );
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/gdpr/export/me',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            Authorization: 'Bearer test-token',
+            'Content-Type': 'application/json',
+          }),
+        }),
+      );
+    });
+
+    // Success affordance appears.
+    await waitFor(() => {
+      expect(screen.getByText(/Export downloaded/i)).toBeInTheDocument();
+    });
+
+    fetchSpy.mockRestore();
+    window.URL.createObjectURL = origCreate;
+    window.URL.revokeObjectURL = origRevoke;
+  });
+
+  it('Export My Data: !res.ok response triggers notify.error', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      blob: () => Promise.resolve(new Blob([])),
+    });
+
+    renderPrivacy();
+    await user.click(
+      screen.getByRole('button', { name: /Download My Data \(JSON\)/i }),
+    );
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to export data'),
+      );
+    });
+
+    fetchSpy.mockRestore();
+  });
+
+  it('RBAC: USER role does NOT render the retention-policies section and skips the GET', async () => {
+    const userRoleUser = { ...TEST_USER, role: 'USER' };
+    renderPrivacy(userRoleUser);
+
+    // useEffect early-exits when !isAdmin, so the section header is absent.
+    // (Loading must be off too — `setPoliciesLoading(false)` in the early branch.)
+    await waitFor(() => {
+      expect(screen.queryByText('Data Retention Policies')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('Loading policies...')).not.toBeInTheDocument();
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/gdpr/retention-policies');
+
+    // Export My Data + Account Deletion sections remain (user-self-service).
+    expect(
+      screen.getByRole('button', { name: /Download My Data \(JSON\)/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Request Account Deletion/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('RBAC: ADMIN role renders the retention-policies section + Save button', async () => {
+    renderPrivacy(); // TEST_USER is ADMIN by default
+    await waitFor(() => {
+      expect(screen.getByText('Data Retention Policies')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Save Policies/i })).toBeInTheDocument();
+  });
+
+  it('loading state: "Loading policies..." copy renders before the GET resolves', async () => {
+    // Force fetchApi to a never-resolving promise so the loading state lingers.
+    let resolver;
+    const pending = new Promise((res) => {
+      resolver = res;
+    });
+    fetchApiMock.mockReturnValueOnce(pending);
+
+    renderPrivacy();
+
+    // Loading copy is visible while fetch is in-flight.
+    await waitFor(() => {
+      expect(screen.getByText(/Loading policies\.\.\./i)).toBeInTheDocument();
+    });
+
+    // Resolve so the test exits cleanly.
+    resolver([]);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading policies\.\.\./i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('error state: fetchApi rejection falls back to defaults (no crash, defaults rendered)', async () => {
+    // Mount-time GET rejects. SUT catches + falls back to VISIBLE_RETENTION_ENTITIES
+    // defaults; the table still renders.
+    fetchApiMock.mockRejectedValueOnce(new Error('network down'));
+
+    renderPrivacy();
+
+    await waitFor(() => {
+      expect(screen.getByText('Email Messages')).toBeInTheDocument();
+    });
+    // Defaults visible — 730 for EmailMessage among others.
+    const numberInputs = document.querySelectorAll('input[type="number"]');
+    const values = Array.from(numberInputs).map((i) => Number(i.value));
+    expect(values).toContain(730);
+    expect(values).toContain(1095);
+    // No global error toast — the catch is silent (console.error only).
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+});

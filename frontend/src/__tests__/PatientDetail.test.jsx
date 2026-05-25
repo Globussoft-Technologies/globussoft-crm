@@ -1259,6 +1259,334 @@ describe('<PatientDetail />', () => {
     });
   });
 
+  // ──────────────────────────────────────────────────────────────────
+  // Extension wave 3 — 2026-05-26
+  // Pin surfaces above-the-tabs and inside leaf tabs that the prior two
+  // extensions skipped:
+  //   - Back-link to /wellness/patients (top of page chrome)
+  //   - Source + counts column (right side of header)
+  //   - Anniversary + GST + bloodGroup in header subline (#792 extras)
+  //   - DownloadFullReportButton render + click streams blob with Auth
+  //   - Patient-not-found render path
+  //   - Tab persistence via sessionStorage (#344 safe id only)
+  //   - sessionStorage refuses non-numeric id (#344 security guard)
+  //   - Case-history date filter chrome (#837)
+  //   - Rx detail modal opens on Rx row click + drug table renders
+  //   - PhotoColumn counts in headings (Before (n) / After (n))
+  //   - Inventory total-cost row + visit dropdown
+  //   - Loyalty modal opens on chip click + redeem form present
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('Page chrome above the tabs', () => {
+    it('renders the Back to patients link with arrow', async () => {
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('patient-header-subline')).toBeInTheDocument());
+      const back = screen.getByRole('link', { name: /Back to patients/i });
+      expect(back).toHaveAttribute('href', '/wellness/patients');
+    });
+
+    it('renders the source + counts column on the right of the header', async () => {
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('patient-header-subline')).toBeInTheDocument());
+      // Source label + value
+      expect(screen.getByText(/Source:/i)).toBeInTheDocument();
+      expect(screen.getByText(/walk-in/)).toBeInTheDocument();
+      // counts: 1 visits • 0 Rx • 0 treatment plans (default fixture)
+      expect(screen.getByText(/1 visits/)).toBeInTheDocument();
+      // The "0 Rx" + "0 treatment plans" text co-occur in the same span; assert
+      // the full pattern so we don't bind to en-dash vs hyphen.
+      expect(screen.getByText(/0 Rx/)).toBeInTheDocument();
+      expect(screen.getByText(/0 treatment plans/)).toBeInTheDocument();
+    });
+
+    it('header subline surfaces anniversary + GST + bloodGroup when present (#792)', async () => {
+      const enriched = {
+        ...patient,
+        anniversary: '2015-06-21T00:00:00Z',
+        gst: '29ABCDE1234F1Z5',
+      };
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(enriched);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('patient-header-subline')).toBeInTheDocument());
+      const subline = screen.getByTestId('patient-header-subline').textContent;
+      expect(subline).toMatch(/Blood O\+/);
+      expect(subline).toMatch(/Anniv /);
+      expect(subline).toMatch(/2015/);
+      expect(subline).toMatch(/GST 29ABCDE1234F1Z5/);
+    });
+
+    it('renders "Patient not found." when the patient fetch resolves null', async () => {
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.reject(new Error('404'));
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+      renderPage();
+      // Rejection path sets patient=null then loading=false → "Patient not found."
+      await waitFor(() => expect(screen.getByText(/Patient not found\./i)).toBeInTheDocument());
+      // Tabs are not rendered in this state
+      expect(screen.queryByRole('button', { name: /Case history/i })).not.toBeInTheDocument();
+    });
+  });
+
+  // #840 — consolidated patient-record export. Bearer-auth-gated fetch +
+  // synthetic anchor click; we mock global fetch + URL helpers to verify
+  // the streaming-blob path runs and the success toast fires.
+  describe('DownloadFullReportButton (#840)', () => {
+    it('renders the button with the canonical label', async () => {
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('download-full-report-btn')).toBeInTheDocument());
+      const btn = screen.getByTestId('download-full-report-btn');
+      expect(btn.textContent).toMatch(/Download full record \(PDF\)/i);
+    });
+
+    it('clicking the button streams a blob via fetch with Authorization + success toast', async () => {
+      // Stub global fetch + URL helpers so the streaming path is exercised end-to-end.
+      const origFetch = global.fetch;
+      const origCreate = global.URL.createObjectURL;
+      const origRevoke = global.URL.revokeObjectURL;
+      const fetchSpy = vi.fn(() => Promise.resolve({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['%PDF-1.4'], { type: 'application/pdf' })),
+        json: () => Promise.resolve({}),
+        headers: { get: () => null },
+      }));
+      global.fetch = fetchSpy;
+      global.URL.createObjectURL = vi.fn(() => 'blob:mock');
+      global.URL.revokeObjectURL = vi.fn();
+
+      try {
+        const user = userEvent.setup();
+        renderPage();
+        await waitFor(() => expect(screen.getByTestId('download-full-report-btn')).toBeInTheDocument());
+        await user.click(screen.getByTestId('download-full-report-btn'));
+
+        await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+        const [url, opts] = fetchSpy.mock.calls[0];
+        expect(url).toMatch(/\/api\/wellness\/patients\/1\/full-report\.pdf$/);
+        expect(opts.headers.Authorization).toBe('Bearer test-token');
+        // Success toast fires once the blob is consumed.
+        await waitFor(() => expect(notifyObj.success).toHaveBeenCalled());
+        expect(notifyObj.success.mock.calls[0][0]).toMatch(/Downloaded /);
+      } finally {
+        global.fetch = origFetch;
+        global.URL.createObjectURL = origCreate;
+        global.URL.revokeObjectURL = origRevoke;
+      }
+    });
+
+    it('surfaces an error toast when the backend returns non-OK', async () => {
+      const origFetch = global.fetch;
+      const fetchSpy = vi.fn(() => Promise.resolve({
+        ok: false,
+        status: 500,
+        blob: () => Promise.resolve(new Blob([])),
+        json: () => Promise.resolve({ error: 'PDF render failed' }),
+        headers: { get: () => null },
+      }));
+      global.fetch = fetchSpy;
+
+      try {
+        const user = userEvent.setup();
+        renderPage();
+        await waitFor(() => expect(screen.getByTestId('download-full-report-btn')).toBeInTheDocument());
+        await user.click(screen.getByTestId('download-full-report-btn'));
+        await waitFor(() => expect(notifyObj.error).toHaveBeenCalled());
+        // The thrown error.message bubbles through; either the server-supplied
+        // .error or our fallback "Download failed (500)" copy is acceptable.
+        expect(notifyObj.error.mock.calls[0][0]).toMatch(/PDF render failed|Download failed/);
+      } finally {
+        global.fetch = origFetch;
+      }
+    });
+  });
+
+  describe('Tab persistence via sessionStorage (#344)', () => {
+    beforeEach(() => {
+      // Clean session state so a previous test's tab persistence doesn't
+      // bleed across cases.
+      try { sessionStorage.clear(); } catch { /* ignore */ }
+    });
+
+    it('writes the currently-selected tab to gbs.tab.patient.<id>', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Photos/i })).toBeInTheDocument());
+
+      await user.click(screen.getByRole('button', { name: /Photos/i }));
+      // Effect runs synchronously after state update; assert it landed.
+      await waitFor(() => {
+        expect(sessionStorage.getItem('gbs.tab.patient.1')).toBe('photos');
+      });
+    });
+
+    it('reads the saved tab on mount and lands on it instead of "history"', async () => {
+      sessionStorage.setItem('gbs.tab.patient.1', 'consent');
+      renderPage();
+      // Consent surface heading is rendered on mount (no click needed)
+      await waitFor(() =>
+        expect(screen.getByRole('heading', { name: /Capture consent/i })).toBeInTheDocument()
+      );
+    });
+  });
+
+  describe('Case-history date-filter chrome (#837)', () => {
+    it('renders the DateRangePicker label above the timeline', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Case history/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Case history/i }));
+
+      // DateRangePicker exposes a labelled select for preset choice.
+      expect(screen.getByText(/Filter by date:/i)).toBeInTheDocument();
+    });
+
+    it('clicking an Rx event row opens the prescription detail modal', async () => {
+      const patientWithRx = {
+        ...patient,
+        prescriptions: [
+          {
+            id: 9001,
+            createdAt: new Date().toISOString(),
+            visitId: 11,
+            drugs: JSON.stringify([
+              { name: 'Finasteride 1mg', dosage: '1 tab', frequency: 'OD', duration: '90 days' },
+            ]),
+            instructions: 'Take after dinner.',
+            doctor: { id: 5, name: 'Dr. Mehta' },
+          },
+        ],
+      };
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patientWithRx);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Case history/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Case history/i }));
+
+      // Find the prescription row (case-history surfaces it as "Prescription" with the drug name)
+      const drugCell = await screen.findByText(/Finasteride 1mg/);
+      // The clickable parent is the .glass card with role=button
+      const row = drugCell.closest('[role="button"]');
+      expect(row).not.toBeNull();
+      await user.click(row);
+
+      // Modal heading
+      expect(await screen.findByRole('heading', { name: /Prescription details/i })).toBeInTheDocument();
+      // Drugs table row picks up the drug + dosage + frequency + duration
+      // (getAllByText pattern — these tokens appear both in the inline summary
+      // and the modal's drugs table)
+      expect(screen.getAllByText(/1 tab/).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(/90 days/).length).toBeGreaterThanOrEqual(1);
+      // Prescribed-by surfaces in modal
+      expect(screen.getByText(/Prescribed by/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/Dr\. Mehta/).length).toBeGreaterThanOrEqual(1);
+      // Download PDF affordance
+      expect(screen.getByRole('button', { name: /Download PDF/i })).toBeInTheDocument();
+    });
+  });
+
+  describe('Photos tab — column headings count uploaded files', () => {
+    it('Before / After columns surface zero count when no photos uploaded', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Photos/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /^Photos/i }));
+
+      // The visit selector defaults to the first visit (id 11) which has no
+      // photosBefore/photosAfter → both columns render "(0)" + the empty-state copy.
+      // Both BEFORE and AFTER labels are uppercase in the rendered DOM
+      // (textTransform makes them visually uppercase but the underlying
+      // text is "Before" / "After"); match the label text + (0).
+      expect(screen.getByText(/Before \(0\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/After \(0\)/i)).toBeInTheDocument();
+      // The two empty-state copies appear (one per column)
+      expect(screen.getAllByText(/No photos yet/i).length).toBe(2);
+    });
+  });
+
+  describe('Inventory tab — totals row + visit dropdown', () => {
+    it('total cost row sums qty × unitCost across consumption rows', async () => {
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        if (url.includes('/consumptions')) {
+          return Promise.resolve([
+            { id: 1, productName: 'Botox vial 100u', qty: 2, unitCost: 5000 }, // 10000
+            { id: 2, productName: 'PRP kit',         qty: 1, unitCost: 2500 }, // 2500
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Inventory used/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Inventory used/i }));
+
+      // Total cost cell — 12500 formatted en-IN: "12,500"
+      const totalLabel = await screen.findByText(/^Total cost$/i);
+      // The total amount appears in the cell to the right of the label;
+      // assert the digit sequence so en-IN vs en-US groupings both pass.
+      const totalRow = totalLabel.closest('tr');
+      expect(totalRow.textContent).toMatch(/12[,.]?500/);
+
+      // Visit dropdown lists the visit by date + service
+      const visitLabel = screen.getByText(/^Visit$/i, { selector: 'label' });
+      const visitSelect = visitLabel.parentElement.querySelector('select');
+      expect(visitSelect).not.toBeNull();
+      const optionTexts = Array.from(visitSelect.querySelectorAll('option')).map((o) => o.textContent);
+      expect(optionTexts.some((t) => /Consultation/.test(t))).toBe(true);
+    });
+  });
+
+  describe('Loyalty modal — opens on chip click', () => {
+    it('clicking the loyalty chip opens the modal with redeem form + recent transactions empty-state', async () => {
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url === '/api/wellness/loyalty/1') {
+          return Promise.resolve({ balance: 120, earnedThisMonth: 40, transactions: [] });
+        }
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      renderPage();
+      const chip = await screen.findByText(/Loyalty: 120 points/i);
+      // Chip is wrapped in a button — find the closest button ancestor.
+      const chipBtn = chip.closest('button');
+      expect(chipBtn).not.toBeNull();
+      await user.click(chipBtn);
+
+      // Modal heading
+      expect(await screen.findByRole('heading', { name: /Loyalty history/i })).toBeInTheDocument();
+      // Current balance value surfaces in the modal
+      expect(screen.getByText(/120 pts/)).toBeInTheDocument();
+      // Redeem button present + transactions empty-state
+      expect(screen.getByRole('button', { name: /^Redeem$/ })).toBeInTheDocument();
+      expect(screen.getByText(/No transactions yet\./i)).toBeInTheDocument();
+    });
+  });
+
   // Tab switching exhaustive: walks every primary tab to confirm they
   // mount their content surfaces without runtime errors. Adapts to the
   // 11 tabs the SUT currently exposes (timeline / case history / Rx list

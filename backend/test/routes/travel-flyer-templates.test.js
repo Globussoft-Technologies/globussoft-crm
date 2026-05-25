@@ -32,6 +32,15 @@
  *   - DELETE /api/travel/flyer-templates/:id
  *       ADMIN happy path → 204 + audit row written before prisma.delete
  *       MANAGER → 403 RBAC_DENIED (route is ADMIN-only on delete)
+ *   - POST   /api/travel/flyer-templates/:id/duplicate (slice 6)
+ *       happy path with no overrides → 201, name=<source> (copy), inherits shape
+ *       body override name → uses override
+ *       body override subBrand → uses override (validates against assertValidSubBrand)
+ *       invalid subBrand override → 400 INVALID_SUB_BRAND
+ *       cross-tenant source → 404 TEMPLATE_NOT_FOUND
+ *       MANAGER restricted, source.subBrand not in access set → 403 SUB_BRAND_DENIED
+ *       USER role → 403 RBAC_DENIED (route is ADMIN/MANAGER)
+ *       source.isActive=false still duplicates (no INVALID_STATE gate)
  *
  * Pattern mirrors backend/test/routes/travel-commission-profiles.test.js —
  * patch the prisma singleton with vi.fn() shapes BEFORE requiring the
@@ -496,5 +505,185 @@ describe('DELETE /api/travel/flyer-templates/:id (ADMIN-only hard delete)', () =
     expect(res.body).toMatchObject({ code: 'RBAC_DENIED' });
     expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
     expect(prisma.travelFlyerTemplate.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/travel/flyer-templates/:id/duplicate (slice 6)', () => {
+  const sourceRow = {
+    id: 11,
+    tenantId: 1,
+    name: 'Summer Umrah 2026',
+    paletteJson: JSON.stringify(validPalette),
+    layoutJson: JSON.stringify(validLayout),
+    assetsJson: JSON.stringify(validAssets),
+    subBrand: 'rfu',
+    isActive: true,
+    notes: 'Brand-approved palette per Yasin 2026-04-15',
+  };
+
+  test('happy path with no overrides → 201, name=<source> (copy), inherits shape', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+    prisma.travelFlyerTemplate.create.mockImplementation(async (args) => ({
+      id: 99,
+      ...args.data,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/11/duplicate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      id: 99,
+      name: 'Summer Umrah 2026 (copy)',
+      subBrand: 'rfu',
+      isActive: true,
+    });
+
+    const callArgs = prisma.travelFlyerTemplate.create.mock.calls[0][0];
+    expect(callArgs.data).toMatchObject({
+      tenantId: 1,
+      name: 'Summer Umrah 2026 (copy)',
+      paletteJson: sourceRow.paletteJson,
+      layoutJson: sourceRow.layoutJson,
+      assetsJson: sourceRow.assetsJson,
+      subBrand: 'rfu',
+      isActive: true,
+      notes: 'Brand-approved palette per Yasin 2026-04-15',
+    });
+
+    // Audit row: action=TRAVEL_FLYER_TEMPLATE_DUPLICATED + sourceId + newId
+    expect(prisma.auditLog.create).toHaveBeenCalled();
+    const auditArgs = prisma.auditLog.create.mock.calls[0][0];
+    expect(auditArgs.data).toMatchObject({
+      entity: 'TravelFlyerTemplate',
+      action: 'TRAVEL_FLYER_TEMPLATE_DUPLICATED',
+      entityId: 99,
+      userId: 7,
+      tenantId: 1,
+    });
+    const detailsParsed = typeof auditArgs.data.details === 'string'
+      ? JSON.parse(auditArgs.data.details)
+      : auditArgs.data.details;
+    expect(detailsParsed).toMatchObject({ sourceId: 11, newId: 99 });
+  });
+
+  test('body override name → uses override (not the "(copy)" suffix)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+    prisma.travelFlyerTemplate.create.mockImplementation(async (args) => ({
+      id: 100,
+      ...args.data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/11/duplicate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'Diwali Palette Variant' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 100, name: 'Diwali Palette Variant' });
+    const callArgs = prisma.travelFlyerTemplate.create.mock.calls[0][0];
+    expect(callArgs.data.name).toBe('Diwali Palette Variant');
+  });
+
+  test('body override subBrand → uses override (validates against assertValidSubBrand)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+    prisma.travelFlyerTemplate.create.mockImplementation(async (args) => ({
+      id: 101,
+      ...args.data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/11/duplicate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ subBrand: 'tmc' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 101, subBrand: 'tmc' });
+    const callArgs = prisma.travelFlyerTemplate.create.mock.calls[0][0];
+    expect(callArgs.data.subBrand).toBe('tmc');
+    // Name still inherits the "(copy)" suffix from source
+    expect(callArgs.data.name).toBe('Summer Umrah 2026 (copy)');
+  });
+
+  test('invalid subBrand override → 400 INVALID_SUB_BRAND', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/11/duplicate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ subBrand: 'not-a-real-brand' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_SUB_BRAND' });
+    expect(prisma.travelFlyerTemplate.create).not.toHaveBeenCalled();
+  });
+
+  test('cross-tenant source returns 404 TEMPLATE_NOT_FOUND', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/9999/duplicate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'TEMPLATE_NOT_FOUND' });
+    expect(prisma.travelFlyerTemplate.create).not.toHaveBeenCalled();
+  });
+
+  test('MANAGER restricted to ["tmc"], source.subBrand="rfu" → 403 SUB_BRAND_DENIED', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['tmc']),
+    });
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/11/duplicate')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'SUB_BRAND_DENIED' });
+    expect(prisma.travelFlyerTemplate.create).not.toHaveBeenCalled();
+  });
+
+  test('USER role → 403 RBAC_DENIED (route is ADMIN/MANAGER only)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/11/duplicate')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'RBAC_DENIED' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelFlyerTemplate.create).not.toHaveBeenCalled();
+  });
+
+  test('source.isActive=false still duplicates fine (no INVALID_STATE gate; new copy is active)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue({
+      ...sourceRow,
+      isActive: false,
+    });
+    prisma.travelFlyerTemplate.create.mockImplementation(async (args) => ({
+      id: 102,
+      ...args.data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/11/duplicate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(201);
+    // Source was archived; the new copy resets isActive=true so it
+    // enters the operator's active list.
+    expect(res.body.isActive).toBe(true);
+    const callArgs = prisma.travelFlyerTemplate.create.mock.calls[0][0];
+    expect(callArgs.data.isActive).toBe(true);
   });
 });

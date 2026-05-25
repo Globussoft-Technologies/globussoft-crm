@@ -21,6 +21,7 @@
  *   GET    /api/travel/flyer-templates                — list (tenant + sub-brand scoped)
  *   GET    /api/travel/flyer-templates/:id            — fetch one
  *   POST   /api/travel/flyer-templates                — ADMIN/MANAGER create
+ *   POST   /api/travel/flyer-templates/:id/duplicate  — ADMIN/MANAGER clone (slice 6)
  *   PUT    /api/travel/flyer-templates/:id            — ADMIN/MANAGER partial update
  *   DELETE /api/travel/flyer-templates/:id            — ADMIN-only hard delete
  *
@@ -480,6 +481,124 @@ router.put(
       }
       console.error("[travel-flyer-templates] update error:", e.message);
       res.status(500).json({ error: "Failed to update flyer template" });
+    }
+  },
+);
+
+// POST /api/travel/flyer-templates/:id/duplicate — ADMIN/MANAGER only.
+//
+// Clones an existing TravelFlyerTemplate row into a fresh row under the
+// same tenant. Optional body fields { name, subBrand } let the operator
+// override the copy's name + sub-brand assignment (e.g. cloning a TMC
+// flyer across to RFU, or naming the variant "Diwali palette swap").
+//
+// Source row is looked up tenant-scoped + sub-brand-scoped (the same
+// guard as GET/PUT/DELETE), so cross-tenant lookups yield 404 and
+// cross-sub-brand reads yield 403. The duplicate inherits paletteJson /
+// layoutJson / assetsJson / notes verbatim from the source — operators
+// use duplicate as a starting point for variations (seasonal palette
+// swap, A/B test variant), so the full shape comes with it. isActive
+// is reset to true regardless of source state so the new copy enters
+// the active list cleanly; source.isActive=false still duplicates fine
+// (no INVALID_STATE gate — archiving a template should not block
+// authoring a variant of it).
+//
+// Name suffix convention: when no `name` override is supplied, the
+// copy is named `"<source.name> (copy)"`. Operators routinely duplicate
+// then immediately rename in the editor, so the suffix is a hint not a
+// commitment; pin the verbatim string here so consumers (tests, UI
+// chrome) can rely on it.
+router.post(
+  "/flyer-templates/:id/duplicate",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const source = await prisma.travelFlyerTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!source) {
+        return res.status(404).json({
+          error: "Flyer template not found",
+          code: "TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (source.subBrand && !canAccessSubBrand(allowed, source.subBrand)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      const { name: nameOverride, subBrand: subBrandOverride } = req.body || {};
+
+      let targetSubBrand = source.subBrand;
+      if (subBrandOverride !== undefined) {
+        if (subBrandOverride === null || subBrandOverride === "") {
+          targetSubBrand = null;
+        } else {
+          assertValidSubBrand(subBrandOverride);
+          if (!canAccessSubBrand(allowed, subBrandOverride)) {
+            return res.status(403).json({
+              error: "Sub-brand access denied",
+              code: "SUB_BRAND_DENIED",
+            });
+          }
+          targetSubBrand = String(subBrandOverride);
+        }
+      }
+
+      let targetName;
+      if (nameOverride !== undefined && nameOverride !== null && nameOverride !== "") {
+        if (typeof nameOverride !== "string" || !nameOverride.trim()) {
+          return res.status(400).json({
+            error: "name must be non-empty",
+            code: "MISSING_FIELDS",
+          });
+        }
+        targetName = nameOverride.trim();
+      } else {
+        targetName = `${source.name} (copy)`;
+      }
+
+      const created = await prisma.travelFlyerTemplate.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          name: targetName,
+          paletteJson: source.paletteJson,
+          layoutJson: source.layoutJson,
+          assetsJson: source.assetsJson,
+          subBrand: targetSubBrand,
+          isActive: true,
+          notes: source.notes,
+        },
+      });
+
+      await writeAudit(
+        "TravelFlyerTemplate",
+        "TRAVEL_FLYER_TEMPLATE_DUPLICATED",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          sourceId: source.id,
+          newId: created.id,
+          subBrand: created.subBrand,
+        },
+      );
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] duplicate error:", e.message);
+      res.status(500).json({ error: "Failed to duplicate flyer template" });
     }
   },
 );

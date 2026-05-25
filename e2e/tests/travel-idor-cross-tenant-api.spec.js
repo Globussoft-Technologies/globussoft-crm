@@ -2315,3 +2315,292 @@ test.describe("IDOR #919 slice 10 — quote + invoice cross-resource probes", ()
     ).toContain(res.status());
   });
 });
+
+test.describe("IDOR #919 slice 11 — webcheckin + trips + visa cross-resource probes", () => {
+  // Slices 8 + 9 + 10 covered commission-profile, itinerary-item,
+  // flyer-template, supplier, quote and invoice sub-resources. Slice 11
+  // closes three remaining Travel-vertical surfaces that landed across
+  // recent waves:
+  //
+  //   • WebCheckin (/api/travel/webcheckins/:id + sub-routes) — flight
+  //     check-in tracking; a missed guard would let cross-tenant
+  //     attackers GET passenger details, mutate status, upload bogus
+  //     boarding passes, mark deliveries, or DELETE check-in rows.
+  //
+  //   • TMC Trips (/api/travel/trips/:id + ops-dashboard) — TmcTrip
+  //     aggregate; a missed guard would let cross-tenant attackers
+  //     GET / PATCH / DELETE trip rows or read the operational rollup
+  //     (revenue, participant counts, document status) of another
+  //     tenant's trips. NOTE: routes/travel_trips.js mounts the layered
+  //     guards `requireTravelTenant` BEFORE `requireTmcAccess` (see
+  //     slice 2 guard-order pin), so cross-vertical attackers hit 403
+  //     WRONG_VERTICAL first — same shape as the slice-1 base pattern.
+  //
+  //   • Visa applications (/api/travel/visa/applications + /:id +
+  //     /:id/status-history) — Phase 3 Visa Sure work surface. A missed
+  //     guard would let cross-tenant attackers GET application rows,
+  //     read status-history audit trails, or POST applications under a
+  //     contactId belonging to another tenant.
+  //
+  // Every probe asserts [403, 404].toContain(status). Cross-vertical
+  // routes return 403 WRONG_VERTICAL via requireTravelTenant; if a
+  // future refactor demotes that to a post-vertical-guard 404 from the
+  // findFirst({ where: { id, tenantId } }) miss, the [403, 404] window
+  // still passes — coverage isn't lost, the layering just shifts.
+  //
+  // Slice 11 endpoint-existence verification (per .claude/skills/
+  // verifying-gap-card-claims/): all 12 prompt-listed targets were
+  // grep-verified against backend/routes/travel_{webcheckin,trips,
+  // visa}.js before authoring. Zero drift — every probe target exists.
+
+  // ---- WebCheckin sub-resources ----------------------------------------
+
+  test("wellness admin GET /webcheckins/:id → 403/404", async ({ request }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/webcheckins/${FAKE_ID}`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not GET travel webcheckin: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin PATCH /webcheckins/:id → 403/404 (status-mutation vector)", async ({
+    request,
+  }) => {
+    // PATCH mutates check-in state (status / assignedAgentId / seatPref
+    // / mealPref / attemptsJson / boardingPassUrl). A missed guard
+    // would let cross-tenant attackers reassign agents or flip status
+    // on another tenant's check-ins. Pinning 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await patch(
+      request,
+      token,
+      `/api/travel/webcheckins/${FAKE_ID}`,
+      { status: "done" },
+    );
+    expect(
+      [403, 404],
+      `generic admin must not PATCH travel webcheckin: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin POST /webcheckins/:id/upload-boarding-pass → 403/404 (file-upload vector)", async ({
+    request,
+  }) => {
+    // The upload route is multipart, but the requireTravelTenant guard
+    // fires BEFORE the multer middleware parses the file — so a probe
+    // without a file body still tests the cross-vertical isolation
+    // contract. A missed guard would let cross-tenant attackers stage
+    // boarding-pass files against another tenant's check-ins. Pinning
+    // 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/webcheckins/${FAKE_ID}/upload-boarding-pass`,
+      {},
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not upload boarding pass to travel webcheckin: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /webcheckins/:id/deliver → 403/404 (delivery-mutation vector)", async ({
+    request,
+  }) => {
+    // POST /deliver marks the check-in delivered (sets deliveredAt) and
+    // would, when Q9 creds land, fire a real WhatsApp send. A missed
+    // guard would let cross-tenant attackers force-deliver another
+    // tenant's check-ins (and once Q9 lands, trigger real WhatsApp
+    // sends on someone else's WABA). Pinning 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/webcheckins/${FAKE_ID}/deliver`,
+      {},
+    );
+    expect(
+      [403, 404],
+      `generic admin must not deliver travel webcheckin: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin DELETE /webcheckins/:id → 403/404 (destructive mutation)", async ({
+    request,
+  }) => {
+    // DELETE /webcheckins/:id is ADMIN-only; a missed guard would let
+    // cross-tenant attackers delete another tenant's check-in tracking
+    // rows. Pinning 403/404 ensures the cross-vertical guard fires
+    // before any Prisma delete runs.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await del(
+      request,
+      token,
+      `/api/travel/webcheckins/${FAKE_ID}`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not DELETE travel webcheckin: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // ---- TMC Trips sub-resources -----------------------------------------
+
+  test("wellness admin GET /trips/:id → 403/404", async ({ request }) => {
+    // GET /trips/:id is gated by requireTravelTenant → requireTmcAccess
+    // (per slice-2 guard-order pin). Cross-vertical attacker hits 403
+    // WRONG_VERTICAL FIRST, not 403 TMC_ACCESS_DENIED. The [403, 404]
+    // window absorbs either layering.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/trips/${FAKE_ID}`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not GET TMC trip: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin PATCH /trips/:id → 403/404 (corruption vector)", async ({
+    request,
+  }) => {
+    // Slice 3 already covered the PATCH /trips/:id case at line 603;
+    // slice 11 re-pins from the generic-admin side (slice 3 fired the
+    // probe from the wellness side via the cross-vertical mutation
+    // table). The duplicate probe is intentional — it pins symmetry of
+    // the cross-vertical guard regardless of which non-travel tenant
+    // is the attacker. Pinning 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await patch(
+      request,
+      token,
+      `/api/travel/trips/${FAKE_ID}`,
+      { name: "attacker-injected-name" },
+    );
+    expect(
+      [403, 404],
+      `generic admin must not PATCH TMC trip: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin DELETE /trips/:id → 403/404 (destructive mutation)", async ({
+    request,
+  }) => {
+    // DELETE /trips/:id is ADMIN-only and cascades through children
+    // (participants, documents). A missed guard would let cross-tenant
+    // attackers nuke another tenant's TMC trip ecosystem. Pinning
+    // 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await del(
+      request,
+      token,
+      `/api/travel/trips/${FAKE_ID}`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not DELETE TMC trip: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin GET /trips/:id/ops-dashboard → 403/404", async ({
+    request,
+  }) => {
+    // PRD §4.9 operational rollup — exposes revenue, participant counts,
+    // document status, etc. for a TMC trip. A missed guard would leak
+    // operational intelligence across tenants. Pinning 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/trips/${FAKE_ID}/ops-dashboard`,
+    );
+    expect(
+      [403, 404],
+      `generic admin must not read TMC trip ops-dashboard: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // ---- Visa applications sub-resources ---------------------------------
+
+  test("wellness admin GET /visa/applications/:id → 403/404", async ({
+    request,
+  }) => {
+    // GET /visa/applications/:id is the canonical Visa Sure record
+    // read. A missed guard would leak passport / immigration / KYC
+    // data across tenants — high-severity PII class. Pinning 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/visa/applications/${FAKE_ID}`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not GET visa application: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /visa/applications cross-tenant payload → 403/404 (creation vector)", async ({
+    request,
+  }) => {
+    // POST /visa/applications creates a new application against a
+    // body-supplied `contactId`. The route gates with requireTravelTenant
+    // FIRST (cross-vertical → 403 WRONG_VERTICAL) and THEN, for
+    // in-travel-vertical callers, looks up the contactId scoped by
+    // tenantId (cross-tenant contactId → 404 NOT_FOUND). Probing from
+    // generic admin pins the cross-vertical 403 layer. The [403, 404]
+    // window also absorbs any future refactor that demotes the
+    // vertical guard to a post-tenant-scope 404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/visa/applications`,
+      { contactId: FAKE_ID, country: "United States" },
+    );
+    expect(
+      [403, 404],
+      `generic admin must not POST visa application: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /visa/applications/:id/status-history → 403/404", async ({
+    request,
+  }) => {
+    // The status-history surface returns the audit trail of every
+    // status transition the application has gone through. A missed
+    // guard would leak status-transition timelines across tenants
+    // (downstream attack vector: timing-correlation attacks against
+    // visa-application processing). Pinning 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/visa/applications/${FAKE_ID}/status-history`,
+    );
+    expect(
+      [403, 404],
+      `wellness admin must not read visa application status-history: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+});

@@ -41,6 +41,8 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requireTravelTenant } = require("../middleware/travelGuards");
+const prisma = require("../lib/prisma");
 const llmRouter = require("../lib/llmRouter");
 
 // Defensive budget cap so a typo / malicious caller can't trigger
@@ -227,6 +229,162 @@ router.post(
       return res.status(502).json({
         error: "LLM router unavailable",
         code: "LLM_ERROR",
+      });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel-personalised-destinations/stats
+//
+// PRD_TRAVEL §4.7 + §9.1 — first rollup endpoint for the admin-curated
+// tailored-destinations domain. Mirrors the /suppliers/stats +
+// /religious-packets/stats + /flyer-templates/global-stats posture across
+// the travel rollup family.
+//
+// IMPORTANT — DATA SOURCE NOTE
+// ----------------------------
+// The personalised-destinations domain has NO Prisma model of its own —
+// it is a pure LLM consumer. The persisted footprint is the LlmCallLog
+// rows written by lib/llmRouter.js with surface="personalised-destinations"
+// (see POST /recommend above; the router stamps __surface into the row).
+// This rollup aggregates LlmCallLog where (tenantId, surface) match.
+//
+// Sub-brand scope: LlmCallLog has NO subBrand column — the rollup is
+// tenant-wide and the response envelope omits `bySubBrand`. If a future
+// schema migration adds subBrand (likely if Travel Stall ever splits
+// personalised-destinations per sub-brand), this handler should grow a
+// bySubBrand bucket then. Today the model is tenant-wide-only, per the
+// "If the model is tenant-wide-only: skip subBrand narrowing" guidance.
+//
+// USER-readable: anodyne aggregate (count + last activity timestamp);
+// safe. No audit row written — read-only meta surface, mirrors sibling
+// /stats endpoints across the rollup family.
+//
+// Behaviour:
+//   - tenantId-scoped (via requireTravelTenant + req.travelTenant.id)
+//   - surface="personalised-destinations" narrows to THIS domain's calls
+//   - ?from / ?to (ISO date bounds) filter LlmCallLog.createdAt; invalid
+//     → 400 INVALID_DATE
+//   - Response envelope:
+//       total: number              — count of matching LlmCallLog rows
+//       byTask: { <task>: count }  — task taxonomy bucket
+//       byModel: { <model>: count } — which LLM model handled it
+//       stubCount: number          — rows with stub=true
+//       liveCount: number          — rows with stub=false
+//       lastCreatedAt: ISO | null  — most-recent createdAt (skips null)
+//
+// Express route ordering: literal-path /stats is declared BEFORE the
+// export so any future :id family added between this and module.exports
+// wouldn't shadow the /stats matcher.
+// ============================================================================
+const PERSONALISED_DESTINATIONS_SURFACE = "personalised-destinations";
+
+router.get(
+  "/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const where = {
+        tenantId,
+        surface: PERSONALISED_DESTINATIONS_SURFACE,
+      };
+
+      // Optional ISO date bounds on LlmCallLog.createdAt — same shape as
+      // the sibling /suppliers/stats + /religious-packets/stats endpoints.
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+      }
+
+      const rows = await prisma.llmCallLog.findMany({
+        where,
+        select: {
+          id: true,
+          task: true,
+          model: true,
+          stub: true,
+          createdAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+      });
+
+      // Empty short-circuit — return zeroed shape with stable bucket maps.
+      if (rows.length === 0) {
+        return res.json({
+          total: 0,
+          byTask: {},
+          byModel: {},
+          stubCount: 0,
+          liveCount: 0,
+          lastCreatedAt: null,
+        });
+      }
+
+      let stubCount = 0;
+      let liveCount = 0;
+      let lastCreatedAt = null;
+      const byTask = {};
+      const byModel = {};
+
+      for (const r of rows) {
+        if (r.stub) stubCount += 1;
+        else liveCount += 1;
+
+        // Defensive: createdAt rows with null/invalid timestamps still
+        // contribute to `total` but are skipped for the lastCreatedAt
+        // max — same posture as sibling stats endpoints.
+        if (r.createdAt != null) {
+          const ts = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(ts.getTime())) {
+            if (!lastCreatedAt || ts > lastCreatedAt) lastCreatedAt = ts;
+          }
+        }
+
+        const taskKey = r.task ? String(r.task) : "_unknown";
+        if (!byTask[taskKey]) byTask[taskKey] = { count: 0 };
+        byTask[taskKey].count += 1;
+
+        const modelKey = r.model ? String(r.model) : "_unknown";
+        if (!byModel[modelKey]) byModel[modelKey] = { count: 0 };
+        byModel[modelKey].count += 1;
+      }
+
+      return res.json({
+        total: rows.length,
+        byTask,
+        byModel,
+        stubCount,
+        liveCount,
+        lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+      });
+    } catch (e) {
+      console.error("[travel-personalised-destinations] /stats error:", e.message);
+      return res.status(500).json({
+        error: "Failed to compute personalised-destinations stats",
+        code: "STATS_ERROR",
       });
     }
   },

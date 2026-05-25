@@ -30,6 +30,11 @@ const {
 const { writeAudit } = require("../lib/audit");
 const { generateTravelQuotePdf } = require("../services/pdfRenderer");
 const { pickMarkup, mapCategoryToScope } = require("../lib/travelPricing");
+const {
+  computeGstForLines,
+  isInterstateSupply,
+  gstRateForCategory,
+} = require("../lib/gstCalculation");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
@@ -1011,6 +1016,180 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] pricing-preview error:", e.message);
       res.status(500).json({ error: "Failed to compute pricing preview" });
+    }
+  },
+);
+
+// GET /api/travel/quotes/:id/tax-preview — any verified token.
+//
+// Slice 2 of #902 (PRD_TRAVEL_GST_COMPLIANCE.md FR-3.2.3). Consumes
+// lib/gstCalculation.js (commit ced09867) — the pure CGST/SGST/IGST
+// math + place-of-supply decision + per-category rate lookup.
+//
+// READ-ONLY tax-composition surface paralleling the markup
+// pricing-preview endpoint above. Loads the parent quote + its lines,
+// derives each line's GST rate from its lineType via
+// gstRateForCategory, decides intra-vs-inter-state via
+// isInterstateSupply, and aggregates per-line + per-rate-bucket totals
+// via computeGstForLines.
+//
+// Place-of-supply (slice-2 SIMPLE rule):
+//   - operatorStateCode from ?operatorStateCode= (default "IN-MH")
+//   - customerStateCode from ?customerStateCode= (default same as
+//     operatorStateCode → intra-state)
+// FUTURE (slice 3): pull operator state from Tenant.gstStateCode +
+// customer state from Contact.stateCode (FR-3.5.1 tenant master + Q-GST-2
+// resolves contact state-code surface). Slice 2 stays decoupled from
+// schema additions so the math + envelope can land while the master
+// tables are being designed.
+//
+// Envelope contract: per-line {id, lineType, amount, gstPercent, cgst,
+// sgst, igst, totalTax, amountWithTax} + envelope totals {subtotal,
+// isInterstate, operatorStateCode, customerStateCode, totalCgst,
+// totalSgst, totalIgst, totalTax, grandTotal, buckets[]}. Invariants:
+// totalTax === totalCgst + totalSgst + totalIgst (split-consistency)
+// and subtotal + totalTax === grandTotal (rounding-safe to 2 decimals
+// because every step is round2'd in the lib helper).
+//
+// Per-line vs bucket aggregation: per-line totals are computed via
+// computeGstSplit (one call per line, line-level rounding). Bucket
+// summary is computed via computeGstForLines which sums taxable into
+// per-rate buckets FIRST then taxes the bucket (per FR-3.4.3 HSN-summary
+// shape). The two views can differ by ≤1 paise on multi-line quotes
+// where individual lines round up vs bucket totals round once — that
+// rounding drift is operator-visible by design; the GSTR-1 spec is the
+// bucket view, the on-quote PDF is the per-line view. Both surfaces
+// here so callers can pick.
+router.get(
+  "/quotes/:id/tax-preview",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const quoteId = parseInt(req.params.id, 10);
+      const quote = await loadParentQuote(req, res, quoteId);
+      if (!quote) return;
+
+      // Place-of-supply state-code resolution. Default operator=IN-MH;
+      // default customer = operator (intra-state). Empty string for an
+      // explicitly-provided param is rejected as INVALID_STATE_CODE so
+      // callers can't silently fall through to defaults by sending a
+      // blank value (defense-in-depth on top of isInterstateSupply's
+      // own empty-string throw).
+      const rawOp = req.query.operatorStateCode;
+      const rawCu = req.query.customerStateCode;
+      if (rawOp != null && String(rawOp).trim() === "") {
+        return res.status(400).json({
+          error: "operatorStateCode must not be empty",
+          code: "INVALID_STATE_CODE",
+        });
+      }
+      if (rawCu != null && String(rawCu).trim() === "") {
+        return res.status(400).json({
+          error: "customerStateCode must not be empty",
+          code: "INVALID_STATE_CODE",
+        });
+      }
+      const operatorStateCode =
+        rawOp != null ? String(rawOp).trim() : "IN-MH";
+      const customerStateCode =
+        rawCu != null ? String(rawCu).trim() : operatorStateCode;
+
+      let isInterstate;
+      try {
+        isInterstate = isInterstateSupply(operatorStateCode, customerStateCode);
+      } catch (e) {
+        return res.status(400).json({
+          error: e.message,
+          code: "INVALID_STATE_CODE",
+        });
+      }
+
+      const lines = await prisma.travelQuoteLine.findMany({
+        where: { quoteId, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+
+      const round2 = (n) => Math.round(n * 100) / 100;
+
+      // Per-line decoration: each line gets its own gstPercent +
+      // CGST/SGST/IGST split. Composite-supply per FR-3.2.4 — every
+      // line is taxed at its own rate, no dominant-rate winner.
+      const decoratedLines = [];
+      const normalizedForBuckets = [];
+      let subtotalAccum = 0;
+      let totalCgstAccum = 0;
+      let totalSgstAccum = 0;
+      let totalIgstAccum = 0;
+      let totalTaxAccum = 0;
+
+      for (const l of lines) {
+        const amt = Number(l.amount || 0);
+        subtotalAccum = round2(subtotalAccum + amt);
+        const gstPercent = gstRateForCategory(l.lineType);
+
+        // Per-line split via local computation (mirrors lib's
+        // computeGstSplit; inlined to avoid an extra require for a
+        // 5-line helper).
+        const totalTax = round2((amt * gstPercent) / 100);
+        let cgst = 0;
+        let sgst = 0;
+        let igst = 0;
+        if (isInterstate) {
+          igst = totalTax;
+        } else {
+          const halfRate = gstPercent / 2;
+          cgst = round2((amt * halfRate) / 100);
+          sgst = round2((amt * halfRate) / 100);
+        }
+        const amountWithTax = round2(amt + totalTax);
+
+        decoratedLines.push({
+          id: l.id,
+          lineType: l.lineType,
+          amount: round2(amt),
+          gstPercent,
+          cgst,
+          sgst,
+          igst,
+          totalTax,
+          amountWithTax,
+        });
+        normalizedForBuckets.push({ taxableAmount: amt, gstPercent });
+
+        totalCgstAccum = round2(totalCgstAccum + cgst);
+        totalSgstAccum = round2(totalSgstAccum + sgst);
+        totalIgstAccum = round2(totalIgstAccum + igst);
+        totalTaxAccum = round2(totalTaxAccum + totalTax);
+      }
+
+      // Bucket summary via lib helper (per-rate aggregation matches
+      // GSTR-1 HSN-summary shape per FR-3.4.3 / NFR-4.2). Use the
+      // bucket totals as the envelope-level totals so the spec-aligned
+      // numbers win the consistency check (per-line drift is contained
+      // to the lines[] array, never leaks into envelope totals).
+      const bucketSummary = computeGstForLines(
+        normalizedForBuckets,
+        isInterstate,
+      );
+
+      res.json({
+        subtotal: bucketSummary.subtotal,
+        isInterstate,
+        operatorStateCode,
+        customerStateCode,
+        lines: decoratedLines,
+        totalCgst: bucketSummary.totalCgst,
+        totalSgst: bucketSummary.totalSgst,
+        totalIgst: bucketSummary.totalIgst,
+        totalTax: bucketSummary.totalTax,
+        grandTotal: bucketSummary.grandTotal,
+        buckets: bucketSummary.buckets,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] tax-preview error:", e.message);
+      res.status(500).json({ error: "Failed to compute tax preview" });
     }
   },
 );

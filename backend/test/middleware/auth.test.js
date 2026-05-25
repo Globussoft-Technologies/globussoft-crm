@@ -289,10 +289,19 @@ describe('verifyToken', () => {
   //
   // The four cases below pin: (a) cookie alone authenticates; (b) header
   // alone still authenticates (regression guard on existing path);
-  // (c) cookie wins when both are present (precedence — a fresh login
-  // cookie must override a stale localStorage Bearer); (d) neither still
-  // 401s with the canonical "Authentication required" envelope (no new
-  // failure-mode copy).
+  // (c) HEADER wins when both are present (precedence — see below for
+  // why this was inverted from the initial cookie-first design); (d)
+  // neither still 401s with the canonical "Authentication required"
+  // envelope (no new failure-mode copy).
+  //
+  // Precedence note (revised from cookie-first): Playwright's api request
+  // fixture persists cookies across specs in the same context. A spec
+  // that authenticated set a cookie (from slice 1's Set-Cookie) that then
+  // overrode the next spec's explicit `Authorization: Bearer <X>` header.
+  // For api_tests / e2e correctness, header MUST win when both are
+  // present — the explicit Authorization header is the load-bearing
+  // identity signal in every existing test and SDK consumer. Cookies
+  // remain the auth path for cookie-only browser clients (slice 3+).
   // ───────────────────────────────────────────────────────────────────────
   test('#914 slice 2: authenticates from auth_token cookie when no Authorization header', async () => {
     const token = jwt.sign({ userId: 11, role: 'USER', tenantId: 3 }, SECRET);
@@ -317,13 +326,13 @@ describe('verifyToken', () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  test('#914 slice 2: cookie wins precedence when BOTH cookie and Authorization header are present', async () => {
-    // Realistic conflict: SPA cleared localStorage and re-logged-in, but
-    // a request races with stale Bearer header (e.g. axios default
-    // headers still set on an in-flight request). Cookie must win so
-    // the user is authenticated as their CURRENT session, not the stale
-    // one. Token payloads differ so we can assert which one populated
-    // req.user.
+  test('#914 slice 2 (revised): HEADER wins precedence when BOTH cookie and Authorization header are present', async () => {
+    // The initial slice-2 design had cookie-first but that broke
+    // api_tests because Playwright's request fixture persists cookies
+    // across specs in the same context — a spec that authenticated set
+    // a cookie that then overrode the next spec's explicit Bearer header,
+    // picking the first spec's user for tenant-isolation assertions.
+    // Token payloads differ so we can assert which one populated req.user.
     const cookieToken = jwt.sign({ userId: 100, role: 'ADMIN', tenantId: 5 }, SECRET);
     const headerToken = jwt.sign({ userId: 999, role: 'USER', tenantId: 9 }, SECRET);
     const { req, res, next } = makeReqResNext({
@@ -332,10 +341,10 @@ describe('verifyToken', () => {
     });
     await verifyToken(req, res, next);
     expect(next).toHaveBeenCalledOnce();
-    // Cookie's userId=100 wins, header's userId=999 ignored.
-    expect(req.user.userId).toBe(100);
-    expect(req.user.tenantId).toBe(5);
-    expect(req.user.role).toBe('ADMIN');
+    // Header's userId=999 wins, cookie's userId=100 ignored.
+    expect(req.user.userId).toBe(999);
+    expect(req.user.tenantId).toBe(9);
+    expect(req.user.role).toBe('USER');
   });
 
   test('#914 slice 2: 401 with canonical envelope when NEITHER cookie nor Authorization header is present', async () => {

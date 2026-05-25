@@ -23,25 +23,29 @@ function unauthorized(res, error) {
 }
 
 const verifyToken = async (req, res, next) => {
-  // #914 slice 2: cookie-first, header-fallback. Slice 1 began sending
-  // an HttpOnly `auth_token` cookie alongside the response-body JWT on
-  // every auth-success path; this is the corresponding READ side. Both
-  // paths remain valid for the duration of the migration window so
-  // existing header-bearing consumers (frontend's localStorage today,
-  // every e2e spec, every Playwright API spec, the external API key
-  // mirror, SDK consumers) keep working unchanged. Slice 3 drops the
-  // SPA's localStorage; slice 4 layers a CSRF token on top of the
-  // cookie. Order matters: cookie wins so a fresh login on a browser
-  // that still has a stale localStorage token presents the new
-  // (cookie-borne) identity rather than reviving the old one.
-  const cookieToken = req.cookies && req.cookies[TOKEN_COOKIE];
+  // #914 slice 2 (revised): header-first, cookie-fallback. Slice 1 began
+  // sending an HttpOnly `auth_token` cookie alongside the response-body JWT
+  // on every auth-success path; this is the READ side. Both paths remain
+  // valid for the migration window so existing header-bearing consumers
+  // (frontend's localStorage today, every e2e spec, every Playwright API
+  // spec, the external API key mirror, SDK consumers) keep working
+  // unchanged. Order: HEADER WINS. The initial slice-2 implementation had
+  // cookie-first but that broke api_tests because Playwright's request
+  // fixture persists cookies across specs in the same context — a spec
+  // that authenticated set a cookie that then overrode the next spec's
+  // explicit `Authorization: Bearer <wellness-admin>` header, picking the
+  // first spec's user for tenant-isolation assertions. Header-first matches
+  // every existing test's intent (the explicit Authorization header is the
+  // load-bearing identity signal) and lets cookies coexist for cookie-only
+  // browser clients in slice 3+.
+  const authHeader = req.headers.authorization;
   let token;
-  if (cookieToken) {
-    token = cookieToken;
-  } else {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) return unauthorized(res, "Authentication required");
+  if (authHeader) {
     token = authHeader.split(" ")[1];
+  } else {
+    const cookieToken = req.cookies && req.cookies[TOKEN_COOKIE];
+    if (!cookieToken) return unauthorized(res, "Authentication required");
+    token = cookieToken;
   }
   try {
     const verified = jwt.verify(token, JWT_SECRET);

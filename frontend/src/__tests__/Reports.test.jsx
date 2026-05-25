@@ -268,7 +268,7 @@ describe('<Reports /> — broad page surface', () => {
       // formatMoney(150000) renders with locale-appropriate grouping. Both
       // en-US "$150,000.00" and en-IN "₹1,50,000.00" contain "150" or
       // "1,50". Permissive match accepts either.
-      const aggregate = screen.getByText(/(?:150[, ]?000|1,50,000|1 50 000)/);
+      const aggregate = screen.getByText(/(?:150[,\u00a0]?000|1,50,000|1\u00a050\u00a0000)/);
       expect(aggregate).toBeInTheDocument();
     });
   });

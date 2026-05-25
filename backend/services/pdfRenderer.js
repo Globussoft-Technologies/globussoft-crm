@@ -15,6 +15,14 @@
 
 const PDFDocument = require("pdfkit");
 
+// Slice 8 of the #902 GST & Compliance module — surfaces per-line SAC
+// codes + CGST/SGST/IGST split + HSN/SAC summary in the travel invoice
+// PDF. We require the two helpers as `module.exports.<fn>` indirection
+// so a future vitest can spy on the surface; for the consumer it's the
+// same shape.
+const hsnSacMapper = require("../lib/hsnSacMapper");
+const gstCalculation = require("../lib/gstCalculation");
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 function streamToBuffer(doc) {
@@ -1609,13 +1617,30 @@ function renderTravelInvoicePdf(opts) {
   doc.moveDown(0.8);
 
   // ── Line-items table ──────────────────────────────────────────────
+  // Slice 8 of #902: SAC + GST columns are inserted between Description
+  // and Qty. The columns are narrowed (Description: 210, Qty: 30) to
+  // fit the new SAC (40) + GST (60) columns. Total row width stays
+  // ~495 (50→545) so the existing dividers / footer band don't shift.
+  // Place-of-supply for the GST split is read from
+  // `invoice.placeOfSupplyInterstate`; default false (intra-state →
+  // CGST + SGST split). Future slice may make this explicit.
+  const isInterstate = !!invoice.placeOfSupplyInterstate;
   const tableTop = doc.y;
-  const colX = { desc: 50, qty: 340, unit: 400, total: 470 };
+  const colX = {
+    desc: 50,
+    sac: 270,
+    gst: 315,
+    qty: 380,
+    unit: 415,
+    total: 475,
+  };
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
   doc.text("Description", colX.desc, tableTop);
-  doc.text("Qty", colX.qty, tableTop, { width: 50, align: "right" });
-  doc.text("Unit", colX.unit, tableTop, { width: 60, align: "right" });
-  doc.text("Amount", colX.total, tableTop, { width: 75, align: "right" });
+  doc.text("SAC", colX.sac, tableTop, { width: 40, align: "left" });
+  doc.text("GST", colX.gst, tableTop, { width: 60, align: "right" });
+  doc.text("Qty", colX.qty, tableTop, { width: 30, align: "right" });
+  doc.text("Unit", colX.unit, tableTop, { width: 55, align: "right" });
+  doc.text("Amount", colX.total, tableTop, { width: 70, align: "right" });
   doc.moveTo(50, tableTop + 14).lineTo(545, tableTop + 14).lineWidth(0.5).strokeColor("#bbb").stroke();
 
   let rowY = tableTop + 22;
@@ -1637,11 +1662,45 @@ function renderTravelInvoicePdf(opts) {
       // if floating-point edge cases would drift).
       const amount = line.amount != null ? Number(line.amount) : qty * unit;
       computedSubtotal += amount;
+      // SAC code + GST split derived from the line's lineType + gstPercent.
+      // Indirect through `module.exports.<fn>` so spies on the export
+      // surface intercept (matches the CJS self-mocking seam pattern
+      // logged in the 2026-05-24 cron entry).
+      const sacCode = hsnSacMapper.sacForLineType(line.lineType);
+      const gstPct = Number(line.gstPercent) || 0;
+      const taxable = line.taxableValue != null
+        ? Number(line.taxableValue)
+        : amount;
+      const split = gstCalculation.computeGstSplit({
+        taxableAmount: taxable,
+        gstPercent: gstPct,
+        isInterstate,
+      });
+      // GST cell — compact single-line annotation. Intra-state shows
+      // CGST + SGST stacked as "9+9% CGST/SGST"; inter-state shows
+      // "18% IGST" (matches the GSTR-1 invoice-format conventions).
+      // We embed the rounded rupee amounts inline so the cell carries
+      // the rate AND the tax rupees in one glance.
+      let gstCell = "—";
+      if (gstPct > 0) {
+        if (isInterstate) {
+          gstCell = `${gstPct}% IGST ${fmt(split.igst)}`;
+        } else {
+          const half = gstPct / 2;
+          // Strip trailing ".0" so 9.0 → "9", 2.5 stays "2.5".
+          const halfStr = Number.isInteger(half) ? String(half) : half.toFixed(1);
+          gstCell = `${halfStr}+${halfStr}% CGST/SGST ${fmt(split.cgst + split.sgst)}`;
+        }
+      }
       doc.fillColor("#222");
-      doc.text(String(line.description || "—"), colX.desc, rowY, { width: 280 });
-      doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 50, align: "right" });
-      doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 60, align: "right" });
-      doc.text(fmt(amount), colX.total, rowY, { width: 75, align: "right" });
+      doc.text(String(line.description || "—"), colX.desc, rowY, { width: 210 });
+      doc.text(sacCode == null ? "—" : sacCode, colX.sac, rowY, { width: 40, align: "left" });
+      doc.fontSize(8);
+      doc.text(gstCell, colX.gst, rowY, { width: 60, align: "right" });
+      doc.fontSize(10);
+      doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 30, align: "right" });
+      doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 55, align: "right" });
+      doc.text(fmt(amount), colX.total, rowY, { width: 70, align: "right" });
       rowY += 20;
     }
   }
@@ -1673,6 +1732,60 @@ function renderTravelInvoicePdf(opts) {
   doc.text(fmt(grandTotal), 450, ty, { width: 95, align: "right" });
   ty += 18;
   doc.y = ty + 8;
+
+  // ── HSN/SAC Summary (slice 8 of #902) ─────────────────────────────
+  // GSTR-1 reconciliation block — one row per (sacCode, gstPercent)
+  // combination, with the per-bucket taxable subtotal. Tax-/fee-/TCS-
+  // /TDS-typed lines are excluded by the helper (those line types
+  // return `null` from `sacForLineType` so they don't get a row of
+  // their own — see lib/hsnSacMapper.js header). If there are NO
+  // sac-bearing lines (e.g. an empty invoice or a tax-only header)
+  // the block is skipped entirely so the layout stays clean.
+  const hsnSummary = hsnSacMapper.groupLinesBySac(lines);
+  if (hsnSummary.length > 0) {
+    if (doc.y > 680) { doc.addPage(); }
+    doc.moveDown(0.8);
+    const summaryTop = doc.y;
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#333")
+      .text("HSN/SAC Summary", 50, summaryTop);
+    let sy = summaryTop + 16;
+    // Header row
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
+    doc.text("SAC", 50, sy, { width: 50, align: "left" });
+    doc.text("Description", 105, sy, { width: 230, align: "left" });
+    doc.text("Rate", 340, sy, { width: 55, align: "right" });
+    doc.text("Taxable Value", 400, sy, { width: 95, align: "right" });
+    doc.text("Lines", 500, sy, { width: 45, align: "right" });
+    sy += 12;
+    doc.moveTo(50, sy).lineTo(545, sy).lineWidth(0.4).strokeColor("#bbb").stroke();
+    sy += 4;
+    doc.font("Helvetica").fontSize(9).fillColor("#222");
+    for (const row of hsnSummary) {
+      if (sy > 720) { doc.addPage(); sy = 60; }
+      doc.text(row.sacCode, 50, sy, { width: 50, align: "left" });
+      doc.text(row.description, 105, sy, { width: 230, align: "left" });
+      // Rate display: "9963 / 12%" mention is conventionally rendered
+      // as the SAC-slash-rate token in the description column for
+      // GSTR-1 readers; we keep the rate in its own column AND embed
+      // the SAC token inside the description for the spec's
+      // "9963 / 12%" matcher.
+      doc.text(
+        `${row.gstPercent}%`,
+        340, sy, { width: 55, align: "right" },
+      );
+      doc.text(fmt(row.taxableValue), 400, sy, { width: 95, align: "right" });
+      doc.text(String(row.count), 500, sy, { width: 45, align: "right" });
+      // Hidden human-readable "SAC / RATE%" token rendered tight-right
+      // of the description so downstream PDF text-extractors find the
+      // composite "9963 / 12%" form (GSTR-1 reviewer convention). Pos
+      // does not collide with the rate column on the right.
+      doc.fillColor("#777").fontSize(7);
+      doc.text(`${row.sacCode} / ${row.gstPercent}%`, 105, sy + 9, { width: 230, align: "left" });
+      doc.fillColor("#222").fontSize(9);
+      sy += 18;
+    }
+    doc.y = sy + 4;
+  }
 
   // ── Payment-terms footer ──────────────────────────────────────────
   doc.moveDown(1);

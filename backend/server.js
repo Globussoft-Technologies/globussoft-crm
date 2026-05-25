@@ -125,9 +125,14 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Security middleware
 const cookieParser = require('cookie-parser');
-const { helmetMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
+const { helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
 const { originCheck } = require('./middleware/originCheck');
 app.use(helmetMiddleware);
+// #917 slice 1 — additive strict CSP in Report-Only mode (no 'unsafe-inline'
+// on script-src/style-src). Browsers log violations to devtools without
+// blocking. Promotion to enforce-mode is a future slice once inline-script /
+// inline-style surface is migrated to external bundles + nonces.
+app.use(helmetStrictReportOnlyMiddleware);
 app.use(permissionsPolicyMiddleware); // #186 — Permissions-Policy header
 app.use(cookieParser());
 // #657 — CSRF defense layer for browser flows. Mounted EARLY (before

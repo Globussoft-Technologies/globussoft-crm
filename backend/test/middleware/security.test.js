@@ -6,6 +6,7 @@
 import { describe, test, expect, vi } from 'vitest';
 import {
   helmetMiddleware,
+  helmetStrictReportOnlyMiddleware,
   permissionsPolicyMiddleware,
   sanitizeBody,
   stripTenantOverride,
@@ -45,8 +46,9 @@ function makeReqRes({ body } = {}) {
 }
 
 describe('module shape', () => {
-  test('exports the four middleware functions', () => {
+  test('exports the five middleware functions', () => {
     expect(typeof helmetMiddleware).toBe('function');
+    expect(typeof helmetStrictReportOnlyMiddleware).toBe('function');
     expect(typeof permissionsPolicyMiddleware).toBe('function');
     expect(typeof sanitizeBody).toBe('function');
     expect(typeof stripTenantOverride).toBe('function');
@@ -105,6 +107,79 @@ describe('helmetMiddleware', () => {
     expect(csp.toLowerCase()).toContain("frame-ancestors 'self'");
     expect(csp.toLowerCase()).toContain("form-action 'self'");
     expect(csp.toLowerCase()).toContain("base-uri 'self'");
+  });
+});
+
+// #917 slice 1 — strict CSP in Report-Only mode is ADDITIVE on top of the
+// transitional enforce-mode CSP above. It emits the
+// `Content-Security-Policy-Report-Only` header WITHOUT 'unsafe-inline' so
+// the SPA's existing inline scripts/styles surface as violations without
+// breaking page rendering. Promotion to enforce-mode is a future slice.
+describe('helmetStrictReportOnlyMiddleware (#917 slice 1)', () => {
+  test('is invokable and calls next', () => {
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  test('sets the Content-Security-Policy-Report-Only header (not enforce mode)', () => {
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    const reportOnly = res.headers['Content-Security-Policy-Report-Only'];
+    expect(reportOnly).toBeTruthy();
+    expect(typeof reportOnly).toBe('string');
+  });
+
+  test('strict policy: NO unsafe-inline on script-src or style-src', () => {
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    const reportOnly = res.headers['Content-Security-Policy-Report-Only'];
+    // Extract the script-src + style-src segments specifically.
+    const scriptMatch = reportOnly.match(/script-src([^;]*)/i);
+    const styleMatch = reportOnly.match(/style-src([^;]*)/i);
+    expect(scriptMatch).toBeTruthy();
+    expect(styleMatch).toBeTruthy();
+    expect(scriptMatch[1]).not.toContain("'unsafe-inline'");
+    expect(scriptMatch[1]).not.toContain("'unsafe-eval'");
+    expect(styleMatch[1]).not.toContain("'unsafe-inline'");
+  });
+
+  test('contains the strict directive set: default-src, object-src none, base-uri self', () => {
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    const reportOnly = res.headers['Content-Security-Policy-Report-Only'].toLowerCase();
+    expect(reportOnly).toContain("default-src 'self'");
+    expect(reportOnly).toContain("object-src 'none'");
+    expect(reportOnly).toContain("base-uri 'self'");
+    expect(reportOnly).toContain("form-action 'self'");
+  });
+
+  test("frame-ancestors is 'none' (stricter than transitional 'self' — clickjacking lockdown)", () => {
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    const reportOnly = res.headers['Content-Security-Policy-Report-Only'].toLowerCase();
+    expect(reportOnly).toContain("frame-ancestors 'none'");
+  });
+
+  test('does NOT set the enforce-mode CSP header (only Report-Only)', () => {
+    // This middleware is layered ON TOP of helmetMiddleware. Its only
+    // contribution must be the Report-Only header — it must not clobber or
+    // duplicate the enforce-mode CSP that helmetMiddleware emits.
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    expect(res.headers['Content-Security-Policy']).toBeUndefined();
+  });
+
+  test('does NOT clobber other security headers (HSTS, X-Frame-Options, etc.)', () => {
+    // The strict middleware disables every helmet-shipped header except CSP.
+    // Layering it after helmetMiddleware must leave existing headers intact;
+    // this verifies the middleware alone does not contribute them.
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    expect(res.headers['Strict-Transport-Security']).toBeUndefined();
+    expect(res.headers['X-Frame-Options']).toBeUndefined();
+    expect(res.headers['Referrer-Policy']).toBeUndefined();
+    expect(res.headers['Cross-Origin-Resource-Policy']).toBeUndefined();
   });
 });
 

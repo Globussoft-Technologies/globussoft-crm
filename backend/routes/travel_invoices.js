@@ -28,6 +28,7 @@ const {
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
+const pdfRenderer = require("../services/pdfRenderer");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
 
@@ -873,6 +874,125 @@ router.delete(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-invoices] delete line error:", e.message);
       res.status(500).json({ error: "Failed to delete line" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/invoices/:id/pdf — ADMIN/MANAGER only (Arc 2 #901 slice 2).
+//
+// Loads the invoice tenant-scoped + sub-brand-scoped, fetches its lines,
+// then hands {invoice, lines, tenant} to pdfRenderer.generateTravelInvoicePdf
+// which returns a Promise<Buffer>. We stream the Buffer back with attachment
+// headers so the operator browser triggers a download dialog.
+//
+// Audit row is stamped BEFORE the body is sent so the audit trail is
+// durable even if the client aborts mid-download. Mirrors the quote
+// /pdf handler's ordering at travel_quotes.js:840+.
+//
+// PDF render failures are wrapped as 500 PDF_RENDER_FAILED rather than
+// the generic "Failed to..." catch — pdfkit can throw on bad font / asset
+// resolution and the operator-facing surface needs an actionable code.
+//
+// NOTE: pdfRenderer.generateTravelInvoicePdf is referenced via the
+// module-exports indirection (`pdfRenderer.generateTravelInvoicePdf(...)`)
+// so unit tests can `vi.spyOn(pdfRenderer, 'generateTravelInvoicePdf')`
+// and intercept render failures. Same CJS self-mocking seam pattern used
+// by adsGptClient / ratehawkClient / callifiedClient (cron learning
+// 2026-05-24 ~01:43 UTC).
+// ============================================================================
+router.get(
+  "/invoices/:id/pdf",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const invoice = await prisma.travelInvoice.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!invoice) {
+        return res
+          .status(404)
+          .json({ error: "Invoice not found", code: "INVOICE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, invoice.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      const lines = await prisma.travelInvoiceLine.findMany({
+        where: { invoiceId: id, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+
+      // Tenant is optional input to the helper — load it for the footer
+      // line. Failure to load (e.g. soft-deleted tenant) is non-fatal;
+      // the helper handles a null tenant cleanly.
+      let tenant = null;
+      try {
+        tenant = await prisma.tenant.findUnique({
+          where: { id: req.travelTenant.id },
+        });
+      } catch (_) {
+        // ignore — proceed with null tenant
+      }
+
+      let pdfBuffer;
+      try {
+        pdfBuffer = await pdfRenderer.generateTravelInvoicePdf({
+          invoice,
+          lines,
+          tenant,
+        });
+      } catch (renderErr) {
+        console.error(
+          "[travel-invoices] PDF render error:",
+          renderErr && renderErr.message,
+        );
+        return res.status(500).json({
+          error: "Failed to render invoice PDF",
+          code: "PDF_RENDER_FAILED",
+        });
+      }
+
+      // Audit BEFORE sending the body so the row is durable even if the
+      // client aborts mid-download. Mirrors the quote /pdf handler.
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_PDF_DOWNLOADED",
+        invoice.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          invoiceId: invoice.id,
+          subBrand: invoice.subBrand,
+          lineCount: lines.length,
+        },
+      );
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="invoice-${invoice.id}.pdf"`,
+      );
+      res.status(200).end(pdfBuffer);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] pdf error:", e.message);
+      res.status(500).json({ error: "Failed to generate invoice PDF" });
     }
   },
 );

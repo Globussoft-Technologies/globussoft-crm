@@ -1437,6 +1437,219 @@ function renderTravelQuotePdf(quote) {
 // a rename of the (yet-to-land) route caller.
 const generateTravelQuotePdf = renderTravelQuotePdf;
 
+// ── Travel CRM — invoice PDF (Arc 2 #901 slice 2) ───────────────────
+//
+// Travel-invoice PDF, customer-facing. Mirrors renderTravelQuotePdf's
+// layout primitives (A4, 50pt margins, sub-brand-aware accent + label
+// band) but renders an INVOICE rather than a quote — issuedDate +
+// dueDate replace the validUntil meta block, and the title strip
+// reads "INVOICE" rather than "QUOTE".
+//
+// Slice scope: SIMPLEST renderable invoice PDF that covers PRD §3
+// "operator clicks Download invoice PDF and gets a branded PDF of the
+// invoice + its line items". Rich templates (per-sub-brand letterhead,
+// GST breakdown rows beyond the existing tax-treatment line, multi-
+// currency split, payment-receipt overlay) land in subsequent slices
+// once Q22 brand-pack creds drop.
+//
+// Input shape — accepts EITHER:
+//   { invoice: { ...lines: [...] }, tenant }   // lines attached on row
+//   { invoice, lines: [...], tenant }          // lines passed alongside
+// `tenant` is optional (currently informational — surfaces in the
+// footer if provided; the header band uses sub-brand labels). Future
+// slices will use tenant for per-tenant address/GSTIN insertion.
+//
+// `invoice` shape:
+//   {
+//     id,                              // for invoice references
+//     invoiceNum,                      // tenant-scoped human ID (e.g. "TINV-2026-0042")
+//     subBrand,                        // 'tmc' | 'rfu' | 'travelstall' | 'visasure'
+//     status,                          // 'Draft' | 'Issued' | 'Partial' | 'Paid' | 'Voided'
+//     issuedDate,                      // optional; falls back to invoice.createdAt or now
+//     dueDate,                         // optional
+//     totalAmount,                     // numeric or string-decimal
+//     currency,                        // 'INR' | 'USD' | 'GBP' | …
+//     contactName, contactEmail, contactPhone,  // optional bill-to fields
+//   }
+//
+// `lines` shape (each):
+//   { description, quantity, unitPrice, amount, lineType, currency, notes }
+//
+// Currency rendering mirrors renderTravelQuotePdf's `fmt(n)` helper —
+// glyphs for INR/USD/GBP, otherwise bare ISO code prefix.
+//
+// @returns {Promise<Buffer>}
+function renderTravelInvoicePdf(opts) {
+  // Accept either the row-with-attached-lines form or the explicit
+  // { invoice, lines, tenant } form. The first is friendlier for
+  // callers that already have a Prisma `findFirst({ include: { lines } })`
+  // row; the second is friendlier for the route handler that loads the
+  // lines separately and wants to pass them in cleanly.
+  const o = opts || {};
+  const invoice = o.invoice || {};
+  const lines = Array.isArray(o.lines)
+    ? o.lines
+    : Array.isArray(invoice.lines)
+      ? invoice.lines
+      : [];
+  const tenant = o.tenant || null;
+
+  const sub = invoice.subBrand;
+  const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
+  const accent = SUB_BRAND_ACCENT[sub] || "#111111";
+  const currency = invoice.currency || "INR";
+
+  // Money formatter mirrored from renderTravelQuotePdf (same currency
+  // glyph set + same fallback to bare ISO code prefix).
+  function fmt(n) {
+    const v = Number(n) || 0;
+    if (currency === "INR") return `₹${v.toFixed(2)}`;
+    if (currency === "USD") return `$${v.toFixed(2)}`;
+    if (currency === "GBP") return `£${v.toFixed(2)}`;
+    return `${currency} ${v.toFixed(2)}`;
+  }
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+
+  // ── Branded header band ────────────────────────────────────────────
+  doc.rect(0, 0, doc.page.width, 60).fill(accent);
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
+    .text(brandLabel, 50, 22, { align: "left" });
+  doc.fillColor("#fff").fontSize(10).text("Invoice", 50, 42, { align: "left" });
+  doc.fillColor("#111").moveDown(2);
+
+  // ── Invoice meta (right column) + bill-to block (left column) ─────
+  const metaTop = 80;
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#111")
+    .text("INVOICE", 380, metaTop, { width: 165, align: "right" });
+  doc.font("Helvetica").fontSize(10).fillColor("#333");
+  doc.text(
+    `Invoice #: ${invoice.invoiceNum || invoice.id || "—"}`,
+    380, metaTop + 26, { width: 165, align: "right" },
+  );
+  doc.text(
+    `Issued: ${formatDate(invoice.issuedDate || invoice.createdAt || new Date())}`,
+    380, metaTop + 40, { width: 165, align: "right" },
+  );
+  doc.text(
+    `Due: ${formatDate(invoice.dueDate)}`,
+    380, metaTop + 54, { width: 165, align: "right" },
+  );
+  doc.text(
+    `Status: ${invoice.status || "Draft"}`,
+    380, metaTop + 68, { width: 165, align: "right" },
+  );
+
+  // Left column — bill-to (optional; falls back to em-dash placeholder).
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Bill To", 50, metaTop);
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  doc.text(invoice.contactName || "—", 50, metaTop + 18);
+  if (invoice.contactEmail) doc.text(invoice.contactEmail, 50, doc.y);
+  if (invoice.contactPhone) doc.text(invoice.contactPhone, 50, doc.y);
+
+  // Advance below both columns
+  doc.y = Math.max(doc.y, metaTop + 100);
+  doc.moveDown(0.6);
+  const divY = doc.y;
+  doc.moveTo(50, divY).lineTo(545, divY).lineWidth(0.7).strokeColor(accent).stroke();
+  doc.moveDown(0.8);
+
+  // ── Line-items table ──────────────────────────────────────────────
+  const tableTop = doc.y;
+  const colX = { desc: 50, qty: 340, unit: 400, total: 470 };
+  doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
+  doc.text("Description", colX.desc, tableTop);
+  doc.text("Qty", colX.qty, tableTop, { width: 50, align: "right" });
+  doc.text("Unit", colX.unit, tableTop, { width: 60, align: "right" });
+  doc.text("Amount", colX.total, tableTop, { width: 75, align: "right" });
+  doc.moveTo(50, tableTop + 14).lineTo(545, tableTop + 14).lineWidth(0.5).strokeColor("#bbb").stroke();
+
+  let rowY = tableTop + 22;
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  let computedSubtotal = 0;
+  if (lines.length === 0) {
+    doc.fillColor("#777").text(
+      "(No line items on this invoice yet.)",
+      colX.desc, rowY, { width: 480 },
+    );
+    rowY += 18;
+  } else {
+    for (const line of lines) {
+      if (rowY > 700) { doc.addPage(); rowY = 60; }
+      const qty = Number(line.quantity) || 0;
+      const unit = Number(line.unitPrice) || 0;
+      // Prefer the stored amount (route layer already computed qty*unit
+      // at write time; this keeps the PDF consistent with the DB row even
+      // if floating-point edge cases would drift).
+      const amount = line.amount != null ? Number(line.amount) : qty * unit;
+      computedSubtotal += amount;
+      doc.fillColor("#222");
+      doc.text(String(line.description || "—"), colX.desc, rowY, { width: 280 });
+      doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 50, align: "right" });
+      doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 60, align: "right" });
+      doc.text(fmt(amount), colX.total, rowY, { width: 75, align: "right" });
+      rowY += 20;
+    }
+  }
+  doc.y = rowY + 4;
+
+  // ── Totals block ──────────────────────────────────────────────────
+  // Prefer the invoice's stored totalAmount (route layer's
+  // recomputeInvoiceTotal keeps it consistent with sum-of-lines). Fall
+  // back to the in-PDF computed subtotal if the header total isn't set
+  // (e.g. header-only invoices with no lines).
+  const grandTotal = invoice.totalAmount != null
+    ? Number(invoice.totalAmount)
+    : computedSubtotal;
+
+  doc.moveDown(0.5);
+  const totalsY = doc.y;
+  doc.moveTo(350, totalsY).lineTo(545, totalsY).lineWidth(0.5).strokeColor("#bbb").stroke();
+  let ty = totalsY + 8;
+  doc.font("Helvetica").fontSize(10).fillColor("#333");
+  doc.text("Subtotal", 350, ty, { width: 95, align: "right" });
+  doc.text(fmt(computedSubtotal), 450, ty, { width: 95, align: "right" });
+  ty += 16;
+
+  // Grand-total line (bold)
+  doc.moveTo(350, ty).lineTo(545, ty).lineWidth(0.5).strokeColor("#bbb").stroke();
+  ty += 6;
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111");
+  doc.text("Total Due", 350, ty, { width: 95, align: "right" });
+  doc.text(fmt(grandTotal), 450, ty, { width: 95, align: "right" });
+  ty += 18;
+  doc.y = ty + 8;
+
+  // ── Payment-terms footer ──────────────────────────────────────────
+  doc.moveDown(1);
+  const termsY = doc.y;
+  doc.font("Helvetica-Bold").fontSize(10).fillColor("#333").text("Payment Terms", 50, termsY);
+  doc.font("Helvetica").fontSize(9).fillColor("#555").text(
+    invoice.dueDate
+      ? `Payment is due by ${formatDate(invoice.dueDate)}. Please quote invoice number ${invoice.invoiceNum || invoice.id || ""} on any payment or correspondence.`
+      : "Please quote the invoice number on any payment or correspondence.",
+    50, termsY + 14, { width: 495 },
+  );
+
+  // ── Footer band ───────────────────────────────────────────────────
+  const footerY = doc.page.height - doc.page.margins.bottom - 24;
+  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.4).strokeColor("#bbb").stroke();
+  const tenantLine = tenant && tenant.name ? `${tenant.name} — ` : "";
+  doc.font("Helvetica").fontSize(8).fillColor("#777").text(
+    `${tenantLine}${brandLabel} — Invoice #${invoice.invoiceNum || invoice.id || "?"}.`,
+    50, footerY + 6, { width: doc.page.width - 100, align: "center" },
+  );
+
+  doc.end();
+  return bufPromise;
+}
+
+// Public name mirrors generateTravelQuotePdf — the route handler imports
+// `generateTravelInvoicePdf`; we keep `renderTravelInvoicePdf` as the
+// internal name for symmetry with the other render* helpers in this file.
+const generateTravelInvoicePdf = renderTravelInvoicePdf;
+
 // ── POS Receipt PDF (D17 slice 6) ──────────────────────────────────
 //
 // Wellness POS issues a paper / PDF receipt after each Sale is finalized.
@@ -1655,5 +1868,7 @@ module.exports = {
   renderTravelStallPersonalisedPdf,
   renderTravelQuotePdf,
   generateTravelQuotePdf,
+  renderTravelInvoicePdf,
+  generateTravelInvoicePdf,
   generatePosReceiptPdf,
 };

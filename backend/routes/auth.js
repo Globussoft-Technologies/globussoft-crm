@@ -9,6 +9,12 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 const { JWT_SECRET } = require("../config/secrets");
+// #914 slice 1 — additive HttpOnly cookie set alongside the JWT body. The
+// middleware does NOT yet read this cookie (slice 2) and the frontend does
+// NOT yet drop localStorage (slice 3+). Setting a cookie nothing reads is a
+// pure no-op for existing consumers; this passes the cross-cutting-shape-
+// change guard because zero behaviour changes downstream.
+const { setAuthCookie, clearAuthCookie } = require("../lib/authCookies");
 
 // In-memory store for password reset tokens (token -> { userId, expiresAt })
 const resetTokens = new Map();
@@ -142,6 +148,7 @@ router.post("/register", async (req, res) => {
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
     const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic" });
+    setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.status(201).json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
@@ -194,6 +201,7 @@ router.post("/signup", async (req, res) => {
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
     const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic" });
+    setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.status(201).json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
@@ -264,6 +272,7 @@ router.post("/login", async (req, res) => {
       sessionInfo: 'Single tenant per session enforced'
     });
 
+    setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
@@ -607,6 +616,13 @@ function jtiExpiresAt(req) {
 // POST /api/auth/logout — revoke the current session.
 router.post("/logout", verifyToken, async (req, res) => {
   try {
+    // #914 slice 1 — drop the additive HttpOnly cookie regardless of which
+    // path we take below. Safe to call even if the cookie was never set
+    // (the browser ignores clearCookie for an absent cookie). Must happen
+    // BEFORE any res.json() so the Set-Cookie clear header rides on the
+    // success response.
+    clearAuthCookie(res);
+
     if (!req.user || !req.user.jti) {
       // Old token (no jti). The client should still clear local storage; we
       // can't add it to the blacklist because we have no stable identifier.

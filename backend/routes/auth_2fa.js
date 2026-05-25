@@ -10,6 +10,9 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 const { JWT_SECRET } = require("../config/secrets");
+// #914 slice 1 — additive HttpOnly cookie set alongside the JWT body
+// (see backend/lib/authCookies.js header for the full migration plan).
+const { setAuthCookie } = require("../lib/authCookies");
 
 // ---------- Helpers ----------
 
@@ -233,6 +236,7 @@ router.post("/verify", async (req, res) => {
       });
     } catch (_auditErr) { /* fail-soft */ }
 
+    setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },

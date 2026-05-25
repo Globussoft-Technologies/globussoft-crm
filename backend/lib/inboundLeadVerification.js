@@ -666,6 +666,192 @@ function verifyByChannel(channel, args = {}) {
   return { ...result, channel };
 }
 
+/**
+ * Slice 14 — Normalize a JustDial lead-feed payload into the route's canonical
+ * body shape (PRD §3.4.2 marketplace backpressure + §1.1 launch-critical
+ * marketplace channel cluster). Sister to the slice-12 Meta normalizer and the
+ * slice-13 IndiaMART normalizer.
+ *
+ * JustDial delivers each lead row as a lowercase-key dict from their lead
+ * feed API (`https://api.justdial.com/...`):
+ *
+ *   {
+ *     "leadid": "JD-9876543",
+ *     "enquiry_id": "EQ-12345",
+ *     "name": "Asha Verma",
+ *     "email": "asha@example.com",
+ *     "mobile": "+919876543210",
+ *     "prefixedmobileno": "+919876543210",
+ *     "company": "Acme Travels",
+ *     "city": "Mumbai",
+ *     "area": "Andheri",
+ *     "branchpin": "400053",
+ *     "category": "Travel Agents",
+ *     "subcategory": "Umrah Package",
+ *     "query": "Looking for Umrah Q4",
+ *     "enquirydate": "2026-05-25 10:00:00",
+ *     "source": "justdial-web"
+ *   }
+ *
+ * The route expects flat `{ firstName?, lastName?, name?, email?, phone?,
+ * subBrand?, metaJson? }` (see slice 1 docstring; the slice-12 Meta + slice-13
+ * IndiaMART normalizers established the bridge pattern). This helper plugs
+ * JustDial into the same contract.
+ *
+ * Behavior (mirrors normalizeIndiamartLeadPayload's discipline):
+ *   - Detection: looks for the JustDial signature key set (`leadid` OR
+ *     `enquiry_id` OR `prefixedmobileno` OR `enquirydate` OR `branchpin`).
+ *     When NONE of these are present the helper returns the body untouched
+ *     (pre-normalized callers + non-JustDial payloads pass through). Note
+ *     that bare `mobile` / `name` / `email` are NOT signature keys because
+ *     they collide with the route's own canonical flat shape — we require
+ *     at least one JustDial-specific key to switch into normalization mode.
+ *   - Maps JustDial field names → canonical route fields:
+ *       name                            → name
+ *       email                           → email
+ *       prefixedmobileno | mobile       → phone
+ *       company                         → company
+ *   - Caller-supplied flat fields WIN over JustDial extraction (defensive
+ *     producer that ships both shapes keeps the explicit values).
+ *   - Preserves JustDial attribution + lead-context tokens under metaJson:
+ *       leadid / enquiry_id              (lead identity)
+ *       category / subcategory           (lead intent)
+ *       query                            (lead message)
+ *       enquirydate                      (lead timestamp)
+ *       city / area / branchpin          (geo)
+ *   - Unknown JustDial-shaped keys (lowercase tokens not in the field/meta
+ *     map) are LEFT untouched on the body — JustDial's payload uses generic
+ *     lowercase keys (no SENDER_/QUERY_-style prefix), so we can't safely
+ *     shovel "unknown lowercase keys" into extraFields without sweeping up
+ *     legitimate route-canonical fields. The conservative move is to leave
+ *     unknowns where they are and let downstream code ignore them.
+ *   - The original JustDial keys we DID consume (name/email/mobile/etc.) are
+ *     stripped from the output so the route handler doesn't ingest stale
+ *     duplicates of the canonical flat fields.
+ *
+ * Pure helper — IO-free, no Prisma. Returns a NEW object; does not mutate
+ * the input body.
+ *
+ * @param {object} body  raw request body (JustDial lead-feed row OR
+ *                       pre-normalized flat shape)
+ * @returns {object}     canonical flat body the route handler expects
+ */
+function normalizeJustdialLeadPayload(body) {
+  if (!body || typeof body !== "object") return body;
+
+  // Detection — JustDial rows always carry at least one of these. Bare
+  // `mobile` / `name` / `email` are NOT signature keys because they overlap
+  // with the route's own canonical flat shape; we'd misclassify pre-
+  // normalized callers as JustDial payloads and strip their fields.
+  const SIGNATURE_KEYS = [
+    "leadid",
+    "enquiry_id",
+    "prefixedmobileno",
+    "enquirydate",
+    "branchpin",
+  ];
+  const isJustdialShape = SIGNATURE_KEYS.some((k) =>
+    Object.prototype.hasOwnProperty.call(body, k),
+  );
+  if (!isJustdialShape) return body;
+
+  // Map JustDial field names → canonical route fields. `prefixedmobileno`
+  // is JustDial's newer E.164-formatted phone column; `mobile` is the
+  // legacy local-format column. Producers may ship either or both; we
+  // prefer prefixedmobileno when present because it's already E.164.
+  const FIELD_MAP = {
+    name: "name",
+    email: "email",
+    prefixedmobileno: "phone",
+    mobile: "phone",
+    company: "company",
+  };
+
+  // JustDial attribution + lead-context tokens that downstream attribution
+  // rollups need to read without re-querying JustDial.
+  const META_TOKENS = [
+    "leadid",
+    "enquiry_id",
+    "category",
+    "subcategory",
+    "query",
+    "enquirydate",
+    "city",
+    "area",
+    "branchpin",
+  ];
+
+  const extracted = {};
+  const metaTokens = {};
+
+  // Preference order for phone: prefixedmobileno wins over mobile (newer
+  // E.164 convention beats legacy local format). We process in map order
+  // but explicitly check prefixedmobileno first to lock the precedence.
+  if (
+    body.prefixedmobileno !== undefined &&
+    body.prefixedmobileno !== null &&
+    !(typeof body.prefixedmobileno === "string" &&
+      body.prefixedmobileno.trim() === "")
+  ) {
+    extracted.phone = body.prefixedmobileno;
+  } else if (
+    body.mobile !== undefined &&
+    body.mobile !== null &&
+    !(typeof body.mobile === "string" && body.mobile.trim() === "")
+  ) {
+    extracted.phone = body.mobile;
+  }
+
+  for (const [k, v] of Object.entries(body)) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === "string" && v.trim() === "") continue;
+
+    const canonical = FIELD_MAP[k];
+    if (canonical) {
+      // Phone is already resolved above by precedence; skip re-extraction.
+      if (canonical === "phone") continue;
+      if (extracted[canonical] === undefined) {
+        extracted[canonical] = v;
+      }
+      continue;
+    }
+    if (META_TOKENS.includes(k)) {
+      metaTokens[k] = v;
+    }
+    // Unknown lowercase keys are LEFT on the body — see header comment for
+    // why we don't sweep them into extraFields (collision risk with the
+    // route's own canonical shape).
+  }
+
+  const hasMetaTokens = Object.keys(metaTokens).length > 0;
+
+  // Shallow-clone the body, strip the JustDial-shaped keys we consumed (so
+  // the route handler doesn't ingest `mobile` / `prefixedmobileno` etc. as
+  // Contact-shaped fields), then layer extracted-canonical fields BEHIND
+  // caller-supplied flat fields (caller wins).
+  const out = { ...body };
+  for (const k of Object.keys(FIELD_MAP)) delete out[k];
+  for (const k of META_TOKENS) delete out[k];
+
+  for (const [k, v] of Object.entries(extracted)) {
+    if (out[k] === undefined || out[k] === null || out[k] === "") {
+      out[k] = v;
+    }
+  }
+
+  if (hasMetaTokens) {
+    const existingMeta =
+      out.metaJson && typeof out.metaJson === "object" ? out.metaJson : {};
+    const mergedMeta = { ...existingMeta };
+    for (const [k, v] of Object.entries(metaTokens)) {
+      if (mergedMeta[k] === undefined) mergedMeta[k] = v;
+    }
+    out.metaJson = mergedMeta;
+  }
+
+  return out;
+}
+
 module.exports = {
   verifyVoyagrHmac,
   verifyWebForm,
@@ -677,5 +863,6 @@ module.exports = {
   classifyInboundJunk,
   normalizeMetaLeadPayload,
   normalizeIndiamartLeadPayload,
+  normalizeJustdialLeadPayload,
   SPAM_PATTERNS,
 };

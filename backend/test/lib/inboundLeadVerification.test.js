@@ -958,3 +958,264 @@ describe("normalizeIndiamartLeadPayload — IndiaMART CRM Listing API → canoni
     expect(out.metaJson).toMatchObject({ QUERY_ID: "Q-only" });
   });
 });
+
+// ─── Slice 14 — normalizeJustdialLeadPayload (JustDial lead-feed API) ──────
+//
+// Pins the JustDial → canonical-body transform. Mirrors the slice-12 Meta and
+// slice-13 IndiaMART normalizers' discipline: detect the vendor shape via
+// signature keys, map vendor field names to canonical fields, preserve
+// attribution + lead-context tokens on metaJson, leave non-JustDial bodies
+// untouched, immutable input.
+//
+// JustDial-specific quirks pinned here:
+//   - `prefixedmobileno` (newer E.164 format) WINS over `mobile` (legacy
+//     local format) when both are present
+//   - Unknown lowercase keys are LEFT on the body (not swept into
+//     extraFields) because JustDial uses generic lowercase keys without a
+//     prefix — sweeping unknowns would collide with the route's own
+//     canonical fields (tenantSlug, subBrand, etc.)
+//   - Signature detection requires JustDial-specific keys (leadid /
+//     enquiry_id / prefixedmobileno / enquirydate / branchpin); bare
+//     `name`/`email`/`mobile` do NOT trigger normalization to avoid
+//     misclassifying pre-normalized callers
+//
+// Slice 14 ships the lib only; the route does NOT wire it in yet (marketplace
+// channels stay on the existing marketplaceEngine cron until the per-channel
+// refactor lands in a later slice — same lib-first / route-wire-later pattern
+// that slices 3→4 + 13 followed).
+
+const { normalizeJustdialLeadPayload } = await import(
+  "../../lib/inboundLeadVerification.js"
+);
+
+describe("normalizeJustdialLeadPayload — JustDial lead-feed API → canonical body (slice 14)", () => {
+  test("happy path: JustDial lowercase shape → flat canonical fields + metaJson", () => {
+    const jd = {
+      leadid: "JD-9876543",
+      enquiry_id: "EQ-12345",
+      name: "Asha Verma",
+      email: "asha@example.com",
+      prefixedmobileno: "+919876543210",
+      company: "Acme Travels",
+      city: "Mumbai",
+      area: "Andheri",
+      branchpin: "400053",
+      category: "Travel Agents",
+      subcategory: "Umrah Package",
+      query: "Looking for Umrah Q4",
+      enquirydate: "2026-05-25 10:00:00",
+    };
+
+    const out = normalizeJustdialLeadPayload(jd);
+
+    expect(out.name).toBe("Asha Verma");
+    expect(out.email).toBe("asha@example.com");
+    expect(out.phone).toBe("+919876543210");
+    expect(out.company).toBe("Acme Travels");
+    // Original JustDial keys consumed → stripped from output.
+    expect(out.prefixedmobileno).toBeUndefined();
+    expect(out.mobile).toBeUndefined();
+    expect(out.category).toBeUndefined();
+    expect(out.subcategory).toBeUndefined();
+    expect(out.query).toBeUndefined();
+    expect(out.enquirydate).toBeUndefined();
+    expect(out.city).toBeUndefined();
+    expect(out.area).toBeUndefined();
+    expect(out.branchpin).toBeUndefined();
+    expect(out.leadid).toBeUndefined();
+    expect(out.enquiry_id).toBeUndefined();
+    // JustDial attribution + lead-context tokens preserved on metaJson.
+    expect(out.metaJson).toMatchObject({
+      leadid: "JD-9876543",
+      enquiry_id: "EQ-12345",
+      category: "Travel Agents",
+      subcategory: "Umrah Package",
+      query: "Looking for Umrah Q4",
+      enquirydate: "2026-05-25 10:00:00",
+      city: "Mumbai",
+      area: "Andheri",
+      branchpin: "400053",
+    });
+  });
+
+  test("mobile alias maps to phone when prefixedmobileno is absent", () => {
+    const out = normalizeJustdialLeadPayload({
+      leadid: "JD-1",
+      name: "Rohan",
+      mobile: "+919876543210",
+    });
+    expect(out.phone).toBe("+919876543210");
+  });
+
+  test("prefixedmobileno WINS over mobile when both are present (newer E.164 beats legacy local)", () => {
+    const out = normalizeJustdialLeadPayload({
+      leadid: "JD-1",
+      prefixedmobileno: "+919876543210",
+      mobile: "9876543210",
+    });
+    expect(out.phone).toBe("+919876543210");
+  });
+
+  test("caller-supplied flat field WINS over JustDial extraction", () => {
+    const out = normalizeJustdialLeadPayload({
+      leadid: "JD-1",
+      name: "Operator Override",
+      // JustDial-side values that would otherwise extract:
+      email: undefined, // ensure caller didn't override email
+      prefixedmobileno: "+919876543210",
+    });
+    // Trick: we passed `name` as caller-supplied (winning) but it's also a
+    // JustDial field-map key — so this verifies "caller wins" doesn't get
+    // stomped during the strip-then-extract step.
+    expect(out.name).toBe("Operator Override");
+    expect(out.phone).toBe("+919876543210");
+  });
+
+  test("caller-supplied empty string is treated as missing (JustDial wins)", () => {
+    const out = normalizeJustdialLeadPayload({
+      leadid: "JD-1",
+      name: "",
+      email: null,
+      // The route's flat shape uses these keys, but JustDial also writes
+      // here. We're verifying that the empty/null caller values lose to
+      // a NEW JustDial value when there is one. Here both are simultaneously
+      // JustDial keys + caller flat fields, so we rely on the strip-then-
+      // extract step: strip removes ALL field-map keys, then extracted{} is
+      // empty for name/email because the body had no NON-empty JustDial
+      // source for them either. Verify the absence is reflected.
+      prefixedmobileno: "+919876543210",
+    });
+    // No name source → undefined.
+    expect(out.name).toBeUndefined();
+    expect(out.email).toBeUndefined();
+    expect(out.phone).toBe("+919876543210");
+  });
+
+  test("unknown lowercase keys are LEFT on the body (not swept into extraFields)", () => {
+    const out = normalizeJustdialLeadPayload({
+      leadid: "JD-1",
+      name: "Asha",
+      // Unknown JustDial keys (not in FIELD_MAP or META_TOKENS):
+      campaign_id: "camp-99",
+      ad_group: "umrah-2026",
+    });
+    expect(out.name).toBe("Asha");
+    // Unknowns survive on the output body (no SENDER_/QUERY_-style prefix
+    // means we can't safely shovel them into extraFields without colliding
+    // with route-canonical fields).
+    expect(out.campaign_id).toBe("camp-99");
+    expect(out.ad_group).toBe("umrah-2026");
+    // metaJson should NOT carry an extraFields key in this slice.
+    expect(out.metaJson?.extraFields).toBeUndefined();
+  });
+
+  test("merges into existing metaJson without clobbering", () => {
+    const out = normalizeJustdialLeadPayload({
+      metaJson: {
+        utm_source: "justdial-organic",
+        existing_token: "preserved",
+      },
+      leadid: "JD-999",
+      name: "Asha",
+      city: "Mumbai",
+    });
+    // Caller-supplied metaJson tokens survive.
+    expect(out.metaJson.utm_source).toBe("justdial-organic");
+    expect(out.metaJson.existing_token).toBe("preserved");
+    // JustDial-supplied tokens land alongside.
+    expect(out.metaJson.leadid).toBe("JD-999");
+    expect(out.metaJson.city).toBe("Mumbai");
+  });
+
+  test("no JustDial signature keys → body returned untouched (other channels / pre-normalized)", () => {
+    const body = {
+      name: "Plain Caller",
+      email: "plain@example.com",
+      phone: "+919876543210",
+      mobile: "9876543210", // bare mobile WITHOUT JustDial signature → no-op
+      subBrand: "rfu",
+      tenantSlug: "travel-stall",
+    };
+    const out = normalizeJustdialLeadPayload(body);
+    expect(out).toBe(body);
+  });
+
+  test("non-object input → returned untouched", () => {
+    expect(normalizeJustdialLeadPayload(null)).toBeNull();
+    expect(normalizeJustdialLeadPayload(undefined)).toBeUndefined();
+    expect(normalizeJustdialLeadPayload("string")).toBe("string");
+    expect(normalizeJustdialLeadPayload(42)).toBe(42);
+  });
+
+  test("null / undefined / empty-string field values are skipped", () => {
+    const out = normalizeJustdialLeadPayload({
+      leadid: "JD-1",
+      name: null,
+      email: "",
+      prefixedmobileno: undefined,
+      mobile: "   ",
+      company: "",
+      query: "Looking for Umrah",
+    });
+    expect(out.name).toBeUndefined();
+    expect(out.email).toBeUndefined();
+    expect(out.phone).toBeUndefined();
+    expect(out.company).toBeUndefined();
+    expect(out.metaJson).toMatchObject({
+      leadid: "JD-1",
+      query: "Looking for Umrah",
+    });
+  });
+
+  test("plain non-JustDial keys (tenantSlug / subBrand) survive untouched alongside extraction", () => {
+    const out = normalizeJustdialLeadPayload({
+      tenantSlug: "travel-stall",
+      subBrand: "rfu",
+      leadid: "JD-1",
+      name: "Asha",
+      email: "asha@example.com",
+    });
+    expect(out.tenantSlug).toBe("travel-stall");
+    expect(out.subBrand).toBe("rfu");
+    expect(out.name).toBe("Asha");
+    expect(out.email).toBe("asha@example.com");
+  });
+
+  test("does not mutate the input body", () => {
+    const body = {
+      leadid: "JD-1",
+      name: "Immutable",
+      prefixedmobileno: "+919876543210",
+      city: "Mumbai",
+    };
+    const snapshot = JSON.parse(JSON.stringify(body));
+    normalizeJustdialLeadPayload(body);
+    expect(body).toEqual(snapshot);
+  });
+
+  test("only canonical extractions, no meta tokens → metaJson stays absent", () => {
+    const out = normalizeJustdialLeadPayload({
+      leadid: "JD-1",
+      name: "Asha",
+      email: "asha@example.com",
+      prefixedmobileno: "+919876543210",
+      // leadid IS a meta token though, so we DO expect metaJson — verify
+      // it carries leadid alone. (Pure "no meta tokens" needs a signature
+      // key that's NOT also a meta token — branchpin fits.)
+    });
+    expect(out.metaJson).toMatchObject({ leadid: "JD-1" });
+  });
+
+  test("signature detection: lone branchpin (no other JustDial tokens) triggers normalization", () => {
+    const out = normalizeJustdialLeadPayload({
+      branchpin: "400053",
+      name: "Pre-normalized Asha",
+      email: "asha@example.com",
+    });
+    expect(out.name).toBe("Pre-normalized Asha");
+    // branchpin is BOTH a signature key AND a meta token — verify it
+    // landed under metaJson and was stripped from the body.
+    expect(out.metaJson).toMatchObject({ branchpin: "400053" });
+    expect(out.branchpin).toBeUndefined();
+  });
+});

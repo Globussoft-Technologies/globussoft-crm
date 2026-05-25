@@ -28,6 +28,7 @@ const {
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
+const { generateTravelQuotePdf } = require("../services/pdfRenderer");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 
@@ -347,6 +348,168 @@ router.delete(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] delete error:", e.message);
       res.status(500).json({ error: "Failed to delete quote" });
+    }
+  },
+);
+
+// POST /api/travel/quotes/:id/duplicate — ADMIN/MANAGER only.
+//
+// Copies an existing TravelQuote row into a fresh DRAFT row under the
+// same tenant. Optional body fields { subBrand, contactId } let the
+// operator re-target the duplicate (e.g. cloning a TMC quote across
+// to RFU, or assigning to a different contact).
+//
+// Source row is looked up tenant-scoped + sub-brand-scoped (the same
+// guard as GET/PUT/DELETE), so cross-tenant or cross-sub-brand reads
+// yield 404 / 403 respectively. The duplicate inherits totalAmount /
+// currency / validUntil from the source; status is always reset to
+// "Draft" so the new row enters the operator queue cleanly.
+router.post(
+  "/quotes/:id/duplicate",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const source = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!source) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, source.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      const { subBrand: subBrandOverride, contactId: contactIdOverride } = req.body || {};
+
+      let targetSubBrand = source.subBrand;
+      if (subBrandOverride !== undefined && subBrandOverride !== null && subBrandOverride !== "") {
+        assertValidSubBrand(subBrandOverride);
+        if (!canAccessSubBrand(allowed, subBrandOverride)) {
+          return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        }
+        targetSubBrand = subBrandOverride;
+      }
+
+      let targetContactId = source.contactId;
+      if (contactIdOverride !== undefined && contactIdOverride !== null && contactIdOverride !== "") {
+        const ci = parseInt(contactIdOverride, 10);
+        if (!Number.isFinite(ci)) {
+          return res.status(400).json({ error: "contactId must be a number", code: "INVALID_CONTACT_ID" });
+        }
+        targetContactId = ci;
+      }
+
+      const created = await prisma.travelQuote.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          subBrand: targetSubBrand,
+          contactId: targetContactId,
+          status: "Draft",
+          totalAmount: source.totalAmount,
+          currency: source.currency,
+          validUntil: source.validUntil,
+        },
+      });
+
+      await writeAudit(
+        "TravelQuote",
+        "TRAVEL_QUOTE_DUPLICATED",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          sourceId: source.id,
+          newId: created.id,
+          subBrand: created.subBrand,
+          contactId: created.contactId,
+        },
+      );
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] duplicate error:", e.message);
+      res.status(500).json({ error: "Failed to duplicate quote" });
+    }
+  },
+);
+
+// GET /api/travel/quotes/:id/pdf — ADMIN/MANAGER only.
+//
+// Looks up the TravelQuote tenant-scoped + sub-brand-scoped, then hands
+// the row to pdfRenderer.generateTravelQuotePdf which returns a
+// Promise<Buffer>. We stream the Buffer back with attachment headers so
+// the operator browser triggers a download dialog.
+//
+// PDF render failures are wrapped as 500 PDF_RENDER_FAILED rather than
+// the generic "Failed to..." catch — pdfkit can throw on bad font/asset
+// resolution and the operator-facing surface needs an actionable code.
+router.get(
+  "/quotes/:id/pdf",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!quote) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      let pdfBuffer;
+      try {
+        pdfBuffer = await generateTravelQuotePdf(quote);
+      } catch (renderErr) {
+        console.error("[travel-quotes] PDF render error:", renderErr && renderErr.message);
+        return res.status(500).json({
+          error: "Failed to render quote PDF",
+          code: "PDF_RENDER_FAILED",
+        });
+      }
+
+      // Audit BEFORE sending the body so the row is durable even if the
+      // client aborts mid-download. Mirrors the DELETE handler's ordering.
+      await writeAudit(
+        "TravelQuote",
+        "TRAVEL_QUOTE_PDF_DOWNLOADED",
+        quote.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          quoteId: quote.id,
+          subBrand: quote.subBrand,
+        },
+      );
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="quote-${quote.id}.pdf"`,
+      );
+      res.status(200).end(pdfBuffer);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] pdf error:", e.message);
+      res.status(500).json({ error: "Failed to generate quote PDF" });
     }
   },
 );

@@ -960,11 +960,21 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
 
     const stampRotation = rotatedFields.length > 0;
 
+    // P1: `phoneNumberId` is the multi-tenant webhook routing key + carries
+    // a UNIQUE constraint at the DB layer. Empty-string values collide with
+    // each other once that constraint applies, so we coerce to NULL here on
+    // the write path. Same applies to the update path below — an empty
+    // request body field becomes NULL, not "".
+    const normalizedPhoneNumberId =
+      typeof phoneNumberId === "string" && phoneNumberId.trim() === ""
+        ? null
+        : phoneNumberId;
+
     const config = await prisma.whatsAppConfig.upsert({
       where: { tenantId_provider: { tenantId: req.user.tenantId, provider } },
       create: {
         provider,
-        phoneNumberId: phoneNumberId || "",
+        phoneNumberId: normalizedPhoneNumberId ?? null,
         businessAccountId: businessAccountId || null,
         accessToken: cleanSecrets.accessToken !== undefined ? cleanSecrets.accessToken : "",
         webhookVerifyToken: cleanSecrets.webhookVerifyToken !== undefined ? cleanSecrets.webhookVerifyToken : null,
@@ -974,7 +984,7 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
         ...(stampRotation && { lastRotatedAt: new Date() }),
       },
       update: {
-        ...(phoneNumberId !== undefined && { phoneNumberId }),
+        ...(phoneNumberId !== undefined && { phoneNumberId: normalizedPhoneNumberId }),
         ...(businessAccountId !== undefined && { businessAccountId }),
         ...cleanSecrets,
         ...(isActive !== undefined && { isActive }),

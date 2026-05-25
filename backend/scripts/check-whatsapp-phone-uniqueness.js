@@ -3,7 +3,9 @@
 // Pre-migration safety check for WhatsApp SaaS P1.
 //
 // ┌────────────────────────────────────────────────────────────────────┐
-// │ READ-ONLY. THIS SCRIPT DOES NOT MODIFY, DELETE, OR INSERT ANY ROW. │
+// │ DEFAULT MODE = READ-ONLY. NO row is modified unless                │
+// │ --fix-empty-strings is explicitly passed. Real duplicates are      │
+// │ NEVER auto-fixed — those always require human review.              │
 // │ Safe to run on production. Run before `prisma migrate deploy`.     │
 // └────────────────────────────────────────────────────────────────────┘
 //
@@ -12,35 +14,53 @@
 //   WhatsAppConfig.phoneNumberId. If any existing rows would violate the
 //   constraint, the ALTER TABLE statement fails mid-migration and leaves
 //   the table in a half-applied state. This script audits the current
-//   data and reports any conflicts so they can be resolved BEFORE the
-//   migration runs.
+//   data and reports / fixes (where safe) any conflicts so they can be
+//   resolved BEFORE the migration runs.
 //
 // What it does:
 //   1. Counts WhatsAppConfig rows.
 //   2. Finds rows where phoneNumberId = '' (these would collide once
-//      @unique applies — MySQL treats empty string as a distinct value).
+//      @unique applies — MySQL treats empty string as a distinct value
+//      but multiple "" values STILL collide with each other).
 //   3. Finds rows where the same non-empty phoneNumberId appears on more
 //      than one row (across any tenant/provider combination).
 //
-// What it does NOT do:
-//   - It does not UPDATE, DELETE, or INSERT anything.
-//   - It does not "fix" duplicates automatically. The repair is intentionally
-//     left to a human because the correct resolution depends on which row
-//     genuinely owns the phone number — only a human knows that.
+// Modes:
+//   • default (no flags)          — read-only audit; exit 1 on conflicts.
+//   • --fix-empty-strings         — UPDATEs phoneNumberId='' → NULL. This is
+//                                   safe + non-destructive: an empty string
+//                                   carries zero information about the
+//                                   tenant's Meta WABA, so converting it to
+//                                   NULL loses nothing. Real duplicates of
+//                                   non-empty values are still reported and
+//                                   left for human review.
+//
+// What this script will NEVER do:
+//   - DELETE any WhatsAppConfig row
+//   - Modify a non-empty phoneNumberId
+//   - Modify any field OTHER than phoneNumberId
+//   - Touch any other table
 //
 // Usage:
-//   node scripts/check-whatsapp-phone-uniqueness.js
+//   node scripts/check-whatsapp-phone-uniqueness.js                   # audit
+//   node scripts/check-whatsapp-phone-uniqueness.js --fix-empty-strings
 //
 // Exit codes:
-//   0  — safe to migrate (no conflicts)
-//   1  — conflicts found (printed to stdout for manual resolution)
+//   0  — safe to migrate (no conflicts, OR all conflicts auto-fixed)
+//   1  — conflicts remain (printed to stdout for manual resolution)
 //   2  — DB connection failure (no inspection performed)
 //
 
 const prisma = require("../lib/prisma");
 
+const FIX_EMPTY = process.argv.includes("--fix-empty-strings");
+
 async function main() {
-  console.log("[wa-phone-uniqueness-check] starting (READ-ONLY)…");
+  console.log(
+    "[wa-phone-uniqueness-check] starting (" +
+      (FIX_EMPTY ? "FIX-EMPTY-STRINGS mode — will write" : "READ-ONLY") +
+      ")…",
+  );
 
   let totalConfigs;
   try {
@@ -83,7 +103,7 @@ async function main() {
   }
 
   console.log("");
-  console.log("[wa-phone-uniqueness-check] ❌ migration would FAIL — duplicates present:");
+  console.log("[wa-phone-uniqueness-check] ❌ migration would FAIL — conflicts present:");
   console.log("");
 
   if (emptyStrings.length > 0) {
@@ -92,10 +112,22 @@ async function main() {
       console.log(`    - id=${r.id}  tenantId=${r.tenantId}  provider=${r.provider}  isActive=${r.isActive}`);
     }
     console.log("");
-    console.log("  Suggested manual fix (review before running):");
-    console.log("    UPDATE WhatsAppConfig SET phoneNumberId = NULL WHERE phoneNumberId = '';");
-    console.log("  This is non-destructive — NULLing an already-empty field loses no information.");
-    console.log("");
+
+    if (FIX_EMPTY) {
+      const result = await prisma.whatsAppConfig.updateMany({
+        where: { phoneNumberId: "" },
+        data: { phoneNumberId: null },
+      });
+      console.log(`  ✅ --fix-empty-strings APPLIED: ${result.count} row(s) updated from "" → NULL.`);
+      console.log("     This is non-destructive — an empty phoneNumberId carries zero");
+      console.log("     information about the tenant's Meta WABA, so NULLing it loses nothing.");
+      console.log("");
+    } else {
+      console.log("  Re-run with --fix-empty-strings to auto-NULL these rows (safe, non-destructive).");
+      console.log("  Or apply manually:");
+      console.log("    UPDATE WhatsAppConfig SET phoneNumberId = NULL WHERE phoneNumberId = '';");
+      console.log("");
+    }
   }
 
   if (duplicates.length > 0) {
@@ -119,6 +151,15 @@ async function main() {
     console.log("");
   }
 
+  // Exit-code policy:
+  //   - If real duplicates remain → exit 1 (migration still unsafe)
+  //   - If only the (now-fixed) empty-string class existed → exit 0
+  //   - Default (read-only) with any conflict → exit 1
+  if (duplicates.length === 0 && FIX_EMPTY && emptyStrings.length > 0) {
+    console.log("[wa-phone-uniqueness-check] ✅ safe to migrate — empty strings cleaned, no real duplicates");
+    await prisma.$disconnect();
+    process.exit(0);
+  }
   await prisma.$disconnect();
   process.exit(1);
 }

@@ -477,6 +477,133 @@ router.get("/suppliers", verifyToken, requireTravelTenant, async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────────────────
+// GET /api/travel/suppliers/search — autocomplete picker (Arc 2 #903 slice 10)
+//
+// Operator-facing supplier picker for quote-line / invoice-line forms.
+// Returns the top-N suppliers whose name CONTAINS the query token (case-
+// insensitive). Top-10 default, max 50, alphabetical sort by name.
+//
+// Auth: any verified token; tenant-scoped via req.travelTenant; sub-brand
+// access enforced via getSubBrandAccessSet so a sub-brand-restricted MANAGER
+// only sees suppliers in their allowed sub-brands.
+//
+// MUST be registered BEFORE `GET /suppliers/:id` — Express matches routes in
+// declaration order, and the literal "search" token would otherwise be
+// consumed by the :id param (yielding 400 INVALID_ID since parseInt("search")
+// is NaN). Placement here keeps the slice atomic at this insertion point.
+//
+// Query params:
+//   q                  required, 1..100 chars  — search needle (case-insensitive contains)
+//   subBrand           optional                — narrow to one sub-brand
+//   supplierCategory   optional, whitelist     — narrow by category
+//   limit              optional, default 10    — clamped to [1, 50]
+//
+// Response shape:
+//   { suppliers: [{ id, name, supplierCategory, subBrand, email, phone }], total }
+//
+// Decisions:
+//   - CONTAINS (not prefix-only): operators searching "hilton" should find
+//     "Grand Hilton" and "Hilton Mumbai" both. Prefix-only would miss the
+//     former. Same UX shape as Gmail / Slack contact pickers.
+//   - Case-insensitive: relies on Prisma's `mode: 'insensitive'` on `contains`
+//     — supported on PostgreSQL natively and on MySQL via collation
+//     (utf8mb4_general_ci default is case-insensitive, so the mode flag is
+//     essentially a no-op on MySQL but harmless and forward-compatible).
+//   - Only returns isActive=true rows — soft-deleted suppliers should not
+//     appear in pickers. The full list endpoint already filters this way
+//     by default; the picker has no opt-out (no ?includeInactive).
+//   - Slim projection: id + name + supplierCategory + subBrand + email + phone.
+//     Picker UI does NOT need gstin / paymentTermsDays / creditLimit; keeping
+//     the wire payload tight matters for tenants with hundreds of suppliers.
+//   - Error codes: INVALID_QUERY, INVALID_SUPPLIER_CATEGORY (re-uses the
+//     existing helper's code), INVALID_SUB_BRAND, INVALID_LIMIT.
+// ────────────────────────────────────────────────────────────────────────
+
+const SEARCH_DEFAULT_LIMIT = 10;
+const SEARCH_MAX_LIMIT = 50;
+const SEARCH_MAX_Q_LEN = 100;
+
+function parseSearchLimitOrThrow(input) {
+  if (input == null || input === "") return SEARCH_DEFAULT_LIMIT;
+  const v = Number(input);
+  if (!Number.isInteger(v) || v < 1) {
+    const err = new Error("limit must be a positive integer");
+    err.status = 400;
+    err.code = "INVALID_LIMIT";
+    throw err;
+  }
+  return Math.min(v, SEARCH_MAX_LIMIT);
+}
+
+router.get(
+  "/suppliers/search",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const q = req.query.q != null ? String(req.query.q) : "";
+      if (q.length < 1 || q.length > SEARCH_MAX_Q_LEN) {
+        return res.status(400).json({
+          error: `q must be 1..${SEARCH_MAX_Q_LEN} characters`,
+          code: "INVALID_QUERY",
+        });
+      }
+
+      const supplierCategory = req.query.supplierCategory
+        ? String(req.query.supplierCategory)
+        : null;
+      if (supplierCategory) assertValidSupplierCategory(supplierCategory);
+
+      const subBrand = req.query.subBrand ? String(req.query.subBrand) : null;
+      if (subBrand) assertValidSubBrand(subBrand);
+
+      const limit = parseSearchLimitOrThrow(req.query.limit);
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        isActive: true,
+        name: { contains: q, mode: "insensitive" },
+      };
+      if (supplierCategory) where.supplierCategory = supplierCategory;
+      if (subBrand) where.subBrand = subBrand;
+
+      // Sub-brand access narrowing — same pattern as the /suppliers list.
+      // If the caller requested a sub-brand they can't access, substitute
+      // "__none__" so the query returns empty rather than 403'ing.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed !== null) {
+        if (where.subBrand) {
+          if (!canAccessSubBrand(allowed, where.subBrand)) {
+            where.subBrand = "__none__";
+          }
+        } else {
+          where.subBrand = allowed.size > 0 ? { in: [...allowed] } : "__none__";
+        }
+      }
+
+      const suppliers = await prisma.travelSupplier.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          supplierCategory: true,
+          subBrand: true,
+          email: true,
+          phone: true,
+        },
+        orderBy: { name: "asc" },
+        take: limit,
+      });
+      res.json({ suppliers, total: suppliers.length });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] search suppliers error:", e.message);
+      res.status(500).json({ error: "Failed to search suppliers" });
+    }
+  },
+);
+
 // GET /api/travel/suppliers/:id
 router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

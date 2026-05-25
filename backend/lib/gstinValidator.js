@@ -61,48 +61,64 @@
 // 38 is Ladakh (2019 split from J&K); 96 reserved; 97 Other Territory; 99
 // reserved for centre.  This list pins the universe of valid first-2-digit
 // prefixes — a GSTIN with state code 40, for example, is structurally invalid.
-const STATE_CODES = new Set([
-  "01", // Jammu & Kashmir
-  "02", // Himachal Pradesh
-  "03", // Punjab
-  "04", // Chandigarh
-  "05", // Uttarakhand
-  "06", // Haryana
-  "07", // Delhi
-  "08", // Rajasthan
-  "09", // Uttar Pradesh
-  "10", // Bihar
-  "11", // Sikkim
-  "12", // Arunachal Pradesh
-  "13", // Nagaland
-  "14", // Manipur
-  "15", // Mizoram
-  "16", // Tripura
-  "17", // Meghalaya
-  "18", // Assam
-  "19", // West Bengal
-  "20", // Jharkhand
-  "21", // Odisha
-  "22", // Chhattisgarh
-  "23", // Madhya Pradesh
-  "24", // Gujarat
-  "25", // Daman & Diu (merged into 26 in 2020 but historic GSTINs persist)
-  "26", // Dadra & Nagar Haveli and Daman & Diu (merged UT)
-  "27", // Maharashtra
-  "28", // Andhra Pradesh (pre-bifurcation; historic only)
-  "29", // Karnataka
-  "30", // Goa
-  "31", // Lakshadweep
-  "32", // Kerala
-  "33", // Tamil Nadu
-  "34", // Puducherry
-  "35", // Andaman & Nicobar Islands
-  "36", // Telangana
-  "37", // Andhra Pradesh (post-bifurcation)
-  "38", // Ladakh
-  "97", // Other Territory
-  "99", // Centre Jurisdiction
-]);
+//
+// Slice 14: promoted to an object map so the operator-facing
+// /api/travel/utils/validate-gstin endpoint can decode state code → state
+// name without re-stating the table in the route layer.  STATE_CODES (the
+// Set form) stays exported for legacy callers that only care about
+// membership.
+const STATE_NAMES = Object.freeze({
+  "01": "Jammu & Kashmir",
+  "02": "Himachal Pradesh",
+  "03": "Punjab",
+  "04": "Chandigarh",
+  "05": "Uttarakhand",
+  "06": "Haryana",
+  "07": "Delhi",
+  "08": "Rajasthan",
+  "09": "Uttar Pradesh",
+  "10": "Bihar",
+  "11": "Sikkim",
+  "12": "Arunachal Pradesh",
+  "13": "Nagaland",
+  "14": "Manipur",
+  "15": "Mizoram",
+  "16": "Tripura",
+  "17": "Meghalaya",
+  "18": "Assam",
+  "19": "West Bengal",
+  "20": "Jharkhand",
+  "21": "Odisha",
+  "22": "Chhattisgarh",
+  "23": "Madhya Pradesh",
+  "24": "Gujarat",
+  "25": "Daman & Diu",
+  "26": "Dadra & Nagar Haveli and Daman & Diu",
+  "27": "Maharashtra",
+  "28": "Andhra Pradesh (pre-bifurcation)",
+  "29": "Karnataka",
+  "30": "Goa",
+  "31": "Lakshadweep",
+  "32": "Kerala",
+  "33": "Tamil Nadu",
+  "34": "Puducherry",
+  "35": "Andaman & Nicobar Islands",
+  "36": "Telangana",
+  "37": "Andhra Pradesh",
+  "38": "Ladakh",
+  "97": "Other Territory",
+  "99": "Centre Jurisdiction",
+});
+
+const STATE_CODES = new Set(Object.keys(STATE_NAMES));
+
+// Returns the human-readable state name for a 2-digit state code, or null
+// if the code isn't a recognised CBIC entry.  Used by the operator-facing
+// validate-gstin endpoint to decode a normalised GSTIN's leading-2 prefix.
+function stateNameFromCode(stateCode) {
+  if (typeof stateCode !== "string") return null;
+  return STATE_NAMES[stateCode] || null;
+}
 
 const FORMAT_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z][Z][0-9A-Z]$/;
 
@@ -203,6 +219,10 @@ module.exports = {
   isValidGstin,
   normaliseGstin,
   stateCodeFromGstin,
+  // Slice 14: state-code → state-name decoder for the operator-facing
+  // /api/travel/utils/validate-gstin endpoint.
+  stateNameFromCode,
+  STATE_NAMES,
   // Exposed for tests + future tax-rate-master seeders.
   STATE_CODES,
   computeChecksumChar,

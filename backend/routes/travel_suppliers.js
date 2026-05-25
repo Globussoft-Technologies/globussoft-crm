@@ -1292,6 +1292,220 @@ router.get(
 );
 
 // ============================================================================
+// GET /api/travel/suppliers/by-quarter — tenant-wide supplier quarterly rollup
+// (PRD_TRAVEL_SUPPLIER_MASTER §3 #903 slice 25).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-Qn bucket for
+// the tenant-scoped (and sub-brand-narrowed) supplier population. Each row
+// carries count + activeCount + archivedCount so the operator dashboard
+// can render a "suppliers onboarded by quarter" trend tile at lower
+// resolution than the /by-month time series (slice 24).
+//
+// Mirrors slice 24 (/suppliers/by-month) at quarter resolution and the
+// #901 slice 30 (/invoices/by-quarter) + #900 slice 17 (/quotes/by-quarter)
+// + #908 slice 22 (/flyer-templates/by-quarter) pattern for YYYY-Qn
+// bucketing. Calendar quarter is `Math.floor(month/3)+1` (Q1=Jan-Mar,
+// Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec). Same defensive math (null/invalid
+// createdAt → "unknown" bucket; excluded when ?from / ?to is set, kept
+// otherwise so the count surface stays accurate), same orderBy semantics,
+// same active-vs-archived split as the by-month aggregator.
+//
+// Distinct from /suppliers/stats (slice 23): /stats is a point-in-time
+// KPI tile; /by-month is the high-resolution time series; /by-quarter is
+// the low-resolution rollup ideal for sparse / multi-year overview tiles.
+//
+// PRD anchors:
+//   - §3 — tenant-wide supplier analytics (quarterly trend tile for the
+//          supplier-master dashboard; coarse-grained period picker)
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-Qn bounds; invalid →
+//                     400 INVALID_QUARTER_FORMAT
+//   - ?orderBy      — default quarter:asc; accepts quarter:{asc|desc},
+//                     count:{asc|desc}, activeCount:{asc|desc};
+//                     unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 40 (quarters
+//                       are sparser than months, so a smaller cap suffices)
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' suppliers in the rollup. Same gate as
+//     /suppliers/by-month — TravelSupplier.subBrand is NON-nullable in
+//     the schema, so we do NOT add a `{ subBrand: null }` OR clause
+//     (which #908 slice 22 does for flyer-templates whose subBrand IS
+//     nullable). Empty access set → forces `subBrand: "__none__"` so the
+//     response stays a clean zero-rollup envelope.
+//   - JS-side aggregation over a light findMany projection
+//     ({ isActive, createdAt }) — same rationale as the by-month sibling.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so the
+//     count surface stays accurate. Excluded when ?from / ?to is set
+//     (no comparable quarter token); included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter — same
+//     posture as the by-month sibling.
+//
+// No audit row written — read-only meta surface; matches /suppliers/stats
+// and /suppliers/by-month posture. USER-readable: anodyne (counts +
+// quarter-string tokens).
+//
+// Express route ordering: literal-path /by-quarter MUST be declared BEFORE
+// the /:id family or `:id="by-quarter"` would 400 INVALID_ID before
+// reaching this handler. Same convention as /suppliers/by-month,
+// /suppliers/stats, /suppliers/search.
+// ============================================================================
+router.get(
+  "/suppliers/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+      // YYYY-Qn validation — mirrors slice 30 /invoices/by-quarter.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "count:asc",
+        "count:desc",
+        "activeCount:asc",
+        "activeCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors slice 24
+      // /suppliers/by-month posture. TravelSupplier.subBrand is
+      // NON-nullable, so we use a single `subBrand: { in: [...] }`
+      // (no `{ subBrand: null }` OR clause). Empty allowed set returns
+      // the zero-rollup envelope.
+      const where = { tenantId: req.travelTenant.id };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          where.subBrand = { in: [...allowed] };
+        } else {
+          where.subBrand = "__none__";
+        }
+      }
+
+      // Light projection — isActive + createdAt is enough for the bucket
+      // totals.
+      const rows = await prisma.travelSupplier.findMany({
+        where,
+        select: { isActive: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { count, activeCount,
+      // archivedCount }. Null/invalid createdAt rows land in "unknown".
+      // Calendar quarter: Math.floor(month/3)+1 where month is 0-indexed.
+      const byQuarter = new Map();
+      for (const r of rows) {
+        let quarterKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const qn = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${qn}`;
+          }
+        }
+
+        let bucket = byQuarter.get(quarterKey);
+        if (!bucket) {
+          bucket = {
+            quarter: quarterKey,
+            count: 0,
+            activeCount: 0,
+            archivedCount: 0,
+          };
+          byQuarter.set(quarterKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.isActive) bucket.activeCount += 1;
+        else bucket.archivedCount += 1;
+      }
+
+      let quarters = [...byQuarter.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. YYYY-Qn sorts lexicographically the
+      // same as chronologically (since "Q1" < "Q2" < "Q3" < "Q4" and
+      // year-prefix dominates).
+      if (fromRaw !== null) {
+        quarters = quarters.filter(
+          (r) => r.quarter !== "unknown" && r.quarter >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter(
+          (r) => r.quarter !== "unknown" && r.quarter <= toRaw,
+        );
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Qn (also
+      // chronological). "unknown" sorts last in asc / first in desc
+      // (lexicographically > "9999-Q4") — acceptable for a defensive
+      // fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalQuarters = quarters.length;
+      const grandCount = quarters.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
+      const grandActiveCount = quarters.reduce(
+        (acc, r) => acc + (Number(r.activeCount) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as slice 24.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        quarters: paged,
+        totalQuarters,
+        grandCount,
+        grandActiveCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
+
+// ============================================================================
 // GET /api/travel/suppliers/:id/credentials — per-supplier portal-logins view
 // (Arc 2 #903 slice 13 — PRD_TRAVEL_SUPPLIER_MASTER AC-6.8 "Supplier Portal
 // Logins" sub-tab under the SupplierMaster detail page).

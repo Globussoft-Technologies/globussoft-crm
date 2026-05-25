@@ -15,6 +15,13 @@
 //      5ca25585). Shows summary tiles (totalDays / grandTotal /
 //      averageDailyCost) + per-day breakdown table with byType chips.
 //      Lazy-loads on first expand; cached for the page lifetime.
+//
+//      #907 slice 5 adds the per-day margin breakdown surfaced by the
+//      lib helper (supplierCost / markupTotal / gstTotal) plus the
+//      grand-total mirror (grandSupplierCost / grandMarkupTotal /
+//      grandGstTotal). The summary-tile row gains three margin tiles;
+//      each day-row gains a margin sub-row beneath the totalCost.
+//      PRD §3.6(d) pricing transparency.
 
 import { useEffect, useState, useContext } from "react";
 import { useParams } from "react-router-dom";
@@ -540,6 +547,27 @@ export default function ItineraryDetail() {
                   <SummaryTile label="Total days" value={String(dayCosts.totalDays)} />
                   <SummaryTile label="Grand total" value={fmtMoney(dayCosts.grandTotal, itin.currency)} />
                   <SummaryTile label="Avg daily cost" value={fmtMoney(dayCosts.averageDailyCost, itin.currency)} />
+                  {/* #907 slice 5 — per-trip margin breakdown. Rendered when
+                      the envelope carries the new fields (older backends
+                      may not). PRD §3.6(d) pricing transparency. */}
+                  {dayCosts.grandSupplierCost != null && (
+                    <SummaryTile
+                      label="Supplier cost"
+                      value={fmtMoney(dayCosts.grandSupplierCost, itin.currency)}
+                    />
+                  )}
+                  {dayCosts.grandMarkupTotal != null && (
+                    <SummaryTile
+                      label="Markup"
+                      value={fmtMoney(dayCosts.grandMarkupTotal, itin.currency)}
+                    />
+                  )}
+                  {dayCosts.grandGstTotal != null && (
+                    <SummaryTile
+                      label="GST"
+                      value={fmtMoney(dayCosts.grandGstTotal, itin.currency)}
+                    />
+                  )}
                 </div>
 
                 <div style={{
@@ -563,7 +591,31 @@ export default function ItineraryDetail() {
                             <strong>Day {d.dayOffset + 1}</strong>
                           </td>
                           <td style={td}>{d.itemCount}</td>
-                          <td style={td}>{fmtMoney(d.totalCost, itin.currency)}</td>
+                          <td style={td}>
+                            <div>{fmtMoney(d.totalCost, itin.currency)}</div>
+                            {/* #907 slice 5 — per-day margin caption.
+                                Rendered when the envelope carries the
+                                breakdown (older backends may not). */}
+                            {(d.supplierCost != null || d.markupTotal != null || d.gstTotal != null) && (
+                              <div
+                                style={{
+                                  fontSize: 11, color: "var(--text-secondary)",
+                                  marginTop: 4, lineHeight: 1.4,
+                                }}
+                                aria-label={`Day ${d.dayOffset + 1} margin breakdown`}
+                              >
+                                {d.supplierCost != null && (
+                                  <span>Supplier {fmtMoney(d.supplierCost, itin.currency)}</span>
+                                )}
+                                {d.markupTotal != null && (
+                                  <span> · Markup {fmtMoney(d.markupTotal, itin.currency)}</span>
+                                )}
+                                {d.gstTotal != null && (
+                                  <span> · GST {fmtMoney(d.gstTotal, itin.currency)}</span>
+                                )}
+                              </div>
+                            )}
+                          </td>
                           <td style={td}>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                               {Object.entries(d.byType || {}).map(([type, amount]) => {

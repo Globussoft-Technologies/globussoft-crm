@@ -255,3 +255,122 @@ describe('computeDayCosts', () => {
     expect(r.days[2].itemCount).toBe(2);
   });
 });
+
+// ─── #907 slice 5 — per-day margin breakdown (supplier / markup / gst) ─
+//
+// PRD §3.6(d) pricing transparency: operators need to see the customer-
+// facing total (already shipped as `totalCost`) PLUS the supplier-payable
+// vs operator-markup vs GST breakdown for the same day. The helper now
+// surfaces `supplierCost`, `markupTotal`, `gstTotal` per day AND
+// `grandSupplierCost` / `grandMarkupTotal` / `grandGstTotal` on the
+// envelope. These tests pin the breakdown contract:
+//   * unitCost / markup / gstAmount flow through additively.
+//   * Missing components default to 0 (no NaN).
+//   * supplierCost falls back to `cost` when unitCost is absent (so
+//     callers that only pass top-line cost still get a non-zero supplier
+//     figure, with markup/gst=0 — the safe degenerate case).
+//   * Grand-totals mirror the per-day shape exactly.
+//   * Half-up rounding holds on the new fields.
+describe('computeDayCosts — per-day margin breakdown (#907 slice 5)', () => {
+  test('exposes supplierCost + markupTotal + gstTotal per day', () => {
+    const items = [
+      { dayOffset: 0, cost: 10500, unitCost: 8500, markup: 1500, gstAmount: 500, itemType: 'flight' },
+      { dayOffset: 0, cost: 7920, unitCost: 6000, markup: 1200, gstAmount: 720, itemType: 'hotel' },
+    ];
+    const r = computeDayCosts(items);
+    expect(r.days).toHaveLength(1);
+    expect(r.days[0].totalCost).toBe(18420);
+    expect(r.days[0].supplierCost).toBe(14500); // 8500 + 6000
+    expect(r.days[0].markupTotal).toBe(2700);   // 1500 + 1200
+    expect(r.days[0].gstTotal).toBe(1220);      // 500 + 720
+  });
+
+  test('missing markup / gstAmount default to 0 (no NaN propagation)', () => {
+    const items = [
+      { dayOffset: 0, cost: 100, unitCost: 80, itemType: 'meal' }, // no markup, no gst
+    ];
+    const r = computeDayCosts(items);
+    expect(r.days[0].markupTotal).toBe(0);
+    expect(r.days[0].gstTotal).toBe(0);
+    expect(r.days[0].supplierCost).toBe(80);
+    expect(Number.isNaN(r.days[0].markupTotal)).toBe(false);
+    expect(Number.isNaN(r.days[0].gstTotal)).toBe(false);
+  });
+
+  test('supplierCost falls back to `cost` when unitCost is absent', () => {
+    // Caller only passed top-line cost — supplierCost takes the whole
+    // line; markup/gst stay 0. The safe degenerate case.
+    const items = [
+      { dayOffset: 0, cost: 500, itemType: 'activity' },
+    ];
+    const r = computeDayCosts(items);
+    expect(r.days[0].supplierCost).toBe(500);
+    expect(r.days[0].markupTotal).toBe(0);
+    expect(r.days[0].gstTotal).toBe(0);
+  });
+
+  test('grand-totals mirror per-day shape (sum across all days)', () => {
+    const items = [
+      { dayOffset: 0, cost: 10500, unitCost: 8500, markup: 1500, gstAmount: 500 },
+      { dayOffset: 1, cost: 7920, unitCost: 6000, markup: 1200, gstAmount: 720 },
+      { dayOffset: 2, cost: 3000, unitCost: 2400, markup: 500, gstAmount: 100 },
+    ];
+    const r = computeDayCosts(items);
+    expect(r.grandTotal).toBe(21420);
+    expect(r.grandSupplierCost).toBe(16900); // 8500 + 6000 + 2400
+    expect(r.grandMarkupTotal).toBe(3200);   // 1500 + 1200 + 500
+    expect(r.grandGstTotal).toBe(1320);      // 500 + 720 + 100
+  });
+
+  test('empty items → all grand-totals are 0 (no division-by-zero on derived fields)', () => {
+    const r = computeDayCosts([]);
+    expect(r.grandSupplierCost).toBe(0);
+    expect(r.grandMarkupTotal).toBe(0);
+    expect(r.grandGstTotal).toBe(0);
+  });
+
+  test('half-up rounding holds for markup/gst/supplier sums', () => {
+    // 33.33 × 3 = 99.99 (exact float).
+    // 0.555 × 3 = 1.665 (exact-ish float) → round2(1.665 + EPSILON) = 1.67.
+    // 1.005 in float is actually 1.00499999... so 1.005 × 3 sums to
+    // 3.01499... → round2 = 3.01 (not 3.02 — this is the expected IEEE-754
+    // behaviour; the helper's round2 + EPSILON trick still applies but
+    // can't compensate for input that's already short of its decimal
+    // representation). Pinning the observed values keeps the test honest
+    // about what float-precision summation actually produces.
+    const items = [
+      { dayOffset: 0, cost: 100, unitCost: 33.33, markup: 0.555, gstAmount: 1.005 },
+      { dayOffset: 0, cost: 100, unitCost: 33.33, markup: 0.555, gstAmount: 1.005 },
+      { dayOffset: 0, cost: 100, unitCost: 33.33, markup: 0.555, gstAmount: 1.005 },
+    ];
+    const r = computeDayCosts(items);
+    expect(r.days[0].supplierCost).toBe(99.99);
+    expect(r.days[0].markupTotal).toBe(1.67);
+    expect(r.days[0].gstTotal).toBe(3.01);
+  });
+
+  test('string-numeric coercion holds for markup / gstAmount / unitCost', () => {
+    const items = [
+      { dayOffset: 0, cost: '100', unitCost: '80', markup: '15', gstAmount: '5' },
+    ];
+    const r = computeDayCosts(items);
+    expect(r.days[0].supplierCost).toBe(80);
+    expect(r.days[0].markupTotal).toBe(15);
+    expect(r.days[0].gstTotal).toBe(5);
+  });
+
+  test('back-compat — `totalCost` + `byType` still computed unchanged', () => {
+    // Existing consumers (#907 slice 2 + slice 4) read these fields; the
+    // slice-5 additions must not alter them.
+    const items = [
+      { dayOffset: 0, cost: 100, unitCost: 80, markup: 15, gstAmount: 5, itemType: 'hotel' },
+      { dayOffset: 0, cost: 50, unitCost: 40, markup: 8, gstAmount: 2, itemType: 'meal' },
+    ];
+    const r = computeDayCosts(items);
+    expect(r.days[0].totalCost).toBe(150);
+    expect(r.days[0].byType).toEqual({ hotel: 100, meal: 50 });
+    expect(r.totalDays).toBe(1);
+    expect(r.grandTotal).toBe(150);
+    expect(r.averageDailyCost).toBe(150);
+  });
+});

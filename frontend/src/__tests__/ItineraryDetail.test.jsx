@@ -108,6 +108,10 @@ const DAY_COSTS_RESPONSE = {
       dayOffset: 0,
       itemCount: 2,
       totalCost: 23530,
+      // #907 slice 5 — per-day margin breakdown from the helper.
+      supplierCost: 20500,
+      markupTotal: 1300,
+      gstTotal: 1730,
       byType: { flight: 9450, hotel: 14080 },
       items: [],
     },
@@ -115,11 +119,18 @@ const DAY_COSTS_RESPONSE = {
       dayOffset: 1,
       itemCount: 1,
       totalCost: 5500,
+      supplierCost: 4500,
+      markupTotal: 800,
+      gstTotal: 200,
       byType: { activity: 5500 },
       items: [],
     },
   ],
   grandTotal: 29030,
+  // #907 slice 5 — grand-total mirror of the margin breakdown.
+  grandSupplierCost: 25000,
+  grandMarkupTotal: 2100,
+  grandGstTotal: 1930,
   totalDays: 2,
   averageDailyCost: 14515,
 };
@@ -457,6 +468,85 @@ describe("ItineraryDetail — day costs panel (#907 slice 4)", () => {
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalledWith("Internal server error");
     });
+  });
+
+  // ─── #907 slice 5 — per-day margin breakdown ─────────────────────
+  //
+  // The envelope now carries grandSupplierCost / grandMarkupTotal /
+  // grandGstTotal (full-trip margin) plus per-day supplierCost /
+  // markupTotal / gstTotal. UI surfaces the grand-totals as 3 extra
+  // summary tiles and shows a per-day margin caption beneath each day's
+  // totalCost. Tests pin:
+  //   - The 3 extra summary tiles render after fetch.
+  //   - Each day-row has a margin caption (Supplier · Markup · GST).
+  //   - Backwards-compat: if the envelope omits the new fields (older
+  //     backend), neither the tiles nor the captions render.
+  it("renders the 3 margin summary tiles (Supplier / Markup / GST)", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+
+    expect(await screen.findByText(/Supplier cost/i)).toBeTruthy();
+    // "Markup" / "GST" also appear as field labels in the add/edit item
+    // form ("Markup" / "GST amount") — use getAllByText since both labels
+    // can be present simultaneously when the form is rendered.
+    expect(screen.getAllByText(/^Markup$/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^GST$/i).length).toBeGreaterThan(0);
+  });
+
+  it("renders per-day margin caption beneath each day's total", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+    await screen.findByText("Day 1");
+
+    // Day 1 caption: aria-label exposes the per-day breakdown.
+    expect(
+      screen.getByLabelText(/Day 1 margin breakdown/i),
+    ).toBeTruthy();
+    expect(
+      screen.getByLabelText(/Day 2 margin breakdown/i),
+    ).toBeTruthy();
+  });
+
+  it("omits margin tiles + per-day captions when envelope has no margin fields (back-compat)", async () => {
+    // Simulate an older backend whose envelope lacks the slice-5 fields.
+    const legacyResp = {
+      itineraryId: 42,
+      days: [
+        {
+          dayOffset: 0,
+          itemCount: 1,
+          totalCost: 100,
+          byType: { hotel: 100 },
+          items: [],
+        },
+      ],
+      grandTotal: 100,
+      totalDays: 1,
+      averageDailyCost: 100,
+    };
+    fetchApiMock.mockImplementation(
+      makeFetchImpl(ITIN_WITH_ITEMS, { dayCosts: legacyResp }),
+    );
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /Day costs/i }));
+    await screen.findByText("Day 1");
+
+    // The existing tiles + per-day rows still render.
+    expect(screen.getByText(/Total days/i)).toBeTruthy();
+    expect(screen.getByText(/Grand total/i)).toBeTruthy();
+    // The slice-5 tiles must NOT render — `Supplier cost` is the
+    // disambiguating label (different from per-day caption text).
+    expect(screen.queryByText(/Supplier cost/i)).toBeNull();
+    // And the per-day margin caption aria-label is absent.
+    expect(screen.queryByLabelText(/Day 1 margin breakdown/i)).toBeNull();
   });
 
   it("does NOT re-fetch on a second toggle (lazy + cached)", async () => {

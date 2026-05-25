@@ -1192,6 +1192,13 @@ router.post("/itineraries/public/:shareToken/record-advance-payment", async (req
 // Items with neither resolved-day-source nor cost are still PASSED to the
 // helper which skips them per its precedence rules (keeps the contract
 // auditable from the helper side).
+//
+// Margin breakdown (#907 slice 5): each ItineraryItem row's `unitCost`,
+// `markup`, and `gstAmount` flow through to the helper, which aggregates
+// per-day `supplierCost` / `markupTotal` / `gstTotal` alongside the
+// existing `totalCost`. Grand-totals mirror the per-day shape
+// (`grandSupplierCost` / `grandMarkupTotal` / `grandGstTotal`) so the
+// envelope carries a full-trip P&L without consumer re-summing.
 router.get("/itineraries/:id/day-costs", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const itin = await loadItineraryWithGuard(req);
@@ -1219,7 +1226,10 @@ router.get("/itineraries/:id/day-costs", verifyToken, requireTravelTenant, async
     if (!tripStart && full.startDate) tripStart = new Date(full.startDate);
 
     // Map ItineraryItem rows → helper input shape. Day source comes from
-    // detailsJson (parsed); cost comes from totalPrice or unitCost.
+    // detailsJson (parsed); customer-facing `cost` is totalPrice (falls
+    // back to unitCost); per-line margin components flow through so the
+    // helper can surface supplierCost / markupTotal / gstTotal per day
+    // (#907 slice 5).
     const helperItems = items.map((row) => {
       let details = {};
       if (row.detailsJson) {
@@ -1233,6 +1243,9 @@ router.get("/itineraries/:id/day-costs", verifyToken, requireTravelTenant, async
         itemType: row.itemType,
         description: row.description,
         cost,
+        unitCost: row.unitCost != null ? Number(row.unitCost) : null,
+        markup: row.markup != null ? Number(row.markup) : 0,
+        gstAmount: row.gstAmount != null ? Number(row.gstAmount) : 0,
       };
       if (typeof details.dayOffset === "number") mapped.dayOffset = details.dayOffset;
       else if (typeof details.dayNumber === "number") mapped.dayNumber = details.dayNumber;

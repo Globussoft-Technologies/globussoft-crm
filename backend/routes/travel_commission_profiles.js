@@ -1879,4 +1879,200 @@ router.get(
   },
 );
 
+// PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 17 — annual commission summary.
+// Coarser-bucket sibling to slice 15 (by-month) + slice 16 (by-quarter). Same
+// Deal × Contact join, same defensive parseError branch, same unknown-bucket
+// fallback. Buckets per calendar year (UTC YYYY string). Powers the
+// operator-facing "year-over-year commission trend" view (PRD §3).
+router.get(
+  "/commission-profiles/:id/summary/by-year",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const profile = await prisma.travelCommissionProfile.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!profile) {
+        return res.status(404).json({
+          error: "Commission profile not found",
+          code: "PROFILE_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand gate — NULL subBrand profiles are tenant-wide.
+      if (profile.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, profile.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      // Default 10 (a decade); max 30 (3 decades). Tighter ceiling than the
+      // by-month / by-quarter siblings because year buckets are larger and a
+      // single response rarely needs >30.
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const stageFilter = req.query.stage ? String(req.query.stage) : null;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+      // YYYY validation — accept four-digit year tokens only. Anything else
+      // (two-digit "26", five-digit "20261", non-numeric) is a 400.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format (e.g. 2026)",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format (e.g. 2026)",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "totalCommission:desc",
+        "totalCommission:asc",
+        "dealCount:desc",
+        "dealCount:asc",
+        "totalSale:desc",
+        "totalSale:asc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      // Same Deal × Contact join as slices 9 + 14 + 15 + 16. No DB-level
+      // pagination — aggregation runs in-process so we can bucket by UTC YYYY.
+      const dealWhere = {
+        tenantId: req.travelTenant.id,
+        deletedAt: null,
+        contact: { commissionProfileId: id, tenantId: req.travelTenant.id },
+      };
+      if (stageFilter) dealWhere.stage = stageFilter;
+
+      const deals = await prisma.deal.findMany({
+        where: dealWhere,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+
+      // Parse stored profileJson once; reuse across all rows.
+      let parsedProfile = null;
+      let parseError = null;
+      try {
+        parsedProfile = JSON.parse(profile.profileJson);
+      } catch (e) {
+        parseError = e.message;
+      }
+
+      // Half-up round to 2dp — matches lib/agentCommissionCalculator.round2.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      // Aggregate per-UTC-year. Map "YYYY" → { year, dealCount, totalSale,
+      // totalCommission }. Deals with a null/invalid createdAt are bucketed
+      // under "unknown" so the count surface stays accurate.
+      const byYear = new Map();
+      for (const d of deals) {
+        let yearKey = "unknown";
+        if (d.createdAt) {
+          const dt = new Date(d.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let row = byYear.get(yearKey);
+        if (!row) {
+          row = {
+            year: yearKey,
+            dealCount: 0,
+            totalSale: 0,
+            totalCommission: 0,
+          };
+          byYear.set(yearKey, row);
+        }
+        row.dealCount += 1;
+        row.totalSale += Number(d.amount) || 0;
+
+        let commission = 0;
+        if (!parseError) {
+          const result = computeCommission({
+            saleAmount: Number(d.amount) || 0,
+            paxCount: 1,
+            profile: parsedProfile,
+          });
+          commission = Number(result.commission) || 0;
+        }
+        row.totalCommission += commission;
+      }
+
+      // Finalise rounding on per-row sums.
+      let years = [...byYear.values()].map((r) => ({
+        ...r,
+        totalSale: round2(r.totalSale),
+        totalCommission: round2(r.totalCommission),
+      }));
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set (no comparable token); when no bounds are set,
+      // "unknown" stays so the deal-count surface remains complete.
+      if (fromRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+      }
+      if (toRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY which is also
+      // chronological. "unknown" lexicographically > "9999" so it sorts last
+      // in asc / first in desc — acceptable for a defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalYears = years.length;
+      const grandTotalCommission = round2(
+        years.reduce((acc, r) => acc + (Number(r.totalCommission) || 0), 0),
+      );
+
+      // Pagination applied AFTER aggregation + sort + filter, same as siblings.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        profileId: profile.id,
+        profileName: profile.name,
+        profileType: profile.profileType,
+        years: paged,
+        totalYears,
+        grandTotalCommission,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] summary-by-year error:", e.message);
+      res.status(500).json({ error: "Failed to load commission annual summary" });
+    }
+  },
+);
+
 module.exports = router;

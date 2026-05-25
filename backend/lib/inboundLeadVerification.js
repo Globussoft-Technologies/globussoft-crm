@@ -300,6 +300,165 @@ function classifyInboundJunk({
 }
 
 /**
+ * Slice 12 — Normalize a Meta lead-ads webhook payload into the route's
+ * canonical body shape (PRD §3.4.3 + §1.1's launch-critical Meta channel).
+ *
+ * Meta delivers lead-ad submissions as a `field_data` array of
+ * `{ name, values: [...] }` pairs:
+ *
+ *   {
+ *     "leadgen_id": "1234567890",
+ *     "form_id": "987654321",
+ *     "ad_id": "111",
+ *     "campaign_id": "222",
+ *     "created_time": "2026-05-25T10:00:00+0000",
+ *     "field_data": [
+ *       { "name": "full_name", "values": ["Asha Verma"] },
+ *       { "name": "email", "values": ["asha@example.com"] },
+ *       { "name": "phone_number", "values": ["+919876543210"] }
+ *     ]
+ *   }
+ *
+ * The route expects flat `{ firstName?, lastName?, name?, email?, phone?,
+ * subBrand?, metaJson? }` (see slice 1 docstring). This helper bridges the
+ * two without forcing the route handler to grow channel-shape branches.
+ *
+ * Behavior:
+ *   - If `body.field_data` is absent or not an array, returns the body
+ *     untouched (pre-normalized callers and non-Meta payloads pass through).
+ *   - Maps known Meta field-names to canonical fields:
+ *       full_name | name             → name
+ *       first_name | given_name      → firstName
+ *       last_name | family_name      → lastName
+ *       email                        → email
+ *       phone_number | phone         → phone
+ *       company_name | company       → company
+ *       sub_brand | subBrand         → subBrand
+ *   - Caller-supplied flat fields WIN over field_data extraction (so a
+ *     pre-normalized payload that also carries field_data — defensive
+ *     producer — keeps the explicit values).
+ *   - Preserves leadgen_id / form_id / ad_id / campaign_id / created_time
+ *     under `metaJson` so downstream attribution rollups can read them
+ *     without re-querying Meta.
+ *   - Each `values` array is collapsed to its first entry (Meta convention:
+ *     single-value fields ship a 1-element array; multi-select fields not
+ *     supported in this slice — out-of-scope per PRD §7).
+ *   - Unknown field names are preserved under `metaJson.extraFields`
+ *     (object keyed by Meta field name) so ops can debug "why is this
+ *     field not flowing through" without losing data.
+ *
+ * Pure helper — IO-free, no Prisma. Returns a NEW object; does not mutate
+ * the input body.
+ *
+ * @param {object} body  raw request body (Meta webhook payload OR
+ *                       pre-normalized flat shape)
+ * @returns {object}     canonical flat body the route handler expects
+ */
+function normalizeMetaLeadPayload(body) {
+  if (!body || typeof body !== "object") return body;
+  if (!Array.isArray(body.field_data)) return body;
+
+  // Map Meta field-names → canonical route fields. Multiple Meta tokens
+  // can land on the same canonical field (e.g. `full_name` / `name` both
+  // → name) because Meta's form-builder lets producers name fields
+  // freely; we keep the alias list narrow to the documented standard
+  // fields.
+  const FIELD_MAP = {
+    full_name: "name",
+    name: "name",
+    first_name: "firstName",
+    given_name: "firstName",
+    last_name: "lastName",
+    family_name: "lastName",
+    email: "email",
+    phone_number: "phone",
+    phone: "phone",
+    company_name: "company",
+    company: "company",
+    sub_brand: "subBrand",
+    subBrand: "subBrand",
+  };
+
+  const extracted = {};
+  const extraFields = {};
+
+  for (const entry of body.field_data) {
+    if (!entry || typeof entry !== "object") continue;
+    const rawName = entry.name;
+    if (!rawName || typeof rawName !== "string") continue;
+    // Meta convention: single-value fields ship a 1-element array. Defend
+    // against producers shipping a bare string (older lead-ads format).
+    let value;
+    if (Array.isArray(entry.values) && entry.values.length > 0) {
+      value = entry.values[0];
+    } else if (typeof entry.values === "string") {
+      value = entry.values;
+    } else {
+      continue;
+    }
+    if (value === null || value === undefined) continue;
+    const canonical = FIELD_MAP[rawName];
+    if (canonical) {
+      // Caller-supplied flat field wins over field_data extraction.
+      if (extracted[canonical] === undefined) {
+        extracted[canonical] = value;
+      }
+    } else {
+      extraFields[rawName] = value;
+    }
+  }
+
+  // Preserve Meta-specific attribution tokens under metaJson so the
+  // route's downstream code can read them without re-querying Meta.
+  const metaTokens = {};
+  for (const k of [
+    "leadgen_id",
+    "form_id",
+    "ad_id",
+    "campaign_id",
+    "created_time",
+    "page_id",
+  ]) {
+    if (body[k] !== undefined && body[k] !== null) {
+      metaTokens[k] = body[k];
+    }
+  }
+  const hasExtras = Object.keys(extraFields).length > 0;
+  const hasMetaTokens = Object.keys(metaTokens).length > 0;
+
+  // Shallow-clone the body, then layer extracted-canonical fields BEHIND
+  // caller-supplied flat fields (caller wins), then merge metaJson.
+  const out = { ...body };
+  // Strip field_data from the output so the route doesn't ingest it as
+  // a Contact-shaped payload field.
+  delete out.field_data;
+
+  for (const [k, v] of Object.entries(extracted)) {
+    if (out[k] === undefined || out[k] === null || out[k] === "") {
+      out[k] = v;
+    }
+  }
+
+  if (hasMetaTokens || hasExtras) {
+    const existingMeta =
+      out.metaJson && typeof out.metaJson === "object" ? out.metaJson : {};
+    const mergedMeta = { ...existingMeta };
+    for (const [k, v] of Object.entries(metaTokens)) {
+      if (mergedMeta[k] === undefined) mergedMeta[k] = v;
+    }
+    if (hasExtras) {
+      mergedMeta.extraFields = {
+        ...(existingMeta.extraFields || {}),
+        ...extraFields,
+      };
+    }
+    out.metaJson = mergedMeta;
+  }
+
+  return out;
+}
+
+/**
  * Dispatch verification based on channel.
  *
  * @param {string} channel  voyagr|webform|whatsapp|ads|adsgpt|manual
@@ -340,5 +499,6 @@ module.exports = {
   checkAntiSpam,
   verifyByChannel,
   classifyInboundJunk,
+  normalizeMetaLeadPayload,
   SPAM_PATTERNS,
 };

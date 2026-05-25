@@ -53,6 +53,7 @@ const {
   normalizePhoneForDedup,
   checkAntiSpam,
   classifyInboundJunk,
+  normalizeMetaLeadPayload,
 } = require("../lib/inboundLeadVerification");
 
 // Slice-1 channel enum — narrower than the full PRD §3.1.2 16-value enum
@@ -122,6 +123,17 @@ function ensureEmail(email, channel) {
 router.post("/inbound/leads/:channel", async (req, res) => {
   try {
     assertValidChannel(req.params.channel);
+
+    // Slice 12 — when channel=metaads and the body carries Meta's
+    // `field_data` array shape (lead-ads webhook payload), normalize it
+    // into the canonical flat body shape BEFORE any downstream validation
+    // / verification / dedup runs. Pre-normalized callers (and other
+    // channels) pass through untouched — the helper is a no-op when
+    // field_data is absent. See lib/inboundLeadVerification.js
+    // normalizeMetaLeadPayload for the mapping.
+    if (req.params.channel === "metaads") {
+      req.body = normalizeMetaLeadPayload(req.body);
+    }
 
     const {
       firstName,

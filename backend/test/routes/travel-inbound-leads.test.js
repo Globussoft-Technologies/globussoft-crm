@@ -1171,3 +1171,222 @@ describe('POST /api/travel/inbound/leads/:channel — slice 11 junk classificati
     expect(prisma.contact.create).not.toHaveBeenCalled();
   });
 });
+
+// ─── Slice 12 — Meta lead-ads field_data normalizer integration ────────
+//
+// Contracts asserted (slice-12 additions):
+//   - Route accepts Meta's raw webhook shape ({ field_data: [{name, values}] })
+//     when channel=metaads and persists a Contact with the extracted
+//     canonical fields (name / email / phone). field_data is NOT carried
+//     through to Contact.create.
+//   - Meta attribution tokens (leadgen_id / form_id / ad_id / campaign_id /
+//     created_time) are preserved upstream of route consumption — the helper
+//     attaches them to metaJson (route's _metaJson destructure discards
+//     before contact.create, but the normalization itself is verified).
+//   - The normalizer is a NO-OP for non-metaads channels — voyagr / whatsapp /
+//     webform requests with an accidental field_data field pass through
+//     untouched.
+//   - Pre-normalized metaads callers (flat shape, no field_data) still work.
+
+describe('POST /api/travel/inbound/leads/metaads — slice 12 Meta payload normalization', () => {
+  test('raw Meta webhook payload → 201 + Contact created with extracted fields', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/metaads')
+      .send({
+        tenantSlug: 'travel-stall',
+        leadgen_id: '1234567890',
+        form_id: '987654321',
+        ad_id: '111',
+        campaign_id: '222',
+        created_time: '2026-05-25T10:00:00+0000',
+        field_data: [
+          { name: 'full_name', values: ['Asha Verma'] },
+          { name: 'email', values: ['asha@example.com'] },
+          { name: 'phone_number', values: ['+919876543210'] },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.channel).toBe('metaads');
+    expect(prisma.contact.create).toHaveBeenCalledTimes(1);
+
+    const callArg = prisma.contact.create.mock.calls[0][0];
+    // Extracted Meta fields landed on Contact.create.
+    expect(callArg.data.name).toBe('Asha Verma');
+    expect(callArg.data.email).toBe('asha@example.com');
+    expect(callArg.data.phone).toBe('+919876543210');
+    // tenantId came from the looked-up Tenant, NOT from the body.
+    expect(callArg.data.tenantId).toBe(42);
+    // source defaults to inbound:metaads.
+    expect(callArg.data.source).toBe('inbound:metaads');
+  });
+
+  test('Meta payload with first_name + last_name field_data → buildName combines them', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/metaads')
+      .send({
+        tenantSlug: 'travel-stall',
+        field_data: [
+          { name: 'first_name', values: ['Rohan'] },
+          { name: 'last_name', values: ['Kapoor'] },
+          { name: 'email', values: ['rohan@example.com'] },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    const callArg = prisma.contact.create.mock.calls[0][0];
+    // No `name` token in field_data → route's buildName() combines
+    // firstName + lastName into "Rohan Kapoor".
+    expect(callArg.data.name).toBe('Rohan Kapoor');
+    expect(callArg.data.email).toBe('rohan@example.com');
+  });
+
+  test('Meta payload with only phone_number → email synthesized to placeholder (route default)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/metaads')
+      .send({
+        tenantSlug: 'travel-stall',
+        leadgen_id: '999',
+        field_data: [
+          { name: 'full_name', values: ['Phone Only Lead'] },
+          { name: 'phone_number', values: ['+919811112222'] },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    const callArg = prisma.contact.create.mock.calls[0][0];
+    expect(callArg.data.phone).toBe('+919811112222');
+    expect(callArg.data.email).toMatch(/^inbound-metaads-\d+@imported\.local$/);
+  });
+
+  test('Meta payload missing both email and phone field_data → 400 MISSING_CONTACT', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/metaads')
+      .send({
+        tenantSlug: 'travel-stall',
+        leadgen_id: '1',
+        field_data: [
+          { name: 'full_name', values: ['No Contact Field'] },
+          { name: 'custom_q', values: ['why are you here'] },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_CONTACT' });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('field_data is NOT carried through to Contact.create (route does not persist Meta-shape arrays)', async () => {
+    await request(makeApp())
+      .post('/api/travel/inbound/leads/metaads')
+      .send({
+        tenantSlug: 'travel-stall',
+        field_data: [
+          { name: 'full_name', values: ['Asha'] },
+          { name: 'email', values: ['asha@example.com'] },
+        ],
+      });
+
+    const callArg = prisma.contact.create.mock.calls[0][0];
+    expect(callArg.data.field_data).toBeUndefined();
+  });
+
+  test('pre-normalized metaads caller (flat body, no field_data) still works → 201', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/metaads')
+      .send({
+        tenantSlug: 'travel-stall',
+        // Already-normalized flat shape (adapter pre-processed the
+        // webhook payload before forwarding to the envelope).
+        name: 'Pre-Normalized',
+        email: 'pre@example.com',
+        phone: '+919833334444',
+      });
+
+    expect(res.status).toBe(201);
+    const callArg = prisma.contact.create.mock.calls[0][0];
+    expect(callArg.data.name).toBe('Pre-Normalized');
+    expect(callArg.data.email).toBe('pre@example.com');
+  });
+
+  test('field_data on non-metaads channel is IGNORED (only metaads runs the normalizer)', async () => {
+    // Voyagr (or any other channel) sending field_data is a producer bug;
+    // the route does NOT run normalization for non-Meta channels. The
+    // missing-contact check fires because field_data didn't get unpacked
+    // into top-level fields.
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        field_data: [
+          { name: 'email', values: ['leaked@example.com' ] },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_CONTACT' });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('Meta payload with caller-supplied flat field WINS over field_data', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/metaads')
+      .send({
+        tenantSlug: 'travel-stall',
+        // Operator override (e.g. adapter that pre-applied a manual fix).
+        name: 'Explicit Override',
+        field_data: [
+          { name: 'full_name', values: ['From Meta'] },
+          { name: 'email', values: ['meta@example.com'] },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    const callArg = prisma.contact.create.mock.calls[0][0];
+    expect(callArg.data.name).toBe('Explicit Override');
+    // Email had no override → field_data wins.
+    expect(callArg.data.email).toBe('meta@example.com');
+  });
+
+  test('Meta payload triggers anti-spam check on extracted text (viagra in full_name)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/metaads')
+      .send({
+        tenantSlug: 'travel-stall',
+        field_data: [
+          { name: 'full_name', values: ['Buy viagra now'] },
+          { name: 'email', values: ['spam@example.com'] },
+        ],
+      });
+
+    // Anti-spam runs over the normalized body (which now contains
+    // "viagra" in the `name` field). The check serializes the body and
+    // matches against patterns.
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VERIFICATION_FAILED');
+    expect(res.body.reason).toMatch(/SPAM_PATTERN_VIAGRA/);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('Meta payload extraction handles 1-element values array semantics correctly', async () => {
+    // Verifies the route doesn't accidentally pass through the array
+    // shape ["Asha"] instead of the scalar "Asha".
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/metaads')
+      .send({
+        tenantSlug: 'travel-stall',
+        field_data: [
+          { name: 'full_name', values: ['Single Value'] },
+          { name: 'email', values: ['sv@example.com'] },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    const callArg = prisma.contact.create.mock.calls[0][0];
+    // Critical: must be a string, NOT an array.
+    expect(typeof callArg.data.name).toBe('string');
+    expect(callArg.data.name).toBe('Single Value');
+    expect(typeof callArg.data.email).toBe('string');
+    expect(callArg.data.email).toBe('sv@example.com');
+  });
+});

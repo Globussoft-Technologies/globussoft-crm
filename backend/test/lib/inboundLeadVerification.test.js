@@ -503,3 +503,230 @@ describe("classifyInboundJunk — low-signal payload flag (slice 11)", () => {
     expect(verdict.reasons).toContain("NO_PHONE");
   });
 });
+
+// ─── Slice 12 — normalizeMetaLeadPayload (Meta lead-ads webhook shape) ────
+//
+// Pins the Meta-payload → canonical-body transform consumed by the route
+// when channel=metaads. The helper is a no-op for non-Meta shapes (any
+// body without a `field_data` array) so pre-normalized callers and other
+// channels are unaffected.
+
+const { normalizeMetaLeadPayload } = await import(
+  "../../lib/inboundLeadVerification.js"
+);
+
+describe("normalizeMetaLeadPayload — Meta lead-ads webhook → canonical body (slice 12)", () => {
+  test("happy path: field_data array → flat canonical fields", () => {
+    const meta = {
+      leadgen_id: "1234567890",
+      form_id: "987654321",
+      ad_id: "111",
+      campaign_id: "222",
+      created_time: "2026-05-25T10:00:00+0000",
+      field_data: [
+        { name: "full_name", values: ["Asha Verma"] },
+        { name: "email", values: ["asha@example.com"] },
+        { name: "phone_number", values: ["+919876543210"] },
+      ],
+    };
+
+    const out = normalizeMetaLeadPayload(meta);
+
+    expect(out.name).toBe("Asha Verma");
+    expect(out.email).toBe("asha@example.com");
+    expect(out.phone).toBe("+919876543210");
+    // field_data is consumed (not present on the output so the route
+    // doesn't accidentally ingest it as a Contact-shaped field).
+    expect(out.field_data).toBeUndefined();
+    // Meta attribution tokens preserved on metaJson.
+    expect(out.metaJson).toMatchObject({
+      leadgen_id: "1234567890",
+      form_id: "987654321",
+      ad_id: "111",
+      campaign_id: "222",
+      created_time: "2026-05-25T10:00:00+0000",
+    });
+  });
+
+  test("first_name + last_name field_data tokens map to firstName / lastName", () => {
+    const out = normalizeMetaLeadPayload({
+      field_data: [
+        { name: "first_name", values: ["Asha"] },
+        { name: "last_name", values: ["Verma"] },
+        { name: "email", values: ["asha@example.com"] },
+      ],
+    });
+    expect(out.firstName).toBe("Asha");
+    expect(out.lastName).toBe("Verma");
+    // No `name` token in field_data → not synthesized; route's existing
+    // buildName() will combine firstName+lastName downstream.
+    expect(out.name).toBeUndefined();
+  });
+
+  test("given_name / family_name aliases also map (Meta's locale variant)", () => {
+    const out = normalizeMetaLeadPayload({
+      field_data: [
+        { name: "given_name", values: ["Rohan"] },
+        { name: "family_name", values: ["Kapoor"] },
+      ],
+    });
+    expect(out.firstName).toBe("Rohan");
+    expect(out.lastName).toBe("Kapoor");
+  });
+
+  test("caller-supplied flat field WINS over field_data extraction", () => {
+    const out = normalizeMetaLeadPayload({
+      // Caller pre-set an explicit name (defensive producer) — must keep it.
+      name: "Operator Override",
+      field_data: [
+        { name: "full_name", values: ["From Meta"] },
+        { name: "email", values: ["meta@example.com"] },
+      ],
+    });
+    expect(out.name).toBe("Operator Override");
+    // Email had no caller override → field_data wins.
+    expect(out.email).toBe("meta@example.com");
+  });
+
+  test("caller-supplied empty string is treated as missing (field_data wins)", () => {
+    const out = normalizeMetaLeadPayload({
+      name: "",
+      email: null,
+      field_data: [
+        { name: "full_name", values: ["From Meta"] },
+        { name: "email", values: ["meta@example.com"] },
+      ],
+    });
+    expect(out.name).toBe("From Meta");
+    expect(out.email).toBe("meta@example.com");
+  });
+
+  test("unknown field_data names land under metaJson.extraFields", () => {
+    const out = normalizeMetaLeadPayload({
+      field_data: [
+        { name: "full_name", values: ["Asha"] },
+        { name: "custom_question_1", values: ["Yes I want a quote"] },
+        { name: "trip_destination", values: ["Mecca"] },
+      ],
+    });
+    expect(out.name).toBe("Asha");
+    expect(out.metaJson?.extraFields).toEqual({
+      custom_question_1: "Yes I want a quote",
+      trip_destination: "Mecca",
+    });
+  });
+
+  test("merges into existing metaJson without clobbering", () => {
+    const out = normalizeMetaLeadPayload({
+      metaJson: {
+        utm_source: "facebook",
+        extraFields: { pre_existing: "value" },
+      },
+      leadgen_id: "999",
+      field_data: [
+        { name: "email", values: ["asha@example.com"] },
+        { name: "unmapped_field", values: ["x"] },
+      ],
+    });
+    // Caller-supplied utm_source must survive.
+    expect(out.metaJson.utm_source).toBe("facebook");
+    // New tokens land alongside.
+    expect(out.metaJson.leadgen_id).toBe("999");
+    // Extra fields merge (caller's `pre_existing` + new `unmapped_field`).
+    expect(out.metaJson.extraFields).toEqual({
+      pre_existing: "value",
+      unmapped_field: "x",
+    });
+  });
+
+  test("no field_data array → body returned untouched (other channels / pre-normalized callers)", () => {
+    const body = {
+      name: "Plain Caller",
+      email: "plain@example.com",
+      phone: "+919876543210",
+      subBrand: "rfu",
+    };
+    const out = normalizeMetaLeadPayload(body);
+    expect(out).toEqual(body);
+  });
+
+  test("field_data present but not an array → body returned untouched (defensive)", () => {
+    const body = {
+      name: "Defensive",
+      field_data: "not-an-array", // malformed producer
+    };
+    const out = normalizeMetaLeadPayload(body);
+    expect(out).toBe(body);
+  });
+
+  test("non-object input → returned untouched", () => {
+    expect(normalizeMetaLeadPayload(null)).toBeNull();
+    expect(normalizeMetaLeadPayload(undefined)).toBeUndefined();
+    expect(normalizeMetaLeadPayload("string")).toBe("string");
+    expect(normalizeMetaLeadPayload(42)).toBe(42);
+  });
+
+  test("malformed field_data entries are skipped (defensive against producer noise)", () => {
+    const out = normalizeMetaLeadPayload({
+      field_data: [
+        null,
+        undefined,
+        "not an object",
+        { /* no name */ values: ["orphan"] },
+        { name: "", values: ["empty name"] },
+        { name: 42, values: ["non-string name"] },
+        { name: "email", values: [] }, // empty values array → skip
+        { name: "phone_number", values: null }, // null values → skip
+        { name: "full_name", values: ["Surviving Entry"] },
+      ],
+    });
+    expect(out.name).toBe("Surviving Entry");
+    // The malformed entries did NOT crash the helper, and none of them
+    // contributed to extracted fields or extraFields.
+    expect(out.email).toBeUndefined();
+    expect(out.phone).toBeUndefined();
+  });
+
+  test("values as bare string (older Meta format) → first-entry semantics still apply", () => {
+    const out = normalizeMetaLeadPayload({
+      field_data: [
+        { name: "full_name", values: "Asha Bare" },
+        { name: "email", values: "asha@example.com" },
+      ],
+    });
+    expect(out.name).toBe("Asha Bare");
+    expect(out.email).toBe("asha@example.com");
+  });
+
+  test("multi-value array collapses to first entry (multi-select fields out of scope per PRD §7)", () => {
+    const out = normalizeMetaLeadPayload({
+      field_data: [
+        // Hypothetical multi-select destination preference. We take the
+        // first only — multi-value semantics are out-of-scope for slice 12.
+        { name: "company", values: ["Acme Travels", "Other Co"] },
+      ],
+    });
+    expect(out.company).toBe("Acme Travels");
+  });
+
+  test("does not mutate the input body", () => {
+    const body = {
+      leadgen_id: "1",
+      field_data: [{ name: "full_name", values: ["Immutable"] }],
+    };
+    const snapshot = JSON.parse(JSON.stringify(body));
+    normalizeMetaLeadPayload(body);
+    expect(body).toEqual(snapshot);
+  });
+
+  test("no Meta tokens AND no extra fields → metaJson stays absent (no empty object)", () => {
+    const out = normalizeMetaLeadPayload({
+      field_data: [
+        { name: "email", values: ["asha@example.com"] },
+        // No leadgen_id, no form_id, all mapped fields → no extras.
+      ],
+    });
+    expect(out.email).toBe("asha@example.com");
+    expect(out.metaJson).toBeUndefined();
+  });
+});

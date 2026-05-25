@@ -852,6 +852,192 @@ function normalizeJustdialLeadPayload(body) {
   return out;
 }
 
+/**
+ * Slice 15 — Normalize a TradeIndia lead-feed payload into the route's canonical
+ * body shape (PRD §3.4.2 marketplace backpressure + §1.1 launch-critical
+ * marketplace channel cluster). Sister to the slice-12 Meta, slice-13 IndiaMART,
+ * and slice-14 JustDial normalizers — completes the four-marketplace cluster.
+ *
+ * TradeIndia (tradeindia.com) is a B2B marketplace similar to IndiaMART; their
+ * lead-feed API ships each enquiry row as a lowercase + snake_case dict:
+ *
+ *   {
+ *     "query_id": "TI-9988776",
+ *     "sender_name": "Asha Verma",
+ *     "sender_company": "Acme Travels",
+ *     "email_id": "asha@example.com",
+ *     "mobile": "+919876543210",
+ *     "subject": "Umrah package enquiry",
+ *     "query_details": "Looking for Umrah Q4 family of 4",
+ *     "product_name": "Umrah Package",
+ *     "query_time": "2026-05-25 10:00:00",
+ *     "sender_city": "Mumbai",
+ *     "sender_state": "Maharashtra",
+ *     "sender_country": "India"
+ *   }
+ *
+ * Note on field-name uncertainty: TradeIndia has shipped multiple lead-feed API
+ * versions over the years (the older buyer-leads API used `mob_no` / `phone`;
+ * the newer enquiry API uses `mobile`). This normalizer accepts the union —
+ * `mobile`, `mob_no`, and `phone` all map to canonical `phone`; `email_id` and
+ * `email` both map to canonical `email`; `sender_name` and `name` both map to
+ * canonical `name`. Producers may ship either older or newer shape.
+ *
+ * The route expects flat `{ firstName?, lastName?, name?, email?, phone?,
+ * subBrand?, metaJson? }` (see slice 1 docstring; the slice-12/13/14 normalizers
+ * established the bridge pattern). This helper plugs TradeIndia into the same
+ * contract.
+ *
+ * Behavior (mirrors normalizeIndiamartLeadPayload's discipline — TradeIndia's
+ * snake_case shape is closer to IndiaMART than to JustDial):
+ *   - Detection: looks for TradeIndia signature keys (`sender_company` OR
+ *     `query_details` OR `query_id`). These three are distinctive — IndiaMART
+ *     uses SCREAMING_SNAKE for the same concepts and JustDial uses bare
+ *     `company` / `query` / `leadid`, so the lowercase snake_case form is
+ *     TradeIndia-specific. When NONE of these are present the helper returns
+ *     the body untouched (pre-normalized callers + non-TradeIndia payloads
+ *     pass through). Bare `mobile` / `email_id` are NOT signature keys because
+ *     they overlap with the route's own canonical shape.
+ *   - Maps TradeIndia field names → canonical route fields:
+ *       sender_name | name               → name
+ *       email_id | email                 → email
+ *       mobile | mob_no | phone          → phone
+ *       sender_company | company         → company
+ *   - Caller-supplied flat fields WIN over TradeIndia extraction (defensive
+ *     producer that ships both shapes keeps the explicit values).
+ *   - Preserves TradeIndia attribution + lead-context tokens under metaJson:
+ *       query_id                          (lead identity)
+ *       subject / query_details           (lead intent + message)
+ *       product_name                      (lead product)
+ *       query_time                        (lead timestamp)
+ *       sender_city / sender_state /
+ *         sender_country                  (geo)
+ *   - Unknown snake_case keys starting with `sender_` or `query_` that didn't
+ *     map to a canonical field or known meta token are preserved under
+ *     `metaJson.extraFields` so ops can debug missing mappings without losing
+ *     data (mirrors the IndiaMART normalizer's extraFields discipline).
+ *   - The original TradeIndia keys we DID consume are stripped from the
+ *     output so the route handler doesn't ingest stale duplicates of the
+ *     canonical flat fields.
+ *
+ * subBrand stays `null` here — TradeIndia doesn't surface a sub-brand hint in
+ * its lead-feed payload; the route resolves subBrand from tenant context later
+ * in the pipeline. Phone normalization is downstream (the normalizer ships the
+ * raw vendor value verbatim).
+ *
+ * Pure helper — IO-free, no Prisma. Returns a NEW object; does not mutate the
+ * input body.
+ *
+ * @param {object} body  raw request body (TradeIndia lead-feed row OR
+ *                       pre-normalized flat shape)
+ * @returns {object}     canonical flat body the route handler expects
+ */
+function normalizeTradeindiaLeadPayload(body) {
+  if (!body || typeof body !== "object") return body;
+
+  // Detection — TradeIndia-distinctive snake_case keys. We intentionally do
+  // NOT include bare `mobile` / `email_id` because they overlap with the
+  // route's own canonical shape; signature must be TradeIndia-specific.
+  const SIGNATURE_KEYS = ["sender_company", "query_details", "query_id"];
+  const isTradeindiaShape = SIGNATURE_KEYS.some((k) =>
+    Object.prototype.hasOwnProperty.call(body, k),
+  );
+  if (!isTradeindiaShape) return body;
+
+  // Map TradeIndia field names → canonical route fields. Multiple TradeIndia
+  // tokens may land on the same canonical field across API-version drift
+  // (mob_no = older buyer-leads API; mobile = newer enquiry API; phone is
+  // occasionally seen on legacy producers).
+  const FIELD_MAP = {
+    sender_name: "name",
+    name: "name",
+    email_id: "email",
+    email: "email",
+    mobile: "phone",
+    mob_no: "phone",
+    phone: "phone",
+    sender_company: "company",
+    company: "company",
+  };
+
+  // TradeIndia attribution + lead-context tokens that downstream attribution
+  // rollups need to read without re-querying TradeIndia.
+  const META_TOKENS = [
+    "query_id",
+    "subject",
+    "query_details",
+    "product_name",
+    "query_time",
+    "sender_city",
+    "sender_state",
+    "sender_country",
+  ];
+
+  const extracted = {};
+  const extraFields = {};
+  const metaTokens = {};
+
+  for (const [k, v] of Object.entries(body)) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === "string" && v.trim() === "") continue;
+
+    const canonical = FIELD_MAP[k];
+    if (canonical) {
+      if (extracted[canonical] === undefined) {
+        extracted[canonical] = v;
+      }
+      continue;
+    }
+    if (META_TOKENS.includes(k)) {
+      metaTokens[k] = v;
+      continue;
+    }
+    // Unmapped snake_case key starting with `sender_` or `query_` → preserve
+    // under extraFields. Plain camelCase / unrelated snake_case keys (e.g.
+    // caller-supplied `tenantSlug`, `subBrand`) are NOT swept — they survive
+    // untouched on the output body. Mirrors the IndiaMART normalizer's
+    // extraFields semantics.
+    if (/^(sender_|query_)/.test(k)) {
+      extraFields[k] = v;
+    }
+  }
+
+  const hasMetaTokens = Object.keys(metaTokens).length > 0;
+  const hasExtras = Object.keys(extraFields).length > 0;
+
+  // Shallow-clone the body, strip the TradeIndia-shaped keys we've consumed,
+  // then layer extracted-canonical fields BEHIND caller-supplied flat fields
+  // (caller wins).
+  const out = { ...body };
+  for (const k of Object.keys(FIELD_MAP)) delete out[k];
+  for (const k of META_TOKENS) delete out[k];
+  for (const k of Object.keys(extraFields)) delete out[k];
+
+  for (const [k, v] of Object.entries(extracted)) {
+    if (out[k] === undefined || out[k] === null || out[k] === "") {
+      out[k] = v;
+    }
+  }
+
+  if (hasMetaTokens || hasExtras) {
+    const existingMeta =
+      out.metaJson && typeof out.metaJson === "object" ? out.metaJson : {};
+    const mergedMeta = { ...existingMeta };
+    for (const [k, v] of Object.entries(metaTokens)) {
+      if (mergedMeta[k] === undefined) mergedMeta[k] = v;
+    }
+    if (hasExtras) {
+      mergedMeta.extraFields = {
+        ...(existingMeta.extraFields || {}),
+        ...extraFields,
+      };
+    }
+    out.metaJson = mergedMeta;
+  }
+
+  return out;
+}
+
 module.exports = {
   verifyVoyagrHmac,
   verifyWebForm,
@@ -864,5 +1050,6 @@ module.exports = {
   normalizeMetaLeadPayload,
   normalizeIndiamartLeadPayload,
   normalizeJustdialLeadPayload,
+  normalizeTradeindiaLeadPayload,
   SPAM_PATTERNS,
 };

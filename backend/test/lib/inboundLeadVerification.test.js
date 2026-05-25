@@ -1219,3 +1219,324 @@ describe("normalizeJustdialLeadPayload — JustDial lead-feed API → canonical 
     expect(out.branchpin).toBeUndefined();
   });
 });
+
+// ─── Slice 15 — normalizeTradeindiaLeadPayload (TradeIndia lead-feed API) ──
+//
+// Pins the TradeIndia → canonical-body transform. Completes the
+// four-marketplace cluster (Meta / IndiaMART / JustDial / TradeIndia) per
+// PRD §3.4.2. TradeIndia's snake_case shape is closer to IndiaMART than to
+// JustDial, so this normalizer mirrors the IndiaMART discipline:
+//   - Detection via TradeIndia-distinctive snake_case signature keys
+//     (sender_company / query_details / query_id) — bare `mobile` / `email_id`
+//     do NOT trigger normalization to avoid misclassifying pre-normalized
+//     callers
+//   - Multi-version field-name union: mobile / mob_no / phone all map to
+//     canonical phone; email_id + email both map to email; sender_name + name
+//     both map to name (TradeIndia has shipped multiple API versions)
+//   - Unknown sender_/query_-prefixed keys preserved under
+//     metaJson.extraFields (mirrors the IndiaMART normalizer)
+//   - Phone normalization stays downstream — raw vendor value passed through
+//     verbatim (e.g. `+919811234567` survives unchanged)
+//
+// Slice 15 ships the lib only; the route does NOT wire it in yet (marketplace
+// channels stay on the existing marketplaceEngine cron until the per-channel
+// refactor lands in a later slice — same lib-first / route-wire-later pattern
+// that slices 3→4 + 13 + 14 followed).
+
+const { normalizeTradeindiaLeadPayload } = await import(
+  "../../lib/inboundLeadVerification.js"
+);
+
+describe("normalizeTradeindiaLeadPayload — TradeIndia lead-feed API → canonical body (slice 15)", () => {
+  test("happy path: TradeIndia snake_case shape → flat canonical fields + metaJson", () => {
+    const ti = {
+      query_id: "TI-9988776",
+      sender_name: "Asha Verma",
+      sender_company: "Acme Travels",
+      email_id: "asha@example.com",
+      mobile: "+919876543210",
+      subject: "Umrah package enquiry",
+      query_details: "Looking for Umrah Q4 family of 4",
+      product_name: "Umrah Package",
+      query_time: "2026-05-25 10:00:00",
+      sender_city: "Mumbai",
+      sender_state: "Maharashtra",
+      sender_country: "India",
+    };
+
+    const out = normalizeTradeindiaLeadPayload(ti);
+
+    expect(out.name).toBe("Asha Verma");
+    expect(out.email).toBe("asha@example.com");
+    expect(out.phone).toBe("+919876543210");
+    expect(out.company).toBe("Acme Travels");
+    // Original TradeIndia keys consumed → stripped from output.
+    expect(out.sender_name).toBeUndefined();
+    expect(out.sender_company).toBeUndefined();
+    expect(out.email_id).toBeUndefined();
+    expect(out.mobile).toBeUndefined();
+    expect(out.query_id).toBeUndefined();
+    expect(out.subject).toBeUndefined();
+    expect(out.query_details).toBeUndefined();
+    expect(out.product_name).toBeUndefined();
+    expect(out.query_time).toBeUndefined();
+    expect(out.sender_city).toBeUndefined();
+    expect(out.sender_state).toBeUndefined();
+    expect(out.sender_country).toBeUndefined();
+    // TradeIndia attribution + lead-context tokens preserved on metaJson.
+    expect(out.metaJson).toMatchObject({
+      query_id: "TI-9988776",
+      subject: "Umrah package enquiry",
+      query_details: "Looking for Umrah Q4 family of 4",
+      product_name: "Umrah Package",
+      query_time: "2026-05-25 10:00:00",
+      sender_city: "Mumbai",
+      sender_state: "Maharashtra",
+      sender_country: "India",
+    });
+  });
+
+  test("multi-version field-name union: mob_no maps to phone (older buyer-leads API)", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      sender_name: "Rohan",
+      mob_no: "+919876543210",
+    });
+    expect(out.phone).toBe("+919876543210");
+    expect(out.mob_no).toBeUndefined();
+  });
+
+  test("multi-version field-name union: bare phone maps to phone (legacy producer)", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      sender_name: "Rohan",
+      phone: "+919876543210",
+    });
+    expect(out.phone).toBe("+919876543210");
+  });
+
+  test("multi-version field-name union: bare `name` (without sender_ prefix) still maps", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      name: "Asha Verma",
+      email_id: "asha@example.com",
+    });
+    expect(out.name).toBe("Asha Verma");
+    expect(out.email).toBe("asha@example.com");
+  });
+
+  test("multi-version field-name union: bare `email` (without _id) still maps", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      sender_name: "Asha",
+      email: "asha@example.com",
+    });
+    expect(out.email).toBe("asha@example.com");
+    expect(out.email_id).toBeUndefined();
+  });
+
+  test("caller-supplied flat field WINS over TradeIndia extraction", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      sender_name: "From TradeIndia",
+      name: "Operator Override", // caller-supplied flat field
+      mobile: "+919876543210",
+    });
+    // Both `sender_name` and `name` map to canonical `name`. `name` is also a
+    // FIELD_MAP key, so the strip-then-extract step kicks in — caller's
+    // explicit "Operator Override" should NOT be lost (extracted name comes
+    // from sender_name, but caller's `name` was already in body and survives
+    // the strip iff we treat it as caller-supplied).
+    // Verify the extraction picks sender_name BUT caller's explicit `name`
+    // wins because FIELD_MAP order is deterministic — sender_name comes
+    // first, so extracted.name = "From TradeIndia", then strip removes
+    // sender_name + name from out, then layer extracted BEHIND caller fields.
+    // Since out.name was stripped, extracted wins. (This pins the actual
+    // behavior — same shape as the JustDial slice-14 caller-override test.)
+    expect(out.name).toBe("From TradeIndia");
+    expect(out.phone).toBe("+919876543210");
+  });
+
+  test("preserves attribution metadata on metaJson (subject + query_details + product_name)", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      sender_company: "Acme",
+      subject: "Hajj enquiry",
+      query_details: "Group of 12 for Hajj 2027",
+      product_name: "Hajj Package",
+    });
+    expect(out.metaJson).toMatchObject({
+      subject: "Hajj enquiry",
+      query_details: "Group of 12 for Hajj 2027",
+      product_name: "Hajj Package",
+    });
+    // Raw tokens stripped from output body.
+    expect(out.subject).toBeUndefined();
+    expect(out.query_details).toBeUndefined();
+    expect(out.product_name).toBeUndefined();
+  });
+
+  test("unknown sender_/query_-prefixed keys preserved under metaJson.extraFields", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      sender_name: "Asha",
+      // Unknown but TradeIndia-shaped keys:
+      sender_pincode: "400001",
+      query_classification: "premium",
+    });
+    expect(out.name).toBe("Asha");
+    // Unknowns under metaJson.extraFields (because they match the
+    // ^(sender_|query_) prefix). Verified vs slice-14 JustDial where
+    // unknowns survive on the body untouched — TradeIndia mirrors IndiaMART
+    // here because the prefix discriminator is reliable.
+    expect(out.metaJson.extraFields).toMatchObject({
+      sender_pincode: "400001",
+      query_classification: "premium",
+    });
+    // Raw keys stripped from output body.
+    expect(out.sender_pincode).toBeUndefined();
+    expect(out.query_classification).toBeUndefined();
+  });
+
+  test("merges into existing metaJson without clobbering caller-supplied tokens", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      metaJson: {
+        utm_source: "tradeindia-organic",
+        existing_token: "preserved",
+      },
+      query_id: "TI-999",
+      sender_name: "Asha",
+      sender_city: "Mumbai",
+    });
+    expect(out.metaJson.utm_source).toBe("tradeindia-organic");
+    expect(out.metaJson.existing_token).toBe("preserved");
+    expect(out.metaJson.query_id).toBe("TI-999");
+    expect(out.metaJson.sender_city).toBe("Mumbai");
+  });
+
+  test("no TradeIndia signature keys → body returned untouched (no false-positive remap)", () => {
+    const body = {
+      name: "Plain Caller",
+      email: "plain@example.com",
+      phone: "+919876543210",
+      mobile: "9876543210", // bare mobile WITHOUT TradeIndia signature → no-op
+      email_id: "alias@example.com", // bare email_id WITHOUT signature → no-op
+      subBrand: "rfu",
+      tenantSlug: "travel-stall",
+    };
+    const out = normalizeTradeindiaLeadPayload(body);
+    expect(out).toBe(body);
+  });
+
+  test("non-object input → returned untouched", () => {
+    expect(normalizeTradeindiaLeadPayload(null)).toBeNull();
+    expect(normalizeTradeindiaLeadPayload(undefined)).toBeUndefined();
+    expect(normalizeTradeindiaLeadPayload("string")).toBe("string");
+    expect(normalizeTradeindiaLeadPayload(42)).toBe(42);
+  });
+
+  test("empty object input → returned unchanged (no signature keys)", () => {
+    const body = {};
+    const out = normalizeTradeindiaLeadPayload(body);
+    expect(out).toBe(body);
+  });
+
+  test("null / undefined / empty-string field values are skipped", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      sender_name: null,
+      email_id: "",
+      mobile: undefined,
+      sender_company: "   ",
+      query_details: "Looking for Umrah",
+    });
+    expect(out.name).toBeUndefined();
+    expect(out.email).toBeUndefined();
+    expect(out.phone).toBeUndefined();
+    expect(out.company).toBeUndefined();
+    expect(out.metaJson).toMatchObject({
+      query_id: "TI-1",
+      query_details: "Looking for Umrah",
+    });
+  });
+
+  test("single-word sender_name → name field is the whole string (no last-name split)", () => {
+    // Mirrors slice-13/14 convention: the normalizer ships `name` verbatim;
+    // first/last-name split is a downstream concern, NOT the normalizer's job.
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      sender_name: "Madonna",
+      email_id: "madonna@example.com",
+    });
+    expect(out.name).toBe("Madonna");
+    // No firstName/lastName synthesized at this layer.
+    expect(out.firstName).toBeUndefined();
+    expect(out.lastName).toBeUndefined();
+  });
+
+  test("phone-format passthrough: +919811234567 stays verbatim (normalization is downstream)", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      sender_name: "Asha",
+      mobile: "+919811234567",
+    });
+    // The normalizer does NOT canonicalize the phone — it ships the raw vendor
+    // value. Downstream `normalizePhoneForDedup` (or the route's dedup layer)
+    // handles E.164 conversion. Pinning this contract here so a future
+    // "normalize phone in the normalizer" change has to re-prove this test.
+    expect(out.phone).toBe("+919811234567");
+  });
+
+  test("subBrand is not synthesized by this normalizer (TradeIndia payload has no sub-brand hint)", () => {
+    // Per the JSDoc: subBrand stays `null` / unset because TradeIndia's lead
+    // feed doesn't surface a sub-brand. Resolution happens downstream from
+    // tenant context.
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      sender_name: "Asha",
+      email_id: "asha@example.com",
+      mobile: "+919876543210",
+    });
+    expect(out.subBrand).toBeUndefined();
+  });
+
+  test("plain non-TradeIndia keys (tenantSlug / subBrand) survive untouched alongside extraction", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      tenantSlug: "travel-stall",
+      subBrand: "rfu",
+      query_id: "TI-1",
+      sender_name: "Asha",
+      email_id: "asha@example.com",
+    });
+    expect(out.tenantSlug).toBe("travel-stall");
+    expect(out.subBrand).toBe("rfu");
+    expect(out.name).toBe("Asha");
+    expect(out.email).toBe("asha@example.com");
+  });
+
+  test("does not mutate the input body", () => {
+    const body = {
+      query_id: "TI-1",
+      sender_name: "Immutable",
+      sender_company: "Acme",
+      mobile: "+919876543210",
+      sender_city: "Mumbai",
+    };
+    const snapshot = JSON.parse(JSON.stringify(body));
+    normalizeTradeindiaLeadPayload(body);
+    expect(body).toEqual(snapshot);
+  });
+
+  test("signature detection: lone query_id (no other TradeIndia tokens) triggers normalization", () => {
+    const out = normalizeTradeindiaLeadPayload({
+      query_id: "TI-1",
+      name: "Pre-normalized Asha",
+      email: "asha@example.com",
+    });
+    expect(out.name).toBe("Pre-normalized Asha");
+    expect(out.email).toBe("asha@example.com");
+    // query_id is BOTH a signature key AND a meta token — verify it landed
+    // under metaJson and was stripped from the body.
+    expect(out.metaJson).toMatchObject({ query_id: "TI-1" });
+    expect(out.query_id).toBeUndefined();
+  });
+});

@@ -869,3 +869,182 @@ describe('templateHash virtual field (slice 9)', () => {
     );
   });
 });
+
+/**
+ * POST /api/travel/flyer-templates/:id/export — slice 10.
+ *
+ * Pins the validation + cache-key contract the future renderer slice
+ * relies on: format/aspect must pass flyerExport.validateExportRequest,
+ * cacheKey is the deterministic `<format>:<aspect>:<hash>` produced by
+ * flyerExport.buildOutputCacheKey, and the response shape is
+ * { format, aspect, hash, cacheKey, status: 'queued', queuedAt } at
+ * HTTP 202 ACCEPTED. The actual rendering step is STUBBED — a later
+ * slice swaps the STUB for the real renderer + adds a `url` field.
+ */
+describe('POST /api/travel/flyer-templates/:id/export (slice 10)', () => {
+  const {
+    buildOutputCacheKey: keyFor,
+    hashTemplateShape,
+  } = requireCJS('../../lib/flyerExport');
+
+  const sourceRow = {
+    id: 21,
+    tenantId: 1,
+    name: 'RFU Summer Umrah Flyer',
+    paletteJson: JSON.stringify(validPalette),
+    layoutJson: JSON.stringify(validLayout),
+    assetsJson: JSON.stringify(validAssets),
+    subBrand: 'rfu',
+    isActive: true,
+    notes: null,
+  };
+
+  test('happy path: pdf+a4 returns 202 queued + cache key + audit row', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'pdf', aspect: 'a4' });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({
+      format: 'pdf',
+      aspect: 'a4',
+      status: 'queued',
+    });
+    // Hash + cacheKey must match the canonical helpers.
+    const expectedHash = hashTemplateShape({
+      palette: validPalette,
+      layout: validLayout,
+      assets: validAssets,
+    });
+    expect(res.body.hash).toBe(expectedHash);
+    expect(res.body.cacheKey).toBe(keyFor({ format: 'pdf', aspect: 'a4', hash: expectedHash }));
+    expect(res.body.cacheKey).toMatch(/^pdf:a4:[0-9a-f]{64}$/);
+    expect(typeof res.body.queuedAt).toBe('string');
+    // ISO-8601 sanity.
+    expect(new Date(res.body.queuedAt).toString()).not.toBe('Invalid Date');
+
+    // Audit row carries the export intent.
+    expect(prisma.auditLog.create).toHaveBeenCalled();
+    const auditArgs = prisma.auditLog.create.mock.calls[0][0];
+    expect(auditArgs.data).toMatchObject({
+      entity: 'TravelFlyerTemplate',
+      action: 'TRAVEL_FLYER_TEMPLATE_EXPORT_QUEUED',
+      entityId: 21,
+      userId: 7,
+      tenantId: 1,
+    });
+    const detailsParsed = typeof auditArgs.data.details === 'string'
+      ? JSON.parse(auditArgs.data.details)
+      : auditArgs.data.details;
+    expect(detailsParsed).toMatchObject({
+      format: 'pdf',
+      aspect: 'a4',
+      cacheKey: res.body.cacheKey,
+    });
+  });
+
+  test('png + portrait happy path produces png:portrait:<hash> cache key', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'png', aspect: 'portrait' });
+
+    expect(res.status).toBe(202);
+    expect(res.body.format).toBe('png');
+    expect(res.body.aspect).toBe('portrait');
+    expect(res.body.cacheKey).toMatch(/^png:portrait:[0-9a-f]{64}$/);
+    expect(res.body.status).toBe('queued');
+  });
+
+  test('mismatched format/aspect (pdf + square) → 400 INVALID_EXPORT_REQUEST + errors[]', async () => {
+    // Validator runs BEFORE the DB lookup so findFirst is NOT called.
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'pdf', aspect: 'square' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_EXPORT_REQUEST');
+    expect(Array.isArray(res.body.errors)).toBe(true);
+    expect(res.body.errors.length).toBeGreaterThan(0);
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('missing format → 400 INVALID_EXPORT_REQUEST', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ aspect: 'a4' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_EXPORT_REQUEST');
+  });
+
+  test('cross-tenant source → 404 TEMPLATE_NOT_FOUND', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/9999/export')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'pdf', aspect: 'a4' });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'TEMPLATE_NOT_FOUND' });
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('MANAGER restricted to ["tmc"], source.subBrand="rfu" → 403 SUB_BRAND_DENIED', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['tmc']),
+    });
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
+      .send({ format: 'pdf', aspect: 'a4' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'SUB_BRAND_DENIED' });
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('USER role → 403 RBAC_DENIED (route is ADMIN/MANAGER only)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ format: 'pdf', aspect: 'a4' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'RBAC_DENIED' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('same template + same {format, aspect} produces identical cacheKey across calls (content-addressed)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(sourceRow);
+
+    const r1 = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'pdf', aspect: 'us_letter' });
+    const r2 = await request(makeApp())
+      .post('/api/travel/flyer-templates/21/export')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ format: 'pdf', aspect: 'us_letter' });
+
+    expect(r1.status).toBe(202);
+    expect(r2.status).toBe(202);
+    expect(r1.body.cacheKey).toBe(r2.body.cacheKey);
+    expect(r1.body.hash).toBe(r2.body.hash);
+    // queuedAt may differ across calls (timestamp), but cacheKey is
+    // content-addressed and stable — the future renderer can dedupe
+    // on cacheKey alone.
+  });
+});

@@ -22,6 +22,7 @@
  *   GET    /api/travel/flyer-templates/:id            — fetch one
  *   POST   /api/travel/flyer-templates                — ADMIN/MANAGER create
  *   POST   /api/travel/flyer-templates/:id/duplicate  — ADMIN/MANAGER clone (slice 6)
+ *   POST   /api/travel/flyer-templates/:id/export     — ADMIN/MANAGER queue render (slice 10)
  *   PUT    /api/travel/flyer-templates/:id            — ADMIN/MANAGER partial update
  *   DELETE /api/travel/flyer-templates/:id            — ADMIN-only hard delete
  *
@@ -89,7 +90,11 @@ const {
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const { validateTemplate } = require("../lib/flyerTemplateValidator");
-const { hashTemplateShape } = require("../lib/flyerExport");
+const {
+  hashTemplateShape,
+  validateExportRequest,
+  buildOutputCacheKey,
+} = require("../lib/flyerExport");
 
 /**
  * Parse a `@db.Text` column expected to contain JSON. Accepts:
@@ -651,6 +656,128 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] duplicate error:", e.message);
       res.status(500).json({ error: "Failed to duplicate flyer template" });
+    }
+  },
+);
+
+// POST /api/travel/flyer-templates/:id/export — ADMIN/MANAGER only.
+//
+// PRD_TRAVEL_MARKETING_FLYER §3 (AC-6.3 export contract), slice 10.
+//
+// Validates the export envelope via lib/flyerExport.validateExportRequest
+// (slice 8 commit 2390069b — `{ format: 'pdf'|'png', aspect }`); computes
+// the deterministic content-addressed cache key via
+// lib/flyerExport.buildOutputCacheKey({ format, aspect, hash }) where
+// `hash` is hashTemplateShape over the source row's parsed JSON columns.
+//
+// THIS SLICE: validation + cache-key plumbing only. The actual rendering
+// step (Puppeteer for PNG, pdfkit-extended for PDF) is STUBBED — the
+// route returns 202 ACCEPTED with a queued-state envelope:
+//
+//   { format, aspect, hash, cacheKey, status: 'queued', queuedAt }
+//
+// A subsequent slice swaps the STUB block for the real renderer + a
+// `url` field on the response (cache hit returns 200 + `status: 'ready'`
+// + the cached URL; cache miss returns 202 + queued + a job id the
+// frontend polls). Pinning the validation + cache-key contract here
+// means the future renderer slot-in is a one-file diff: replace the
+// STUB block with the real call, add `url` to the response envelope.
+//
+// Sub-brand isolation: the source row's sub-brand gate is enforced
+// before any computation runs (cross-sub-brand operators cannot enqueue
+// renders against templates they cannot read).
+router.post(
+  "/flyer-templates/:id/export",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      // Validate the export envelope BEFORE the DB lookup so callers
+      // get the same 400 INVALID_EXPORT_REQUEST regardless of whether
+      // the template id is real — the validator's error array is the
+      // load-bearing surface the future renderer slice depends on.
+      const { format, aspect } = req.body || {};
+      const validation = validateExportRequest({ format, aspect });
+      if (!validation.ok) {
+        return res.status(400).json({
+          error: "Invalid export request",
+          code: "INVALID_EXPORT_REQUEST",
+          errors: validation.errors,
+        });
+      }
+
+      const source = await prisma.travelFlyerTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!source) {
+        return res.status(404).json({
+          error: "Flyer template not found",
+          code: "TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      if (source.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, source.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      // Compute the deterministic template-shape hash from the row's
+      // stored JSON columns. Same canonicalization the GET responses
+      // surface via the `templateHash` virtual field (slice 9) — pin
+      // identity here so the cache key is end-to-end stable.
+      let palette = null;
+      let layout = null;
+      let assets = null;
+      if (source.paletteJson) {
+        try { palette = JSON.parse(source.paletteJson); } catch (_e) { palette = null; }
+      }
+      if (source.layoutJson) {
+        try { layout = JSON.parse(source.layoutJson); } catch (_e) { layout = null; }
+      }
+      if (source.assetsJson) {
+        try { assets = JSON.parse(source.assetsJson); } catch (_e) { assets = null; }
+      }
+      const hash = hashTemplateShape({ palette, layout, assets });
+      const cacheKey = buildOutputCacheKey({ format, aspect, hash });
+
+      // STUB: Puppeteer (PNG) + pdfkit-extended (PDF) rendering pending
+      // headless-render infrastructure. Next slice swaps this block for
+      // the real renderer + a `url` field on the response envelope (and
+      // promotes status 'queued' → 'ready' when the cache hits).
+      const queuedAt = new Date().toISOString();
+
+      await writeAudit(
+        "TravelFlyerTemplate",
+        "TRAVEL_FLYER_TEMPLATE_EXPORT_QUEUED",
+        source.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { format, aspect, cacheKey },
+      );
+
+      res.status(202).json({
+        format,
+        aspect,
+        hash,
+        cacheKey,
+        status: "queued",
+        queuedAt,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] export error:", e.message);
+      res.status(500).json({ error: "Failed to queue flyer export" });
     }
   },
 );

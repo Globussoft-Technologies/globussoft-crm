@@ -133,4 +133,162 @@ function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
-module.exports = { AGING_BUCKETS, bucketForDays, classifyPayable, computeAgingReport };
+// === Monthly rollup (Arc 2 #903 slice 18) ===
+//
+// Group a list of payables into per-YYYY-MM buckets, splitting count +
+// total amount by status (pending / scheduled / paid / cancelled). Feeds
+// the per-supplier dashboard "monthly invoice rollup" widget — operators
+// pull a single supplier's per-month payable schedule for cash-flow
+// planning (PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.d + §3.5.b "commission
+// ledger per FY" precursor — FY-wide rollup composes from monthly).
+//
+// Bucketing key is the payable's `dueDate` (forward-looking liability
+// calendar — when each obligation is/was scheduled to be paid). Rows
+// with a null / invalid dueDate are excluded with reason — caller can
+// surface "N payables excluded from monthly rollup" for the operator.
+//
+// Status split per month is essential — a month with ₹50K total amount
+// is very different if it's 50K-pending vs 50K-paid. Operators glance
+// at the rollup and immediately see "March: ₹50K owed (45K pending,
+// 5K paid)" without further drill-down.
+//
+// === Output shape ===
+//
+//   {
+//     months: [
+//       { month: "2026-03", totalAmount: 50000, totalCount: 12,
+//         byStatus: {
+//           pending:   { count: 9, totalAmount: 45000 },
+//           scheduled: { count: 0, totalAmount: 0 },
+//           paid:      { count: 3, totalAmount: 5000 },
+//           cancelled: { count: 0, totalAmount: 0 },
+//         },
+//       },
+//       ...
+//     ],
+//     grandTotal: 50000,
+//     totalCount: 12,
+//     excludedCount: 0,
+//     excludedReasons: {},
+//   }
+//
+// Months are sorted ASC by YYYY-MM key so callers can render the timeline
+// left-to-right without re-sorting. Empty months (no payables) are NOT
+// emitted — callers showing a contiguous month axis fill gaps client-side.
+// (Rationale: the rollup is response-size-bounded by the actual payable
+// timeline rather than by an arbitrary axis window.)
+
+const ROLLUP_STATUSES = ["pending", "scheduled", "paid", "cancelled"];
+
+/**
+ * Format a Date as YYYY-MM (UTC). Used as the rollup bucket key.
+ *
+ * @param {Date} d
+ * @returns {string} — "YYYY-MM"
+ */
+function monthKey(d) {
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth() + 1;
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * Build a per-YYYY-MM rollup of payables, split by status.
+ *
+ * Exclusion reasons:
+ *   - NO_PAYABLE     → null entry in input array
+ *   - NO_DUE_DATE    → payable.dueDate is null/undefined
+ *   - INVALID_DUE_DATE → payable.dueDate doesn't parse
+ *
+ * Unknown statuses are tallied under their literal status key but NOT
+ * added to the per-status break (kept under totalAmount + totalCount).
+ * This guards against future-added status values that haven't been
+ * wired into ROLLUP_STATUSES yet — caller still sees the total.
+ *
+ * @param {Array} payables
+ * @returns {{
+ *   months: Array<{ month: string, totalAmount: number, totalCount: number,
+ *     byStatus: Record<string, { count: number, totalAmount: number }>
+ *   }>,
+ *   grandTotal: number,
+ *   totalCount: number,
+ *   excludedCount: number,
+ *   excludedReasons: Record<string, number>
+ * }}
+ */
+function computeMonthlyRollup(payables) {
+  const buckets = new Map(); // key=YYYY-MM -> aggregate
+  let grandTotal = 0;
+  let totalCount = 0;
+  let excludedCount = 0;
+  const excludedReasons = {};
+
+  function excluded(reason) {
+    excludedCount++;
+    excludedReasons[reason] = (excludedReasons[reason] || 0) + 1;
+  }
+
+  for (const p of payables || []) {
+    if (!p) {
+      excluded("NO_PAYABLE");
+      continue;
+    }
+    if (!p.dueDate) {
+      excluded("NO_DUE_DATE");
+      continue;
+    }
+    const due = p.dueDate instanceof Date ? p.dueDate : new Date(p.dueDate);
+    if (Number.isNaN(due.getTime())) {
+      excluded("INVALID_DUE_DATE");
+      continue;
+    }
+
+    const key = monthKey(due);
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { month: key, totalAmount: 0, totalCount: 0, byStatus: {} };
+      for (const s of ROLLUP_STATUSES) {
+        bucket.byStatus[s] = { count: 0, totalAmount: 0 };
+      }
+      buckets.set(key, bucket);
+    }
+
+    const amount = Number(p.amount || 0);
+    bucket.totalAmount = round2(bucket.totalAmount + amount);
+    bucket.totalCount++;
+
+    const status = typeof p.status === "string" ? p.status : "pending";
+    if (ROLLUP_STATUSES.includes(status)) {
+      bucket.byStatus[status].count++;
+      bucket.byStatus[status].totalAmount = round2(
+        bucket.byStatus[status].totalAmount + amount,
+      );
+    }
+    // Unknown statuses still land in totalAmount + totalCount but are
+    // intentionally NOT echoed under byStatus — the caller's UI legend
+    // is fixed to ROLLUP_STATUSES and an unknown key would render blank.
+
+    grandTotal = round2(grandTotal + amount);
+    totalCount++;
+  }
+
+  const months = [...buckets.values()].sort((a, b) => a.month.localeCompare(b.month));
+
+  return {
+    months,
+    grandTotal,
+    totalCount,
+    excludedCount,
+    excludedReasons,
+  };
+}
+
+module.exports = {
+  AGING_BUCKETS,
+  bucketForDays,
+  classifyPayable,
+  computeAgingReport,
+  ROLLUP_STATUSES,
+  monthKey,
+  computeMonthlyRollup,
+};

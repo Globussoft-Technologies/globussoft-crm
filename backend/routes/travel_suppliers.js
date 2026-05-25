@@ -2114,6 +2114,129 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/:id/payables/monthly — Arc 2 #903 slice 18 —
+// per-supplier monthly invoice rollup (PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.d +
+// §3.5.b "commission ledger per FY" precursor — FY-wide rollup composes
+// from monthly).
+//
+// Sibling to slice 17's /:id/payables/aging — same parent-supplier guard
+// (loadParentSupplier) + same hard cap on payable rows fetched (10_000)
+// + same lib-pure aggregation (computeMonthlyRollup in payableAging.js).
+//
+// Operator use-case: per-supplier detail page shows a "next 6 months
+// payable schedule" widget. Each month displays total owed split by
+// status — pending vs scheduled vs paid vs cancelled — so a glance
+// answers "how much do we owe this supplier in March?" + "how much of
+// that is still unpaid?".
+//
+// Optional ?from + ?to query bounds the result months (inclusive,
+// YYYY-MM-DD form). When omitted, the route returns every month the
+// supplier has a payable scheduled for. Bounds parse via
+// parseDateBoundOrThrow (mirrors slice 7's /payables route).
+//
+// Route ordering: must register BEFORE /:id/payables/:payableId
+//   (PUT/DELETE) so "monthly" cannot be captured as a payableId — same
+//   sub-paths-before-:id discipline used by slices 13-17.
+// ============================================================================
+
+const { computeMonthlyRollup } = require("../lib/payableAging");
+const MONTHLY_MAX_ROWS = 10_000;
+
+router.get(
+  "/suppliers/:id/payables/monthly",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // Optional from / to bounds — applied at month-level after rollup.
+      // Parsing happens BEFORE loadParentSupplier so an invalid date
+      // surfaces 400 INVALID_FROM / INVALID_TO without a DB round-trip.
+      let fromMonthKey = null;
+      let toMonthKey = null;
+      if (req.query.from != null && req.query.from !== "") {
+        const parsed = new Date(String(req.query.from));
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date / parseable date string",
+            code: "INVALID_FROM",
+          });
+        }
+        const y = parsed.getUTCFullYear();
+        const m = parsed.getUTCMonth() + 1;
+        fromMonthKey = `${y}-${String(m).padStart(2, "0")}`;
+      }
+      if (req.query.to != null && req.query.to !== "") {
+        const parsed = new Date(String(req.query.to));
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date / parseable date string",
+            code: "INVALID_TO",
+          });
+        }
+        const y = parsed.getUTCFullYear();
+        const m = parsed.getUTCMonth() + 1;
+        toMonthKey = `${y}-${String(m).padStart(2, "0")}`;
+      }
+
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const rows = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+        },
+        select: {
+          id: true,
+          dueDate: true,
+          status: true,
+          amount: true,
+        },
+        take: MONTHLY_MAX_ROWS,
+      });
+
+      const rollup = computeMonthlyRollup(rows);
+
+      // Apply from / to bounds (inclusive, YYYY-MM string compare).
+      let months = rollup.months;
+      if (fromMonthKey) months = months.filter((m) => m.month >= fromMonthKey);
+      if (toMonthKey) months = months.filter((m) => m.month <= toMonthKey);
+
+      // Recompute grandTotal + totalCount over the filtered window so the
+      // caller's "this window's owed amount" matches the months array.
+      let windowGrandTotal = 0;
+      let windowTotalCount = 0;
+      for (const m of months) {
+        windowGrandTotal = Math.round((windowGrandTotal + m.totalAmount + Number.EPSILON) * 100) / 100;
+        windowTotalCount += m.totalCount;
+      }
+
+      res.json({
+        supplier: {
+          id: supplier.id,
+          name: supplier.name,
+          supplierCategory: supplier.supplierCategory,
+          subBrand: supplier.subBrand,
+        },
+        from: fromMonthKey,
+        to: toMonthKey,
+        months,
+        grandTotal: windowGrandTotal,
+        totalCount: windowTotalCount,
+        excludedCount: rollup.excludedCount,
+        excludedReasons: rollup.excludedReasons,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] per-supplier monthly rollup error:", e.message);
+      res.status(500).json({ error: "Failed to build per-supplier monthly rollup" });
+    }
+  },
+);
+
 // POST /api/travel/suppliers/:id/payables — ADMIN/MANAGER only.
 // Required: description, amount. Optional: poNumber, currency, dueDate, notes, status.
 router.post(

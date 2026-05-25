@@ -2969,6 +2969,203 @@ router.get(
   },
 );
 
+// GET /api/travel/invoices/stats
+//
+// #901 slice 32 (PRD_TRAVEL_BILLING §3) — tenant-wide rollup KPI tile for
+// the Travel billing dashboard. Mirrors #900 slice 19 (/quotes/stats) +
+// #903 slice 23 (/suppliers/stats) — same envelope shape, swapping
+// TravelQuote → TravelInvoice + 4-status → 5-status taxonomy
+// (Draft|Issued|Partial|Paid|Voided) + acceptanceRate → paidRate +
+// expiredCount → overdueCount + lastUpdatedAt → lastIssuedAt.
+//
+// Behavior:
+//   - Tenant-scoped count + breakdown of ALL TravelInvoice rows.
+//   - USER-readable (anodyne aggregate; same as /quotes/stats).
+//   - MANAGER scoped to subBrandAccess via getSubBrandAccessSet — empty
+//     access set returns the zeroed shape (not 403) so the dashboard
+//     tile renders cleanly for not-yet-onboarded operators.
+//   - Optional ?from / ?to ISO-date bounds on createdAt.
+//
+// Response shape:
+//   {
+//     total,
+//     byStatus: { Draft|Issued|Partial|Paid|Voided: {count, totalValue} },
+//     bySubBrand: { tmc|rfu|...|_tenant: {count} },
+//     grandTotalValue, grandPaidValue, grandOpenValue,
+//     paidRate,        // paid / (paid + open); null if denom = 0
+//     overdueCount,    // status IN (Issued, Partial) AND dueDate < now
+//     lastIssuedAt,    // most-recent updatedAt where status='Issued'
+//   }
+//
+// Half-up 2dp on all money values. Defensive: null/non-numeric totalAmount → 0,
+// no NaN poisoning.
+//
+// Route-ordering: declared BEFORE GET /:id so Express doesn't try to parse
+// "stats" as a numeric :id and 400.
+router.get("/invoices/stats", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+
+    // Optional ISO date bounds on createdAt.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Sub-brand narrowing — empty access set → zeroed shape (not 403).
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    const zeroed = {
+      total: 0,
+      byStatus: {
+        Draft: { count: 0, totalValue: 0 },
+        Issued: { count: 0, totalValue: 0 },
+        Partial: { count: 0, totalValue: 0 },
+        Paid: { count: 0, totalValue: 0 },
+        Voided: { count: 0, totalValue: 0 },
+      },
+      bySubBrand: {},
+      grandTotalValue: 0,
+      grandPaidValue: 0,
+      grandOpenValue: 0,
+      paidRate: null,
+      overdueCount: 0,
+      lastIssuedAt: null,
+    };
+
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed);
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    const invoices = await prisma.travelInvoice.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        status: true,
+        totalAmount: true,
+        dueDate: true,
+        updatedAt: true,
+      },
+    });
+
+    if (invoices.length === 0) {
+      return res.json(zeroed);
+    }
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const now = Date.now();
+
+    const byStatus = {
+      Draft: { count: 0, totalValue: 0 },
+      Issued: { count: 0, totalValue: 0 },
+      Partial: { count: 0, totalValue: 0 },
+      Paid: { count: 0, totalValue: 0 },
+      Voided: { count: 0, totalValue: 0 },
+    };
+    const bySubBrand = {};
+    let grandTotalValue = 0;
+    let grandPaidValue = 0;
+    let grandVoidedValue = 0;
+    let overdueCount = 0;
+    let lastIssuedAt = null;
+
+    for (const inv of invoices) {
+      const amt = Number(inv.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      grandTotalValue += safeAmt;
+
+      if (byStatus[inv.status]) {
+        byStatus[inv.status].count += 1;
+        byStatus[inv.status].totalValue += safeAmt;
+      }
+
+      if (inv.status === "Paid") {
+        grandPaidValue += safeAmt;
+      }
+      if (inv.status === "Voided") {
+        grandVoidedValue += safeAmt;
+      }
+
+      // overdueCount: non-terminal billing-active status AND dueDate past.
+      if (
+        (inv.status === "Issued" || inv.status === "Partial")
+        && inv.dueDate
+      ) {
+        const dd = inv.dueDate instanceof Date ? inv.dueDate : new Date(inv.dueDate);
+        if (!Number.isNaN(dd.getTime()) && dd.getTime() < now) {
+          overdueCount += 1;
+        }
+      }
+
+      // bySubBrand: defensively coalesce null → "_tenant".
+      const sbKey = inv.subBrand ? String(inv.subBrand) : "_tenant";
+      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+      bySubBrand[sbKey].count += 1;
+
+      // lastIssuedAt: most-recent updatedAt of any Issued-status row (no
+      // dedicated issuedAt column on TravelInvoice — updatedAt under
+      // status='Issued' is the closest available semantic).
+      if (inv.status === "Issued") {
+        const ts = inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastIssuedAt || ts > lastIssuedAt) lastIssuedAt = ts;
+        }
+      }
+    }
+
+    // Round per-status sums.
+    for (const s of Object.keys(byStatus)) {
+      byStatus[s].totalValue = round2(byStatus[s].totalValue);
+    }
+
+    // grandOpenValue: total revenue surface MINUS paid MINUS voided.
+    const grandOpenValue = grandTotalValue - grandPaidValue - grandVoidedValue;
+
+    // paidRate: paid / (paid + open); null if denom = 0.
+    const paidDenom = grandPaidValue + grandOpenValue;
+    const paidRate = paidDenom > 0
+      ? round2(grandPaidValue / paidDenom)
+      : null;
+
+    res.json({
+      total: invoices.length,
+      byStatus,
+      bySubBrand,
+      grandTotalValue: round2(grandTotalValue),
+      grandPaidValue: round2(grandPaidValue),
+      grandOpenValue: round2(grandOpenValue),
+      paidRate,
+      overdueCount,
+      lastIssuedAt: lastIssuedAt ? lastIssuedAt.toISOString() : null,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-invoices] stats error:", e.message);
+    res.status(500).json({ error: "Failed to summarise invoices" });
+  }
+});
+
 // GET /api/travel/invoices/:id
 //
 // #901 slice 3 (PRD_TRAVEL_BILLING UC-2.5): supports ?include=lines to return

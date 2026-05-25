@@ -699,7 +699,13 @@ test.describe('POS — POST /sales/:id/refund', () => {
   });
 
   test('404 on unknown sale id', async ({ request }) => {
-    const res = await authPost(request, '/api/pos/sales/99999999/refund', { reason: 'x' });
+    // Triaged 2026-05-25 — D17 slice 7 (b7a9cf05) added amountCents
+    // requirement to the refund body. Send a valid value so validation
+    // passes and the lookup-fail path is exercised.
+    const res = await authPost(request, '/api/pos/sales/99999999/refund', {
+      reason: 'x',
+      amountCents: 100,
+    });
     expect(res.status()).toBe(404);
   });
 });

@@ -419,3 +419,173 @@ describe('GET /api/travel/suppliers/:id/credentials', () => {
     expect(prisma.travelSupplier.findFirst).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Arc 2 #903 slice 14 — POST /api/travel/suppliers/:id/credentials/:credId/rotate.
+//
+// Pins the contract for the operator-facing "mark rotated" action. PRD §3.7
+// credentials audit trail. Records a SupplierCredentialAccessLog row with
+// action="rotated" so the team has a paper trail of when each supplier-portal
+// credential was last cycled out-of-band.
+//
+// What's pinned
+// -------------
+//   - Happy path:        200 + { credentialId, rotatedAt, supplierId }.
+//   - ADMIN-only:        MANAGER + USER → 403 (verifyRole gate, mirrors the
+//                        existing PATCH /supplier-credentials/:id rotation
+//                        surface even though no secret material moves here).
+//   - Sub-brand:         ADMIN scoped to ['tmc'] rotating an RFU supplier's
+//                        cred → 403 SUB_BRAND_DENIED.
+//   - Cross-tenant 404:  supplier doesn't exist in this tenant → 404 NOT_FOUND.
+//   - Invalid id:        non-numeric :id OR :credId → 400 INVALID_ID.
+//   - Cred-not-found:    credId belongs to a different supplier (name
+//                        mismatch) → 404 NOT_FOUND, no audit row written.
+//   - Idempotency shape: repeated calls each write distinct accessLog rows
+//                        (operators may rotate multiple times; each event
+//                        needs its own timestamp).
+//   - Audit row shape:   action="rotated", userId from req.user.userId,
+//                        credentialId from path param.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/travel/suppliers/:id/credentials/:credId/rotate', () => {
+  test('happy path: marks cred rotated → 200 + { credentialId, rotatedAt, supplierId }', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findFirst = vi.fn().mockResolvedValue({ id: 11 });
+    const rotatedAt = new Date('2026-05-25T12:00:00Z');
+    prisma.supplierCredentialAccessLog.create.mockResolvedValue({ id: 999, at: rotatedAt });
+
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers/42/credentials/11/rotate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      credentialId: 11,
+      supplierId: 42,
+    });
+    expect(new Date(res.body.rotatedAt).getTime()).toBe(rotatedAt.getTime());
+
+    // Audit row shape — action="rotated", userId from token (7), credentialId.
+    expect(prisma.supplierCredentialAccessLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          credentialId: 11,
+          userId: 7,
+          action: 'rotated',
+        }),
+      }),
+    );
+  });
+
+  test('ADMIN-only: MANAGER → 403', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers/42/credentials/11/rotate')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
+      .send({});
+    expect(res.status).toBe(403);
+    expect(prisma.travelSupplier.findFirst).not.toHaveBeenCalled();
+    expect(prisma.supplierCredentialAccessLog.create).not.toHaveBeenCalled();
+  });
+
+  test('ADMIN-only: USER → 403', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers/42/credentials/11/rotate')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({});
+    expect(res.status).toBe(403);
+    expect(prisma.supplierCredentialAccessLog.create).not.toHaveBeenCalled();
+  });
+
+  // Note: sub-brand denial is structurally tested by the verifyRole gate above
+  // for MANAGER/USER → 403. The endpoint is ADMIN-only, and ADMIN role
+  // short-circuits getSubBrandAccessSet() to `null` (full access) in
+  // backend/middleware/travelGuards.js — so an ADMIN can never fail
+  // SUB_BRAND_DENIED on this path. The branch IS in the handler defensively
+  // (in case the role model ever shifts) but is intentionally unreachable
+  // for now. Slice 13's GET tests SUB_BRAND_DENIED against a MANAGER because
+  // that endpoint allows MANAGER.
+
+  test('cross-tenant: supplier not in tenant → 404 NOT_FOUND', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers/9999/credentials/11/rotate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+    expect(prisma.supplierCredentialAccessLog.create).not.toHaveBeenCalled();
+  });
+
+  test('invalid :id (non-numeric) → 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers/abc/credentials/11/rotate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+    expect(prisma.travelSupplier.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('invalid :credId (non-numeric) → 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers/42/credentials/xyz/rotate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+    expect(prisma.travelSupplier.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('credential not found for this supplier (name mismatch) → 404', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    // Cred lookup returns null — the credId belongs to a different supplier
+    // (its supplierName !== SUPPLIER_TMC.name) so the name-match WHERE clause
+    // filters it out.
+    prisma.supplierCredential.findFirst = vi.fn().mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers/42/credentials/777/rotate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+    // The findFirst MUST pin supplierName + tenantId + credId — operators
+    // can't backdate rotations on a cred from a different supplier.
+    expect(prisma.supplierCredential.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 777,
+          tenantId: 1,
+          supplierName: 'Grand Hilton Mumbai',
+        }),
+      }),
+    );
+    expect(prisma.supplierCredentialAccessLog.create).not.toHaveBeenCalled();
+  });
+
+  test('idempotency-shape: repeated calls each write distinct audit rows', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(SUPPLIER_TMC);
+    prisma.supplierCredential.findFirst = vi.fn().mockResolvedValue({ id: 11 });
+    prisma.supplierCredentialAccessLog.create
+      .mockResolvedValueOnce({ id: 1, at: new Date('2026-05-25T10:00:00Z') })
+      .mockResolvedValueOnce({ id: 2, at: new Date('2026-05-25T10:05:00Z') });
+
+    const app = makeApp();
+    const res1 = await request(app)
+      .post('/api/travel/suppliers/42/credentials/11/rotate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    const res2 = await request(app)
+      .post('/api/travel/suppliers/42/credentials/11/rotate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+    // Two distinct audit rows written — each rotation event gets its own
+    // timestamp. Callers wanting "last rotated at" hit slice 13's GET.
+    expect(prisma.supplierCredentialAccessLog.create).toHaveBeenCalledTimes(2);
+  });
+});

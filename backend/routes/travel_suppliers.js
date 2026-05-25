@@ -1050,6 +1050,127 @@ router.get(
   },
 );
 
+// ============================================================================
+// POST /api/travel/suppliers/:id/credentials/:credId/rotate
+// (Arc 2 #903 slice 14 — PRD_TRAVEL_SUPPLIER_MASTER §3.7 "credentials audit
+// trail").
+//
+// Operator-facing "mark rotated" action. The flow is: operator changes the
+// password on the supplier's portal (e.g. Booking.com admin) out-of-band, then
+// clicks "Mark Rotated" in the SupplierMaster detail page → this endpoint
+// records the rotation event so the team has a paper trail of "when was this
+// credential last cycled".
+//
+// This slice does NOT change the underlying secret material. The body MAY
+// carry a future `secret` field for when a real secrets-vault lands, but for
+// now we only record the rotation event by writing a
+// SupplierCredentialAccessLog row { action: "rotated", userId, ip }. The
+// existing slice 13 GET handler then derives `lastRotatedAt` from this row.
+//
+// Auth: ADMIN-only. The existing PATCH /supplier-credentials/:id (the real
+// secret-rotation surface) is ADMIN-only — we mirror that even though no
+// secret material moves here, since "I rotated the cred" is a write event
+// that affects the team's audit trail.
+//
+// Route ordering: registered BEFORE the catch-all `GET /suppliers/:id` so the
+// 4-segment sub-path wins. Sibling sub-paths under `/suppliers/:id/...` are
+// listed in this section in order of specificity.
+//
+// Response: 200 + { credentialId, rotatedAt, supplierId }.
+// Errors: INVALID_ID (400) — non-numeric :id or :credId.
+//         NOT_FOUND (404) — supplier missing OR credential missing OR cred
+//                           supplierName doesn't match the supplier's name.
+//         SUB_BRAND_DENIED (403) — user lacks sub-brand access to supplier.
+//
+// Decisions:
+//   - The :credId must belong to a SupplierCredential whose
+//     supplierName === supplier.name (same name-match contract as slice 13).
+//     A cred for a DIFFERENT supplier returns 404 — operators must not be
+//     able to backdate a rotation event on the wrong supplier just because
+//     they have the credentialId.
+//   - The access-log write is the LOAD-BEARING side effect; if it throws we
+//     return 500 (unlike slice 13's GET where the log write is best-effort).
+//     For a write action the audit row IS the side effect.
+//   - Idempotency: repeated calls each record a distinct accessLog row. That's
+//     correct — operators may rotate the same credential multiple times, and
+//     each event needs its own timestamp. Callers wanting "last rotated at"
+//     hit slice 13's GET which surfaces the most-recent row.
+// ============================================================================
+
+router.post(
+  "/suppliers/:id/credentials/:credId/rotate",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const credId = parseInt(req.params.credId, 10);
+      if (!Number.isFinite(id) || !Number.isFinite(credId)) {
+        return res
+          .status(400)
+          .json({ error: "id and credId must be numbers", code: "INVALID_ID" });
+      }
+
+      const supplier = await prisma.travelSupplier.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true, name: true, subBrand: true },
+      });
+      if (!supplier) {
+        return res.status(404).json({ error: "Supplier not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, supplier.subBrand)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      // Look up the cred + verify the name-match. If the cred belongs to a
+      // different supplier (or to no supplier with this name), 404 — the
+      // operator should not be able to mark "rotated" on a cred they wouldn't
+      // see in this supplier's portal-logins tab.
+      const cred = await prisma.supplierCredential.findFirst({
+        where: {
+          id: credId,
+          tenantId: req.travelTenant.id,
+          supplierName: supplier.name,
+        },
+        select: { id: true },
+      });
+      if (!cred) {
+        return res
+          .status(404)
+          .json({ error: "Credential not found for this supplier", code: "NOT_FOUND" });
+      }
+
+      // Load-bearing audit write. If this throws we surface 500 — the whole
+      // point of the endpoint is to record the rotation event.
+      const log = await prisma.supplierCredentialAccessLog.create({
+        data: {
+          credentialId: cred.id,
+          userId: req.user.userId,
+          action: "rotated",
+          ip: req.ip ? String(req.ip).slice(0, 64) : null,
+        },
+        select: { id: true, at: true },
+      });
+
+      res.json({
+        credentialId: cred.id,
+        supplierId: supplier.id,
+        rotatedAt: log.at,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] mark-rotated error:", e.message);
+      res.status(500).json({ error: "Failed to mark credential as rotated" });
+    }
+  },
+);
+
 // GET /api/travel/suppliers/:id
 router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

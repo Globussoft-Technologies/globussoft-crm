@@ -269,6 +269,191 @@ router.get("/quotes/expired", verifyToken, requireTravelTenant, async (req, res)
   }
 });
 
+// GET /api/travel/quotes/expired-summary — any verified token (tenant + sub-brand-scoped).
+//
+// Slice of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — expiry-recovery rollup).
+// Companion to /quotes/expired (full list) + /quotes/stats (single
+// expiredCount aggregate). This endpoint returns an ACTIONABLE rollup
+// of currently-expired quotes (validUntil < now AND status IN
+// Draft|Sent) grouped by sub-brand, age range, and top customers —
+// the shape an operator dashboard "expiry-recovery" tile needs to
+// prioritise outreach.
+//
+// Response shape:
+//   {
+//     total,                // count of currently-expired quotes
+//     totalValue,           // sum of totalAmount across all expired (half-up 2dp)
+//     bySubBrand: { tmc: {count, value}, rfu: {count, value}, ..., _tenant: {count, value} },
+//     byAgeRange: {
+//       "0-7d":  {count, value},   // expired 0-7 days ago
+//       "8-30d": {count, value},   // expired 8-30 days ago
+//       "31-90d":{count, value},
+//       "90+d":  {count, value},
+//     },
+//     topCustomers: [       // top-5 customers by expired-quote count
+//       { contactId, count, totalValue },
+//       ...
+//     ],
+//     generatedAt,          // ISO timestamp
+//   }
+//
+// Scope rules:
+//   - Tenant-scoped on TravelQuote.tenantId.
+//   - Sub-brand restricted: MANAGER with subBrandAccess narrowed via
+//     getSubBrandAccessSet — empty set → zeroed shape (not 403) so
+//     dashboard tiles render cleanly for not-yet-onboarded operators.
+//   - USER-readable (anodyne aggregate; no quote bodies leak — only
+//     counts + sums + contactIds, no customer names).
+//
+// Defensive: null/non-numeric totalAmount → 0 (no NaN poisoning);
+// null subBrand coalesces to "_tenant" (matches /quotes/stats shape);
+// quotes with null validUntil are skipped (not "expired" without an
+// expiry policy); half-up 2dp rounding via Number.EPSILON.
+//
+// Age-range buckets are inclusive at the low bound:
+//   "0-7d"   → 0 <= ageDays <= 7
+//   "8-30d"  → 8 <= ageDays <= 30
+//   "31-90d" → 31 <= ageDays <= 90
+//   "90+d"   → 91 <= ageDays
+//
+// IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
+// doesn't match "expired-summary" as a numeric :id (which would 400
+// INVALID_ID).
+router.get("/quotes/expired-summary", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const zeroed = () => ({
+      total: 0,
+      totalValue: 0,
+      bySubBrand: {},
+      byAgeRange: {
+        "0-7d": { count: 0, value: 0 },
+        "8-30d": { count: 0, value: 0 },
+        "31-90d": { count: 0, value: 0 },
+        "90+d": { count: 0, value: 0 },
+      },
+      topCustomers: [],
+      generatedAt: new Date().toISOString(),
+    });
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    // Empty access set → zeroed shape (not 403).
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed());
+    }
+
+    const now = new Date();
+    const where = {
+      tenantId: req.travelTenant.id,
+      status: { in: ["Draft", "Sent"] },
+      validUntil: { lt: now },
+    };
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        contactId: true,
+        totalAmount: true,
+        validUntil: true,
+      },
+    });
+
+    if (quotes.length === 0) {
+      return res.json(zeroed());
+    }
+
+    const bySubBrand = {};
+    const byAgeRange = {
+      "0-7d": { count: 0, value: 0 },
+      "8-30d": { count: 0, value: 0 },
+      "31-90d": { count: 0, value: 0 },
+      "90+d": { count: 0, value: 0 },
+    };
+    const perContact = new Map();
+    let total = 0;
+    let totalValue = 0;
+    const nowMs = now.getTime();
+
+    for (const q of quotes) {
+      // Defensive: skip rows whose validUntil failed Prisma's lt filter
+      // (shouldn't happen, but the test mock returns whatever it likes).
+      if (!q.validUntil) continue;
+      const vu = q.validUntil instanceof Date ? q.validUntil : new Date(q.validUntil);
+      if (Number.isNaN(vu.getTime()) || vu.getTime() >= nowMs) continue;
+
+      const amt = Number(q.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+
+      total += 1;
+      totalValue += safeAmt;
+
+      // bySubBrand: null subBrand → "_tenant" (matches /quotes/stats shape).
+      const sbKey = q.subBrand ? String(q.subBrand) : "_tenant";
+      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0, value: 0 };
+      bySubBrand[sbKey].count += 1;
+      bySubBrand[sbKey].value += safeAmt;
+
+      // byAgeRange: how long ago did it expire (in days).
+      const ageDays = Math.floor((nowMs - vu.getTime()) / 86_400_000);
+      let bucket;
+      if (ageDays <= 7) bucket = "0-7d";
+      else if (ageDays <= 30) bucket = "8-30d";
+      else if (ageDays <= 90) bucket = "31-90d";
+      else bucket = "90+d";
+      byAgeRange[bucket].count += 1;
+      byAgeRange[bucket].value += safeAmt;
+
+      // perContact tally for topCustomers.
+      if (q.contactId != null) {
+        const cid = q.contactId;
+        if (!perContact.has(cid)) perContact.set(cid, { contactId: cid, count: 0, totalValue: 0 });
+        const entry = perContact.get(cid);
+        entry.count += 1;
+        entry.totalValue += safeAmt;
+      }
+    }
+
+    // Round per-bucket sums.
+    for (const sb of Object.keys(bySubBrand)) {
+      bySubBrand[sb].value = round2(bySubBrand[sb].value);
+    }
+    for (const ar of Object.keys(byAgeRange)) {
+      byAgeRange[ar].value = round2(byAgeRange[ar].value);
+    }
+
+    // topCustomers: sort desc by count (tie-break by totalValue desc), top 5.
+    const topCustomers = [...perContact.values()]
+      .sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        return b.totalValue - a.totalValue;
+      })
+      .slice(0, 5)
+      .map((c) => ({
+        contactId: c.contactId,
+        count: c.count,
+        totalValue: round2(c.totalValue),
+      }));
+
+    res.json({
+      total,
+      totalValue: round2(totalValue),
+      bySubBrand,
+      byAgeRange,
+      topCustomers,
+      generatedAt: now.toISOString(),
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] expired-summary error:", e.message);
+    res.status(500).json({ error: "Failed to summarise expired quotes" });
+  }
+});
+
 // GET /api/travel/quotes/analytics — any verified token (tenant + sub-brand scoped).
 //
 // Slice 13 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — quote analytics rollup).

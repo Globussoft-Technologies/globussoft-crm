@@ -705,4 +705,197 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(backdrop.className).not.toMatch(/\bis-open\b/);
     });
   });
+
+  // ── Third-extension cases (10+ new) ────────────────────────────────
+  // Cover the still-uncovered surface in the 1553-LOC SUT — Reports cluster
+  // sub-items, Tickets visibility for non-admin support staff, sequences /
+  // marketing / lead routing manager-gated cluster, marketplace integration
+  // links, settings sub-items per role, counter-polling setInterval contract,
+  // socket event-handler registration, and sub-brand active-pill state.
+  //
+  // Adapted from the prompt: Workflows is NOT in the Sidebar SUT (only in
+  // App.jsx routes), so we substitute Sequences + Marketing + Lead Routing
+  // for cases 4-5 which are the equivalent "automation cluster" navs.
+
+  describe('Generic Reports cluster sub-items', () => {
+    it('renders all five Reports cluster items for MANAGER (Reports / Agent Reports / Dashboards / Custom Reports / Funnel)', () => {
+      // The five report-style navs all live under `managerOnly` in
+      // renderGenericNav. MANAGER role should see every one of them.
+      renderSidebar({ vertical: 'generic', role: 'MANAGER' });
+      // "Reports" appears twice (the bare label + potential section header
+      // duplication via segmentMatches). getAllByText handles both.
+      expect(screen.getAllByText('Reports').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Agent Reports')).toBeTruthy();
+      expect(screen.getByText('Dashboards')).toBeTruthy();
+      expect(screen.getByText('Custom Reports')).toBeTruthy();
+      expect(screen.getByText('Funnel')).toBeTruthy();
+    });
+
+    it('hides all five Reports cluster items for USER role under generic', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER' });
+      // Generic Reports cluster is uniformly managerOnly — USER should see
+      // zero of them.
+      expect(screen.queryByText('Agent Reports')).toBeNull();
+      expect(screen.queryByText('Dashboards')).toBeNull();
+      expect(screen.queryByText('Custom Reports')).toBeNull();
+      expect(screen.queryByText('Funnel')).toBeNull();
+      // The bare "Reports" label is also managerOnly, so it should not
+      // appear for USER either.
+      expect(screen.queryByText('Reports')).toBeNull();
+    });
+  });
+
+  describe('Tickets nav visibility', () => {
+    it('shows Tickets in the generic sidebar for USER role (not manager-gated)', () => {
+      // Tickets is a core nav item visible to all roles under generic.
+      // Support staff (role=USER with no clinical wellnessRole) must be
+      // able to see + navigate to /tickets in the generic vertical.
+      renderSidebar({ vertical: 'generic', role: 'USER' });
+      const ticketsLink = screen.getByText('Tickets').closest('a');
+      expect(ticketsLink).toBeTruthy();
+      expect(ticketsLink.getAttribute('href')).toBe('/tickets');
+    });
+  });
+
+  describe('Generic Sequences + Marketing + Lead Routing manager cluster', () => {
+    it('renders Sequences / Marketing / Lead Routing for MANAGER under generic', () => {
+      // These three are the "automation cluster" navs (Sidebar has no
+      // "Workflows" nav; the closest equivalent is Sequences).
+      renderSidebar({ vertical: 'generic', role: 'MANAGER' });
+      expect(screen.getByText('Sequences')).toBeTruthy();
+      expect(screen.getByText('Marketing')).toBeTruthy();
+      expect(screen.getByText('Lead Routing')).toBeTruthy();
+      // Territories is the sibling routing nav.
+      expect(screen.getByText('Territories')).toBeTruthy();
+    });
+
+    it('hides Sequences / Marketing / Lead Routing for USER under generic', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER' });
+      expect(screen.queryByText('Sequences')).toBeNull();
+      expect(screen.queryByText('Marketing')).toBeNull();
+      expect(screen.queryByText('Lead Routing')).toBeNull();
+      expect(screen.queryByText('Territories')).toBeNull();
+    });
+  });
+
+  describe('Marketplace integration links', () => {
+    it('renders Marketplace Leads for MANAGER under generic with correct href', () => {
+      renderSidebar({ vertical: 'generic', role: 'MANAGER' });
+      const link = screen.getByText('Marketplace Leads').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/marketplace-leads');
+    });
+
+    it('renders Zapier integration link for ADMIN under generic', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const link = screen.getByText('Zapier').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/zapier');
+      // Developer link is the sibling integration entry.
+      const devLink = screen.getByText('Developers').closest('a');
+      expect(devLink.getAttribute('href')).toBe('/developer');
+    });
+
+    it('hides Zapier + Developers for MANAGER (admin-only integrations)', () => {
+      renderSidebar({ vertical: 'generic', role: 'MANAGER' });
+      expect(screen.queryByText('Zapier')).toBeNull();
+      expect(screen.queryByText('Developers')).toBeNull();
+    });
+  });
+
+  describe('Settings nav variants per role under generic', () => {
+    it('renders Settings nav for ADMIN under generic vertical (admin-only path)', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const link = screen.getByText('Settings').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/settings');
+    });
+
+    it('renders Settings nav for MANAGER under generic (manager-block bottom)', () => {
+      // For MANAGER role, the bottom block `!isAdmin && isManager` renders
+      // a single Settings link with no adminOnly gate (Link without
+      // `adminOnly` so it always shows for MANAGER).
+      renderSidebar({ vertical: 'generic', role: 'MANAGER' });
+      const link = screen.getByText('Settings').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/settings');
+    });
+
+    it('renders Notification Settings (not Settings) for USER under generic', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER' });
+      expect(screen.queryByText('Settings')).toBeNull();
+      const link = screen.getByText('Notification Settings').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/notification-settings');
+    });
+  });
+
+  describe('Counter polling + socket wiring', () => {
+    it('registers a 60s setInterval for counter polling on mount', () => {
+      // #392 / #529: refreshCounts is wired through setInterval(refreshCounts, 60000).
+      // Spy on setInterval to confirm the contract — guards against
+      // someone accidentally changing the interval to a hot value (e.g.
+      // 6_000ms) and re-triggering the BUG-001 storm.
+      const setIntervalSpy = vi.spyOn(global, 'setInterval');
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      // At least one setInterval call should be at 60000ms cadence.
+      const calls = setIntervalSpy.mock.calls;
+      const sixtySecondCall = calls.find((args) => args[1] === 60000);
+      expect(sixtySecondCall).toBeTruthy();
+      setIntervalSpy.mockRestore();
+    });
+
+    it('registers socket event handlers for the 7 live-bump events', () => {
+      // The SUT subscribes to: marketplace_lead_imported, marketplace_lead_new,
+      // email_received, lead_created, task_created, ticket_created,
+      // sidebar_counts_changed (plus connect_error + error = 9 total). Pin
+      // that socket.on was called for each expected counter event so a
+      // future "lost socket plumbing" regression is caught.
+      socketObj.on.mockReset();
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const registeredEvents = socketObj.on.mock.calls.map((args) => args[0]);
+      expect(registeredEvents).toContain('marketplace_lead_imported');
+      expect(registeredEvents).toContain('marketplace_lead_new');
+      expect(registeredEvents).toContain('email_received');
+      expect(registeredEvents).toContain('lead_created');
+      expect(registeredEvents).toContain('task_created');
+      expect(registeredEvents).toContain('ticket_created');
+      expect(registeredEvents).toContain('sidebar_counts_changed');
+      // Plus the silent-failure plumbing.
+      expect(registeredEvents).toContain('connect_error');
+      expect(registeredEvents).toContain('error');
+    });
+  });
+
+  describe('Sub-brand active selection state', () => {
+    it('binds the switcher value to the activeSubBrand context default (empty = All)', () => {
+      // Without wrapping in ActiveSubBrandProvider, the default context
+      // returns activeSubBrand=null, which the SUT renders as value="".
+      renderSidebar({
+        vertical: 'travel',
+        role: 'ADMIN',
+      });
+      const switcher = screen.getByLabelText('Switch active sub-brand');
+      // Default value should be empty string (= "All N").
+      expect(switcher.value).toBe('');
+    });
+
+    it('preserves nav structure when switching sub-brand value (no nav-link unmount)', () => {
+      // Pin that changing the switcher does not blow away the rest of the
+      // travel nav — the value-change is local UI state, not a vertical
+      // remount. Sales pipeline / Customer comms section labels stay
+      // present before AND after change.
+      renderSidebar({
+        vertical: 'travel',
+        role: 'ADMIN',
+      });
+      // Pre-change.
+      expect(screen.getByText('Sales pipeline')).toBeTruthy();
+      const switcher = screen.getByLabelText('Switch active sub-brand');
+      fireEvent.change(switcher, { target: { value: 'rfu' } });
+      // Post-change.
+      expect(screen.getByText('Sales pipeline')).toBeTruthy();
+      expect(screen.getByText('Customer comms')).toBeTruthy();
+    });
+  });
 });

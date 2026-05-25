@@ -31,6 +31,23 @@ const { writeAudit } = require("../lib/audit");
 const pdfRenderer = require("../services/pdfRenderer");
 const { invoicePrefixFor, fiscalYearStart } = require("../lib/travelFiscalYear");
 const { computeTcs, isOverseasDestination } = require("../lib/tcsCalculation");
+// Arc 2 #902 slice 7 — GST tax-preview pipeline (CGST/SGST/IGST math +
+// state-code resolver + SAC codes + GSTR-1 HSN-summary grouping). The
+// invoice tax-preview endpoint mirrors backend/routes/travel_quotes.js
+// /quotes/:id/tax-preview (slice 6, commit b9833a0e) — same envelope,
+// same library consumers, scoped to TravelInvoiceLine instead of
+// TravelQuoteLine.
+const {
+  computeGstForLines,
+  isInterstateSupply,
+  gstRateForCategory,
+} = require("../lib/gstCalculation");
+const { resolveStateCodes } = require("../lib/gstStateCodeResolver");
+const {
+  sacForLineType,
+  descriptionForSac,
+  groupLinesBySac,
+} = require("../lib/hsnSacMapper");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
 
@@ -2333,6 +2350,231 @@ router.post(
       }
       console.error("[travel-invoices] apply-tcs error:", e.message);
       res.status(500).json({ error: "Failed to apply TCS" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/invoices/:id/tax-preview — any verified token.
+// ============================================================================
+//
+// Arc 2 #902 slice 7 (PRD_TRAVEL_GST_COMPLIANCE.md FR-3.2.3 / FR-3.4.3 /
+// NFR-4.2). Invoice analog of /quotes/:id/tax-preview (slice 6, commit
+// b9833a0e). Same response envelope, same library consumers — only the
+// parent type + line query differ (TravelInvoiceLine instead of
+// TravelQuoteLine).
+//
+// READ-ONLY surface: zero writes. Loads the parent invoice via
+// loadParentInvoice (tenant + sub-brand scoped — same INVALID_ID /
+// INVOICE_NOT_FOUND / SUB_BRAND_DENIED shape as every other invoice
+// child endpoint), resolves the operator + customer state codes via
+// lib/gstStateCodeResolver.js, decides intra-vs-inter-state via
+// isInterstateSupply, derives each line's GST rate from lineType via
+// gstRateForCategory, decorates each line with its SAC code +
+// description via lib/hsnSacMapper.js, and aggregates per-line +
+// per-rate-bucket + GSTR-1-style HSN-summary totals via
+// computeGstForLines + groupLinesBySac.
+//
+// === Invoice-side lineType taxonomy ===
+//
+// TravelInvoiceLine extends TravelQuoteLine with billing-specific
+// types: per_pax / per_room / per_night / per_trip / tax / fee / addon
+// / tcs / tds / other. hsnSacMapper.sacForLineType handles all of
+// these — per_room/per_night map to SAC 9963 (accommodation),
+// per_pax/per_trip/addon map to SAC 9985 (travel-tourism support),
+// tax/fee/tcs/tds return null SAC (groupLinesBySac skips them so
+// they don't pollute the GSTR-1 HSN summary — withholding taxes are
+// reported on Form 27EQ, not GSTR-1). gstRateForCategory does not
+// know these invoice-specific types so they fall through to the 18%
+// DEFAULT_RATE — operator-safe (highest common slab); when the
+// TaxRateMaster slice (FR-3.1) lands it will override per-tenant.
+//
+// === Place-of-supply resolution ===
+//
+// Source-of-truth chain (FR-3.x):
+//   1. Truthy override (query param ?operatorStateCode= /
+//      ?customerStateCode=) wins.
+//   2. DB column — Tenant.gstStateCode for operator,
+//      Contact.stateCode for customer (slice 3 schema adds).
+//   3. Hard-coded "IN-MH" fallback (slice 2 back-compat).
+// Customer-side: when override + DB are both null, mirror operator
+// (intra-state default) — handled inside resolveStateCodes.
+//
+// Empty-string for an explicit param is rejected with 400
+// INVALID_STATE_CODE (defense-in-depth — prevents silent fall-through
+// to defaults when caller sends `?operatorStateCode=`).
+//
+// === Envelope contract (mirrors slice 6 exactly) ===
+//
+// Per-line: { id, lineType, amount, gstPercent, sacCode,
+//             sacDescription, cgst, sgst, igst, totalTax, amountWithTax }
+// Top-level: { invoiceId, subtotal, isInterstate, operatorStateCode,
+//              customerStateCode, lines[], totalCgst, totalSgst,
+//              totalIgst, totalTax, grandTotal, buckets[], hsnSummary[] }
+//
+// Invariants (rounding-safe to 2 decimals — every step round2'd in
+// gstCalculation.js):
+//   totalTax === totalCgst + totalSgst + totalIgst    (split consistency)
+//   subtotal + totalTax === grandTotal                 (gross consistency)
+//
+// Per-line vs bucket aggregation: per-line totals are computed inline
+// (mirrors gstCalculation.computeGstSplit; inlined for one extra
+// require avoidance). Bucket summary is computed via computeGstForLines
+// which sums taxable into per-rate buckets FIRST then taxes the bucket
+// (per FR-3.4.3 HSN-summary shape). Envelope-level totals come from
+// the bucket summary so the spec-aligned numbers win the invariants;
+// per-line drift (≤1 paise on multi-line invoices) stays contained in
+// the lines[] array.
+router.get(
+  "/invoices/:id/tax-preview",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      // Empty-string state-code validation BEFORE the resolver fires
+      // (mirrors slice 6 — keeps the user-facing 400 contract even
+      // though the resolver itself treats empty as no-override).
+      const rawOp = req.query.operatorStateCode;
+      const rawCu = req.query.customerStateCode;
+      if (rawOp != null && String(rawOp).trim() === "") {
+        return res.status(400).json({
+          error: "operatorStateCode must not be empty",
+          code: "INVALID_STATE_CODE",
+        });
+      }
+      if (rawCu != null && String(rawCu).trim() === "") {
+        return res.status(400).json({
+          error: "customerStateCode must not be empty",
+          code: "INVALID_STATE_CODE",
+        });
+      }
+
+      const { operatorStateCode, customerStateCode } = await resolveStateCodes({
+        prisma,
+        tenantId: req.travelTenant.id,
+        contactId: invoice.contactId,
+        operatorOverride: rawOp != null ? String(rawOp).trim() : null,
+        customerOverride: rawCu != null ? String(rawCu).trim() : null,
+      });
+
+      let isInterstate;
+      try {
+        isInterstate = isInterstateSupply(operatorStateCode, customerStateCode);
+      } catch (e) {
+        return res.status(400).json({
+          error: e.message,
+          code: "INVALID_STATE_CODE",
+        });
+      }
+
+      const lines = await prisma.travelInvoiceLine.findMany({
+        where: { invoiceId, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+
+      const round2 = (n) => Math.round(n * 100) / 100;
+
+      // Per-line decoration: each line gets its own gstPercent +
+      // CGST/SGST/IGST split + SAC code/description. Composite-supply
+      // per FR-3.2.4 — every line taxed at its own rate.
+      const decoratedLines = [];
+      const normalizedForBuckets = [];
+      let subtotalAccum = 0;
+      let totalCgstAccum = 0;
+      let totalSgstAccum = 0;
+      let totalIgstAccum = 0;
+      let totalTaxAccum = 0;
+
+      for (const l of lines) {
+        const amt = Number(l.amount || 0);
+        subtotalAccum = round2(subtotalAccum + amt);
+        const gstPercent = gstRateForCategory(l.lineType);
+
+        const totalTax = round2((amt * gstPercent) / 100);
+        let cgst = 0;
+        let sgst = 0;
+        let igst = 0;
+        if (isInterstate) {
+          igst = totalTax;
+        } else {
+          const halfRate = gstPercent / 2;
+          cgst = round2((amt * halfRate) / 100);
+          sgst = round2((amt * halfRate) / 100);
+        }
+        const amountWithTax = round2(amt + totalTax);
+
+        const sacCode = sacForLineType(l.lineType);
+        const sacDescription = sacCode ? descriptionForSac(sacCode) : null;
+
+        decoratedLines.push({
+          id: l.id,
+          lineType: l.lineType,
+          amount: round2(amt),
+          gstPercent,
+          sacCode,
+          sacDescription,
+          cgst,
+          sgst,
+          igst,
+          totalTax,
+          amountWithTax,
+        });
+        normalizedForBuckets.push({ taxableAmount: amt, gstPercent });
+
+        totalCgstAccum = round2(totalCgstAccum + cgst);
+        totalSgstAccum = round2(totalSgstAccum + sgst);
+        totalIgstAccum = round2(totalIgstAccum + igst);
+        totalTaxAccum = round2(totalTaxAccum + totalTax);
+      }
+
+      // Bucket summary via lib helper — per-rate aggregation matches
+      // GSTR-1 HSN-summary shape (FR-3.4.3). Use bucket totals as
+      // envelope totals so the spec-aligned numbers win the consistency
+      // invariants (per-line drift contained to lines[]).
+      const bucketSummary = computeGstForLines(
+        normalizedForBuckets,
+        isInterstate,
+      );
+
+      // HSN/SAC summary grouping per FR-3.4.3 (GSTR-1 export-ready
+      // shape: one row per (sacCode, gstPercent) pair with summed
+      // taxableValue + line count). Sibling to buckets[] (which groups
+      // by gstPercent only). tax/fee/tcs/tds lines have null SAC →
+      // skipped by the helper (withholding taxes don't belong in
+      // GSTR-1; they're Form 27EQ).
+      const hsnSummary = groupLinesBySac(
+        lines.map((l) => ({
+          lineType: l.lineType,
+          taxableValue: Number(l.amount || 0),
+          gstPercent: gstRateForCategory(l.lineType),
+        })),
+      );
+
+      res.json({
+        invoiceId: invoice.id,
+        subtotal: bucketSummary.subtotal,
+        isInterstate,
+        operatorStateCode,
+        customerStateCode,
+        lines: decoratedLines,
+        totalCgst: bucketSummary.totalCgst,
+        totalSgst: bucketSummary.totalSgst,
+        totalIgst: bucketSummary.totalIgst,
+        totalTax: bucketSummary.totalTax,
+        grandTotal: bucketSummary.grandTotal,
+        buckets: bucketSummary.buckets,
+        hsnSummary,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] tax-preview error:", e.message);
+      res.status(500).json({ error: "Failed to compute tax preview" });
     }
   },
 );

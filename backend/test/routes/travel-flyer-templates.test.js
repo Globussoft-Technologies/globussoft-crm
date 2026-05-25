@@ -1435,3 +1435,246 @@ describe('GET /api/travel/flyer-templates/:id/preview.pdf (slice 12)', () => {
     expect(res.body[0]).toBe(0x25); // %PDF
   });
 });
+
+/**
+ * Slice 14 — POST /api/travel/flyer-templates/:id/archive
+ *              + POST /api/travel/flyer-templates/:id/unarchive
+ *
+ * Dedicated lifecycle toggles. Functionally a thin wrapper over
+ * `PUT /:id { isActive }` BUT:
+ *   - Distinct audit actions (TRAVEL_FLYER_TEMPLATE_ARCHIVED /
+ *     TRAVEL_FLYER_TEMPLATE_UNARCHIVED) so reports segment lifecycle
+ *     events from generic edits.
+ *   - Idempotent: archiving an already-archived row → 200 no-op envelope,
+ *     no audit row, no prisma.update call.
+ *   - ADMIN/MANAGER gated; sub-brand isolation enforced identically to
+ *     PUT / DELETE.
+ */
+describe('POST /api/travel/flyer-templates/:id/archive (slice 14)', () => {
+  const activeSource = {
+    id: 77,
+    tenantId: 1,
+    name: 'Diwali Family Goa',
+    paletteJson: JSON.stringify(validPalette),
+    layoutJson: JSON.stringify(validLayout),
+    assetsJson: JSON.stringify(validAssets),
+    subBrand: 'travelstall',
+    isActive: true,
+    notes: null,
+  };
+
+  test('ADMIN happy path: flips isActive=false, writes TRAVEL_FLYER_TEMPLATE_ARCHIVED audit, returns 200 + templateHash', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(activeSource);
+    prisma.travelFlyerTemplate.update.mockResolvedValue({
+      ...activeSource,
+      isActive: false,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/77/archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 77, isActive: false });
+    expect(res.body.templateHash).toMatch(/^[0-9a-f]{64}$/);
+    // prisma.update fired with isActive=false ONLY.
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalledWith({
+      where: { id: 77 },
+      data: { isActive: false },
+    });
+    // Distinct audit action.
+    expect(prisma.auditLog.create).toHaveBeenCalled();
+    const auditArgs = prisma.auditLog.create.mock.calls[0][0];
+    expect(auditArgs.data.action).toBe('TRAVEL_FLYER_TEMPLATE_ARCHIVED');
+  });
+
+  test('idempotent: archiving an already-archived row → 200 alreadyArchived=true, no prisma.update, no audit', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue({
+      ...activeSource,
+      isActive: false,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/77/archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 77, isActive: false, alreadyArchived: true });
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('non-numeric id → 400 INVALID_ID (no DB lookup fires)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/notanumber/archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('cross-tenant source → 404 TEMPLATE_NOT_FOUND', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/9999/archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'TEMPLATE_NOT_FOUND' });
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('MANAGER restricted to ["rfu"], source.subBrand="travelstall" → 403 SUB_BRAND_DENIED', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(activeSource);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/77/archive')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'SUB_BRAND_DENIED' });
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('USER role: rejected at verifyRole → 403 RBAC_DENIED (route is ADMIN/MANAGER)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/77/archive')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({});
+
+    expect(res.status).toBe(403);
+    // verifyRole emits a generic role-denied; the exact code may be
+    // RBAC_DENIED or similar — pin status + ensure prisma was not hit.
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('tenant-wide (subBrand=null): MANAGER restricted to ["rfu"] CAN archive (NULL subBrand is tenant-wide)', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue({
+      ...activeSource,
+      subBrand: null,
+    });
+    prisma.travelFlyerTemplate.update.mockResolvedValue({
+      ...activeSource,
+      subBrand: null,
+      isActive: false,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/77/archive')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 77, isActive: false });
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/travel/flyer-templates/:id/unarchive (slice 14)', () => {
+  const archivedSource = {
+    id: 78,
+    tenantId: 1,
+    name: 'Last-Season Bali Family',
+    paletteJson: JSON.stringify(validPalette),
+    layoutJson: JSON.stringify(validLayout),
+    assetsJson: JSON.stringify(validAssets),
+    subBrand: 'travelstall',
+    isActive: false,
+    notes: null,
+  };
+
+  test('ADMIN happy path: flips isActive=true, writes TRAVEL_FLYER_TEMPLATE_UNARCHIVED audit, returns 200 + templateHash', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(archivedSource);
+    prisma.travelFlyerTemplate.update.mockResolvedValue({
+      ...archivedSource,
+      isActive: true,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/78/unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 78, isActive: true });
+    expect(res.body.templateHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(prisma.travelFlyerTemplate.update).toHaveBeenCalledWith({
+      where: { id: 78 },
+      data: { isActive: true },
+    });
+    const auditArgs = prisma.auditLog.create.mock.calls[0][0];
+    expect(auditArgs.data.action).toBe('TRAVEL_FLYER_TEMPLATE_UNARCHIVED');
+  });
+
+  test('idempotent: unarchiving an already-active row → 200 alreadyActive=true, no prisma.update, no audit', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue({
+      ...archivedSource,
+      isActive: true,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/78/unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 78, isActive: true, alreadyActive: true });
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('cross-tenant source → 404 TEMPLATE_NOT_FOUND', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/9999/unarchive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'TEMPLATE_NOT_FOUND' });
+  });
+
+  test('MANAGER restricted to ["rfu"], source.subBrand="travelstall" → 403 SUB_BRAND_DENIED', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(archivedSource);
+
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/78/unarchive')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'SUB_BRAND_DENIED' });
+    expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('USER role → 403 (route is ADMIN/MANAGER)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/78/unarchive')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+  });
+});

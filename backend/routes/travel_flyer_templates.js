@@ -23,6 +23,8 @@
  *   GET    /api/travel/flyer-templates/:id            — fetch one
  *   POST   /api/travel/flyer-templates                — ADMIN/MANAGER create
  *   POST   /api/travel/flyer-templates/:id/duplicate  — ADMIN/MANAGER clone (slice 6)
+ *   POST   /api/travel/flyer-templates/:id/archive    — ADMIN/MANAGER soft-archive (slice 14)
+ *   POST   /api/travel/flyer-templates/:id/unarchive  — ADMIN/MANAGER restore (slice 14)
  *   POST   /api/travel/flyer-templates/:id/export     — ADMIN/MANAGER queue render (slice 10)
  *   GET    /api/travel/flyer-templates/:id/preview.pdf — USER+ inline PDF preview (slice 12)
  *   PUT    /api/travel/flyer-templates/:id            — ADMIN/MANAGER partial update
@@ -768,6 +770,169 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] duplicate error:", e.message);
       res.status(500).json({ error: "Failed to duplicate flyer template" });
+    }
+  },
+);
+
+// POST /api/travel/flyer-templates/:id/archive — ADMIN/MANAGER soft-archive
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 14).
+//
+// Dedicated lifecycle endpoint that flips `isActive` to false. Functionally
+// equivalent to `PUT /:id { isActive: false }` but split off as a distinct
+// route so:
+//   (1) The audit row carries a SPECIFIC `TRAVEL_FLYER_TEMPLATE_ARCHIVED`
+//       action rather than a generic UPDATE with `{ fields: ['isActive'] }`
+//       — reports that segment "archive events" from "edit events" can read
+//       the action verbatim without parsing the diff blob.
+//   (2) The frontend's "Archive" button has a clean POST target rather than
+//       building a PUT body. Less mistake surface; less JSON to send.
+//   (3) Idempotent: archiving an already-archived row returns 200 + a
+//       no-op envelope rather than mutating + writing a redundant audit
+//       row (mirrors how the wellness portal's archive endpoints behave).
+//
+// Sub-brand isolation: same gate as the rest of the route — sub-branded
+// templates require canAccessSubBrand; tenant-wide (NULL) templates are
+// accessible to any tenant operator with ADMIN/MANAGER role.
+//
+// Hard-delete is intentionally NOT replaced by archive — operators who
+// truly want a row gone still hit DELETE (ADMIN-only). Archive is the
+// "remove from library, keep around for un-archive" surface.
+router.post(
+  "/flyer-templates/:id/archive",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.travelFlyerTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({
+          error: "Flyer template not found",
+          code: "TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      if (existing.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, existing.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      // Idempotency: already archived → 200 no-op envelope. No audit row
+      // for no-op (otherwise the audit log accumulates noise from UI
+      // double-clicks or refresh-loops).
+      if (existing.isActive === false) {
+        return res.status(200).json({
+          ...withTemplateHash(existing),
+          alreadyArchived: true,
+        });
+      }
+
+      const updated = await prisma.travelFlyerTemplate.update({
+        where: { id },
+        data: { isActive: false },
+      });
+
+      await writeAudit(
+        "TravelFlyerTemplate",
+        "TRAVEL_FLYER_TEMPLATE_ARCHIVED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          name: updated.name,
+          subBrand: updated.subBrand,
+        },
+      );
+
+      res.status(200).json(withTemplateHash(updated));
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] archive error:", e.message);
+      res.status(500).json({ error: "Failed to archive flyer template" });
+    }
+  },
+);
+
+// POST /api/travel/flyer-templates/:id/unarchive — ADMIN/MANAGER restore
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 14).
+//
+// Inverse of /archive. Flips `isActive` back to true. Same idempotency
+// + audit-row + sub-brand-isolation contract as the archive endpoint.
+// Distinct audit action `TRAVEL_FLYER_TEMPLATE_UNARCHIVED` so reports
+// can distinguish "operator restored an archived template" from "operator
+// edited the row's isActive flag inline via PUT".
+router.post(
+  "/flyer-templates/:id/unarchive",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.travelFlyerTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({
+          error: "Flyer template not found",
+          code: "TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      if (existing.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, existing.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      // Idempotency: already active → 200 no-op envelope. No audit row.
+      if (existing.isActive === true) {
+        return res.status(200).json({
+          ...withTemplateHash(existing),
+          alreadyActive: true,
+        });
+      }
+
+      const updated = await prisma.travelFlyerTemplate.update({
+        where: { id },
+        data: { isActive: true },
+      });
+
+      await writeAudit(
+        "TravelFlyerTemplate",
+        "TRAVEL_FLYER_TEMPLATE_UNARCHIVED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          name: updated.name,
+          subBrand: updated.subBrand,
+        },
+      );
+
+      res.status(200).json(withTemplateHash(updated));
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] unarchive error:", e.message);
+      res.status(500).json({ error: "Failed to unarchive flyer template" });
     }
   },
 );

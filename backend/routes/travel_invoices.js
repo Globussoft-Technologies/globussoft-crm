@@ -425,6 +425,423 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/invoices/gstr1-export — Arc 2 #902 slice 10.
+//
+// PRD_TRAVEL_GST_COMPLIANCE.md GSTR-1 section. Monthly CSV export for GST
+// return filing. Operator picks a filing month (YYYY-MM) and optionally a
+// single sub-brand; we emit a CSV blob containing three GoI-aligned sections
+// stitched together:
+//
+//   Section 1 (HSN_SUMMARY) — one row per (SAC code, GST rate) pair with
+//     aggregate counts + taxable value + IGST / CGST / SGST. Lines whose
+//     lineType has no SAC (tax / fee / tcs / tds — withholding lines that
+//     don't belong on GSTR-1; those reconcile via Form 27EQ) are skipped by
+//     the `groupLinesBySac` helper.
+//   Section 2 (B2B_INVOICES) — one row per source invoice with totals.
+//     CGST / SGST split when intra-state; IGST when inter-state. Doc_Type
+//     column carries TaxInvoice / CreditNote / DebitNote.
+//   Section 3 (DOCUMENT_TOTALS) — three roll-up rows summarising counts +
+//     taxable + GST totals broken out by docType.
+//
+// === Doc-type filter ===
+//
+// Includes TaxInvoice + CreditNote + DebitNote. Excludes Proforma (a
+// pre-payment quote-like instrument with no GST output until promoted to a
+// TaxInvoice) and TravelVoucher (supplier-passthrough receipts that aren't
+// GST-bearing). Pre-slice-11 historical rows where docType is NULL are
+// treated as TaxInvoice (matches the existing route convention — see slice
+// 11 header comment).
+//
+// === Date range ===
+//
+// `month=YYYY-MM` resolves to `[year, month-1, 1, 00:00:00.000)` —
+// `[year, month, 1, 00:00:00.000)` (half-open interval, server-local
+// timezone). createdAt is the filter field — matches the cohort GSTR-1
+// expects (issuance month, not service-rendered month). Using paidAt would
+// strand un-paid invoices off the filing return; using service dates would
+// drag service-rendered-this-month lines from invoices issued in OTHER
+// months into the return. createdAt is the canonical GoI cohort.
+//
+// === CSV format ===
+//
+//   - UTF-8 with BOM (U+FEFF prefix) so Excel auto-detects encoding and
+//     doesn't mojibake currency symbols / non-ASCII operator names.
+//   - CRLF line endings — GoI GSTR-1 portal expects DOS-style.
+//   - Sections separated by a blank line + a `# <SECTION_NAME>` marker line
+//     so the file is self-documenting. The portal's downstream JSON
+//     converter ignores comment lines starting with `#`.
+//   - csvEscape: wrap in double-quotes when the cell contains comma /
+//     newline / double-quote, doubling inner quotes per RFC 4180.
+//
+// === Auth ===
+//
+// ADMIN / MANAGER only — operator-tax-action surface. USER role is blocked
+// by verifyRole before any database read.
+//
+// === Sub-brand scoping ===
+//
+// Two layers: query `?subBrand=` (optional explicit filter) intersected
+// with the caller's `subBrandAccess`. If the explicit filter targets a
+// sub-brand the caller can't access, we substitute "__none__" so the
+// result is an empty CSV (consistent with the silent-empty pattern used
+// across other list endpoints).
+//
+// === Filename ===
+//
+// `gstr1-<month>-<subBrand>.csv` when sub-brand was filtered, else
+// `gstr1-<month>-all.csv`. Spaces avoided so wget/curl downloads stay
+// clean. Quoted in Content-Disposition.
+//
+// === Error codes ===
+//
+//   - INVALID_MONTH (400) — missing or wrong-shape `month` query param
+//   - INVALID_SUB_BRAND (400) — `subBrand` query value isn't in the
+//     recognised list (assertValidSubBrand)
+//
+// ============================================================================
+const GSTR1_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
+
+function csvEscape(s) {
+  if (s == null) return "";
+  const str = String(s);
+  if (/[",\r\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function formatMoney(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return "0.00";
+  return num.toFixed(2);
+}
+
+function parseFilingMonth(raw) {
+  if (!raw || typeof raw !== "string") {
+    const err = new Error("month query parameter is required (format YYYY-MM)");
+    err.status = 400;
+    err.code = "INVALID_MONTH";
+    throw err;
+  }
+  const m = /^(\d{4})-(\d{2})$/.exec(raw.trim());
+  if (!m) {
+    const err = new Error("month must match YYYY-MM (e.g. 2026-04)");
+    err.status = 400;
+    err.code = "INVALID_MONTH";
+    throw err;
+  }
+  const year = parseInt(m[1], 10);
+  const month = parseInt(m[2], 10);
+  if (month < 1 || month > 12) {
+    const err = new Error("month component must be 01..12");
+    err.status = 400;
+    err.code = "INVALID_MONTH";
+    throw err;
+  }
+  // Half-open [start, end) — month rollover handled by the Date constructor.
+  const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
+  const end = new Date(year, month, 1, 0, 0, 0, 0);
+  return { year, month, start, end };
+}
+
+router.get(
+  "/invoices/gstr1-export",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { year, month, start, end } = parseFilingMonth(req.query.month);
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        createdAt: { gte: start, lt: end },
+        docType: { in: GSTR1_DOC_TYPES },
+      };
+      if (subBrandFilter) where.subBrand = subBrandFilter;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+
+      // Bulk-load all lines for the in-scope invoices in one round-trip;
+      // group client-side so we don't issue N+1 queries per invoice.
+      const invoiceIds = invoices.map((i) => i.id);
+      const allLines =
+        invoiceIds.length > 0
+          ? await prisma.travelInvoiceLine.findMany({
+              where: {
+                invoiceId: { in: invoiceIds },
+                tenantId: req.travelTenant.id,
+              },
+              orderBy: [{ invoiceId: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
+            })
+          : [];
+      const linesByInvoice = new Map();
+      for (const l of allLines) {
+        if (!linesByInvoice.has(l.invoiceId)) linesByInvoice.set(l.invoiceId, []);
+        linesByInvoice.get(l.invoiceId).push(l);
+      }
+
+      // Cache state-code resolutions per (contactId) — multiple invoices
+      // for the same contact share the same operator/customer state pair.
+      const stateCodeCache = new Map();
+      async function getInterstateForInvoice(invoice) {
+        if (stateCodeCache.has(invoice.contactId)) {
+          return stateCodeCache.get(invoice.contactId);
+        }
+        const codes = await resolveStateCodes({
+          prisma,
+          tenantId: req.travelTenant.id,
+          contactId: invoice.contactId,
+          operatorOverride: null,
+          customerOverride: null,
+        });
+        let isInterstate;
+        try {
+          isInterstate = isInterstateSupply(
+            codes.operatorStateCode,
+            codes.customerStateCode,
+          );
+        } catch (_e) {
+          isInterstate = false;
+        }
+        const result = { ...codes, isInterstate };
+        stateCodeCache.set(invoice.contactId, result);
+        return result;
+      }
+
+      // === Build Section 1: HSN_SUMMARY ===
+      // Aggregate ALL lines across ALL in-scope invoices into HSN/SAC
+      // buckets. Each row carries IGST/CGST/SGST per the (sacCode,
+      // gstPercent) cohort's interstate ratio: lines from interstate-supply
+      // invoices contribute to IGST; lines from intra-state invoices
+      // contribute to CGST + SGST 50/50.
+      const hsnBucketsRaw = new Map();
+      for (const inv of invoices) {
+        const lines = linesByInvoice.get(inv.id) || [];
+        const { isInterstate } = await getInterstateForInvoice(inv);
+        const normalized = lines.map((l) => ({
+          lineType: l.lineType,
+          taxableValue: Number(l.amount || 0),
+          gstPercent: gstRateForCategory(l.lineType),
+        }));
+        const grouped = groupLinesBySac(normalized);
+        for (const g of grouped) {
+          const key = `${g.sacCode}:${g.gstPercent}`;
+          if (!hsnBucketsRaw.has(key)) {
+            hsnBucketsRaw.set(key, {
+              sacCode: g.sacCode,
+              description: g.description,
+              gstPercent: g.gstPercent,
+              taxableValue: 0,
+              count: 0,
+              igst: 0,
+              cgst: 0,
+              sgst: 0,
+            });
+          }
+          const acc = hsnBucketsRaw.get(key);
+          const totalTax = Math.round((g.taxableValue * g.gstPercent) / 100 * 100) / 100;
+          acc.taxableValue = Math.round((acc.taxableValue + g.taxableValue) * 100) / 100;
+          acc.count += g.count;
+          if (isInterstate) {
+            acc.igst = Math.round((acc.igst + totalTax) * 100) / 100;
+          } else {
+            const half = Math.round((totalTax / 2) * 100) / 100;
+            acc.cgst = Math.round((acc.cgst + half) * 100) / 100;
+            acc.sgst = Math.round((acc.sgst + half) * 100) / 100;
+          }
+        }
+      }
+      const hsnRows = [...hsnBucketsRaw.values()].sort((a, b) =>
+        a.sacCode === b.sacCode
+          ? a.gstPercent - b.gstPercent
+          : a.sacCode.localeCompare(b.sacCode),
+      );
+
+      // === Build Section 2: B2B_INVOICES ===
+      // One row per invoice with computed totals.
+      const b2bRows = [];
+      const docTotals = new Map(); // docType → { count, taxable, gst }
+      for (const inv of invoices) {
+        const lines = linesByInvoice.get(inv.id) || [];
+        const { isInterstate, customerStateCode } =
+          await getInterstateForInvoice(inv);
+        let taxable = 0;
+        let igst = 0;
+        let cgst = 0;
+        let sgst = 0;
+        for (const l of lines) {
+          // Skip lines whose lineType is not SAC-bearing (tax / fee /
+          // tcs / tds — they're either already double-counted via the
+          // parent's gstPercent or are withholding lines that don't
+          // belong on GSTR-1).
+          if (sacForLineType(l.lineType) === null) continue;
+          const amt = Number(l.amount || 0);
+          const rate = gstRateForCategory(l.lineType);
+          const tax = Math.round((amt * rate) / 100 * 100) / 100;
+          taxable = Math.round((taxable + amt) * 100) / 100;
+          if (isInterstate) {
+            igst = Math.round((igst + tax) * 100) / 100;
+          } else {
+            const half = Math.round((tax / 2) * 100) / 100;
+            cgst = Math.round((cgst + half) * 100) / 100;
+            sgst = Math.round((sgst + half) * 100) / 100;
+          }
+        }
+        const totalGst = Math.round((igst + cgst + sgst) * 100) / 100;
+        const docType = inv.docType || "TaxInvoice";
+        b2bRows.push({
+          invoiceNum: inv.invoiceNum,
+          // YYYY-MM-DD slice of createdAt — the GoI portal accepts
+          // ISO-date but rejects timestamp strings.
+          date: inv.createdAt.toISOString().slice(0, 10),
+          customerState: customerStateCode,
+          taxable,
+          igst,
+          cgst,
+          sgst,
+          totalGst,
+          docType,
+        });
+        const dt = docTotals.get(docType) || { count: 0, taxable: 0, gst: 0 };
+        dt.count += 1;
+        dt.taxable = Math.round((dt.taxable + taxable) * 100) / 100;
+        dt.gst = Math.round((dt.gst + totalGst) * 100) / 100;
+        docTotals.set(docType, dt);
+      }
+
+      // === Stitch the CSV ===
+      const CRLF = "\r\n";
+      const BOM = "\uFEFF";
+      const parts = [];
+
+      parts.push(`# GSTR1_EXPORT month=${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")} subBrand=${subBrandFilter || "ALL"}`);
+      parts.push("");
+
+      // Section 1
+      parts.push("# HSN_SUMMARY");
+      parts.push(
+        [
+          "SAC_Code",
+          "Description",
+          "Total_Lines",
+          "Taxable_Value",
+          "IGST",
+          "CGST",
+          "SGST",
+          "GST_Rate",
+        ]
+          .map(csvEscape)
+          .join(","),
+      );
+      for (const r of hsnRows) {
+        parts.push(
+          [
+            r.sacCode,
+            r.description,
+            String(r.count),
+            formatMoney(r.taxableValue),
+            formatMoney(r.igst),
+            formatMoney(r.cgst),
+            formatMoney(r.sgst),
+            formatMoney(r.gstPercent),
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+      }
+      parts.push("");
+
+      // Section 2
+      parts.push("# B2B_INVOICES");
+      parts.push(
+        [
+          "Invoice_Num",
+          "Date",
+          "Customer_State",
+          "Total_Taxable",
+          "Total_IGST",
+          "Total_CGST",
+          "Total_SGST",
+          "Total_GST",
+          "Doc_Type",
+        ]
+          .map(csvEscape)
+          .join(","),
+      );
+      for (const r of b2bRows) {
+        parts.push(
+          [
+            r.invoiceNum,
+            r.date,
+            r.customerState || "",
+            formatMoney(r.taxable),
+            formatMoney(r.igst),
+            formatMoney(r.cgst),
+            formatMoney(r.sgst),
+            formatMoney(r.totalGst),
+            r.docType,
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+      }
+      parts.push("");
+
+      // Section 3 — DOCUMENT_TOTALS. Sorted alphabetically by docType so
+      // diffs across filing-months stay stable.
+      parts.push("# DOCUMENT_TOTALS");
+      parts.push(["Type", "Count", "Total_Taxable", "Total_GST"].map(csvEscape).join(","));
+      const sortedDocTypes = [...docTotals.keys()].sort();
+      for (const t of sortedDocTypes) {
+        const v = docTotals.get(t);
+        parts.push(
+          [t, String(v.count), formatMoney(v.taxable), formatMoney(v.gst)]
+            .map(csvEscape)
+            .join(","),
+        );
+      }
+
+      const csv = BOM + parts.join(CRLF) + CRLF;
+
+      const filename = `gstr1-${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${subBrandFilter || "all"}.csv`;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      );
+      return res.status(200).send(csv);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] gstr1-export error:", e.message);
+      res.status(500).json({ error: "Failed to generate GSTR-1 CSV" });
+    }
+  },
+);
+
+
 // GET /api/travel/invoices/:id
 //
 // #901 slice 3 (PRD_TRAVEL_BILLING UC-2.5): supports ?include=lines to return
@@ -3122,5 +3539,4 @@ router.post(
     }
   },
 );
-
 module.exports = router;

@@ -1074,6 +1074,224 @@ router.get(
 );
 
 // ============================================================================
+// GET /api/travel/suppliers/by-month — tenant-wide supplier monthly rollup
+// (PRD_TRAVEL_SUPPLIER_MASTER §3 #903 slice 24).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-MM bucket for
+// the tenant-scoped (and sub-brand-narrowed) supplier population. Each row
+// carries count + activeCount + archivedCount so the operator dashboard
+// can render a "suppliers onboarded over time" trend chart without N
+// round-trips per month.
+//
+// Mirrors #908 slice 21 (/flyer-templates/by-month) + #900 slice 16
+// (/quotes/by-month) + #901 slice 29 (/invoices/by-month) — same UTC
+// YYYY-MM bucketing template, same defensive math (null/invalid
+// createdAt → "unknown" bucket; excluded when ?from / ?to is set, kept
+// otherwise so count surface stays accurate), same orderBy semantics. The
+// activeCount/archivedCount split is the supplier-master analogue of the
+// flyer-templates active-vs-archived breakdown — suppliers flip between
+// active and archived via the soft-delete handler and the activate/
+// deactivate endpoints, and the rollup makes the "lifetime population vs.
+// currently-active" delta visible at a glance.
+//
+// Distinct from /suppliers/stats (slice 23): /stats is a single
+// point-in-time KPI tile (total / active / archived / bySubBrand /
+// byCategory / payable sums); /by-month is the per-month time series
+// across the same population. The two endpoints powering the same
+// Supplier Master library page header — /stats for the KPI strip,
+// /by-month for the trend chart.
+//
+// PRD anchors:
+//   - §3 — tenant-wide supplier analytics (trend chart for the
+//          supplier-master dashboard; per-month drill-down picker)
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//                     400 INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}, activeCount:{asc|desc};
+//                     unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' suppliers in the rollup. Same gate as
+//     /suppliers/stats — TravelSupplier.subBrand is NON-nullable in the
+//     schema, so we do NOT add a `{ subBrand: null }` OR clause (which
+//     #908 slice 21 does for flyer-templates whose subBrand IS nullable).
+//     Empty access set → forces `subBrand: "__none__"` so the query
+//     returns the zero-rollup envelope (not 403) and the dashboard tile
+//     renders cleanly for not-yet-onboarded operators.
+//   - JS-side aggregation over a light findMany projection
+//     ({ isActive, createdAt }) — the population is bounded by tenant
+//     scale (low thousands), and the mock-friendly JS aggregation matches
+//     the rationale on /flyer-templates/by-month + /quotes/by-month +
+//     /suppliers/stats. No groupBy for marginal efficiency.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so the
+//     count surface stays accurate. Excluded when ?from / ?to is set
+//     (no comparable month token); included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter — same
+//     posture as /flyer-templates/by-month slice 21.
+//
+// No audit row written — read-only meta surface; matches /suppliers/stats
+// and /flyer-templates/by-month posture. USER-readable: anodyne (counts +
+// month-string tokens).
+//
+// Express route ordering: literal-path /by-month MUST be declared BEFORE
+// the /:id family or `:id="by-month"` would 400 INVALID_ID before
+// reaching this handler. Same convention as /suppliers/search,
+// /suppliers/exposure, /suppliers/stats.
+// ============================================================================
+router.get(
+  "/suppliers/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors slice 21 /flyer-templates/by-month.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+        "activeCount:asc",
+        "activeCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors /suppliers/stats
+      // slice 23: subBrand-restricted callers see only their allowed
+      // sub-brands' suppliers; admins (allowed=null) see all. Empty
+      // allowed set returns the zero-rollup envelope (not 403).
+      //
+      // Note: TravelSupplier.subBrand is NON-nullable, so we do NOT mix
+      // in a `{ subBrand: null }` OR clause (that's the flyer-templates
+      // pattern, where subBrand IS nullable). The narrowing is a pure
+      // `subBrand: { in: [...allowed] }`.
+      const where = { tenantId: req.travelTenant.id };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          where.subBrand = { in: [...allowed] };
+        } else {
+          // Empty allowed set = deny everything; force-empty query so
+          // the response stays a clean zero-rollup envelope.
+          where.subBrand = "__none__";
+        }
+      }
+
+      // Light projection — isActive + createdAt is enough for the bucket
+      // totals. No JSON columns pulled.
+      const rows = await prisma.travelSupplier.findMany({
+        where,
+        select: { isActive: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { count, activeCount,
+      // archivedCount }. Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const r of rows) {
+        let monthKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            month: monthKey,
+            count: 0,
+            activeCount: 0,
+            archivedCount: 0,
+          };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.isActive) bucket.activeCount += 1;
+        else bucket.archivedCount += 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. Mirrors slice 21 /flyer-templates/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also
+      // chronological). "unknown" sorts last in asc / first in desc
+      // (lexicographically > "9999-12") — acceptable for a defensive
+      // fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandCount = months.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+      const grandActiveCount = months.reduce(
+        (acc, r) => acc + (Number(r.activeCount) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as slice 21.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        months: paged,
+        totalMonths,
+        grandCount,
+        grandActiveCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
+
+// ============================================================================
 // GET /api/travel/suppliers/:id/credentials — per-supplier portal-logins view
 // (Arc 2 #903 slice 13 — PRD_TRAVEL_SUPPLIER_MASTER AC-6.8 "Supplier Portal
 // Logins" sub-tab under the SupplierMaster detail page).

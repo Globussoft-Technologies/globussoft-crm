@@ -2504,6 +2504,158 @@ router.post(
 );
 
 // ============================================================================
+// POST /api/travel/invoices/:id/debit-note — Arc 2 #901 slice 15.
+//
+// PRD_TRAVEL_BILLING UC-2.7 (cancellation + refund flow — inverse arm).
+// Operator-action "Issue Debit Note" against an existing invoice: creates
+// a NEW TravelInvoice row with docType='DebitNote', linked to the original
+// via parentInvoiceId (the self-relation added in slice 14). The debit
+// note's totalAmount is stored POSITIVE — it INCREASES the customer's
+// payable for additional charges (late fees, T&C revisions, supplemental
+// services, supplier-side surcharge pass-through).
+//
+// Mirrors the slice-14 credit-note workflow with three differences:
+//   - totalAmount = +amount (positive, vs credit-note's negative)
+//   - docType = 'DebitNote'
+//   - invoiceNum prefix = 'DN-' (vs credit-note's 'CN-')
+//   - NO AMOUNT_EXCEEDS_PARENT gate (debit notes can legitimately exceed
+//     the parent — that's the whole point: charging MORE than originally
+//     billed, e.g. an INR 5000 trip's INR 8000 cancellation fee).
+//   - CANNOT_DEBIT_CREDIT_NOTE rejection covers BOTH DebitNote AND
+//     CreditNote parents (you can't pile a debit onto either a credit
+//     or another debit — only onto a primary TaxInvoice).
+//
+// invoiceNum format: "DN-<parent.invoiceNum>". Same tenant-scoped
+// uniqueness backstop via @@unique([tenantId, invoiceNum]).
+//
+// Auth: ADMIN/MANAGER only.
+//
+// Body:
+//   - amount (required, positive number > 0)
+//   - reason (optional, string)
+//   - lineDescription (optional, short description for narrative)
+//
+// Pre-conditions:
+//   1. Parent invoice exists, tenant-scoped, sub-brand-accessible.
+//   2. Parent status in [Issued, Partial, Paid] — Draft cannot be debited
+//      (issue it first), Voided cannot be debited (settled non-event).
+//   3. Parent is NOT itself a DebitNote or CreditNote — debit-of-credit
+//      or debit-of-debit would muddy the AR ledger semantics; if more
+//      charges arise after a credit note, raise them against the original
+//      TaxInvoice not the note.
+//
+// Side effects:
+//   - New TravelInvoice row created with docType='DebitNote',
+//     totalAmount = +amount, parentInvoiceId set, status = 'Issued'.
+//   - Audit row stamped action='TRAVEL_INVOICE_DEBIT_NOTE_ISSUED'
+//     with details { parentId, parentInvoiceNum, amount, reason,
+//     lineDescription, subBrand }.
+//
+// Returns: 201 + the new DebitNote row.
+//
+// Error codes: INVALID_ID (400), INVOICE_NOT_FOUND (404),
+//   SUB_BRAND_DENIED (403), MISSING_FIELDS (400 — amount absent),
+//   INVALID_AMOUNT (400 — amount <= 0 or non-numeric),
+//   CANNOT_DEBIT_CREDIT_NOTE (400 — parent.docType in [DebitNote, CreditNote]),
+//   INVALID_PARENT_STATE (400 — parent.status not in debitable set).
+// ============================================================================
+router.post(
+  "/invoices/:id/debit-note",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const parent = await loadParentInvoice(req, res, invoiceId);
+      if (!parent) return;
+
+      // Parent must not itself be a CreditNote or DebitNote. NULL docType
+      // is treated as "TaxInvoice" (per slice-11 back-compat convention)
+      // — only explicit DebitNote / CreditNote rows are blocked.
+      if (parent.docType === "DebitNote" || parent.docType === "CreditNote") {
+        return res.status(400).json({
+          error:
+            "Cannot issue a debit note against an existing credit or debit note",
+          code: "CANNOT_DEBIT_CREDIT_NOTE",
+        });
+      }
+
+      // Parent must be in a debitable state. Reuses CREDITABLE_PARENT_STATUSES
+      // because the gate is structurally identical (same set: Issued/Partial/Paid).
+      if (!CREDITABLE_PARENT_STATUSES.includes(parent.status)) {
+        return res.status(400).json({
+          error: `Parent invoice must be in one of [${CREDITABLE_PARENT_STATUSES.join(", ")}] to issue a debit note (current: ${parent.status})`,
+          code: "INVALID_PARENT_STATE",
+        });
+      }
+
+      const { amount, reason, lineDescription } = req.body || {};
+
+      // amount required + numeric > 0.
+      if (amount == null || amount === "") {
+        return res.status(400).json({
+          error: "amount is required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      const amt = Number(amount);
+      if (!Number.isFinite(amt) || amt <= 0) {
+        return res.status(400).json({
+          error: "amount must be a positive number",
+          code: "INVALID_AMOUNT",
+        });
+      }
+
+      // NOTE: deliberately NO AMOUNT_EXCEEDS_PARENT gate. Debit notes
+      // commonly exceed the parent (a 5000 trip can incur an 8000
+      // cancellation fee). The slice-14 credit-note gate (amount <=
+      // parent.totalAmount) does NOT apply here.
+
+      const debitInvoiceNum = `DN-${parent.invoiceNum}`;
+
+      const created = await prisma.travelInvoice.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          subBrand: parent.subBrand,
+          contactId: parent.contactId,
+          invoiceNum: debitInvoiceNum,
+          docType: "DebitNote",
+          status: "Issued",
+          totalAmount: amt,
+          currency: parent.currency,
+          parentInvoiceId: parent.id,
+        },
+      });
+
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_DEBIT_NOTE_ISSUED",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          parentId: parent.id,
+          parentInvoiceNum: parent.invoiceNum,
+          amount: amt,
+          reason: reason ? String(reason) : null,
+          lineDescription: lineDescription ? String(lineDescription) : null,
+          subBrand: parent.subBrand,
+        },
+      );
+
+      return res.status(201).json(created);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] debit-note error:", e.message);
+      res.status(500).json({ error: "Failed to issue debit note" });
+    }
+  },
+);
+
+// ============================================================================
 // GET /api/travel/invoices/:id/tax-preview — any verified token.
 // ============================================================================
 //

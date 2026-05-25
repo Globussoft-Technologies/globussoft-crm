@@ -197,7 +197,7 @@ describe('GET / — list dashboards', () => {
     }));
   });
 
-  it.skip('TODO: filed-issue — restricts to caller userId OR shared/default rows (req.user.id vs req.user.userId bug)', async () => {
+  it('restricts to caller userId OR shared/default rows (post-fix #936)', async () => {
     // The list handler destructures `{ tenantId, id: userId }` from req.user,
     // but verifyToken places the JWT payload (with `userId`, NOT `id`) onto
     // req.user. So `userId` in this handler is ALWAYS undefined and the

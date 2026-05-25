@@ -359,3 +359,147 @@ describe("normalizePhoneForDedup — canonical dedup key", () => {
     expect(normalizePhoneForDedup("not a phone")).toBeNull();
   });
 });
+
+// ─── Slice 11 — classifyInboundJunk heuristic ─────────────────────────────
+//
+// Pins the junk-classification rule used by the inbound-leads route to
+// flag low-signal payloads from STUB-trusted channels. See the helper
+// docstring for the full rule. The rule is "junk = true" when ALL of:
+//   - verification was stub-trusted OR bypassed
+//   - no name signal anywhere
+//   - no real email
+//   - no secondary signal (company / subBrand / metaJson)
+
+const { classifyInboundJunk } = await import(
+  "../../lib/inboundLeadVerification.js"
+);
+
+describe("classifyInboundJunk — low-signal payload flag (slice 11)", () => {
+  test("signed verification → never junk regardless of payload", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true }, // no stub, no bypassed
+      body: {}, // zero signal
+      normalizedPhone: null,
+      hasRealEmail: false,
+    });
+    expect(verdict.junk).toBe(false);
+    expect(verdict.reasons).toEqual([]);
+  });
+
+  test("stub-trusted + zero name + synthesized email + no extras → junk:true", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true, stub: true, channel: "whatsapp" },
+      body: { phone: "+919876543210" }, // ONLY phone
+      normalizedPhone: "919876543210",
+      hasRealEmail: false,
+    });
+    expect(verdict.junk).toBe(true);
+    expect(verdict.reasons).toContain("VERIFICATION_STUB");
+    expect(verdict.reasons).toContain("NO_NAME");
+    expect(verdict.reasons).toContain("NO_REAL_EMAIL");
+    expect(verdict.reasons).toContain("NO_SECONDARY_SIGNAL");
+  });
+
+  test("bypassed verification (Voyagr env-missing) flagged with VERIFICATION_BYPASSED", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true, bypassed: true },
+      body: { phone: "+919876543210" },
+      normalizedPhone: "919876543210",
+      hasRealEmail: false,
+    });
+    expect(verdict.junk).toBe(true);
+    expect(verdict.reasons[0]).toBe("VERIFICATION_BYPASSED");
+  });
+
+  test("stub + name present → NOT junk (real customer signal)", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true, stub: true },
+      body: { name: "Asha Verma", phone: "+919876543210" },
+      normalizedPhone: "919876543210",
+      hasRealEmail: false,
+    });
+    expect(verdict.junk).toBe(false);
+    expect(verdict.reasons).toEqual([]);
+  });
+
+  test("stub + firstName/lastName present → NOT junk", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true, stub: true },
+      body: { firstName: "Asha", lastName: "Verma", phone: "+919876543210" },
+      normalizedPhone: "919876543210",
+      hasRealEmail: false,
+    });
+    expect(verdict.junk).toBe(false);
+  });
+
+  test("stub + real email → NOT junk (email is identity)", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true, stub: true },
+      body: { email: "asha@example.com" },
+      normalizedPhone: null,
+      hasRealEmail: true,
+    });
+    expect(verdict.junk).toBe(false);
+  });
+
+  test("stub + company supplied → NOT junk (secondary signal)", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true, stub: true },
+      body: { phone: "+919876543210", company: "Acme Travels" },
+      normalizedPhone: "919876543210",
+      hasRealEmail: false,
+    });
+    expect(verdict.junk).toBe(false);
+  });
+
+  test("stub + subBrand supplied → NOT junk (form-routing identity)", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true, stub: true },
+      body: { phone: "+919876543210", subBrand: "rfu" },
+      normalizedPhone: "919876543210",
+      hasRealEmail: false,
+    });
+    expect(verdict.junk).toBe(false);
+  });
+
+  test("stub + metaJson present → NOT junk (carries upstream context)", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true, stub: true },
+      body: {
+        phone: "+919876543210",
+        metaJson: { utm_source: "facebook", form_id: "12345" },
+      },
+      normalizedPhone: "919876543210",
+      hasRealEmail: false,
+    });
+    expect(verdict.junk).toBe(false);
+  });
+
+  test("whitespace-only name fields do NOT count as signal", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true, stub: true },
+      body: { name: "   ", firstName: "", lastName: "  " },
+      normalizedPhone: "919876543210",
+      hasRealEmail: false,
+    });
+    expect(verdict.junk).toBe(true);
+    expect(verdict.reasons).toContain("NO_NAME");
+  });
+
+  test("no-args call → not junk, empty reasons (defensive)", () => {
+    const verdict = classifyInboundJunk();
+    expect(verdict.junk).toBe(false);
+    expect(verdict.reasons).toEqual([]);
+  });
+
+  test("stub + nothing at all (no phone) → junk:true + NO_PHONE reason", () => {
+    const verdict = classifyInboundJunk({
+      verification: { ok: true, stub: true },
+      body: {},
+      normalizedPhone: null,
+      hasRealEmail: false,
+    });
+    expect(verdict.junk).toBe(true);
+    expect(verdict.reasons).toContain("NO_PHONE");
+  });
+});

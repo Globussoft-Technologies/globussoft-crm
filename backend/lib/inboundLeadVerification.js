@@ -201,6 +201,105 @@ function checkAntiSpam(body) {
 }
 
 /**
+ * Slice 11 — Inbound-lead junk classification heuristic (PRD §3.2 + §3.4).
+ *
+ * Flags a payload as `junk` when the trust signal is weak AND the payload
+ * carries no identifying data beyond a single contact-method digit. The
+ * route applies the verdict by writing `status: 'Junk'` (free-string field
+ * on Contact) instead of the default `'Lead'`, so the operator UI's leads
+ * page can filter junk out of the inbox by default.
+ *
+ * Heuristic — junk = true when ALL of these hold:
+ *   1. The verification was STUB-trusted (channel returned {stub:true}, e.g.
+ *      whatsapp/ads/adsgpt pre-Q9/Q1 cred drop) OR was bypassed entirely
+ *      (verification.bypassed:true — passed in by the route when
+ *      VOYAGR_HMAC_SECRET is unset). A signed/honeypotted payload from a
+ *      real producer is NEVER junk by this rule.
+ *   2. No name signal — neither `body.name` nor the firstName+lastName pair
+ *      carries a non-empty string. (Bots routinely skip name fields.)
+ *   3. No real email — the route synthesized the placeholder
+ *      `inbound-<channel>-<ts>@imported.local` because the producer didn't
+ *      send one (`hasRealEmail` is the inbound flag).
+ *   4. No `company`, `subBrand`, or `metaJson` extras in the body — these
+ *      are the secondary-signal fields that real leads tend to carry.
+ *   5. Normalized phone (if present) is the ONLY contact field. A
+ *      no-phone-AND-no-real-email payload is rejected upstream by the
+ *      MISSING_CONTACT 400, so this branch is really "phone-only,
+ *      minimal-payload."
+ *
+ * Why "STUB-trusted" not "HMAC-failed": HMAC failure already 400s in the
+ * route (VERIFICATION_FAILED). Junk-classification is for payloads that
+ * PASSED verification but carry minimal-signal data — the weak-signal
+ * class that real-spam-filtering would handle at the WAF layer but we
+ * still want app-tier visibility into. Per PRD §3.2 "soft dedup" + the
+ * cron-learning standing rule "client-side aggregation over a paginated
+ * endpoint is a structural correctness bug," we want the dashboard to
+ * see a Junk vs Lead split that mirrors the actual data quality.
+ *
+ * NOT a hard block — junk leads still persist (operator can promote them
+ * later if a real conversion happens). This differs from the
+ * VERIFICATION_FAILED / SPAM_PATTERN paths which 400 + drop the payload.
+ *
+ * Pure helper — IO-free, no Prisma, no fetch. Returns the verdict +
+ * reason list for observability + AuditLog hand-off.
+ *
+ * @param {object} args
+ * @param {{ok: boolean, stub?: boolean, bypassed?: boolean}} args.verification
+ * @param {object} args.body                 the raw request body
+ * @param {string|null} args.normalizedPhone the digits-only canonical phone
+ * @param {boolean} args.hasRealEmail        true when caller-supplied email is a real one
+ * @returns {{junk: boolean, reasons: string[]}}
+ */
+function classifyInboundJunk({
+  verification,
+  body,
+  normalizedPhone,
+  hasRealEmail,
+} = {}) {
+  const reasons = [];
+  const v = verification || {};
+  if (!v.stub && !v.bypassed) {
+    return { junk: false, reasons: [] };
+  }
+  // Channel was either STUB-trusted or HMAC-bypassed — proceed to check the
+  // payload signal.
+  reasons.push(v.bypassed ? "VERIFICATION_BYPASSED" : "VERIFICATION_STUB");
+
+  const b = body || {};
+  const nameRaw = b.name && String(b.name).trim();
+  const firstRaw = b.firstName && String(b.firstName).trim();
+  const lastRaw = b.lastName && String(b.lastName).trim();
+  if (nameRaw || firstRaw || lastRaw) {
+    // Name present — not junk.
+    return { junk: false, reasons: [] };
+  }
+  reasons.push("NO_NAME");
+
+  if (hasRealEmail) {
+    // Real email present — not junk.
+    return { junk: false, reasons: [] };
+  }
+  reasons.push("NO_REAL_EMAIL");
+
+  const companyRaw = b.company && String(b.company).trim();
+  const subBrandRaw = b.subBrand && String(b.subBrand).trim();
+  const metaRaw = b.metaJson;
+  if (companyRaw || subBrandRaw || metaRaw) {
+    // Secondary signal present — not junk.
+    return { junk: false, reasons: [] };
+  }
+  reasons.push("NO_SECONDARY_SIGNAL");
+
+  // Reached only when verification is stub/bypassed AND no name AND no real
+  // email AND no secondary signal. Phone may or may not be present (the
+  // MISSING_CONTACT 400 upstream guarantees ≥1 contact field).
+  if (!normalizedPhone) {
+    reasons.push("NO_PHONE");
+  }
+  return { junk: true, reasons };
+}
+
+/**
  * Dispatch verification based on channel.
  *
  * @param {string} channel  voyagr|webform|whatsapp|ads|adsgpt|manual
@@ -240,5 +339,6 @@ module.exports = {
   normalizePhoneForDedup,
   checkAntiSpam,
   verifyByChannel,
+  classifyInboundJunk,
   SPAM_PATTERNS,
 };

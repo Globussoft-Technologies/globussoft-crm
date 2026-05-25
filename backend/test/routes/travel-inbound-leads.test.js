@@ -1032,3 +1032,142 @@ describe('GET /api/travel/inbound/leads/by-channel — slice 10 rollup', () => {
     expect(res.body.error).not.toMatch(/P1001/);
   });
 });
+
+// ─── Slice 11 — junk-classification integration ───────────────────────
+//
+// Pins the route's behaviour when classifyInboundJunk returns junk:true:
+//   - Contact.create called with status='Junk' (NOT 'Lead')
+//   - Response envelope carries junk:true + junkReasons[]
+//   - Existing-Contact merge branch is NOT affected (status stays
+//     untouched; junk only applies to brand-new Contact creation)
+
+describe('POST /api/travel/inbound/leads/:channel — slice 11 junk classification', () => {
+  test('whatsapp (STUB) + only phone, no name, no email → status="Junk" + junk:true', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/whatsapp')
+      .send({
+        tenantSlug: 'travel-stall',
+        phone: '+919811111111',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.junk).toBe(true);
+    expect(res.body.junkReasons).toEqual(
+      expect.arrayContaining([
+        'VERIFICATION_STUB',
+        'NO_NAME',
+        'NO_REAL_EMAIL',
+        'NO_SECONDARY_SIGNAL',
+      ]),
+    );
+    expect(prisma.contact.create).toHaveBeenCalledTimes(1);
+    expect(prisma.contact.create.mock.calls[0][0].data.status).toBe('Junk');
+  });
+
+  test('whatsapp (STUB) + name supplied → status="Lead" + junk:false', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/whatsapp')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Priya Sharma',
+        phone: '+919822222222',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.junk).toBe(false);
+    expect(res.body.junkReasons).toEqual([]);
+    expect(prisma.contact.create.mock.calls[0][0].data.status).toBe('Lead');
+  });
+
+  test('whatsapp (STUB) + real email supplied → not junk (email = identity)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/whatsapp')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'real@example.com',
+        phone: '+919833333333',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.junk).toBe(false);
+    expect(prisma.contact.create.mock.calls[0][0].data.status).toBe('Lead');
+  });
+
+  test('whatsapp (STUB) + subBrand supplied → not junk (form-routing signal)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/whatsapp')
+      .send({
+        tenantSlug: 'travel-stall',
+        phone: '+919844444444',
+        subBrand: 'rfu',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.junk).toBe(false);
+    expect(prisma.contact.create.mock.calls[0][0].data.status).toBe('Lead');
+  });
+
+  test('voyagr without VOYAGR_HMAC_SECRET (bypass) + zero signal → junk:true with VERIFICATION_BYPASSED', async () => {
+    // Slice 1 + 11 — when env-missing, the route synthesizes a bypassed
+    // verification verdict. With no name + no real email + no extras, the
+    // junk classifier fires.
+    const prevSecret = process.env.VOYAGR_HMAC_SECRET;
+    delete process.env.VOYAGR_HMAC_SECRET;
+    try {
+      const res = await request(makeApp())
+        .post('/api/travel/inbound/leads/voyagr')
+        .send({
+          tenantSlug: 'travel-stall',
+          phone: '+919855555555',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.junk).toBe(true);
+      expect(res.body.junkReasons).toContain('VERIFICATION_BYPASSED');
+      expect(prisma.contact.create.mock.calls[0][0].data.status).toBe('Junk');
+    } finally {
+      if (prevSecret !== undefined) process.env.VOYAGR_HMAC_SECRET = prevSecret;
+    }
+  });
+
+  test('manual channel (signed/JWT) + minimal payload → never junk (real auth)', async () => {
+    // manual channel's verification returns {ok:true} with no stub/bypassed
+    // flag (the surrounding JWT middleware already authenticated). Junk
+    // classifier never fires regardless of how thin the payload is.
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/manual')
+      .send({
+        tenantSlug: 'travel-stall',
+        phone: '+919866666666',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.junk).toBe(false);
+    expect(prisma.contact.create.mock.calls[0][0].data.status).toBe('Lead');
+  });
+
+  test('dedup merge branch does NOT carry junk flag in envelope (status untouched)', async () => {
+    // When the phone matches an existing Contact, the merge branch fires
+    // BEFORE the junk classifier — the existing Contact's status is not
+    // overwritten and the junk fields are absent from the envelope.
+    prisma.contact.findMany.mockResolvedValueOnce([
+      { id: 99, phone: '+919877777777', email: 'existing@example.com', name: 'Existing' },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/whatsapp')
+      .send({
+        tenantSlug: 'travel-stall',
+        phone: '+919877777777', // matches the existing Contact
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('merged');
+    expect(res.body.contactId).toBe(99);
+    // Junk fields are only on the "created" branch — merge envelope
+    // intentionally omits them so operator UI doesn't show a "junk" badge
+    // on an already-converted Contact.
+    expect(res.body.junk).toBeUndefined();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+});

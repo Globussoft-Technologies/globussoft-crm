@@ -52,6 +52,7 @@ const {
   isValidPhone,
   normalizePhoneForDedup,
   checkAntiSpam,
+  classifyInboundJunk,
 } = require("../lib/inboundLeadVerification");
 
 // Slice-1 channel enum — narrower than the full PRD §3.1.2 16-value enum
@@ -192,10 +193,16 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     const channelParam = req.params.channel;
     const voyagrEnvMissing =
       channelParam === "voyagr" && !process.env.VOYAGR_HMAC_SECRET;
+    // Slice 11 — track the verification verdict beyond the if/else so the
+    // junk-classifier can read its `stub` / `bypassed` flags below. When
+    // voyagrEnvMissing fires, we synthesize a `{ok:true, bypassed:true}`
+    // verdict so the classifier treats it as a low-trust signal.
+    let verificationVerdict = { ok: true };
     if (voyagrEnvMissing) {
       console.warn(
         "[travel-inbound-leads] VOYAGR_HMAC_SECRET unset — skipping HMAC verification (STUB mode)",
       );
+      verificationVerdict = { ok: true, bypassed: true };
     } else {
       // Channel-mapping: the route enum is wider than the helper's switch.
       // `metaads` (route) maps to `ads` (helper) — same Q1 cred surface
@@ -218,6 +225,7 @@ router.post("/inbound/leads/:channel", async (req, res) => {
           channel: channelParam,
         });
       }
+      verificationVerdict = verification;
     }
 
     const tenant = await prisma.tenant.findUnique({
@@ -305,6 +313,21 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       });
     }
 
+    // Slice 11 — junk classification (PRD §3.2 + §3.4). Run AFTER dedup
+    // (so existing real Contacts don't get their status flipped to Junk on
+    // a follow-up low-signal touch) and BEFORE Contact.create (so the
+    // initial status reflects the verdict). Heuristic = stub-trusted/bypass
+    // verification + zero-name + synthesized-email + no-secondary-signal.
+    // See lib/inboundLeadVerification.js for the full rule.
+    const normalizedPhone = phone ? normalizePhoneForDedup(phone) : null;
+    const hasRealEmail = !!(email && String(email).trim());
+    const junkVerdict = classifyInboundJunk({
+      verification: verificationVerdict,
+      body: req.body || {},
+      normalizedPhone,
+      hasRealEmail,
+    });
+
     const created = await prisma.contact.create({
       data: {
         tenantId: tenant.id,
@@ -316,7 +339,11 @@ router.post("/inbound/leads/:channel", async (req, res) => {
         // for non-travel tenants). Trust the producer's payload — verification
         // moves with cred-drop in slice 4.
         subBrand: subBrand || null,
-        status: "Lead",
+        // Slice 11 — flip to 'Junk' when the heuristic fires so the leads
+        // page can filter low-signal payloads out of the default inbox view.
+        // Real leads (signed/honeypotted producers OR any payload with name
+        // / real email / secondary signal) stay at 'Lead'.
+        status: junkVerdict.junk ? "Junk" : "Lead",
       },
     });
 
@@ -327,6 +354,11 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       channel,
       status: "received",
       action: "created",
+      // Slice 11 — surface the classification verdict in the envelope so
+      // operator-side UI can render a "low signal" badge + ops dashboards
+      // can roll up Junk-vs-Lead splits without re-querying.
+      junk: junkVerdict.junk,
+      junkReasons: junkVerdict.reasons,
       // STUB (slice 3 wire-in): lead-auto-router + Touchpoint chain pending.
       routed: false,
     });

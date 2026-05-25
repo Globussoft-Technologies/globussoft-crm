@@ -184,6 +184,11 @@ model Tenant {
   // commit cb284098). Each row is one named operator-facing pricing
   // profile (flat_percent | tiered | per_pax_flat | hybrid).
   travelCommissionProfiles TravelCommissionProfile[]
+  // PRD_TRAVEL_MARKETING_FLYER #908 slice 3 — saved flyer templates
+  // (additive; consumes lib/flyerTemplateValidator.js from slice 1
+  // commit 28146498). Each row is one operator-composed flyer (palette
+  // + layout + asset placeholders) validated before persistence.
+  travelFlyerTemplates     TravelFlyerTemplate[]
   // TMC curriculum→destination mapping (PRD_TMC_CURRICULUM_MAPPING PC-1
   // RESOLVED 2026-05-24). 100-200 starter rows seeded by GS; TMC academic
   // team validates + extends over 6-week window.
@@ -5288,6 +5293,41 @@ model TravelCommissionProfile {
   subBrand    String? // optional sub-brand restriction (tmc/rfu/travelstall/visasure)
   profileType String // flat_percent | tiered | per_pax_flat | hybrid
   profileJson String   @db.Text // JSON serialization of profile shape
+  isActive    Boolean  @default(true)
+  notes       String?  @db.Text
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, subBrand])
+  @@index([tenantId, isActive])
+}
+
+// PRD_TRAVEL_MARKETING_FLYER #908 slice 3 — saved flyer template.
+//
+// Operator-composed JSON blob (palette + layout + asset placeholders)
+// validated via lib/flyerTemplateValidator.js (slice 1 commit 28146498)
+// before persistence. Replaces the frontend STUB in FlyerTemplates.jsx
+// (slice 2 commit a64c1058). The renderer (future slice) consumes the
+// same JSON columns at PDF/PNG export time.
+//
+// Why three JSON columns instead of separate models for palette / layout /
+// assets: a template is operator-composed as a single editor session, and
+// the renderer wants all three blobs together — splitting would force a
+// 3-way join on every read with no callsite that wants just one piece.
+//
+// Slice scope (slice 3): schema + CRUD endpoints. The server.js mount,
+// frontend wire-in (replacing the STUB), and renderer pipeline are
+// separate slices.
+model TravelFlyerTemplate {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int      @default(1)
+  name        String // operator-facing label, e.g. "Summer Umrah 2026"
+  subBrand    String? // optional sub-brand restriction (tmc/rfu/travelstall/visasure)
+  paletteJson String   @db.Text // JSON: { primaryHex, secondaryHex, accentHex?, textHex, bgHex }
+  layoutJson  String   @db.Text // JSON: [{type, x, y, width, height, content?, src?, href?}, ...]
+  assetsJson  String?  @db.Text // JSON: { logo?, hero?, footer? } URLs (optional)
   isActive    Boolean  @default(true)
   notes       String?  @db.Text
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)

@@ -1134,3 +1134,158 @@ describe('POST /api/travel/flyer-templates/:id/export (slice 10)', () => {
     // on cacheKey alone.
   });
 });
+
+/**
+ * Slice 12 — GET /api/travel/flyer-templates/:id/preview.pdf
+ *
+ * Read-only inline PDF preview surface for the list-page "preview this
+ * template before picking" UX. Opens up to USER as well as ADMIN/MANAGER
+ * (the export POST stays gated). Sub-brand isolation enforced
+ * identically to GET /:id. No audit row (every list-page hover would
+ * otherwise pollute audit). Aspect defaults to 'a4'; invalid aspect
+ * yields 400 INVALID_ASPECT (reuses lib/flyerExport's PDF_PAPER_SIZES).
+ */
+describe('GET /api/travel/flyer-templates/:id/preview.pdf (slice 12)', () => {
+  const previewSource = {
+    id: 33,
+    tenantId: 1,
+    name: 'TMC Summer Greece',
+    paletteJson: JSON.stringify(validPalette),
+    layoutJson: JSON.stringify(validLayout),
+    assetsJson: JSON.stringify(validAssets),
+    subBrand: 'tmc',
+    isActive: true,
+    notes: null,
+  };
+
+  test('USER role: returns 200 application/pdf with valid PDF bytes (USER can preview but cannot export)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(previewSource);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/33/preview.pdf')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/pdf/);
+    expect(res.headers['content-disposition']).toMatch(/inline; filename="flyer-33-preview-a4\.pdf"/);
+    expect(res.headers['x-flyer-template-hash']).toMatch(/^[0-9a-f]{64}$/);
+    expect(res.headers['cache-control']).toMatch(/private/);
+    expect(Buffer.isBuffer(res.body)).toBe(true);
+    expect(res.body.length).toBeGreaterThan(500);
+    // PDF magic bytes %PDF.
+    expect(res.body[0]).toBe(0x25);
+    expect(res.body[1]).toBe(0x50);
+    expect(res.body[2]).toBe(0x44);
+    expect(res.body[3]).toBe(0x46);
+    // No audit row for read-only preview.
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('ADMIN role: returns 200 application/pdf (same surface, no role narrowing)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(previewSource);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/33/preview.pdf')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/pdf/);
+    expect(Buffer.isBuffer(res.body)).toBe(true);
+    expect(res.body.length).toBeGreaterThan(500);
+  });
+
+  test('?aspect=us_letter renders the US-letter variant + disposition reflects aspect', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(previewSource);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/33/preview.pdf?aspect=us_letter')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/pdf/);
+    expect(res.headers['content-disposition']).toMatch(/flyer-33-preview-us_letter\.pdf/);
+    expect(res.body[0]).toBe(0x25); // %PDF
+  });
+
+  test('invalid aspect → 400 INVALID_ASPECT (no DB lookup fires)', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/33/preview.pdf?aspect=square')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ASPECT' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('non-numeric id → 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/notanumber/preview.pdf')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+    expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('cross-tenant source → 404 TEMPLATE_NOT_FOUND', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/9999/preview.pdf')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'TEMPLATE_NOT_FOUND' });
+  });
+
+  test('MANAGER restricted to ["rfu"], source.subBrand="tmc" → 403 SUB_BRAND_DENIED', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(previewSource);
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/33/preview.pdf')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'SUB_BRAND_DENIED' });
+  });
+
+  test('tenant-wide (subBrand=null) row is previewable by any role regardless of subBrandAccess', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'USER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue({
+      ...previewSource,
+      subBrand: null,
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/33/preview.pdf')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/pdf/);
+  });
+
+  test('corrupted paletteJson still renders a placeholder PDF (defensive — does not 500)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue({
+      ...previewSource,
+      paletteJson: '{not-valid-json',
+      layoutJson: '[]',
+      assetsJson: null,
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/flyer-templates/33/preview.pdf')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/pdf/);
+    expect(Buffer.isBuffer(res.body)).toBe(true);
+    expect(res.body[0]).toBe(0x25); // %PDF
+  });
+});

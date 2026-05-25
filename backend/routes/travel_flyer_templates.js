@@ -23,6 +23,7 @@
  *   POST   /api/travel/flyer-templates                — ADMIN/MANAGER create
  *   POST   /api/travel/flyer-templates/:id/duplicate  — ADMIN/MANAGER clone (slice 6)
  *   POST   /api/travel/flyer-templates/:id/export     — ADMIN/MANAGER queue render (slice 10)
+ *   GET    /api/travel/flyer-templates/:id/preview.pdf — USER+ inline PDF preview (slice 12)
  *   PUT    /api/travel/flyer-templates/:id            — ADMIN/MANAGER partial update
  *   DELETE /api/travel/flyer-templates/:id            — ADMIN-only hard delete
  *
@@ -816,6 +817,118 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] export error:", e.message);
       res.status(500).json({ error: "Failed to queue flyer export" });
+    }
+  },
+);
+
+// GET /api/travel/flyer-templates/:id/preview.pdf — inline PDF preview
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice 12).
+//
+// Read-only preview surface: any authenticated tenant user (USER /
+// MANAGER / ADMIN) can fetch a rendered PDF preview of a flyer template
+// they have sub-brand access to. Pairs with the FlyerTemplates list
+// page's "Use as starting point" affordance — a marketer needs to see
+// what a saved template actually looks like before picking it as a base
+// for a new flyer.
+//
+// Distinction from POST /:id/export?inline=1 (slice 11):
+//   - GET vs POST     — this is a true read; cacheable + bookmarkable +
+//                       browser-previewable via a plain anchor tag.
+//   - Roles           — opens up to USER as well as ADMIN/MANAGER. The
+//                       export POST stays gated to ADMIN/MANAGER because
+//                       export is operator-driven distribution; preview
+//                       is a list-browsing aid.
+//   - No audit row    — read-only preview, every list-page render would
+//                       otherwise pollute the audit log.
+//   - Query-driven    — aspect lives in ?aspect= rather than a JSON body
+//                       (browsers can't POST a body from an <a href>).
+//
+// Sub-brand isolation: same gate as the rest of the route file — NULL
+// subBrand rows are tenant-wide and visible to everyone; sub-branded
+// rows enforce canAccessSubBrand. Cross-tenant lookups 404 cleanly.
+//
+// Aspect taxonomy reuses lib/flyerExport's PDF_PAPER_SIZES (a4 /
+// us_letter); invalid aspect → 400 INVALID_ASPECT.
+router.get(
+  "/flyer-templates/:id/preview.pdf",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      // Aspect defaults to 'a4'. Reuses the canonical PDF_PAPER_SIZES
+      // list rather than hardcoding so a future taxonomy widening
+      // (e.g. 'tabloid', 'legal') automatically flows here.
+      const aspect = (req.query && req.query.aspect) || "a4";
+      const { PDF_PAPER_SIZES } = require("../lib/flyerExport");
+      if (!PDF_PAPER_SIZES.includes(String(aspect))) {
+        return res.status(400).json({
+          error: `aspect must be one of: ${PDF_PAPER_SIZES.join(", ")}`,
+          code: "INVALID_ASPECT",
+        });
+      }
+
+      const source = await prisma.travelFlyerTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!source) {
+        return res.status(404).json({
+          error: "Flyer template not found",
+          code: "TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      if (source.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, source.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      // Parse the row's JSON columns into the live shape the renderer
+      // consumes. Same defensive try/catch dance as POST /:id/export —
+      // a corrupted-stored-row should still render a degraded placeholder
+      // PDF rather than 500.
+      let palette = null;
+      let layout = null;
+      let assets = null;
+      if (source.paletteJson) {
+        try { palette = JSON.parse(source.paletteJson); } catch (_e) { palette = null; }
+      }
+      if (source.layoutJson) {
+        try { layout = JSON.parse(source.layoutJson); } catch (_e) { layout = null; }
+      }
+      if (source.assetsJson) {
+        try { assets = JSON.parse(source.assetsJson); } catch (_e) { assets = null; }
+      }
+
+      const hash = hashTemplateShape({ palette, layout, assets });
+      const buffer = await renderFlyerPdf(
+        { palette, layout, assets },
+        { aspect: String(aspect), hash },
+      );
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="flyer-${source.id}-preview-${aspect}.pdf"`,
+      );
+      res.setHeader("X-Flyer-Template-Hash", hash);
+      // Short-cache so a list-page hover-preview doesn't re-render on
+      // every mouse-over but template edits still propagate quickly.
+      res.setHeader("Cache-Control", "private, max-age=60");
+      return res.status(200).send(buffer);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] preview error:", e.message);
+      res.status(500).json({ error: "Failed to render flyer preview" });
     }
   },
 );

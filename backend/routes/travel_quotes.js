@@ -6,6 +6,15 @@
  * (2026-05-24 tick #94) as the fork-side of the symmetric Quote/Billing/
  * Supplier decision. This module ships the operator-facing CRUD scaffold.
  *
+ * Slice 11 (THIS commit): POST /:id/accept + POST /:id/decline — dedicated
+ * semantic workflow endpoints with status-transition guards. Distinct from
+ * the catch-all PUT /:id (which permits arbitrary status writes) — these
+ * carry workflow-specific audit action codes (TRAVEL_QUOTE_ACCEPTED /
+ * TRAVEL_QUOTE_DECLINED), an idempotent 200 response on already-{Accepted,
+ * Rejected}, and a 409 INVALID_TRANSITION on attempts to flip from a
+ * terminal state. Decline takes an optional reason (≤1000 chars, captured
+ * in audit details — schema has no rejectionReason column in this slice).
+ *
  * Future slices (not in this commit): pricing engine + line items (PRD §3.2),
  * tax calculation per sub-brand default (DD-5.3 pending product call),
  * PDF render via pdfRenderer.js (DD-5.6 RESOLVED: extend existing),
@@ -1094,6 +1103,198 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] convert-to-invoice error:", e.message);
       res.status(500).json({ error: "Failed to convert quote to invoice" });
+    }
+  },
+);
+
+// POST /api/travel/quotes/:id/accept — ADMIN/MANAGER only.
+//
+// Slice 11 of #900 (PRD_TRAVEL_QUOTE_BUILDER FR-3.1.3 status workflow +
+// FR-3.7.4 customer-accept transition). Dedicated semantic endpoint for
+// transitioning a quote into the "Accepted" state. Distinct from PUT
+// /quotes/:id which permits arbitrary status writes — accept/decline
+// carry workflow-specific transition guards + audit action codes that
+// downstream invoice-conversion + reporting surfaces can grep for.
+//
+// Status-transition guard (FR-3.1.3): only quotes in "Draft" or "Sent"
+// can move to "Accepted". "Rejected" → "Accepted" is rejected with 409
+// INVALID_TRANSITION; the operator must clone the quote (POST /duplicate)
+// rather than resurrect a rejected one. "Accepted" → "Accepted" is
+// idempotent (200 + alreadyAccepted: true) so double-clicks from the
+// operator UI don't surface a spurious error.
+//
+// Schema note: TravelQuote has no acceptedAt / acceptedBy columns
+// (schema frozen for this slice). The acceptance timestamp + actor are
+// captured in the audit row's details payload; downstream surfaces that
+// need "when was this accepted" read from the audit chain rather than
+// the quote envelope. A future slice can promote those into first-class
+// columns once the product call lands.
+router.post(
+  "/quotes/:id/accept",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!quote) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Idempotent accept: already-Accepted short-circuits with 200.
+      if (quote.status === "Accepted") {
+        return res.status(200).json({
+          quote,
+          alreadyAccepted: true,
+          code: "ALREADY_ACCEPTED",
+        });
+      }
+
+      // Transition guard: only Draft or Sent can move to Accepted.
+      // Rejected quotes must be cloned (POST /duplicate), not resurrected.
+      if (quote.status !== "Draft" && quote.status !== "Sent") {
+        return res.status(409).json({
+          error: `Cannot accept a quote in status "${quote.status}". Only Draft or Sent quotes can be accepted.`,
+          code: "INVALID_TRANSITION",
+        });
+      }
+
+      const updated = await prisma.travelQuote.update({
+        where: { id },
+        data: { status: "Accepted" },
+      });
+
+      await writeAudit(
+        "TravelQuote",
+        "TRAVEL_QUOTE_ACCEPTED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          quoteId: updated.id,
+          subBrand: updated.subBrand,
+          contactId: updated.contactId,
+          previousStatus: quote.status,
+          acceptedAt: new Date().toISOString(),
+        },
+      );
+
+      res.status(200).json({ quote: updated });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] accept error:", e.message);
+      res.status(500).json({ error: "Failed to accept quote" });
+    }
+  },
+);
+
+// POST /api/travel/quotes/:id/decline — ADMIN/MANAGER only.
+//
+// Slice 11 of #900 (PRD_TRAVEL_QUOTE_BUILDER FR-3.7.5 reject-with-reason).
+// Dedicated semantic endpoint paralleling /accept. Optional `reason`
+// body field (max 1000 chars) is captured in the audit row's details
+// payload — TravelQuote has no rejectionReason column (schema frozen
+// for this slice), so the audit chain is the source of truth for
+// rejection rationale until a future slice promotes it.
+//
+// Status-transition guard: only quotes in "Draft" or "Sent" can move
+// to "Rejected". "Accepted" → "Rejected" is rejected with 409
+// INVALID_TRANSITION; once accepted, the operator should treat the
+// downstream invoice as the cancellation surface. "Rejected" →
+// "Rejected" is idempotent (200 + alreadyRejected: true).
+router.post(
+  "/quotes/:id/decline",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      // Reason is optional but if provided must be a string ≤1000 chars.
+      // Longer strings get truncated rather than 400'd — operators have
+      // no UI hint for the limit and refusing the request would be
+      // user-hostile. Sanitization happens at the audit-write level.
+      const rawReason = req.body && req.body.reason;
+      let reason = null;
+      if (rawReason != null) {
+        if (typeof rawReason !== "string") {
+          return res.status(400).json({
+            error: "reason must be a string",
+            code: "INVALID_REASON",
+          });
+        }
+        reason = rawReason.trim().slice(0, 1000);
+        if (reason === "") reason = null;
+      }
+
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!quote) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      if (quote.status === "Rejected") {
+        return res.status(200).json({
+          quote,
+          alreadyRejected: true,
+          code: "ALREADY_REJECTED",
+        });
+      }
+
+      if (quote.status !== "Draft" && quote.status !== "Sent") {
+        return res.status(409).json({
+          error: `Cannot decline a quote in status "${quote.status}". Only Draft or Sent quotes can be declined.`,
+          code: "INVALID_TRANSITION",
+        });
+      }
+
+      const updated = await prisma.travelQuote.update({
+        where: { id },
+        data: { status: "Rejected" },
+      });
+
+      await writeAudit(
+        "TravelQuote",
+        "TRAVEL_QUOTE_DECLINED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          quoteId: updated.id,
+          subBrand: updated.subBrand,
+          contactId: updated.contactId,
+          previousStatus: quote.status,
+          declinedAt: new Date().toISOString(),
+          reason: reason || null,
+        },
+      );
+
+      res.status(200).json({ quote: updated, reason });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] decline error:", e.message);
+      res.status(500).json({ error: "Failed to decline quote" });
     }
   },
 );

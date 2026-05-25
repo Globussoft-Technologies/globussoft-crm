@@ -50,6 +50,7 @@ const {
   descriptionForSac,
   groupLinesBySac,
 } = require("../lib/hsnSacMapper");
+const { computeQuoteAnalytics } = require("../lib/travelQuoteAnalytics");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
@@ -255,6 +256,117 @@ router.get("/quotes/expired", verifyToken, requireTravelTenant, async (req, res)
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-quotes] expired list error:", e.message);
     res.status(500).json({ error: "Failed to list expired quotes" });
+  }
+});
+
+// GET /api/travel/quotes/analytics — any verified token (tenant + sub-brand scoped).
+//
+// Slice 13 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — quote analytics rollup).
+// Read-only aggregator over the caller's scoped TravelQuote rows. Returns
+// status counts, sub-brand breakdown, totals per status, acceptance rate
+// (over terminal-state quotes only), avg time-to-decision in days, and an
+// expired-count cross-reference. Consumed by the operator dashboard tile
+// + the /quotes list-page summary band.
+//
+// === Filters ===
+// Honors optional ?subBrand=tmc and ?from=ISO + ?to=ISO date-range
+// (matched against createdAt). Sub-brand isolation is enforced via
+// getSubBrandAccessSet — operators without access to a sub-brand never see
+// its quotes in the rollup, mirroring the GET /quotes index behaviour.
+// Empty access set → all-zeros rollup (not 403) so dashboard tiles render
+// cleanly for not-yet-onboarded operators.
+//
+// === Date range ===
+// ?from / ?to are parsed via new Date(); invalid values 400. When both
+// supplied, ?from must be <= ?to or 400 INVALID_RANGE. Either may be
+// omitted (open-ended on that side).
+//
+// === Mixed currencies ===
+// totalValueByStatus sums totalAmount naively without FX conversion. When
+// the scoped quotes span multiple currencies, the top-level `currency`
+// field is set to null as a signal to the dashboard ("can't show one $".
+// Mirrors the PRD's FR-3.4.3 stance — FX is locked at accept time, not
+// roll-up time.
+//
+// === Route ordering ===
+// IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
+// doesn't match "analytics" as a numeric :id (which would 400 INVALID_ID).
+router.get("/quotes/analytics", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+
+    if (req.query.subBrand) {
+      assertValidSubBrand(String(req.query.subBrand));
+      where.subBrand = String(req.query.subBrand);
+    }
+
+    if (req.query.from || req.query.to) {
+      const createdAt = {};
+      if (req.query.from) {
+        const fromDate = new Date(String(req.query.from));
+        if (Number.isNaN(fromDate.getTime())) {
+          return res.status(400).json({
+            error: "from must be a parseable date",
+            code: "INVALID_FROM",
+          });
+        }
+        createdAt.gte = fromDate;
+      }
+      if (req.query.to) {
+        const toDate = new Date(String(req.query.to));
+        if (Number.isNaN(toDate.getTime())) {
+          return res.status(400).json({
+            error: "to must be a parseable date",
+            code: "INVALID_TO",
+          });
+        }
+        createdAt.lte = toDate;
+      }
+      if (
+        createdAt.gte && createdAt.lte
+        && createdAt.gte.getTime() > createdAt.lte.getTime()
+      ) {
+        return res.status(400).json({
+          error: "from must be <= to",
+          code: "INVALID_RANGE",
+        });
+      }
+      where.createdAt = createdAt;
+    }
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    // Empty access set → all-zeros rollup (not 403). Matches the
+    // expired-list behaviour.
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(computeQuoteAnalytics([]));
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = where.subBrand
+        ? canAccessSubBrand(allowed, where.subBrand)
+          ? where.subBrand
+          : "__none__"
+        : { in: [...allowed] };
+    }
+
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        status: true,
+        totalAmount: true,
+        currency: true,
+        validUntil: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    res.json(computeQuoteAnalytics(quotes));
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] analytics error:", e.message);
+    res.status(500).json({ error: "Failed to compute analytics" });
   }
 });
 

@@ -22,6 +22,7 @@
  *   POST   /api/travel/commission-profiles/:id/duplicate  — ADMIN/MANAGER clone (slice 13)
  *   GET    /api/travel/commission-profiles/:id/summary/by-contact — per-contact aggregation (slice 14)
  *   GET    /api/travel/commission-profiles/:id/summary/by-month — monthly time-series rollup (slice 15)
+ *   GET    /api/travel/commission-profiles/:id/summary/by-quarter — quarterly time-series rollup (slice 16)
  *
  * Validation strictness (slice 2):
  *   - name required, non-empty trim                       → 400 MISSING_FIELDS
@@ -1625,6 +1626,255 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-commission-profiles] summary-by-month error:", e.message);
       res.status(500).json({ error: "Failed to load commission monthly summary" });
+    }
+  },
+);
+
+// GET /api/travel/commission-profiles/:id/summary/by-quarter — quarterly
+// time-series rollup across the same Deal × Contact join the slice 9 ledger
+// emits. One row per YYYY-Qn bucket present in the deal set, summarising the
+// number of deals, gross sale total, and total commission earned for that
+// quarter. Mirrors slice 15's monthly endpoint but at the quarter granularity
+// finance teams use for FY rollups (PRD §3 FR-3.6.3 — per-FY summary with
+// month-over-month trend; quarter is the coarser-bucket sibling). Bucket key
+// shape "YYYY-Qn" (e.g. "2026-Q2") derived from Deal.createdAt's UTC year +
+// quarter. Same UTC rationale as slice 15 — finance reconciliation works in
+// calendar quarters; if tenant-locale quarter boundaries are needed later,
+// that's an additive ?tz= param on the same endpoint.
+//
+// Why a separate endpoint instead of an aggregate=quarter query param on
+// by-month: callers expect different defaults (12 quarters = 3 years at
+// quarter granularity is a sensible UI default; 36 months ≠ 12 quarters in
+// any meaningful sense). Different default sort + bucket validation regex.
+// Keeping the two reads disjoint lets each evolve independently — same
+// rationale slice 15 cites for not extending by-contact.
+//
+// Scope rules (identical to slices 9 + 14 + 15):
+//   - Tenant-scoped on Contact.tenantId AND Deal.tenantId.
+//   - Sub-brand-restricted callers must access the profile's sub-brand
+//     (NULL subBrand = tenant-wide, accessible to all authorised roles).
+//   - Soft-deleted deals (deletedAt != null) are excluded.
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   stage     optional Deal.stage filter (e.g. "won" for settled-only trend)
+//   from      optional inclusive lower bound on bucket (YYYY-Qn, e.g. 2026-Q1)
+//   to        optional inclusive upper bound on bucket (YYYY-Qn)
+//   orderBy   default "quarter:asc" (chronological); also accepts "quarter:desc",
+//             "totalCommission:desc", "totalCommission:asc", "dealCount:desc",
+//             "dealCount:asc", "totalSale:desc", "totalSale:asc". Unknown
+//             tokens degrade silently to default — same graceful posture
+//             slices 14 + 15 use.
+//   limit     default 12 (3 years of quarters), max 40 (10 years). Smaller
+//             default than by-month because the typical UI surface is one
+//             quarterly-trend chart with ~12 bars.
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     profileId, profileName, profileType,
+//     quarters: [
+//       { quarter: "2026-Q2", dealCount, totalSale, totalCommission }
+//     ],
+//     totalQuarters,
+//     grandTotalCommission,
+//     limit, offset
+//   }
+//
+// Defensive behaviour mirrors slice 15: malformed stored profileJson → every
+// per-quarter row reports totalCommission=0 with dealCount + totalSale still
+// accurate. Operator sees the misconfig at use-time, not via a 500 throw.
+router.get(
+  "/commission-profiles/:id/summary/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const profile = await prisma.travelCommissionProfile.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!profile) {
+        return res.status(404).json({
+          error: "Commission profile not found",
+          code: "PROFILE_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand gate — NULL subBrand profiles are tenant-wide.
+      if (profile.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, profile.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const stageFilter = req.query.stage ? String(req.query.stage) : null;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+      // YYYY-Qn validation — accept "YYYY-Q1" through "YYYY-Q4" only. Bucket
+      // labels we emit follow this shape so callers passing tokens to from/to
+      // should already use it. Anything else is a 400 INVALID_QUARTER_FORMAT.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Qn format (e.g. 2026-Q2)",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Qn format (e.g. 2026-Q2)",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "totalCommission:desc",
+        "totalCommission:asc",
+        "dealCount:desc",
+        "dealCount:asc",
+        "totalSale:desc",
+        "totalSale:asc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+      // Same Deal × Contact join as slices 9 + 14 + 15. No DB-level pagination —
+      // aggregation runs in-process so we can bucket by UTC YYYY-Qn.
+      const dealWhere = {
+        tenantId: req.travelTenant.id,
+        deletedAt: null,
+        contact: { commissionProfileId: id, tenantId: req.travelTenant.id },
+      };
+      if (stageFilter) dealWhere.stage = stageFilter;
+
+      const deals = await prisma.deal.findMany({
+        where: dealWhere,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+
+      // Parse stored profileJson once; reuse across all rows.
+      let parsedProfile = null;
+      let parseError = null;
+      try {
+        parsedProfile = JSON.parse(profile.profileJson);
+      } catch (e) {
+        parseError = e.message;
+      }
+
+      // Half-up round to 2dp — matches lib/agentCommissionCalculator.round2.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { quarter, dealCount,
+      // totalSale, totalCommission }. Deals with a null/invalid createdAt
+      // are bucketed under "unknown" so the count surface stays accurate.
+      // Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec — calendar quarters,
+      // not Indian-FY April-March quarters. FY tooling is a future overlay
+      // on top of this calendar-quarter primitive.
+      const byQuarter = new Map();
+      for (const d of deals) {
+        let quarterKey = "unknown";
+        if (d.createdAt) {
+          const dt = new Date(d.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${q}`;
+          }
+        }
+
+        let row = byQuarter.get(quarterKey);
+        if (!row) {
+          row = {
+            quarter: quarterKey,
+            dealCount: 0,
+            totalSale: 0,
+            totalCommission: 0,
+          };
+          byQuarter.set(quarterKey, row);
+        }
+        row.dealCount += 1;
+        row.totalSale += Number(d.amount) || 0;
+
+        let commission = 0;
+        if (!parseError) {
+          const result = computeCommission({
+            saleAmount: Number(d.amount) || 0,
+            paxCount: 1,
+            profile: parsedProfile,
+          });
+          commission = Number(result.commission) || 0;
+        }
+        row.totalCommission += commission;
+      }
+
+      // Finalise rounding on per-row sums.
+      let quarters = [...byQuarter.values()].map((r) => ({
+        ...r,
+        totalSale: round2(r.totalSale),
+        totalCommission: round2(r.totalCommission),
+      }));
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set (no comparable token); when no bounds are set,
+      // "unknown" stays so the deal-count surface remains complete.
+      if (fromRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+      // chronological (Q1<Q2<Q3<Q4 sorts correctly as ASCII). "unknown"
+      // lexicographically > "9999-Q4" so it sorts last in asc / first in desc
+      // — acceptable for a defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalQuarters = quarters.length;
+      const grandTotalCommission = round2(
+        quarters.reduce((acc, r) => acc + (Number(r.totalCommission) || 0), 0),
+      );
+
+      // Pagination applied AFTER aggregation + sort + filter, same as slices 14+15.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        profileId: profile.id,
+        profileName: profile.name,
+        profileType: profile.profileType,
+        quarters: paged,
+        totalQuarters,
+        grandTotalCommission,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] summary-by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to load commission quarterly summary" });
     }
   },
 );

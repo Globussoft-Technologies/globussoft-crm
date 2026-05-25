@@ -6,32 +6,44 @@
 // each supplier row via an expand panel; this page is the month-end AP
 // review surface where the operator wants ALL payables in one table.
 //
-// Backend contract (currently per-supplier only):
-//   GET /api/travel/suppliers                  list (commit 192b8c1)
-//   GET /api/travel/suppliers/:id/payables     per-supplier (commit 59336ab7)
+// Backend contract (Arc 2 #903 slice 5, commit f7cfc364):
+//   GET /api/travel/payables
+//     ?status=pending|scheduled|paid|cancelled
+//     ?supplierCategory=hotel|flight|transport|visa-consul|other
+//     ?subBrand=tmc|rfu|travelstall|visasure
+//     ?dueBefore=ISO date
+//     ?dueAfter=ISO date
+//     ?limit=N (default 100, clamped to 500)
+//     ?offset=N
+//   →
+//   {
+//     payables: [{
+//       id, supplierId, supplierName, supplierCategory, subBrand,
+//       poNumber, description, amount, currency, dueDate, status,
+//       paidAt, daysUntilDue, createdAt
+//     }],
+//     total, limit, offset,
+//     summary: { byStatus, totalPending, totalScheduled, totalPaid,
+//                currencyBreakdown }
+//   }
 //
-// TODO #903 slice 6: replace per-supplier fan-out with a single
-// cross-supplier endpoint GET /api/travel/payables that returns every
-// payable (joined with supplier name/category/subBrand) in one round-trip.
-// Until that endpoint lands, this page does the fan-out client-side —
-// fetch the supplier list, then issue one GET per supplier for its
-// payables, then merge + flatten + render. Inefficient (N+1 round-trips)
-// but functional placeholder so the page is in place when the consolidating
-// endpoint ships.
+// Slice 6 (this commit) retires the previous per-supplier fan-out (which
+// hit /api/travel/suppliers then issued one /payables GET per supplier
+// and merged client-side) in favour of the single consolidated round-trip.
+// The supplier-name client-side substring search is preserved — the
+// endpoint doesn't filter by supplier name yet (future slice).
 //
-// Filters (client-side, applied AFTER the fan-out merge):
-//   - status chips (pending | scheduled | paid | cancelled) + "All"
-//   - supplier text search (case-insensitive substring against supplier name)
-//   - due-date from / to (ISO date inputs)
+// Filter surface (now server-side via query params except supplier-name
+// substring + the chip-driven status which also goes server-side):
+//   - status chips → ?status= (pending | scheduled | paid | cancelled)
+//   - subBrand     → ?subBrand=
+//   - supplierCategory → ?supplierCategory=
+//   - dueFrom/dueTo    → ?dueAfter / ?dueBefore
+//   - supplier text search → client-side substring on payable.supplierName
 //
-// KPI cards:
-//   - Pending / Scheduled / Paid / Cancelled — count + summed amount
-//     (summed in display currency; mixed-currency totals are best-effort
-//     because we don't FX-convert client-side — the figure represents the
-//     payable's raw amount summed within its own currency token).
-//
-// Pagination: client-side (PAGE_SIZE = 50) since backend has no batch
-// endpoint yet. Once slice 6 ships, swap to server-side pagination.
+// Defensive fallback: if /api/travel/payables returns 404 (endpoint not
+// yet deployed on this stack), notify.error + render the empty state
+// rather than crashing.
 
 import { useEffect, useMemo, useState } from "react";
 import { Wallet, Search } from "lucide-react";
@@ -46,6 +58,23 @@ const STATUS_CHIPS = [
   { value: "scheduled", label: "Scheduled" },
   { value: "paid", label: "Paid" },
   { value: "cancelled", label: "Cancelled" },
+];
+
+const SUB_BRANDS = [
+  { value: "", label: "All sub-brands" },
+  { value: "tmc", label: "TMC (schools)" },
+  { value: "rfu", label: "RFU (Umrah)" },
+  { value: "travelstall", label: "Travel Stall" },
+  { value: "visasure", label: "Visa Sure" },
+];
+
+const SUPPLIER_CATEGORIES = [
+  { value: "", label: "All categories" },
+  { value: "hotel", label: "Hotel" },
+  { value: "flight", label: "Flight" },
+  { value: "transport", label: "Transport" },
+  { value: "visa-consul", label: "Visa / Consul" },
+  { value: "other", label: "Other" },
 ];
 
 // Status badge palette — mirrors PAYABLE_STATUS_STYLE in SuppliersAdmin.jsx
@@ -72,20 +101,9 @@ function formatDate(iso) {
   return d.toISOString().slice(0, 10);
 }
 
-// daysUntilDue computed client-side from dueDate. Returns null when no
-// dueDate is set (the column displays "—"). The route doesn't compute this
-// server-side for payables (unlike payment-schedules' upcoming endpoint).
-function computeDaysUntilDue(dueDate) {
-  if (!dueDate) return null;
-  const d = new Date(dueDate);
-  if (Number.isNaN(d.getTime())) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const ms = target.getTime() - today.getTime();
-  return Math.round(ms / 86400000);
-}
-
+// daysUntilDue styling — positive=neutral text, zero=warning (amber, "due
+// today"), negative=red "N days overdue". Server-computed (slice 5);
+// null falls through to "—".
 function daysCellStyle(days) {
   if (days == null) return { color: "var(--text-secondary)" };
   if (days < 0) return { color: "var(--danger-color, #f43f5e)", fontWeight: 600 };
@@ -102,130 +120,103 @@ function daysCellText(days) {
 
 export default function Payables() {
   const notify = useNotify();
-  const [rows, setRows] = useState([]); // flattened: each row has supplier{} + payable fields
+  const [payables, setPayables] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState({
+    byStatus: {},
+    totalPending: "0.00",
+    totalScheduled: "0.00",
+    totalPaid: "0.00",
+    currencyBreakdown: {},
+  });
   const [loading, setLoading] = useState(true);
 
-  // Filter state — all client-side since fan-out result is already in memory.
+  // Server-side filter state.
   const [status, setStatus] = useState("");
-  const [supplierSearch, setSupplierSearch] = useState("");
+  const [subBrand, setSubBrand] = useState("");
+  const [supplierCategory, setSupplierCategory] = useState("");
   const [dueFrom, setDueFrom] = useState("");
   const [dueTo, setDueTo] = useState("");
   const [offset, setOffset] = useState(0);
+  // Client-side filter — supplier-name substring; the endpoint doesn't
+  // accept this yet (future slice).
+  const [supplierSearch, setSupplierSearch] = useState("");
 
-  // Fan-out load: GET supplier list, then GET payables per supplier.
-  // TODO #903 slice 6: replace per-supplier fan-out with cross-supplier
-  // endpoint GET /api/travel/payables. The single round-trip will return
-  // each payable already joined with supplier.{name,category,subBrand}, so
-  // this page can drop the per-supplier loop entirely and read directly
-  // from the response payload.
-  const load = async () => {
+  const load = () => {
     setLoading(true);
-    try {
-      const supplierResp = await fetchApi("/api/travel/suppliers?includeInactive=1");
-      const suppliers = Array.isArray(supplierResp?.suppliers) ? supplierResp.suppliers : [];
-
-      const flattened = [];
-      // Sequential rather than Promise.all to avoid a thundering herd of
-      // requests on tenants with many suppliers. Pagination clamps this
-      // back when the consolidating endpoint lands.
-      for (const s of suppliers) {
-        try {
-          const payResp = await fetchApi(`/api/travel/suppliers/${s.id}/payables`);
-          const payables = Array.isArray(payResp?.payables) ? payResp.payables : [];
-          for (const p of payables) {
-            flattened.push({
-              ...p,
-              supplier: {
-                id: s.id,
-                name: s.name,
-                supplierCategory: s.supplierCategory,
-                subBrand: s.subBrand,
-              },
-            });
-          }
-        } catch (err) {
-          // Surface 5xx (or any non-2xx with a status >= 500) so the operator
-          // knows ONE supplier's fan-out failed — but don't abort the whole
-          // load; the rest of the suppliers' rows still render.
-          if (err?.status >= 500) {
-            notify.error(`Failed to load payables for ${s.name}`);
-          }
-          // 4xx silent (fetchApi already auto-toasts) — keep the page useful.
+    const qs = new URLSearchParams();
+    if (status) qs.set("status", status);
+    if (subBrand) qs.set("subBrand", subBrand);
+    if (supplierCategory) qs.set("supplierCategory", supplierCategory);
+    if (dueFrom) qs.set("dueAfter", dueFrom);
+    if (dueTo) qs.set("dueBefore", dueTo);
+    qs.set("limit", String(PAGE_SIZE));
+    qs.set("offset", String(offset));
+    const url = `/api/travel/payables?${qs.toString()}`;
+    fetchApi(url)
+      .then((d) => {
+        const rows = Array.isArray(d?.payables) ? d.payables : [];
+        setPayables(rows);
+        setTotal(Number.isFinite(d?.total) ? d.total : 0);
+        setSummary({
+          byStatus: d?.summary?.byStatus || {},
+          totalPending: d?.summary?.totalPending || "0.00",
+          totalScheduled: d?.summary?.totalScheduled || "0.00",
+          totalPaid: d?.summary?.totalPaid || "0.00",
+          currencyBreakdown: d?.summary?.currencyBreakdown || {},
+        });
+      })
+      .catch((err) => {
+        setPayables([]);
+        setTotal(0);
+        setSummary({
+          byStatus: {},
+          totalPending: "0.00",
+          totalScheduled: "0.00",
+          totalPaid: "0.00",
+          currencyBreakdown: {},
+        });
+        // Defensive fallback: 404 means the consolidated endpoint isn't on
+        // this stack yet (e.g. demo not yet deployed past slice 5); surface
+        // a friendly notify.error and leave the empty state showing rather
+        // than crashing the page.
+        if (err?.status === 404) {
+          notify.error(
+            "Cross-supplier payables endpoint not available on this server yet.",
+          );
+        } else if (err?.status >= 500) {
+          notify.error("Failed to load payables — please try again.");
         }
-      }
-      setRows(flattened);
-    } catch (err) {
-      setRows([]);
-      if (err?.status >= 500) {
-        notify.error("Failed to load suppliers — please try again.");
-      }
-    } finally {
-      setLoading(false);
-    }
+      })
+      .finally(() => setLoading(false));
   };
 
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(load, [status, subBrand, supplierCategory, dueFrom, dueTo, offset]);
 
-  // Reset to page 0 whenever filters change so the operator doesn't end up
+  // Reset to page 0 whenever a filter changes so the operator doesn't end up
   // viewing an empty middle page after a narrowing filter.
   useEffect(() => {
     setOffset(0);
-  }, [status, supplierSearch, dueFrom, dueTo]);
+  }, [status, subBrand, supplierCategory, dueFrom, dueTo]);
 
-  // Client-side filtering — applied to the flattened row set produced by
-  // the fan-out. Keep the filter logic pure so the SUT can be reasoned
-  // about as input → output.
+  // Client-side filtering — only the supplier-name substring narrows the
+  // server-returned page further.
   const filtered = useMemo(() => {
     const term = supplierSearch.trim().toLowerCase();
-    const fromTime = dueFrom ? new Date(dueFrom).getTime() : null;
-    const toTime = dueTo ? new Date(dueTo).getTime() : null;
-    return rows.filter((r) => {
-      if (status && r.status !== status) return false;
-      if (term) {
-        const name = (r.supplier?.name || "").toLowerCase();
-        if (!name.includes(term)) return false;
-      }
-      if (fromTime != null) {
-        if (!r.dueDate) return false;
-        const dt = new Date(r.dueDate).getTime();
-        if (Number.isNaN(dt) || dt < fromTime) return false;
-      }
-      if (toTime != null) {
-        if (!r.dueDate) return false;
-        const dt = new Date(r.dueDate).getTime();
-        if (Number.isNaN(dt) || dt > toTime) return false;
-      }
-      return true;
+    if (!term) return payables;
+    return payables.filter((r) => {
+      const name = (r.supplierName || "").toLowerCase();
+      return name.includes(term);
     });
-  }, [rows, status, supplierSearch, dueFrom, dueTo]);
+  }, [payables, supplierSearch]);
 
-  // KPI summary — derived from the filtered set so chip-narrowed view
-  // surfaces the within-filter totals.
-  const summary = useMemo(() => {
-    const acc = {
-      pending: { count: 0, amount: 0 },
-      scheduled: { count: 0, amount: 0 },
-      paid: { count: 0, amount: 0 },
-      cancelled: { count: 0, amount: 0 },
-    };
-    for (const r of filtered) {
-      const key = r.status || "pending";
-      if (!acc[key]) continue;
-      acc[key].count += 1;
-      const n = Number(r.amount);
-      if (Number.isFinite(n)) acc[key].amount += n;
-    }
-    return acc;
-  }, [filtered]);
-
-  const totalFiltered = filtered.length;
-  const pageRows = filtered.slice(offset, offset + PAGE_SIZE);
+  const pendingCount = summary.byStatus?.pending || 0;
+  const scheduledCount = summary.byStatus?.scheduled || 0;
+  const paidCount = summary.byStatus?.paid || 0;
+  const cancelledCount = summary.byStatus?.cancelled || 0;
 
   const handleNext = () => {
-    if (offset + PAGE_SIZE >= totalFiltered) return;
+    if (offset + PAGE_SIZE >= total) return;
     setOffset(offset + PAGE_SIZE);
   };
   const handlePrev = () => {
@@ -240,12 +231,13 @@ export default function Payables() {
           <Wallet size={26} aria-hidden /> All Payables
         </h1>
         <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-          Cross-supplier A/P ledger — every payable across every supplier in one view. {totalFiltered.toLocaleString()} payable{totalFiltered === 1 ? "" : "s"} match.
+          Cross-supplier A/P ledger — every payable across every supplier in one view. {total.toLocaleString()} payable{total === 1 ? "" : "s"} match.
         </p>
       </header>
 
-      {/* KPI cards — counts + amounts grouped by status, drawn from the
-          filter-narrowed set. */}
+      {/* KPI cards — counts + amounts grouped by status, read from
+          summary.byStatus + summary.total* returned by the server (which
+          is authoritative — server aggregates over the current page). */}
       <div
         style={{
           display: "grid",
@@ -254,13 +246,14 @@ export default function Payables() {
           marginBottom: 16,
         }}
       >
-        <KpiCard label="Pending" count={summary.pending.count} amount={summary.pending.amount} color="var(--warning-color, #f59e0b)" />
-        <KpiCard label="Scheduled" count={summary.scheduled.count} amount={summary.scheduled.amount} color="#3b82f6" />
-        <KpiCard label="Paid" count={summary.paid.count} amount={summary.paid.amount} color="var(--success-color, #22c55e)" />
-        <KpiCard label="Cancelled" count={summary.cancelled.count} amount={summary.cancelled.amount} color="var(--text-secondary)" />
+        <KpiCard label="Pending" count={pendingCount} amount={summary.totalPending} color="var(--warning-color, #f59e0b)" />
+        <KpiCard label="Scheduled" count={scheduledCount} amount={summary.totalScheduled} color="#3b82f6" />
+        <KpiCard label="Paid" count={paidCount} amount={summary.totalPaid} color="var(--success-color, #22c55e)" />
+        <KpiCard label="Cancelled" count={cancelledCount} amount="0.00" color="var(--text-secondary)" />
       </div>
 
-      {/* Filter chrome — status chips + supplier search + date range. */}
+      {/* Filter chrome — status chips + sub-brand + category + supplier
+          search + date range. */}
       <div
         className="glass"
         style={{
@@ -295,6 +288,28 @@ export default function Payables() {
           })}
         </div>
 
+        <select
+          value={subBrand}
+          onChange={(e) => setSubBrand(e.target.value)}
+          style={inputStyle}
+          aria-label="Filter by sub-brand"
+        >
+          {SUB_BRANDS.map((s) => (
+            <option key={s.value || "all"} value={s.value}>{s.label}</option>
+          ))}
+        </select>
+
+        <select
+          value={supplierCategory}
+          onChange={(e) => setSupplierCategory(e.target.value)}
+          style={inputStyle}
+          aria-label="Filter by supplier category"
+        >
+          {SUPPLIER_CATEGORIES.map((c) => (
+            <option key={c.value || "all"} value={c.value}>{c.label}</option>
+          ))}
+        </select>
+
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <Search size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
           <input
@@ -327,7 +342,7 @@ export default function Payables() {
       <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
-        ) : pageRows.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div style={empty}>No payables found</div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -343,27 +358,26 @@ export default function Payables() {
               </tr>
             </thead>
             <tbody>
-              {pageRows.map((r) => {
-                const days = computeDaysUntilDue(r.dueDate);
+              {filtered.map((r) => {
                 const statusKey = r.status || "pending";
                 return (
                   <tr
-                    key={`${r.supplier?.id}-${r.id}`}
+                    key={`${r.supplierId}-${r.id}`}
                     data-testid={`payable-row-${r.id}`}
                     style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
                   >
                     <td style={td}>
                       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        <strong>{r.supplier?.name || "—"}</strong>
-                        {r.supplier?.subBrand && (
+                        <strong>{r.supplierName || "—"}</strong>
+                        {r.subBrand && (
                           <span
                             style={{
                               ...brandBadge,
-                              background: SUB_BRAND_BG[r.supplier.subBrand] || "rgba(255,255,255,0.08)",
+                              background: SUB_BRAND_BG[r.subBrand] || "rgba(255,255,255,0.08)",
                               alignSelf: "flex-start",
                             }}
                           >
-                            {r.supplier.subBrand}
+                            {r.subBrand}
                           </span>
                         )}
                       </div>
@@ -391,7 +405,7 @@ export default function Payables() {
                         {statusKey}
                       </span>
                     </td>
-                    <td style={{ ...td, ...daysCellStyle(days) }}>{daysCellText(days)}</td>
+                    <td style={{ ...td, ...daysCellStyle(r.daysUntilDue) }}>{daysCellText(r.daysUntilDue)}</td>
                   </tr>
                 );
               })}
@@ -399,6 +413,31 @@ export default function Payables() {
           </table>
         )}
       </div>
+
+      {/* Currency breakdown footer — read directly from
+          summary.currencyBreakdown (server is authoritative). */}
+      {Object.keys(summary.currencyBreakdown).length > 0 && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: "10px 14px",
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            flexWrap: "wrap",
+            color: "var(--text-secondary)",
+            fontSize: 13,
+          }}
+          aria-label="Currency breakdown"
+        >
+          <strong style={{ color: "var(--text-primary)" }}>Currency breakdown (this page):</strong>
+          {Object.entries(summary.currencyBreakdown).map(([cur, amt]) => (
+            <span key={cur} data-currency={cur}>
+              {cur}: {formatMoney(amt, { currency: cur })}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Pagination */}
       <div
@@ -411,8 +450,8 @@ export default function Payables() {
         }}
       >
         <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-          {totalFiltered > 0
-            ? `Showing ${offset + 1}–${Math.min(offset + PAGE_SIZE, totalFiltered)} of ${totalFiltered.toLocaleString()}`
+          {total > 0
+            ? `Showing ${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} of ${total.toLocaleString()}`
             : "No payables to show"}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -428,8 +467,8 @@ export default function Payables() {
           <button
             type="button"
             onClick={handleNext}
-            disabled={offset + PAGE_SIZE >= totalFiltered}
-            style={offset + PAGE_SIZE >= totalFiltered ? secondaryBtnDisabled : secondaryBtn}
+            disabled={offset + PAGE_SIZE >= total}
+            style={offset + PAGE_SIZE >= total ? secondaryBtnDisabled : secondaryBtn}
             aria-label="Next page"
           >
             Next

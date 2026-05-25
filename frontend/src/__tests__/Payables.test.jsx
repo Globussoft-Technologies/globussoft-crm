@@ -1,47 +1,51 @@
 /**
  * Payables.test.jsx — vitest + RTL coverage for the Travel-vertical
- * cross-supplier Payables page (frontend/src/pages/travel/Payables.jsx,
- * shipped this slice — Arc 2 #903 slice 5 frontend follow-on).
+ * cross-supplier Payables page (frontend/src/pages/travel/Payables.jsx).
  *
- * Scope — pins the page-surface invariants for the operator-facing All
- * Payables view that aggregates every TravelSupplierPayable across every
- * supplier into one cross-supplier table. Backend doesn't yet have a
- * consolidated endpoint, so the SUT does a client-side fan-out:
- *   GET /api/travel/suppliers?includeInactive=1
- *     then for each supplier:
- *   GET /api/travel/suppliers/<id>/payables
- *   …merge, flatten, render.
+ * Slice 6 (Arc 2 #903) — pins the page-surface invariants AFTER swapping
+ * the per-supplier fan-out for the consolidated /api/travel/payables
+ * endpoint (commit f7cfc364). The page now does a SINGLE GET per filter
+ * change and consumes:
  *
- * The TODO marker "TODO #903 slice 6" calls out the swap point — when the
- * consolidating endpoint lands, the fan-out goes away.
+ *   {
+ *     payables: [{ id, supplierId, supplierName, supplierCategory,
+ *                  subBrand, poNumber, description, amount, currency,
+ *                  dueDate, status, paidAt, daysUntilDue, createdAt }],
+ *     total, limit, offset,
+ *     summary: { byStatus, totalPending, totalScheduled, totalPaid,
+ *                currencyBreakdown }
+ *   }
  *
+ * Cases:
  *   1. Heading "All Payables" renders.
- *   2. Initial mount fires the supplier-list GET; then one /payables GET
- *      per supplier (fan-out fires).
- *   3. KPI cards render counts AND amounts from the aggregated payable rows
- *      grouped by status (pending / scheduled / paid / cancelled).
- *   4. Status filter chips: clicking "Paid" narrows the visible row set to
- *      paid-only rows; chip "All" restores the full set.
- *   5. Supplier text search filters rows by case-insensitive substring
- *      against the supplier name.
- *   6. Empty state ("No payables found") renders when the fan-out returns
- *      zero payables.
- *   7. Status badges render with the correct labels (pending / scheduled /
- *      paid / cancelled) — pinned by per-row data-testid="payable-status-<id>".
- *   8. Days-until-due text rendering: positive=neutral "N days", zero=
- *      warning "Due today", negative=red "N days overdue". Days are
- *      computed client-side from dueDate.
- *   9. 5xx on one supplier's payables fetch surfaces notify.error (one
- *      supplier's failure does NOT abort the whole page — the rest still
- *      render).
- *  10. TODO marker comment is present in the source (per the slice prompt:
- *      "// TODO #903 slice 6: replace per-supplier fan-out with cross-
- *      supplier endpoint GET /api/travel/payables"). This forward-references
- *      the next slice that retires the fan-out.
+ *   2. Initial mount fires a SINGLE GET /api/travel/payables (no
+ *      per-supplier fan-out — replaced this slice).
+ *   3. KPI counts read from summary.byStatus (server is authoritative).
+ *   4. KPI amounts read from summary.totalPending / totalScheduled /
+ *      totalPaid.
+ *   5. Status filter chip click pushes ?status=<value> into the URL.
+ *   6. Sub-brand select pushes ?subBrand=<value>; supplierCategory
+ *      pushes ?supplierCategory=<value>.
+ *   7. dueFrom/dueTo push ?dueAfter / ?dueBefore.
+ *   8. Supplier text search is CLIENT-SIDE — narrows the visible row set
+ *      without re-fetching.
+ *   9. Empty state ("No payables found") renders when response payables=[].
+ *  10. Status badges render with the correct labels (pending / scheduled /
+ *      paid / cancelled) — pinned by data-testid="payable-status-<id>".
+ *  11. Days-until-due text is consumed from the server's daysUntilDue
+ *      field (no client-side recompute) — positive=N days, zero=Due today,
+ *      negative=N days overdue.
+ *  12. Currency breakdown footer renders from summary.currencyBreakdown.
+ *  13. 404 defensive fallback — endpoint not deployed → notify.error +
+ *      empty state, NOT a crash.
+ *  14. 5xx → notify.error generic "Failed to load payables — please try
+ *      again."
+ *  15. TODO marker for slice 6 is REMOVED from the source (no per-supplier
+ *      fan-out comment, no `TODO #903 slice 6` directive remains).
  *
  * Mocking discipline (per CLAUDE.md RTL standing rules):
- *   - fetchApi mocked at ../utils/api with a routing fn so multiple URLs
- *     resolve to distinct payloads.
+ *   - fetchApi mocked at ../utils/api with a routing fn that resolves
+ *     /api/travel/payables to a caller-provided payload.
  *   - useNotify returns a STABLE notifyObj reference for the whole file
  *     (Wave 11 cfb5789 / Wave 12 f59e91d — fresh per-call objects flap
  *     useCallback identity and infinite-render).
@@ -76,81 +80,86 @@ vi.mock('../utils/notify', () => ({
 
 import Payables from '../pages/travel/Payables';
 
-// Helper: build a supplier list payload.
-function makeSuppliers(suppliers) {
-  return {
-    suppliers,
-    total: suppliers.length,
-    limit: 100,
-    offset: 0,
-  };
-}
-
-// Helper: build a supplier row.
-function makeSupplier(overrides = {}) {
-  return {
-    id: 1,
-    name: 'Hotel Alpha',
-    supplierCategory: 'hotel',
-    subBrand: 'tmc',
-    isActive: true,
-    ...overrides,
-  };
-}
-
-// Helper: build a payables-for-one-supplier payload.
-function makePayables(payables) {
-  return {
-    payables,
-    total: payables.length,
-    limit: 100,
-    offset: 0,
-  };
-}
-
-// Helper: build a payable row.
+// Helper: build a payable row (server-shape — flattened supplierName +
+// supplierCategory + subBrand at the top level + server-computed
+// daysUntilDue).
 function makePayable(overrides = {}) {
   return {
     id: 101,
     supplierId: 1,
+    supplierName: 'Hotel Alpha',
+    supplierCategory: 'hotel',
+    subBrand: 'tmc',
+    poNumber: 'PO-2026-001',
     description: 'Room block October',
     amount: '50000.00',
     currency: 'INR',
-    poNumber: 'PO-2026-001',
     dueDate: '2026-07-01T00:00:00.000Z',
     status: 'pending',
-    notes: null,
     paidAt: null,
+    daysUntilDue: 30,
     createdAt: '2026-05-20T00:00:00.000Z',
     ...overrides,
   };
 }
 
-// Install a fetchApi mock that routes the supplier list + per-supplier
-// /payables URLs to caller-provided payloads. Tests opt into per-supplier
-// behaviour by passing a `payablesBySupplierId` map; default = empty per
-// supplier so the page renders the empty state cleanly.
+// Helper: build the /api/travel/payables response envelope.
+function makePayablesResponse({
+  payables = [],
+  total = null,
+  byStatus = null,
+  totalPending = '0.00',
+  totalScheduled = '0.00',
+  totalPaid = '0.00',
+  currencyBreakdown = {},
+  limit = 50,
+  offset = 0,
+} = {}) {
+  // If byStatus not supplied, derive it from the payable rows.
+  let computedByStatus = byStatus;
+  if (!computedByStatus) {
+    computedByStatus = { pending: 0, scheduled: 0, paid: 0, cancelled: 0 };
+    for (const p of payables) {
+      const k = p.status || 'pending';
+      computedByStatus[k] = (computedByStatus[k] || 0) + 1;
+    }
+  }
+  return {
+    payables,
+    total: total == null ? payables.length : total,
+    limit,
+    offset,
+    summary: {
+      byStatus: computedByStatus,
+      totalPending,
+      totalScheduled,
+      totalPaid,
+      currencyBreakdown,
+    },
+  };
+}
+
+// Install a fetchApi mock that resolves any /api/travel/payables URL to
+// the caller-supplied response. Tests pass `error` to make it reject
+// with a given status, or `responseByMatcher` for per-URL routing (e.g.
+// a status-filtered second call).
 function installFetchMock({
-  suppliers = [],
-  payablesBySupplierId = {},
-  errorBySupplierId = {},
-  supplierListError = null,
+  response = makePayablesResponse(),
+  error = null,
+  responseByMatcher = null,
 } = {}) {
   fetchApiMock.mockImplementation((url) => {
     if (typeof url !== 'string') return Promise.resolve(null);
-    if (url.startsWith('/api/travel/suppliers?')) {
-      if (supplierListError) return Promise.reject(supplierListError);
-      return Promise.resolve(makeSuppliers(suppliers));
+    if (!url.startsWith('/api/travel/payables')) {
+      return Promise.resolve(null);
     }
-    // Match /api/travel/suppliers/<id>/payables — both bare and ?status=
-    const m = url.match(/^\/api\/travel\/suppliers\/(\d+)\/payables(?:[?&].*)?$/);
-    if (m) {
-      const sid = Number(m[1]);
-      if (errorBySupplierId[sid]) return Promise.reject(errorBySupplierId[sid]);
-      const list = payablesBySupplierId[sid] || [];
-      return Promise.resolve(makePayables(list));
+    if (responseByMatcher) {
+      for (const [matcher, resp] of responseByMatcher) {
+        if (matcher.test(url)) return Promise.resolve(resp);
+      }
     }
-    return Promise.resolve(null);
+    if (error) return Promise.reject(error);
+    return Promise.resolve(response);
   });
 }
 
@@ -178,110 +187,208 @@ describe('<Payables /> — page chrome', () => {
   });
 });
 
-describe('<Payables /> — fan-out fetch', () => {
-  it('fires GET /api/travel/suppliers then per-supplier /payables on mount', async () => {
+describe('<Payables /> — consolidated endpoint fetch', () => {
+  it('fires a single GET /api/travel/payables on mount (no per-supplier fan-out)', async () => {
     installFetchMock({
-      suppliers: [makeSupplier({ id: 1, name: 'Hotel Alpha' }), makeSupplier({ id: 2, name: 'Hotel Beta' })],
-      payablesBySupplierId: {
-        1: [makePayable({ id: 101, supplierId: 1 })],
-        2: [makePayable({ id: 201, supplierId: 2, description: 'Flight charter' })],
-      },
+      response: makePayablesResponse({
+        payables: [
+          makePayable({ id: 101, supplierId: 1, supplierName: 'Hotel Alpha' }),
+          makePayable({
+            id: 201,
+            supplierId: 2,
+            supplierName: 'Hotel Beta',
+            description: 'Flight charter',
+          }),
+        ],
+      }),
     });
     renderPage();
     await waitFor(() => {
-      const supplierCall = fetchApiMock.mock.calls.find(
-        ([url]) => typeof url === 'string' && url.startsWith('/api/travel/suppliers?'),
+      const payablesCall = fetchApiMock.mock.calls.find(
+        ([url]) => typeof url === 'string' && url.startsWith('/api/travel/payables'),
       );
-      expect(supplierCall).toBeTruthy();
+      expect(payablesCall).toBeTruthy();
     });
-    await waitFor(() => {
-      const sup1Call = fetchApiMock.mock.calls.find(
-        ([url]) => typeof url === 'string' && url === '/api/travel/suppliers/1/payables',
-      );
-      const sup2Call = fetchApiMock.mock.calls.find(
-        ([url]) => typeof url === 'string' && url === '/api/travel/suppliers/2/payables',
-      );
-      expect(sup1Call).toBeTruthy();
-      expect(sup2Call).toBeTruthy();
-    });
+    // Negative: no fan-out — the per-supplier /payables URL must NOT be hit.
+    const fanOutCall = fetchApiMock.mock.calls.find(
+      ([url]) =>
+        typeof url === 'string' &&
+        /^\/api\/travel\/suppliers\/\d+\/payables/.test(url),
+    );
+    expect(fanOutCall).toBeUndefined();
     // And the merged rows should render.
     expect(await screen.findByText('Room block October')).toBeInTheDocument();
     expect(screen.getByText('Flight charter')).toBeInTheDocument();
   });
 });
 
-describe('<Payables /> — KPI cards', () => {
-  it('renders count + amount for pending / scheduled / paid / cancelled from aggregated data', async () => {
+describe('<Payables /> — KPI cards read from summary.byStatus', () => {
+  it('counts come from summary.byStatus (server-authoritative)', async () => {
     installFetchMock({
-      suppliers: [makeSupplier({ id: 1, name: 'Hotel Alpha' })],
-      payablesBySupplierId: {
-        1: [
-          makePayable({ id: 101, status: 'pending', amount: '10000.00' }),
-          makePayable({ id: 102, status: 'pending', amount: '5000.00' }),
-          makePayable({ id: 103, status: 'scheduled', amount: '3000.00' }),
-          makePayable({ id: 104, status: 'paid', amount: '7000.00' }),
-          makePayable({ id: 105, status: 'cancelled', amount: '1000.00' }),
-        ],
-      },
+      response: makePayablesResponse({
+        payables: [],
+        // Server-supplied counts — page should reflect these even if the
+        // current-page row set is empty (e.g. an offset past the data).
+        byStatus: { pending: 7, scheduled: 3, paid: 12, cancelled: 1 },
+        totalPending: '14000.00',
+        totalScheduled: '9000.00',
+        totalPaid: '50000.00',
+        total: 23,
+      }),
     });
     renderPage();
-    // KPI cards are role=group with aria-label "KPI <Label>" so we can
-    // assert each one's count text by scoping to that group.
     await waitFor(() => {
       const pendingCard = screen.getByRole('group', { name: /KPI Pending/i });
-      expect(pendingCard).toBeInTheDocument();
-      // 2 pending entries
-      expect(pendingCard.textContent).toContain('2');
+      expect(pendingCard.textContent).toContain('7');
     });
-    const scheduledCard = screen.getByRole('group', { name: /KPI Scheduled/i });
-    expect(scheduledCard.textContent).toContain('1');
-    const paidCard = screen.getByRole('group', { name: /KPI Paid/i });
-    expect(paidCard.textContent).toContain('1');
-    const cancelledCard = screen.getByRole('group', { name: /KPI Cancelled/i });
-    expect(cancelledCard.textContent).toContain('1');
+    expect(screen.getByRole('group', { name: /KPI Scheduled/i }).textContent).toContain('3');
+    expect(screen.getByRole('group', { name: /KPI Paid/i }).textContent).toContain('12');
+    expect(screen.getByRole('group', { name: /KPI Cancelled/i }).textContent).toContain('1');
   });
-});
 
-describe('<Payables /> — status filter chips', () => {
-  it('clicking "Paid" chip narrows visible rows to status=paid only', async () => {
+  it('amounts come from summary.totalPending / totalScheduled / totalPaid', async () => {
     installFetchMock({
-      suppliers: [makeSupplier({ id: 1, name: 'Hotel Alpha' })],
-      payablesBySupplierId: {
-        1: [
-          makePayable({ id: 101, status: 'pending', description: 'Pending payable A' }),
-          makePayable({ id: 102, status: 'paid', description: 'Paid payable B' }),
-        ],
-      },
+      response: makePayablesResponse({
+        payables: [],
+        byStatus: { pending: 1, scheduled: 0, paid: 0, cancelled: 0 },
+        totalPending: '12345.00',
+        totalScheduled: '67800.00',
+        totalPaid: '90123.00',
+      }),
     });
     renderPage();
-    // Wait for both rows to appear initially.
-    await screen.findByText('Pending payable A');
-    expect(screen.getByText('Paid payable B')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Filter by status: Paid/i }));
-    // After narrowing, only the paid row should be visible.
+    // formatMoney rendering depends on locale; assert the numeric prefix
+    // is visible in the pending card. Use Intl-loose match.
     await waitFor(() => {
-      expect(screen.queryByText('Pending payable A')).not.toBeInTheDocument();
-      expect(screen.getByText('Paid payable B')).toBeInTheDocument();
+      const pendingCard = screen.getByRole('group', { name: /KPI Pending/i });
+      // 12,345 or 12345 — either way the digits should be there.
+      expect(pendingCard.textContent).toMatch(/12,?345/);
+    });
+    const scheduledCard = screen.getByRole('group', { name: /KPI Scheduled/i });
+    expect(scheduledCard.textContent).toMatch(/67,?800/);
+    const paidCard = screen.getByRole('group', { name: /KPI Paid/i });
+    expect(paidCard.textContent).toMatch(/90,?123/);
+  });
+});
+
+describe('<Payables /> — status filter chip pushes ?status= to URL', () => {
+  it('clicking "Paid" chip triggers a refetch with ?status=paid in the URL', async () => {
+    installFetchMock({
+      response: makePayablesResponse({
+        payables: [makePayable({ id: 101, status: 'pending' })],
+      }),
+    });
+    renderPage();
+    await screen.findByText('Room block October');
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Filter by status: Paid/i }));
+
+    await waitFor(() => {
+      const paidCall = fetchApiMock.mock.calls.find(
+        ([url]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/travel/payables') &&
+          /[?&]status=paid(&|$)/.test(url),
+      );
+      expect(paidCall).toBeTruthy();
     });
   });
 });
 
-describe('<Payables /> — supplier text search', () => {
-  it('filters rows by case-insensitive substring match on supplier name', async () => {
+describe('<Payables /> — sub-brand + category filters push to URL', () => {
+  it('sub-brand select pushes ?subBrand=<value>', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+
+    fetchApiMock.mockClear();
+    fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), {
+      target: { value: 'rfu' },
+    });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/travel/payables') &&
+          /[?&]subBrand=rfu(&|$)/.test(url),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('supplierCategory select pushes ?supplierCategory=<value>', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+
+    fetchApiMock.mockClear();
+    fireEvent.change(screen.getByLabelText(/Filter by supplier category/i), {
+      target: { value: 'hotel' },
+    });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/travel/payables') &&
+          /[?&]supplierCategory=hotel(&|$)/.test(url),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+});
+
+describe('<Payables /> — date-range filter maps to dueAfter / dueBefore', () => {
+  it('dueFrom value pushes ?dueAfter=<value>; dueTo pushes ?dueBefore=<value>', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+
+    fetchApiMock.mockClear();
+    fireEvent.change(screen.getByLabelText(/Due date from/i), {
+      target: { value: '2026-06-01' },
+    });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/travel/payables') &&
+          /[?&]dueAfter=2026-06-01(&|$)/.test(url),
+      );
+      expect(call).toBeTruthy();
+    });
+
+    fetchApiMock.mockClear();
+    fireEvent.change(screen.getByLabelText(/Due date to/i), {
+      target: { value: '2026-07-31' },
+    });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/travel/payables') &&
+          /[?&]dueBefore=2026-07-31(&|$)/.test(url),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+});
+
+describe('<Payables /> — supplier text search is client-side', () => {
+  it('filters rows by case-insensitive substring on supplierName without re-fetching', async () => {
     installFetchMock({
-      suppliers: [
-        makeSupplier({ id: 1, name: 'Hotel Alpha' }),
-        makeSupplier({ id: 2, name: 'Flight Charter Co' }),
-      ],
-      payablesBySupplierId: {
-        1: [makePayable({ id: 101, supplierId: 1, description: 'Alpha room block' })],
-        2: [makePayable({ id: 201, supplierId: 2, description: 'Charter booking' })],
-      },
+      response: makePayablesResponse({
+        payables: [
+          makePayable({ id: 101, supplierId: 1, supplierName: 'Hotel Alpha', description: 'Alpha room block' }),
+          makePayable({ id: 201, supplierId: 2, supplierName: 'Flight Charter Co', description: 'Charter booking' }),
+        ],
+      }),
     });
     renderPage();
     await screen.findByText('Alpha room block');
     expect(screen.getByText('Charter booking')).toBeInTheDocument();
-    // Type "alpha" (lowercase) — should keep Alpha row, drop Charter row.
+
+    fetchApiMock.mockClear();
     fireEvent.change(screen.getByLabelText(/Search supplier/i), {
       target: { value: 'alpha' },
     });
@@ -289,14 +396,15 @@ describe('<Payables /> — supplier text search', () => {
       expect(screen.getByText('Alpha room block')).toBeInTheDocument();
       expect(screen.queryByText('Charter booking')).not.toBeInTheDocument();
     });
+    // No new fetch should have fired — the search is client-side.
+    expect(fetchApiMock).not.toHaveBeenCalled();
   });
 });
 
 describe('<Payables /> — empty state', () => {
-  it('renders "No payables found" when fan-out returns zero payables', async () => {
+  it('renders "No payables found" when the endpoint returns zero rows', async () => {
     installFetchMock({
-      suppliers: [makeSupplier({ id: 1, name: 'Hotel Alpha' })],
-      payablesBySupplierId: { 1: [] },
+      response: makePayablesResponse({ payables: [] }),
     });
     renderPage();
     expect(await screen.findByText(/No payables found/i)).toBeInTheDocument();
@@ -306,15 +414,14 @@ describe('<Payables /> — empty state', () => {
 describe('<Payables /> — status badges', () => {
   it('renders the status badge for each row with the right capitalised label', async () => {
     installFetchMock({
-      suppliers: [makeSupplier({ id: 1, name: 'Hotel Alpha' })],
-      payablesBySupplierId: {
-        1: [
+      response: makePayablesResponse({
+        payables: [
           makePayable({ id: 101, status: 'pending' }),
           makePayable({ id: 102, status: 'scheduled' }),
           makePayable({ id: 103, status: 'paid' }),
           makePayable({ id: 104, status: 'cancelled' }),
         ],
-      },
+      }),
     });
     renderPage();
     await waitFor(() => {
@@ -326,23 +433,16 @@ describe('<Payables /> — status badges', () => {
   });
 });
 
-describe('<Payables /> — days until due', () => {
-  it('positive=N days, zero=Due today, negative=N days overdue', async () => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const isoIn5 = new Date(today.getTime() + 5 * 86400000).toISOString();
-    const isoToday = today.toISOString();
-    const isoOverdue = new Date(today.getTime() - 3 * 86400000).toISOString();
-
+describe('<Payables /> — daysUntilDue consumed from server response', () => {
+  it('renders the server-supplied daysUntilDue verbatim (no client recompute)', async () => {
     installFetchMock({
-      suppliers: [makeSupplier({ id: 1, name: 'Hotel Alpha' })],
-      payablesBySupplierId: {
-        1: [
-          makePayable({ id: 201, description: 'Future', dueDate: isoIn5, status: 'pending' }),
-          makePayable({ id: 202, description: 'Today', dueDate: isoToday, status: 'pending' }),
-          makePayable({ id: 203, description: 'Overdue', dueDate: isoOverdue, status: 'pending' }),
+      response: makePayablesResponse({
+        payables: [
+          makePayable({ id: 201, description: 'Future', daysUntilDue: 5, status: 'pending' }),
+          makePayable({ id: 202, description: 'Today', daysUntilDue: 0, status: 'pending' }),
+          makePayable({ id: 203, description: 'Overdue', daysUntilDue: -3, status: 'pending' }),
         ],
-      },
+      }),
     });
     renderPage();
     await screen.findByText('Future');
@@ -352,39 +452,63 @@ describe('<Payables /> — days until due', () => {
   });
 });
 
-describe('<Payables /> — error path', () => {
-  it('5xx on a per-supplier payables fetch fires notify.error and the rest of the rows still render', async () => {
-    const err = new Error('Internal Server Error');
-    err.status = 500;
+describe('<Payables /> — currency breakdown footer', () => {
+  it('renders currency breakdown read from summary.currencyBreakdown', async () => {
     installFetchMock({
-      suppliers: [
-        makeSupplier({ id: 1, name: 'Hotel Alpha' }),
-        makeSupplier({ id: 2, name: 'Hotel Beta' }),
-      ],
-      payablesBySupplierId: {
-        2: [makePayable({ id: 201, supplierId: 2, description: 'Beta survived' })],
-      },
-      errorBySupplierId: { 1: err },
+      response: makePayablesResponse({
+        payables: [
+          makePayable({ id: 101, status: 'pending', amount: '10000.00', currency: 'INR' }),
+          makePayable({ id: 102, status: 'pending', amount: '500.00', currency: 'USD' }),
+        ],
+        currencyBreakdown: { INR: '10000.00', USD: '500.00' },
+      }),
     });
+    renderPage();
+    await screen.findByText(/Currency breakdown/i);
+    const inrSpan = await screen.findByText((_, node) => node?.getAttribute?.('data-currency') === 'INR');
+    expect(inrSpan).toBeInTheDocument();
+    expect(inrSpan.textContent).toMatch(/INR/);
+    const usdSpan = screen.getByText((_, node) => node?.getAttribute?.('data-currency') === 'USD');
+    expect(usdSpan).toBeInTheDocument();
+    expect(usdSpan.textContent).toMatch(/USD/);
+  });
+});
+
+describe('<Payables /> — defensive 404 fallback', () => {
+  it('endpoint not deployed yet → notify.error + empty state, NOT a crash', async () => {
+    const err = new Error('Not Found');
+    err.status = 404;
+    installFetchMock({ error: err });
     renderPage();
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalled();
     });
-    expect(notifyError.mock.calls[0][0]).toMatch(/Failed to load payables for Hotel Alpha/i);
-    // Hotel Beta's row should still appear — one supplier's failure shouldn't
-    // abort the whole page.
-    expect(await screen.findByText('Beta survived')).toBeInTheDocument();
+    expect(notifyError.mock.calls[0][0]).toMatch(/not available/i);
+    // Empty state should render — no crash.
+    expect(await screen.findByText(/No payables found/i)).toBeInTheDocument();
   });
 });
 
-describe('<Payables /> — TODO marker for slice 6', () => {
-  it('source contains the TODO #903 slice 6 marker for the future cross-supplier endpoint swap', () => {
+describe('<Payables /> — 5xx error path', () => {
+  it('5xx on /api/travel/payables fires notify.error', async () => {
+    const err = new Error('Internal Server Error');
+    err.status = 500;
+    installFetchMock({ error: err });
+    renderPage();
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalled();
+    });
+    expect(notifyError.mock.calls[0][0]).toMatch(/Failed to load payables/i);
+  });
+});
+
+describe('<Payables /> — slice 6 source hygiene', () => {
+  it('source has the TODO #903 slice 6 marker REMOVED (fan-out retired)', () => {
     const src = readFileSync(
       path.resolve(__dirname, '../pages/travel/Payables.jsx'),
       'utf8',
     );
-    expect(src).toMatch(/TODO #903 slice 6/);
-    expect(src).toMatch(/cross-supplier endpoint/i);
+    expect(src).not.toMatch(/TODO #903 slice 6/);
   });
 });
 

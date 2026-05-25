@@ -2327,6 +2327,260 @@ router.delete(
 );
 
 // ============================================================================
+// POST /api/travel/invoices/:id/schedule/:milestoneId/mark-paid
+// PRD_TRAVEL_BILLING §3 — slice 19 (operator-driven installment settlement).
+//
+// Slice 17 (commit 572cb107) auto-creates a 25/50/25 PaymentSchedule on
+// /:id/issue. Slice 18 shipped the TravelVoucher PDF subtype. This slice
+// closes the settlement loop: when an installment is collected (cash / UPI /
+// bank-transfer / gateway-callback), the operator hits this endpoint and we:
+//   1. Create a Payment row (financial record-of-record) linked back to the
+//      milestone + invoice via metadata JSON. We don't add a Prisma FK from
+//      Payment → TravelPaymentSchedule (schema freeze; metadata link is
+//      enough for reporting + GST audit-trail purposes).
+//   2. Update the TravelPaymentSchedule with status='paid', paidAt=<body or
+//      now>, and receivedAmount=<body.amount>.
+//   3. Check sibling milestones — if all schedules on this invoice are now
+//      'paid' or 'waived', flip the parent invoice status to 'Paid' and
+//      emit `travel.invoice.paid` via eventBus for downstream cron + audit.
+//      Otherwise transition the invoice to 'Partial' (so dashboards reflect
+//      mid-settlement state correctly).
+//
+// Body shape:
+//   { amount: <number, required>, method: <string, required>,
+//     reference?: <string — gateway charge ID, UPI ref, bank txn ref>,
+//     paidAt?: <ISO date string — defaults to now> }
+//
+// Idempotency: re-marking an already-paid milestone is a no-op (returns the
+// existing row with payment=null, idempotent=true). This guards the gateway-
+// webhook retry case where Razorpay/Stripe deliver the same charge twice;
+// the second hit MUST NOT double-credit.
+//
+// Auth: ADMIN/MANAGER only (USER cannot reconcile finances — same gate as
+// slice-6 schedule POST/PUT/DELETE).
+//
+// Returns 200 + { milestone, payment, invoice, idempotent, allPaid }.
+//
+// Error codes: INVALID_ID, INVALID_AMOUNT, MISSING_METHOD, MILESTONE_NOT_FOUND,
+// INVALID_DATE.
+// ============================================================================
+router.post(
+  "/invoices/:id/schedule/:milestoneId/mark-paid",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      const milestoneId = parseInt(req.params.milestoneId, 10);
+      if (!Number.isFinite(milestoneId)) {
+        return res.status(400).json({
+          error: "milestoneId must be a number",
+          code: "INVALID_ID",
+        });
+      }
+
+      const existing = await prisma.travelPaymentSchedule.findFirst({
+        where: {
+          id: milestoneId,
+          invoiceId,
+          tenantId: req.travelTenant.id,
+        },
+      });
+      if (!existing) {
+        return res.status(404).json({
+          error: "Milestone not found",
+          code: "MILESTONE_NOT_FOUND",
+        });
+      }
+
+      // Idempotency: already-paid milestone is a no-op. Returns the row
+      // unchanged + idempotent=true. Webhook retries (Razorpay/Stripe deliver
+      // the same charge twice) MUST NOT double-credit; this is the guard.
+      if (existing.status === "paid") {
+        // Compute allPaid against current state so the response still
+        // tells the truth about the parent invoice.
+        const siblings = await prisma.travelPaymentSchedule.findMany({
+          where: { invoiceId, tenantId: req.travelTenant.id },
+        });
+        const allPaid = siblings.every(
+          (s) => s.status === "paid" || s.status === "waived",
+        );
+        return res.status(200).json({
+          milestone: existing,
+          payment: null,
+          invoice,
+          idempotent: true,
+          allPaid,
+        });
+      }
+
+      const { amount, method, reference, paidAt } = req.body || {};
+
+      // amount validation — must be a positive finite number. Half-up
+      // round to 2 decimal places per standing rule.
+      if (amount == null || amount === "") {
+        return res.status(400).json({
+          error: "amount is required",
+          code: "INVALID_AMOUNT",
+        });
+      }
+      const amtNum = Number(amount);
+      if (!Number.isFinite(amtNum) || amtNum <= 0) {
+        return res.status(400).json({
+          error: "amount must be a positive number",
+          code: "INVALID_AMOUNT",
+        });
+      }
+      const amountRounded =
+        Math.round((amtNum + Number.EPSILON) * 100) / 100;
+
+      // method is required — gateway/channel attribution (cash, upi, neft,
+      // razorpay, stripe, manual). Operator-supplied string; we don't
+      // whitelist because PRD §3 hasn't pinned the enum yet.
+      if (!method || typeof method !== "string" || method.trim() === "") {
+        return res.status(400).json({
+          error: "method is required",
+          code: "MISSING_METHOD",
+        });
+      }
+      const methodNorm = String(method).trim();
+
+      // paidAt: optional ISO date string, defaults to now.
+      let paidAtDate = new Date();
+      if (paidAt !== undefined && paidAt !== null && paidAt !== "") {
+        const parsed = new Date(paidAt);
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "paidAt must be a valid ISO date string",
+            code: "INVALID_DATE",
+          });
+        }
+        paidAtDate = parsed;
+      }
+
+      // 1. Create the Payment row (financial record-of-record).
+      // Payment.invoiceId is generic Int? — we re-use it for the TravelInvoice
+      // id (the schema doesn't separate Payment from TravelPayment; the
+      // metadata JSON disambiguates).
+      const payment = await prisma.payment.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          invoiceId,
+          amount: amountRounded,
+          currency: existing.expectedCurrency || invoice.currency,
+          gateway: methodNorm,
+          gatewayId: reference ? String(reference) : null,
+          status: "SUCCESS",
+          paidAt: paidAtDate,
+          metadata: JSON.stringify({
+            type: "travel-payment-schedule",
+            scheduleId: milestoneId,
+            milestoneOrder: existing.milestoneOrder,
+            invoiceNum: invoice.invoiceNum,
+            subBrand: invoice.subBrand,
+          }),
+        },
+      });
+
+      // 2. Update the milestone: status='paid', paidAt, receivedAmount.
+      const updatedMilestone = await prisma.travelPaymentSchedule.update({
+        where: { id: milestoneId },
+        data: {
+          status: "paid",
+          paidAt: paidAtDate,
+          receivedAmount: String(amountRounded),
+        },
+      });
+
+      // 3. Check siblings — if all are paid/waived, flip invoice to Paid;
+      // otherwise flip to Partial (mid-settlement state).
+      const siblings = await prisma.travelPaymentSchedule.findMany({
+        where: { invoiceId, tenantId: req.travelTenant.id },
+      });
+      const allPaid = siblings.every(
+        (s) => s.status === "paid" || s.status === "waived",
+      );
+      const anyPaid = siblings.some((s) => s.status === "paid");
+      let invoiceAfter = invoice;
+      const targetInvoiceStatus = allPaid
+        ? "Paid"
+        : anyPaid
+          ? "Partial"
+          : invoice.status;
+      if (
+        invoice.status !== "Voided" &&
+        targetInvoiceStatus !== invoice.status
+      ) {
+        invoiceAfter = await prisma.travelInvoice.update({
+          where: { id: invoiceId },
+          data: { status: targetInvoiceStatus },
+        });
+      }
+
+      // 4. Audit row — TRAVEL_PAYMENT_SCHEDULE_MARK_PAID. Includes amount,
+      // method, reference (if any), allPaid flag, invoice status transition.
+      await writeAudit(
+        "TravelPaymentSchedule",
+        "TRAVEL_PAYMENT_SCHEDULE_MARK_PAID",
+        milestoneId,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          invoiceId,
+          milestoneOrder: existing.milestoneOrder,
+          amount: amountRounded,
+          method: methodNorm,
+          reference: reference ? String(reference) : null,
+          allPaid,
+          invoiceStatusAfter: invoiceAfter.status,
+          paymentId: payment.id,
+        },
+      );
+
+      // 5. Emit invoice.paid event on full settlement (downstream cron +
+      // notification consumers). Best-effort; eventBus is optional.
+      if (allPaid && invoiceAfter.status === "Paid") {
+        try {
+          require("../lib/eventBus").emitEvent(
+            "travel.invoice.paid",
+            {
+              invoiceId,
+              invoiceNum: invoice.invoiceNum,
+              subBrand: invoice.subBrand,
+              tenantId: req.travelTenant.id,
+              totalAmount: String(invoice.totalAmount),
+              currency: invoice.currency,
+            },
+            req.travelTenant.id,
+            req.io,
+          );
+        } catch (_e) {
+          /* event bus optional */
+        }
+      }
+
+      return res.status(200).json({
+        milestone: updatedMilestone,
+        payment,
+        invoice: invoiceAfter,
+        idempotent: false,
+        allPaid,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] mark-paid error:", e.message);
+      res.status(500).json({ error: "Failed to mark milestone as paid" });
+    }
+  },
+);
+
+// ============================================================================
 // /api/travel/payment-schedules/upcoming — cross-invoice milestone summary
 // (PRD_TRAVEL_BILLING UC-2.5 month-end-close + DD-5.5 reminders cadence).
 //

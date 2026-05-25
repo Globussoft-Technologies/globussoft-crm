@@ -604,6 +604,257 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/exposure — per-supplier credit-utilization summary
+// (Arc 2 #903 slice 11 — PRD_TRAVEL_SUPPLIER_MASTER §3.1.c credit limit
+// + §3.7.a credit-utilization gauge + §3.7.b suppliers-index sortable-by-
+// -exposure).
+//
+// Realizes the "which of my N suppliers are near limit?" operator question
+// in one round-trip. Natural follow-on to slice 5 (/payables cross-supplier
+// list) + slice 8 (/payables/aging buckets) — same aggregation surface,
+// different keying: payables grouped by SUPPLIER rather than by status
+// bucket or due-date window.
+//
+// MUST be registered BEFORE `GET /suppliers/:id` — Express matches routes in
+// declaration order, and the literal "exposure" token would otherwise be
+// consumed by the :id param (yielding 400 INVALID_ID since
+// parseInt("exposure") is NaN). Mirrors the placement of /suppliers/search
+// (slice 10) which is also a sub-path under /suppliers.
+//
+// Auth: any verified token; tenant-scoped via req.travelTenant; sub-brand
+// access enforced via getSubBrandAccessSet so a sub-brand-restricted MANAGER
+// only sees suppliers in their allowed sub-brands.
+//
+// Query params (all optional):
+//   ?subBrand=tmc|rfu|travelstall|visasure         — filter to one sub-brand
+//                                                    (within the caller's
+//                                                    allowed set; outside-
+//                                                    allowed → empty)
+//   ?supplierCategory=hotel|flight|transport|      — filter by category
+//                       visa-consul|other
+//   ?includeInactive=1                             — include soft-deleted
+//                                                    suppliers (default off)
+//   ?nearLimitOnly=1                               — return only suppliers
+//                                                    with utilization >= 0.8
+//                                                    (80% threshold, the
+//                                                    "needs attention" cohort)
+//
+// Response shape:
+//   {
+//     suppliers: [
+//       { id, name, supplierCategory, subBrand,
+//         creditLimit, creditCurrency,
+//         openExposure,            // sum of pending+scheduled payable amounts
+//         utilization,             // openExposure / creditLimit (null if no limit)
+//         openPayableCount,        // # of pending+scheduled payables
+//         status,                  // 'ok' | 'near-limit' | 'over-limit' | 'no-limit'
+//         isActive,
+//       },
+//       ...
+//     ],
+//     total,
+//     summary: {
+//       overLimitCount,
+//       nearLimitCount,           // 80% <= util <= 100%
+//       totalExposure,            // grand-total across returned suppliers
+//     }
+//   }
+//
+// Decisions:
+//   - openExposure = sum(amount) over payables where status IN ('pending',
+//     'scheduled'). Paid + cancelled excluded (settled / voided liabilities
+//     don't consume credit). Same semantics as payableAging.js exclusion rules.
+//   - utilization rounded to 4dp (half-up) so the UI gauge can render
+//     percentages cleanly: 0.8421 → "84.21%". null when creditLimit is null
+//     or 0 (we don't divide-by-zero).
+//   - status 'over-limit' fires at utilization > 1.0 (strictly greater —
+//     a utilization of exactly 1.0 is "at-limit", still 'near-limit'). The
+//     PRD §3.3.e booking-confirm hard-block is (current owed + new PO) >
+//     limit — for the dashboard surface, > limit is the alarm threshold.
+//   - nearLimitOnly=1 filters in JS (post-aggregate) rather than in SQL,
+//     because utilization is computed from BOTH sides (limit + sum) — a
+//     SQL-side filter would need a subquery + HAVING; the JS-side filter
+//     keeps the route shape simple and works correctly across the typical
+//     50-500 suppliers-per-tenant scale.
+//   - Sorted: openExposure DESC then name ASC (biggest debts first; ties
+//     broken alphabetically). Operators reading top-to-bottom see the
+//     highest-priority suppliers first.
+//   - Sub-brand filtering pattern mirrors /payables (slice 5) + /payables/
+//     aging (slice 8): joins through supplier.subBrand at the WHERE level,
+//     restricted callers requesting a sub-brand they can't see get
+//     "__none__" substituted (silent empty rather than 403).
+//   - Error codes: INVALID_SUB_BRAND, INVALID_SUPPLIER_CATEGORY.
+// ============================================================================
+
+const EXPOSURE_MAX_SUPPLIERS = 1_000;
+const NEAR_LIMIT_THRESHOLD = 0.8;
+
+function round2Exposure(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+function round4Exposure(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 10000) / 10000;
+}
+
+router.get(
+  "/suppliers/exposure",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const subBrand = req.query.subBrand ? String(req.query.subBrand) : null;
+      if (subBrand) assertValidSubBrand(subBrand);
+
+      const supplierCategory = req.query.supplierCategory
+        ? String(req.query.supplierCategory)
+        : null;
+      if (supplierCategory) assertValidSupplierCategory(supplierCategory);
+
+      const includeInactive =
+        req.query.includeInactive === "1" || req.query.includeInactive === "true";
+      const nearLimitOnly =
+        req.query.nearLimitOnly === "1" || req.query.nearLimitOnly === "true";
+
+      // Supplier where-clause + sub-brand access narrowing (same pattern as
+      // /suppliers list + /payables + /payables/aging).
+      const where = { tenantId: req.travelTenant.id };
+      if (!includeInactive) where.isActive = true;
+      if (supplierCategory) where.supplierCategory = supplierCategory;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (subBrand) {
+        if (allowed !== null && !canAccessSubBrand(allowed, subBrand)) {
+          where.subBrand = "__none__";
+        } else {
+          where.subBrand = subBrand;
+        }
+      } else if (allowed !== null) {
+        where.subBrand = allowed.size > 0 ? { in: [...allowed] } : "__none__";
+      }
+
+      const suppliers = await prisma.travelSupplier.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          supplierCategory: true,
+          subBrand: true,
+          creditLimit: true,
+          creditCurrency: true,
+          isActive: true,
+        },
+        orderBy: { name: "asc" },
+        take: EXPOSURE_MAX_SUPPLIERS,
+      });
+
+      if (suppliers.length === 0) {
+        return res.json({
+          suppliers: [],
+          total: 0,
+          summary: { overLimitCount: 0, nearLimitCount: 0, totalExposure: 0 },
+        });
+      }
+
+      // Aggregate open exposure per supplier via groupBy. status ∈
+      // {pending, scheduled} are the unsettled liabilities that consume
+      // credit; paid + cancelled are excluded.
+      const supplierIds = suppliers.map((s) => s.id);
+      const grouped = await prisma.travelSupplierPayable.groupBy({
+        by: ["supplierId"],
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierId: { in: supplierIds },
+          status: { in: ["pending", "scheduled"] },
+        },
+        _sum: { amount: true },
+        _count: { _all: true },
+      });
+
+      // Build a quick lookup: supplierId → { sum, count }
+      const exposureBySupplierId = new Map();
+      for (const g of grouped) {
+        exposureBySupplierId.set(g.supplierId, {
+          sum: g._sum && g._sum.amount != null ? Number(g._sum.amount) : 0,
+          count: g._count && g._count._all != null ? g._count._all : 0,
+        });
+      }
+
+      let overLimitCount = 0;
+      let nearLimitCount = 0;
+      let totalExposure = 0;
+
+      const rows = suppliers.map((s) => {
+        const exposure = exposureBySupplierId.get(s.id) || { sum: 0, count: 0 };
+        const openExposure = round2Exposure(exposure.sum);
+        const limitNum =
+          s.creditLimit == null ? null : Number(s.creditLimit);
+        const hasLimit = limitNum != null && Number.isFinite(limitNum) && limitNum > 0;
+        const utilization = hasLimit ? round4Exposure(openExposure / limitNum) : null;
+
+        let status;
+        if (!hasLimit) {
+          status = "no-limit";
+        } else if (utilization > 1) {
+          status = "over-limit";
+        } else if (utilization >= NEAR_LIMIT_THRESHOLD) {
+          status = "near-limit";
+        } else {
+          status = "ok";
+        }
+
+        if (status === "over-limit") overLimitCount++;
+        else if (status === "near-limit") nearLimitCount++;
+
+        totalExposure = round2Exposure(totalExposure + openExposure);
+
+        return {
+          id: s.id,
+          name: s.name,
+          supplierCategory: s.supplierCategory,
+          subBrand: s.subBrand,
+          creditLimit: limitNum,
+          creditCurrency: s.creditCurrency || "INR",
+          openExposure,
+          utilization,
+          openPayableCount: exposure.count,
+          status,
+          isActive: s.isActive,
+        };
+      });
+
+      // Sort by exposure DESC then name ASC (post-aggregate — Prisma
+      // can't sort by a computed sum natively).
+      rows.sort((a, b) => {
+        if (b.openExposure !== a.openExposure) return b.openExposure - a.openExposure;
+        return a.name.localeCompare(b.name);
+      });
+
+      // Optional near-limit filter (post-aggregate; see header decision note).
+      const filtered = nearLimitOnly
+        ? rows.filter((r) => r.status === "near-limit" || r.status === "over-limit")
+        : rows;
+
+      res.json({
+        suppliers: filtered,
+        total: filtered.length,
+        summary: {
+          overLimitCount,
+          nearLimitCount,
+          totalExposure,
+        },
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] exposure error:", e.message);
+      res.status(500).json({ error: "Failed to build supplier exposure summary" });
+    }
+  },
+);
+
 // GET /api/travel/suppliers/:id
 router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

@@ -4,6 +4,10 @@ const prisma = require("../lib/prisma");
 // JWT_SECRET resolution + the dev-fallback warning are centralized in
 // config/secrets.js (P1.3 — was duplicated across 6 files).
 const { JWT_SECRET } = require("../config/secrets");
+// #914 slice 2: cookie name comes from the same helper that SETS the
+// cookie on auth-success paths (slice 1). Single-source the name so a
+// future rename can't desync read+write sites.
+const { TOKEN_COOKIE } = require("../lib/authCookies");
 
 // #537 (PT-05): RFC 7235 semantics — missing/invalid credentials are 401
 // (not 403). 403 is reserved for "authenticated but not allowed". Also
@@ -19,10 +23,26 @@ function unauthorized(res, error) {
 }
 
 const verifyToken = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return unauthorized(res, "Authentication required");
-
-  const token = authHeader.split(" ")[1];
+  // #914 slice 2: cookie-first, header-fallback. Slice 1 began sending
+  // an HttpOnly `auth_token` cookie alongside the response-body JWT on
+  // every auth-success path; this is the corresponding READ side. Both
+  // paths remain valid for the duration of the migration window so
+  // existing header-bearing consumers (frontend's localStorage today,
+  // every e2e spec, every Playwright API spec, the external API key
+  // mirror, SDK consumers) keep working unchanged. Slice 3 drops the
+  // SPA's localStorage; slice 4 layers a CSRF token on top of the
+  // cookie. Order matters: cookie wins so a fresh login on a browser
+  // that still has a stale localStorage token presents the new
+  // (cookie-borne) identity rather than reviving the old one.
+  const cookieToken = req.cookies && req.cookies[TOKEN_COOKIE];
+  let token;
+  if (cookieToken) {
+    token = cookieToken;
+  } else {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return unauthorized(res, "Authentication required");
+    token = authHeader.split(" ")[1];
+  }
   try {
     const verified = jwt.verify(token, JWT_SECRET);
 

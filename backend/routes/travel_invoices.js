@@ -1083,6 +1083,303 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/invoices/hsn-summary — Arc 2 #902 slice 17.
+//
+// PRD_TRAVEL_GST_COMPLIANCE.md FR-3.4.3: HSN/SAC summary report for a filing
+// period. One row per (SAC code, GST rate) cohort with aggregate count,
+// taxable value, IGST, CGST, and SGST. Differs from /gstr1-export in three
+// ways:
+//   (1) JSON by default (?format=csv opts into the CSV alternate);
+//   (2) single section only (no B2B_INVOICES / DOCUMENT_TOTALS roll-ups);
+//   (3) ?docType= optional filter — operators reconciling a specific class
+//       (e.g. CreditNote-only HSN summary) get a narrow slice. Default
+//       includes the same docType set as GSTR-1 (TaxInvoice + CreditNote +
+//       DebitNote; excludes Proforma + TravelVoucher).
+//
+// === Date range ===
+//
+// `month=YYYY-MM` resolves to a half-open `[start, end)` interval on
+// createdAt — same cohort convention as /gstr1-export so the two reports
+// always reconcile to the same denominator.
+//
+// === Auth ===
+//
+// ADMIN / MANAGER only — finance-report surface, mirrors /gstr1-export.
+//
+// === Sub-brand scoping ===
+//
+// Caller's subBrandAccess narrows the result; explicit ?subBrand= filter
+// is intersected with the access set (silent empty when caller can't
+// access the requested brand — same pattern as gstr1-export).
+//
+// === Output shape (JSON) ===
+//
+//   {
+//     month: 'YYYY-MM',
+//     subBrand: 'tmc' | 'all',
+//     docTypes: ['TaxInvoice', 'CreditNote', 'DebitNote'],
+//     rows: [
+//       { sacCode, description, gstPercent, taxableValue, igst, cgst, sgst,
+//         totalTax, count }
+//     ],
+//     totals: { taxableValue, igst, cgst, sgst, totalTax, lineCount }
+//   }
+//
+// === Output shape (CSV) ===
+//
+// Single section, BOM-prefixed UTF-8 with CRLF (mirrors gstr1-export
+// conventions). Filename: `hsn-summary-<month>-<subBrand>.csv`.
+//
+// === Error codes ===
+//
+//   - INVALID_MONTH (400)
+//   - INVALID_SUB_BRAND (400)
+//   - INVALID_DOC_TYPE (400) — when ?docType= isn't in the canonical set
+//   - INVALID_FORMAT (400) — when ?format= is anything other than
+//     'json' (default) or 'csv'
+//
+// ============================================================================
+const HSN_SUMMARY_DEFAULT_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
+
+router.get(
+  "/invoices/hsn-summary",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { year, month, start, end } = parseFilingMonth(req.query.month);
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      let docTypes = HSN_SUMMARY_DEFAULT_DOC_TYPES;
+      if (req.query.docType != null && String(req.query.docType).trim() !== "") {
+        const dt = String(req.query.docType).trim();
+        if (!HSN_SUMMARY_DEFAULT_DOC_TYPES.includes(dt)) {
+          return res.status(400).json({
+            error: `docType must be one of: ${HSN_SUMMARY_DEFAULT_DOC_TYPES.join(", ")}`,
+            code: "INVALID_DOC_TYPE",
+          });
+        }
+        docTypes = [dt];
+      }
+
+      const format = req.query.format != null
+        ? String(req.query.format).trim().toLowerCase()
+        : "json";
+      if (format !== "json" && format !== "csv") {
+        return res.status(400).json({
+          error: "format must be 'json' or 'csv'",
+          code: "INVALID_FORMAT",
+        });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        createdAt: { gte: start, lt: end },
+        docType: { in: docTypes },
+      };
+      if (subBrandFilter) where.subBrand = subBrandFilter;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+
+      const invoiceIds = invoices.map((i) => i.id);
+      const allLines =
+        invoiceIds.length > 0
+          ? await prisma.travelInvoiceLine.findMany({
+              where: {
+                invoiceId: { in: invoiceIds },
+                tenantId: req.travelTenant.id,
+              },
+              orderBy: [{ invoiceId: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
+            })
+          : [];
+      const linesByInvoice = new Map();
+      for (const l of allLines) {
+        if (!linesByInvoice.has(l.invoiceId)) linesByInvoice.set(l.invoiceId, []);
+        linesByInvoice.get(l.invoiceId).push(l);
+      }
+
+      // Cache state-code resolutions per contact — multiple invoices for
+      // the same customer share the same operator/customer state pair.
+      const stateCodeCache = new Map();
+      async function getInterstateForInvoice(invoice) {
+        if (stateCodeCache.has(invoice.contactId)) {
+          return stateCodeCache.get(invoice.contactId);
+        }
+        const codes = await resolveStateCodes({
+          prisma,
+          tenantId: req.travelTenant.id,
+          contactId: invoice.contactId,
+          operatorOverride: null,
+          customerOverride: null,
+        });
+        let isInterstate;
+        try {
+          isInterstate = isInterstateSupply(
+            codes.operatorStateCode,
+            codes.customerStateCode,
+          );
+        } catch (_e) {
+          isInterstate = false;
+        }
+        const result = { ...codes, isInterstate };
+        stateCodeCache.set(invoice.contactId, result);
+        return result;
+      }
+
+      // Aggregate lines into (sacCode, gstPercent) buckets — same math as
+      // gstr1-export but emitted as a standalone payload (no other sections).
+      const buckets = new Map();
+      for (const inv of invoices) {
+        const lines = linesByInvoice.get(inv.id) || [];
+        const { isInterstate } = await getInterstateForInvoice(inv);
+        const normalized = lines.map((l) => ({
+          lineType: l.lineType,
+          taxableValue: Number(l.amount || 0),
+          gstPercent: gstRateForCategory(l.lineType),
+        }));
+        const grouped = groupLinesBySac(normalized);
+        for (const g of grouped) {
+          const key = `${g.sacCode}:${g.gstPercent}`;
+          if (!buckets.has(key)) {
+            buckets.set(key, {
+              sacCode: g.sacCode,
+              description: g.description,
+              gstPercent: g.gstPercent,
+              taxableValue: 0,
+              count: 0,
+              igst: 0,
+              cgst: 0,
+              sgst: 0,
+            });
+          }
+          const acc = buckets.get(key);
+          const totalTax =
+            Math.round(((g.taxableValue * g.gstPercent) / 100) * 100) / 100;
+          acc.taxableValue =
+            Math.round((acc.taxableValue + g.taxableValue) * 100) / 100;
+          acc.count += g.count;
+          if (isInterstate) {
+            acc.igst = Math.round((acc.igst + totalTax) * 100) / 100;
+          } else {
+            const half = Math.round((totalTax / 2) * 100) / 100;
+            acc.cgst = Math.round((acc.cgst + half) * 100) / 100;
+            acc.sgst = Math.round((acc.sgst + half) * 100) / 100;
+          }
+        }
+      }
+
+      const rows = [...buckets.values()]
+        .map((r) => ({
+          ...r,
+          totalTax: Math.round((r.igst + r.cgst + r.sgst) * 100) / 100,
+        }))
+        .sort((a, b) =>
+          a.sacCode === b.sacCode
+            ? a.gstPercent - b.gstPercent
+            : a.sacCode.localeCompare(b.sacCode),
+        );
+
+      const totals = rows.reduce(
+        (acc, r) => {
+          acc.taxableValue = Math.round((acc.taxableValue + r.taxableValue) * 100) / 100;
+          acc.igst = Math.round((acc.igst + r.igst) * 100) / 100;
+          acc.cgst = Math.round((acc.cgst + r.cgst) * 100) / 100;
+          acc.sgst = Math.round((acc.sgst + r.sgst) * 100) / 100;
+          acc.totalTax = Math.round((acc.totalTax + r.totalTax) * 100) / 100;
+          acc.lineCount += r.count;
+          return acc;
+        },
+        { taxableValue: 0, igst: 0, cgst: 0, sgst: 0, totalTax: 0, lineCount: 0 },
+      );
+
+      const monthLabel = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+
+      if (format === "csv") {
+        const CRLF = "\r\n";
+        const BOM = "﻿";
+        const parts = [];
+        parts.push(
+          `# HSN_SUMMARY month=${monthLabel} subBrand=${subBrandFilter || "ALL"} docTypes=${docTypes.join("|")}`,
+        );
+        parts.push("");
+        parts.push(
+          [
+            "SAC_Code",
+            "Description",
+            "GST_Rate",
+            "Total_Lines",
+            "Taxable_Value",
+            "IGST",
+            "CGST",
+            "SGST",
+            "Total_Tax",
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+        for (const r of rows) {
+          parts.push(
+            [
+              r.sacCode,
+              r.description,
+              formatMoney(r.gstPercent),
+              String(r.count),
+              formatMoney(r.taxableValue),
+              formatMoney(r.igst),
+              formatMoney(r.cgst),
+              formatMoney(r.sgst),
+              formatMoney(r.totalTax),
+            ]
+              .map(csvEscape)
+              .join(","),
+          );
+        }
+        const csv = BOM + parts.join(CRLF) + CRLF;
+        const filename = `hsn-summary-${monthLabel}-${subBrandFilter || "all"}.csv`;
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${filename}"`,
+        );
+        return res.status(200).send(csv);
+      }
+
+      return res.status(200).json({
+        month: monthLabel,
+        subBrand: subBrandFilter || "all",
+        docTypes,
+        rows,
+        totals,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] hsn-summary error:", e.message);
+      res.status(500).json({ error: "Failed to generate HSN summary" });
+    }
+  },
+);
 
 // GET /api/travel/invoices/:id
 //

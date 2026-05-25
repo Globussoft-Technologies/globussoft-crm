@@ -741,3 +741,546 @@ describe('<Patients /> — filters / bulk-select / chrome (extension)', () => {
     await waitFor(() => expect(notifyObj.success).toHaveBeenCalled());
   });
 });
+
+/**
+ * EXTENSION 2 (tick #N+1) — broader coverage of CSV/XLSX/template/import
+ * surfaces + bulk-tag-REMOVE companion + bulk-tag validation gates. Pins:
+ *   1. CSV export — fetch URL includes active filter snapshot (q + source +
+ *      gender + createdFrom + createdTo) + Authorization header.
+ *   2. XLSX export — same URL shape against /patients.xlsx.
+ *   3. Download-template button fires a parameterless fetch to the
+ *      import-template.csv endpoint (no q / no filters).
+ *   4. Import Patients button (visible by default; hidden when 403)
+ *      opens the modal with the file picker.
+ *   5. Import POST — multipart/form-data with field name `file`; Auth header
+ *      forwarded; success path bumps reload + toasts.
+ *   6. Import error response renders error table + Download-CSV affordance.
+ *   7. Bulk-tag-add modal validates empty input — toast + no PATCH.
+ *   8. Bulk-tag-add modal validates >20 tags — toast + no PATCH.
+ *   9. Bulk-tag-REMOVE modal opens via the "Remove tags from N selected" CTA
+ *      and submits a PATCH with `removeTags` (NOT `addTags`).
+ *  10. Tag-add `+` button opens the inline input + autoFocus.
+ *  11. Export buttons are disabled while a CSV/XLSX/template/import call is
+ *      in flight (shared busy gate).
+ *  12. Import modal is hidden when permissionDenied (matches the 403 chrome).
+ *
+ * Uses raw global.fetch mocking for the CSV/XLSX/template/import paths
+ * (they use `fetch`, not `fetchApi`), and the existing fetchApi mock for
+ * the table-population calls.
+ */
+describe('<Patients /> — CSV/XLSX/template/import + bulk-remove (extension 2)', () => {
+  beforeEach(() => {
+    fetchApi.mockReset();
+    notifyObj.success.mockReset();
+    notifyObj.error.mockReset();
+    notifyObj.info.mockReset();
+    // Stub global.fetch so the CSV/XLSX/template/import paths (which use
+    // raw fetch) resolve to a predictable Blob/JSON without making a real
+    // network call. Tests can override per-case via .mockImplementationOnce.
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob(['placeholder'], { type: 'text/csv' })),
+      json: () => Promise.resolve({}),
+    });
+    // jsdom doesn't implement URL.createObjectURL / revokeObjectURL — the
+    // download helpers call both unconditionally.
+    if (!global.URL.createObjectURL) {
+      global.URL.createObjectURL = vi.fn(() => 'blob:fake');
+    } else {
+      global.URL.createObjectURL = vi.fn(() => 'blob:fake');
+    }
+    if (!global.URL.revokeObjectURL) {
+      global.URL.revokeObjectURL = vi.fn();
+    } else {
+      global.URL.revokeObjectURL = vi.fn();
+    }
+  });
+
+  it('Export CSV button forwards q + source + gender + createdFrom + createdTo + Bearer header', async () => {
+    fetchApi.mockImplementation(defaultFetchHandler);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('patients-pagination-indicator');
+
+    // Apply a few filters first so the export carries them.
+    await user.type(screen.getByPlaceholderText(/Search by name, phone, or email/i), 'rohan');
+    await user.selectOptions(screen.getByLabelText(/Filter by source/i), 'walk-in');
+    await user.selectOptions(screen.getByLabelText(/Filter by gender/i), 'F');
+    fireEvent.change(screen.getByLabelText(/Created from/i), { target: { value: '2026-01-01' } });
+    fireEvent.change(screen.getByLabelText(/Created to/i), { target: { value: '2026-06-30' } });
+    // Wait for the debounced state to settle.
+    await waitFor(() => {
+      const recent = [...fetchApi.mock.calls]
+        .reverse()
+        .find(([u]) => u.startsWith('/api/wellness/patients?') && /q=rohan/.test(u));
+      expect(recent).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('button', { name: /Export CSV/i }));
+
+    await waitFor(() => {
+      const call = global.fetch.mock.calls.find(([u]) => String(u).startsWith('/api/wellness/patients.csv'));
+      expect(call).toBeTruthy();
+      const url = String(call[0]);
+      expect(url).toMatch(/q=rohan/);
+      expect(url).toMatch(/source=walk-in/);
+      expect(url).toMatch(/gender=F/);
+      expect(url).toMatch(/createdFrom=2026-01-01/);
+      expect(url).toMatch(/createdTo=2026-06-30/);
+      // Authorization header from getAuthToken() (mocked → 'fake-token').
+      expect(call[1].headers.Authorization).toBe('Bearer fake-token');
+    });
+    // Success toast fires once the blob resolves.
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalled());
+  });
+
+  it('Export XLSX button fetches /patients.xlsx with the same filter snapshot', async () => {
+    fetchApi.mockImplementation(defaultFetchHandler);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('patients-pagination-indicator');
+    await user.selectOptions(screen.getByLabelText(/Filter by source/i), 'whatsapp');
+
+    await waitFor(() => {
+      const recent = [...fetchApi.mock.calls]
+        .reverse()
+        .find(([u]) => u.startsWith('/api/wellness/patients?') && /source=whatsapp/.test(u));
+      expect(recent).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('button', { name: /Export XLSX/i }));
+
+    await waitFor(() => {
+      const call = global.fetch.mock.calls.find(([u]) => String(u).startsWith('/api/wellness/patients.xlsx'));
+      expect(call).toBeTruthy();
+      expect(String(call[0])).toMatch(/source=whatsapp/);
+    });
+  });
+
+  it('Download template button fires a parameterless fetch to the template endpoint', async () => {
+    fetchApi.mockImplementation(defaultFetchHandler);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('patients-pagination-indicator');
+
+    // Even with active filters, the template URL must NOT carry them.
+    await user.selectOptions(screen.getByLabelText(/Filter by source/i), 'referral');
+    await waitFor(() => {
+      const recent = [...fetchApi.mock.calls]
+        .reverse()
+        .find(([u]) => u.startsWith('/api/wellness/patients?') && /source=referral/.test(u));
+      expect(recent).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('button', { name: /Download template/i }));
+
+    await waitFor(() => {
+      const call = global.fetch.mock.calls.find(([u]) =>
+        String(u) === '/api/wellness/patients/import-template.csv',
+      );
+      expect(call).toBeTruthy();
+      // Authorization header is forwarded.
+      expect(call[1].headers.Authorization).toBe('Bearer fake-token');
+    });
+    await waitFor(() =>
+      expect(notifyObj.success).toHaveBeenCalledWith('Import template downloaded.'),
+    );
+  });
+
+  it('Import Patients button opens the modal with a file picker', async () => {
+    fetchApi.mockImplementation(defaultFetchHandler);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('patients-pagination-indicator');
+
+    await user.click(screen.getByRole('button', { name: /Import Patients/i }));
+
+    // Modal title.
+    expect(await screen.findByText(/^Import Patients$/i, { selector: 'h3' })).toBeInTheDocument();
+    // CSV file input (accept=".csv,text/csv").
+    const fileInput = screen.getByLabelText(/CSV file/i);
+    expect(fileInput).toBeInTheDocument();
+    expect(fileInput).toHaveAttribute('accept', '.csv,text/csv');
+    // Upload button is disabled until a file is picked.
+    const uploadBtn = screen.getByRole('button', { name: /Upload/i });
+    expect(uploadBtn).toBeDisabled();
+  });
+
+  it('Import POST uses multipart/form-data with field name `file` and bumps reload on success', async () => {
+    fetchApi.mockImplementation(defaultFetchHandler);
+
+    // Override global.fetch for the /import call so we can inspect FormData.
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (String(url) === '/api/wellness/patients/import') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          blob: () => Promise.resolve(new Blob([], { type: 'application/json' })),
+          json: () =>
+            Promise.resolve({
+              summary: { totalRows: 3, imported: 2, duplicates: 1, invalid: 0 },
+              errors: [],
+              createdIds: [101, 102],
+            }),
+        });
+      }
+      // Other fetch calls return the placeholder shape.
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        blob: () => Promise.resolve(new Blob([], { type: 'text/csv' })),
+        json: () => Promise.resolve({}),
+      });
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('patients-pagination-indicator');
+    await user.click(screen.getByRole('button', { name: /Import Patients/i }));
+
+    const fileInput = await screen.findByLabelText(/CSV file/i);
+    const fakeFile = new File(['name,phone\nAarti,+919800000001\n'], 'patients.csv', {
+      type: 'text/csv',
+    });
+    fireEvent.change(fileInput, { target: { files: [fakeFile] } });
+
+    // Upload button enables once a file is picked.
+    const uploadBtn = screen.getByRole('button', { name: /Upload/i });
+    expect(uploadBtn).not.toBeDisabled();
+    await user.click(uploadBtn);
+
+    await waitFor(() => {
+      const call = global.fetch.mock.calls.find(([u]) => String(u) === '/api/wellness/patients/import');
+      expect(call).toBeTruthy();
+      expect(call[1].method).toBe('POST');
+      // body is FormData with field name `file`.
+      const body = call[1].body;
+      expect(body).toBeInstanceOf(FormData);
+      expect(body.get('file')).toBeTruthy();
+      expect(call[1].headers.Authorization).toBe('Bearer fake-token');
+    });
+
+    // Success toast + summary panel renders.
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalled());
+    const summary = await screen.findByTestId('import-summary');
+    expect(summary.textContent).toMatch(/Imported.*2.*of.*3.*rows/);
+  });
+
+  it('Import error response surfaces the error table + Download full error CSV button', async () => {
+    fetchApi.mockImplementation(defaultFetchHandler);
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (String(url) === '/api/wellness/patients/import') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          blob: () => Promise.resolve(new Blob([])),
+          json: () =>
+            Promise.resolve({
+              summary: { totalRows: 3, imported: 1, duplicates: 0, invalid: 2 },
+              errors: [
+                { row: 2, errorCode: 'INVALID_PHONE', errorMessage: 'Phone must be Indian mobile' },
+                { row: 3, errorCode: 'MISSING_NAME', errorMessage: 'Name is required' },
+              ],
+              createdIds: [101],
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        blob: () => Promise.resolve(new Blob([])),
+        json: () => Promise.resolve({}),
+      });
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('patients-pagination-indicator');
+    await user.click(screen.getByRole('button', { name: /Import Patients/i }));
+
+    const fileInput = await screen.findByLabelText(/CSV file/i);
+    const fakeFile = new File(['headers\nrow'], 'bad.csv', { type: 'text/csv' });
+    fireEvent.change(fileInput, { target: { files: [fakeFile] } });
+    await user.click(screen.getByRole('button', { name: /Upload/i }));
+
+    // Errors table renders 2 rows + Download CSV button is present.
+    await screen.findByText(/INVALID_PHONE/);
+    expect(screen.getByText(/MISSING_NAME/)).toBeInTheDocument();
+    expect(screen.getByText(/Phone must be Indian mobile/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Download full error CSV/i })).toBeInTheDocument();
+    // The header strong-text reports the count.
+    expect(screen.getByText(/Errors \(2\)/)).toBeInTheDocument();
+  });
+
+  it('clicking Download full error CSV triggers a Blob download (URL.createObjectURL called)', async () => {
+    fetchApi.mockImplementation(defaultFetchHandler);
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (String(url) === '/api/wellness/patients/import') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          blob: () => Promise.resolve(new Blob([])),
+          json: () =>
+            Promise.resolve({
+              summary: { totalRows: 1, imported: 0, duplicates: 0, invalid: 1 },
+              errors: [
+                { row: 1, errorCode: 'BAD_HEADER', errorMessage: 'Header row missing required columns' },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve(new Blob([])), json: () => Promise.resolve({}) });
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('patients-pagination-indicator');
+    await user.click(screen.getByRole('button', { name: /Import Patients/i }));
+
+    const fileInput = await screen.findByLabelText(/CSV file/i);
+    fireEvent.change(fileInput, { target: { files: [new File(['x'], 'x.csv', { type: 'text/csv' })] } });
+    await user.click(screen.getByRole('button', { name: /Upload/i }));
+    await screen.findByText(/BAD_HEADER/);
+
+    // Reset the createObjectURL spy so we can prove the click triggers it
+    // (the import POST itself does not — only the error-CSV download does).
+    global.URL.createObjectURL.mockClear();
+    await user.click(screen.getByRole('button', { name: /Download full error CSV/i }));
+    expect(global.URL.createObjectURL).toHaveBeenCalled();
+  });
+
+  it('bulk-tag-add modal Apply with empty input shows an error toast and does NOT PATCH', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/wellness/patients?')) {
+        return Promise.resolve({
+          patients: [
+            { id: 300, name: 'TagVal One', phone: '+919800000300', email: '', gender: 'F', source: 'walk-in', createdAt: '2026-05-20T10:00:00Z', tags: null },
+          ],
+          total: 1,
+        });
+      }
+      if (url === '/api/wellness/locations') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('TagVal One');
+    await user.click(screen.getByLabelText(/Select TagVal One/i));
+    await user.click(screen.getByText(/Add tags to 1 selected/i));
+
+    // Type whitespace-only — the Apply button is disabled when input is
+    // empty/whitespace (style.opacity + disabled attr), so simulate the
+    // "force submit despite empty" path via direct Apply button event:
+    // type a single space + comma so the parser sees [] after trim/filter.
+    const tagInput = screen.getByLabelText(/^Tags \(comma-separated\)$/i);
+    // We type " , , " — non-empty by .trim() check on the button, but the
+    // parser will dedupe to [] post-filter.
+    await user.type(tagInput, ' , , ');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    // No PATCH issued; error toast fired.
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        'Enter at least one tag (comma-separated).',
+      );
+    });
+    const patchCall = fetchApi.mock.calls.find(
+      ([u, o]) => u === '/api/wellness/patients/bulk-tags' && o?.method === 'PATCH',
+    );
+    expect(patchCall).toBeUndefined();
+  });
+
+  it('bulk-tag-add modal rejects > 20 tags with an error toast and no PATCH', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/wellness/patients?')) {
+        return Promise.resolve({
+          patients: [
+            { id: 301, name: 'Many Tags', phone: '+919800000301', email: '', gender: 'F', source: 'walk-in', createdAt: '2026-05-20T10:00:00Z', tags: null },
+          ],
+          total: 1,
+        });
+      }
+      if (url === '/api/wellness/locations') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Many Tags');
+    await user.click(screen.getByLabelText(/Select Many Tags/i));
+    await user.click(screen.getByText(/Add tags to 1 selected/i));
+
+    // 21 unique tags → blocks at the >20 client-side gate.
+    const tags = Array.from({ length: 21 }, (_, i) => `t${i}`).join(',');
+    const tagInput = screen.getByLabelText(/^Tags \(comma-separated\)$/i);
+    await user.type(tagInput, tags);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        'Cannot add more than 20 tags in a single request.',
+      );
+    });
+    const patchCall = fetchApi.mock.calls.find(
+      ([u, o]) => u === '/api/wellness/patients/bulk-tags' && o?.method === 'PATCH',
+    );
+    expect(patchCall).toBeUndefined();
+  });
+
+  it('bulk-tag-REMOVE modal submits PATCH with `removeTags` (not addTags)', async () => {
+    let resolvePatch;
+    const patchPromise = new Promise((res) => { resolvePatch = res; });
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/wellness/patients/bulk-tags' && opts?.method === 'PATCH') {
+        return patchPromise;
+      }
+      if (url.startsWith('/api/wellness/patients?')) {
+        return Promise.resolve({
+          patients: [
+            { id: 400, name: 'Rem One', phone: '+919800000400', email: '', gender: 'F', source: 'walk-in', createdAt: '2026-05-20T10:00:00Z', tags: JSON.stringify(['vip', 'follow-up']) },
+            { id: 401, name: 'Rem Two', phone: '+919800000401', email: '', gender: 'M', source: 'walk-in', createdAt: '2026-05-20T10:00:00Z', tags: JSON.stringify(['vip']) },
+          ],
+          total: 2,
+        });
+      }
+      if (url === '/api/wellness/locations') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Rem One');
+    await user.click(screen.getByLabelText(/Select Rem One/i));
+    await user.click(screen.getByLabelText(/Select Rem Two/i));
+
+    // Open the REMOVE-tags modal (not the ADD-tags one).
+    await user.click(screen.getByText(/Remove tags from 2 selected/i));
+    // Modal heading distinguishes it from the add modal.
+    expect(
+      await screen.findByText(/Remove tags from 2 patients/i, { selector: 'h3' }),
+    ).toBeInTheDocument();
+
+    const tagInput = screen.getByLabelText(/^Tags to remove \(comma-separated\)$/i);
+    await user.type(tagInput, 'VIP');
+    // Use getAllByRole because both modals' Apply buttons share the same
+    // accessible name when both are open. Only the remove-modal is open
+    // here, so length should be 1.
+    const applyBtns = screen.getAllByRole('button', { name: 'Apply' });
+    expect(applyBtns).toHaveLength(1);
+    await user.click(applyBtns[0]);
+
+    await waitFor(() => {
+      const patchCall = fetchApi.mock.calls.find(
+        ([u, o]) => u === '/api/wellness/patients/bulk-tags' && o?.method === 'PATCH',
+      );
+      expect(patchCall).toBeTruthy();
+      const body = JSON.parse(patchCall[1].body);
+      expect(body.patientIds.sort()).toEqual([400, 401]);
+      // load-bearing: removeTags, NOT addTags.
+      expect(body.removeTags).toEqual(['vip']);
+      expect(body.addTags).toBeUndefined();
+    });
+
+    resolvePatch({ updated: 2, removed: 1 });
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalled());
+  });
+
+  it('clicking the tag-add + button opens an inline input with autoFocus', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/wellness/patients?')) {
+        return Promise.resolve({
+          patients: [
+            { id: 502, name: 'Open Tag', phone: '+919800000502', email: '', gender: 'F', source: 'walk-in', createdAt: '2026-05-20T10:00:00Z', tags: null },
+          ],
+          total: 1,
+        });
+      }
+      if (url === '/api/wellness/locations') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+    const addBtn = await screen.findByTestId('tag-add-502');
+    expect(addBtn).toBeInTheDocument();
+    await user.click(addBtn);
+
+    const input = screen.getByLabelText(/New tag for Open Tag/i);
+    expect(input).toBeInTheDocument();
+    // autoFocus puts focus on the input on mount.
+    expect(document.activeElement).toBe(input);
+    // The + button is gone while the input is open.
+    expect(screen.queryByTestId('tag-add-502')).not.toBeInTheDocument();
+    // The inline Save button is present + initially disabled (empty input).
+    const saveBtn = screen.getByRole('button', { name: /Save tag for Open Tag/i });
+    expect(saveBtn).toBeDisabled();
+  });
+
+  it('Import Patients button is hidden when permissionDenied (403)', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/wellness/patients?')) {
+        const err = new Error('forbidden');
+        err.status = 403;
+        return Promise.reject(err);
+      }
+      if (url === '/api/wellness/locations') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+
+    renderPage();
+    await screen.findByText(/Access restricted\./i);
+    // None of Import Patients / Export CSV / Export XLSX should render.
+    expect(screen.queryByRole('button', { name: /Import Patients/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Export CSV/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Export XLSX/i })).not.toBeInTheDocument();
+    // Download template (no PHI) IS still visible.
+    expect(screen.getByRole('button', { name: /Download template/i })).toBeInTheDocument();
+  });
+
+  it('Export buttons disable while a CSV download is in flight', async () => {
+    fetchApi.mockImplementation(defaultFetchHandler);
+    // Hang the CSV fetch so the button stays disabled long enough to assert.
+    let resolveFn;
+    const pending = new Promise((resolve) => { resolveFn = resolve; });
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (String(url).startsWith('/api/wellness/patients.csv')) {
+        return pending;
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        blob: () => Promise.resolve(new Blob([])),
+        json: () => Promise.resolve({}),
+      });
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('patients-pagination-indicator');
+
+    const csvBtn = screen.getByRole('button', { name: /Export CSV/i });
+    const xlsxBtn = screen.getByRole('button', { name: /Export XLSX/i });
+    const tmplBtn = screen.getByRole('button', { name: /Download template/i });
+    expect(csvBtn).not.toBeDisabled();
+    expect(xlsxBtn).not.toBeDisabled();
+
+    await user.click(csvBtn);
+    // While the CSV fetch is pending, all three share-busy buttons disable.
+    await waitFor(() => {
+      expect(csvBtn).toBeDisabled();
+      expect(xlsxBtn).toBeDisabled();
+      expect(tmplBtn).toBeDisabled();
+    });
+
+    // Resolve the in-flight CSV — buttons re-enable.
+    resolveFn({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob(['csv'])),
+      json: () => Promise.resolve({}),
+    });
+    await waitFor(() => expect(csvBtn).not.toBeDisabled());
+  });
+});

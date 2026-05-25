@@ -346,6 +346,183 @@ router.get("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =>
   }
 });
 
+// ============================================================================
+// GET /api/travel/diagnostics/stats — tenant-wide Diagnostic submissions rollup
+// (PRD_TRAVEL_RFU_DIAGNOSTIC §3).
+//
+// Mirrors #905 slice 18 /commission-profiles/stats + #903 slice 23
+// /suppliers/stats + #908 slice 19 /flyer-templates/global-stats. USER-readable
+// anodyne aggregate. Powers the Diagnostics dashboard's header summary strip
+// ("42 submissions · 18 TMC · 12 RFU · 8 TS · 4 VS · across 3 banks · last
+// submitted 2h ago"). Without this, the frontend has to fire {list,
+// count by subBrand×4, count by bank×N} — N+1 round-trips for a single
+// visual surface.
+//
+// Distinct from GET /diagnostics (paginated list with row payload) and
+// GET /diagnostics/:id (single row). This is the tenant-wide rollup across
+// the count + per-bucket breakdown surfaces.
+//
+// Behaviour:
+//   - Sub-brand-scoped: MANAGER restricted to one sub-brand sees ONLY their
+//     allowed sub-brands' diagnostics in the counts. Same gate as the
+//     /diagnostics list endpoint.
+//   - Rollup:
+//       total                                — count of matching diagnostics
+//       bySubBrand: { <sb|_tenant>: { count } }
+//       byBank: { <bankId>: { count, bankName } }   — bankName = `${subBrand} v${version}`
+//                                                     since QuestionBank has no name field
+//       lastSubmittedAt                      — max(createdAt) across matching rows
+//   - ?from / ?to (ISO date bounds) filter Diagnostic.createdAt before aggregation.
+//
+// Public/auth split: the TravelDiagnostic schema has NO marker distinguishing
+// public-quiz submissions from authenticated submissions (both land in the
+// same model with the same fields). publicCount / authCount are intentionally
+// omitted from the response shape — the prompt allows skipping these when
+// the schema doesn't model the distinction.
+//
+// Safety cap: process at most 2000 diagnostics per call; if matching total >
+// 2000, return counts but mark aggregateExceedsCap=true.
+//
+// USER-readable: anodyne aggregate (counts + timestamps); safe. No audit row:
+// read-only meta surface, mirrors /commission-profiles/stats + /suppliers/stats.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family or `:id="stats"` would 400 INVALID_ID before reaching this
+// handler. Mirrors travel_suppliers.js + travel_commission_profiles.js placement.
+// ============================================================================
+const DIAGNOSTICS_STATS_CAP = 2000;
+
+router.get(
+  "/diagnostics/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Optional ISO date bounds on Diagnostic.createdAt
+      const diagWhere = { tenantId };
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        diagWhere.createdAt = Object.assign(diagWhere.createdAt || {}, { gte: d });
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        diagWhere.createdAt = Object.assign(diagWhere.createdAt || {}, { lte: d });
+      }
+
+      // Sub-brand narrowing — same gate as the /diagnostics list endpoint.
+      // MANAGER subBrandAccess restricts the visible-set BEFORE counting.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          diagWhere.subBrand = { in: [...allowed] };
+        } else {
+          // Empty allowed set = deny everything; force-empty query.
+          diagWhere.subBrand = "__none__";
+        }
+      }
+
+      // Bounded fetch to keep in-process aggregation safe.
+      const diagnostics = await prisma.travelDiagnostic.findMany({
+        where: diagWhere,
+        select: {
+          id: true,
+          subBrand: true,
+          questionBankId: true,
+          createdAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+        take: DIAGNOSTICS_STATS_CAP,
+      });
+
+      // Get the true total so callers know if aggregation is bounded.
+      const totalMatching = await prisma.travelDiagnostic.count({ where: diagWhere });
+      const aggregateExceedsCap = totalMatching > DIAGNOSTICS_STATS_CAP;
+
+      // Empty short-circuit — return zeroed shape.
+      if (diagnostics.length === 0) {
+        return res.json({
+          total: 0,
+          bySubBrand: {},
+          byBank: {},
+          lastSubmittedAt: null,
+          aggregateExceedsCap: false,
+        });
+      }
+
+      // Bucket counts.
+      let lastSubmittedAt = null;
+      const bySubBrand = {};
+      const byBank = {};
+      const bankIdsSeen = new Set();
+
+      for (const d of diagnostics) {
+        const ts = d.createdAt instanceof Date ? d.createdAt : new Date(d.createdAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastSubmittedAt || ts > lastSubmittedAt) lastSubmittedAt = ts;
+        }
+
+        // TravelDiagnostic.subBrand is non-nullable in schema, but defensively
+        // coalesce falsy → '_tenant' for forward-compat (matches sibling stats
+        // endpoint shape — see travel_suppliers.js /suppliers/stats).
+        const sbKey = d.subBrand ? String(d.subBrand) : "_tenant";
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+        bySubBrand[sbKey].count += 1;
+
+        if (d.questionBankId != null) {
+          const bankKey = String(d.questionBankId);
+          if (!byBank[bankKey]) byBank[bankKey] = { count: 0, bankName: null };
+          byBank[bankKey].count += 1;
+          bankIdsSeen.add(d.questionBankId);
+        }
+      }
+
+      // Resolve bank names. TravelDiagnosticQuestionBank has no `name` column;
+      // synthesise from subBrand + version (e.g. "tmc v1"). Tenant-scoped fetch
+      // — defensive against any future cross-tenant FK leak.
+      if (bankIdsSeen.size > 0) {
+        const banks = await prisma.travelDiagnosticQuestionBank.findMany({
+          where: { tenantId, id: { in: [...bankIdsSeen] } },
+          select: { id: true, subBrand: true, version: true },
+        });
+        for (const b of banks) {
+          const k = String(b.id);
+          if (byBank[k]) {
+            byBank[k].bankName = `${b.subBrand} v${b.version}`;
+          }
+        }
+      }
+
+      res.json({
+        total: diagnostics.length,
+        bySubBrand,
+        byBank,
+        lastSubmittedAt: lastSubmittedAt ? lastSubmittedAt.toISOString() : null,
+        aggregateExceedsCap,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise diagnostics" });
+    }
+  },
+);
+
 // GET /api/travel/diagnostics/:id
 router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

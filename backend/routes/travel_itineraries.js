@@ -1415,4 +1415,189 @@ router.post("/itineraries/:id/clone-day", verifyToken, requireTravelTenant, asyn
   }
 });
 
+// ─── Supplier-confirmation rollup (#907 slice 7) ─────────────────────
+//
+// GET /api/travel/itineraries/:id/supplier-rollup
+//
+// Operator-facing pre-PO view: "which suppliers are in this itinerary,
+// and what do I need to confirm with each?" Aggregates ItineraryItem
+// rows by supplierId. Items without supplierId fall into an `unassigned`
+// bucket — surfaces gaps before the operator issues POs.
+//
+// Per-supplier rollup shape:
+//   {
+//     supplierId,           // null for unassigned bucket
+//     supplierName,         // TravelSupplier.name; "Unassigned" for null
+//     supplierCategory,     // hotel | flight | transport | visa-consul | other
+//     contactPerson,        // free-form contact name (nullable)
+//     phone, email,         // contact channels (nullable)
+//     itemCount,            // number of ItineraryItem rows mapped to supplier
+//     itemTypes,            // unique itemType strings ["hotel","transfer",...]
+//     totalSupplierCost,    // sum(unitCost) — half-up to paise (2dp)
+//     totalGst,             // sum(gstAmount)
+//     totalSalePrice,       // sum(totalPrice)
+//     marginTotal,          // totalSalePrice - totalSupplierCost - totalGst
+//     marginPct,            // marginTotal / totalSalePrice * 100; null if sale=0
+//     items: [{ id, itemType, description, unitCost, gstAmount, totalPrice }]
+//   }
+//
+// Envelope:
+//   { itineraryId, suppliers: [...], unassigned: {...} | null,
+//     grandTotals: { supplierCost, gst, salePrice, marginTotal, marginPct },
+//     supplierCount }
+//
+// Tenant + sub-brand guard via loadItineraryWithGuard (mirrors slices 2/5/6).
+// Read-only — no audit log, no eventBus emit.
+//
+// Refs PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3 + §6 (operator
+// "Confirmation pipe" workflow before PO issue).
+router.get(
+  "/itineraries/:id/supplier-rollup",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+
+      const items = await prisma.itineraryItem.findMany({
+        where: { itineraryId: itin.id },
+        orderBy: { position: "asc" },
+      });
+
+      // Half-up to 2dp (paise precision). All money fields are Decimal(15,2)
+      // on the DB; the conversion to Number is safe for ≤15-digit values.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      // Bucket items by supplierId (null bucket kept separate).
+      /** @type {Map<number|null, Array<any>>} */
+      const buckets = new Map();
+      for (const row of items) {
+        const key = row.supplierId == null ? null : row.supplierId;
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key).push(row);
+      }
+
+      // Look up supplier metadata in a single query — only for supplierIds
+      // that actually appear in this itinerary's items.
+      const supplierIds = [...buckets.keys()].filter((k) => k !== null);
+      const supplierMap = new Map();
+      if (supplierIds.length > 0) {
+        const rows = await prisma.travelSupplier.findMany({
+          where: {
+            id: { in: supplierIds },
+            tenantId: req.travelTenant.id,
+          },
+          select: {
+            id: true,
+            name: true,
+            supplierCategory: true,
+            contactPerson: true,
+            phone: true,
+            email: true,
+          },
+        });
+        for (const s of rows) supplierMap.set(s.id, s);
+      }
+
+      function rollupFor(supplierId, rows) {
+        let totalSupplierCost = 0;
+        let totalGst = 0;
+        let totalSalePrice = 0;
+        const itemTypeSet = new Set();
+        const lineItems = [];
+        for (const r of rows) {
+          const unit = r.unitCost != null ? Number(r.unitCost) : 0;
+          const gst = r.gstAmount != null ? Number(r.gstAmount) : 0;
+          const sale = r.totalPrice != null ? Number(r.totalPrice) : 0;
+          totalSupplierCost += unit;
+          totalGst += gst;
+          totalSalePrice += sale;
+          itemTypeSet.add(r.itemType);
+          lineItems.push({
+            id: r.id,
+            itemType: r.itemType,
+            description: r.description,
+            unitCost: r.unitCost != null ? round2(unit) : null,
+            gstAmount: r.gstAmount != null ? round2(gst) : null,
+            totalPrice: r.totalPrice != null ? round2(sale) : null,
+          });
+        }
+        const supplierCost = round2(totalSupplierCost);
+        const gstTotal = round2(totalGst);
+        const sale = round2(totalSalePrice);
+        const marginTotal = round2(sale - supplierCost - gstTotal);
+        // marginPct null when sale=0 to avoid div-zero / Infinity.
+        const marginPct = sale > 0 ? round2((marginTotal / sale) * 100) : null;
+        const supplier = supplierId != null ? supplierMap.get(supplierId) : null;
+        return {
+          supplierId,
+          supplierName: supplier ? supplier.name : (supplierId == null ? "Unassigned" : "Unknown supplier"),
+          supplierCategory: supplier ? supplier.supplierCategory : null,
+          contactPerson: supplier ? supplier.contactPerson : null,
+          phone: supplier ? supplier.phone : null,
+          email: supplier ? supplier.email : null,
+          itemCount: rows.length,
+          itemTypes: [...itemTypeSet].sort(),
+          totalSupplierCost: supplierCost,
+          totalGst: gstTotal,
+          totalSalePrice: sale,
+          marginTotal,
+          marginPct,
+          items: lineItems,
+        };
+      }
+
+      const suppliers = [];
+      let unassigned = null;
+      for (const [supplierId, rows] of buckets.entries()) {
+        const rollup = rollupFor(supplierId, rows);
+        if (supplierId == null) {
+          unassigned = rollup;
+        } else {
+          suppliers.push(rollup);
+        }
+      }
+      // Stable order: assigned suppliers sorted by descending sale price
+      // (operator wants the biggest spend up top), tiebreak by supplierId asc.
+      suppliers.sort((a, b) => {
+        if (b.totalSalePrice !== a.totalSalePrice) return b.totalSalePrice - a.totalSalePrice;
+        return a.supplierId - b.supplierId;
+      });
+
+      // Grand totals span assigned + unassigned (operator's view of the
+      // whole itinerary's PO surface).
+      const allRollups = unassigned ? [...suppliers, unassigned] : suppliers;
+      const grandSupplierCost = round2(
+        allRollups.reduce((s, r) => s + r.totalSupplierCost, 0),
+      );
+      const grandGst = round2(allRollups.reduce((s, r) => s + r.totalGst, 0));
+      const grandSalePrice = round2(
+        allRollups.reduce((s, r) => s + r.totalSalePrice, 0),
+      );
+      const grandMargin = round2(grandSalePrice - grandSupplierCost - grandGst);
+      const grandMarginPct = grandSalePrice > 0
+        ? round2((grandMargin / grandSalePrice) * 100)
+        : null;
+
+      res.json({
+        itineraryId: itin.id,
+        supplierCount: suppliers.length,
+        suppliers,
+        unassigned,
+        grandTotals: {
+          supplierCost: grandSupplierCost,
+          gst: grandGst,
+          salePrice: grandSalePrice,
+          marginTotal: grandMargin,
+          marginPct: grandMarginPct,
+        },
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] supplier-rollup error:", e.message);
+      res.status(500).json({ error: "Failed to compute supplier rollup" });
+    }
+  },
+);
+
 module.exports = router;

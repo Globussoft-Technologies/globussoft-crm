@@ -31,6 +31,67 @@ const { writeAudit } = require("../lib/audit");
 const { generateTravelQuotePdf } = require("../services/pdfRenderer");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
+const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
+
+function assertValidLineType(t) {
+  if (t == null) return;
+  if (!VALID_LINE_TYPES.includes(t)) {
+    const err = new Error(
+      `lineType must be one of: ${VALID_LINE_TYPES.join(", ")}`,
+    );
+    err.status = 400;
+    err.code = "INVALID_LINE_TYPE";
+    throw err;
+  }
+}
+
+function parsePositiveDecimal(input, fieldName) {
+  if (input == null || input === "") {
+    const err = new Error(`${fieldName} is required`);
+    err.status = 400;
+    err.code = "MISSING_FIELDS";
+    throw err;
+  }
+  const n = Number(input);
+  if (!Number.isFinite(n) || n < 0) {
+    const err = new Error(`${fieldName} must be a non-negative number`);
+    err.status = 400;
+    err.code = "INVALID_AMOUNT";
+    throw err;
+  }
+  return n;
+}
+
+function parsePositiveInt(input, fieldName, fallback) {
+  if (input == null || input === "") return fallback;
+  const n = parseInt(input, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    const err = new Error(`${fieldName} must be a positive integer`);
+    err.status = 400;
+    err.code = "INVALID_QUANTITY";
+    throw err;
+  }
+  return n;
+}
+
+// Recompute the quote's totalAmount as the sum of its lines and persist.
+// Called from POST/PUT/DELETE /lines. Idempotent. Skipped if the lines
+// table is empty (totalAmount stays at whatever the operator typed).
+async function recomputeQuoteTotal(quoteId, tenantId) {
+  const lines = await prisma.travelQuoteLine.findMany({
+    where: { quoteId, tenantId },
+    select: { amount: true },
+  });
+  if (lines.length === 0) return;
+  const total = lines.reduce(
+    (acc, l) => acc + Number(l.amount || 0),
+    0,
+  );
+  await prisma.travelQuote.update({
+    where: { id: quoteId },
+    data: { totalAmount: total },
+  });
+}
 
 function assertValidStatus(s) {
   if (s == null) return;
@@ -352,6 +413,302 @@ router.delete(
   },
 );
 
+// ── Line-item endpoints (PRD_TRAVEL_QUOTE_BUILDER §3.2) ────────────────
+//
+// Lines are the composition under a TravelQuote (hotel rooms, flight
+// segments, transport, visa fees, services). Every line CRUD recomputes
+// the parent quote's totalAmount as the sum of all surviving lines so
+// the quote header stays consistent with its composition. Lines inherit
+// tenant + sub-brand scoping from their parent quote (no separate
+// sub-brand column on the line — looked up via the FK).
+//
+// Auth: read endpoints accept any verified token; write endpoints
+// require ADMIN/MANAGER. Same shape as the parent quote routes.
+
+// Helper: load the parent quote tenant-scoped + sub-brand-scoped.
+// Returns { quote } on success or sends an HTTP response on failure
+// (caller short-circuits if !quote).
+async function loadParentQuote(req, res, quoteId) {
+  if (!Number.isFinite(quoteId)) {
+    res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    return null;
+  }
+  const quote = await prisma.travelQuote.findFirst({
+    where: { id: quoteId, tenantId: req.travelTenant.id },
+  });
+  if (!quote) {
+    res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+    return null;
+  }
+  const allowed = await getSubBrandAccessSet(req.user.userId);
+  if (!canAccessSubBrand(allowed, quote.subBrand)) {
+    res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    return null;
+  }
+  return quote;
+}
+
+// GET /api/travel/quotes/:id/lines — list lines for a quote.
+router.get(
+  "/quotes/:id/lines",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const quoteId = parseInt(req.params.id, 10);
+      const quote = await loadParentQuote(req, res, quoteId);
+      if (!quote) return;
+
+      const lines = await prisma.travelQuoteLine.findMany({
+        where: { quoteId, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+      res.json({ lines, total: lines.length });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] list lines error:", e.message);
+      res.status(500).json({ error: "Failed to list quote lines" });
+    }
+  },
+);
+
+// POST /api/travel/quotes/:id/lines — ADMIN/MANAGER only.
+// Required: description, unitPrice. Optional: lineType (default "other"),
+// quantity (default 1), currency (default quote currency), supplierId,
+// sortOrder, notes.
+router.post(
+  "/quotes/:id/lines",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const quoteId = parseInt(req.params.id, 10);
+      const quote = await loadParentQuote(req, res, quoteId);
+      if (!quote) return;
+
+      const {
+        lineType, description, quantity, unitPrice,
+        currency, supplierId, sortOrder, notes,
+      } = req.body || {};
+
+      if (!description || typeof description !== "string" || !description.trim()) {
+        return res.status(400).json({
+          error: "description is required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      assertValidLineType(lineType);
+      const qty = parsePositiveInt(quantity, "quantity", 1);
+      const unit = parsePositiveDecimal(unitPrice, "unitPrice");
+      const amount = qty * unit;
+
+      let supplierIdInt = null;
+      if (supplierId != null && supplierId !== "") {
+        supplierIdInt = parseInt(supplierId, 10);
+        if (!Number.isFinite(supplierIdInt)) {
+          return res.status(400).json({
+            error: "supplierId must be a number",
+            code: "INVALID_SUPPLIER_ID",
+          });
+        }
+      }
+
+      const created = await prisma.travelQuoteLine.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          quoteId,
+          lineType: lineType || "other",
+          description: description.trim(),
+          quantity: qty,
+          unitPrice: unit,
+          amount,
+          currency: currency ? String(currency) : quote.currency,
+          supplierId: supplierIdInt,
+          sortOrder: Number.isFinite(parseInt(sortOrder, 10))
+            ? parseInt(sortOrder, 10) : 0,
+          notes: notes ? String(notes) : null,
+        },
+      });
+
+      await recomputeQuoteTotal(quoteId, req.travelTenant.id);
+
+      await writeAudit(
+        "TravelQuoteLine",
+        "CREATE",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          quoteId,
+          lineType: created.lineType,
+          amount: String(created.amount),
+        },
+      );
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] create line error:", e.message);
+      res.status(500).json({ error: "Failed to create line" });
+    }
+  },
+);
+
+// PUT /api/travel/quotes/:id/lines/:lineId — ADMIN/MANAGER only.
+router.put(
+  "/quotes/:id/lines/:lineId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const quoteId = parseInt(req.params.id, 10);
+      const lineId = parseInt(req.params.lineId, 10);
+      if (!Number.isFinite(lineId)) {
+        return res.status(400).json({ error: "lineId must be a number", code: "INVALID_LINE_ID" });
+      }
+      const quote = await loadParentQuote(req, res, quoteId);
+      if (!quote) return;
+
+      const existing = await prisma.travelQuoteLine.findFirst({
+        where: { id: lineId, quoteId, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Line not found", code: "LINE_NOT_FOUND" });
+      }
+
+      const data = {};
+      const {
+        lineType, description, quantity, unitPrice,
+        currency, supplierId, sortOrder, notes,
+      } = req.body || {};
+
+      if (lineType !== undefined) {
+        assertValidLineType(lineType);
+        data.lineType = lineType;
+      }
+      if (description !== undefined) {
+        if (typeof description !== "string" || !description.trim()) {
+          return res.status(400).json({
+            error: "description must be non-empty",
+            code: "MISSING_FIELDS",
+          });
+        }
+        data.description = description.trim();
+      }
+      const nextQty = quantity !== undefined
+        ? parsePositiveInt(quantity, "quantity", existing.quantity)
+        : existing.quantity;
+      const nextUnit = unitPrice !== undefined
+        ? parsePositiveDecimal(unitPrice, "unitPrice")
+        : Number(existing.unitPrice);
+      if (quantity !== undefined) data.quantity = nextQty;
+      if (unitPrice !== undefined) data.unitPrice = nextUnit;
+      // Recompute amount whenever either qty or unitPrice changed.
+      if (quantity !== undefined || unitPrice !== undefined) {
+        data.amount = nextQty * nextUnit;
+      }
+      if (currency !== undefined) data.currency = String(currency);
+      if (supplierId !== undefined) {
+        if (supplierId === null || supplierId === "") {
+          data.supplierId = null;
+        } else {
+          const sid = parseInt(supplierId, 10);
+          if (!Number.isFinite(sid)) {
+            return res.status(400).json({
+              error: "supplierId must be a number",
+              code: "INVALID_SUPPLIER_ID",
+            });
+          }
+          data.supplierId = sid;
+        }
+      }
+      if (sortOrder !== undefined) {
+        const so = parseInt(sortOrder, 10);
+        if (!Number.isFinite(so)) {
+          return res.status(400).json({
+            error: "sortOrder must be a number",
+            code: "INVALID_SORT_ORDER",
+          });
+        }
+        data.sortOrder = so;
+      }
+      if (notes !== undefined) data.notes = notes === null ? null : String(notes);
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+
+      const updated = await prisma.travelQuoteLine.update({
+        where: { id: lineId },
+        data,
+      });
+
+      await recomputeQuoteTotal(quoteId, req.travelTenant.id);
+
+      await writeAudit(
+        "TravelQuoteLine",
+        "UPDATE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { quoteId, fields: Object.keys(data) },
+      );
+
+      res.json(updated);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] update line error:", e.message);
+      res.status(500).json({ error: "Failed to update line" });
+    }
+  },
+);
+
+// DELETE /api/travel/quotes/:id/lines/:lineId — ADMIN/MANAGER only.
+router.delete(
+  "/quotes/:id/lines/:lineId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const quoteId = parseInt(req.params.id, 10);
+      const lineId = parseInt(req.params.lineId, 10);
+      if (!Number.isFinite(lineId)) {
+        return res.status(400).json({ error: "lineId must be a number", code: "INVALID_LINE_ID" });
+      }
+      const quote = await loadParentQuote(req, res, quoteId);
+      if (!quote) return;
+
+      const existing = await prisma.travelQuoteLine.findFirst({
+        where: { id: lineId, quoteId, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Line not found", code: "LINE_NOT_FOUND" });
+      }
+
+      await writeAudit(
+        "TravelQuoteLine",
+        "DELETE",
+        lineId,
+        req.user.userId,
+        req.travelTenant.id,
+        { quoteId, lineType: existing.lineType, amount: String(existing.amount) },
+      );
+
+      await prisma.travelQuoteLine.delete({ where: { id: lineId } });
+      await recomputeQuoteTotal(quoteId, req.travelTenant.id);
+
+      res.status(204).end();
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] delete line error:", e.message);
+      res.status(500).json({ error: "Failed to delete line" });
+    }
+  },
+);
+
 // POST /api/travel/quotes/:id/duplicate — ADMIN/MANAGER only.
 //
 // Copies an existing TravelQuote row into a fresh DRAFT row under the
@@ -419,6 +776,32 @@ router.post(
         },
       });
 
+      // Clone line items from source quote into the duplicate. Composite
+      // quotes (with line items) are duplicated as a complete unit —
+      // operators copying a TMC trip package across to RFU expect the
+      // hotel/flight/visa breakdown to come with it.
+      const sourceLines = await prisma.travelQuoteLine.findMany({
+        where: { quoteId: source.id, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+      if (sourceLines.length > 0) {
+        await prisma.travelQuoteLine.createMany({
+          data: sourceLines.map((l) => ({
+            tenantId: req.travelTenant.id,
+            quoteId: created.id,
+            lineType: l.lineType,
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            amount: l.amount,
+            currency: l.currency,
+            supplierId: l.supplierId,
+            sortOrder: l.sortOrder,
+            notes: l.notes,
+          })),
+        });
+      }
+
       await writeAudit(
         "TravelQuote",
         "TRAVEL_QUOTE_DUPLICATED",
@@ -430,6 +813,7 @@ router.post(
           newId: created.id,
           subBrand: created.subBrand,
           contactId: created.contactId,
+          linesCloned: sourceLines.length,
         },
       );
 

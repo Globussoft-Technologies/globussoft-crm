@@ -48,6 +48,18 @@ prisma.travelQuote = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+// slice 3: line-item clone path inside duplicate handler reads/writes
+// travelQuoteLine. Default empty findMany → no clone path executed,
+// keeping the slice 1 contract tests unchanged. The dedicated lines
+// test (travel-quote-lines.test.js) exercises the clone branch.
+prisma.travelQuoteLine = {
+  findMany: vi.fn().mockResolvedValue([]),
+  findFirst: vi.fn(),
+  create: vi.fn(),
+  createMany: vi.fn(),
+  update: vi.fn(),
+  delete: vi.fn(),
+};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1,
@@ -124,6 +136,8 @@ beforeEach(() => {
   prisma.travelQuote.create.mockReset();
   prisma.travelQuote.update.mockReset();
   prisma.travelQuote.delete.mockReset();
+  prisma.travelQuoteLine.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelQuoteLine.createMany.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });

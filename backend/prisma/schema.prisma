@@ -168,6 +168,7 @@ model Tenant {
   // SUPPLIER_MASTER} DD-5.1 [RESOLVED 2026-05-24]) — fork models alongside
   // the generic Quote / Invoice / Vendor. See model docs at bottom of file.
   travelQuotes             TravelQuote[]
+  travelQuoteLines         TravelQuoteLine[]
   travelInvoices           TravelInvoice[]
   travelSuppliers          TravelSupplier[]
   // TMC curriculum→destination mapping (PRD_TMC_CURRICULUM_MAPPING PC-1
@@ -4838,21 +4839,60 @@ model TripMicrositeOtp {
 // (tenantId, subBrand). The voyagrAuth + apiKeyAuth.requireSubBrandMatch
 // helpers enforce sub-brand isolation at the route layer.
 model TravelQuote {
-  id          Int             @id @default(autoincrement())
-  tenantId    Int             @default(1)
+  id          Int               @id @default(autoincrement())
+  tenantId    Int               @default(1)
   subBrand    String
   contactId   Int
-  status      String          @default("Draft") // Draft | Sent | Accepted | Rejected
-  totalAmount Decimal?        @db.Decimal(15, 2)
-  currency    String          @default("INR")
+  status      String            @default("Draft") // Draft | Sent | Accepted | Rejected
+  totalAmount Decimal?          @db.Decimal(15, 2)
+  currency    String            @default("INR")
   validUntil  DateTime?
+  lines       TravelQuoteLine[]
   invoices    TravelInvoice[]
-  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
+}
+
+// PRD_TRAVEL_QUOTE_BUILDER §3.2 — line-item composition.
+//
+// Stores the composite line items that make up a quote (hotel rooms,
+// flight segments, transport, visa fees, ad-hoc services). Each row
+// carries its own lineType for downstream supplier-PO routing + tax
+// classification (DD-5.3, pending product call). Amount is stored
+// derived (quantity * unitPrice) at write time so the operator UI
+// + PDF render don't need to recompute on every read.
+//
+// supplierId is optional — set when the operator has picked a vendor
+// for that line (so supplier-payable ledgers can be backfilled).
+// sortOrder controls display order in the quote PDF + builder UI.
+//
+// onDelete: Cascade on quoteId — if the parent quote is hard-deleted
+// (TravelQuote.delete is a hard-delete per route comment at the
+// DELETE handler), the line rows go with it.
+model TravelQuoteLine {
+  id          Int         @id @default(autoincrement())
+  tenantId    Int         @default(1)
+  quoteId     Int
+  lineType    String      @default("other") // hotel | flight | transport | visa | service | other
+  description String
+  quantity    Int         @default(1)
+  unitPrice   Decimal     @db.Decimal(15, 2)
+  amount      Decimal     @db.Decimal(15, 2)
+  currency    String      @default("INR")
+  supplierId  Int?
+  sortOrder   Int         @default(0)
+  notes       String?     @db.Text
+  quote       TravelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([tenantId, quoteId])
+  @@index([quoteId, sortOrder])
 }
 
 model TravelInvoice {

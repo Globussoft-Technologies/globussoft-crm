@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Cross-tenant IDOR probe — GH #919 slices 1 + 2 + 3.
+ * Cross-tenant IDOR probe — GH #919 slices 1 + 2 + 3 + 4.
  *
  * Issue #919's remediation: "Add a CI test suite: for every /api/* route,
  * seed two tenants A and B with one record each, then call the route with
@@ -11,13 +11,24 @@
  * authored, including the two routes that #5c48de2a unblocked by adding
  * their missing app.use() mounts (flyer-templates already covered in
  * slice 1; trips + diagnostics + suppliers + cost-master + rfu-profiles
- * + diagnostic-banks are the new sweep). Slice 3 (this commit) extends
+ * + diagnostic-banks are the new sweep). Slice 3 (3a3b05fb) extends
  * the cross-vertical sweep from GET probes to MUTATION probes — PUT /
  * PATCH / DELETE / POST against existing /:id endpoints on Travel
  * routes. Mutation IDOR is the worst-case path because it can CORRUPT
- * or DELETE cross-tenant data, not just leak it. Future slices expand
- * to additional /api/* routes (Patient, Visit, Prescription, Deal,
- * Invoice, etc.) on the same pattern.
+ * or DELETE cross-tenant data, not just leak it. Slice 4 (this commit)
+ * broadens the audit BEYOND the Travel namespace to two of the highest-
+ * value cross-vertical models — Deal (generic-tenant pipeline data) and
+ * Contact mutations (extending slice 1's contact GET probes to PUT and
+ * DELETE). Deal is enumerated because it's the single largest revenue-
+ * proxy entity in the generic vertical (the seed has $5B+ of closed
+ * revenue across 375 won deals — see CLAUDE.md #567 entry) and a
+ * missed tenant filter would let a wellness admin read or corrupt
+ * generic pipeline value. The /api/quotes/:id (CPQ) endpoint named in
+ * the slice-4 prompt is NOT covered here because cpq.js routes are
+ * scoped as `/quotes/:dealId` (a deal-relation lookup), not
+ * `/quotes/:id` — the prompt's verbatim claim does not match reality,
+ * so we pin reality (deals.js is the right surface for the same
+ * generic-tenant IDOR class).
  *
  * Slice 3 drift note (per .claude/skills/verifying-gap-card-claims/):
  * the slice-3 prompt named `PUT /api/travel/quotes/:id`, `PATCH
@@ -212,13 +223,21 @@ async function patch(request, token, path, body) {
 // Track contact ids we create so afterAll() can sweep them. Each entry
 // is { token, id } — token used to delete from the same tenant.
 const createdContacts = [];
+// Slice 4 — same shape for Deal ids created during the cross-tenant
+// mutation probes. Sweep on the SAME token that created them.
+const createdDeals = [];
 
 test.afterAll(async ({ request }) => {
-  const deadline = Date.now() + 40_000;
+  const deadline = Date.now() + 60_000;
   for (const { token, id } of createdContacts) {
     if (Date.now() > deadline) break;
     if (!token) continue;
     await del(request, token, `/api/contacts/${id}`).catch(() => {});
+  }
+  for (const { token, id } of createdDeals) {
+    if (Date.now() > deadline) break;
+    if (!token) continue;
+    await del(request, token, `/api/deals/${id}`).catch(() => {});
   }
 });
 
@@ -234,6 +253,24 @@ async function createContact(request, token, label) {
   const body = await res.json();
   expect(body.id, `contact create response missing id`).toBeTruthy();
   createdContacts.push({ token, id: body.id });
+  return body.id;
+}
+
+// Slice 4 helper — create a Deal under the supplied admin token. The
+// id becomes the "victim deal" for cross-tenant READ + WRITE + DELETE
+// probes. We use the simplest possible body — title + stage `lead`
+// (the seed-default open stage from the ALLOWED_DEAL_STAGES enum in
+// routes/deals.js:208). No contact link, no amount, so cleanup is
+// trivial and the probe is decoupled from contact-relation drift.
+async function createDeal(request, token, label) {
+  const res = await post(request, token, "/api/deals", {
+    title: `${RUN_TAG} ${label}`,
+    stage: "lead",
+  });
+  expect(res.status(), `create deal (${label}): ${await res.text()}`).toBe(201);
+  const body = await res.json();
+  expect(body.id, `deal create response missing id`).toBeTruthy();
+  createdDeals.push({ token, id: body.id });
   return body.id;
 }
 
@@ -612,6 +649,222 @@ test.describe("IDOR #919 slice 3 — /api/travel/* cross-vertical mutations (403
   });
 });
 
+// ─── Slice 4 — Non-Travel cross-tenant probes (Deal + Contact) ───────
+// The slice-1+2+3 sweep covered the Travel namespace (vertical-guard
+// path: 403 WRONG_VERTICAL) + the Contact GET path (tenant-filter path:
+// 404). Slice 4 broadens the audit to two more cross-vertical models:
+//
+//   (a) Deal — generic-tenant pipeline data. Highest-value entity by
+//       revenue proxy (CLAUDE.md #567 entry: ~$5B closed across 375
+//       won deals in the seed). A missed tenant filter here would let
+//       a wellness admin READ generic pipeline value (information
+//       leak) or PUT/DELETE on it (corruption / deletion). The deals
+//       handlers correctly use prisma.deal.findFirst({ where: { id,
+//       tenantId }}) — pinned below so a future regression that drops
+//       the tenant filter is caught.
+//
+//   (b) Contact mutations — slice 1 covered the GET path; slice 4
+//       extends to PUT (update) and DELETE (soft-delete). PUT is the
+//       corruption vector (overwrite a victim contact's fields);
+//       DELETE is the deletion vector (soft-delete a victim contact).
+//       Both must 404 (canonical tenant-filter contract).
+//
+// Each probe creates a real victim row under the OWNER tenant's admin
+// (so the id is guaranteed to exist), then probes from the ATTACKER
+// tenant. A 200 / 204 anywhere here is the true IDOR leak; we assert
+// 404 to pin the canonical "tenant filter in WHERE clause" contract.
+
+test.describe("IDOR #919 slice 4 — non-Travel cross-tenant (Deal + Contact mutations)", () => {
+  test("wellness admin GET /api/deals/:id (generic victim) → 404 (read leak vector)", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    const victimId = await createDeal(request, generic, "deal-read-victim");
+
+    const res = await get(request, wellness, `/api/deals/${victimId}`);
+    expect(
+      res.status(),
+      `wellness admin must not read generic Deal id=${victimId}: got ${res.status()} (${await res.text()})`,
+    ).toBe(404);
+  });
+
+  test("wellness admin PUT /api/deals/:id (generic victim) → 404 (corruption vector)", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    const victimId = await createDeal(request, generic, "deal-put-victim");
+
+    // Attempt to flip the victim's title + stage. If the tenant filter
+    // is missing, this would CORRUPT a generic-tenant deal's data.
+    const res = await put(request, wellness, `/api/deals/${victimId}`, {
+      title: "IDOR-CORRUPTION-ATTEMPT-must-never-land",
+      stage: "won",
+    });
+    expect(
+      res.status(),
+      `wellness admin must not PUT generic Deal id=${victimId}: got ${res.status()} (${await res.text()})`,
+    ).toBe(404);
+
+    // Sanity: read the deal back from the OWNER tenant — title must
+    // be unchanged. Pins the contract end-to-end: the 404 above truly
+    // means no write happened (not just "status changed but data
+    // touched"). This is the load-bearing assertion for slice 4.
+    const readBack = await get(request, generic, `/api/deals/${victimId}`);
+    expect(readBack.status()).toBe(200);
+    const dealAfter = await readBack.json();
+    expect(
+      dealAfter.title,
+      `cross-tenant PUT must NOT have corrupted victim deal title`,
+    ).toBe(`${RUN_TAG} deal-put-victim`);
+    expect(
+      dealAfter.stage,
+      `cross-tenant PUT must NOT have corrupted victim deal stage`,
+    ).toBe("lead");
+  });
+
+  test("wellness admin DELETE /api/deals/:id (generic victim) → 404 (deletion vector)", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    const victimId = await createDeal(request, generic, "deal-del-victim");
+
+    const res = await del(request, wellness, `/api/deals/${victimId}`);
+    expect(
+      res.status(),
+      `wellness admin must not DELETE generic Deal id=${victimId}: got ${res.status()} (${await res.text()})`,
+    ).toBe(404);
+
+    // Sanity: read the deal back from the OWNER tenant — must still
+    // be live (not soft-deleted). The deals route's DELETE flips
+    // deletedAt; if the tenant filter is missing, deletedAt would be
+    // populated on the victim.
+    const readBack = await get(request, generic, `/api/deals/${victimId}`);
+    expect(readBack.status()).toBe(200);
+    const dealAfter = await readBack.json();
+    expect(
+      dealAfter.deletedAt,
+      `cross-tenant DELETE must NOT have flipped deletedAt on the victim`,
+    ).toBeFalsy();
+  });
+
+  test("travel admin PUT /api/deals/:id (generic victim) → 404 (cross-vertical corruption vector)", async ({
+    request,
+  }) => {
+    // Travel admin attacking a generic-tenant Deal hits the same
+    // tenant-filter 404 — Deal is a generic-and-wellness model (not a
+    // travel one), so the vertical guard is NOT in play here. Pins
+    // that the tenant filter alone is sufficient when the model
+    // doesn't live in a verticalised namespace.
+    const generic = await getGenericAdmin(request);
+    const travel = await getTravelAdmin(request);
+    if (!generic || !travel) {
+      test.skip(true, "generic + travel admin tokens both required");
+    }
+    const victimId = await createDeal(request, generic, "deal-put-travel-attacker");
+
+    const res = await put(request, travel, `/api/deals/${victimId}`, {
+      title: "IDOR-TRAVEL-ATTACKER-must-never-land",
+    });
+    expect(
+      res.status(),
+      `travel admin must not PUT generic Deal id=${victimId}: got ${res.status()} (${await res.text()})`,
+    ).toBe(404);
+  });
+
+  test("wellness admin PUT /api/contacts/:id (generic victim) → 404 (contact corruption vector)", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    const victimId = await createContact(request, generic, "contact-put-victim");
+
+    const res = await put(request, wellness, `/api/contacts/${victimId}`, {
+      name: "IDOR-CONTACT-CORRUPTION-ATTEMPT",
+    });
+    expect(
+      res.status(),
+      `wellness admin must not PUT generic Contact id=${victimId}: got ${res.status()} (${await res.text()})`,
+    ).toBe(404);
+
+    // Sanity: name unchanged on the owner-side read.
+    const readBack = await get(request, generic, `/api/contacts/${victimId}`);
+    expect(readBack.status()).toBe(200);
+    const contactAfter = await readBack.json();
+    expect(
+      contactAfter.name,
+      `cross-tenant PUT must NOT have corrupted victim contact name`,
+    ).toBe(`${RUN_TAG} contact-put-victim`);
+  });
+
+  test("wellness admin DELETE /api/contacts/:id (generic victim) → 404 (contact deletion vector)", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    const victimId = await createContact(request, generic, "contact-del-victim");
+
+    const res = await del(request, wellness, `/api/contacts/${victimId}`);
+    expect(
+      res.status(),
+      `wellness admin must not DELETE generic Contact id=${victimId}: got ${res.status()} (${await res.text()})`,
+    ).toBe(404);
+
+    // Sanity: deletedAt unchanged on the owner-side read.
+    const readBack = await get(request, generic, `/api/contacts/${victimId}`);
+    expect(readBack.status()).toBe(200);
+    const contactAfter = await readBack.json();
+    expect(
+      contactAfter.deletedAt,
+      `cross-tenant DELETE must NOT have flipped deletedAt on the victim contact`,
+    ).toBeFalsy();
+  });
+
+  // Reverse-direction probe: generic admin attacks a wellness-tenant
+  // Deal. Identical 404 contract — pins the tenant filter in BOTH
+  // directions so a future regression that only adds the filter to
+  // ONE direction (e.g. wellness → generic but not generic →
+  // wellness) is caught.
+  test("generic admin DELETE /api/deals/:id (wellness victim) → 404 (reverse-direction deletion vector)", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness) {
+      test.skip(true, "generic + wellness admin tokens both required");
+    }
+    const victimId = await createDeal(request, wellness, "deal-reverse-del-victim");
+
+    const res = await del(request, generic, `/api/deals/${victimId}`);
+    expect(
+      res.status(),
+      `generic admin must not DELETE wellness Deal id=${victimId}: got ${res.status()} (${await res.text()})`,
+    ).toBe(404);
+
+    const readBack = await get(request, wellness, `/api/deals/${victimId}`);
+    expect(readBack.status()).toBe(200);
+    const dealAfter = await readBack.json();
+    expect(dealAfter.deletedAt).toBeFalsy();
+  });
+});
+
 // ─── Auth gate ───────────────────────────────────────────────────────
 // Defense-in-depth: probes without ANY token should never 200, regardless
 // of vertical. The global auth guard 401/403s before requireTravelTenant.
@@ -688,6 +941,41 @@ test.describe("IDOR #919 — auth gate (no token never 200s)", () => {
     const res = await request.post(`${BASE_URL}/api/travel/itineraries/1/accept`, {
       data: {},
       headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  // Slice 4 — auth-gate sweep for the non-Travel mutation surface.
+  // Mirrors the slice-3 mutation auth-gate but on /api/deals/:id and
+  // /api/contacts/:id. No token must never 2xx on these mutations.
+  test("PUT /api/deals/1 without token → 401/403", async ({ request }) => {
+    const res = await request.put(`${BASE_URL}/api/deals/1`, {
+      data: { title: "no-token-probe" },
+      headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test("DELETE /api/deals/1 without token → 401/403", async ({ request }) => {
+    const res = await request.delete(`${BASE_URL}/api/deals/1`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test("PUT /api/contacts/1 without token → 401/403", async ({ request }) => {
+    const res = await request.put(`${BASE_URL}/api/contacts/1`, {
+      data: { name: "no-token-probe" },
+      headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test("DELETE /api/contacts/1 without token → 401/403", async ({ request }) => {
+    const res = await request.delete(`${BASE_URL}/api/contacts/1`, {
       timeout: REQUEST_TIMEOUT,
     });
     expect([401, 403]).toContain(res.status());

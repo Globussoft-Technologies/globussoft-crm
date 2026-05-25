@@ -459,6 +459,182 @@ function normalizeMetaLeadPayload(body) {
 }
 
 /**
+ * Slice 13 — Normalize an IndiaMART CRM Listing API payload into the route's
+ * canonical body shape (PRD §3.4.2 marketplace backpressure + §1.1's
+ * launch-critical marketplace channel cluster).
+ *
+ * IndiaMART delivers each lead row as a `SENDER_*` / `QUERY_*` SCREAMING_SNAKE
+ * dict from `https://mapi.indiamart.com/wservce/crm/crmListing/v2/`:
+ *
+ *   {
+ *     "UNIQUE_QUERY_ID": "1234567890",
+ *     "QUERY_ID": "Q-1",
+ *     "SENDER_NAME": "Asha Verma",
+ *     "SENDER_EMAIL": "asha@example.com",
+ *     "SENDER_MOBILE": "+919876543210",   // or SENDER_PHONE
+ *     "SENDER_COMPANY": "Acme Travels",
+ *     "SENDER_CITY": "Mumbai",
+ *     "SENDER_STATE": "MH",
+ *     "SENDER_COUNTRY_ISO": "IN",
+ *     "QUERY_PRODUCT_NAME": "Umrah Package",
+ *     "QUERY_MESSAGE": "Need a quote",
+ *     "QUERY_TYPE": "B",
+ *     "QUERY_TIME": "2026-05-25 10:00:00"
+ *   }
+ *
+ * The route expects flat `{ firstName?, lastName?, name?, email?, phone?,
+ * subBrand?, metaJson? }` (see slice 1 docstring + slice 12 Meta normalizer
+ * for the same shape contract). This helper bridges the two so the route's
+ * channel taxonomy can grow without forcing the handler to sprout per-vendor
+ * branches.
+ *
+ * Behavior (mirrors normalizeMetaLeadPayload's discipline):
+ *   - Detection: the helper looks for the IndiaMART signature key set
+ *     (`UNIQUE_QUERY_ID` OR `QUERY_ID` OR `SENDER_NAME` / `SENDER_MOBILE` /
+ *     `SENDER_EMAIL`). When NONE of these are present, the helper returns
+ *     the body untouched (no-op for pre-normalized callers + non-IndiaMART
+ *     payloads).
+ *   - Maps the known IndiaMART field names to canonical fields:
+ *       SENDER_NAME                    → name
+ *       SENDER_EMAIL                   → email
+ *       SENDER_MOBILE | SENDER_PHONE   → phone
+ *       SENDER_COMPANY                 → company
+ *   - Caller-supplied flat fields WIN (so a pre-normalized payload that also
+ *     carries `SENDER_*` keys — defensive producer — keeps the explicit
+ *     values).
+ *   - Preserves IndiaMART attribution + lead-context tokens under metaJson:
+ *       UNIQUE_QUERY_ID / QUERY_ID                  (lead identity)
+ *       QUERY_PRODUCT_NAME / QUERY_MESSAGE          (lead intent)
+ *       QUERY_TYPE / QUERY_TIME                     (lead metadata)
+ *       SENDER_CITY / SENDER_STATE / SENDER_COUNTRY_ISO  (geo)
+ *   - Unknown SCREAMING_SNAKE keys (any field starting with SENDER_ or
+ *     QUERY_ that didn't map to a canonical field or known meta token) are
+ *     preserved under `metaJson.extraFields` so ops can debug missing
+ *     mappings without losing data.
+ *   - The original SCREAMING_SNAKE keys are stripped from the output so the
+ *     route handler doesn't accidentally ingest them as Contact-shaped
+ *     fields (mirrors the slice-12 `delete field_data` step).
+ *
+ * Pure helper — IO-free, no Prisma. Returns a NEW object; does not mutate
+ * the input body.
+ *
+ * @param {object} body  raw request body (IndiaMART webhook row OR
+ *                       pre-normalized flat shape)
+ * @returns {object}     canonical flat body the route handler expects
+ */
+function normalizeIndiamartLeadPayload(body) {
+  if (!body || typeof body !== "object") return body;
+
+  // Detection — IndiaMART rows always carry at least one of these. Without
+  // them, the helper is a no-op so pre-normalized callers + non-IndiaMART
+  // payloads pass through untouched.
+  const SIGNATURE_KEYS = [
+    "UNIQUE_QUERY_ID",
+    "QUERY_ID",
+    "SENDER_NAME",
+    "SENDER_MOBILE",
+    "SENDER_PHONE",
+    "SENDER_EMAIL",
+  ];
+  const isIndiamartShape = SIGNATURE_KEYS.some((k) =>
+    Object.prototype.hasOwnProperty.call(body, k),
+  );
+  if (!isIndiamartShape) return body;
+
+  // Map IndiaMART field names → canonical route fields. Multiple IndiaMART
+  // tokens can land on the same canonical field (SENDER_MOBILE +
+  // SENDER_PHONE both → phone) because the vendor's payload schema has
+  // historically shipped phone under either key depending on the form-type.
+  const FIELD_MAP = {
+    SENDER_NAME: "name",
+    SENDER_EMAIL: "email",
+    SENDER_MOBILE: "phone",
+    SENDER_PHONE: "phone",
+    SENDER_COMPANY: "company",
+  };
+
+  // IndiaMART attribution + lead-context tokens that downstream attribution
+  // rollups need to read without re-querying IndiaMART. Mirrors the Meta
+  // normalizer's metaTokens block.
+  const META_TOKENS = [
+    "UNIQUE_QUERY_ID",
+    "QUERY_ID",
+    "QUERY_PRODUCT_NAME",
+    "QUERY_MESSAGE",
+    "QUERY_TYPE",
+    "QUERY_TIME",
+    "SENDER_CITY",
+    "SENDER_STATE",
+    "SENDER_COUNTRY_ISO",
+  ];
+
+  const extracted = {};
+  const extraFields = {};
+  const metaTokens = {};
+
+  for (const [k, v] of Object.entries(body)) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === "string" && v.trim() === "") continue;
+
+    const canonical = FIELD_MAP[k];
+    if (canonical) {
+      if (extracted[canonical] === undefined) {
+        extracted[canonical] = v;
+      }
+      continue;
+    }
+    if (META_TOKENS.includes(k)) {
+      metaTokens[k] = v;
+      continue;
+    }
+    // Unmapped SCREAMING_SNAKE key starting with SENDER_ or QUERY_ — preserve
+    // under extraFields so ops can debug. Plain camelCase / snake_case keys
+    // that aren't IndiaMART tokens (e.g. caller-supplied `subBrand`,
+    // `tenantSlug`) are NOT shoveled into extraFields — they survive
+    // untouched on the output body.
+    if (/^(SENDER_|QUERY_)/.test(k)) {
+      extraFields[k] = v;
+    }
+  }
+
+  const hasMetaTokens = Object.keys(metaTokens).length > 0;
+  const hasExtras = Object.keys(extraFields).length > 0;
+
+  // Shallow-clone the body, strip the IndiaMART-shaped keys we've consumed
+  // (so the route handler doesn't ingest SENDER_NAME etc. as a
+  // Contact-shaped field), then layer extracted-canonical fields BEHIND
+  // caller-supplied flat fields (caller wins).
+  const out = { ...body };
+  for (const k of Object.keys(FIELD_MAP)) delete out[k];
+  for (const k of META_TOKENS) delete out[k];
+  for (const k of Object.keys(extraFields)) delete out[k];
+
+  for (const [k, v] of Object.entries(extracted)) {
+    if (out[k] === undefined || out[k] === null || out[k] === "") {
+      out[k] = v;
+    }
+  }
+
+  if (hasMetaTokens || hasExtras) {
+    const existingMeta =
+      out.metaJson && typeof out.metaJson === "object" ? out.metaJson : {};
+    const mergedMeta = { ...existingMeta };
+    for (const [k, v] of Object.entries(metaTokens)) {
+      if (mergedMeta[k] === undefined) mergedMeta[k] = v;
+    }
+    if (hasExtras) {
+      mergedMeta.extraFields = {
+        ...(existingMeta.extraFields || {}),
+        ...extraFields,
+      };
+    }
+    out.metaJson = mergedMeta;
+  }
+
+  return out;
+}
+
+/**
  * Dispatch verification based on channel.
  *
  * @param {string} channel  voyagr|webform|whatsapp|ads|adsgpt|manual
@@ -500,5 +676,6 @@ module.exports = {
   verifyByChannel,
   classifyInboundJunk,
   normalizeMetaLeadPayload,
+  normalizeIndiamartLeadPayload,
   SPAM_PATTERNS,
 };

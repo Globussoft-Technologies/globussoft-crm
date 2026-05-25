@@ -730,3 +730,231 @@ describe("normalizeMetaLeadPayload — Meta lead-ads webhook → canonical body 
     expect(out.metaJson).toBeUndefined();
   });
 });
+
+// ─── Slice 13 — normalizeIndiamartLeadPayload (IndiaMART CRM Listing API) ──
+//
+// Pins the IndiaMART → canonical-body transform. Mirrors the slice-12 Meta
+// normalizer's discipline: detect the vendor shape via signature keys, map
+// SENDER_*/QUERY_* to canonical fields, preserve metadata on metaJson, leave
+// non-IndiaMART bodies untouched. Pure helper, IO-free, immutable input.
+//
+// Slice 13 ships the lib only; the route does NOT wire it in yet (marketplace
+// channels stay on the existing marketplaceEngine cron until the per-channel
+// refactor lands in a later slice — same lib-first / route-wire-later pattern
+// that slice 3 → slice 4 followed).
+
+const { normalizeIndiamartLeadPayload } = await import(
+  "../../lib/inboundLeadVerification.js"
+);
+
+describe("normalizeIndiamartLeadPayload — IndiaMART CRM Listing API → canonical body (slice 13)", () => {
+  test("happy path: SENDER_* + QUERY_* shape → flat canonical fields + metaJson", () => {
+    const im = {
+      UNIQUE_QUERY_ID: "1234567890",
+      QUERY_ID: "Q-1",
+      SENDER_NAME: "Asha Verma",
+      SENDER_EMAIL: "asha@example.com",
+      SENDER_MOBILE: "+919876543210",
+      SENDER_COMPANY: "Acme Travels",
+      SENDER_CITY: "Mumbai",
+      SENDER_STATE: "MH",
+      SENDER_COUNTRY_ISO: "IN",
+      QUERY_PRODUCT_NAME: "Umrah Package",
+      QUERY_MESSAGE: "Need a quote",
+      QUERY_TYPE: "B",
+      QUERY_TIME: "2026-05-25 10:00:00",
+    };
+
+    const out = normalizeIndiamartLeadPayload(im);
+
+    expect(out.name).toBe("Asha Verma");
+    expect(out.email).toBe("asha@example.com");
+    expect(out.phone).toBe("+919876543210");
+    expect(out.company).toBe("Acme Travels");
+    // The original SCREAMING_SNAKE keys are consumed (stripped from output)
+    // so the route handler never sees SENDER_NAME as a Contact-shaped field.
+    expect(out.SENDER_NAME).toBeUndefined();
+    expect(out.SENDER_EMAIL).toBeUndefined();
+    expect(out.SENDER_MOBILE).toBeUndefined();
+    expect(out.SENDER_COMPANY).toBeUndefined();
+    // IndiaMART attribution + lead-context tokens preserved on metaJson.
+    expect(out.metaJson).toMatchObject({
+      UNIQUE_QUERY_ID: "1234567890",
+      QUERY_ID: "Q-1",
+      QUERY_PRODUCT_NAME: "Umrah Package",
+      QUERY_MESSAGE: "Need a quote",
+      QUERY_TYPE: "B",
+      QUERY_TIME: "2026-05-25 10:00:00",
+      SENDER_CITY: "Mumbai",
+      SENDER_STATE: "MH",
+      SENDER_COUNTRY_ISO: "IN",
+    });
+  });
+
+  test("SENDER_PHONE alias also maps to phone (older IndiaMART payloads)", () => {
+    const out = normalizeIndiamartLeadPayload({
+      UNIQUE_QUERY_ID: "1",
+      SENDER_NAME: "Rohan",
+      SENDER_PHONE: "+919876543210",
+    });
+    expect(out.phone).toBe("+919876543210");
+  });
+
+  test("SENDER_MOBILE wins over SENDER_PHONE when both are present (mobile is newer convention)", () => {
+    const out = normalizeIndiamartLeadPayload({
+      SENDER_MOBILE: "+919876543210",
+      SENDER_PHONE: "+919999999999",
+    });
+    expect(out.phone).toBe("+919876543210");
+  });
+
+  test("caller-supplied flat field WINS over IndiaMART extraction", () => {
+    const out = normalizeIndiamartLeadPayload({
+      name: "Operator Override",
+      SENDER_NAME: "From IndiaMART",
+      SENDER_EMAIL: "im@example.com",
+    });
+    expect(out.name).toBe("Operator Override");
+    // Email had no caller override → IndiaMART wins.
+    expect(out.email).toBe("im@example.com");
+  });
+
+  test("caller-supplied empty string is treated as missing (IndiaMART wins)", () => {
+    const out = normalizeIndiamartLeadPayload({
+      name: "",
+      email: null,
+      SENDER_NAME: "From IndiaMART",
+      SENDER_EMAIL: "im@example.com",
+    });
+    expect(out.name).toBe("From IndiaMART");
+    expect(out.email).toBe("im@example.com");
+  });
+
+  test("unknown SENDER_/QUERY_ keys land under metaJson.extraFields", () => {
+    const out = normalizeIndiamartLeadPayload({
+      SENDER_NAME: "Asha",
+      QUERY_PRODUCT_NAME: "Umrah",
+      // These aren't in FIELD_MAP or META_TOKENS but start with SENDER_/QUERY_:
+      SENDER_PINCODE: "400001",
+      QUERY_CATEGORY: "Travel",
+    });
+    expect(out.name).toBe("Asha");
+    expect(out.metaJson?.extraFields).toEqual({
+      SENDER_PINCODE: "400001",
+      QUERY_CATEGORY: "Travel",
+    });
+  });
+
+  test("merges into existing metaJson without clobbering", () => {
+    const out = normalizeIndiamartLeadPayload({
+      metaJson: {
+        utm_source: "indiamart-organic",
+        extraFields: { pre_existing: "value" },
+      },
+      UNIQUE_QUERY_ID: "999",
+      SENDER_NAME: "Asha",
+      SENDER_PINCODE: "400001",
+    });
+    // Caller-supplied utm_source must survive.
+    expect(out.metaJson.utm_source).toBe("indiamart-organic");
+    // New tokens land alongside.
+    expect(out.metaJson.UNIQUE_QUERY_ID).toBe("999");
+    // Extra fields merge (caller's `pre_existing` + new `SENDER_PINCODE`).
+    expect(out.metaJson.extraFields).toEqual({
+      pre_existing: "value",
+      SENDER_PINCODE: "400001",
+    });
+  });
+
+  test("no IndiaMART signature keys → body returned untouched (other channels / pre-normalized callers)", () => {
+    const body = {
+      name: "Plain Caller",
+      email: "plain@example.com",
+      phone: "+919876543210",
+      subBrand: "rfu",
+      tenantSlug: "travel-stall",
+    };
+    const out = normalizeIndiamartLeadPayload(body);
+    expect(out).toBe(body);
+  });
+
+  test("non-object input → returned untouched", () => {
+    expect(normalizeIndiamartLeadPayload(null)).toBeNull();
+    expect(normalizeIndiamartLeadPayload(undefined)).toBeUndefined();
+    expect(normalizeIndiamartLeadPayload("string")).toBe("string");
+    expect(normalizeIndiamartLeadPayload(42)).toBe(42);
+  });
+
+  test("null / undefined / empty-string field values are skipped", () => {
+    const out = normalizeIndiamartLeadPayload({
+      UNIQUE_QUERY_ID: "1",
+      SENDER_NAME: null,
+      SENDER_EMAIL: "",
+      SENDER_MOBILE: undefined,
+      SENDER_COMPANY: "   ",
+      QUERY_PRODUCT_NAME: "Umrah",
+    });
+    // None of the empty/null sender fields contributed to extracted fields.
+    expect(out.name).toBeUndefined();
+    expect(out.email).toBeUndefined();
+    expect(out.phone).toBeUndefined();
+    expect(out.company).toBeUndefined();
+    // The non-empty meta tokens DID survive.
+    expect(out.metaJson).toMatchObject({
+      UNIQUE_QUERY_ID: "1",
+      QUERY_PRODUCT_NAME: "Umrah",
+    });
+  });
+
+  test("plain non-IndiaMART keys (tenantSlug / subBrand) survive untouched alongside extraction", () => {
+    const out = normalizeIndiamartLeadPayload({
+      tenantSlug: "travel-stall",
+      subBrand: "rfu",
+      SENDER_NAME: "Asha",
+      SENDER_EMAIL: "asha@example.com",
+    });
+    // Caller's plain camelCase keys survive — they're NOT IndiaMART tokens.
+    expect(out.tenantSlug).toBe("travel-stall");
+    expect(out.subBrand).toBe("rfu");
+    // Canonical fields still extracted.
+    expect(out.name).toBe("Asha");
+    expect(out.email).toBe("asha@example.com");
+    // Plain camelCase keys are NOT shoveled into extraFields.
+    expect(out.metaJson?.extraFields).toBeUndefined();
+  });
+
+  test("does not mutate the input body", () => {
+    const body = {
+      UNIQUE_QUERY_ID: "1",
+      SENDER_NAME: "Immutable",
+      QUERY_PRODUCT_NAME: "Umrah",
+    };
+    const snapshot = JSON.parse(JSON.stringify(body));
+    normalizeIndiamartLeadPayload(body);
+    expect(body).toEqual(snapshot);
+  });
+
+  test("no meta tokens AND no extras AND only canonical extractions → metaJson stays absent", () => {
+    const out = normalizeIndiamartLeadPayload({
+      SENDER_NAME: "Asha",
+      SENDER_EMAIL: "asha@example.com",
+      // No UNIQUE_QUERY_ID / QUERY_* tokens, no extra SENDER_/QUERY_ keys.
+    });
+    expect(out.name).toBe("Asha");
+    expect(out.email).toBe("asha@example.com");
+    expect(out.metaJson).toBeUndefined();
+  });
+
+  test("signature detection: lone QUERY_ID is sufficient to trigger normalization", () => {
+    // A producer that ships only QUERY_ID + canonical fields should still
+    // route through the helper (signature keys span both lead-id and
+    // sender-data prefixes so we catch both shapes).
+    const out = normalizeIndiamartLeadPayload({
+      QUERY_ID: "Q-only",
+      name: "Pre-normalized Asha",
+      email: "asha@example.com",
+    });
+    expect(out.name).toBe("Pre-normalized Asha");
+    expect(out.metaJson).toMatchObject({ QUERY_ID: "Q-only" });
+  });
+});

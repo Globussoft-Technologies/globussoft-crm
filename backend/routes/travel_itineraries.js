@@ -2239,4 +2239,183 @@ router.get("/itineraries/:id/versions", verifyToken, requireTravelTenant, async 
   }
 });
 
+// GET /api/travel/itineraries/:id/cost-breakdown.csv
+//
+// #907 slice 13 — downloadable spreadsheet view of the per-day cost
+// breakdown. The JSON sibling `GET /:id/day-costs` (slice 2 + slice 5)
+// returns the same numbers; this endpoint streams them as CSV so
+// operators can paste into a quote sheet, email to finance, or open in
+// Excel without round-tripping through the UI export-button cycle.
+//
+// Columns (one row per day):
+//   dayOffset, itemCount, totalCost, supplierCost, markupTotal,
+//   gstTotal, marginTotal, marginPct
+// plus a trailing TOTAL row spanning the trip.
+//
+// Half-up rounding inherited from computeDayCosts. marginTotal =
+// totalCost - supplierCost - gstTotal (mirrors the supplier-rollup
+// margin identity so the two reports reconcile). marginPct is blank
+// (not "Infinity") when totalCost = 0.
+//
+// CSV escape rules per RFC 4180: numeric cells unquoted; the empty
+// marginPct cell stays empty (no double-quote pair). Header line
+// matches the column list above exactly.
+//
+// Filename: `itinerary-<id>-cost-breakdown.csv` — pinned shape so
+// frontend tests can assert Content-Disposition without parsing.
+//
+// Sub-path placement is BEFORE any `/:id` catch-all (Express ordering
+// rule). The `.csv` suffix is a literal route token — Express treats
+// `/cost-breakdown.csv` as a single static segment, no extension
+// detection needed.
+//
+// Tenant + sub-brand guard delegated to loadItineraryWithGuard — same
+// 401 / 404 NOT_FOUND / 403 SUB_BRAND_DENIED contracts as siblings.
+//
+// PRD: docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §5.3 (Analytics export)
+// + §3.6(d) (pricing transparency).
+router.get(
+  "/itineraries/:id/cost-breakdown.csv",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const full = await prisma.itinerary.findFirst({
+        where: { id: itin.id, tenantId: req.travelTenant.id },
+        select: { id: true, startDate: true },
+      });
+      if (!full) {
+        return res
+          .status(404)
+          .json({ error: "Itinerary not found", code: "ITINERARY_NOT_FOUND" });
+      }
+
+      const items = await prisma.itineraryItem.findMany({
+        where: { itineraryId: full.id },
+        orderBy: { position: "asc" },
+      });
+
+      let tripStart;
+      if (req.query.tripStart) {
+        const overrideDate = new Date(String(req.query.tripStart));
+        if (Number.isFinite(overrideDate.getTime())) {
+          tripStart = overrideDate;
+        }
+      }
+      if (!tripStart && full.startDate) tripStart = new Date(full.startDate);
+
+      // Map ItineraryItem → helper input shape (same projection as
+      // the JSON day-costs endpoint — keeps the two surfaces in lockstep).
+      const helperItems = items.map((row) => {
+        let details = {};
+        if (row.detailsJson) {
+          try {
+            details = JSON.parse(row.detailsJson);
+          } catch {
+            /* malformed → fall through */
+          }
+        }
+        const cost =
+          row.totalPrice != null
+            ? Number(row.totalPrice)
+            : row.unitCost != null
+              ? Number(row.unitCost)
+              : 0;
+        const mapped = {
+          id: row.id,
+          itemType: row.itemType,
+          description: row.description,
+          cost,
+          unitCost: row.unitCost != null ? Number(row.unitCost) : null,
+          markup: row.markup != null ? Number(row.markup) : 0,
+          gstAmount: row.gstAmount != null ? Number(row.gstAmount) : 0,
+        };
+        if (typeof details.dayOffset === "number") mapped.dayOffset = details.dayOffset;
+        else if (typeof details.dayNumber === "number") mapped.dayNumber = details.dayNumber;
+        else if (details.date) mapped.date = details.date;
+        return mapped;
+      });
+
+      const result = computeDayCosts(helperItems, tripStart ? { tripStart } : {});
+
+      // Half-up to 2dp — matches helper's internal rounding so the two
+      // surfaces stay byte-identical for the same input.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      const header = [
+        "dayOffset",
+        "itemCount",
+        "totalCost",
+        "supplierCost",
+        "markupTotal",
+        "gstTotal",
+        "marginTotal",
+        "marginPct",
+      ];
+      const lines = [header.join(",")];
+
+      for (const day of result.days) {
+        const margin = round2(day.totalCost - day.supplierCost - day.gstTotal);
+        const marginPct =
+          day.totalCost > 0 ? round2((margin / day.totalCost) * 100) : null;
+        lines.push(
+          [
+            day.dayOffset,
+            day.itemCount,
+            round2(day.totalCost),
+            round2(day.supplierCost),
+            round2(day.markupTotal),
+            round2(day.gstTotal),
+            margin,
+            marginPct == null ? "" : marginPct,
+          ].join(","),
+        );
+      }
+
+      // Grand-total trailer — operators paste this into the bottom of
+      // their quote sheet without re-summing.
+      const grandMargin = round2(
+        result.grandTotal - result.grandSupplierCost - result.grandGstTotal,
+      );
+      const grandMarginPct =
+        result.grandTotal > 0
+          ? round2((grandMargin / result.grandTotal) * 100)
+          : null;
+      const totalItemCount = result.days.reduce((s, d) => s + d.itemCount, 0);
+      lines.push(
+        [
+          "TOTAL",
+          totalItemCount,
+          round2(result.grandTotal),
+          round2(result.grandSupplierCost),
+          round2(result.grandMarkupTotal),
+          round2(result.grandGstTotal),
+          grandMargin,
+          grandMarginPct == null ? "" : grandMarginPct,
+        ].join(","),
+      );
+
+      const csv = lines.join("\n") + "\n";
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename=itinerary-${full.id}-cost-breakdown.csv`,
+      );
+      res.send(csv);
+    } catch (e) {
+      if (e.status) {
+        if (e.code === "NOT_FOUND") {
+          return res
+            .status(404)
+            .json({ error: "Itinerary not found", code: "ITINERARY_NOT_FOUND" });
+        }
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-itin] cost-breakdown-csv error:", e.message);
+      res.status(500).json({ error: "Failed to export cost breakdown CSV" });
+    }
+  },
+);
+
 module.exports = router;

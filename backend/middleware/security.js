@@ -161,6 +161,15 @@ const helmetStrictReportOnlyMiddleware = helmet({
       // tightens once observed-clean.
       frameAncestors: ["'none'"],
       baseUri: ["'self'"],
+      // #917 slice 2b — point violation reports at the slice 2a ingestion
+      // endpoint (backend/routes/csp.js → POST /api/csp/report). Browsers
+      // deliver violation reports here as application/csp-report or
+      // application/reports+json; the route persists each as an AuditLog
+      // row with entity='CSPViolation'. `report-uri` is the legacy
+      // (CSP2-era) directive — universally supported. The newer
+      // `report-to` directive needs a Reporting-Endpoints HTTP header
+      // companion, deferred until we wire that header in a future slice.
+      reportUri: ["/api/csp/report"],
     },
   },
   // Disable all other headers — the transitional helmetMiddleware above

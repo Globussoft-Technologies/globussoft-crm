@@ -38,6 +38,8 @@ import {
   PanelTop,
   Calendar,
   Shield,
+  // #917 slice 5 — CSP Violations admin nav entry icon.
+  ShieldAlert,
   ScrollText,
   GitBranch,
   TrendingUp,
@@ -1357,6 +1359,14 @@ function renderGenericNav({
             to="/field-permissions"
             icon={Shield}
             label="Field Permissions"
+            adminOnly
+          />
+          {/* #917 slice 5 — CSP Violations admin (consumes GET /api/csp/violations
+              shipped slice 3; page shipped slice 4 at /admin/csp-violations). */}
+          <Link
+            to="/admin/csp-violations"
+            icon={ShieldAlert}
+            label="CSP Violations"
             adminOnly
           />
           {/* PRD Gap §1.5 / §1.6 — Commission profiles + revenue goals admin pages. */}

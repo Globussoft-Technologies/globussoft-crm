@@ -246,6 +246,28 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Patients')).toBeTruthy();
       expect(screen.getByText('Waitlist')).toBeTruthy();
     });
+
+    // #917 slice 5 — CSP Violations admin entry visibility pin. Slice 4
+    // shipped the page + route mount at /admin/csp-violations; this slice
+    // adds the Sidebar nav entry. The two cases below assert the entry is
+    // gated to ADMIN role exactly like Audit Log + Field Permissions.
+    it('reveals CSP Violations admin entry for ADMIN role under generic', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const link = screen.getByText('CSP Violations');
+      expect(link).toBeTruthy();
+      // The anchor href should point at /admin/csp-violations.
+      const anchor = link.closest('a');
+      expect(anchor).toBeTruthy();
+      expect(anchor.getAttribute('href')).toBe('/admin/csp-violations');
+    });
+
+    it('hides CSP Violations admin entry for USER and MANAGER roles', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER' });
+      expect(screen.queryByText('CSP Violations')).toBeNull();
+      // MANAGER should also NOT see it (adminOnly, not managerOnly).
+      renderSidebar({ vertical: 'generic', role: 'MANAGER' });
+      expect(screen.queryByText('CSP Violations')).toBeNull();
+    });
   });
 
   describe('Brand header', () => {

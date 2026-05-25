@@ -1540,3 +1540,372 @@ describe("normalizeTradeindiaLeadPayload — TradeIndia lead-feed API → canoni
     expect(out.query_id).toBeUndefined();
   });
 });
+
+// ─── Slice 17 — normalizeFacebookLeadAdsPayload (FB Lead Ads Graph webhook) ──
+//
+// Pins the FB Lead Ads webhook envelope → canonical-body transform. Distinct
+// from slice 12's `normalizeMetaLeadPayload`: slice 12 handles the resolved
+// `field_data` payload (what the route gets AFTER a Graph API fetch resolves
+// the leadgen_id); slice 17 handles the OUTER webhook envelope FB POSTs the
+// moment a lead is submitted, which only carries `entry[].changes[].value.
+// leadgen_id` + page/form/ad/campaign attribution tokens — name / email /
+// phone are deferred to the slice-12 step once the field-resolution fetch
+// returns them.
+//
+// Slice 17 ships the lib only; the route doesn't wire it in yet (FB Lead Ads
+// channel needs the Graph API access token from Q1 cred drop before the
+// downstream field-resolution fetch can fire — same lib-first / route-wire-
+// later pattern slices 3→4 + 13 + 14 + 15 followed).
+
+const { normalizeFacebookLeadAdsPayload } = await import(
+  "../../lib/inboundLeadVerification.js"
+);
+
+describe("normalizeFacebookLeadAdsPayload — FB Lead Ads Graph webhook → canonical body (slice 17)", () => {
+  test("happy path: FB Page webhook envelope with leadgen change → metaJson attribution", () => {
+    const fb = {
+      object: "page",
+      entry: [
+        {
+          id: "1234567890",
+          time: 1716624000,
+          changes: [
+            {
+              field: "leadgen",
+              value: {
+                leadgen_id: "9988776655",
+                page_id: "1234567890",
+                form_id: "555444333",
+                adgroup_id: "111222",
+                ad_id: "333444",
+                created_time: 1716624000,
+                campaign_id: "777888",
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const out = normalizeFacebookLeadAdsPayload(fb);
+
+    // Envelope keys stripped from output (route won't ingest stale envelope).
+    expect(out.object).toBeUndefined();
+    expect(out.entry).toBeUndefined();
+    // FB attribution tokens preserved on metaJson — the route's Graph API
+    // fetch uses leadgen_id as the lookup key.
+    expect(out.metaJson).toMatchObject({
+      leadgen_id: "9988776655",
+      page_id: "1234567890",
+      form_id: "555444333",
+      adgroup_id: "111222",
+      ad_id: "333444",
+      created_time: 1716624000,
+      campaign_id: "777888",
+      entry_page_id: "1234567890",
+      entry_time: 1716624000,
+      source: "facebook-lead-ads",
+    });
+    // No name / email / phone — envelope doesn't carry them (deferred to
+    // slice-12 once the field-resolution fetch lands the field_data).
+    expect(out.name).toBeUndefined();
+    expect(out.email).toBeUndefined();
+    expect(out.phone).toBeUndefined();
+  });
+
+  test("empty / non-object body returns body unchanged", () => {
+    expect(normalizeFacebookLeadAdsPayload(null)).toBeNull();
+    expect(normalizeFacebookLeadAdsPayload(undefined)).toBeUndefined();
+    expect(normalizeFacebookLeadAdsPayload("string")).toBe("string");
+    expect(normalizeFacebookLeadAdsPayload(42)).toBe(42);
+  });
+
+  test("body without FB envelope signature returns unchanged (no false-positive remap)", () => {
+    // No `object: 'page'` and no `entry` array — pre-normalized caller, must
+    // pass through untouched.
+    const body = {
+      name: "Plain Caller",
+      email: "plain@example.com",
+      phone: "+919876543210",
+      subBrand: "rfu",
+      tenantSlug: "travel-stall",
+    };
+    const out = normalizeFacebookLeadAdsPayload(body);
+    expect(out).toBe(body);
+  });
+
+  test("partial envelope (object:'page' alone, no entry array) returns unchanged", () => {
+    // Both signature keys required — `object: 'page'` alone is too weak.
+    const body = { object: "page", name: "Plain Caller" };
+    const out = normalizeFacebookLeadAdsPayload(body);
+    expect(out).toBe(body);
+  });
+
+  test("partial envelope (entry array alone, no object:'page') returns unchanged", () => {
+    // Could be a generic envelope shape from a different vendor — must not
+    // claim it.
+    const body = { entry: [{ id: "1" }], name: "Plain Caller" };
+    const out = normalizeFacebookLeadAdsPayload(body);
+    expect(out).toBe(body);
+  });
+
+  test("wrong object type (object:'user') with entry array returns unchanged", () => {
+    // Meta uses the same envelope for other webhook objects; we only claim
+    // the `page`-scoped feed.
+    const body = {
+      object: "user",
+      entry: [{ id: "1", changes: [{ field: "leadgen", value: {} }] }],
+    };
+    const out = normalizeFacebookLeadAdsPayload(body);
+    expect(out).toBe(body);
+  });
+
+  test("metaJson preserves raw FB-specific attribution fields", () => {
+    const out = normalizeFacebookLeadAdsPayload({
+      object: "page",
+      entry: [
+        {
+          id: "PG-1",
+          time: 1716624000,
+          changes: [
+            {
+              field: "leadgen",
+              value: {
+                leadgen_id: "LG-1",
+                form_id: "FORM-1",
+                ad_id: "AD-1",
+                campaign_id: "CAMP-1",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    // Every leadgen-value field surfaces on metaJson.
+    expect(out.metaJson.leadgen_id).toBe("LG-1");
+    expect(out.metaJson.form_id).toBe("FORM-1");
+    expect(out.metaJson.ad_id).toBe("AD-1");
+    expect(out.metaJson.campaign_id).toBe("CAMP-1");
+    // Entry-level metadata preserved too.
+    expect(out.metaJson.entry_page_id).toBe("PG-1");
+    expect(out.metaJson.entry_time).toBe(1716624000);
+    // Source token always populated for downstream attribution.
+    expect(out.metaJson.source).toBe("facebook-lead-ads");
+  });
+
+  test("envelope with no leadgen change strips envelope keys but skips metaJson", () => {
+    // Envelope present (object + entry) but the change is `feed` not
+    // `leadgen` — common when the webhook URL is also subscribed to other
+    // page events. Strip envelope, no metaJson written.
+    const out = normalizeFacebookLeadAdsPayload({
+      object: "page",
+      entry: [
+        {
+          id: "PG-1",
+          time: 1716624000,
+          changes: [{ field: "feed", value: { post_id: "P-1" } }],
+        },
+      ],
+      tenantSlug: "travel-stall",
+    });
+    expect(out.object).toBeUndefined();
+    expect(out.entry).toBeUndefined();
+    expect(out.metaJson).toBeUndefined();
+    // Caller-supplied flat fields survive.
+    expect(out.tenantSlug).toBe("travel-stall");
+  });
+
+  test("first leadgen change wins in multi-change envelope", () => {
+    // If a single entry carries multiple changes, the first leadgen one is
+    // taken. Multi-lead batching is the route's concern, not the normalizer's.
+    const out = normalizeFacebookLeadAdsPayload({
+      object: "page",
+      entry: [
+        {
+          id: "PG-1",
+          changes: [
+            { field: "feed", value: { post_id: "P-1" } },
+            { field: "leadgen", value: { leadgen_id: "LG-FIRST" } },
+            { field: "leadgen", value: { leadgen_id: "LG-SECOND" } },
+          ],
+        },
+      ],
+    });
+    expect(out.metaJson.leadgen_id).toBe("LG-FIRST");
+  });
+
+  test("multi-entry envelope: first entry's first leadgen wins", () => {
+    // Multi-entry envelopes deliver each lead under its own entry; per
+    // header the route's batching layer is responsible for fan-out, so the
+    // normalizer takes just the first leadgen it finds.
+    const out = normalizeFacebookLeadAdsPayload({
+      object: "page",
+      entry: [
+        {
+          id: "PG-1",
+          changes: [{ field: "leadgen", value: { leadgen_id: "LG-FROM-E1" } }],
+        },
+        {
+          id: "PG-2",
+          changes: [{ field: "leadgen", value: { leadgen_id: "LG-FROM-E2" } }],
+        },
+      ],
+    });
+    expect(out.metaJson.leadgen_id).toBe("LG-FROM-E1");
+    expect(out.metaJson.entry_page_id).toBe("PG-1");
+  });
+
+  test("merges into existing metaJson without clobbering caller-supplied tokens", () => {
+    const out = normalizeFacebookLeadAdsPayload({
+      metaJson: {
+        utm_source: "fb-organic",
+        source: "operator-override", // caller's source wins over our default
+      },
+      object: "page",
+      entry: [
+        {
+          id: "PG-1",
+          changes: [
+            {
+              field: "leadgen",
+              value: { leadgen_id: "LG-1", form_id: "FORM-1" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(out.metaJson.utm_source).toBe("fb-organic");
+    // Caller's source wins (existing metaJson keys are preserved).
+    expect(out.metaJson.source).toBe("operator-override");
+    // New tokens still land.
+    expect(out.metaJson.leadgen_id).toBe("LG-1");
+    expect(out.metaJson.form_id).toBe("FORM-1");
+  });
+
+  test("null / undefined leadgen value fields are skipped on metaJson", () => {
+    const out = normalizeFacebookLeadAdsPayload({
+      object: "page",
+      entry: [
+        {
+          id: "PG-1",
+          changes: [
+            {
+              field: "leadgen",
+              value: {
+                leadgen_id: "LG-1",
+                form_id: null,
+                ad_id: undefined,
+                campaign_id: "CAMP-1",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(out.metaJson.leadgen_id).toBe("LG-1");
+    expect(out.metaJson.campaign_id).toBe("CAMP-1");
+    expect(out.metaJson.form_id).toBeUndefined();
+    expect(out.metaJson.ad_id).toBeUndefined();
+  });
+
+  test("handles edge case: malformed change entries are skipped", () => {
+    const out = normalizeFacebookLeadAdsPayload({
+      object: "page",
+      entry: [
+        {
+          id: "PG-1",
+          changes: [
+            null,
+            "string-change",
+            { field: "leadgen" }, // no value
+            { field: "leadgen", value: "not-an-object" },
+            { field: "leadgen", value: { leadgen_id: "LG-VALID" } },
+          ],
+        },
+      ],
+    });
+    expect(out.metaJson.leadgen_id).toBe("LG-VALID");
+  });
+
+  test("handles edge case: malformed entries (non-object / no changes array) are skipped", () => {
+    const out = normalizeFacebookLeadAdsPayload({
+      object: "page",
+      entry: [
+        null,
+        "string-entry",
+        { id: "PG-NO-CHANGES" }, // no changes array
+        { id: "PG-VALID", changes: [{ field: "leadgen", value: { leadgen_id: "LG-OK" } }] },
+      ],
+    });
+    expect(out.metaJson.leadgen_id).toBe("LG-OK");
+    expect(out.metaJson.entry_page_id).toBe("PG-VALID");
+  });
+
+  test("subBrand is not synthesized by this normalizer (FB webhook has no sub-brand hint)", () => {
+    // Per the JSDoc: form_id → form-mapping is the route's downstream concern.
+    const out = normalizeFacebookLeadAdsPayload({
+      object: "page",
+      entry: [
+        {
+          id: "PG-1",
+          changes: [
+            { field: "leadgen", value: { leadgen_id: "LG-1", form_id: "F-1" } },
+          ],
+        },
+      ],
+    });
+    expect(out.subBrand).toBeUndefined();
+  });
+
+  test("plain non-FB keys (tenantSlug / subBrand) survive untouched alongside extraction", () => {
+    const out = normalizeFacebookLeadAdsPayload({
+      tenantSlug: "travel-stall",
+      subBrand: "rfu",
+      object: "page",
+      entry: [
+        {
+          id: "PG-1",
+          changes: [{ field: "leadgen", value: { leadgen_id: "LG-1" } }],
+        },
+      ],
+    });
+    expect(out.tenantSlug).toBe("travel-stall");
+    expect(out.subBrand).toBe("rfu");
+    expect(out.metaJson.leadgen_id).toBe("LG-1");
+  });
+
+  test("does not mutate the input body", () => {
+    const body = {
+      object: "page",
+      entry: [
+        {
+          id: "PG-1",
+          time: 1716624000,
+          changes: [
+            { field: "leadgen", value: { leadgen_id: "LG-1", form_id: "F-1" } },
+          ],
+        },
+      ],
+    };
+    const snapshot = JSON.parse(JSON.stringify(body));
+    normalizeFacebookLeadAdsPayload(body);
+    expect(body).toEqual(snapshot);
+  });
+
+  test("does NOT collide with slice-12 normalizeMetaLeadPayload (field_data shape)", () => {
+    // The slice-12 Meta normalizer claims `field_data: [...]` payloads. The
+    // slice-17 normalizer claims the OUTER webhook envelope. A body carrying
+    // ONLY field_data (no object/entry) must pass through slice-17 unchanged.
+    const fieldDataOnly = {
+      leadgen_id: "1234567890",
+      field_data: [
+        { name: "full_name", values: ["Asha Verma"] },
+        { name: "email", values: ["asha@example.com"] },
+      ],
+    };
+    const out = normalizeFacebookLeadAdsPayload(fieldDataOnly);
+    // No envelope signature → slice-17 returns body unchanged.
+    expect(out).toBe(fieldDataOnly);
+    expect(out.field_data).toBeDefined();
+  });
+});

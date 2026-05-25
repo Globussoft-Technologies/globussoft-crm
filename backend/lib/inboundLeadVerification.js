@@ -1038,6 +1038,203 @@ function normalizeTradeindiaLeadPayload(body) {
   return out;
 }
 
+/**
+ * Slice 17 — Normalize a Facebook Lead Ads Graph API webhook envelope into the
+ * route's canonical body shape (PRD §3.1.2 multi-channel enum extension +
+ * §3.4.3 paid-social channel cluster).
+ *
+ * IMPORTANT — this is DIFFERENT from `normalizeMetaLeadPayload` (slice 12).
+ * Slice 12 handles Meta's flat `field_data: [{name, values}, ...]` shape that
+ * arrives AFTER a follow-up Graph API fetch resolves the leadgen_id to its
+ * field values. Slice 17 handles the OUTER webhook envelope Meta POSTs to the
+ * registered webhook URL the moment a lead is submitted — that envelope
+ * carries `entry[].changes[].value.leadgen_id` but NOT the field values; the
+ * route's downstream code is responsible for the field-resolution fetch.
+ *
+ * Meta delivers the leadgen webhook as a Page-subscription envelope per
+ * https://developers.facebook.com/docs/marketing-api/guides/lead-ads/retrieving:
+ *
+ *   {
+ *     "object": "page",
+ *     "entry": [
+ *       {
+ *         "id": "1234567890",                  // page id
+ *         "time": 1716624000,                  // unix seconds
+ *         "changes": [
+ *           {
+ *             "field": "leadgen",
+ *             "value": {
+ *               "leadgen_id": "9988776655",
+ *               "page_id": "1234567890",
+ *               "form_id": "555444333",
+ *               "adgroup_id": "111222",
+ *               "ad_id": "333444",
+ *               "created_time": 1716624000,
+ *               "campaign_id": "777888"
+ *             }
+ *           }
+ *         ]
+ *       }
+ *     ]
+ *   }
+ *
+ * The route expects flat `{ firstName?, lastName?, name?, email?, phone?,
+ * subBrand?, metaJson? }` (see slice 1 docstring; slice 12/13/14/15 normalizers
+ * established the bridge pattern). This helper plugs FB Lead Ads webhooks into
+ * the same contract — the leadgen_id + page_id + form_id + ad_id +
+ * campaign_id all land under `metaJson` so the route's downstream code can
+ * fire the Graph API field-resolution fetch using them. No `name` / `email` /
+ * `phone` is extracted here because the webhook envelope simply doesn't
+ * carry them; the slice-12 normalizer takes over once the follow-up fetch
+ * lands the `field_data` payload.
+ *
+ * Behavior (mirrors normalizeMetaLeadPayload's discipline):
+ *   - Detection: `body.object === 'page'` AND `Array.isArray(body.entry)`.
+ *     This is the FB webhook envelope signature; without both, the helper
+ *     returns the body untouched (pre-normalized callers + non-FB payloads
+ *     pass through). Object === 'page' is required because Meta uses the
+ *     same envelope shape for other webhook objects (user, application,
+ *     instagram) and we only want to claim the page-scoped leadgen feed.
+ *   - Iterates entry[].changes[] looking for `field === 'leadgen'`. The first
+ *     leadgen change wins; multi-lead batched envelopes deliver each lead
+ *     under its own entry, so per-envelope multi-extraction is out-of-scope
+ *     (matches the slice-12 single-leadgen contract). Multi-lead batches
+ *     would be resolved by the route receiving the envelope, iterating
+ *     entry[], and calling the normalizer per-entry — that's an integration
+ *     concern, not a normalizer concern.
+ *   - Extracts the leadgen attribution tokens (leadgen_id / page_id /
+ *     form_id / adgroup_id / ad_id / campaign_id / created_time) under
+ *     `metaJson`. The route's Graph API fetch hits
+ *     `https://graph.facebook.com/<leadgen_id>/?access_token=...` to
+ *     resolve the lead's field_data; the slice-12 normalizer then bridges
+ *     the resolved field_data into canonical flat fields.
+ *   - Preserves entry-level `id` (page id) and `time` (unix-seconds) under
+ *     `metaJson` too, so attribution rollups have the page-creation
+ *     timestamp even before the field-resolution fetch lands.
+ *   - Caller-supplied flat fields WIN (defensive producer that ships both
+ *     shapes keeps the explicit values — same precedence as slices 12-15).
+ *   - The original `entry` / `object` keys are stripped from the output so
+ *     the route handler doesn't ingest them as Contact-shaped fields.
+ *   - Source token: the metaJson carries `source: 'facebook-lead-ads'` so
+ *     downstream attribution can distinguish webhook-originated leads from
+ *     the slice-12 already-fetched leads (both flow through the same
+ *     channel queue but carry different freshness semantics).
+ *
+ * subBrand stays unset — FB Lead Ads webhook envelopes don't surface a
+ * sub-brand hint; the route's downstream code resolves subBrand from the
+ * form_id → form-mapping table maintained per-tenant. Name/email/phone
+ * extraction is deferred to slice 12 once the field-resolution fetch lands
+ * the actual field_data payload.
+ *
+ * Pure helper — IO-free, no Prisma. Returns a NEW object; does not mutate
+ * the input body.
+ *
+ * @param {object} body  raw request body (FB Lead Ads webhook envelope OR
+ *                       pre-normalized flat shape)
+ * @returns {object}     canonical flat body the route handler expects
+ */
+function normalizeFacebookLeadAdsPayload(body) {
+  if (!body || typeof body !== "object") return body;
+
+  // Detection — FB Page webhook envelope. Both `object === 'page'` AND
+  // `Array.isArray(entry)` required; either alone is too weak (object alone
+  // would collide with other Meta webhook types; entry alone could be a
+  // generic envelope shape from a different vendor).
+  const isFbLeadAdsShape =
+    body.object === "page" && Array.isArray(body.entry);
+  if (!isFbLeadAdsShape) return body;
+
+  // FB Lead Ads attribution tokens that downstream code (Graph API
+  // field-resolution fetch + attribution rollups) needs without re-querying
+  // Meta. The leadgen_id is the lookup key for the resolution fetch.
+  const VALUE_META_TOKENS = [
+    "leadgen_id",
+    "page_id",
+    "form_id",
+    "adgroup_id",
+    "ad_id",
+    "campaign_id",
+    "created_time",
+  ];
+
+  const metaTokens = {};
+
+  // Iterate entry[].changes[] looking for the first leadgen change. Per
+  // header: multi-lead batches deliver each lead under its own entry, so
+  // single-leadgen extraction matches the slice-12 contract. If a producer
+  // sends a single envelope with multiple leadgen changes (non-standard),
+  // we still take the first one — the route's batching layer is
+  // responsible for envelope-level fan-out.
+  let leadgenValue = null;
+  let entryMetadata = null;
+  for (const entry of body.entry) {
+    if (!entry || typeof entry !== "object") continue;
+    if (!Array.isArray(entry.changes)) continue;
+    for (const change of entry.changes) {
+      if (!change || typeof change !== "object") continue;
+      if (change.field !== "leadgen") continue;
+      if (!change.value || typeof change.value !== "object") continue;
+      leadgenValue = change.value;
+      entryMetadata = {
+        id: entry.id,
+        time: entry.time,
+      };
+      break;
+    }
+    if (leadgenValue) break;
+  }
+
+  if (!leadgenValue) {
+    // Envelope present but no leadgen change found (could be a different
+    // page-feed event like `feed` or `mention`). Strip the envelope keys
+    // and return — the route handler won't ingest stale envelope shape.
+    const out = { ...body };
+    delete out.object;
+    delete out.entry;
+    return out;
+  }
+
+  for (const k of VALUE_META_TOKENS) {
+    if (leadgenValue[k] !== undefined && leadgenValue[k] !== null) {
+      metaTokens[k] = leadgenValue[k];
+    }
+  }
+  // Preserve entry-level page id + envelope timestamp (distinct from
+  // value.created_time which is the leadgen creation time). The
+  // entry.id duplicates value.page_id in practice but we ship both because
+  // some legacy producers omit value.page_id.
+  if (entryMetadata && entryMetadata.id !== undefined) {
+    metaTokens.entry_page_id = entryMetadata.id;
+  }
+  if (entryMetadata && entryMetadata.time !== undefined) {
+    metaTokens.entry_time = entryMetadata.time;
+  }
+  // Source token — distinguishes webhook-originated FB Lead Ads payloads
+  // from the slice-12 already-fetched form-data payloads. Downstream
+  // attribution + freshness semantics differ between the two stages.
+  metaTokens.source = "facebook-lead-ads";
+
+  const hasMetaTokens = Object.keys(metaTokens).length > 0;
+
+  // Shallow-clone the body, strip the FB envelope keys we consumed, then
+  // merge metaJson behind caller-supplied tokens (caller wins).
+  const out = { ...body };
+  delete out.object;
+  delete out.entry;
+
+  if (hasMetaTokens) {
+    const existingMeta =
+      out.metaJson && typeof out.metaJson === "object" ? out.metaJson : {};
+    const mergedMeta = { ...existingMeta };
+    for (const [k, v] of Object.entries(metaTokens)) {
+      if (mergedMeta[k] === undefined) mergedMeta[k] = v;
+    }
+    out.metaJson = mergedMeta;
+  }
+
+  return out;
+}
+
 module.exports = {
   verifyVoyagrHmac,
   verifyWebForm,
@@ -1051,5 +1248,6 @@ module.exports = {
   normalizeIndiamartLeadPayload,
   normalizeJustdialLeadPayload,
   normalizeTradeindiaLeadPayload,
+  normalizeFacebookLeadAdsPayload,
   SPAM_PATTERNS,
 };

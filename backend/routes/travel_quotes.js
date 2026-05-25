@@ -6,9 +6,19 @@
  * (2026-05-24 tick #94) as the fork-side of the symmetric Quote/Billing/
  * Supplier decision. This module ships the operator-facing CRUD scaffold.
  *
- * Slice 11 (THIS commit): POST /:id/accept + POST /:id/decline — dedicated
- * semantic workflow endpoints with status-transition guards. Distinct from
- * the catch-all PUT /:id (which permits arbitrary status writes) — these
+ * Slice 15 (THIS commit): GET /:id/audit-trail — read-only chronological
+ * audit history for a single quote. Joins TravelQuote rows (entityId = id)
+ * with TravelQuoteLine rows whose details payload references the same
+ * quoteId, sorts by createdAt asc, surfaces every CRUD/workflow verb the
+ * route file emits (CREATE, UPDATE, DELETE, TRAVEL_QUOTE_ACCEPTED,
+ * TRAVEL_QUOTE_DECLINED, TRAVEL_QUOTE_DUPLICATED, TRAVEL_QUOTE_EXTENDED,
+ * TRAVEL_QUOTE_CONVERTED, TRAVEL_QUOTE_PDF_DOWNLOADED, plus line-CRUD).
+ * Pure read; tenant + sub-brand scoped via loadParentQuote. PRD §3.8.1 +
+ * §3.8.3 — operator/compliance "who-changed-what" surface.
+ *
+ * Slice 11: POST /:id/accept + POST /:id/decline — dedicated semantic
+ * workflow endpoints with status-transition guards. Distinct from the
+ * catch-all PUT /:id (which permits arbitrary status writes) — these
  * carry workflow-specific audit action codes (TRAVEL_QUOTE_ACCEPTED /
  * TRAVEL_QUOTE_DECLINED), an idempotent 200 response on already-{Accepted,
  * Rejected}, and a 409 INVALID_TRANSITION on attempts to flip from a
@@ -2115,6 +2125,145 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] extend error:", e.message);
       res.status(500).json({ error: "Failed to extend quote" });
+    }
+  },
+);
+
+// GET /api/travel/quotes/:id/audit-trail — any verified token (tenant +
+// sub-brand-scoped via loadParentQuote).
+//
+// Slice 15 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3.8.1 audit + §3.8.3 send-
+// history). Read-only chronological audit log for a single quote.
+//
+// === What it joins ===
+// Two audit-entity classes contribute to a quote's history:
+//   1. entity='TravelQuote'  AND entityId=<quoteId>
+//      → CREATE / UPDATE / DELETE / TRAVEL_QUOTE_ACCEPTED /
+//        TRAVEL_QUOTE_DECLINED / TRAVEL_QUOTE_DUPLICATED /
+//        TRAVEL_QUOTE_EXTENDED / TRAVEL_QUOTE_CONVERTED /
+//        TRAVEL_QUOTE_PDF_DOWNLOADED
+//   2. entity='TravelQuoteLine' whose details JSON contains "quoteId":<id>
+//      → line-level CREATE / UPDATE / DELETE.
+//
+// The line-rows query uses Prisma's `contains` on the JSON-string `details`
+// column (the route layer writes details via JSON.stringify), tenant-
+// scoped. This is the same pragmatic approach the audit_viewer route uses
+// for cross-entity filtering and avoids needing a relational column.
+//
+// Both result sets are merged in-memory and sorted by createdAt asc so the
+// timeline reads top-down (oldest first), with `details` re-parsed back
+// into a structured object so the operator UI doesn't have to.
+//
+// === Pagination ===
+// Optional ?limit (1..500, default 100). The list is bounded above by
+// design — a single quote should never legitimately have >500 audit rows.
+//
+// === Auth ===
+// Mirrors loadParentQuote — 400 INVALID_ID for non-numeric, 404
+// QUOTE_NOT_FOUND when no row, 403 SUB_BRAND_DENIED when caller lacks
+// access to the quote's sub-brand. Read-only; no RBAC tier required.
+//
+// === Route ordering ===
+// Sub-path under /quotes/:id; Express matches by segment count so this
+// won't conflict with GET /quotes/:id (2 segs vs 3).
+router.get(
+  "/quotes/:id/audit-trail",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const quoteId = parseInt(req.params.id, 10);
+      const quote = await loadParentQuote(req, res, quoteId);
+      if (!quote) return;
+
+      const limitRaw = parseInt(req.query.limit, 10);
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(limitRaw, 500)
+        : 100;
+
+      // Quote-entity audit rows: direct entityId match.
+      const quoteRows = await prisma.auditLog.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          entity: "TravelQuote",
+          entityId: quoteId,
+        },
+        select: {
+          id: true,
+          action: true,
+          entity: true,
+          entityId: true,
+          details: true,
+          userId: true,
+          createdAt: true,
+        },
+      });
+
+      // Line-entity audit rows: filter by JSON-substring match on the
+      // details column. The route layer writes details as JSON.stringify
+      // of an object that includes quoteId, so a substring match on
+      // `"quoteId":<id>` reliably picks up CREATE/UPDATE/DELETE on every
+      // line that ever belonged to this quote (including soft-deleted
+      // ones, which is the whole point of an audit trail).
+      const lineRows = await prisma.auditLog.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          entity: "TravelQuoteLine",
+          details: { contains: `"quoteId":${quoteId}` },
+        },
+        select: {
+          id: true,
+          action: true,
+          entity: true,
+          entityId: true,
+          details: true,
+          userId: true,
+          createdAt: true,
+        },
+      });
+
+      // Merge + sort by createdAt asc (oldest first) so the UI renders
+      // top-down chronologically. Tie-break on id for determinism.
+      const merged = [...quoteRows, ...lineRows].sort((a, b) => {
+        const aMs = new Date(a.createdAt).getTime();
+        const bMs = new Date(b.createdAt).getTime();
+        if (aMs !== bMs) return aMs - bMs;
+        return (a.id || 0) - (b.id || 0);
+      });
+
+      // Re-parse details into a structured object so the consumer doesn't
+      // have to. Tolerant of legacy null / malformed-JSON rows.
+      const entries = merged.slice(0, limit).map((row) => {
+        let parsedDetails = null;
+        if (row.details) {
+          try {
+            parsedDetails = JSON.parse(row.details);
+          } catch (_e) {
+            parsedDetails = { _raw: row.details };
+          }
+        }
+        return {
+          id: row.id,
+          action: row.action,
+          entity: row.entity,
+          entityId: row.entityId,
+          userId: row.userId,
+          createdAt: row.createdAt,
+          details: parsedDetails,
+        };
+      });
+
+      res.json({
+        quoteId,
+        subBrand: quote.subBrand,
+        count: entries.length,
+        truncated: merged.length > limit,
+        entries,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] audit-trail error:", e.message);
+      res.status(500).json({ error: "Failed to load audit trail" });
     }
   },
 );

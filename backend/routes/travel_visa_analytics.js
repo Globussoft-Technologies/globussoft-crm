@@ -941,4 +941,266 @@ router.get(
   },
 );
 
+// ─── V21 — by-year time series rollup ─────────────────────────────────
+//
+// GET /api/travel/visa/analytics/by-year
+//
+// 6th analytics endpoint (V21) completing the V16-V21 set. Mirrors V19
+// (/by-month) + V20 (/by-quarter) at calendar-year resolution.
+// Tenant-wide VisaApplication time-series bucketed by UTC YYYY (4-digit
+// calendar year), joined via Contact.subBrand='visasure'. Where
+// /by-month emits one row per UTC-month and /by-quarter one per
+// UTC-quarter, V21 emits one row per UTC-year with the same per-status
+// + complex + flagged split. Useful for board-level annual reports
+// where the natural cadence is "how many visas did we process this
+// calendar year, broken down by terminal outcome".
+//
+// Bucket key shape: ISO YYYY string (e.g. "2026") derived from
+// VisaApplication.createdAt's UTC year via getUTCFullYear(). UTC
+// chosen deliberately so bucket labels stay stable across operator
+// timezones — visa reconciliation works in calendar-year UTC for
+// cross-border work, matching V19/V20.
+//
+// Scope rules:
+//   - Tenant-scoped on VisaApplication.tenantId.
+//   - Sub-brand-restricted via Contact.subBrand="visasure" — same join
+//     pattern as V16/V17/V18/V19/V20.
+//   - verifyToken (router-level) + verifyRole(['ADMIN','MANAGER']) +
+//     requireTravelTenant per the V16-V20 pattern.
+//
+// Query string:
+//   status    optional VisaApplication.status filter (intake / docs-pending
+//             / filed / approved / rejected / appeal); invalid → 400
+//             INVALID_STATUS.
+//   from      optional inclusive lower bound on bucket (YYYY); invalid →
+//             400 INVALID_YEAR_FORMAT.
+//   to        optional inclusive upper bound on bucket (YYYY); invalid →
+//             400 INVALID_YEAR_FORMAT.
+//   orderBy   default "year:asc" (chronological); also accepts
+//             "year:desc", "count:asc|desc", "approvedCount:asc|desc".
+//             Unknown tokens degrade silently to default.
+//   limit     default 10 (one decade), max 30 (three decades).
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     years: [ {
+//       year: "2026",
+//       count,
+//       intakeCount, docsPendingCount, filedCount, approvedCount,
+//       rejectedCount, appealCount,
+//       complexCount, flaggedCount,
+//     } ],
+//     totalYears,
+//     grandCount,
+//     grandApprovedCount,
+//     grandRejectedCount,
+//     limit, offset,
+//   }
+//
+// Defensive: null/invalid createdAt → "unknown" bucket (excluded when
+// from/to is set, kept otherwise so the count surface stays accurate).
+// Empty scoped-contact set → all-zeros envelope (NOT 404 / 500) so the
+// dashboard tile renders gracefully.
+router.get(
+  "/by-year",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const statusFilter = req.query.status ? String(req.query.status) : null;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "year:asc";
+
+      // Status enum validation — mirrors V19/V20.
+      if (statusFilter && !VALID_STATUSES.includes(statusFilter)) {
+        return res.status(400).json({
+          error: `status must be one of: ${VALID_STATUSES.join(", ")}`,
+          code: "INVALID_STATUS",
+        });
+      }
+
+      // YYYY validation — strict 4-digit calendar year.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format (e.g. 2026)",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format (e.g. 2026)",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "count:asc",
+        "count:desc",
+        "approvedCount:asc",
+        "approvedCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      // Resolve visa-sure contact IDs first (mirrors V16-V20).
+      const visaContacts = await prisma.contact.findMany({
+        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        select: { id: true },
+      });
+
+      const emptyEnvelope = () => ({
+        years: [],
+        totalYears: 0,
+        grandCount: 0,
+        grandApprovedCount: 0,
+        grandRejectedCount: 0,
+        limit: take,
+        offset: skip,
+      });
+
+      if (visaContacts.length === 0) {
+        return res.json(emptyEnvelope());
+      }
+
+      const contactIds = visaContacts.map((c) => c.id);
+
+      const where = { tenantId, contactId: { in: contactIds } };
+      if (statusFilter) where.status = statusFilter;
+
+      const applications = await prisma.visaApplication.findMany({
+        where,
+        select: {
+          id: true,
+          status: true,
+          complexCase: true,
+          advisorRiskFlag: true,
+          createdAt: true,
+        },
+      });
+
+      if (applications.length === 0) {
+        return res.json(emptyEnvelope());
+      }
+
+      // Aggregate per-UTC-year. Map "YYYY" → row.
+      const makeEmptyRow = (yearKey) => ({
+        year: yearKey,
+        count: 0,
+        intakeCount: 0,
+        docsPendingCount: 0,
+        filedCount: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+        appealCount: 0,
+        complexCount: 0,
+        flaggedCount: 0,
+      });
+
+      const byYear = new Map();
+      for (const a of applications) {
+        let yearKey = "unknown";
+        if (a.createdAt) {
+          const dt = new Date(a.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let row = byYear.get(yearKey);
+        if (!row) {
+          row = makeEmptyRow(yearKey);
+          byYear.set(yearKey, row);
+        }
+
+        row.count += 1;
+
+        if (a.status) {
+          const field = STATUS_FIELD[a.status];
+          if (field) row[field] += 1;
+        }
+
+        if (a.complexCase === true) row.complexCount += 1;
+        if (a.advisorRiskFlag) row.flaggedCount += 1;
+      }
+
+      let years = [...byYear.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set; kept otherwise. Mirrors V19/V20.
+      if (fromRaw !== null) {
+        years = years.filter(
+          (r) => r.year !== "unknown" && r.year >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        years = years.filter(
+          (r) => r.year !== "unknown" && r.year <= toRaw,
+        );
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY (also chronological).
+      // "unknown" sorts last in asc / first in desc (lexicographically >
+      // "9999") — acceptable for a defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalYears = years.length;
+      const grandCount = years.reduce((acc, r) => acc + (r.count || 0), 0);
+      const grandApprovedCount = years.reduce(
+        (acc, r) => acc + (r.approvedCount || 0),
+        0,
+      );
+      const grandRejectedCount = years.reduce(
+        (acc, r) => acc + (r.rejectedCount || 0),
+        0,
+      );
+
+      const paged = years.slice(skip, skip + take);
+
+      await writeAudit(
+        "VisaApplication",
+        "ANALYTICS_READ",
+        0,
+        req.user.userId,
+        tenantId,
+        { metric: "by-year", subBrand: VISA_SUB_BRAND },
+      ).catch(() => {});
+
+      res.json({
+        years: paged,
+        totalYears,
+        grandCount,
+        grandApprovedCount,
+        grandRejectedCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      console.error("[travel-visa-analytics/by-year] error:", e.message);
+      res.status(500).json({
+        error: "Failed to compute by-year metrics",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
 module.exports = router;

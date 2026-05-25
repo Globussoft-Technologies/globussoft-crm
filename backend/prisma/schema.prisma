@@ -4934,6 +4934,13 @@ model TravelInvoice {
   tcsRate            Decimal?                @db.Decimal(5, 2)
   tcsExceedingAmount Decimal?                @db.Decimal(15, 2)
   tcsAppliedAt       DateTime?
+  // Arc 2 #901 slice 11 — Doc-type taxonomy (PRD_TRAVEL_BILLING FR-3.x).
+  // Nullable with default "TaxInvoice"; new rows get the default, existing
+  // rows remain NULL (route layer treats NULL as "TaxInvoice"). Enum values:
+  // Proforma | TaxInvoice | CreditNote | DebitNote | TravelVoucher.
+  // Separate CreditNote/DebitNote workflows deferred to slice 12; this slice
+  // ships the field + validation + filter only.
+  docType            String?                 @default("TaxInvoice")
   lines              TravelInvoiceLine[]
   schedule           TravelPaymentSchedule[]
   quote              TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)

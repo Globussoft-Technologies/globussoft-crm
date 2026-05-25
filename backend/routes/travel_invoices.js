@@ -34,6 +34,34 @@ const { computeTcs, isOverseasDestination } = require("../lib/tcsCalculation");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
 
+// Arc 2 #901 slice 11 — PRD_TRAVEL_BILLING FR-3.x doc-type taxonomy.
+// Travel verticals need to issue more than just a "TaxInvoice": Proforma
+// (pre-payment quote-like bill), CreditNote / DebitNote (post-invoice
+// adjustments), and TravelVoucher (supplier-passthrough receipt). The
+// docType field on TravelInvoice persists which class a given row is;
+// NULL is treated as "TaxInvoice" for back-compat with pre-slice-11 rows.
+// Separate CreditNote/DebitNote routing (different sequence, different
+// PDF template) lands in slice 12; this slice ships the field + filter.
+const VALID_INVOICE_DOC_TYPES = [
+  "Proforma",
+  "TaxInvoice",
+  "CreditNote",
+  "DebitNote",
+  "TravelVoucher",
+];
+
+function assertValidDocType(s) {
+  if (s == null) return;
+  if (!VALID_INVOICE_DOC_TYPES.includes(s)) {
+    const err = new Error(
+      `docType must be one of: ${VALID_INVOICE_DOC_TYPES.join(", ")}`,
+    );
+    err.status = 400;
+    err.code = "INVALID_DOC_TYPE";
+    throw err;
+  }
+}
+
 // PRD_TRAVEL_BILLING FR-3.1.a — line-type enum for invoice line items.
 // Extends the TravelQuoteLine enum (hotel/flight/transport/visa/service/other)
 // with billing-side classifications (tax/fee/addon/tcs/tds) needed for the
@@ -307,6 +335,10 @@ router.get(
         }
         where.quoteId = qid;
       }
+      if (req.query.docType) {
+        assertValidDocType(String(req.query.docType));
+        where.docType = String(req.query.docType);
+      }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (allowed) {
@@ -423,6 +455,7 @@ router.post(
         subBrand,
         quoteId,
         status,
+        docType,
       } = req.body || {};
 
       if (
@@ -458,6 +491,13 @@ router.post(
 
       assertValidStatus(status);
       if (subBrand) assertValidSubBrand(subBrand);
+      // Slice 11 — explicit empty string is treated as "use default" (NULL on
+      // create, so Prisma applies the column default "TaxInvoice"); a present
+      // non-empty value is validated against the enum. Undefined means "field
+      // not in body" — fall through to Prisma's default.
+      if (docType !== undefined && docType !== "") {
+        assertValidDocType(docType);
+      }
       const parsedDueDate = parseDueDate(dueDate);
 
       // Sub-brand isolation: reject create that targets a sub-brand the
@@ -472,18 +512,24 @@ router.post(
 
       const invoiceNum = await nextInvoiceNum(req.travelTenant.id);
 
+      const createData = {
+        tenantId: req.travelTenant.id,
+        subBrand: targetSubBrand,
+        contactId: contactIdInt,
+        quoteId: quoteIdInt,
+        invoiceNum,
+        status: status || "Draft",
+        totalAmount: totalAmount,
+        currency: String(currency),
+        dueDate: parsedDueDate,
+      };
+      // Only pass docType if the caller supplied a non-empty value — empty
+      // string / undefined falls through to the schema default ("TaxInvoice").
+      if (docType !== undefined && docType !== "") {
+        createData.docType = docType;
+      }
       const created = await prisma.travelInvoice.create({
-        data: {
-          tenantId: req.travelTenant.id,
-          subBrand: targetSubBrand,
-          contactId: contactIdInt,
-          quoteId: quoteIdInt,
-          invoiceNum,
-          status: status || "Draft",
-          totalAmount: totalAmount,
-          currency: String(currency),
-          dueDate: parsedDueDate,
-        },
+        data: createData,
       });
 
       await writeAudit(
@@ -499,6 +545,7 @@ router.post(
           invoiceNum: created.invoiceNum,
           status: created.status,
           currency: created.currency,
+          docType: created.docType,
         },
       );
 
@@ -555,6 +602,7 @@ router.put(
         quoteId,
         status,
         paidAt,
+        docType,
       } = req.body || {};
 
       if (contactId !== undefined) {
@@ -622,6 +670,17 @@ router.put(
             });
           }
           data.paidAt = p;
+        }
+      }
+      if (docType !== undefined) {
+        // Empty string OR explicit null on PUT clears back to default
+        // ("TaxInvoice" via schema default — Prisma write null then the
+        // route layer treats null as "TaxInvoice" on read).
+        if (docType === null || docType === "") {
+          data.docType = null;
+        } else {
+          assertValidDocType(docType);
+          data.docType = docType;
         }
       }
 

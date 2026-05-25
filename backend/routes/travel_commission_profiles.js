@@ -11,6 +11,7 @@
  *
  * Endpoints:
  *   GET    /api/travel/commission-profiles                — list (tenant + sub-brand scoped)
+ *   GET    /api/travel/commission-profiles/stats          — USER+ tenant-wide rollup (slice 18)
  *   GET    /api/travel/commission-profiles/:id            — fetch one
  *   POST   /api/travel/commission-profiles                — ADMIN/MANAGER create
  *   PUT    /api/travel/commission-profiles/:id            — ADMIN/MANAGER partial update
@@ -178,6 +179,246 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-commission-profiles] list error:", e.message);
       res.status(500).json({ error: "Failed to list commission profiles" });
+    }
+  },
+);
+
+// GET /api/travel/commission-profiles/stats — tenant-wide commission profile rollup
+// (PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 18).
+//
+// USER-readable meta endpoint. Powers the CommissionProfiles library page's
+// header summary strip ("42 profiles · 35 active · 7 archived · 2 flat /
+// 5 tiered ... · last activity 3h ago"). Without this, the frontend has to
+// fire {list, count by profileType×4, count by subBrand×N, audit poll}
+// just to render the header — N+ round-trips for a single visual surface.
+//
+// Distinct from /:id/summary/by-{month,quarter,year} (per-profile time series)
+// and /:id/ledger (per-profile deal list). This is the tenant-wide aggregate
+// across BOTH dimensions: profile-count summary (status + profileType +
+// sub-brand) AND audit-derived activity (scoped deal count + lastActivityAt).
+//
+// PRD anchors:
+//   - §3 — operator-facing commission dashboard surfaces "how many
+//          profiles do I have, of what shape, attached to which deals" —
+//          this endpoint feeds those KPI tiles
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' profiles in the counts, PLUS tenant-wide
+//     (NULL subBrand) rows. Same gate as the list endpoint.
+//   - Profile-count rollup (from prisma.travelCommissionProfile.findMany):
+//       total, active, archived            — overall + by status
+//       byProfileType: { <type>: { count, totalCommission } }
+//       bySubBrand: { <sb|_tenant>: { count, totalCommission } }
+//   - totalCommission per group: in-process sum of computeCommission()
+//     over ALL Deals tied via Contact.commissionProfileId to each profile.
+//     If profileJson is malformed for any profile, that profile
+//     contributes totalCommission=0 (defensive — same posture as
+//     /:id/summary/by-month).
+//   - Audit-derived activity:
+//       totalDealsScoped                   — count of Deals attached via
+//                                            Contact.commissionProfileId to
+//                                            ANY visible profile in this rollup
+//       lastActivityAt                     — max(updatedAt) across all
+//                                            matching profiles, or null
+//   - ?from / ?to (ISO date bounds) filter profile.createdAt before aggregation.
+//
+// Safety cap: process at most 1000 profiles per call; if matching total >
+// 1000, return counts but mark aggregateExceedsCap=true (totalCommission
+// would be incomplete past the cap).
+//
+// USER-readable: anodyne aggregate (counts + sums + timestamps); safe.
+// No audit row: read-only meta surface, mirrors /flyer-templates/global-stats.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family or `:id="stats"` would 400 INVALID_ID before reaching this
+// handler.
+const PROFILES_AGGREGATE_CAP = 1000;
+router.get(
+  "/commission-profiles/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Optional ISO date bounds on profile.createdAt
+      const profileWhere = { tenantId };
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        profileWhere.createdAt = Object.assign(profileWhere.createdAt || {}, { gte: d });
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        profileWhere.createdAt = Object.assign(profileWhere.createdAt || {}, { lte: d });
+      }
+
+      // Sub-brand narrowing — same gate as list endpoint.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        profileWhere.OR = [
+          { subBrand: { in: [...allowed] } },
+          { subBrand: null },
+        ];
+      }
+
+      // Bounded fetch to keep in-process aggregation safe.
+      const profiles = await prisma.travelCommissionProfile.findMany({
+        where: profileWhere,
+        orderBy: [{ id: "asc" }],
+        take: PROFILES_AGGREGATE_CAP,
+      });
+
+      // Get the true total so callers know if aggregation is bounded.
+      const totalMatching = await prisma.travelCommissionProfile.count({
+        where: profileWhere,
+      });
+      const aggregateExceedsCap = totalMatching > PROFILES_AGGREGATE_CAP;
+
+      // Empty short-circuit — return zeroed shape.
+      if (profiles.length === 0) {
+        return res.json({
+          total: 0,
+          active: 0,
+          archived: 0,
+          byProfileType: {},
+          bySubBrand: {},
+          totalDealsScoped: 0,
+          lastActivityAt: null,
+          aggregateExceedsCap: false,
+        });
+      }
+
+      // Counts overall.
+      let active = 0;
+      let archived = 0;
+      let lastActivityAt = null;
+      for (const p of profiles) {
+        if (p.isActive) active += 1;
+        else archived += 1;
+        const ts = p.updatedAt instanceof Date ? p.updatedAt : new Date(p.updatedAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastActivityAt || ts > lastActivityAt) lastActivityAt = ts;
+        }
+      }
+
+      // Pre-parse all profileJson once so the per-deal loop below is fast.
+      // A profile that fails to parse contributes totalCommission=0 — its
+      // count + status still register normally.
+      const parsedById = new Map();
+      for (const p of profiles) {
+        try {
+          parsedById.set(p.id, JSON.parse(p.profileJson));
+        } catch (_e) {
+          parsedById.set(p.id, null);
+        }
+      }
+
+      // Fetch all Deals scoped to ANY contact pointing at any visible profile.
+      // We pull amount + contact.commissionProfileId so we can attribute each
+      // deal's computed commission back to its profile's groups.
+      const profileIds = profiles.map((p) => p.id);
+      const deals = await prisma.deal.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          contact: {
+            commissionProfileId: { in: profileIds },
+            tenantId,
+          },
+        },
+        select: {
+          id: true,
+          amount: true,
+          contact: { select: { commissionProfileId: true } },
+        },
+      });
+
+      // Half-up round to 2dp — matches lib/agentCommissionCalculator.round2.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      // Initialise per-profileType + per-subBrand bucket maps. Pre-seed with
+      // ALL profileTypes the existing population uses (so a type with zero
+      // deals still appears with count + totalCommission=0). Same for
+      // sub-brand (null → '_tenant').
+      const byProfileType = {};
+      const bySubBrand = {};
+      for (const p of profiles) {
+        const pt = p.profileType || "unknown";
+        if (!byProfileType[pt]) byProfileType[pt] = { count: 0, totalCommission: 0 };
+        byProfileType[pt].count += 1;
+
+        const sbKey = p.subBrand ? String(p.subBrand) : "_tenant";
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0, totalCommission: 0 };
+        bySubBrand[sbKey].count += 1;
+      }
+
+      // Index profile metadata for the deal-attribution loop.
+      const profileMetaById = new Map();
+      for (const p of profiles) {
+        profileMetaById.set(p.id, {
+          profileType: p.profileType || "unknown",
+          subBrandKey: p.subBrand ? String(p.subBrand) : "_tenant",
+        });
+      }
+
+      // Attribute each deal's commission to its profile's two bucket-axes.
+      // Deal whose contact's profileId isn't in our visible set (cross-tenant
+      // / not-in-cap window / sub-brand-stripped) is skipped defensively.
+      for (const d of deals) {
+        const pid = d.contact && d.contact.commissionProfileId;
+        if (!pid) continue;
+        const meta = profileMetaById.get(pid);
+        if (!meta) continue;
+        const parsed = parsedById.get(pid);
+        if (!parsed) continue; // malformed profile contributes 0
+
+        const result = computeCommission({
+          saleAmount: Number(d.amount) || 0,
+          paxCount: 1,
+          profile: parsed,
+        });
+        const commission = Number(result && result.commission) || 0;
+        byProfileType[meta.profileType].totalCommission += commission;
+        bySubBrand[meta.subBrandKey].totalCommission += commission;
+      }
+
+      // Finalise rounding on per-bucket sums.
+      for (const k of Object.keys(byProfileType)) {
+        byProfileType[k].totalCommission = round2(byProfileType[k].totalCommission);
+      }
+      for (const k of Object.keys(bySubBrand)) {
+        bySubBrand[k].totalCommission = round2(bySubBrand[k].totalCommission);
+      }
+
+      res.json({
+        total: profiles.length,
+        active,
+        archived,
+        byProfileType,
+        bySubBrand,
+        totalDealsScoped: deals.length,
+        lastActivityAt: lastActivityAt ? lastActivityAt.toISOString() : null,
+        aggregateExceedsCap,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-commission-profiles] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise commission profiles" });
     }
   },
 );

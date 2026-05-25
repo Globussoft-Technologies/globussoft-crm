@@ -523,6 +523,204 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/diagnostics/by-month — tenant-wide Diagnostic submissions
+// monthly rollup (PRD_TRAVEL_RFU_DIAGNOSTIC §3).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-MM bucket for
+// the tenant-scoped (and sub-brand-narrowed) Diagnostic submission population.
+// Each row carries count + bySubBrand breakdown so the Diagnostics dashboard
+// can render a "submissions over time" trend chart + per-month sub-brand
+// drill-down without N round-trips per month.
+//
+// Pairs with /diagnostics/stats (fffc7345): /stats is a single point-in-time
+// KPI tile (total / bySubBrand / byBank / lastSubmittedAt); /by-month is the
+// per-month time series across the same population. Two endpoints powering
+// the same Diagnostics dashboard — /stats for the KPI strip, /by-month for
+// the trend chart + per-month drill-down picker.
+//
+// Mirrors #903 slice 24 (/suppliers/by-month) + #908 slice 21
+// (/flyer-templates/by-month) + #900 slice 16 (/quotes/by-month) — same UTC
+// YYYY-MM bucketing template, same defensive math (null/invalid createdAt →
+// "unknown" bucket; excluded when ?from / ?to is set, kept otherwise so
+// count surface stays accurate), same orderBy semantics.
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//                     400 INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' diagnostics in the rollup. Same gate as
+//     /diagnostics/stats — TravelDiagnostic.subBrand is NON-nullable in the
+//     schema, so we do NOT add a `{ subBrand: null }` OR clause (mirrors
+//     /suppliers/by-month, distinct from /flyer-templates/by-month whose
+//     subBrand IS nullable). Empty access set → force-empty `subBrand:
+//     "__none__"` so the response stays a clean zero-rollup envelope.
+//   - JS-side aggregation over a light findMany projection
+//     ({ subBrand, createdAt }) — matches /diagnostics/stats posture.
+//   - "unknown" bucket: rows with null/invalid createdAt land here.
+//     Excluded when ?from / ?to is set; included otherwise.
+//   - Per-month bySubBrand: each bucket carries a `bySubBrand` map keyed by
+//     sub-brand token (falsy → "_tenant" for forward-compat, mirrors /stats).
+//   - Pagination applied AFTER aggregation + sort + bucket filter.
+//
+// No audit row written — read-only meta surface; matches /diagnostics/stats
+// + /suppliers/by-month + /flyer-templates/by-month posture. USER-readable:
+// anodyne (counts + month-string tokens).
+//
+// Express route ordering: literal-path /by-month MUST be declared BEFORE
+// the /:id family or `:id="by-month"` would 400 INVALID_ID before reaching
+// this handler. Same convention as /diagnostics/stats.
+// ============================================================================
+router.get(
+  "/diagnostics/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors slice 24 /suppliers/by-month.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors /diagnostics/stats
+      // sub-brand gate: subBrand-restricted callers see only their allowed
+      // sub-brands' diagnostics; admins (allowed=null) see all. Empty
+      // allowed set returns the zero-rollup envelope (not 403).
+      //
+      // Note: TravelDiagnostic.subBrand is NON-nullable, so we do NOT mix
+      // in a `{ subBrand: null }` OR clause (that's the flyer-templates
+      // pattern, where subBrand IS nullable). The narrowing is a pure
+      // `subBrand: { in: [...allowed] }`, mirroring /suppliers/by-month.
+      const where = { tenantId: req.travelTenant.id };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          where.subBrand = { in: [...allowed] };
+        } else {
+          where.subBrand = "__none__";
+        }
+      }
+
+      // Light projection — subBrand + createdAt is enough for the bucket
+      // totals + per-bucket bySubBrand breakdown.
+      const rows = await prisma.travelDiagnostic.findMany({
+        where,
+        select: { subBrand: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const r of rows) {
+        let monthKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            month: monthKey,
+            count: 0,
+            bySubBrand: {},
+          };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+
+        // bySubBrand: defensively coalesce falsy → "_tenant" to match
+        // /diagnostics/stats posture (forward-compat against any future
+        // schema change to nullable subBrand).
+        const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+        if (!bucket.bySubBrand[sbKey]) bucket.bySubBrand[sbKey] = { count: 0 };
+        bucket.bySubBrand[sbKey].count += 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise. Mirrors slice
+      // 24 /suppliers/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
+      // "unknown" sorts last in asc / first in desc (lexicographically >
+      // "9999-12") — acceptable for a defensive fallback bucket that should
+      // rarely appear. Mirrors slice 24 /suppliers/by-month.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandCount = months.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+
+      // Pagination AFTER aggregation + sort + filter, same as slice 24.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        months: paged,
+        totalMonths,
+        grandCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
+
 // GET /api/travel/diagnostics/:id
 router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

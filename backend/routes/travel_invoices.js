@@ -843,6 +843,239 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/invoices/aged-receivable — Aged Receivable report
+// (Arc 2 #901 slice 23 — PRD_TRAVEL_BILLING FR-3.6.a).
+//
+// Returns open (Issued | Partial) invoices bucketed by days past due. The
+// bucket layout matches FR-3.6.a verbatim: 0-30 / 31-60 / 61-90 / 90+ (plus
+// a `notYetDue` bucket for invoices whose dueDate is in the future or null).
+//
+// Per-invoice outstanding balance = totalAmount - sum(schedule.receivedAmount).
+// Invoices with NO payment schedule rows treat the entire totalAmount as
+// outstanding (the slice-17 auto-schedule landed mid-arc — pre-slice-17
+// invoices stay schedule-less by design, and operator-issued single-pay
+// invoices may stay schedule-less). Balance is half-up rounded to 2 dp.
+//
+// Auth: ADMIN | MANAGER (mirrors gstr1-export — finance reports are not
+// surfaced to USER role per the same UC-2.5 month-end-close framing).
+// Sub-brand access narrows the where clause via getSubBrandAccessSet.
+//
+// Query params (all optional):
+//   ?subBrand=tmc                — narrow to one sub-brand
+//   ?asOf=2026-05-25             — bucket against this date instead of now
+//                                  (ISO-8601 YYYY-MM-DD). Useful for
+//                                  reproducible month-end snapshots.
+//   ?limit=200                   — clamped to MAX_LIMIT=500, default 100.
+//   ?offset=0                    — pagination cursor.
+//   ?contactId=999               — narrow to one customer (operator-side
+//                                  collections workflow).
+//
+// Response shape: {
+//   asOf: <ISO date>,
+//   total: <count of matched invoices>,
+//   limit, offset,
+//   invoices: [
+//     { id, invoiceNum, subBrand, contactId, status, dueDate,
+//       totalAmount, receivedAmount, outstandingAmount, daysPastDue,
+//       bucket: "0-30" | "31-60" | "61-90" | "90+" | "notYetDue",
+//       currency }
+//   ],
+//   summary: {
+//     byBucket: {
+//       "0-30":    { count, outstanding },
+//       "31-60":   { count, outstanding },
+//       "61-90":   { count, outstanding },
+//       "90+":     { count, outstanding },
+//       notYetDue: { count, outstanding },
+//     },
+//     totalOutstanding: "X.XX",
+//     currencyBreakdown: { INR: "X.XX", USD: "Y.YY", ... }
+//   }
+// }
+//
+// Error codes: INVALID_SUB_BRAND, INVALID_AS_OF, INVALID_LIMIT,
+// INVALID_OFFSET, INVALID_CONTACT_ID.
+// ============================================================================
+function parseAsOf(input) {
+  if (input == null || input === "") return new Date();
+  const s = String(input);
+  // Accept ISO-8601 date OR datetime. Reject obviously-bad input.
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) {
+    const err = new Error("asOf must be a valid ISO-8601 date");
+    err.status = 400;
+    err.code = "INVALID_AS_OF";
+    throw err;
+  }
+  return d;
+}
+
+function bucketForDaysPastDue(days) {
+  if (days == null || days < 0) return "notYetDue";
+  if (days <= 30) return "0-30";
+  if (days <= 60) return "31-60";
+  if (days <= 90) return "61-90";
+  return "90+";
+}
+
+// Half-up rounding to 2dp on a Number. Mirrors the addDecimal convention
+// (Decimal(15,2) — Number precision is fine well below 1e15). Math.round
+// uses round-half-away-from-zero in V8 which is the half-up we want for
+// non-negative currency amounts.
+function roundHalfUp2(n) {
+  const v = Number(n == null ? 0 : n);
+  return (Math.round(v * 100) / 100).toFixed(2);
+}
+
+router.get(
+  "/invoices/aged-receivable",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const asOf = parseAsOf(req.query.asOf);
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      let contactIdFilter = null;
+      if (req.query.contactId != null && String(req.query.contactId).trim() !== "") {
+        const cid = parseInt(req.query.contactId, 10);
+        if (!Number.isFinite(cid) || cid <= 0) {
+          return res.status(400).json({
+            error: "contactId must be a positive integer",
+            code: "INVALID_CONTACT_ID",
+          });
+        }
+        contactIdFilter = cid;
+      }
+
+      const limit = parseLimitForSummary(req.query.limit);
+      const offset = parseOffsetForSummary(req.query.offset);
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        // "Open" = not paid, not voided, not draft. Issued | Partial are
+        // the customer-owed states.
+        status: { in: ["Issued", "Partial"] },
+      };
+      if (subBrandFilter) where.subBrand = subBrandFilter;
+      if (contactIdFilter) where.contactId = contactIdFilter;
+
+      // Sub-brand access narrowing mirrors gstr1-export.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (where.subBrand) {
+          if (!canAccessSubBrand(allowed, where.subBrand)) {
+            where.subBrand = "__none__";
+          }
+        } else {
+          where.subBrand = allowed.size > 0 ? { in: [...allowed] } : "__none__";
+        }
+      }
+
+      const [invoices, total] = await Promise.all([
+        prisma.travelInvoice.findMany({
+          where,
+          include: {
+            schedule: {
+              select: { receivedAmount: true, status: true },
+            },
+          },
+          orderBy: [{ dueDate: "asc" }, { id: "asc" }],
+          take: limit,
+          skip: offset,
+        }),
+        prisma.travelInvoice.count({ where }),
+      ]);
+
+      const asOfMs = asOf.getTime();
+      const buckets = {
+        "0-30": { count: 0, outstanding: "0.00" },
+        "31-60": { count: 0, outstanding: "0.00" },
+        "61-90": { count: 0, outstanding: "0.00" },
+        "90+": { count: 0, outstanding: "0.00" },
+        notYetDue: { count: 0, outstanding: "0.00" },
+      };
+      const currencyBreakdown = {};
+      let totalOutstanding = "0.00";
+
+      const rows = invoices.map((inv) => {
+        const sched = Array.isArray(inv.schedule) ? inv.schedule : [];
+        let received = 0;
+        for (const s of sched) {
+          received += Number(s.receivedAmount == null ? 0 : s.receivedAmount);
+        }
+        const totalAmt = Number(inv.totalAmount == null ? 0 : inv.totalAmount);
+        const outstandingNum = totalAmt - received;
+        const outstanding = roundHalfUp2(outstandingNum);
+        const dueMs =
+          inv.dueDate instanceof Date
+            ? inv.dueDate.getTime()
+            : inv.dueDate
+              ? new Date(inv.dueDate).getTime()
+              : null;
+        const daysPastDue =
+          dueMs == null ? null : Math.floor((asOfMs - dueMs) / 86_400_000);
+        const bucket = bucketForDaysPastDue(daysPastDue);
+
+        buckets[bucket].count += 1;
+        buckets[bucket].outstanding = addDecimal(
+          buckets[bucket].outstanding,
+          outstanding,
+        );
+        totalOutstanding = addDecimal(totalOutstanding, outstanding);
+
+        const cur = inv.currency || "INR";
+        currencyBreakdown[cur] = addDecimal(
+          currencyBreakdown[cur] || "0.00",
+          outstanding,
+        );
+
+        return {
+          id: inv.id,
+          invoiceNum: inv.invoiceNum,
+          subBrand: inv.subBrand,
+          contactId: inv.contactId,
+          status: inv.status,
+          dueDate: inv.dueDate,
+          totalAmount: roundHalfUp2(totalAmt),
+          receivedAmount: roundHalfUp2(received),
+          outstandingAmount: outstanding,
+          daysPastDue,
+          bucket,
+          currency: cur,
+        };
+      });
+
+      res.json({
+        asOf: asOf.toISOString(),
+        total,
+        limit,
+        offset,
+        invoices: rows,
+        summary: {
+          byBucket: buckets,
+          totalOutstanding,
+          currencyBreakdown,
+        },
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] aged-receivable error:", e.message);
+      res.status(500).json({ error: "Failed to generate aged receivable" });
+    }
+  },
+);
+
 
 // GET /api/travel/invoices/:id
 //

@@ -16,16 +16,30 @@
 //   - Slice 4 (commit 188d50c2): wire QuoteBuilder to the persistent line
 //     endpoints + add a per-line supplier picker fed by
 //     GET /api/travel/suppliers?subBrand=<sub>.
-//   - Slice 6 (THIS commit): add a "Send to customer" action button that
-//     opens a confirm modal explaining the Q9 (Wati WhatsApp) credential
-//     dependency. STUB-mode delivery: on confirm we mark the quote as
-//     "Sent" via PUT /api/travel/quotes/:id { status: "Sent" } so the
-//     status pill flips, and surface a notify.info "Send queued" message.
-//     Actual WhatsApp + email dispatch lives behind a Q9 cred drop (Meta
-//     System User token + 3×WABA ID + 3×phoneNumberId + webhook verify
-//     token). Once Q9 lands, wire the modal's confirm handler to POST
-//     /api/travel/quotes/:id/send (route to be added in a later slice)
-//     and remove the STUB marker.
+//   - Slice 6 (commit d2eff34c): add a "Send to customer" action button
+//     that opens a confirm modal explaining the Q9 (Wati WhatsApp)
+//     credential dependency. STUB-mode delivery: on confirm we mark the
+//     quote as "Sent" via PUT /api/travel/quotes/:id { status: "Sent" } so
+//     the status pill flips, and surface a notify.info "Send queued"
+//     message. Actual WhatsApp + email dispatch lives behind a Q9 cred
+//     drop (Meta System User token + 3×WABA ID + 3×phoneNumberId + webhook
+//     verify token). Once Q9 lands, wire the modal's confirm handler to
+//     POST /api/travel/quotes/:id/send (route to be added in a later
+//     slice) and remove the STUB marker.
+//   - Slice 8 (THIS commit): "Calculate with markups" action button +
+//     dismissable preview panel. Reads GET /api/travel/quotes/:id/
+//     pricing-preview (slice 5 endpoint at commit 91a7b931) and renders
+//     the per-rule markup breakdown alongside subtotal + new total.
+//     Strictly informational — Save Draft still persists the pre-markup
+//     grandTotal. A disclaimer ("Preview only — apply markup permanently
+//     on Send") sits near the panel so operators don't conflate the
+//     preview total with the persisted one. Button disabled when:
+//       (a) quote is NEW (no saved id — endpoint requires :id), or
+//       (b) the quote has zero visible lines (nothing to compute).
+//     Empty markupApplied[] renders a "No markup rules apply for this
+//     sub-brand" hint instead of an empty list. Error path: 4xx/5xx →
+//     notify.error using the standard err.body.error / err.message
+//     pattern that the other actions already follow.
 //
 // Backend contracts (all live as of f7203b8e):
 //   GET    /api/travel/quotes/:id                    → 200 { id, contactId, ... }
@@ -38,6 +52,16 @@
 //   PUT    /api/travel/quotes/:id/lines/:lineId      → 200 updated
 //   DELETE /api/travel/quotes/:id/lines/:lineId      → 204
 //   GET    /api/travel/suppliers?subBrand=<sub>      → 200 { suppliers: [...], total }
+//   GET    /api/travel/quotes/:id/pricing-preview    → 200 { subtotal, markupApplied[], total, currency, lines[] }
+//
+// pricing-preview response shape (slice 5, commit 91a7b931):
+//   { subtotal: number,
+//     markupApplied: [{ ruleId, ruleName, percent (nullable), amount }],
+//     total: number,
+//     currency: string,
+//     lines: [{ id, lineType, description, amount, amountWithMarkup }] }
+// `markupApplied` is dedupe'd by ruleId — one entry per rule even if it
+// matched multiple lines, with the amounts summed.
 //
 // Line CRUD body shape for POST (per backend slice 3):
 //   { lineType?: "hotel"|"flight"|"transport"|"visa"|"service"|"other",
@@ -70,7 +94,7 @@
 
 import { useEffect, useState, useContext, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X } from "lucide-react";
+import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
@@ -151,6 +175,13 @@ export default function QuoteBuilder() {
   // Send-to-customer confirm modal flag (slice 6 — Q9 STUB).
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  // Slice 8: pricing preview state. `pricingPreview` is null until the
+  // operator clicks "Calculate with markups"; once populated it renders
+  // the side panel until dismissed (set back to null) or until a fresh
+  // calculate fires (replaces the value). `previewLoading` gates the
+  // button label so consecutive clicks don't fire multiple GETs.
+  const [pricingPreview, setPricingPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   // Re-fetch the parent quote (used after line writes — server recomputes
   // totalAmount and we don't want the UI to drift from what's persisted).
@@ -492,6 +523,41 @@ export default function QuoteBuilder() {
     }
   };
 
+  // Slice 8: GET the markup-aware pricing preview from the backend and
+  // stash it in `pricingPreview`. The endpoint requires a persisted quote
+  // (button is disabled in NEW mode) and is informational only — the
+  // preview total does NOT feed back into Save Draft's payload. The
+  // separate disclaimer near the panel reinforces this for operators.
+  const handlePricingPreview = async () => {
+    if (!quoteId) {
+      notify.error("Save the quote first before calculating with markups");
+      return;
+    }
+    if (visibleLines.length === 0) {
+      notify.error("Add at least one line before calculating with markups");
+      return;
+    }
+    setPreviewLoading(true);
+    try {
+      const resp = await fetchApi(`/api/travel/quotes/${quoteId}/pricing-preview`);
+      if (resp && typeof resp === "object") {
+        setPricingPreview({
+          subtotal: Number(resp.subtotal) || 0,
+          total: Number(resp.total) || 0,
+          currency: resp.currency || currency || "INR",
+          markupApplied: Array.isArray(resp.markupApplied) ? resp.markupApplied : [],
+          lines: Array.isArray(resp.lines) ? resp.lines : [],
+        });
+      }
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Pricing preview failed");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const dismissPricingPreview = () => setPricingPreview(null);
+
   if (loading) {
     return (
       <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
@@ -601,6 +667,23 @@ export default function QuoteBuilder() {
               title={!quoteId ? "Save first" : "Download PDF"}
             >
               <Download size={14} /> Download PDF
+            </button>
+            <button
+              type="button"
+              onClick={handlePricingPreview}
+              disabled={!quoteId || visibleLines.length === 0 || previewLoading}
+              style={secondaryBtn}
+              title={
+                !quoteId
+                  ? "Save first"
+                  : visibleLines.length === 0
+                    ? "Add a line first"
+                    : "Calculate subtotal + markup-rule preview"
+              }
+              aria-label="Calculate with markups"
+            >
+              <TrendingUp size={14} />{" "}
+              {previewLoading ? "Calculating…" : "Calculate with markups"}
             </button>
           </div>
         )}
@@ -951,6 +1034,124 @@ export default function QuoteBuilder() {
           </div>
         </div>
       </section>
+
+      {pricingPreview && (
+        <section
+          className="glass"
+          aria-label="Pricing preview"
+          style={{ padding: 16, marginBottom: 16 }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: 12,
+              marginBottom: 12,
+            }}
+          >
+            <div>
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: "1rem",
+                  fontWeight: 600,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <TrendingUp size={16} aria-hidden /> Pricing preview
+              </h2>
+              <p
+                style={{
+                  color: "var(--text-secondary)",
+                  fontSize: 12,
+                  margin: "4px 0 0",
+                }}
+              >
+                Preview only — apply markup permanently on Send.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={dismissPricingPreview}
+              style={iconBtn}
+              aria-label="Dismiss pricing preview"
+              title="Dismiss"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={totalsRow}>
+              <span style={totalsLabel}>Subtotal (pre-markup)</span>
+              <span style={totalsValue} aria-label="Pricing preview subtotal">
+                {pricingPreview.currency} {fmt(pricingPreview.subtotal)}
+              </span>
+            </div>
+            {pricingPreview.markupApplied.length === 0 ? (
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  fontStyle: "italic",
+                  padding: "4px 0",
+                }}
+                aria-label="No markup rules apply"
+              >
+                No markup rules apply for this sub-brand
+              </div>
+            ) : (
+              <div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--text-secondary)",
+                    marginBottom: 4,
+                  }}
+                >
+                  Markup rules applied
+                </div>
+                <ul
+                  style={{ margin: 0, padding: "0 0 0 16px", listStyle: "disc" }}
+                  aria-label="Markup rules applied"
+                >
+                  {pricingPreview.markupApplied.map((r) => (
+                    <li
+                      key={r.ruleId}
+                      style={{ fontSize: 13, padding: "2px 0" }}
+                    >
+                      <span>{r.ruleName}</span>
+                      <span style={{ color: "var(--text-secondary)" }}>
+                        {r.percent != null ? `: ${Number(r.percent)}%` : ""}{" "}
+                        ({pricingPreview.currency} {fmt(r.amount)})
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div
+              style={{
+                ...totalsRow,
+                borderTop: "1px solid var(--border-color)",
+                paddingTop: 6,
+                marginTop: 6,
+                fontWeight: 700,
+              }}
+            >
+              <span style={totalsLabel}>Total with markup</span>
+              <span
+                style={{ ...totalsValue, color: "var(--primary-color, var(--accent-color))" }}
+                aria-label="Pricing preview total"
+              >
+                {pricingPreview.currency} {fmt(pricingPreview.total)}
+              </span>
+            </div>
+          </div>
+        </section>
+      )}
 
       {sendConfirmOpen && (
         <div

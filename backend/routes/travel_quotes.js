@@ -36,6 +36,11 @@ const {
   gstRateForCategory,
 } = require("../lib/gstCalculation");
 const { resolveStateCodes } = require("../lib/gstStateCodeResolver");
+const {
+  sacForLineType,
+  descriptionForSac,
+  groupLinesBySac,
+} = require("../lib/hsnSacMapper");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
@@ -1160,11 +1165,19 @@ router.get(
         }
         const amountWithTax = round2(amt + totalTax);
 
+        // Slice 6 of #902 — surface per-line SAC code + description from
+        // lib/hsnSacMapper.js (commit 6aca2361). Additive fields; the
+        // existing per-line shape stays back-compat.
+        const sacCode = sacForLineType(l.lineType);
+        const sacDescription = sacCode ? descriptionForSac(sacCode) : null;
+
         decoratedLines.push({
           id: l.id,
           lineType: l.lineType,
           amount: round2(amt),
           gstPercent,
+          sacCode,
+          sacDescription,
           cgst,
           sgst,
           igst,
@@ -1189,6 +1202,19 @@ router.get(
         isInterstate,
       );
 
+      // Slice 6 of #902 — HSN/SAC summary grouping per FR-3.4.3 (GSTR-1
+      // export-ready shape: one row per (sacCode, gstPercent) pair with
+      // summed taxableValue + line count). Sibling shape to buckets[]
+      // (which groups by gstPercent only). Lines whose lineType has no
+      // SAC of its own (tax/fee/tcs/tds) are skipped by the helper.
+      const hsnSummary = groupLinesBySac(
+        lines.map((l) => ({
+          lineType: l.lineType,
+          taxableValue: Number(l.amount || 0),
+          gstPercent: gstRateForCategory(l.lineType),
+        })),
+      );
+
       res.json({
         subtotal: bucketSummary.subtotal,
         isInterstate,
@@ -1201,6 +1227,7 @@ router.get(
         totalTax: bucketSummary.totalTax,
         grandTotal: bucketSummary.grandTotal,
         buckets: bucketSummary.buckets,
+        hsnSummary,
       });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

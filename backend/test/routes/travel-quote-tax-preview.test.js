@@ -580,3 +580,140 @@ describe('GET /api/travel/quotes/:id/tax-preview — slice 4 resolver wiring', (
     expect(prisma.contact.findUnique).not.toHaveBeenCalled();
   });
 });
+
+// Slice 6 of #902 — wiring lib/hsnSacMapper.js (commit 6aca2361). The
+// tax-preview response now decorates each line with its canonical SAC
+// code + description AND surfaces a top-level hsnSummary[] grouping
+// for GSTR-1 export (FR-3.4.3). hsnSummary is a sibling of buckets[]:
+// buckets groups by gstPercent only; hsnSummary groups by (sacCode,
+// gstPercent) pair. Both ship in the envelope so callers pick the view
+// they need (PDF on-quote = per-line; GSTR-1 JSON export = hsnSummary).
+describe('GET /api/travel/quotes/:id/tax-preview — slice 6 SAC + hsnSummary', () => {
+  test('per-line: every line carries a sacCode + sacDescription field', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote());
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'hotel', amount: '1000.00' }),
+      makeLine({ id: 2, lineType: 'flight', amount: '2000.00' }),
+      makeLine({ id: 3, lineType: 'service', amount: '500.00' }),
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.lines).toHaveLength(3);
+    for (const line of res.body.lines) {
+      expect(line).toHaveProperty('sacCode');
+      expect(line).toHaveProperty('sacDescription');
+    }
+  });
+
+  test('hotel line → sacCode "9963", description "Accommodation services"', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote());
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'hotel', amount: '1000.00' }),
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.lines[0].sacCode).toBe('9963');
+    expect(res.body.lines[0].sacDescription).toBe('Accommodation services');
+  });
+
+  test('flight line → sacCode "9964", description "Passenger transport services"', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote());
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'flight', amount: '2000.00' }),
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.lines[0].sacCode).toBe('9964');
+    expect(res.body.lines[0].sacDescription).toBe('Passenger transport services');
+  });
+
+  test('unknown lineType → falls back to default SAC "9985" with travel-tourism description', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote());
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'something_weird', amount: '1000.00' }),
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.lines[0].sacCode).toBe('9985');
+    expect(res.body.lines[0].sacDescription).toBe('Support services to travel & tourism');
+  });
+
+  test('hsnSummary present in response, length matches distinct (sacCode, gstPercent) pairs', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote());
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'hotel', amount: '1000.00' }),   // 9963 @ 12%
+      makeLine({ id: 2, lineType: 'flight', amount: '2000.00' }),  // 9964 @ 5%
+      makeLine({ id: 3, lineType: 'service', amount: '500.00' }),  // 9985 @ 18%
+      makeLine({ id: 4, lineType: 'hotel', amount: '800.00' }),    // 9963 @ 12% (duplicate group)
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.hsnSummary)).toBe(true);
+    // 3 distinct (sacCode, gstPercent) pairs: (9963,12), (9964,5), (9985,18)
+    expect(res.body.hsnSummary).toHaveLength(3);
+    // The two hotel lines must collapse into one group with count=2 + summed taxable
+    const hotelGroup = res.body.hsnSummary.find((g) => g.sacCode === '9963');
+    expect(hotelGroup).toBeDefined();
+    expect(hotelGroup.count).toBe(2);
+    expect(hotelGroup.taxableValue).toBe(1800);
+    expect(hotelGroup.gstPercent).toBe(12);
+  });
+
+  test('hsnSummary entries have { sacCode, description, gstPercent, taxableValue, count } shape', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote());
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 1, lineType: 'hotel', amount: '1000.00' }),
+      makeLine({ id: 2, lineType: 'flight', amount: '2000.00' }),
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    for (const entry of res.body.hsnSummary) {
+      expect(entry).toEqual(expect.objectContaining({
+        sacCode: expect.any(String),
+        description: expect.any(String),
+        gstPercent: expect.any(Number),
+        taxableValue: expect.any(Number),
+        count: expect.any(Number),
+      }));
+    }
+    // Sorted by sacCode ascending — 9963 (hotel) before 9964 (flight)
+    expect(res.body.hsnSummary[0].sacCode).toBe('9963');
+    expect(res.body.hsnSummary[1].sacCode).toBe('9964');
+  });
+
+  test('empty quote (zero lines) → hsnSummary is []', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote());
+    prisma.travelQuoteLine.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/tax-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.hsnSummary).toEqual([]);
+  });
+});

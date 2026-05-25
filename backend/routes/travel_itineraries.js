@@ -4,6 +4,7 @@
 //   GET    /api/travel/itineraries                          — list (paginated, filterable)
 //   POST   /api/travel/itineraries                          — create itinerary (+ optional items)
 //   GET    /api/travel/itineraries/by-month                  — tenant-wide monthly rollup (#907 slice 16)
+//   GET    /api/travel/itineraries/by-quarter                — tenant-wide quarterly rollup (#907 slice 17)
 //   GET    /api/travel/itineraries/:id                      — fetch one with items
 //   PATCH  /api/travel/itineraries/:id                      — amend top-level fields (not items)
 //   POST   /api/travel/itineraries/:id/items                — append a polymorphic item
@@ -515,6 +516,279 @@ router.get("/itineraries/by-month", verifyToken, requireTravelTenant, async (req
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-itin] by-month error:", e.message);
     res.status(500).json({ error: "Failed to compute monthly rollup" });
+  }
+});
+
+// ─── Tenant-wide quarterly rollup (slice 17) ──────────────────────────
+
+// GET /api/travel/itineraries/by-quarter — any verified token (tenant + sub-brand scoped).
+//
+// Slice 17 of #907 (PRD_TRAVEL_ITINERARY_UPGRADES.md §3 — tenant-wide
+// itinerary analytics rolled up by calendar quarter). Mirrors slice 16
+// /by-month exactly — same 7-status envelope, same defensive math,
+// same orderBy semantics, same half-up 2dp rounding — at quarter
+// resolution instead of month. One row per UTC YYYY-Qn present in the
+// scoped itinerary set, summarising count + 7-status splits + value
+// sums for that quarter.
+//
+// 7-status envelope (PRD §4.7 Phase 2 50%-advance booking):
+//   draft / sent / revised / accepted / rejected / advance_paid / fully_paid
+// The acceptedValue rollup sums totalAmount across the THREE
+// "agreement-secured" statuses {accepted, advance_paid, fully_paid} —
+// mirrors slice 16 by-month exactly.
+//
+// Why quarter granularity in addition to month: finance review cadence
+// (board reporting, supplier reconciliation, RFU Umrah seasonal
+// planning) is quarterly. The dashboard's quarterly trend chart needs
+// a single endpoint hit instead of summing 3 month rows client-side.
+//
+// Bucket key shape: "YYYY-Qn" where n ∈ {1,2,3,4}. Calendar quarter via
+// `Math.floor(month/3) + 1` where month is the 0-indexed UTC month:
+//   Q1: Jan–Mar (months 0..2)
+//   Q2: Apr–Jun (months 3..5)
+//   Q3: Jul–Sep (months 6..8)
+//   Q4: Oct–Dec (months 9..11)
+// UTC chosen deliberately so bucket labels stay stable across operator
+// timezones (matches slice 16 by-month posture).
+//
+// Scope rules: identical to slice 16 by-month — tenant-scoped on
+// Itinerary.tenantId, sub-brand-restricted via subBrandAccess
+// (Itinerary.subBrand is non-nullable → narrowing uses { in: [...] }
+// with NO NULL OR-clause), any verified token, no RBAC narrowing.
+//
+// Query string:
+//   status   optional Itinerary.status filter; invalid → 400 INVALID_STATUS.
+//   from     optional inclusive lower bound on bucket (YYYY-Qn); rows
+//            with quarter < from are excluded.
+//   to       optional inclusive upper bound on bucket (YYYY-Qn); rows
+//            with quarter > to are excluded.
+//   orderBy  default "quarter:asc" (chronological); also accepts
+//            "quarter:desc", "count:asc|desc", "acceptedCount:asc|desc",
+//            "totalValue:asc|desc". Unknown tokens degrade silently to
+//            the default.
+//   limit    default 12 (3 years of quarters), max 40 (10 years).
+//   offset   default 0
+//
+// Response shape:
+//   {
+//     quarters: [ {
+//       quarter: "2026-Q2",
+//       count, totalValue,
+//       draftCount, sentCount, revisedCount, acceptedCount, rejectedCount,
+//       advancePaidCount, fullyPaidCount,
+//       acceptedValue
+//     } ],
+//     totalQuarters,
+//     grandCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-quarter" as a numeric :id (which would 400 INVALID_ID).
+router.get("/itineraries/by-quarter", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+    if (statusFilter && !VALID_STATUSES.includes(statusFilter)) {
+      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+    }
+
+    // YYYY-Qn validation — quarter ∈ {1,2,3,4}, year is 4 digits.
+    // Bucket labels we emit follow this exact shape so callers passing
+    // quarter-tokens to from/to should already be using it.
+    const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+    if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "quarter:asc",
+      "quarter:desc",
+      "count:asc",
+      "count:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /itineraries list handler — empty access set → all-zeros rollup
+    // (not 403) so the dashboard tile renders cleanly for
+    // not-yet-onboarded operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        quarters: [],
+        totalQuarters: 0,
+        grandCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-Qn. Input size bound is the same as the list
+    // endpoint (low thousands at platinum scale).
+    const itineraries = await prisma.itinerary.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Statuses whose totalAmount counts toward acceptedValue — the
+    // "agreement-secured" set. Mirrors slice 16 by-month exactly.
+    const ACCEPTED_VALUE_STATUSES = new Set(["accepted", "advance_paid", "fully_paid"]);
+
+    // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts/sums }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate. Null/invalid totalAmount contributes 0.
+    const byQuarter = new Map();
+    for (const it of itineraries) {
+      let quarterKey = "unknown";
+      if (it.createdAt) {
+        const dt = it.createdAt instanceof Date
+          ? it.createdAt
+          : new Date(it.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+          quarterKey = `${yyyy}-Q${q}`;
+        }
+      }
+
+      let row = byQuarter.get(quarterKey);
+      if (!row) {
+        row = {
+          quarter: quarterKey,
+          count: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          revisedCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          advancePaidCount: 0,
+          fullyPaidCount: 0,
+          acceptedValue: 0,
+        };
+        byQuarter.set(quarterKey, row);
+      }
+
+      row.count += 1;
+      const amt = Number(it.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (it.status) {
+        case "draft": row.draftCount += 1; break;
+        case "sent": row.sentCount += 1; break;
+        case "revised": row.revisedCount += 1; break;
+        case "accepted": row.acceptedCount += 1; break;
+        case "rejected": row.rejectedCount += 1; break;
+        case "advance_paid": row.advancePaidCount += 1; break;
+        case "fully_paid": row.fullyPaidCount += 1; break;
+        default: break;
+      }
+      if (ACCEPTED_VALUE_STATUSES.has(it.status)) {
+        row.acceptedValue += safeAmt;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let quarters = [...byQuarter.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable quarter token); when
+    // no bounds are set, "unknown" stays so the count surface remains
+    // complete. Mirrors slice 16 by-month posture.
+    if (fromRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+    }
+    if (toRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+    }
+
+    // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+    // chronological (Q1 < Q2 < Q3 < Q4 in ASCII, years naturally
+    // ordered). "unknown" sorts last in asc / first in desc by virtue
+    // of being lexicographically > "9999-Q4" — acceptable for a
+    // defensive fallback bucket that should rarely appear.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    quarters.sort((a, b) => {
+      if (field === "quarter") {
+        if (a.quarter < b.quarter) return -1 * mult;
+        if (a.quarter > b.quarter) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalQuarters = quarters.length;
+    const grandCount = quarters.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as
+    // slice 16 by-month.
+    const paged = quarters.slice(skip, skip + take);
+
+    res.json({
+      quarters: paged,
+      totalQuarters,
+      grandCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] by-quarter error:", e.message);
+    res.status(500).json({ error: "Failed to compute quarterly rollup" });
   }
 });
 

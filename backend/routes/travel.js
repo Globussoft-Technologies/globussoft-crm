@@ -22,6 +22,7 @@ const {
   normaliseGstin,
   stateNameFromCode,
 } = require("../lib/gstinValidator");
+const { lookupSacByKeyword } = require("../lib/hsnSacMapper");
 
 // ─── GET /api/travel/health ────────────────────────────────────────────
 //
@@ -129,6 +130,60 @@ router.get(
       stateName,
       stateCode,
       errors: [code],
+    });
+  }
+);
+
+// ─── GET /api/travel/utils/hsn-lookup ──────────────────────────────────
+//
+// Slice 15 of the #902 GST & Compliance arc (PRD:
+// docs/PRD_TRAVEL_GST_COMPLIANCE.md §3.4.3 — HSN summary requires that
+// each invoice line carries an HSN/SAC code; an operator typing
+// "hotel" or "umrah" needs a picker to find the right SAC).  Wraps
+// the slice-5 `backend/lib/hsnSacMapper.js` keyword reverse-lookup in
+// a read-only HTTP surface.  ADMIN+MANAGER gate (low-cost lookup used
+// by the invoice-line edit form before submit; the form's "Help me
+// pick a SAC" picker hits this endpoint as the operator types).
+//
+// Query: `?q=<keyword>`  e.g.  ?q=hotel  ?q=umrah  ?q=passenger transport
+//
+// Response shape (200 always; empty result is `{results:[], count:0}`,
+// NOT a 404 — the operator UI surfaces a "no matches" state rather
+// than treating a no-hit as an error):
+//
+//   { query:   <normalised lowercase, trimmed>,
+//     count:   <number>,
+//     results: [ { sacCode: "9963",
+//                  description: "Accommodation services",
+//                  matchType: "EXACT" | "KEYWORD" | "DESCRIPTION" } ] }
+//
+// Error envelope (400) only when the `q` query parameter is missing /
+// non-string / empty — that's a malformed request rather than a
+// "valid query, no hits" result.
+//
+// Sort order: by sacCode ascending (matches groupLinesBySac contract
+// for downstream PDF render / GSTR-1 reconciliation reuse).
+// Dedup: one row per SAC (the lib does this); the operator picks
+// from a short list rather than a per-keyword-hit long one.
+router.get(
+  "/utils/hsn-lookup",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  (req, res) => {
+    const raw = req.query.q;
+    if (raw == null || typeof raw !== "string" || raw.trim() === "") {
+      return res.status(400).json({
+        error: "Query parameter `q` is required",
+        code: "MISSING_QUERY",
+      });
+    }
+    const normalised = raw.trim().toLowerCase();
+    const results = lookupSacByKeyword(normalised);
+    return res.json({
+      query: normalised,
+      count: results.length,
+      results,
     });
   }
 );

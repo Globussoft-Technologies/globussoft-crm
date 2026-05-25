@@ -157,11 +157,165 @@ function groupLinesBySac(lines) {
   );
 }
 
+// === Keyword → SAC reverse-lookup (slice 15) ===
+//
+// Operator-facing reverse-lookup: type a service description ("hotel",
+// "flight", "umrah package") and get the SAC code(s) that classify it.
+// Drives the Finance > Compliance > "Help me pick a SAC" picker in the
+// invoice-line edit form (FR-3.4.3 acceptance path).
+//
+// Match strategy:
+//   1. EXACT match on TRAVEL_SAC_CODES key (case-insensitive) — when the
+//      operator types one of our internal line-type names verbatim
+//      ("hotel", "tour_package", "per_room") we return that one SAC
+//      hit first. Highest confidence (this is what the lib's own
+//      categoriser would have picked).
+//   2. KEYWORD match: walk a curated keyword → SAC map. The map covers
+//      operator-natural phrasings ("flight" / "airline" / "ticket" →
+//      9964; "hotel" / "room" / "accommodation" → 9963; "visa" /
+//      "consulate" → 9982; "umrah" / "package" / "tour" → 9985; etc.).
+//      Multiple keyword hits collapse to one row per SAC; we surface
+//      the deduplicated set sorted by sacCode ascending for determinism.
+//   3. SUBSTRING match on SAC_DESCRIPTIONS values — covers operator
+//      queries like "transport" / "financial" / "legal" that aren't in
+//      the keyword table but appear in the description text. Same
+//      dedup + sort.
+//
+// All three strategies feed the same output list; first match wins for
+// any given SAC code so a query that hits both EXACT and KEYWORD stages
+// doesn't double-list. Empty / whitespace / non-string queries return
+// [] (the route layer 400s before calling this — defensive).
+//
+// Result row carries `matchType` ∈ {"EXACT", "KEYWORD", "DESCRIPTION"}
+// so the operator UI can decorate (e.g. EXACT in bold, KEYWORD in
+// regular, DESCRIPTION in italic). The route layer passes it through
+// verbatim.
+
+const KEYWORD_TO_SAC = {
+  // 9963 — Accommodation
+  hotel: "9963",
+  hotels: "9963",
+  room: "9963",
+  rooms: "9963",
+  accommodation: "9963",
+  lodging: "9963",
+  resort: "9963",
+  homestay: "9963",
+  hostel: "9963",
+  // 9964 — Passenger transport
+  flight: "9964",
+  flights: "9964",
+  airline: "9964",
+  airfare: "9964",
+  ticket: "9964",
+  tickets: "9964",
+  transport: "9964",
+  transportation: "9964",
+  bus: "9964",
+  cab: "9964",
+  taxi: "9964",
+  rail: "9964",
+  train: "9964",
+  passenger: "9964",
+  // 9971 — Financial / fx
+  forex: "9971",
+  fx: "9971",
+  remittance: "9971",
+  currency: "9971",
+  exchange: "9971",
+  // 9982 — Legal / visa
+  visa: "9982",
+  visas: "9982",
+  consulate: "9982",
+  passport: "9982",
+  embassy: "9982",
+  legal: "9982",
+  paperwork: "9982",
+  // 9985 — Tour / travel support catch-all
+  tour: "9985",
+  tours: "9985",
+  package: "9985",
+  packages: "9985",
+  itinerary: "9985",
+  travel: "9985",
+  tourism: "9985",
+  umrah: "9985",
+  hajj: "9985",
+  pilgrimage: "9985",
+  trip: "9985",
+  holiday: "9985",
+  vacation: "9985",
+  guide: "9985",
+};
+
+/**
+ * Reverse-lookup SAC codes from an operator-supplied keyword string.
+ * Returns deduplicated rows (one per SAC) sorted by sacCode ascending.
+ *
+ * @param {string} query  operator-supplied keyword (any casing,
+ *   may include leading/trailing whitespace). The keyword may be a
+ *   single word ("hotel") or a phrase ("luxury hotel room") — we
+ *   tokenise on whitespace + try EXACT/KEYWORD lookup for each token,
+ *   then fall back to a DESCRIPTION substring match on the joined query.
+ * @returns {Array<{sacCode: string, description: string, matchType: "EXACT"|"KEYWORD"|"DESCRIPTION"}>}
+ *   Empty array on empty / non-string / no-hit query (callers should
+ *   surface a "no matches" UI state, not 404).
+ */
+function lookupSacByKeyword(query) {
+  if (!query || typeof query !== "string") return [];
+  const trimmed = query.trim().toLowerCase();
+  if (trimmed === "") return [];
+
+  // sacCode → row (preserves first match — EXACT beats KEYWORD beats DESCRIPTION).
+  const hits = new Map();
+
+  const recordHit = (sacCode, matchType) => {
+    if (!sacCode) return;
+    if (hits.has(sacCode)) return; // first match wins
+    hits.set(sacCode, {
+      sacCode,
+      description: descriptionForSac(sacCode),
+      matchType,
+    });
+  };
+
+  // Stage 1: EXACT — full query matches a TRAVEL_SAC_CODES key.
+  // Tokens are checked too so "hotel room" finds the hotel key.
+  const tokens = trimmed.split(/\s+/);
+  const exactCandidates = [trimmed, ...tokens];
+  for (const candidate of exactCandidates) {
+    if (
+      Object.prototype.hasOwnProperty.call(TRAVEL_SAC_CODES, candidate)
+    ) {
+      const sac = TRAVEL_SAC_CODES[candidate];
+      if (sac !== null) recordHit(sac, "EXACT");
+    }
+  }
+
+  // Stage 2: KEYWORD — any token matches a KEYWORD_TO_SAC entry.
+  for (const token of tokens) {
+    if (Object.prototype.hasOwnProperty.call(KEYWORD_TO_SAC, token)) {
+      recordHit(KEYWORD_TO_SAC[token], "KEYWORD");
+    }
+  }
+
+  // Stage 3: DESCRIPTION — the joined query appears in any description.
+  for (const [sac, desc] of Object.entries(SAC_DESCRIPTIONS)) {
+    if (desc.toLowerCase().includes(trimmed)) {
+      recordHit(sac, "DESCRIPTION");
+    }
+  }
+
+  return [...hits.values()].sort((a, b) => a.sacCode.localeCompare(b.sacCode));
+}
+
 module.exports = {
   TRAVEL_SAC_CODES,
   SAC_DESCRIPTIONS,
   DEFAULT_SAC,
+  KEYWORD_TO_SAC,
   sacForLineType,
   descriptionForSac,
   groupLinesBySac,
+  lookupSacByKeyword,
 };

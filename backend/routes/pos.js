@@ -40,6 +40,11 @@ const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extr
 // telecaller/helper) can ring up sales + manage their own shift but not
 // configure registers / refund.
 const adminGate = verifyWellnessRole(["admin", "manager"]);
+// D17 slice 7 (PRD_POS_NEW_SALE §3.9 + DD-5.7 round-2 RESOLVED 2026-05-25
+// STRICT mode) — void + refund must be ADMIN-only (not manager). Stricter
+// than adminGate above; gives the cashier/manager no escape hatch from the
+// audited destruction of a completed sale + its wallet redemption.
+const strictAdminGate = verifyWellnessRole(["admin"]);
 const cashierGate = verifyWellnessRole([
   "admin",
   "manager",
@@ -1685,47 +1690,416 @@ async function resolveRegisterIdForFinalize(tx, req) {
   throw err;
 }
 
-router.post("/sales/:id/refund", adminGate, async (req, res) => {
+// ── D17 Arc 1 Slice 7: void + refund (PRD_POS_NEW_SALE §3.9) ─────────
+//
+// POST /api/pos/sales/:id/void
+// POST /api/pos/sales/:id/refund
+//
+// DD-5.7 round-2 RESOLVED 2026-05-25: STRICT mode → BOTH endpoints are
+// ADMIN-only (strictAdminGate above — manager cannot reach here).
+//
+// SEMANTIC DIFFERENCE (why two endpoints, not one):
+//   /void   — undo the entire COMPLETED sale, reverse wallet redemption back
+//             to the customer's wallet (restore batch.remainingCents +
+//             write WalletTransaction VOID_REVERSAL + bump Wallet.balance),
+//             flip Invoice.status to VOIDED. Use case: cashier rang the
+//             wrong patient/items and the customer hasn't taken the
+//             goods yet. NO money leaves the till; wallet redemption is
+//             restored as if the sale never happened.
+//   /refund — issue a cash-out (full or partial). Writes a negative-amount
+//             Payment row tagged gateway='refund'. Does NOT touch the
+//             wallet — wallet redemption stays consumed; the refund is a
+//             real cash payout to the customer. Use case: customer returns
+//             goods after the fact, or admin grants a goodwill partial
+//             refund. Multiple partial refunds accumulate; status flips to
+//             PARTIALLY_REFUNDED until the sum equals total → REFUNDED.
+//
+// WALLET REVERSAL MECHANISM (void only):
+//   The original /sales/finalize audit log row carries the per-batch
+//   debit ledger in its details JSON (POS_SALE_FINALIZED →
+//   walletBatchesDebited: [{batchId, batchType, consumedCents}, ...]).
+//   We read that ledger, restore each batch's remainingCents +
+//   status=ACTIVE, increment Wallet.balance by the total reversed, and
+//   write a single WalletTransaction(type=VOID_REVERSAL). The audit log
+//   IS the source of truth for the reversal trail since the schema has
+//   no direct Sale→Batch FK linkage (the finalize tx records batches in
+//   audit, not in a relational table — see /sales/finalize line ~1610).
+//   If no audit row exists (legacy sales pre-slice-7) the void still
+//   succeeds but walletReversedCents=0 with a diagnostic note.
+//
+// PARTIAL-REFUND TRACKING:
+//   The Sale schema has no "refundedTotalCents" column (schema mods are
+//   out of scope for this slice). We compute refunded-to-date on every
+//   request by summing Payment rows where invoiceId = sale's invoice AND
+//   amount < 0 AND gateway = 'refund'. The new refund row is rejected
+//   with REFUND_EXCEEDS_BALANCE if (refundedSoFar + amountCents) >
+//   sale.totalCents. Status flips: COMPLETED → PARTIALLY_REFUNDED on
+//   first partial; PARTIALLY_REFUNDED → REFUNDED when sum reaches total.
+//
+// Error codes (both endpoints unless noted):
+//   400 INVALID_ID             :id is not numeric
+//   400 INVALID_REASON         body.reason missing / not string / >500 chars
+//   400 INVALID_AMOUNT         (refund only) amountCents missing / non-int / ≤0
+//   403 WELLNESS_ROLE_FORBIDDEN  RBAC (manager / user / clinical role denied)
+//   404 SALE_NOT_FOUND         sale missing OR cross-tenant
+//   409 SALE_NOT_VOIDABLE      (void) sale.status not COMPLETED
+//   409 SALE_NOT_REFUNDABLE    (refund) sale.status not COMPLETED/PARTIALLY_REFUNDED
+//   409 REFUND_EXCEEDS_BALANCE (refund) amountCents > remaining refundable
+//   500 SALE_VOID_FAILED / SALE_REFUND_FAILED  unexpected tx failure
+
+router.post("/sales/:id/void", strictAdminGate, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res
+        .status(400)
+        .json({ error: "id must be a positive integer", code: "INVALID_ID" });
     }
-    const sale = await prisma.sale.findFirst({ where: tenantWhere(req, { id }) });
-    if (!sale) return res.status(404).json({ error: "Sale not found" });
-    if (sale.status === "REFUNDED") {
-      return res.status(409).json({
-        error: "Sale already refunded",
-        code: "SALE_ALREADY_REFUNDED",
-      });
-    }
-    if (sale.status === "CANCELLED") {
-      return res.status(409).json({
-        error: "Cannot refund a cancelled sale",
-        code: "SALE_CANCELLED",
-      });
-    }
-    const { reason } = req.body;
+
+    const { reason } = req.body || {};
     if (!reason || typeof reason !== "string" || !reason.trim()) {
-      return res.status(400).json({ error: "reason is required", code: "REASON_REQUIRED" });
+      return res
+        .status(400)
+        .json({ error: "reason is required", code: "INVALID_REASON" });
     }
-    const refunded = await prisma.sale.update({
-      where: { id },
-      data: {
-        status: "REFUNDED",
-        refundedAt: new Date(),
-        refundReason: reason.trim().slice(0, 1000),
+    if (reason.length > 500) {
+      return res
+        .status(400)
+        .json({ error: "reason exceeds 500 chars", code: "INVALID_REASON" });
+    }
+
+    const sale = await prisma.sale.findFirst({ where: tenantWhere(req, { id }) });
+    if (!sale) {
+      return res
+        .status(404)
+        .json({ error: "Sale not found", code: "SALE_NOT_FOUND" });
+    }
+    if (sale.status !== "COMPLETED") {
+      return res.status(409).json({
+        error: `Sale status=${sale.status} is not voidable (must be COMPLETED)`,
+        code: "SALE_NOT_VOIDABLE",
+        currentStatus: sale.status,
+      });
+    }
+
+    // Look up the POS_SALE_FINALIZED audit row to recover wallet-batch
+    // debit ledger. If not present (legacy sales pre-slice-7), the void
+    // still succeeds with walletReversedCents=0.
+    const finalizeAudit = await prisma.auditLog.findFirst({
+      where: {
+        tenantId: req.user.tenantId,
+        entity: "Sale",
+        action: "POS_SALE_FINALIZED",
+        entityId: id,
       },
+      orderBy: { createdAt: "desc" },
     });
-    await writeAudit("Sale", "REFUND", id, req.user.userId, req.user.tenantId, {
-      invoiceNumber: sale.invoiceNumber,
-      total: sale.total,
-      reason: reason.trim().slice(0, 200),
+    let batchesToReverse = [];
+    let walletIdFromAudit = null;
+    if (finalizeAudit && finalizeAudit.details) {
+      try {
+        const parsed = typeof finalizeAudit.details === "string"
+          ? JSON.parse(finalizeAudit.details)
+          : finalizeAudit.details;
+        if (Array.isArray(parsed.walletBatchesDebited)) {
+          batchesToReverse = parsed.walletBatchesDebited.filter(
+            (b) => b && Number.isFinite(b.batchId) && Number.isFinite(b.consumedCents) && b.consumedCents > 0,
+          );
+        }
+      } catch (_parseErr) {
+        // Malformed audit JSON — proceed with empty reversal list (no wallet
+        // path to undo). The void itself is still valid; the diagnostic is
+        // logged for operators.
+        console.warn(`[pos] void: malformed finalize audit details for sale ${id}`);
+      }
+    }
+    // Resolve walletId via the patient (Wallet has @unique patientId).
+    // Only needed if there ARE batches to reverse.
+    let walletReversedCents = 0;
+    if (batchesToReverse.length > 0 && sale.patientId) {
+      const wallet = await prisma.wallet.findFirst({
+        where: tenantWhere(req, { patientId: sale.patientId }),
+        select: { id: true, balance: true },
+      });
+      if (wallet) {
+        walletIdFromAudit = wallet.id;
+        walletReversedCents = batchesToReverse.reduce(
+          (sum, b) => sum + b.consumedCents,
+          0,
+        );
+      } else {
+        // Wallet was deleted between finalize and void — cannot reverse,
+        // but the sale void itself is still legitimate.
+        batchesToReverse = [];
+      }
+    }
+
+    // Look up the linked Invoice (no FK; matched by invoiceNum). Optional —
+    // if no Invoice was created during finalize (patient lacked a Contact),
+    // skip the Invoice.status flip.
+    const linkedInvoice = await prisma.invoice.findFirst({
+      where: { tenantId: req.user.tenantId, invoiceNum: sale.invoiceNumber },
+      select: { id: true },
     });
-    res.json(refunded);
+
+    const now = new Date();
+    try {
+      await prisma.$transaction(async (tx) => {
+        // 1) Reverse each wallet batch: restore remainingCents + flip
+        //    EXHAUSTED → ACTIVE (newRemaining > 0 always since we're adding).
+        for (const b of batchesToReverse) {
+          const current = await tx.walletCreditBatch.findUnique({
+            where: { id: b.batchId },
+            select: { remainingCents: true, status: true },
+          });
+          if (!current) continue; // batch was hard-deleted; skip silently
+          const restored = current.remainingCents + b.consumedCents;
+          await tx.walletCreditBatch.update({
+            where: { id: b.batchId },
+            data: { remainingCents: restored, status: "ACTIVE" },
+          });
+        }
+        // 2) Bump Wallet.balance by total reversed + write VOID_REVERSAL txn.
+        if (walletIdFromAudit && walletReversedCents > 0) {
+          const wallet = await tx.wallet.findUnique({
+            where: { id: walletIdFromAudit },
+            select: { balance: true },
+          });
+          const reversedRupees = walletReversedCents / 100;
+          const newBalance = +(wallet.balance + reversedRupees).toFixed(2);
+          await tx.wallet.update({
+            where: { id: walletIdFromAudit },
+            data: { balance: newBalance },
+          });
+          await tx.walletTransaction.create({
+            data: {
+              tenantId: req.user.tenantId,
+              walletId: walletIdFromAudit,
+              type: "VOID_REVERSAL",
+              amount: reversedRupees,
+              reason: `Void sale #${id}: ${reason.trim().slice(0, 200)}`,
+              balanceAfter: newBalance,
+              performedBy: req.user.userId,
+            },
+          });
+        }
+        // 3) Flip Invoice to VOIDED (if one was created).
+        if (linkedInvoice) {
+          await tx.invoice.update({
+            where: { id: linkedInvoice.id },
+            data: { status: "VOIDED" },
+          });
+        }
+        // 4) Flip Sale to VOIDED. Schema has no voidedAt / voidedReason
+        //    columns; reuse refundedAt + refundReason (only DateTime / Text
+        //    free fields available) and tag the reason with a VOID: prefix
+        //    so operators reading the row can distinguish void from refund.
+        await tx.sale.update({
+          where: { id },
+          data: {
+            status: "VOIDED",
+            refundedAt: now,
+            refundReason: `VOID: ${reason.trim().slice(0, 480)}`,
+          },
+        });
+      });
+    } catch (txErr) {
+      console.error("[pos] void sale tx error:", txErr.message);
+      return res
+        .status(500)
+        .json({ error: "Failed to void sale", code: "SALE_VOID_FAILED" });
+    }
+
+    // Audit OUTSIDE the transaction (hash-chained — never blocks the void).
+    writeAudit(
+      "Sale",
+      "POS_SALE_VOIDED",
+      id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        saleId: id,
+        invoiceNumber: sale.invoiceNumber,
+        reason: reason.trim().slice(0, 200),
+        walletReversedCents,
+        batchesReversed: batchesToReverse.length,
+      },
+    ).catch((auditErr) => {
+      console.warn("[pos] POS_SALE_VOIDED audit failed:", auditErr.message);
+    });
+
+    return res.json({
+      success: true,
+      saleId: id,
+      status: "VOIDED",
+      walletReversedCents,
+    });
+  } catch (e) {
+    console.error("[pos] void sale error:", e.message);
+    return res
+      .status(500)
+      .json({ error: "Failed to void sale", code: "SALE_VOID_FAILED" });
+  }
+});
+
+router.post("/sales/:id/refund", strictAdminGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res
+        .status(400)
+        .json({ error: "id must be a positive integer", code: "INVALID_ID" });
+    }
+
+    const { reason, amountCents } = req.body || {};
+    if (!reason || typeof reason !== "string" || !reason.trim()) {
+      return res
+        .status(400)
+        .json({ error: "reason is required", code: "INVALID_REASON" });
+    }
+    if (reason.length > 500) {
+      return res
+        .status(400)
+        .json({ error: "reason exceeds 500 chars", code: "INVALID_REASON" });
+    }
+    const amt = parseInt(amountCents, 10);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res
+        .status(400)
+        .json({
+          error: "amountCents must be a positive integer",
+          code: "INVALID_AMOUNT",
+        });
+    }
+
+    const sale = await prisma.sale.findFirst({ where: tenantWhere(req, { id }) });
+    if (!sale) {
+      return res
+        .status(404)
+        .json({ error: "Sale not found", code: "SALE_NOT_FOUND" });
+    }
+    if (sale.status !== "COMPLETED" && sale.status !== "PARTIALLY_REFUNDED") {
+      return res.status(409).json({
+        error: `Sale status=${sale.status} is not refundable (must be COMPLETED or PARTIALLY_REFUNDED)`,
+        code: "SALE_NOT_REFUNDABLE",
+        currentStatus: sale.status,
+      });
+    }
+
+    // Sale.total is float rupees; promote to cents for integer math.
+    const saleTotalCents = Math.round((sale.total || 0) * 100);
+
+    // Resolve the linked Invoice (matched by invoiceNum — no FK in schema).
+    // Refund Payment rows persist regardless of whether an Invoice was
+    // created during finalize; an absent Invoice just means invoiceId=null
+    // on the refund Payment, mirroring the finalize handler's contract.
+    const linkedInvoice = await prisma.invoice.findFirst({
+      where: { tenantId: req.user.tenantId, invoiceNum: sale.invoiceNumber },
+      select: { id: true },
+    });
+
+    // Sum prior refund Payments (negative-amount, gateway='refund') for this
+    // invoice to compute remaining refundable. If no Invoice was created
+    // (linkedInvoice=null), refunded-so-far is 0 (nothing to sum against).
+    let refundedSoFarCents = 0;
+    if (linkedInvoice) {
+      const priorRefunds = await prisma.payment.findMany({
+        where: {
+          tenantId: req.user.tenantId,
+          invoiceId: linkedInvoice.id,
+          gateway: "refund",
+          amount: { lt: 0 },
+        },
+        select: { amount: true },
+      });
+      refundedSoFarCents = priorRefunds.reduce(
+        (sum, p) => sum + Math.abs(Math.round(p.amount * 100)),
+        0,
+      );
+    }
+    const remainingRefundableCents = saleTotalCents - refundedSoFarCents;
+    if (amt > remainingRefundableCents) {
+      return res.status(409).json({
+        error: `amountCents=${amt} exceeds remaining refundable=${remainingRefundableCents}`,
+        code: "REFUND_EXCEEDS_BALANCE",
+        requestedCents: amt,
+        remainingCents: remainingRefundableCents,
+      });
+    }
+
+    const newRefundedTotalCents = refundedSoFarCents + amt;
+    const isFullRefund = newRefundedTotalCents >= saleTotalCents;
+    const newStatus = isFullRefund ? "REFUNDED" : "PARTIALLY_REFUNDED";
+    const now = new Date();
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        // 1) Write the refund Payment row (negative amount, gateway='refund').
+        await tx.payment.create({
+          data: {
+            tenantId: req.user.tenantId,
+            invoiceId: linkedInvoice ? linkedInvoice.id : null,
+            amount: -(amt / 100),
+            currency: "INR",
+            gateway: "refund",
+            status: "SUCCESS",
+            paidAt: now,
+            metadata: JSON.stringify({
+              saleId: id,
+              reason: reason.trim().slice(0, 480),
+              previousRefundedCents: refundedSoFarCents,
+              newRefundedTotalCents,
+            }).slice(0, 4000),
+          },
+        });
+        // 2) Flip Sale.status; preserve refundReason as a running log
+        //    (newest reason wins since schema has no per-refund log table).
+        await tx.sale.update({
+          where: { id },
+          data: {
+            status: newStatus,
+            refundedAt: now,
+            refundReason: reason.trim().slice(0, 1000),
+          },
+        });
+      });
+    } catch (txErr) {
+      console.error("[pos] refund sale tx error:", txErr.message);
+      return res
+        .status(500)
+        .json({ error: "Failed to refund sale", code: "SALE_REFUND_FAILED" });
+    }
+
+    writeAudit(
+      "Sale",
+      "POS_SALE_REFUNDED",
+      id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        saleId: id,
+        invoiceNumber: sale.invoiceNumber,
+        amountCents: amt,
+        reason: reason.trim().slice(0, 200),
+        refundedTotalCents: newRefundedTotalCents,
+        saleTotalCents,
+        isFullRefund,
+      },
+    ).catch((auditErr) => {
+      console.warn("[pos] POS_SALE_REFUNDED audit failed:", auditErr.message);
+    });
+
+    return res.json({
+      success: true,
+      saleId: id,
+      status: newStatus,
+      refundedTotalCents: newRefundedTotalCents,
+    });
   } catch (e) {
     console.error("[pos] refund sale error:", e.message);
-    res.status(500).json({ error: "Failed to refund sale" });
+    return res
+      .status(500)
+      .json({ error: "Failed to refund sale", code: "SALE_REFUND_FAILED" });
   }
 });
 

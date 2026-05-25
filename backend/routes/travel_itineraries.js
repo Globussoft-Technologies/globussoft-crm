@@ -11,6 +11,7 @@
 //   GET    /api/travel/itineraries/:id/items/search         — item notes search/filter (#907 slice 10)
 //   PATCH  /api/travel/itineraries/:id/items/:itemId        — amend an item
 //   DELETE /api/travel/itineraries/:id/items/:itemId        — remove an item
+//   POST   /api/travel/itineraries/:id/items/:itemId/duplicate — clone one item in place (#907 slice 12)
 //   POST   /api/travel/itineraries/:id/draft/regen          — regen LLM-drafted summary (PRD §4.3 + §9.1)
 //
 // Mounted at /api/travel by server.js. Shares the requireTravelTenant
@@ -898,6 +899,96 @@ router.delete("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant
     res.status(500).json({ error: "Failed to delete item" });
   }
 });
+
+// POST /api/travel/itineraries/:id/items/:itemId/duplicate
+//
+// #907 slice 12 — per-item clone-in-place. The closest existing surface,
+// /clone-day (slice 6), bulk-clones every item on a given day; the
+// SAME_DAY_CLONE branch at line 1761 explicitly directs the operator to
+// "POST /items to duplicate" a single line. That suggested DIY pattern
+// asks operators to re-supply every field from the source row — at best
+// awkward, at worst lossy (forgets supplierId / detailsJson / GST). This
+// endpoint closes that gap with a one-call dup.
+//
+// Semantics:
+//   - Source resolved via (:id, :itemId) — tenant + sub-brand scoping
+//     inherited from loadItineraryWithGuard on the parent.
+//   - Cloned row is appended to the SAME itinerary (no cross-itinerary
+//     dup — that's clone-day's job for whole-day moves, or future
+//     copy-itinerary for the full duplicate).
+//   - Position: appended at max(position)+1 of the same itinerary
+//     (mirrors POST /items + clone-day pattern).
+//   - All copyable fields preserved verbatim: itemType, description,
+//     detailsJson (raw passthrough — already-stringified JSON), supplierId,
+//     unitCost, markup, gstAmount, totalPrice. id / createdAt /
+//     updatedAt are NOT preserved (Prisma auto-fills).
+//   - Body { description?: string } optional override — operator can
+//     rename the clone in one call ("Hotel Day 5 — backup option").
+//     Empty / whitespace-only override falls back to source description
+//     (defensive: operator hitting Submit on a blank form shouldn't blow
+//     away the description).
+//
+// Response: 201 + the freshly created row (matches POST /items shape).
+//
+// Refs PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3 (FR-3.6 operator UX
+// — "Cloning a template is one click + an optional rename"; same shape
+// applies at the item level).
+router.post(
+  "/itineraries/:id/items/:itemId/duplicate",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const itemId = parseInt(req.params.itemId, 10);
+      if (!Number.isFinite(itemId)) {
+        return res.status(400).json({ error: "itemId must be a number", code: "INVALID_ITEM_ID" });
+      }
+      const source = await prisma.itineraryItem.findFirst({
+        where: { id: itemId, itineraryId: itin.id },
+      });
+      if (!source) {
+        return res.status(404).json({ error: "Item not found", code: "ITEM_NOT_FOUND" });
+      }
+
+      // Optional rename — fall back to the source description when the
+      // override is missing / empty / whitespace-only.
+      let description = source.description;
+      if (req.body && typeof req.body.description === "string") {
+        const trimmed = req.body.description.trim();
+        if (trimmed.length > 0) description = trimmed;
+      }
+
+      // Append after the current max position of THIS itinerary.
+      const maxRow = await prisma.itineraryItem.findFirst({
+        where: { itineraryId: itin.id },
+        orderBy: { position: "desc" },
+        select: { position: true },
+      });
+      const nextPos = (maxRow?.position ?? -1) + 1;
+
+      const created = await prisma.itineraryItem.create({
+        data: {
+          itineraryId: itin.id,
+          itemType: source.itemType,
+          position: nextPos,
+          description,
+          detailsJson: source.detailsJson, // raw passthrough — already JSON-stringified
+          supplierId: source.supplierId,
+          unitCost: source.unitCost != null ? Number(source.unitCost) : null,
+          markup: source.markup != null ? Number(source.markup) : null,
+          gstAmount: source.gstAmount != null ? Number(source.gstAmount) : null,
+          totalPrice: source.totalPrice != null ? Number(source.totalPrice) : null,
+        },
+      });
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] item duplicate error:", e.message);
+      res.status(500).json({ error: "Failed to duplicate item" });
+    }
+  },
+);
 
 // ─── Status transitions + version chain (PRD §4.3 / §6.1) ───────────
 //

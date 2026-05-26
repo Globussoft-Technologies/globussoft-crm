@@ -28,12 +28,25 @@ import prisma from '../../lib/prisma.js';
 // Prisma singleton patching — mounted before the router require below.
 prisma.survey = {
   findFirst: vi.fn(),
+  findUnique: vi.fn(),
+  findMany: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+  delete: vi.fn(),
 };
 prisma.surveyResponse = {
   findMany: vi.fn(),
+  create: vi.fn(),
+  deleteMany: vi.fn(),
 };
 prisma.contact = {
   findMany: vi.fn(),
+};
+prisma.tenant = {
+  findUnique: vi.fn(),
+};
+prisma.patient = {
+  findFirst: vi.fn(),
 };
 
 import express from 'express';
@@ -55,9 +68,19 @@ function makeApp({ tenantId = 1, userId = 7 } = {}) {
 
 beforeEach(() => {
   prisma.survey.findFirst.mockReset();
+  prisma.survey.findUnique.mockReset();
+  prisma.survey.findMany.mockReset();
+  prisma.survey.create.mockReset();
+  prisma.survey.update.mockReset();
+  prisma.survey.delete.mockReset();
   prisma.surveyResponse.findMany.mockReset();
+  prisma.surveyResponse.create.mockReset();
+  prisma.surveyResponse.deleteMany.mockReset();
   prisma.contact.findMany.mockReset();
   prisma.contact.findMany.mockResolvedValue([]);
+  prisma.tenant.findUnique.mockReset();
+  prisma.tenant.findUnique.mockResolvedValue(null);
+  prisma.patient.findFirst.mockReset();
 });
 
 // ── Aggregate endpoint ─────────────────────────────────────────────
@@ -174,3 +197,200 @@ describe('GET /:id/export.csv — #613 raw response export', () => {
     expect(lines[2]).toContain('"meh, comma here"');
   });
 });
+
+// ── Authenticated CRUD ─────────────────────────────────────────────
+
+describe('GET / — list surveys with response counts + NPS rollup', () => {
+  test('enriches each survey with responseCount, avgScore, and (for NPS) npsScore', async () => {
+    prisma.survey.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, type: 'NPS', name: 'Q1 NPS', question: 'q', isActive: true },
+      { id: 2, tenantId: 1, type: 'CSAT', name: 'Sat', question: 'q', isActive: true },
+    ]);
+    // Survey #1: 2 promoters, 1 detractor → NPS = (2-1)/3*100 = 33
+    // Survey #2: avg of [4, 5] = 4.5
+    prisma.surveyResponse.findMany.mockResolvedValue([
+      { surveyId: 1, score: 10 }, { surveyId: 1, score: 9 }, { surveyId: 1, score: 3 },
+      { surveyId: 2, score: 4 }, { surveyId: 2, score: 5 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/surveys/');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(2);
+    const s1 = res.body.find(s => s.id === 1);
+    expect(s1.responseCount).toBe(3);
+    expect(s1.npsScore).toBe(33);
+    expect(s1.avgScore).toBeCloseTo(7.33, 1);
+    const s2 = res.body.find(s => s.id === 2);
+    expect(s2.responseCount).toBe(2);
+    expect(s2.avgScore).toBeCloseTo(4.5, 2);
+    // CSAT is never an NPS — npsScore stays null.
+    expect(s2.npsScore).toBeNull();
+  });
+});
+
+// ── POST / (create) ────────────────────────────────────────────────
+
+describe('POST / — create survey', () => {
+  test('400 when name missing', async () => {
+    const res = await request(makeApp())
+      .post('/api/surveys/')
+      .send({ question: 'How likely?', type: 'NPS' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/name/i);
+    expect(prisma.survey.create).not.toHaveBeenCalled();
+  });
+
+  test('400 when question missing', async () => {
+    const res = await request(makeApp())
+      .post('/api/surveys/')
+      .send({ name: 'Q3 NPS', type: 'NPS' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/question/i);
+    expect(prisma.survey.create).not.toHaveBeenCalled();
+  });
+
+  test('unknown type falls back to NPS default; tenantId stamped from req.user', async () => {
+    prisma.survey.create.mockImplementation(async ({ data }) => ({ id: 99, ...data }));
+    const res = await request(makeApp({ tenantId: 7 }))
+      .post('/api/surveys/')
+      .send({ name: 'My Survey', question: 'How?', type: 'NOT_A_TYPE' });
+    expect(res.status).toBe(201);
+    expect(res.body.type).toBe('NPS');
+    expect(prisma.survey.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ tenantId: 7, isActive: true, type: 'NPS' }),
+      })
+    );
+  });
+});
+
+// ── PUT /:id (update) + DELETE /:id ────────────────────────────────
+
+describe('PUT /:id — update survey', () => {
+  test('404 when survey is missing or cross-tenant', async () => {
+    prisma.survey.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .put('/api/surveys/123')
+      .send({ isActive: false });
+    expect(res.status).toBe(404);
+    expect(prisma.survey.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /:id — also cascades responses for this tenant', () => {
+  test('deletes responses first then the survey', async () => {
+    prisma.survey.findFirst.mockResolvedValue({ id: 5, tenantId: 1, type: 'NPS' });
+    prisma.surveyResponse.deleteMany.mockResolvedValue({ count: 3 });
+    prisma.survey.delete.mockResolvedValue({});
+
+    const res = await request(makeApp()).delete('/api/surveys/5');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    // Order matters — responses must be cleared before the parent (no FK orphan).
+    expect(prisma.surveyResponse.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ surveyId: 5, tenantId: 1 }),
+      })
+    );
+    expect(prisma.survey.delete).toHaveBeenCalledWith({ where: { id: 5 } });
+  });
+});
+
+// ── POST /:id/send ─────────────────────────────────────────────────
+
+describe('POST /:id/send — dispatch survey to contacts', () => {
+  test('400 when survey is inactive', async () => {
+    prisma.survey.findFirst.mockResolvedValue({ id: 1, tenantId: 1, type: 'NPS', isActive: false });
+    const res = await request(makeApp())
+      .post('/api/surveys/1/send')
+      .send({ contactIds: [1, 2, 3] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/inactive/i);
+  });
+
+  test('400 when contactIds is missing or empty', async () => {
+    prisma.survey.findFirst.mockResolvedValue({ id: 1, tenantId: 1, type: 'NPS', isActive: true });
+    const res = await request(makeApp())
+      .post('/api/surveys/1/send')
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/contactIds/);
+  });
+
+  test('contacts with no email get reason=no_email and are skipped', async () => {
+    prisma.survey.findFirst.mockResolvedValue({
+      id: 1, tenantId: 1, type: 'NPS', name: 'Q', question: 'q', isActive: true,
+    });
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 10, name: 'No Email', email: null },
+      { id: 11, name: 'Has Email', email: 'has@example.com' },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/surveys/1/send')
+      .send({ contactIds: [10, 11] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.attempted).toBe(2);
+    const noEmail = res.body.results.find(r => r.contactId === 10);
+    expect(noEmail.sent).toBe(false);
+    expect(noEmail.reason).toBe('no_email');
+    // Has-email contact still got attempted (mailgun likely unconfigured in test → sent=false reason=no_api_key)
+    const hasEmail = res.body.results.find(r => r.contactId === 11);
+    expect(hasEmail).toBeDefined();
+  });
+});
+
+// ── POST /public/:id/respond ───────────────────────────────────────
+
+describe('POST /public/:id/respond — public response submission', () => {
+  test('CSAT survey: rejects score > 5 with explicit max in message', async () => {
+    prisma.survey.findUnique.mockResolvedValue({
+      id: 1, tenantId: 1, type: 'CSAT', isActive: true, question: 'q',
+    });
+    const res = await request(makeApp())
+      .post('/api/surveys/public/1/respond')
+      .send({ score: 7 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/between 0 and 5/);
+    expect(prisma.surveyResponse.create).not.toHaveBeenCalled();
+  });
+
+  test('410 Gone when public survey is inactive', async () => {
+    prisma.survey.findUnique.mockResolvedValue({
+      id: 1, tenantId: 1, type: 'NPS', isActive: false, question: 'q',
+    });
+    const res = await request(makeApp())
+      .post('/api/surveys/public/1/respond')
+      .send({ score: 8 });
+    expect(res.status).toBe(410);
+    expect(res.body.error).toMatch(/no longer active/i);
+  });
+});
+
+// ── GET /:id/responses ─────────────────────────────────────────────
+
+describe('GET /:id/responses — list responses with contact info', () => {
+  test('null contactId → contact:null in enriched payload (anonymous response)', async () => {
+    prisma.survey.findFirst.mockResolvedValue({ id: 1, tenantId: 1, type: 'NPS' });
+    prisma.surveyResponse.findMany.mockResolvedValue([
+      { id: 100, surveyId: 1, score: 9, contactId: 5, comment: 'good', respondedAt: new Date() },
+      { id: 101, surveyId: 1, score: 4, contactId: null, comment: 'anon', respondedAt: new Date() },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 5, name: 'Rohan Verma', email: 'rohan@example.in', company: 'Acme' },
+    ]);
+
+    const res = await request(makeApp()).get('/api/surveys/1/responses');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    const identified = res.body.find(r => r.id === 100);
+    expect(identified.contact).toEqual(
+      expect.objectContaining({ name: 'Rohan Verma', email: 'rohan@example.in' })
+    );
+    const anon = res.body.find(r => r.id === 101);
+    expect(anon.contact).toBeNull();
+  });
+});
+

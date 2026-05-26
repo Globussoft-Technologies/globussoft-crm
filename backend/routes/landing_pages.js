@@ -129,6 +129,101 @@ router.post(
   }
 );
 
+// ── GET /api/landing-pages/stats — tenant-wide landing-page rollup ─
+//
+// Marketing polish — first /stats aggregate for LandingPage. Mirrors the
+// posture of knowledge_base.js's /stats (sibling CRM-publishing surface)
+// and travel_suppliers.js's /suppliers/stats — read-only meta envelope,
+// auth-gated via verifyToken, no audit row written.
+//
+// Specs:
+//   - Tenant-scoped via req.user.tenantId.
+//   - ?from / ?to (optional ISO date bounds on createdAt); invalid → 400 INVALID_DATE.
+//   - byStatus: { DRAFT: N, PUBLISHED: M, ARCHIVED: K } based on LandingPage.status.
+//   - publishedCount: count of status="PUBLISHED".
+//   - totalViews: sum of LandingPage.visits (defensive null/undefined → 0).
+//   - totalConversions: sum of LandingPage.submissions (defensive null/undefined → 0).
+//   - conversionRate: totalConversions / totalViews, half-up 2dp; null when totalViews=0.
+//   - lastCreatedAt: max(createdAt) ISO across selected rows, or null when empty.
+//   - NO audit row written — anodyne aggregate.
+//
+// Schema notes (verified against prisma/schema.prisma:1752-1777):
+//   - LandingPage uses `status` String enum ("DRAFT"|"PUBLISHED"|"ARCHIVED"),
+//     NOT an `isPublished` Boolean. Buckets are emitted under their literal
+//     status string for that reason. Per kb-stats convention, empty buckets
+//     are omitted entirely (no "PUBLISHED: 0" noise).
+//   - "Views" on this model = LandingPage.visits (incremented in the public
+//     /:slug GET handler). "Conversions" = LandingPage.submissions
+//     (incremented in /:slug/submit). No separate viewCount/conversions
+//     column exists in the schema.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family (line below) — otherwise the dynamic /:id matcher catches
+// the literal "stats" string and treats it as a numeric id parse failure.
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "from must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "to must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    const pages = await prisma.landingPage.findMany({
+      where,
+      select: { status: true, visits: true, submissions: true, createdAt: true },
+    });
+
+    const byStatus = {};
+    let publishedCount = 0;
+    let totalViews = 0;
+    let totalConversions = 0;
+    let lastCreatedAt = null;
+
+    for (const p of pages) {
+      const bucket = p.status || "DRAFT";
+      byStatus[bucket] = (byStatus[bucket] || 0) + 1;
+      if (bucket === "PUBLISHED") publishedCount += 1;
+      totalViews += Number(p.visits) || 0;
+      totalConversions += Number(p.submissions) || 0;
+      if (p.createdAt) {
+        const ca = p.createdAt instanceof Date ? p.createdAt : new Date(p.createdAt);
+        if (!lastCreatedAt || ca > lastCreatedAt) lastCreatedAt = ca;
+      }
+    }
+
+    // conversionRate: half-up 2dp; null when totalViews=0 (undefined division).
+    const conversionRate = totalViews > 0
+      ? Math.round((totalConversions / totalViews) * 10000) / 10000
+      : null;
+
+    res.json({
+      totalPages: pages.length,
+      byStatus,
+      publishedCount,
+      totalViews,
+      totalConversions,
+      conversionRate,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[LandingPages][stats]", err);
+    res.status(500).json({ error: "Failed to compute landing-page stats" });
+  }
+});
+
 router.get("/:id", verifyToken, async (req, res) => {
   try {
     const page = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });

@@ -373,11 +373,15 @@ router.post("/calls", async (req, res) => {
       const lookupPhone = dir === "INBOUND" ? (callerNumber || phone) : (calleeNumber || phone);
       const suf = normalizedSuffix(lookupPhone);
       if (suf) {
-        const linked = await prisma.contact.findFirst({
-          where: { tenantId: req.tenantId, phone: { contains: suf } },
-          select: { id: true },
-        }).catch(() => null);
-        if (linked) resolvedContactId = linked.id;
+        try {
+          const linked = await prisma.contact.findFirst({
+            where: { tenantId: req.tenantId, phone: { contains: suf } },
+            select: { id: true },
+          });
+          if (linked) resolvedContactId = linked.id;
+        } catch (_) {
+          // best-effort — contact lookup failure must not block call logging
+        }
       }
     }
 

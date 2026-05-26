@@ -185,7 +185,9 @@ describe('lib/webhookDelivery — boundary / shape', () => {
     const body = JSON.parse(opts.body);
     const ts = Date.parse(body.timestamp);
     expect(Number.isNaN(ts)).toBe(false);
-    expect(ts).toBeGreaterThanOrEqual(before - 1);
+    // body.timestamp is floored to whole seconds (matches the HMAC t= value),
+    // so allow up to 999 ms of truncation on the lower bound.
+    expect(ts).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
     expect(ts).toBeLessThanOrEqual(after + 1);
   });
 

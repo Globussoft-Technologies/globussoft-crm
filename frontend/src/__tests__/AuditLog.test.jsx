@@ -523,4 +523,286 @@ describe('<AuditLog /> — page surface', () => {
       ).toBeInTheDocument();
     });
   });
+
+  // ---------------- Round-2 extension (2026-05-26) ----------------
+  // Adds ≥5 cases covering branches not yet exercised:
+  //   - TZ-aware timestamp rendering (#387 — IST timeZone + short label)
+  //   - hash/prevHash drill-down display (#558 — slice(0,12) + GENESIS prefix)
+  //   - stats endpoint failure (cards display 0)
+  //   - integrity verify failure path (notify.error fires)
+  //   - integrity chip "broken" (tampered row, distinct from null-hash path)
+  //   - pagination summary text ("Page X of Y · N total events")
+  //   - ActionBadge fallback variant for unknown actions
+  //   - integrity chip "ok" + chainLength rendering
+  //   - handleExport failure → notify.error
+  // All pinned to actual code in AuditLog.jsx — no behaviour change implied.
+  // Stable mock-object discipline preserved.
+
+  it('renders timestamps in IST with a short TZ label (#387)', async () => {
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    // 2026-04-29T09:00:00.000Z → 2:30 pm IST (en-IN locale renders day/M/yyyy
+    // with no leading zero on day-of-month → "29/4/2026" not "29/04/2026").
+    // Per the 2026-05-07 wave-6 cron-learning (ICU drift), accept either
+    // "IST" or "GMT+5:30" as the short-label form — both are valid ISO output
+    // depending on the runner's ICU/tzdata build. Assert flexibly.
+    const cells = screen.getAllByText(
+      (_, el) => el?.tagName === 'TD' && /29\/0?4\/2026/.test(el.textContent || '')
+    );
+    expect(cells.length).toBeGreaterThanOrEqual(1);
+    // At least one timestamp cell contains an IST-or-GMT-offset label.
+    const labelled = cells.find(el =>
+      /(IST|GMT[+-]\d)/i.test(el.textContent || '')
+    );
+    expect(labelled).toBeTruthy();
+    // And contains 2:30 wall-clock (UTC+5:30 of 09:00 → 14:30; en-IN renders
+    // 12-hour by default → "2:30:00 pm"). Accept either 24h or 12h form.
+    expect(/(14:30|2:30)/.test(labelled.textContent)).toBe(true);
+  });
+
+  it('drill-down shows truncated hash + prevHash with slice(0,12) ellipsis', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({
+          chainLength: 3, brokenAt: null, integrityVerified: true,
+          lastVerifiedAt: '2026-05-08T10:30:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.resolve(sampleStats);
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.resolve({
+          logs: [{
+            ...sampleLogs[0],
+            hash: 'abcdef0123456789ffffffffffffffffffffffffffffffffffffffffffffffff',
+            prevHash: '9876543210fedcba0000000000000000000000000000000000000000000000ee',
+          }],
+          pages: 1, total: 1,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Alice Admin'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('row-hash')).toBeInTheDocument();
+    });
+    // hash/prev each slice(0, 12) + '…'.
+    expect(screen.getByTestId('row-hash').textContent).toMatch(/abcdef012345/);
+    expect(screen.getByTestId('row-hash').textContent).toMatch(/…/);
+    expect(screen.getByTestId('row-prevhash').textContent).toMatch(/9876543210fe/);
+    expect(screen.getByTestId('row-prevhash').textContent).toMatch(/…/);
+  });
+
+  it('drill-down renders the full GENESIS_<...> prevHash without truncation', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({
+          chainLength: 1, brokenAt: null, integrityVerified: true,
+          lastVerifiedAt: '2026-05-08T10:30:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.resolve(sampleStats);
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.resolve({
+          logs: [{
+            ...sampleLogs[0],
+            hash: 'abcdef0123456789ffffffffffffffffffffffffffffffffffffffffffffffff',
+            prevHash: 'GENESIS_tenant_1',
+          }],
+          pages: 1, total: 1,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Alice Admin'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('row-prevhash')).toBeInTheDocument();
+    });
+    // GENESIS_ prefix is preserved verbatim — no slice/ellipsis applied.
+    expect(screen.getByTestId('row-prevhash').textContent).toMatch(/GENESIS_tenant_1/);
+    expect(screen.getByTestId('row-prevhash').textContent).not.toMatch(/GENESIS_te…/);
+  });
+
+  it('stats cards display 0 when /api/audit-viewer/stats fails', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({
+          chainLength: 3, brokenAt: null, integrityVerified: true,
+          lastVerifiedAt: '2026-05-08T10:30:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.reject(new Error('stats boom'));
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.resolve({ logs: sampleLogs, pages: 1, total: 3 });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    // stats stays null → StatCard receives 0 fallback via `?? 0`.
+    expect(screen.getByText(/Total events \(30d\)/i)).toBeInTheDocument();
+    // Four StatCards with value "0" appear (Total + CREATEs + UPDATEs + DELETEs).
+    const zeros = screen.getAllByText('0');
+    expect(zeros.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('shows notify.error when /api/audit/verify rejects and sets the error chip', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.reject(new Error('verify boom'));
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.resolve(sampleStats);
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.resolve({ logs: sampleLogs, pages: 1, total: 3 });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Failed to verify audit chain');
+    });
+
+    // After the rejection the catch-branch sets integrityVerified=false +
+    // brokenAt=null + unhashedRows=0 → falls through to the broken chip.
+    expect(screen.getByTestId('integrity-chip-broken')).toBeInTheDocument();
+  });
+
+  it('integrity chip renders "broken" for a tampered row (non-null hash mismatch)', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({
+          chainLength: 50,
+          totalRows: 100,
+          unhashedRows: 0,
+          brokenAt: 73,
+          reason: 'hash mismatch — recomputed sha256 disagrees with stored hash',
+          integrityVerified: false,
+          lastVerifiedAt: '2026-05-08T10:30:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.resolve(sampleStats);
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.resolve({ logs: sampleLogs, pages: 1, total: 3 });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderAuditLog();
+    await waitFor(() => {
+      expect(screen.getByTestId('integrity-chip-broken')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Chain broken/i)).toBeInTheDocument();
+    expect(screen.getByText(/row #73/i)).toBeInTheDocument();
+    expect(screen.getByText(/hash mismatch/i)).toBeInTheDocument();
+    // Backfill banner does NOT render for a tamper case.
+    expect(screen.queryByTestId('integrity-backfill-banner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-backfill-btn')).not.toBeInTheDocument();
+  });
+
+  it('integrity chip "ok" path shows verified chip with row count', async () => {
+    renderAuditLog();
+    await waitFor(() => {
+      expect(screen.getByTestId('integrity-chip-ok')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Integrity verified at/i)).toBeInTheDocument();
+    // chainLength=150 from beforeEach default.
+    expect(screen.getByText(/\(150 rows\)/)).toBeInTheDocument();
+  });
+
+  it('renders pagination summary "Page X of Y · N total events"', async () => {
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    // pages=3, total=150 from beforeEach defaults; toLocaleString → "150".
+    // The summary text is split across plain text nodes + <strong> children
+    // inside one wrapper div ("Page <strong>1</strong> of <strong>3</strong>
+    // · 150 total events"). Find by smallest matching div to dodge ancestors.
+    const candidates = screen.getAllByText((_, el) => {
+      if (!el || el.tagName !== 'DIV') return false;
+      const txt = el.textContent || '';
+      return /Page\s+1\s+of\s+3/.test(txt) && /150 total events/.test(txt);
+    });
+    // Smallest text-length match = the actual summary wrapper, not ancestors.
+    const summary = candidates.reduce((min, el) =>
+      (el.textContent.length < min.textContent.length ? el : min), candidates[0]);
+    expect(summary).toBeTruthy();
+    expect(summary.textContent).toMatch(/Page\s+1\s+of\s+3/);
+    expect(summary.textContent).toMatch(/150 total events/);
+  });
+
+  it('ActionBadge renders unknown actions with the "other" CSS variant', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({
+          chainLength: 1, brokenAt: null, integrityVerified: true,
+          lastVerifiedAt: '2026-05-08T10:30:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.resolve(sampleStats);
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.resolve({
+          logs: [{
+            ...sampleLogs[0],
+            action: 'LOGIN',
+          }],
+          pages: 1, total: 1,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    // LOGIN action → variant='other' → class `audit-action-pill--other`.
+    const loginPill = screen.getAllByText('LOGIN').find(el =>
+      el.className?.includes('audit-action-pill')
+    );
+    expect(loginPill).toBeTruthy();
+    expect(loginPill.className).toContain('audit-action-pill--other');
+  });
+
+  it('Export CSV failure fires notify.error("Failed to export CSV")', async () => {
+    const originalFetch = global.fetch;
+    const fetchSpy = vi.fn(() => Promise.reject(new Error('network down')));
+    global.fetch = fetchSpy;
+
+    try {
+      renderAuditLog();
+      await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /Export CSV/i }));
+
+      await waitFor(() => {
+        expect(notifyError).toHaveBeenCalledWith('Failed to export CSV');
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
 });

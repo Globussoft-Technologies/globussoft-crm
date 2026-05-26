@@ -180,6 +180,97 @@ describe('GET / — list routing rules', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('GET /?fields=summary — slim-shape opt-in (#920)', () => {
+  test('omits the `select` arg when ?fields is absent (back-compat full-shape + conditions JSON parsed back)', async () => {
+    prisma.leadRoutingRule.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, name: 'Rule', priority: 10, conditions: JSON.stringify({ status: 'Lead' }), assignType: 'round_robin', isActive: true },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/lead-routing');
+
+    expect(res.status).toBe(200);
+    const args = prisma.leadRoutingRule.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // Full-shape wire response still parses the JSON-string column back.
+    expect(res.body[0].conditions).toEqual({ status: 'Lead' });
+  });
+
+  test('passes a slim Prisma `select` dropping conditions when ?fields=summary', async () => {
+    prisma.leadRoutingRule.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, name: 'Rule', priority: 10, assignType: 'round_robin', isActive: true },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/lead-routing?fields=summary');
+
+    expect(res.status).toBe(200);
+    const args = prisma.leadRoutingRule.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    // Heavy / PII field explicitly absent from the select:
+    expect(args.select.conditions).toBeUndefined();
+    // Lightweight admin-list fields present:
+    expect(args.select.id).toBe(true);
+    expect(args.select.name).toBe(true);
+    expect(args.select.assignType).toBe(true);
+    expect(args.select.assignTo).toBe(true);
+    expect(args.select.priority).toBe(true);
+    expect(args.select.isActive).toBe(true);
+    expect(args.select.tenantId).toBe(true);
+    expect(args.select.createdAt).toBe(true);
+    expect(args.select.updatedAt).toBe(true);
+  });
+
+  test('summary mode still applies the tenantId filter + priority-asc ordering', async () => {
+    prisma.leadRoutingRule.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/lead-routing?fields=summary');
+
+    expect(res.status).toBe(200);
+    const args = prisma.leadRoutingRule.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 42 });
+    expect(args.orderBy).toEqual([{ priority: 'asc' }, { id: 'asc' }]);
+    expect(args.select).toBeDefined();
+  });
+
+  test('unknown ?fields value (not "summary") falls back to full shape', async () => {
+    prisma.leadRoutingRule.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, name: 'R', priority: 10, conditions: JSON.stringify({ status: 'Lead' }), assignType: 'round_robin', isActive: true },
+    ]);
+
+    const res = await request(makeApp()).get('/api/lead-routing?fields=bogus');
+
+    expect(res.status).toBe(200);
+    const args = prisma.leadRoutingRule.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // Full-shape post-process ran — conditions parsed back from the JSON string.
+    expect(res.body[0].conditions).toEqual({ status: 'Lead' });
+  });
+
+  test('summary opt-in skips the conditions JSON post-process (slim rows go through as-is)', async () => {
+    // In summary mode the column is not selected, so the wire shape does not
+    // include `conditions` at all — the post-process spread is a no-op.
+    prisma.leadRoutingRule.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, name: 'Slim', priority: 10, assignType: 'round_robin', isActive: true },
+      { id: 2, tenantId: 1, name: 'Slim 2', priority: 20, assignType: 'specific_user', assignTo: 7, isActive: false },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/lead-routing?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    // Slim row 1 has no `conditions` key — wire shape preserved verbatim.
+    expect(res.body[0].conditions).toBeUndefined();
+    expect(res.body[1].conditions).toBeUndefined();
+    // Lightweight fields preserved.
+    expect(res.body[0].name).toBe('Slim');
+    expect(res.body[1].assignType).toBe('specific_user');
+    expect(res.body[1].isActive).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // POST / — create with #299 / #301 / #302 / #332 validators + #245 sanitization
 // ─────────────────────────────────────────────────────────────────────────
 

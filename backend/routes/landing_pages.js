@@ -74,9 +74,24 @@ const isValidSlug = (s) =>
 
 router.get("/", verifyToken, async (req, res) => {
   try {
+    // #920 slice 38: ?fields=summary slim-shape opt-in. Mirrors slices 1-36.
+    // The default list already excludes the heavy content @db.LongText +
+    // cssOverrides @db.Text + metaTitle/metaDescription columns (LandingPage
+    // schema has the body JSON in `content`, see prisma/schema.prisma:1764).
+    // Picker / dropdown UI (slug-collision check, page-selector chips, "link
+    // to landing page" form fields) doesn't need visits / submissions /
+    // templateType / createdAt / updatedAt either — only id + title + slug +
+    // status. When the caller passes ?fields=summary we project to that
+    // minimal set. Opt-in additive — existing callers (no ?fields, or any
+    // non-exact value) get the analytics-bearing shape unchanged so the
+    // LandingPages.jsx grid continues to render visits + submissions tiles.
+    const isSummary = req.query.fields === "summary";
+    const select = isSummary
+      ? { id: true, title: true, slug: true, status: true }
+      : { id: true, title: true, slug: true, status: true, visits: true, submissions: true, templateType: true, createdAt: true, updatedAt: true };
     res.json(await prisma.landingPage.findMany({
       where: { tenantId: req.user.tenantId },
-      select: { id: true, title: true, slug: true, status: true, visits: true, submissions: true, templateType: true, createdAt: true, updatedAt: true },
+      select,
       orderBy: { createdAt: "desc" },
     }));
   } catch (_err) { res.status(500).json({ error: "Failed to fetch landing pages" }); }

@@ -68,7 +68,13 @@ export default function Vendors() {
 
   const setArchived = async (v, archived) => {
     const verb = archived ? 'Archive' : 'Restore';
-    if (!window.confirm(`${verb} vendor "${v.name}"?`)) return;
+    const ok = await notify.confirm({
+      title: `${verb} vendor`,
+      message: `${verb} vendor "${v.name}"?`,
+      confirmText: verb,
+      destructive: archived,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/vendors/${v.id}`, {
         method: 'PUT',
@@ -80,7 +86,13 @@ export default function Vendors() {
   };
 
   const remove = async (v) => {
-    if (!window.confirm(`Delete vendor "${v.name}"? Vendors with prior receipts will be archived instead.`)) return;
+    const ok = await notify.confirm({
+      title: 'Delete vendor',
+      message: `Delete vendor "${v.name}"? Vendors with prior receipts will be archived instead.`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/vendors/${v.id}`, { method: 'DELETE' });
       notify.success(`Removed "${v.name}"`);

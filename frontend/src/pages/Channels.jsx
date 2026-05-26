@@ -702,7 +702,17 @@ function WebhookInfo({ label, url, copied, copyText }) {
 }
 
 function TemplateSection({ kind, templates, onDelete, onCreate, onEdit, onDuplicate, onSend, onBlast, onPreview, statusColors }) {
+  const notify = useNotify();
   const showStatus = kind === 'whatsapp';
+  const handleDelete = async (t) => {
+    const ok = await notify.confirm({
+      title: 'Delete template',
+      message: `Delete template "${t.name}"?`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (ok) onDelete(t.id);
+  };
   return (
     <div className="card" style={{ padding: '1.5rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -742,7 +752,7 @@ function TemplateSection({ kind, templates, onDelete, onCreate, onEdit, onDuplic
                 {onBlast && (
                   <IconBtn title={kind === 'push' ? 'Send to All Subscribers' : 'Send Blast'} onClick={() => onBlast(t)}><Megaphone size={15} /></IconBtn>
                 )}
-                <IconBtn title="Delete" onClick={() => { if (window.confirm(`Delete template "${t.name}"?`)) onDelete(t.id); }} danger><Trash2 size={15} /></IconBtn>
+                <IconBtn title="Delete" onClick={() => handleDelete(t)} danger><Trash2 size={15} /></IconBtn>
               </div>
             </div>
           ))}

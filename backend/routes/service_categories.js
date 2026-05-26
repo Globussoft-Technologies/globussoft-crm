@@ -16,7 +16,14 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const router = express.Router();
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
-const adminGate = verifyWellnessRole(["admin", "manager"]);
+// Service-category mutations are operational config. `anyOfPermissions`
+// lets a custom RBAC role with `services.write` (the page catalog's
+// permission for /wellness/service-categories) perform the action even
+// without a matching wellnessRole.
+const adminGate = verifyWellnessRole(
+  ["admin", "manager"],
+  { anyOfPermissions: [{ module: "services", action: "write" }] },
+);
 
 // ── ServiceCategory CRUD ───────────────────────────────────────────
 

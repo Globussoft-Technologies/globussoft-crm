@@ -30,7 +30,13 @@ export default function CashbackRulesPage() {
   useEffect(() => { load(); }, []);
 
   const remove = async (id) => {
-    if (!confirm('Delete this cashback rule? Past wallet credits remain.')) return;
+    const ok = await notify.confirm({
+      title: 'Delete cashback rule',
+      message: 'Delete this cashback rule? Past wallet credits remain.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/cashback-rules/${id}`, { method: 'DELETE' });
       notify.success('Rule deleted');

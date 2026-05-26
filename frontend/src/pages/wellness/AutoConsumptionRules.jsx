@@ -75,7 +75,14 @@ export default function AutoConsumptionRules() {
   };
 
   const remove = async (r) => {
-    if (!window.confirm('Delete this auto-consumption rule? Future visits will no longer auto-decrement stock for this service+product.')) return;
+    const ok = await notify.confirm({
+      title: 'Delete auto-consumption rule',
+      message:
+        'Delete this auto-consumption rule? Future visits will no longer auto-decrement stock for this service+product.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/auto-consumption-rules/${r.id}`, { method: 'DELETE' });
       notify.success('Rule deleted.');

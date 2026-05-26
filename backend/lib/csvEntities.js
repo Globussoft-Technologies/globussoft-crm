@@ -221,8 +221,12 @@ const services = {
     description: "Three-step hydradermabrasion",
     active: "true",
   },
-  readGate: ["doctor", "professional", "telecaller", "admin", "manager"],
+  readGate: ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
+  // RBAC unlock — any user with services.read passes the read gate.
+  // services.write unlocks template + import.
+  readPermissions: [{ module: "services", action: "read" }],
   writeGate: ["admin", "manager"],
+  writePermissions: [{ module: "services", action: "write" }],
   buildWhere: (req) => {
     const where = { tenantId: req.user.tenantId };
     const { q, includeInactive } = req.query;
@@ -316,8 +320,11 @@ const packages = {
     description: "10 sessions over 6 months",
     active: "true",
   },
-  readGate: ["doctor", "professional", "telecaller", "admin", "manager"],
+  readGate: ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
+  // Memberships are part of the service catalog — same RBAC module.
+  readPermissions: [{ module: "services", action: "read" }],
   writeGate: ["admin", "manager"],
+  writePermissions: [{ module: "services", action: "write" }],
   buildWhere: (req) => {
     const where = { tenantId: req.user.tenantId };
     if (req.query.q) where.name = { contains: req.query.q };
@@ -436,8 +443,12 @@ const products = {
     notes: "After meals",
     active: "true",
   },
-  readGate: ["doctor", "admin", "manager"],
+  readGate: ["clinical", "doctor", "admin", "manager"],
+  // Drug catalogue is the prescription typeahead source — clinicians
+  // with prescriptions.read need to browse it.
+  readPermissions: [{ module: "prescriptions", action: "read" }],
   writeGate: ["admin", "manager"],
+  writePermissions: [{ module: "prescriptions", action: "write" }],
   buildWhere: (req) => {
     const where = { tenantId: req.user.tenantId };
     if (req.query.q) where.OR = [{ name: { contains: req.query.q } }, { genericName: { contains: req.query.q } }];
@@ -529,8 +540,12 @@ const customers = {
     allergies: "",
     notes: "",
   },
-  readGate: ["doctor", "professional", "telecaller", "admin", "manager"],
-  writeGate: ["doctor", "professional", "admin", "manager"],
+  readGate: ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
+  // Customer = Patient. patients.read unlocks the directory export;
+  // patients.write unlocks bulk-import.
+  readPermissions: [{ module: "patients", action: "read" }],
+  writeGate: ["clinical", "doctor", "professional", "admin", "manager"],
+  writePermissions: [{ module: "patients", action: "write" }],
   buildWhere: (req) => {
     const where = { tenantId: req.user.tenantId };
     if (req.query.q) {
@@ -637,8 +652,22 @@ const bookings = {
     amountCharged: "3500",
     notes: "First visit",
   },
-  readGate: ["doctor", "professional", "telecaller", "admin", "manager"],
-  writeGate: ["doctor", "professional", "admin", "manager"],
+  readGate: ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
+  // Bookings = Visit rows backing the Calendar. Same wide read set as
+  // phiReadGate so any clinical / scheduling read permission unlocks
+  // the export — matches what the Calendar page itself accepts.
+  readPermissions: [
+    { module: "calendar", action: "read" },
+    { module: "appointments", action: "read" },
+    { module: "visits", action: "read" },
+    { module: "patients", action: "read" },
+  ],
+  writeGate: ["clinical", "doctor", "professional", "admin", "manager"],
+  writePermissions: [
+    { module: "calendar", action: "write" },
+    { module: "appointments", action: "write" },
+    { module: "visits", action: "write" },
+  ],
   buildWhere: (req) => {
     const where = { tenantId: req.user.tenantId };
     if (req.query.status) where.status = req.query.status;
@@ -766,7 +795,9 @@ const invoices = {
     recurFrequency: "",
   },
   readGate: ["admin", "manager"],
+  readPermissions: [{ module: "billing", action: "read" }],
   writeGate: ["admin", "manager"],
+  writePermissions: [{ module: "billing", action: "write" }],
   buildWhere: (req) => {
     const where = { tenantId: req.user.tenantId };
     const { status, q } = req.query;

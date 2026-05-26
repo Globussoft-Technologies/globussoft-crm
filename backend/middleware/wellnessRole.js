@@ -9,10 +9,26 @@
  * fixes that — use it AFTER verifyToken on wellness routes that need a
  * narrower clinical/operational gate.
  *
- * Allowed list accepts wellnessRole values plus two special tokens:
- *   - "admin"   → owner override; req.user.role === "ADMIN" always passes.
- *   - "manager" → req.user.role === "MANAGER" passes.
+ * Allowed list accepts wellnessRole values plus three special tokens:
+ *   - "admin"    → owner override; req.user.role === "ADMIN" always passes.
+ *   - "manager"  → req.user.role === "MANAGER" passes.
+ *   - "clinical" → ANY wellnessRole present in the tenant's
+ *                  WellnessRoleType catalog with `canTakeVisits = true`
+ *                  passes. Lets admins add a new clinical role (e.g.
+ *                  "nurse", "physiotherapist") in Settings → Wellness
+ *                  Role Types and have it flow through every clinical
+ *                  route automatically with NO code edits.
  * Everything else must literally match req.user.wellnessRole.
+ *
+ * Optional second argument `{ anyOfPermissions: [{module, action}, ...] }`
+ * lets a route ALSO accept RBAC-permission-based access — any user
+ * whose effective permissions include AT LEAST ONE of the listed
+ * grants passes the gate, even without a matching wellnessRole. This
+ * is what makes a brand-new custom role (e.g. "Receptionist") created
+ * in the Roles & Permissions admin UI immediately usable: the admin
+ * grants `appointments.read` to the role and the user gains access to
+ * every route whose `anyOfPermissions` lists that grant — with NO
+ * code changes anywhere.
  *
  * Backwards-compat: tokens minted before the JWT carries `wellnessRole`
  * lack the claim entirely. They will fail any clinical/operational gate
@@ -51,6 +67,12 @@ const prisma = require("../lib/prisma");
 // We keep the granular `code` (WELLNESS_TENANT_REQUIRED /
 // WELLNESS_ROLE_FORBIDDEN) so SDKs / specs can branch on intent.
 const { RBAC_DENIED_MESSAGE } = require("./auth");
+// Whole-module require (NOT destructured) so unit tests can swap out
+// `requirePermissionModule.getUserPermissions` with a deterministic fake
+// without losing the reference — destructuring at require-time would
+// freeze the original function in a const that test re-assignment can't
+// affect.
+const requirePermissionModule = require("./requirePermission");
 
 async function resolveTenantVertical(req) {
   if (req.user?.vertical) return req.user.vertical;
@@ -68,10 +90,36 @@ async function resolveTenantVertical(req) {
   }
 }
 
-function verifyWellnessRole(allowed) {
+// Per-request memoized lookup: is the given wellnessRole key marked as
+// a clinical role (canTakeVisits = true) in the tenant's
+// WellnessRoleType catalog? Returns false on missing key, inactive row,
+// or any DB error — callers degrade to "literal-match only" semantics,
+// preserving the pre-catalog behaviour as the safety net.
+async function isCatalogClinical(req, key) {
+  if (!key || !req.user?.tenantId) return false;
+  if (!req._wellnessRoleCatalog) {
+    try {
+      const rows = await prisma.wellnessRoleType.findMany({
+        where: { tenantId: req.user.tenantId, isActive: true },
+        select: { key: true, canTakeVisits: true },
+      });
+      const map = new Map();
+      for (const r of rows) map.set(r.key, !!r.canTakeVisits);
+      req._wellnessRoleCatalog = map;
+    } catch (_e) {
+      req._wellnessRoleCatalog = new Map();
+    }
+  }
+  return req._wellnessRoleCatalog.get(key) === true;
+}
+
+function verifyWellnessRole(allowed, opts = {}) {
   if (!Array.isArray(allowed) || allowed.length === 0) {
     throw new Error("verifyWellnessRole(allowed): non-empty array required");
   }
+  const anyOfPermissions = Array.isArray(opts.anyOfPermissions)
+    ? opts.anyOfPermissions.filter((p) => p && p.module && p.action)
+    : [];
   return async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ error: "Authentication required" });
@@ -94,6 +142,38 @@ function verifyWellnessRole(allowed) {
     if (allowed.includes("manager") && req.user.role === "MANAGER") return next();
     if (req.user.wellnessRole && allowed.includes(req.user.wellnessRole)) {
       return next();
+    }
+    // "clinical" meta-token: passes any wellnessRole the tenant's
+    // WellnessRoleType catalog marks as `canTakeVisits = true`. This
+    // means an admin can add a new clinical role (nurse,
+    // physiotherapist, etc.) from Settings → Wellness Role Types and it
+    // immediately becomes accepted by every clinical-gated route — no
+    // code change required.
+    if (allowed.includes("clinical") && (await isCatalogClinical(req, req.user.wellnessRole))) {
+      return next();
+    }
+    // RBAC-permission fallback: pass if the user's effective
+    // permissions (merged from every UserRole assignment) include AT
+    // LEAST ONE of the route's `anyOfPermissions` grants. Lets an
+    // admin spin up a brand-new custom role like "Receptionist" in
+    // Roles & Permissions, grant `appointments.read`, and have the
+    // assignee immediately use the appointments UI — without needing
+    // to also pick a wellnessRole or edit any code.
+    if (anyOfPermissions.length > 0 && req.user.tenantId && req.user.userId) {
+      try {
+        const userPerms = await requirePermissionModule.getUserPermissions(
+          req.user.tenantId,
+          req.user.userId,
+        );
+        for (const { module, action } of anyOfPermissions) {
+          if (userPerms.has(`${module}.${action}`)) {
+            return next();
+          }
+        }
+      } catch (_e) {
+        // Fail-closed: if the permission lookup throws, fall through
+        // to 403 — never accidentally grant access on a DB hiccup.
+      }
     }
     // `allowed` stays in the envelope to honour the #274 contract
     // (services-api spec pins it; frontend toast mapper keys off the

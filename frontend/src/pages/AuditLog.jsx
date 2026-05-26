@@ -534,11 +534,15 @@ export default function AuditLog() {
   // suspected tampering, surface the row id so ops can investigate.
   const runBackfill = useCallback(async () => {
     if (!isAdmin) return;
-    if (!window.confirm(
-      'Repair audit chain — re-stamp the link/hash on any row that has the wrong anchor. ' +
-      'Row content is never modified. If a row was actually tampered with, the repair will ' +
-      'abort and show the affected row ID. Continue?'
-    )) return;
+    const ok = await notify.confirm({
+      title: 'Repair audit chain',
+      message:
+        'Re-stamp the link/hash on any row that has the wrong anchor. ' +
+        'Row content is never modified. If a row was actually tampered with, the repair will ' +
+        'abort and show the affected row ID. Continue?',
+      confirmText: 'Repair',
+    });
+    if (!ok) return;
     setBackfilling(true);
     try {
       const data = await fetchApi('/api/audit/backfill', { method: 'POST' });

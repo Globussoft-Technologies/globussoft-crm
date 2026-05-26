@@ -81,7 +81,13 @@ export default function Holidays() {
   };
 
   const remove = async (h) => {
-    if (!window.confirm(`Remove holiday "${h.name}" on ${fmtDate(h.date)}?`)) return;
+    const ok = await notify.confirm({
+      title: 'Remove holiday',
+      message: `Remove holiday "${h.name}" on ${fmtDate(h.date)}?`,
+      confirmText: 'Remove',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/holidays/${h.id}`, { method: 'DELETE' });
       notify.success(`Removed "${h.name}"`);

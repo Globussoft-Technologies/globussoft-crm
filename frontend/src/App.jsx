@@ -228,25 +228,20 @@ export const ThemeContext = createContext();
 // fresh login; this helper covers refresh / `/` / GenericOnly bounces where
 // the URL would otherwise resolve to /wellness Owner Dashboard for everyone.
 function wellnessLandingFor(user) {
-  if (!user) return '/wellness';
+  if (!user) return '/home';
   if (user.role === 'ADMIN' || user.role === 'MANAGER') return '/wellness';
   switch (user.wellnessRole) {
     case 'owner':
     case 'manager':
     case 'admin':
       return '/wellness';
-    case 'doctor':
-    case 'professional':
-      return '/wellness/calendar';
-    case 'telecaller':
-      return '/wellness/telecaller';
-    case 'helper':
-    case 'stylist':
-      return '/wellness/calendar';
     default:
-      // No wellnessRole + not ADMIN/MANAGER — regular user (patient).
-      // Send to appointment booking page where they can book with doctors.
-      return '/wellness/book-appointment';
+      // Everyone else (doctor / professional / telecaller / helper /
+      // plain users) lands on the role-aware /home widget dashboard.
+      // /home renders only the widgets and quick-actions the user has
+      // permission for, so it's always the right starting surface even
+      // when the user has zero wellness clinical permissions.
+      return '/home';
   }
 }
 

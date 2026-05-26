@@ -8,8 +8,17 @@
 // Note: the middleware is now async (it may DB-look-up tenant.vertical
 // when the JWT lacks the claim). Every call site awaits it. Tests
 // pre-populate `req.user.vertical` so the middleware never hits prisma.
-import { describe, test, expect, vi } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+
 import { verifyWellnessRole } from '../../middleware/wellnessRole.js';
+// The middleware looks up `getUserPermissions` on the requirePermission
+// module object at CALL TIME (not destructured at require-time), so we
+// can swap it with a deterministic fake here. The eslint rule is fine
+// with this pattern — it's the standard "module reference patch" used
+// throughout the test suite.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const requirePermissionModule = require('../../middleware/requirePermission.js');
+const realGetUserPermissions = requirePermissionModule.getUserPermissions;
 
 // All tests use vertical='wellness' by default — only the dedicated
 // "tenant vertical gate" describe block flips it to test the refusal.
@@ -293,5 +302,263 @@ describe('tenant vertical gate (#325)', () => {
     await mw(req, res, next);
     expect(next).toHaveBeenCalledOnce();
     expect(res.status).not.toHaveBeenCalled();
+  });
+});
+
+// "clinical" meta-token: dynamically resolves against the per-tenant
+// WellnessRoleType catalog. Lets admins add a brand-new clinical
+// wellnessRole (e.g. "nurse", "physiotherapist") in Settings → Wellness
+// Role Types and have it flow through every clinical-gated route with
+// ZERO code change. The middleware checks `canTakeVisits = true` on the
+// user's wellnessRole in the catalog; if true and "clinical" is in the
+// allowed list, the request passes.
+describe('"clinical" meta-token (catalog-driven dynamic gate)', () => {
+  // The middleware uses prisma.wellnessRoleType.findMany to read the
+  // catalog. Tests inject a `_wellnessRoleCatalog` Map on req.user so the
+  // middleware never hits prisma — this is the same memoization key the
+  // middleware itself populates on the request after one lookup.
+  function withCatalog(user, catalog) {
+    return { ...user, vertical: 'wellness' };
+  }
+  function makeReqWithCatalog({ user, catalog }) {
+    const req = { user: { ...user, vertical: 'wellness' } };
+    // The middleware memoizes the catalog on req._wellnessRoleCatalog
+    // after its first lookup. Pre-populate it so the middleware reads
+    // ours instead of hitting prisma in unit tests.
+    req._wellnessRoleCatalog = catalog;
+    let statusCode = 200;
+    const res = {
+      status: vi.fn(function (c) { statusCode = c; return this; }),
+      json: vi.fn(function (data) { this.body = data; return this; }),
+      get statusCode() { return statusCode; },
+    };
+    const next = vi.fn();
+    return { req, res, next };
+  }
+
+  test('USER with wellnessRole=nurse passes on ["clinical"] when nurse has canTakeVisits=true', async () => {
+    const mw = verifyWellnessRole(['clinical']);
+    const catalog = new Map([
+      ['doctor', true],
+      ['professional', true],
+      ['nurse', true],
+      ['stylist', true],
+      ['telecaller', false],
+      ['helper', false],
+    ]);
+    const { req, res, next } = makeReqWithCatalog({
+      user: { role: 'USER', wellnessRole: 'nurse', tenantId: 1 },
+      catalog,
+    });
+    await mw(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  test('USER with wellnessRole=physiotherapist (new custom role) passes on ["clinical"]', async () => {
+    const mw = verifyWellnessRole(['clinical']);
+    const catalog = new Map([
+      ['doctor', true],
+      ['physiotherapist', true], // admin just added this in Settings → Wellness Role Types
+    ]);
+    const { req, res, next } = makeReqWithCatalog({
+      user: { role: 'USER', wellnessRole: 'physiotherapist', tenantId: 1 },
+      catalog,
+    });
+    await mw(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  test('USER with wellnessRole=helper (canTakeVisits=false) does NOT pass on ["clinical"]', async () => {
+    const mw = verifyWellnessRole(['clinical']);
+    const catalog = new Map([
+      ['doctor', true],
+      ['helper', false],
+    ]);
+    const { req, res, next } = makeReqWithCatalog({
+      user: { role: 'USER', wellnessRole: 'helper', tenantId: 1 },
+      catalog,
+    });
+    await mw(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('USER with wellnessRole=nurse does NOT pass on ["doctor"] (no "clinical" token in allow-list)', async () => {
+    // Without "clinical" in the allow-list, only literal matches count —
+    // nurse stays denied. Important: admin-only routes ["admin","manager"]
+    // continue to reject every wellnessRole regardless of canTakeVisits.
+    const mw = verifyWellnessRole(['doctor']);
+    const catalog = new Map([['doctor', true], ['nurse', true]]);
+    const { req, res, next } = makeReqWithCatalog({
+      user: { role: 'USER', wellnessRole: 'nurse', tenantId: 1 },
+      catalog,
+    });
+    await mw(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('USER with wellnessRole=nurse does NOT pass on ["admin","manager"] (admin-only gate stays admin-only)', async () => {
+    const mw = verifyWellnessRole(['admin', 'manager']);
+    const catalog = new Map([['doctor', true], ['nurse', true]]);
+    const { req, res, next } = makeReqWithCatalog({
+      user: { role: 'USER', wellnessRole: 'nurse', tenantId: 1 },
+      catalog,
+    });
+    await mw(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('USER with wellnessRole=nurse passes on ["clinical","telecaller","admin","manager"] (the new phiReadGate shape)', async () => {
+    const mw = verifyWellnessRole(['clinical', 'telecaller', 'admin', 'manager']);
+    const catalog = new Map([['doctor', true], ['nurse', true], ['telecaller', false]]);
+    const { req, res, next } = makeReqWithCatalog({
+      user: { role: 'USER', wellnessRole: 'nurse', tenantId: 1 },
+      catalog,
+    });
+    await mw(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  test('USER with wellnessRole=doctor passes via LITERAL match on ["clinical","doctor",...] before catalog lookup', async () => {
+    // Performance contract: when the literal "doctor" is in the allow-list,
+    // it matches FIRST and short-circuits the catalog DB query. The
+    // catalog is irrelevant in this hot path — verified by passing an
+    // empty catalog and still seeing next() called.
+    const mw = verifyWellnessRole(['clinical', 'doctor', 'professional', 'admin', 'manager']);
+    const { req, res, next } = makeReqWithCatalog({
+      user: { role: 'USER', wellnessRole: 'doctor', tenantId: 1 },
+      catalog: new Map(), // empty catalog — proves literal short-circuit
+    });
+    await mw(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  test('USER with no wellnessRole does NOT pass on ["clinical"]', async () => {
+    const mw = verifyWellnessRole(['clinical']);
+    const catalog = new Map([['doctor', true]]);
+    const { req, res, next } = makeReqWithCatalog({
+      user: { role: 'USER', tenantId: 1 }, // no wellnessRole
+      catalog,
+    });
+    await mw(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  // Silences eslint no-unused-vars on the unused helper
+  void withCatalog;
+});
+
+// anyOfPermissions: RBAC-permission fallback. When the route declares
+// a list of {module, action} grants AND the calling user's effective
+// permissions (from the merged UserRole→RolePermission set) include
+// AT LEAST ONE of them, the request passes — even without a matching
+// wellnessRole. Implements the "I created a Receptionist role, granted
+// appointments.read, expect the appointments UI to work" use case.
+describe('anyOfPermissions (RBAC fallback)', () => {
+  // Swap getUserPermissions with a deterministic fake; restore after.
+  beforeEach(() => {
+    requirePermissionModule.getUserPermissions = vi.fn(
+      async () => new Set(),
+    );
+  });
+  afterEach(() => {
+    requirePermissionModule.getUserPermissions = realGetUserPermissions;
+  });
+
+  function makeReq({ user, perms = [] }) {
+    const req = { user: { ...user, vertical: 'wellness' } };
+    let statusCode = 200;
+    const res = {
+      status: vi.fn(function (c) { statusCode = c; return this; }),
+      json: vi.fn(function (data) { this.body = data; return this; }),
+      get statusCode() { return statusCode; },
+    };
+    const next = vi.fn();
+    requirePermissionModule.getUserPermissions = vi.fn(
+      async () => new Set(perms),
+    );
+    return { req, res, next };
+  }
+
+  test('USER with appointments.read passes on ["clinical","doctor",...] + anyOfPermissions [appointments.read]', async () => {
+    const mw = verifyWellnessRole(
+      ['clinical', 'doctor', 'professional', 'telecaller', 'admin', 'manager'],
+      { anyOfPermissions: [{ module: 'appointments', action: 'read' }] },
+    );
+    // User has no wellnessRole and isn't ADMIN/MANAGER — only the RBAC
+    // grant lets them through.
+    const { req, res, next } = makeReq({
+      user: { role: 'USER', userId: 42, tenantId: 1 },
+      perms: ['appointments.read'],
+    });
+    await mw(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  test('USER without the listed permission falls through to 403', async () => {
+    const mw = verifyWellnessRole(
+      ['doctor', 'professional', 'admin', 'manager'],
+      { anyOfPermissions: [{ module: 'patients', action: 'read' }] },
+    );
+    const { req, res, next } = makeReq({
+      user: { role: 'USER', userId: 42, tenantId: 1 },
+      perms: ['unrelated.read'],
+    });
+    await mw(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('user with ANY one of multiple listed grants passes', async () => {
+    const mw = verifyWellnessRole(
+      ['doctor', 'admin', 'manager'],
+      {
+        anyOfPermissions: [
+          { module: 'patients', action: 'read' },
+          { module: 'appointments', action: 'read' },
+          { module: 'visits', action: 'read' },
+        ],
+      },
+    );
+    const { req, res, next } = makeReq({
+      user: { role: 'USER', userId: 42, tenantId: 1 },
+      perms: ['visits.read'], // only the 3rd in the list
+    });
+    await mw(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  test('omitting anyOfPermissions leaves behaviour identical to before (literal-only)', async () => {
+    // No 2nd argument → no RBAC fallback. USER with no wellnessRole and
+    // appointments.read grant still gets 403 because the gate has no
+    // anyOfPermissions declared.
+    const mw = verifyWellnessRole(['doctor', 'professional', 'admin', 'manager']);
+    const { req, res, next } = makeReq({
+      user: { role: 'USER', userId: 42, tenantId: 1 },
+      perms: ['appointments.read'],
+    });
+    await mw(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('admin/manager literal aliases still short-circuit before RBAC lookup', async () => {
+    // ADMIN passes via the "admin" alias before any DB lookup. Same
+    // for MANAGER. anyOfPermissions is irrelevant to that path.
+    const mw = verifyWellnessRole(
+      ['admin', 'manager'],
+      { anyOfPermissions: [{ module: 'patients', action: 'read' }] },
+    );
+    const { req, res, next } = makeReq({
+      user: { role: 'ADMIN', userId: 42, tenantId: 1 },
+      perms: [], // empty — proves admin alias short-circuits
+    });
+    await mw(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
   });
 });

@@ -161,13 +161,13 @@ export default function RolesAdmin() {
   };
 
   const handleDelete = async (role) => {
-    if (
-      !window.confirm(
-        `Delete role "${role.name}"? Users assigned to this role will lose its permissions.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await notify.confirm({
+      title: 'Delete role',
+      message: `Delete role "${role.name}"? Users assigned to this role will lose its permissions.`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/roles/${role.id}`, { method: 'DELETE' });
       notify.success?.(`Role "${role.name}" deleted`);
@@ -805,6 +805,45 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
   const [selected, setSelected] = useState(initial);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  // Page catalog so we can show admins which pages each permission
+  // unlocks. Without this, admins look for a "calendar" module in the
+  // picker, don't find it (calendar is gated by appointments.read), and
+  // assume the permission is missing. Showing "Unlocks: Calendar,
+  // Appointments, …" under each module makes the mapping obvious.
+  const [pageCatalog, setPageCatalog] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchApi('/api/pages/catalog')
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res?.catalog) ? res.catalog : [];
+        setPageCatalog(list);
+      })
+      .catch(() => {
+        // Non-fatal — the hint is supplementary, the picker still works.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Build a `module → Set<pageLabel>` map by walking each catalog page's
+  // requiredPermissions. A page that requires `appointments.read` shows
+  // up under the "appointments" module hint — across ALL its actions —
+  // because granting that module's read action is what unlocks it.
+  const pagesByModule = useMemo(() => {
+    const map = new Map();
+    for (const page of pageCatalog) {
+      const reqs = Array.isArray(page?.requiredPermissions) ? page.requiredPermissions : [];
+      for (const { module } of reqs) {
+        if (!module) continue;
+        if (!map.has(module)) map.set(module, new Set());
+        map.get(module).add(page.label);
+      }
+    }
+    return map;
+  }, [pageCatalog]);
+
   const notify = useNotify();
 
   const toggle = (module, action) => {
@@ -933,7 +972,7 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'space-between',
-                          marginBottom: '0.5rem',
+                          marginBottom: '0.25rem',
                         }}
                       >
                         <span
@@ -965,6 +1004,33 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                           </button>
                         )}
                       </div>
+                      {(() => {
+                        // Show "Unlocks: <pages>" so admins can map a
+                        // permission to the SPA pages it grants access
+                        // to. Answers the recurring "I can't find the
+                        // 'calendar' permission" confusion — Calendar
+                        // is unlocked by `appointments`, which now
+                        // says so directly under its header.
+                        const pages = pagesByModule.get(module);
+                        if (!pages || pages.size === 0) return null;
+                        const labels = Array.from(pages).sort();
+                        return (
+                          <div
+                            style={{
+                              fontSize: '0.7rem',
+                              color: 'var(--text-secondary)',
+                              marginBottom: '0.5rem',
+                              lineHeight: 1.35,
+                            }}
+                            title={`Pages requiring this permission: ${labels.join(', ')}`}
+                          >
+                            Unlocks:{' '}
+                            <span style={{ color: 'var(--text-primary)', opacity: 0.85 }}>
+                              {labels.join(', ')}
+                            </span>
+                          </div>
+                        );
+                      })()}
                       <div
                         style={{
                           display: 'flex',
@@ -1377,7 +1443,13 @@ function UsersModal({ role, canManage, onClose, onChange }) {
   };
 
   const unassign = async (userId) => {
-    if (!window.confirm('Remove this role from the user?')) return;
+    const ok = await notify.confirm({
+      title: 'Remove role',
+      message: 'Remove this role from the user?',
+      confirmText: 'Remove',
+      destructive: true,
+    });
+    if (!ok) return;
     setBusyUserId(userId);
     try {
       await fetchApi(`/api/roles/${role.id}/assign/${userId}`, {

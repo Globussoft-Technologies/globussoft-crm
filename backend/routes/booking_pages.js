@@ -146,10 +146,38 @@ async function buildSlotsForDate(page, dateStr) {
 
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const pages = await prisma.bookingPage.findMany({
+    // #920 slice 40: ?fields=summary slim-shape opt-in. Mirrors slices 1-39.
+    // The default list returns the full BookingPage row including heavy
+    // @db.Text columns — availability (JSON), logoUrl, heroImageUrl,
+    // heroSubheadline, featuredServiceIds (JSON-string array), hoursJson
+    // (JSON-string weekday map), and the description blob. Picker /
+    // dropdown UI (link-to-booking-page form fields, slug-collision check,
+    // settings → "default booking page" selector) doesn't need any of
+    // that — only id + slug + title + isActive + durationMins +
+    // bufferMins + createdAt + updatedAt + the bookingCount roll-up.
+    // When the caller passes ?fields=summary we project to that minimal
+    // set. Opt-in additive — existing callers (no ?fields, or any
+    // non-exact value) get the full row shape unchanged so the
+    // BookingPages.jsx library page continues to render hero / featured
+    // services / hours / etc. on each card.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        slug: true,
+        title: true,
+        isActive: true,
+        durationMins: true,
+        bufferMins: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
+    const pages = await prisma.bookingPage.findMany(findManyArgs);
 
     const ids = pages.map(p => p.id);
     let counts = {};

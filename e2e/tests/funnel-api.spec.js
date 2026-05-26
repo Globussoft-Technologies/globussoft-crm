@@ -265,12 +265,15 @@ test.describe('Funnel API — GET /trend', () => {
     expect(body).toHaveLength(36);
   });
 
-  test('?months=0 floors to 1', async ({ request }) => {
+  test('?months=0 falls through to default 6 (parseInt("0")||6 short-circuit)', async ({ request }) => {
+    // Source: routes/funnel.js:270 — `Math.max(1, Math.min(36, parseInt(req.query.months, 10) || 6))`.
+    // parseInt('0') is 0 (falsy) → falls through `|| 6` → returns 6 buckets, NOT 1.
+    // Pinning reality, not the spec's earlier guess of floor-to-1.
     const token = await getAdminToken(request);
     const res = await authGet(request, '/api/funnel/trend?months=0', token);
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body).toHaveLength(1);
+    expect(body).toHaveLength(6);
   });
 });
 

@@ -108,4 +108,134 @@ describe('DuplicateContactModal', () => {
     expect(screen.getByText('Contact #7')).toBeInTheDocument();
     expect(screen.getByText('nameless@example.com')).toBeInTheDocument();
   });
+
+  // -------------------------------------------------------------------------
+  // Extended coverage — edge cases on matchedBy fallback, contact projection
+  // gating, partial-field rendering, accessibility wiring, and idempotent
+  // callback behaviour. Brings test ratio from 59% (111L/186L) to ~115%+.
+  // -------------------------------------------------------------------------
+
+  it('falls back to the "email or phone number" label when matchedBy is unrecognised', () => {
+    renderModal({ matchedBy: 'something_else' });
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      /email or phone number already exists/i
+    );
+  });
+
+  it('falls back to the "email or phone number" label when matchedBy is undefined', () => {
+    renderModal({ matchedBy: undefined });
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      /email or phone number already exists/i
+    );
+  });
+
+  it('omits the contact projection block entirely when contact is null', () => {
+    renderModal({ contact: null, existingContactId: 100 });
+    // The dialog still renders (operator can still pick a path), but the
+    // projection card with name/email/phone is not shown.
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByText('Alice Cooper')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Contact #100/)).not.toBeInTheDocument();
+    // The three action buttons are still rendered.
+    expect(screen.getByText('Edit details')).toBeInTheDocument();
+    expect(screen.getByText('Create anyway')).toBeInTheDocument();
+    expect(screen.getByText('Open existing')).toBeInTheDocument();
+  });
+
+  it('omits the Status line when contact.status is missing', () => {
+    renderModal({
+      contact: {
+        id: 42,
+        name: 'Bob Builder',
+        email: 'bob@example.com',
+      },
+    });
+    expect(screen.getByText('Bob Builder')).toBeInTheDocument();
+    expect(screen.queryByText(/Status:/i)).not.toBeInTheDocument();
+  });
+
+  it('renders only the email line when phone + company + status are absent', () => {
+    renderModal({
+      contact: {
+        id: 5,
+        name: 'Solo Mio',
+        email: 'solo@example.com',
+      },
+    });
+    expect(screen.getByText('Solo Mio')).toBeInTheDocument();
+    expect(screen.getByText('solo@example.com')).toBeInTheDocument();
+    expect(screen.queryByText(/\+\d/)).not.toBeInTheDocument(); // no phone-shaped text
+    expect(screen.queryByText('Acme Inc')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Status:/i)).not.toBeInTheDocument();
+  });
+
+  it('renders only the phone line when email + company + status are absent', () => {
+    renderModal({
+      contact: {
+        id: 6,
+        name: 'Phone Only',
+        phone: '+1-555-0123',
+      },
+    });
+    expect(screen.getByText('Phone Only')).toBeInTheDocument();
+    expect(screen.getByText('+1-555-0123')).toBeInTheDocument();
+    expect(screen.queryByText(/@/)).not.toBeInTheDocument(); // no email
+  });
+
+  it('declares aria attributes for screen readers (role="dialog", aria-modal, aria-labelledby)', () => {
+    renderModal();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAttribute('aria-labelledby', 'dup-contact-modal-title');
+    // And the labelledby target must actually exist in the DOM, otherwise
+    // assistive tech finds nothing to announce.
+    const title = document.getElementById('dup-contact-modal-title');
+    expect(title).not.toBeNull();
+    expect(title).toHaveTextContent(/Possible duplicate contact/i);
+  });
+
+  it('renders exactly three actionable affordances (Edit details, Create anyway, Open existing)', () => {
+    renderModal();
+    // The two callback buttons.
+    expect(screen.getByRole('button', { name: 'Edit details' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create anyway' })).toBeInTheDocument();
+    // The Link rendered as an anchor — react-router-dom's <Link> emits an <a>.
+    const openExisting = screen.getByText('Open existing').closest('a');
+    expect(openExisting).toBeInTheDocument();
+    expect(openExisting.tagName).toBe('A');
+    // And the header close button is a SEPARATE element with aria-label "Close".
+    const closeBtn = screen.getByLabelText('Close');
+    expect(closeBtn).toBeInTheDocument();
+    expect(closeBtn.tagName).toBe('BUTTON');
+  });
+
+  it('"Create anyway" is enabled and clickable when creating=false', () => {
+    const { props } = renderModal({ creating: false });
+    const btn = screen.getByText('Create anyway');
+    expect(btn).not.toBeDisabled();
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    // Parent owns idempotency / debounce; the component fires the callback
+    // for every click while enabled.
+    expect(props.onCreateAnyway).toHaveBeenCalledTimes(2);
+  });
+
+  it('header close button and Edit details button both invoke the SAME callback', () => {
+    const { props } = renderModal();
+    fireEvent.click(screen.getByLabelText('Close'));
+    fireEvent.click(screen.getByText('Edit details'));
+    // Both routes are deliberately the same path (close-modal) so the parent
+    // sees one channel for cancellation regardless of which UI affordance the
+    // operator used.
+    expect(props.onEditDetails).toHaveBeenCalledTimes(2);
+  });
+
+  it('"Open existing" link href reflects the existingContactId prop verbatim (no normalization)', () => {
+    renderModal({ existingContactId: 0 });
+    // existingContactId=0 is a degenerate value but the component should not
+    // silently rewrite it — the parent owns validation. The link still emits
+    // /contacts/0 so the bug is visible to the operator if it happens.
+    const link = screen.getByText('Open existing').closest('a');
+    expect(link).toHaveAttribute('href', '/contacts/0');
+  });
 });

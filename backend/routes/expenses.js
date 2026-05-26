@@ -26,6 +26,118 @@ router.get("/", async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────────
+// GET /api/expenses/stats
+//
+// CRM polish — first /stats aggregate for the Expense CRUD route.
+// Read-only tenant-wide KPI surface backing the finance dashboard's
+// expense tile. Mirrors billing.js /stats + travel_suppliers.js
+// /stats posture — anodyne aggregate, NO audit row written.
+//
+// Auth: verifyToken (matches the explicit gate on billing.js /stats).
+// The Expense list endpoint above relies on the global auth guard;
+// the per-route gate here is for parity with other /stats endpoints
+// and for unit-test mount-the-router-bare ergonomics.
+//
+// Schema notes — actual Expense columns (verified against schema.prisma
+// model Expense): amount (Float), status (default "Pending"; live values
+// per the schema comment: Draft, Pending, Approved, Rejected, Reimbursed),
+// category (default "General"), createdAt. NO submittedAt column — date
+// bounds operate on createdAt (matches billing.js /stats).
+//
+// approvedAmount sums Approved + Reimbursed (terminal-positive states).
+// pendingAmount sums Pending (awaiting decision). totalAmount sums every
+// row regardless of status.
+//
+// Query params:
+//   ?from / ?to — optional ISO date bounds on createdAt. Invalid → 400
+//                 INVALID_DATE. Both optional, independent validation.
+//
+// Response envelope:
+//   { total, byStatus, byCategory, totalAmount, approvedAmount,
+//     pendingAmount, lastCreatedAt }
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE
+// the /:id family or `:id="stats"` would 400 INVALID_ID before reaching
+// this handler. Same convention as billing.js + travel_suppliers.js.
+// ────────────────────────────────────────────────────────────────
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    // Validate optional date bounds. Independent validation so a bad
+    // ?from doesn't get masked by a missing ?to and vice-versa.
+    const createdAtClause = {};
+    if (req.query.from !== undefined) {
+      const fromDate = new Date(req.query.from);
+      if (Number.isNaN(fromDate.getTime())) {
+        return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE" });
+      }
+      createdAtClause.gte = fromDate;
+    }
+    if (req.query.to !== undefined) {
+      const toDate = new Date(req.query.to);
+      if (Number.isNaN(toDate.getTime())) {
+        return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE" });
+      }
+      createdAtClause.lte = toDate;
+    }
+
+    const where = { tenantId: req.user.tenantId };
+    if (Object.keys(createdAtClause).length > 0) {
+      where.createdAt = createdAtClause;
+    }
+
+    // Pull only the columns needed for aggregation — avoids dragging
+    // user/contact joins into memory just to sum.
+    const rows = await prisma.expense.findMany({
+      where,
+      select: { status: true, category: true, amount: true, createdAt: true },
+    });
+
+    const total = rows.length;
+    const byStatus = {};
+    const byCategory = {};
+    let totalSum = 0;
+    let approvedSum = 0;
+    let pendingSum = 0;
+    let lastCreatedAt = null;
+    const APPROVED_STATES = new Set(["Approved", "Reimbursed"]);
+
+    for (const r of rows) {
+      const status = r.status || "Pending";
+      byStatus[status] = (byStatus[status] || 0) + 1;
+
+      const category = r.category || "General";
+      byCategory[category] = (byCategory[category] || 0) + 1;
+
+      const amt = Number(r.amount) || 0;
+      totalSum += amt;
+      if (APPROVED_STATES.has(status)) approvedSum += amt;
+      if (status === "Pending") pendingSum += amt;
+
+      if (r.createdAt && (lastCreatedAt === null || new Date(r.createdAt) > lastCreatedAt)) {
+        lastCreatedAt = new Date(r.createdAt);
+      }
+    }
+
+    // Half-up 2dp rounding — EPSILON tweak collapses JS float noise
+    // (0.1+0.2 type artefacts) so 100.555 rounds to 100.56 not 100.55.
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+    res.json({
+      total,
+      byStatus,
+      byCategory,
+      totalAmount: round2(totalSum),
+      approvedAmount: round2(approvedSum),
+      pendingAmount: round2(pendingSum),
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[expenses/stats]", err);
+    res.status(500).json({ error: "Failed to compute expense stats" });
+  }
+});
+
 // GET /api/expenses/:id — single expense
 router.get("/:id", async (req, res) => {
   try {

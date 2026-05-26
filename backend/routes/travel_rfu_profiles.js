@@ -672,6 +672,174 @@ router.get(
   },
 );
 
+// ─── By-year — tenant-wide RFU profile annual rollup ────────────────
+//
+// GET /api/travel/rfu-profiles/by-year
+// (PRD_TRAVEL_RFU §3 — operator-facing dashboard annual trend).
+//
+// USER-readable meta endpoint (within RFU-gated callers). Returns one
+// row per UTC YYYY bucket for the tenant-scoped RfuLeadProfile
+// population so the operator dashboard can render a "pilgrims onboarded
+// over year" trend chart without N round-trips per year. Completes the
+// /rfu-profiles/stats + /by-month + /by-quarter + /by-year triplet —
+// same pattern, same posture, calendar-year granularity.
+//
+// Mirrors /itineraries/by-year + /suppliers/by-year — same UTC YYYY
+// bucketing template, same defensive math (null/invalid createdAt →
+// "unknown" bucket; excluded when ?from / ?to is set, kept otherwise
+// so count surface stays accurate), same orderBy semantics.
+//
+// Sub-brand handling: RFU is a SINGLE-SUB-BRAND surface
+// (requireRfuAccess gates everything in this file). RfuLeadProfile has
+// NO subBrand column (the model is RFU-exclusive by design — see
+// schema.prisma:4752). The where-clause therefore needs NO additional
+// subBrand narrowing — the middleware already gates access. No
+// bySubBrand bucket emitted; matches /rfu-profiles/stats + /by-month +
+// /by-quarter posture.
+//
+// Why year granularity in addition to month + quarter: annual reviews
+// (year-end CFO close, year-over-year trend lines, fiscal-year
+// reporting, RFU Umrah season-on-season comparisons) need a single
+// endpoint hit instead of summing 12 month rows or 4 quarter rows
+// client-side. Also feeds multi-year trend charts directly.
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY bounds; invalid →
+//                     400 INVALID_YEAR_FORMAT
+//   - ?orderBy      — default year:asc; accepts year:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 10 / 0; limit caps at 30
+//
+// Behaviour:
+//   - JS-side aggregation over a light findMany projection
+//     ({ createdAt }) — same rationale as /by-month + /by-quarter.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so
+//     the count surface stays accurate. Excluded when ?from / ?to is
+//     set (no comparable year token); included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter.
+//
+// No audit row written — read-only meta surface. USER-readable
+// (within RFU-gated callers): anodyne (counts + year-string tokens).
+//
+// Express route ordering: literal-path /by-year MUST be declared
+// BEFORE the /:id family or `:id="by-year"` would 400 INVALID_ID
+// before reaching this handler.
+router.get(
+  "/rfu-profiles/by-year",
+  verifyToken,
+  requireTravelTenant,
+  requireRfuAccess,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+      // YYYY validation — exactly 4 digits. Mirrors /itineraries/by-year.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      // Tenant-scoped where. NO sub-brand narrowing —
+      // requireRfuAccess already gated this caller, and
+      // RfuLeadProfile has no subBrand column.
+      const where = { tenantId: req.travelTenant.id };
+
+      // Light projection — createdAt is all we need for the bucket
+      // totals. No JSON columns pulled.
+      const rows = await prisma.rfuLeadProfile.findMany({
+        where,
+        select: { createdAt: true },
+      });
+
+      // Aggregate per-UTC-year. Map "YYYY" → { year, count }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byYear = new Map();
+      for (const r of rows) {
+        let yearKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let bucket = byYear.get(yearKey);
+        if (!bucket) {
+          bucket = { year: yearKey, count: 0 };
+          byYear.set(yearKey, bucket);
+        }
+        bucket.count += 1;
+      }
+
+      let years = [...byYear.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. Mirrors /by-month + /by-quarter.
+      if (fromRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+      }
+      if (toRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY (also chronological
+      // for 4-digit zero-padded years). "unknown" sorts last in asc /
+      // first in desc (lexicographically > "9999") — acceptable for a
+      // defensive fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = years.length;
+
+      // Pagination AFTER aggregation + sort + filter.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      console.error("[travel-rfu] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute annual rollup" });
+    }
+  },
+);
+
 // ─── Phase 2 — preflight duplicate check (PRD §4.5) ──────────────────
 //
 // The Phase 2 "full pop-up flow with preferences" needs a check-without-

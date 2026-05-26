@@ -82,6 +82,108 @@ router.post("/", ...adminOnly, async (req, res) => {
   }
 });
 
+// ============================================================================
+// GET /api/pipelines/stats — tenant-wide pipeline rollup (CRM polish)
+// ============================================================================
+// First /stats endpoint for the Pipeline route. Read-only KPI surface for the
+// sales dashboard's pipeline strip. Aggregates:
+//
+//   - totalPipelines       count of Pipeline rows for tenant
+//   - totalStages          count of PipelineStage rows for tenant (tenant-wide;
+//                          PipelineStage has NO pipelineId column in the
+//                          current schema — stages are a tenant-shared library
+//                          per prisma/schema.prisma:1333)
+//   - avgStagesPerPipeline totalStages / totalPipelines, rounded half-up to
+//                          2dp; null when totalPipelines = 0
+//   - defaultPipelineId    id of the Pipeline where isDefault=true (null when
+//                          tenant has no default — empty tenant or pre-seed)
+//   - lastCreatedAt        max(Pipeline.createdAt) as ISO string; null when
+//                          totalPipelines = 0
+//
+// Query params:
+//   - ?from / ?to (ISO date bounds on Pipeline.createdAt). Bounds apply to
+//     pipeline aggregates (totalPipelines, defaultPipelineId, lastCreatedAt).
+//     totalStages stays unbounded — PipelineStage has no temporal relation to
+//     a specific Pipeline. Invalid date → 400 INVALID_DATE.
+//
+// Auth: mirrors GET / (verifyToken, all authenticated tenant members).
+// NO audit row written — read-only meta surface, mirrors deals/stats +
+// accounting/stats posture.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family or `:id="stats"` would NaN-parse + 400 "Invalid pipeline id"
+// before reaching this handler.
+// ============================================================================
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // Optional ISO date bounds on Pipeline.createdAt
+    const pipelineWhere = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      pipelineWhere.createdAt = Object.assign(
+        pipelineWhere.createdAt || {},
+        { gte: d },
+      );
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      pipelineWhere.createdAt = Object.assign(
+        pipelineWhere.createdAt || {},
+        { lte: d },
+      );
+    }
+
+    const [totalPipelines, totalStages, defaultPipeline, latest] = await Promise.all([
+      prisma.pipeline.count({ where: pipelineWhere }),
+      prisma.pipelineStage.count({ where: { tenantId } }),
+      prisma.pipeline.findFirst({
+        where: { ...pipelineWhere, isDefault: true },
+        select: { id: true },
+      }),
+      prisma.pipeline.findFirst({
+        where: pipelineWhere,
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      }),
+    ]);
+
+    // Half-up 2dp rounding; null when totalPipelines = 0
+    let avgStagesPerPipeline = null;
+    if (totalPipelines > 0) {
+      const raw = totalStages / totalPipelines;
+      avgStagesPerPipeline = Math.round(raw * 100) / 100;
+    }
+
+    res.json({
+      totalPipelines,
+      totalStages,
+      avgStagesPerPipeline,
+      defaultPipelineId: defaultPipeline ? defaultPipeline.id : null,
+      lastCreatedAt:
+        latest && latest.createdAt ? new Date(latest.createdAt).toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[pipelines][GET /stats]", err);
+    res.status(500).json({ error: "Failed to fetch pipeline stats" });
+  }
+});
+
 // ── PUT /:id ─ update name/description ───────────────────────────
 router.put("/:id", ...adminOnly, async (req, res) => {
   try {

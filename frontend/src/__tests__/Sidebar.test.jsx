@@ -898,4 +898,242 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Customer comms')).toBeTruthy();
     });
   });
+
+  // ── Fourth-extension cases (≥7 new) ────────────────────────────────
+  // Surface still uncovered by the prior three extension batches:
+  //   - Mobile drawer keyboard + backdrop event wiring (ESC, click).
+  //   - Aside ARIA-role/aria-modal nuances for the non-drawer path.
+  //   - `sidebar:counts-changed` window CustomEvent → fetchApi re-fetch.
+  //   - Travel-vertical Inbox/Tasks `badge=` vs `count=` prop wiring (the
+  //     SUT wires `badge=` on these two links in renderTravelNav at L1201
+  //     + L1203, but the Link helper only consumes `count=`. Pin the
+  //     shipping behavior — badges silently absent on travel even with
+  //     counts populated — so a future "fix" to rename the prop is a
+  //     deliberate decision, not a silent regression in a different
+  //     direction).
+  //   - #904 Inbound Leads operator surface mount under travel.
+  //   - Brand swatch fallback chain (no logo + no brandColor → uses
+  //     CSS variable default).
+  //   - Logo present → swatch div absent (mutually-exclusive header).
+  //   - Sub-brand switcher `id`/`for` a11y label pairing.
+
+  describe('Mobile drawer event wiring', () => {
+    it('fires onMobileClose when ESC is pressed while drawer is open', () => {
+      const onClose = vi.fn();
+      const tenant = { name: 'X', vertical: 'generic' };
+      const user = { name: 'X', email: 'x@x.test', role: 'USER' };
+      render(
+        <MemoryRouter initialEntries={['/dashboard']}>
+          <AuthContext.Provider
+            value={{ user, setUser: vi.fn(), token: 't', setToken: vi.fn(), tenant, setTenant: vi.fn() }}
+          >
+            <Sidebar mobileOpen={true} isMobileViewport={true} onMobileClose={onClose} />
+          </AuthContext.Provider>
+        </MemoryRouter>,
+      );
+      // Dispatch ESC on document — the SUT's effect listens at document level.
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it('does NOT fire onMobileClose for non-ESC keys (no additional calls beyond mount-time auto-close)', () => {
+      // The SUT's `useEffect([location.pathname])` fires onMobileClose() once
+      // on mount when mobileOpen=true (auto-close on route change handler,
+      // L185-188). Anchor the call-count to "1 after mount" and assert
+      // non-ESC keys don't bump it.
+      const onClose = vi.fn();
+      const tenant = { name: 'X', vertical: 'generic' };
+      const user = { name: 'X', email: 'x@x.test', role: 'USER' };
+      render(
+        <MemoryRouter initialEntries={['/dashboard']}>
+          <AuthContext.Provider
+            value={{ user, setUser: vi.fn(), token: 't', setToken: vi.fn(), tenant, setTenant: vi.fn() }}
+          >
+            <Sidebar mobileOpen={true} isMobileViewport={true} onMobileClose={onClose} />
+          </AuthContext.Provider>
+        </MemoryRouter>,
+      );
+      const baseline = onClose.mock.calls.length;
+      fireEvent.keyDown(document, { key: 'Enter' });
+      fireEvent.keyDown(document, { key: 'a' });
+      // Skip 'Tab' — the focus-trap effect may preventDefault on it which
+      // could ripple to onClose in jsdom focus-loss paths. The probe is
+      // about ESC-vs-other contract; 'Enter' + 'a' suffice.
+      expect(onClose.mock.calls.length).toBe(baseline);
+    });
+
+    it('fires onMobileClose when the backdrop is clicked', () => {
+      const onClose = vi.fn();
+      const tenant = { name: 'X', vertical: 'generic' };
+      const user = { name: 'X', email: 'x@x.test', role: 'USER' };
+      const { container } = render(
+        <MemoryRouter initialEntries={['/dashboard']}>
+          <AuthContext.Provider
+            value={{ user, setUser: vi.fn(), token: 't', setToken: vi.fn(), tenant, setTenant: vi.fn() }}
+          >
+            <Sidebar mobileOpen={true} isMobileViewport={true} onMobileClose={onClose} />
+          </AuthContext.Provider>
+        </MemoryRouter>,
+      );
+      const backdrop = container.querySelector('.sidebar-backdrop');
+      expect(backdrop).toBeTruthy();
+      fireEvent.click(backdrop);
+      expect(onClose).toHaveBeenCalled();
+    });
+  });
+
+  describe('Aside ARIA contract in non-drawer mode', () => {
+    it('does NOT set aria-modal when mobileOpen=true but isMobileViewport=false (desktop)', () => {
+      // Drawer mode requires BOTH conditions. On desktop with mobileOpen=true
+      // (e.g. user resized from mobile to desktop while drawer was open) the
+      // aside is still semantically navigation, not a modal dialog.
+      const tenant = { name: 'X', vertical: 'generic' };
+      const user = { name: 'X', email: 'x@x.test', role: 'USER' };
+      const { container } = render(
+        <MemoryRouter initialEntries={['/dashboard']}>
+          <AuthContext.Provider
+            value={{ user, setUser: vi.fn(), token: 't', setToken: vi.fn(), tenant, setTenant: vi.fn() }}
+          >
+            <Sidebar mobileOpen={true} isMobileViewport={false} onMobileClose={vi.fn()} />
+          </AuthContext.Provider>
+        </MemoryRouter>,
+      );
+      const aside = container.querySelector('aside#app-sidebar');
+      expect(aside.getAttribute('role')).toBe('navigation');
+      // aria-modal should be absent (the SUT sets it to undefined which
+      // React omits from the rendered DOM).
+      expect(aside.hasAttribute('aria-modal')).toBe(false);
+    });
+  });
+
+  describe('Cross-component counter invalidation via window CustomEvent', () => {
+    it('re-fetches counts when `sidebar:counts-changed` CustomEvent is dispatched on window', async () => {
+      const apiMod = await import('../utils/api');
+      apiMod.fetchApi.mockReset();
+      apiMod.fetchApi.mockResolvedValue([]);
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      // Mount fires 4 initial fetches (leads/tasks/tickets/inbox).
+      const mountCalls = apiMod.fetchApi.mock.calls.length;
+      expect(mountCalls).toBeGreaterThanOrEqual(4);
+      // Dispatch the cross-component invalidation event.
+      window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
+      // The SUT's listener calls refreshCounts → 4 more fetches.
+      // Allow microtask drain so the Promise.all chain registers.
+      await Promise.resolve();
+      const postEventCalls = apiMod.fetchApi.mock.calls.length;
+      expect(postEventCalls).toBeGreaterThan(mountCalls);
+      apiMod.fetchApi.mockReset();
+      apiMod.fetchApi.mockResolvedValue([]);
+    });
+  });
+
+  describe('Travel vertical — Inbox/Tasks badge prop wiring (shipping-behavior pin)', () => {
+    // The travel renderer wires `badge={counts.inbox}` / `badge={counts.tasks}`
+    // at Sidebar.jsx:1201,1203 but the shared Link helper only consumes
+    // `count=` (Sidebar.jsx:413,432). Result: even with populated counts,
+    // travel-vertical Inbox + Tasks links render NO badge. Pin that
+    // behavior here so a future prop-rename to `count=` is a deliberate
+    // change with the test updated alongside, not a silent UX shift.
+    it('does NOT render a badge on travel Inbox link even when counts.inbox > 0', async () => {
+      const apiMod = await import('../utils/api');
+      apiMod.fetchApi.mockImplementation((url) => {
+        if (url.includes('/email?unread=1')) {
+          return Promise.resolve(new Array(42).fill({ id: 0 }));
+        }
+        return Promise.resolve([]);
+      });
+      renderSidebar({ vertical: 'travel', role: 'MANAGER' });
+      // Wait one microtask for the initial fetch to land.
+      await Promise.resolve();
+      await Promise.resolve();
+      // The travel Inbox link exists at /inbox.
+      const inboxLink = Array.from(document.querySelectorAll('a'))
+        .find((a) => a.getAttribute('href') === '/inbox');
+      expect(inboxLink).toBeTruthy();
+      // Critical pin: even with 42 inbox items, no badge span renders.
+      const badge = inboxLink.querySelector('[aria-label="42 items"]');
+      expect(badge).toBeNull();
+      apiMod.fetchApi.mockReset();
+      apiMod.fetchApi.mockResolvedValue([]);
+    });
+  });
+
+  describe('Travel vertical — Inbound Leads operator surface', () => {
+    it('renders /travel/inbound-leads link for all roles under travel (role-agnostic)', () => {
+      // #904 slice — InboundLeads admin is mounted with no role gate so
+      // every operator on the travel vertical can see the queue of newly-
+      // arrived webhook leads. Pin presence + href for both USER + ADMIN.
+      const cases = ['USER', 'MANAGER', 'ADMIN'];
+      cases.forEach((role) => {
+        const { unmount } = renderSidebar({ vertical: 'travel', role });
+        const link = Array.from(document.querySelectorAll('a'))
+          .find((a) => a.getAttribute('href') === '/travel/inbound-leads');
+        expect(link).toBeTruthy();
+        expect(link.textContent).toContain('Inbound Leads');
+        unmount();
+      });
+    });
+  });
+
+  describe('Brand header swatch fallback chain', () => {
+    it('uses CSS-variable default for swatch background when brandColor + logoUrl both null and vertical is generic', () => {
+      // SUT: backgroundColor: brandColor || "var(--accent-color)"
+      // jsdom resolves CSS variables to "" so style.backgroundColor reads
+      // empty. The pin: the inline style is set with a `var()` token, NOT
+      // an empty string or "transparent" — assert via the style attribute
+      // text (jsdom preserves the literal).
+      const { container } = renderSidebar({
+        vertical: 'generic',
+        role: 'USER',
+        tenantName: 'Plain Co',
+        logoUrl: null,
+        brandColor: null,
+      });
+      const heading = container.querySelector('h1');
+      const swatch = heading.previousElementSibling;
+      expect(swatch).toBeTruthy();
+      // Generic vertical → no HeartPulse svg inside the swatch.
+      expect(swatch.querySelector('svg')).toBeNull();
+      // Style attribute should reference the var(--accent-color) fallback.
+      const styleAttr = swatch.getAttribute('style') || '';
+      expect(styleAttr).toMatch(/var\(--accent-color\)/);
+    });
+
+    it('renders the logo IMG and NOT the swatch DIV when tenant.logoUrl is set', () => {
+      // Logo branch is exclusive of the swatch branch — they're sibling
+      // arms of a ternary in the header. Pin the exclusivity.
+      const { container } = renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        tenantName: 'Logo Co',
+        logoUrl: 'https://cdn.example.test/logo2.png',
+      });
+      const heading = container.querySelector('h1');
+      const sibling = heading.previousElementSibling;
+      expect(sibling).toBeTruthy();
+      // When logoUrl is set, the sibling should be an IMG, not the DIV
+      // swatch — so it has no HeartPulse svg child.
+      expect(sibling.tagName).toBe('IMG');
+      expect(sibling.getAttribute('src')).toBe('https://cdn.example.test/logo2.png');
+      expect(sibling.getAttribute('alt')).toBe('Logo Co');
+    });
+  });
+
+  describe('Sub-brand switcher a11y label pairing', () => {
+    it('switcher select has id `travel-sub-brand-switcher` and a matching <label htmlFor>', () => {
+      // Pin the for/id pairing so a refactor that drops the <label> or
+      // renames the id breaks the test (the aria-label is a separate
+      // belt-and-braces a11y signal — both should hold).
+      const { container } = renderSidebar({
+        vertical: 'travel',
+        role: 'ADMIN',
+      });
+      const switcher = container.querySelector('#travel-sub-brand-switcher');
+      expect(switcher).toBeTruthy();
+      expect(switcher.tagName).toBe('SELECT');
+      const label = container.querySelector('label[for="travel-sub-brand-switcher"]');
+      expect(label).toBeTruthy();
+      expect(label.textContent).toMatch(/Sub-brand/i);
+    });
+  });
 });

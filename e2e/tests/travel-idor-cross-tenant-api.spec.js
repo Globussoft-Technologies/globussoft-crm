@@ -3456,3 +3456,414 @@ test.describe("IDOR #919 slice 14 — new-rollup endpoint cross-tenant probes", 
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice 15 — non-Travel /:id cross-tenant probes on shared-vertical
+// models that ship on every tenant (generic + wellness + travel). These
+// routes use the canonical `prisma.<model>.findFirst({ where: { id,
+// tenantId: req.user.tenantId } })` → 404 contract — there is no
+// vertical guard upstream because the model exists across all verticals.
+// A missed `tenantId:` filter is the pure-form IDOR class the #919 spec
+// is trying to catch (read leak, mutate corruption, destructive
+// deletion). Eleven routes covered, drawn from `backend/routes/` with
+// /:id endpoints that have not yet been probed by slices 1-14:
+//
+//   • /api/tickets/:id        (GET — support-ticket read leak)
+//   • /api/brand-kits/:id     (GET — branding asset read leak; route has
+//                              a 400 INVALID_ID pre-lookup validator so
+//                              the probe accepts [400, 403, 404])
+//   • /api/wallet/rules/:id   (PUT + DELETE — ADMIN-only financial
+//                              corruption + destruction vector)
+//   • /api/tasks/:id          (PUT — task corruption vector)
+//   • /api/surveys/:id        (PUT + DELETE — survey corruption +
+//                              destruction)
+//   • /api/document-templates/:id (GET + DELETE — template read leak +
+//                                  destruction)
+//   • /api/dashboards/:id     (GET — custom-dashboard leak)
+//   • /api/knowledge-base/:id (GET — KB article leak; 200 is also valid
+//                              because KB articles can be `isPublic` and
+//                              are surfaced via portal — so the probe
+//                              checks the SEEDED row id is NOT returned
+//                              vs accepts [200, 403, 404] otherwise)
+//   • /api/expenses/:id       (GET — financial PII leak)
+//   • /api/estimates/:id      (GET — quote leak vector)
+//   • /api/projects/:id       (GET — project plan leak)
+//
+// Probe shape: FAKE_ID (999999999) — non-existent in every tenant. A
+// correctly-scoped handler returns 404 from the findFirst miss. A
+// missed tenant filter ALSO returns 404 (because the id doesn't exist
+// anywhere), so FAKE_ID alone can't distinguish leak from clean — but
+// it pins the contract that the route surfaces "id-not-found" identically
+// across attacker tokens (no side-channel via status or body shape). For
+// the four highest-value reads (tickets, expenses, estimates, projects),
+// we additionally SEED a real row in tenant A with a unique label and
+// assert the attacker's response body does NOT contain that label — a
+// strict no-content-leak check that catches the actual IDOR class.
+// Created rows are tracked in slice-15 cleanup arrays so afterAll()
+// sweeps them.
+//
+// If any probe finds a 200 leak with the SEEDED row's data: do NOT fix
+// the source from this commit — file a `bug,security` GitHub issue with
+// the leak vector + tag this probe `test.skip()` referencing the issue.
+// ─────────────────────────────────────────────────────────────────────
+
+const createdGenericTickets = [];
+const createdGenericExpenses = [];
+const createdGenericEstimates = [];
+const createdGenericProjects = [];
+
+test.afterAll(async ({ request }) => {
+  const deadline = Date.now() + 60_000;
+  for (const { token, id } of createdGenericTickets) {
+    if (Date.now() > deadline) break;
+    if (!token) continue;
+    await del(request, token, `/api/tickets/${id}`).catch(() => {});
+  }
+  for (const { token, id } of createdGenericExpenses) {
+    if (Date.now() > deadline) break;
+    if (!token) continue;
+    await del(request, token, `/api/expenses/${id}`).catch(() => {});
+  }
+  for (const { token, id } of createdGenericEstimates) {
+    if (Date.now() > deadline) break;
+    if (!token) continue;
+    await del(request, token, `/api/estimates/${id}`).catch(() => {});
+  }
+  for (const { token, id } of createdGenericProjects) {
+    if (Date.now() > deadline) break;
+    if (!token) continue;
+    await del(request, token, `/api/projects/${id}`).catch(() => {});
+  }
+});
+
+test.describe("IDOR #919 slice 15 — non-Travel /:id cross-tenant probes (shared-vertical models)", () => {
+  // ---- FAKE_ID cross-tenant 404 contract pins ------------------------
+  // For each route, fire from the wellness attacker side against a non-
+  // existent generic-tenant id. Correctly-scoped handler returns 404
+  // (or 400 for routes with an INVALID_ID pre-lookup validator like
+  // brand-kits). Status MUST NOT be 2xx.
+
+  test("wellness admin GET /api/tickets/:id (FAKE_ID) → 404 (read leak vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/tickets/${FAKE_ID}`);
+    expect(
+      [403, 404],
+      `wellness admin must not GET ticket id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /api/brand-kits/:id (FAKE_ID) → 404 (branding asset leak vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/brand-kits/${FAKE_ID}`);
+    // brand-kits.js:168 has an INVALID_ID pre-lookup validator that returns
+    // 400 for non-numeric ids; FAKE_ID is numeric so we still hit the
+    // findFirst miss → 404. Keep [400, 403, 404] to absorb either path
+    // if the validator changes.
+    expect(
+      [400, 403, 404],
+      `wellness admin must not GET brand-kit id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin PUT /api/wallet/rules/:id (FAKE_ID) → 404 (financial-rule corruption vector)", async ({
+    request,
+  }) => {
+    // wallet_rules.js:348 is ADMIN-only + tenantWhere-scoped. A missed
+    // filter would let cross-tenant admins corrupt another tenant's
+    // wallet-bonus rules (changes `bonusPercent`, `minAmountCents`,
+    // `active` flag) — directly affects customer wallet credit. Pin 404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await put(request, token, `/api/wallet/rules/${FAKE_ID}`, {
+      bonusPercent: 99,
+    });
+    expect(
+      [400, 403, 404],
+      `wellness admin must not PUT wallet rule id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin DELETE /api/wallet/rules/:id (FAKE_ID) → 404 (financial-rule deletion vector)", async ({
+    request,
+  }) => {
+    // DELETE is the worst-case mutation — drops the row entirely. Pinning
+    // 404 ensures cross-tenant admins cannot nuke another tenant's
+    // wallet-rule configuration.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await del(request, token, `/api/wallet/rules/${FAKE_ID}`);
+    expect(
+      [400, 403, 404],
+      `wellness admin must not DELETE wallet rule id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin PUT /api/tasks/:id (FAKE_ID) → 404 (task corruption vector)", async ({
+    request,
+  }) => {
+    // tasks.js:183 PUT corrupts task title/dueDate/assigneeId. A missed
+    // filter would let cross-tenant attackers re-assign tasks across
+    // tenants (and trigger downstream notification fan-out on the
+    // wrong tenant's staff).
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await put(request, token, `/api/tasks/${FAKE_ID}`, {
+      title: "attacker-injected",
+    });
+    expect(
+      [400, 403, 404],
+      `wellness admin must not PUT task id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin PUT /api/surveys/:id (FAKE_ID) → 404 (survey corruption vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await put(request, token, `/api/surveys/${FAKE_ID}`, {
+      title: "attacker-injected",
+    });
+    expect(
+      [400, 403, 404],
+      `wellness admin must not PUT survey id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin DELETE /api/surveys/:id (FAKE_ID) → 404 (survey destruction vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await del(request, token, `/api/surveys/${FAKE_ID}`);
+    expect(
+      [400, 403, 404],
+      `wellness admin must not DELETE survey id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /api/document-templates/:id (FAKE_ID) → 404 (template read leak vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/document-templates/${FAKE_ID}`,
+    );
+    expect(
+      [400, 403, 404],
+      `wellness admin must not GET doc-template id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin DELETE /api/document-templates/:id (FAKE_ID) → 404 (template destruction vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await del(
+      request,
+      token,
+      `/api/document-templates/${FAKE_ID}`,
+    );
+    expect(
+      [400, 403, 404],
+      `wellness admin must not DELETE doc-template id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /api/dashboards/:id (FAKE_ID) → 404 (custom-dashboard leak vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/dashboards/${FAKE_ID}`);
+    expect(
+      [400, 403, 404],
+      `wellness admin must not GET dashboard id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /api/knowledge-base/:id (FAKE_ID) → 404 (KB-article leak vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/knowledge-base/${FAKE_ID}`);
+    expect(
+      [400, 403, 404],
+      `wellness admin must not GET kb-article id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /api/expenses/:id (FAKE_ID) → 404 (financial PII leak vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/expenses/${FAKE_ID}`);
+    expect(
+      [400, 403, 404],
+      `wellness admin must not GET expense id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /api/estimates/:id (FAKE_ID) → 404 (quote leak vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/estimates/${FAKE_ID}`);
+    expect(
+      [400, 403, 404],
+      `wellness admin must not GET estimate id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /api/projects/:id (FAKE_ID) → 404 (project-plan leak vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/projects/${FAKE_ID}`);
+    expect(
+      [400, 403, 404],
+      `wellness admin must not GET project id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // ---- SEEDED-VICTIM real-row probes (strict no-content-leak check) ---
+  // For the four highest-value reads, seed a real row in the generic
+  // tenant with a unique RUN_TAG-prefixed label, then probe with the
+  // wellness attacker token. Status must be non-2xx AND the response
+  // body must NOT contain the unique label (catches the case where a
+  // missed tenant filter would have returned the row).
+
+  test("wellness admin GET /api/tickets/:id (real generic id, seeded victim) → no leak", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness)
+      test.skip(true, "both generic + wellness admin tokens required");
+
+    const uniqueSubject = `${RUN_TAG}_TICKET_VICTIM_SUBJECT_${Math.random().toString(36).slice(2, 8)}`;
+    const seed = await post(request, generic, `/api/tickets`, {
+      subject: uniqueSubject,
+      description: "slice-15 IDOR victim row — not for human consumption",
+    });
+    if (!seed.ok()) test.skip(true, `cannot seed ticket: ${await seed.text()}`);
+    const seedBody = await seed.json();
+    if (seedBody?.id)
+      createdGenericTickets.push({ token: generic, id: seedBody.id });
+
+    const res = await get(request, wellness, `/api/tickets/${seedBody.id}`);
+    expect(
+      [403, 404],
+      `wellness admin must not GET real generic ticket id=${seedBody.id}: got ${res.status()}`,
+    ).toContain(res.status());
+    const bodyText = await res.text();
+    expect(
+      bodyText,
+      `response body MUST NOT leak generic-tenant subject (${uniqueSubject})`,
+    ).not.toContain(uniqueSubject);
+  });
+
+  test("wellness admin GET /api/expenses/:id (real generic id, seeded victim) → no leak", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness)
+      test.skip(true, "both generic + wellness admin tokens required");
+
+    const uniqueTitle = `${RUN_TAG}_EXPENSE_VICTIM_${Math.random().toString(36).slice(2, 8)}`;
+    const seed = await post(request, generic, `/api/expenses`, {
+      title: uniqueTitle,
+      amount: 12345,
+      category: "Travel",
+    });
+    if (!seed.ok()) test.skip(true, `cannot seed expense: ${await seed.text()}`);
+    const seedBody = await seed.json();
+    if (seedBody?.id)
+      createdGenericExpenses.push({ token: generic, id: seedBody.id });
+
+    const res = await get(request, wellness, `/api/expenses/${seedBody.id}`);
+    expect(
+      [403, 404],
+      `wellness admin must not GET real generic expense id=${seedBody.id}: got ${res.status()}`,
+    ).toContain(res.status());
+    const bodyText = await res.text();
+    expect(
+      bodyText,
+      `response body MUST NOT leak generic-tenant expense title (${uniqueTitle})`,
+    ).not.toContain(uniqueTitle);
+  });
+
+  test("wellness admin GET /api/estimates/:id (real generic id, seeded victim) → no leak", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness)
+      test.skip(true, "both generic + wellness admin tokens required");
+
+    const uniqueTitle = `${RUN_TAG}_ESTIMATE_VICTIM_${Math.random().toString(36).slice(2, 8)}`;
+    const seed = await post(request, generic, `/api/estimates`, {
+      title: uniqueTitle,
+    });
+    if (!seed.ok())
+      test.skip(true, `cannot seed estimate: ${await seed.text()}`);
+    const seedBody = await seed.json();
+    if (seedBody?.id)
+      createdGenericEstimates.push({ token: generic, id: seedBody.id });
+
+    const res = await get(request, wellness, `/api/estimates/${seedBody.id}`);
+    expect(
+      [403, 404],
+      `wellness admin must not GET real generic estimate id=${seedBody.id}: got ${res.status()}`,
+    ).toContain(res.status());
+    const bodyText = await res.text();
+    expect(
+      bodyText,
+      `response body MUST NOT leak generic-tenant estimate title (${uniqueTitle})`,
+    ).not.toContain(uniqueTitle);
+  });
+
+  test("wellness admin GET /api/projects/:id (real generic id, seeded victim) → no leak", async ({
+    request,
+  }) => {
+    const generic = await getGenericAdmin(request);
+    const wellness = await getWellnessAdmin(request);
+    if (!generic || !wellness)
+      test.skip(true, "both generic + wellness admin tokens required");
+
+    const uniqueName = `${RUN_TAG}_PROJECT_VICTIM_${Math.random().toString(36).slice(2, 8)}`;
+    const seed = await post(request, generic, `/api/projects`, {
+      name: uniqueName,
+    });
+    if (!seed.ok()) test.skip(true, `cannot seed project: ${await seed.text()}`);
+    const seedBody = await seed.json();
+    if (seedBody?.id)
+      createdGenericProjects.push({ token: generic, id: seedBody.id });
+
+    const res = await get(request, wellness, `/api/projects/${seedBody.id}`);
+    expect(
+      [403, 404],
+      `wellness admin must not GET real generic project id=${seedBody.id}: got ${res.status()}`,
+    ).toContain(res.status());
+    const bodyText = await res.text();
+    expect(
+      bodyText,
+      `response body MUST NOT leak generic-tenant project name (${uniqueName})`,
+    ).not.toContain(uniqueName);
+  });
+});

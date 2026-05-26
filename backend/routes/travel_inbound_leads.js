@@ -1061,4 +1061,294 @@ router.get("/inbound/leads/by-month", async (req, res) => {
   }
 });
 
+// ─── Slice 21 — tenant-wide quarterly time-series rollup ─────────────────
+//
+// GET /inbound/leads/by-quarter?tenantSlug=<slug>
+//
+// PRD_TRAVEL_MULTICHANNEL_LEADS (#904) — sibling rollup to slice-20
+// /inbound/leads/by-month and slice-18 /inbound/leads/stats. Buckets inbound
+// Contact rows by UTC YYYY-Q[1-4] so the operator dashboard can render a
+// quarterly trend chart (finance review cadence, supplier reconciliation,
+// RFU Umrah seasonal planning) in a single endpoint hit instead of
+// summing 3 month rows client-side.
+//
+// Mirrors the slice-17 /api/travel/itineraries/by-quarter pattern (same
+// YYYY-Q[1-4] bucket-key shape, same Math.floor(getUTCMonth()/3)+1
+// derivation, same VALID_ORDER_BY set, same "unknown" fallback bucket for
+// null/invalid createdAt rows, same pagination-after-aggregation posture).
+// Auth / sub-brand handling mirrors slice-20 /by-month EXACTLY (no
+// verifyToken, tenantSlug-scoped, no sub-brand restriction — these
+// rollups predate the subBrandAccess gating that landed on the itinerary
+// surface).
+//
+// USER-readable (anodyne — counts only; no payload contents).
+//
+// Quarter key derivation:
+//   const yyyy = dt.getUTCFullYear();
+//   const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+//   const quarterKey = `${yyyy}-Q${q}`;
+//
+// Query params:
+//   tenantSlug  REQUIRED — resolves to a travel tenant; 404 / 400 on miss.
+//   channel     OPTIONAL — narrow to a single VALID_CHANNEL; otherwise
+//                          all inbound-source rows are bucketed.
+//   from        OPTIONAL — YYYY-Q[1-4] lower bound (inclusive). Default: no floor.
+//   to          OPTIONAL — YYYY-Q[1-4] upper bound (inclusive). Default: no ceiling.
+//   orderBy     OPTIONAL — one of: quarter:asc | quarter:desc | count:asc | count:desc.
+//                          Unknown tokens degrade silently to quarter:asc.
+//   limit       OPTIONAL — page size (default 8, max 40).
+//   offset      OPTIONAL — skip-N (default 0).
+//
+// Response shape (200):
+//   {
+//     total,                          // distinct quarters matched (pre-pagination)
+//     rows: [
+//       {
+//         quarter,                    // YYYY-Q[1-4] (UTC), or "unknown"
+//         count,                      // total inbound contacts in that quarter
+//         bySubBrand: { <sb>: n, _tenant: n },
+//         byChannel: { voyagr, webform, whatsapp, ads, adsgpt, metaads,
+//                      manual, indiamart, justdial, tradeindia },
+//       },
+//     ],
+//   }
+//
+// Per-bucket bySubBrand: falsy subBrand (null/undefined/empty) coerces to
+// "_tenant" so the breakdown remains a flat string→int map even when
+// some rows have no sub-brand attribution. Forward-compat with the
+// sub-brand rollouts (Q25 — TMC / RFU / Travel Stall / Visa Sure).
+//
+// "unknown" bucket: rows with null or invalid createdAt fall here when no
+// ?from/?to window is set. When EITHER bound is set, the "unknown"
+// bucket is excluded (it has no comparable quarter token).
+//
+// Route ordering: declared BEFORE the POST /inbound/leads/:channel family
+// (which lives above in the file) is irrelevant for GET — Express
+// dispatch is verb-aware. No collision risk.
+//
+// Errors:
+//   400 MISSING_TENANT_SLUG / INVALID_QUARTER_FORMAT / INVALID_CHANNEL
+//       / INVALID_LIMIT / WRONG_VERTICAL
+//   404 TENANT_NOT_FOUND
+//   500 generic envelope
+const BY_QUARTER_DEFAULT_LIMIT = 8;
+const BY_QUARTER_MAX_LIMIT = 40;
+const BY_QUARTER_VALID_ORDER_BY = new Set([
+  "quarter:asc",
+  "quarter:desc",
+  "count:asc",
+  "count:desc",
+]);
+const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+
+router.get("/inbound/leads/by-quarter", async (req, res) => {
+  try {
+    const {
+      tenantSlug,
+      channel,
+      from,
+      to,
+      orderBy: orderByRaw,
+      limit: limitRaw,
+      offset: offsetRaw,
+    } = req.query || {};
+
+    if (!tenantSlug) {
+      return res.status(400).json({
+        error: "tenantSlug is required",
+        code: "MISSING_TENANT_SLUG",
+      });
+    }
+
+    // Validate ?channel (when supplied). Mirrors /by-month exactly.
+    if (channel !== undefined && !VALID_CHANNELS.includes(String(channel))) {
+      return res.status(400).json({
+        error: `channel must be one of: ${VALID_CHANNELS.join(", ")}`,
+        code: "INVALID_CHANNEL",
+      });
+    }
+
+    // Validate ?from / ?to YYYY-Q[1-4] bounds. Both inclusive.
+    if (from !== undefined && !QUARTER_RE.test(String(from))) {
+      return res.status(400).json({
+        error: "from must be in YYYY-Q[1-4] format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+    if (to !== undefined && !QUARTER_RE.test(String(to))) {
+      return res.status(400).json({
+        error: "to must be in YYYY-Q[1-4] format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+
+    // Validate ?orderBy — unknown tokens degrade silently to quarter:asc
+    // (per spec; differs from /by-month which 400s on unknown).
+    const orderByCandidate = orderByRaw ? String(orderByRaw) : "quarter:asc";
+    const orderBy = BY_QUARTER_VALID_ORDER_BY.has(orderByCandidate)
+      ? orderByCandidate
+      : "quarter:asc";
+
+    // Validate ?limit / ?offset. Default 8 / 0; cap 40.
+    let limit = BY_QUARTER_DEFAULT_LIMIT;
+    if (limitRaw !== undefined) {
+      const parsed = Number.parseInt(String(limitRaw), 10);
+      if (
+        !Number.isFinite(parsed) ||
+        parsed < 1 ||
+        parsed > BY_QUARTER_MAX_LIMIT
+      ) {
+        return res.status(400).json({
+          error: `limit must be an integer between 1 and ${BY_QUARTER_MAX_LIMIT}`,
+          code: "INVALID_LIMIT",
+        });
+      }
+      limit = parsed;
+    }
+    let offset = 0;
+    if (offsetRaw !== undefined) {
+      const parsed = Number.parseInt(String(offsetRaw), 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({
+          error: "offset must be a non-negative integer",
+          code: "INVALID_LIMIT",
+        });
+      }
+      offset = parsed;
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true, vertical: true },
+    });
+    if (!tenant) {
+      return res.status(404).json({
+        error: "Tenant not found",
+        code: "TENANT_NOT_FOUND",
+      });
+    }
+    if (tenant.vertical !== "travel") {
+      return res.status(400).json({
+        error: "Tenant is not a travel tenant",
+        code: "WRONG_VERTICAL",
+      });
+    }
+
+    // Build the base where-predicate. When ?channel is supplied, narrow
+    // source to that exact `inbound:<channel>` literal (mirrors /by-month).
+    const where = {
+      tenantId: tenant.id,
+      deletedAt: null,
+      source: channel ? `inbound:${channel}` : { startsWith: "inbound:" },
+    };
+
+    // Light projection — source for byChannel derivation, subBrand for
+    // bySubBrand bucket, createdAt for the quarter key.
+    const rows = await prisma.contact.findMany({
+      where,
+      select: { source: true, subBrand: true, createdAt: true },
+    });
+
+    // Bucket by UTC YYYY-Q[1-4]. Each bucket carries a byChannel sub-map
+    // pre-seeded with all VALID_CHANNELS at 0 for stable shape, plus a
+    // bySubBrand sub-map that grows on demand.
+    const quarterMap = new Map();
+    function getBucket(quarterKey) {
+      let bucket = quarterMap.get(quarterKey);
+      if (!bucket) {
+        const byChannel = Object.create(null);
+        for (const c of VALID_CHANNELS) byChannel[c] = 0;
+        bucket = {
+          quarter: quarterKey,
+          count: 0,
+          bySubBrand: Object.create(null),
+          byChannel,
+        };
+        quarterMap.set(quarterKey, bucket);
+      }
+      return bucket;
+    }
+
+    for (const row of rows) {
+      let quarterKey = "unknown";
+      if (row.createdAt) {
+        const dt =
+          row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+          quarterKey = `${yyyy}-Q${q}`;
+        }
+      }
+      const bucket = getBucket(quarterKey);
+      bucket.count += 1;
+
+      // Per-bucket bySubBrand — falsy subBrand coerces to "_tenant" so the
+      // breakdown is forward-compat with sub-brand rollouts (TMC / RFU /
+      // Travel Stall / Visa Sure per Q25). Stays a flat string→int map.
+      const sbKey = row.subBrand ? String(row.subBrand) : "_tenant";
+      bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+
+      const src = row.source || "";
+      if (src.startsWith("inbound:")) {
+        const suffix = src.slice("inbound:".length);
+        if (Object.prototype.hasOwnProperty.call(bucket.byChannel, suffix)) {
+          bucket.byChannel[suffix] += 1;
+        }
+        // Unknown channels silently drop from byChannel — keeps the
+        // per-quarter key set at exactly 10.
+      }
+    }
+
+    let quarters = [...quarterMap.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable quarter token); when
+    // no bounds are set, "unknown" stays.
+    if (from !== undefined) {
+      const fromStr = String(from);
+      quarters = quarters.filter(
+        (r) => r.quarter !== "unknown" && r.quarter >= fromStr,
+      );
+    }
+    if (to !== undefined) {
+      const toStr = String(to);
+      quarters = quarters.filter(
+        (r) => r.quarter !== "unknown" && r.quarter <= toStr,
+      );
+    }
+
+    // Sort per ?orderBy. quarter:asc/desc uses the lex order of the
+    // YYYY-Q[1-4] key (also chronological — Q1 < Q2 < Q3 < Q4 in ASCII).
+    // count:asc/desc breaks ties by quarter:asc for a deterministic
+    // ordering even when counts tie.
+    const [orderField, orderDir] = orderBy.split(":");
+    quarters.sort((a, b) => {
+      if (orderField === "quarter") {
+        return orderDir === "asc"
+          ? a.quarter.localeCompare(b.quarter)
+          : b.quarter.localeCompare(a.quarter);
+      }
+      const delta = orderDir === "asc" ? a.count - b.count : b.count - a.count;
+      if (delta !== 0) return delta;
+      return a.quarter.localeCompare(b.quarter);
+    });
+
+    const total = quarters.length;
+    // Pagination applied AFTER aggregation + sort + bucket filter, same as
+    // /by-month.
+    const paged = quarters.slice(offset, offset + limit);
+
+    return res.status(200).json({
+      total,
+      rows: paged,
+    });
+  } catch (e) {
+    console.error("[travel-inbound-leads] by-quarter error:", e.message);
+    return res
+      .status(500)
+      .json({ error: "Failed to roll up inbound leads by quarter" });
+  }
+});
+
 module.exports = router;

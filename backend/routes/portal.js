@@ -245,13 +245,35 @@ router.post("/tickets", verifyPortalToken, async (req, res) => {
   }
 });
 
-// GET /api/portal/invoices
+// GET /api/portal/invoices?fields=summary
 router.get("/invoices", verifyPortalToken, async (req, res) => {
   try {
-    const invoices = await prisma.invoice.findMany({
+    // #920 slice 33: ?fields=summary slim-shape opt-in. Mirrors slices 1-30.
+    // The default portal invoice list returns the full Invoice row including
+    // recurrence metadata (isRecurring, recurFrequency, nextRecurDate,
+    // parentInvoiceId), the wellness-vertical visit join column (visitId),
+    // legalEntityCode, paidAt, dealId, tenantId, and timestamps — none of
+    // which the customer-portal invoice ledger UI needs to render rows
+    // (invoice #, amount, status chip, due date, issued date). When the
+    // caller passes ?fields=summary we project to the minimal column set
+    // for portal ledger rows. Opt-in additive — existing callers (no
+    // ?fields, or any non-exact value) get the full row shape unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
       orderBy: { issuedDate: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        invoiceNum: true,
+        amount: true,
+        status: true,
+        dueDate: true,
+        issuedDate: true,
+      };
+    }
+    const invoices = await prisma.invoice.findMany(findManyArgs);
     res.json(invoices);
   } catch (err) {
     console.error("[Portal][invoices]", err);

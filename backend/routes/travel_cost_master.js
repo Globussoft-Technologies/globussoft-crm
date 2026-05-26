@@ -139,6 +139,135 @@ router.post(
   },
 );
 
+// ============================================================================
+// GET /api/travel/cost-master/stats — tenant-wide cost-library rollup
+// (PRD_TRAVEL cost-master — first analytical surface for the admin-curated
+// supplier rate book).
+//
+// Mirrors /suppliers/stats + /commission-profiles/stats + /religious-packets
+// /stats posture. USER-readable anodyne aggregate. Extends what
+// TravelDashboard already shows (costMaster.activeRows + costMaster
+// .bySubBrand) by adding total + bySupplier + lastCreatedAt so the operator
+// dashboard can fire one request instead of four.
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' rows in the counts. Same gate as the
+//     /cost-master list endpoint (narrowWhereBySubBrand). TravelCostMaster
+//     .subBrand is NON-nullable in the schema, but the bucketing code
+//     defensively coalesces falsy → '_tenant' for forward-compat.
+//   - ?from / ?to (ISO date bounds) filter createdAt before aggregation;
+//     invalid → 400 INVALID_DATE.
+//   - Response envelope:
+//       total         — count of all matching rows
+//       active        — count where isActive=true
+//       bySubBrand    — { <sb|_tenant>: <count> }
+//       bySupplier    — { <supplierId>: <count> } (rows with null supplierId omitted)
+//       lastCreatedAt — ISO of most-recent createdAt, null when empty
+//
+// USER-readable: anodyne aggregate (counts + timestamps); safe.
+// No audit row: read-only meta surface, mirrors /suppliers/stats.
+//
+// Express route ordering: literal-path /cost-master/stats MUST be declared
+// BEFORE the /cost-master/:id family or `:id="stats"` would 400 INVALID_ID
+// before reaching this handler.
+// ============================================================================
+router.get("/cost-master/stats", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const tenantId = req.travelTenant.id;
+    const where = { tenantId };
+
+    // Optional ISO date bounds on createdAt — invalid → 400 INVALID_DATE.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Sub-brand narrowing — same gate as the list endpoint.
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    narrowWhereBySubBrand(where, allowed);
+
+    const rows = await prisma.travelCostMaster.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        supplierId: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+
+    if (rows.length === 0) {
+      return res.json({
+        total: 0,
+        active: 0,
+        bySubBrand: {},
+        bySupplier: {},
+        lastCreatedAt: null,
+      });
+    }
+
+    let active = 0;
+    let lastCreatedAt = null;
+    const bySubBrand = {};
+    const bySupplier = {};
+
+    for (const r of rows) {
+      if (r.isActive) active += 1;
+
+      // Defensive: null/invalid createdAt rows still counted in total but
+      // skipped for the lastCreatedAt max calculation.
+      if (r.createdAt) {
+        const ts = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastCreatedAt || ts > lastCreatedAt) lastCreatedAt = ts;
+        }
+      }
+
+      // Coalesce falsy subBrand → '_tenant' bucket.
+      const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+      bySubBrand[sbKey] = (bySubBrand[sbKey] || 0) + 1;
+
+      // bySupplier — only count rows with a non-null supplierId.
+      if (r.supplierId != null) {
+        const supKey = String(r.supplierId);
+        bySupplier[supKey] = (bySupplier[supKey] || 0) + 1;
+      }
+    }
+
+    res.json({
+      total: rows.length,
+      active,
+      bySubBrand,
+      bySupplier,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-cost] stats error:", e.message);
+    res.status(500).json({ error: "Failed to summarise cost-master" });
+  }
+});
+
 // GET /api/travel/cost-master/:id
 router.get("/cost-master/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

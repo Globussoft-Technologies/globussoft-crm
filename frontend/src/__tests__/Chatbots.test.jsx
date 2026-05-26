@@ -415,4 +415,264 @@ describe('<Chatbots /> — page surface', () => {
     expect(caveat.textContent).toMatch(/Privacy note/i);
     expect(caveat.textContent).toMatch(/numeric tenant/i);
   });
+
+  // ── Extended coverage (uncovered branches) ──────────────────────────
+
+  it('renders the loading-state message before the initial fetch resolves', async () => {
+    // Hold the fetch open so we can observe the loading state. The
+    // component renders "Loading bots..." until the first fetchApi
+    // resolve fires, so a never-resolving promise pins the branch.
+    let resolveFetch;
+    const pendingFetch = new Promise((r) => { resolveFetch = r; });
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/chatbots') return pendingFetch;
+      return Promise.resolve([]);
+    });
+
+    renderChatbots();
+
+    expect(screen.getByText(/Loading bots/i)).toBeInTheDocument();
+
+    // Cleanup: resolve so the test doesn't leave dangling state.
+    resolveFetch([]);
+    await waitFor(() => expect(screen.queryByText(/Loading bots/i)).not.toBeInTheDocument());
+  });
+
+  it('renders empty-state when /api/chatbots throws (try/catch fallback)', async () => {
+    // The catch in load() sets bots to []. Throwing the initial fetch
+    // exercises the resilience branch — UI must not blow up, it just
+    // renders the empty-state card.
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/chatbots') return Promise.reject(new Error('network down'));
+      return Promise.resolve([]);
+    });
+
+    renderChatbots();
+    await waitFor(() => expect(screen.getByText(/No chatbots yet/i)).toBeInTheDocument());
+  });
+
+  it('FlowEditor Add Node appends a new node to the linear list', async () => {
+    const user = userEvent.setup();
+    renderChatbots();
+    await waitFor(() => expect(screen.getByText('Sales Qualifier')).toBeInTheDocument());
+
+    await user.click(screen.getAllByRole('button', { name: /Edit Flow/i })[0]);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /^Edit Flow$/, level: 3 })).toBeInTheDocument(),
+    );
+
+    // Sales Qualifier seeded 2 nodes; count textarea elements as the
+    // node-row indicator (each node row renders exactly one textarea).
+    const beforeNodes = screen.getAllByRole('textbox').filter(el => el.tagName === 'TEXTAREA');
+    expect(beforeNodes.length).toBe(2);
+
+    await user.click(screen.getByRole('button', { name: /Add Node/i }));
+
+    const afterNodes = screen.getAllByRole('textbox').filter(el => el.tagName === 'TEXTAREA');
+    expect(afterNodes.length).toBe(3);
+  });
+
+  it('FlowEditor Remove Node drops the node from the list', async () => {
+    const user = userEvent.setup();
+    renderChatbots();
+    await waitFor(() => expect(screen.getByText('Sales Qualifier')).toBeInTheDocument());
+
+    await user.click(screen.getAllByRole('button', { name: /Edit Flow/i })[0]);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /^Edit Flow$/, level: 3 })).toBeInTheDocument(),
+    );
+
+    const beforeTextareas = screen.getAllByRole('textbox').filter(el => el.tagName === 'TEXTAREA');
+    expect(beforeTextareas.length).toBe(2);
+
+    // The remove button has aria-label "Remove node N" — pick the
+    // first one and click it.
+    const removeBtns = screen.getAllByRole('button', { name: /Remove node \d+/i });
+    expect(removeBtns.length).toBeGreaterThanOrEqual(1);
+    await user.click(removeBtns[0]);
+
+    await waitFor(() => {
+      const afterTextareas = screen.getAllByRole('textbox').filter(el => el.tagName === 'TEXTAREA');
+      expect(afterTextareas.length).toBe(1);
+    });
+  });
+
+  it('FlowEditor Save Flow fires PUT /api/chatbots/:id with the edited flow', async () => {
+    const user = userEvent.setup();
+    renderChatbots();
+    await waitFor(() => expect(screen.getByText('Sales Qualifier')).toBeInTheDocument());
+
+    await user.click(screen.getAllByRole('button', { name: /Edit Flow/i })[0]);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /^Edit Flow$/, level: 3 })).toBeInTheDocument(),
+    );
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(defaultFetch);
+
+    await user.click(screen.getByRole('button', { name: /Save Flow/i }));
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/chatbots/11' && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.name).toBe('Sales Qualifier');
+      expect(body.flow).toBeTruthy();
+      expect(Array.isArray(body.flow.nodes)).toBe(true);
+      // Original Sales Qualifier flow has 2 nodes; no edits → still 2.
+      expect(body.flow.nodes.length).toBe(2);
+      // buildEdges produces (nodes.length - 1) linear edges for
+      // non-end / non-branch nodes — Sales Qualifier's are message +
+      // capture-email → 1 linear edge.
+      expect(Array.isArray(body.flow.edges)).toBe(true);
+    });
+  });
+
+  it('FlowEditor Cancel closes the modal without firing PUT', async () => {
+    const user = userEvent.setup();
+    renderChatbots();
+    await waitFor(() => expect(screen.getByText('Sales Qualifier')).toBeInTheDocument());
+
+    await user.click(screen.getAllByRole('button', { name: /Edit Flow/i })[0]);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /^Edit Flow$/, level: 3 })).toBeInTheDocument(),
+    );
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(defaultFetch);
+
+    // The modal has two "Cancel" buttons potentially in the page —
+    // the FlowEditor's bottom-row Cancel is the one we want. Take
+    // the LAST one (deepest in render tree).
+    const cancelBtns = screen.getAllByRole('button', { name: /^Cancel$/ });
+    await user.click(cancelBtns[cancelBtns.length - 1]);
+
+    // Modal heading must be gone.
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: /^Edit Flow$/, level: 3 })).not.toBeInTheDocument(),
+    );
+
+    // No PUT fired.
+    await new Promise(r => setTimeout(r, 50));
+    const putCalls = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url.match(/^\/api\/chatbots\/\d+$/) && opts?.method === 'PUT',
+    );
+    expect(putCalls.length).toBe(0);
+  });
+
+  it('clicking Test opens the BotTester modal and fires initial POST /api/chatbots/chat/:id', async () => {
+    const user = userEvent.setup();
+    // Custom fetch impl that also handles the chat endpoint.
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/chatbots' && (!opts || opts.method === 'GET' || !opts.method)) {
+        return Promise.resolve(sampleBots);
+      }
+      if (url.match(/^\/api\/chatbots\/chat\/\d+$/) && opts?.method === 'POST') {
+        return Promise.resolve({ replies: ['Hi! How can we help you today?'], completed: false });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderChatbots();
+    await waitFor(() => expect(screen.getByText('Sales Qualifier')).toBeInTheDocument());
+
+    // The Test button is the second row-action button on each card.
+    const testBtns = screen.getAllByRole('button', { name: /^Test$/ });
+    await user.click(testBtns[0]);
+
+    // BotTester modal title is "Test: <bot name>".
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /Test: Sales Qualifier/i, level: 3 })).toBeInTheDocument(),
+    );
+
+    // Initial chat POST must have fired against bot id 11 with the
+    // visitorId + previewTenantId body shape.
+    await waitFor(() => {
+      const chatCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/chatbots/chat/11' && opts?.method === 'POST',
+      );
+      expect(chatCall).toBeTruthy();
+      const body = JSON.parse(chatCall[1].body);
+      expect(typeof body.visitorId).toBe('string');
+      expect(body.visitorId.startsWith('test_')).toBe(true);
+      // tenantId derived from the stubbed JWT (=1).
+      expect(body.previewTenantId).toBe(1);
+    });
+
+    // The bot's initial reply renders in the chat surface.
+    await waitFor(() =>
+      expect(screen.getByText('Hi! How can we help you today?')).toBeInTheDocument(),
+    );
+  });
+
+  it('BotTester user-message submit fires a second POST and renders both turns', async () => {
+    const user = userEvent.setup();
+    let chatPostCount = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/chatbots' && (!opts || opts.method === 'GET' || !opts.method)) {
+        return Promise.resolve(sampleBots);
+      }
+      if (url.match(/^\/api\/chatbots\/chat\/\d+$/) && opts?.method === 'POST') {
+        chatPostCount += 1;
+        const body = JSON.parse(opts.body);
+        if (!body.message) {
+          return Promise.resolve({ replies: ['Drop your email and we will get back to you.'], completed: false });
+        }
+        return Promise.resolve({ replies: ['Thanks! We will reach out shortly.'], completed: true });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderChatbots();
+    await waitFor(() => expect(screen.getByText('Sales Qualifier')).toBeInTheDocument());
+
+    await user.click(screen.getAllByRole('button', { name: /^Test$/ })[0]);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /Test: Sales Qualifier/i, level: 3 })).toBeInTheDocument(),
+    );
+
+    // Wait for the initial bot reply (POST #1 — the kickoff).
+    await waitFor(() =>
+      expect(screen.getByText(/Drop your email/i)).toBeInTheDocument(),
+    );
+    expect(chatPostCount).toBe(1);
+
+    // Type a reply and submit.
+    const input = screen.getByPlaceholderText(/Type a reply/i);
+    await user.type(input, 'sumit@globussoft.com');
+    const sendBtn = screen.getByRole('button', { name: /Send/i });
+    await user.click(sendBtn);
+
+    // User message rendered.
+    await waitFor(() =>
+      expect(screen.getByText('sumit@globussoft.com')).toBeInTheDocument(),
+    );
+    // Bot follow-up rendered.
+    await waitFor(() =>
+      expect(screen.getByText(/Thanks! We will reach out shortly/i)).toBeInTheDocument(),
+    );
+
+    // Two chat POSTs total: kickoff + user reply.
+    expect(chatPostCount).toBe(2);
+  });
+
+  it('embed snippet contains the tenantId derived from the JWT', async () => {
+    // The stubbed JWT in the module mock decodes to { tenantId: 1 }.
+    // The snippet line MUST contain "tenant=1" so we don't silently
+    // regress the tenant-id propagation.
+    const user = userEvent.setup();
+    renderChatbots();
+    await waitFor(() => expect(screen.getByText('Sales Qualifier')).toBeInTheDocument());
+
+    await user.click(screen.getAllByRole('button', { name: /Edit Flow/i })[0]);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /^Edit Flow$/, level: 3 })).toBeInTheDocument(),
+    );
+
+    // Snippet has both bot=11 AND tenant=1.
+    const snippetNode = screen.getByText(/bot=11/);
+    expect(snippetNode.textContent).toMatch(/tenant=1/);
+  });
 });

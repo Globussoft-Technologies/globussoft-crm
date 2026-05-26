@@ -72,6 +72,166 @@ router.post("/track", async (req, res) => {
   }
 });
 
+// ── GET /stats ────────────────────────────────────────────────────
+// Marketing/Analytics polish — first /stats endpoint for attribution route.
+// Tenant-wide aggregate KPI surface intended to power the marketing dashboard
+// header without N round-trips. Mirrors the sibling /stats template from
+// travel_suppliers.js (slice 23): anodyne aggregate, tenant-scoped, no audit
+// row written, returns { totalTouchpoints, byChannel, byCampaign,
+// attributedContacts, lastTouchAt } plus a forward-compat aggregateExceedsCap
+// flag.
+//
+// Output shape:
+//   {
+//     totalTouchpoints:    number,           // count of all (non-junk-source) touchpoints
+//     byChannel:           [{ channel, count }],         // sorted by count desc
+//     byCampaign:          [{ campaignId, count }],      // top 10, sorted by count desc
+//     attributedContacts:  number,           // distinct contactId where the contact has
+//                                            // ≥1 touchpoint AND ≥1 won Deal
+//     lastTouchAt:         ISO string | null
+//   }
+//
+// Query params:
+//   ?from=<ISO>  optional inclusive lower bound on Touchpoint.timestamp
+//   ?to=<ISO>    optional inclusive upper bound on Touchpoint.timestamp
+// Invalid ISO → 400 { error, code: 'INVALID_DATE' }. NOTE: this endpoint
+// does not use the shared validateDateRange helper (which would return
+// INVERTED_DATE_RANGE) — it's a per-field ISO-validity guard mirroring
+// travel_suppliers.js /stats, since marketing dashboards routinely call
+// with a half-open window (only ?from set, no ?to). Inverted ranges still
+// produce an empty (but well-formed) response — not an error.
+//
+// Junk-source filter (#268): touchpoints whose `source` matches the junk
+// pattern (test-skip / e2e-* / qa-* / rbac-*) are excluded from totals +
+// byChannel + byCampaign + attributedContacts so e2e fixtures don't pollute
+// the operator dashboard.
+//
+// Auth: mirrors GET /report — global verifyToken applies at server.js:512;
+// tenantOf() reads req.user.tenantId. No role gate (USER-readable aggregate;
+// no PII / no money values).
+//
+// Tenant-scoped: req.user.tenantId — NEVER req.body.tenantId.
+// No audit row written: read-only meta surface, mirrors /report.
+//
+// Express route ordering: declared BEFORE /contact/:id family so no path
+// collision can occur. (Even though /stats and /contact/:id are distinct
+// paths, declaring /stats before any /:id-style route is the conservative
+// pattern from travel_suppliers.js /suppliers/stats.)
+router.get("/stats", async (req, res) => {
+  try {
+    const tenantId = tenantOf(req);
+
+    // Per-field ISO validity — mirrors travel_suppliers.js /suppliers/stats.
+    const where = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.timestamp = Object.assign(where.timestamp || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.timestamp = Object.assign(where.timestamp || {}, { lte: d });
+    }
+
+    const allTouchpoints = await prisma.touchpoint.findMany({
+      where,
+      select: {
+        contactId: true,
+        channel: true,
+        source: true,
+        campaignId: true,
+        timestamp: true,
+      },
+    });
+    // #268: drop junk-source rows BEFORE aggregating so operator dashboards
+    // don't leak e2e/test fixtures.
+    const touchpoints = allTouchpoints.filter((tp) => !isJunkSource(tp.source));
+
+    // byChannel — count per channel (utm_source-style — for touchpoints
+    // captured via /track, this is the high-level channel like "web" /
+    // "whatsapp" / "email"). Null channels coalesce to 'unknown'.
+    const channelMap = new Map();
+    // byCampaign — count per campaignId. Null campaignIds skipped (not
+    // every touchpoint is campaign-attributed).
+    const campaignMap = new Map();
+    // distinct contactId set + max timestamp.
+    const contactIdSet = new Set();
+    let lastTouchAt = null;
+
+    for (const tp of touchpoints) {
+      const ch = tp.channel || "unknown";
+      channelMap.set(ch, (channelMap.get(ch) || 0) + 1);
+
+      if (tp.campaignId != null) {
+        const cid = tp.campaignId;
+        campaignMap.set(cid, (campaignMap.get(cid) || 0) + 1);
+      }
+
+      if (tp.contactId != null) {
+        contactIdSet.add(tp.contactId);
+      }
+
+      const ts = tp.timestamp instanceof Date ? tp.timestamp : new Date(tp.timestamp);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastTouchAt || ts > lastTouchAt) lastTouchAt = ts;
+      }
+    }
+
+    // attributedContacts — count of distinct contactIds that have BOTH
+    // ≥1 (non-junk) touchpoint AND ≥1 won deal. The "converted" notion
+    // here is: the contact's touchpoint(s) eventually led to a won deal.
+    let attributedContacts = 0;
+    if (contactIdSet.size > 0) {
+      const wonDeals = await prisma.deal.findMany({
+        where: {
+          tenantId,
+          stage: "won",
+          contactId: { in: [...contactIdSet] },
+        },
+        select: { contactId: true },
+      });
+      const wonContactSet = new Set();
+      for (const d of wonDeals) {
+        if (d.contactId != null) wonContactSet.add(d.contactId);
+      }
+      attributedContacts = wonContactSet.size;
+    }
+
+    const byChannel = Array.from(channelMap.entries())
+      .map(([channel, count]) => ({ channel, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const byCampaign = Array.from(campaignMap.entries())
+      .map(([campaignId, count]) => ({ campaignId, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
+    res.json({
+      totalTouchpoints: touchpoints.length,
+      byChannel,
+      byCampaign,
+      attributedContacts,
+      lastTouchAt: lastTouchAt ? lastTouchAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[attribution/stats]", err);
+    res.status(500).json({ error: "Failed to build attribution stats" });
+  }
+});
+
 // ── GET /contact/:id — timeline ──────────────────────────────────
 router.get("/contact/:id", async (req, res) => {
   try {

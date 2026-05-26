@@ -105,6 +105,102 @@ router.get("/public/:tenantSlug/article/:slug", async (req, res) => {
 
 // ─── AUTHENTICATED ENDPOINTS (admin write, all read) ────────────────────────
 
+// GET /api/knowledge-base/stats — tenant-wide aggregate KPI surface.
+//
+// CRM polish — first /stats endpoint for the Knowledge Base route. Mirrors
+// estimates/stats + travel-suppliers/stats posture. Read-only meta surface;
+// powers the support/knowledge dashboard header strip ("42 articles · 31
+// published · 11 drafts · 5 categories · 1,204 views · last updated 3h ago").
+// Without this, the frontend has to fire {list, count-by-published×2,
+// sum-views, count-categories, max-updatedAt} — N+1 round-trips for a
+// single visual surface.
+//
+// Schema drift from the prompt brief (verified against schema.prisma):
+//   - KbArticle has NO `status` enum — only `isPublished` Boolean.
+//     The brief's "Draft/Published/Archived" bucket is rendered as
+//     "Draft" (isPublished=false) / "Published" (isPublished=true).
+//     "Archived" does not exist in this schema (vs. routes/estimates.js,
+//     which has a real status enum).
+//   - KbArticle has NO `publishedAt` field; `lastPublishedAt` is derived
+//     from max(updatedAt) across rows where isPublished=true (closest
+//     proxy — articles' updatedAt advances on publish via PUT).
+//   - KbArticle has `views` (Int), not `viewCount` — totalViews sums `views`.
+//
+// Behaviour:
+//   - Tenant-scoped via req.user.tenantId.
+//   - ?from / ?to (optional ISO date bounds on createdAt); invalid → 400 INVALID_DATE.
+//   - articlesByStatus: { Draft: N, Published: M } based on isPublished bool.
+//   - publishedCount: count of isPublished=true.
+//   - totalCategories: count of KbCategory rows in the tenant.
+//   - totalViews: sum of views (defensive null→0).
+//   - lastPublishedAt: max(updatedAt) where isPublished=true, ISO or null.
+//   - NO audit row written — anodyne aggregate.
+//
+// Express route ordering: literal /stats MUST be declared BEFORE any /:id
+// family (none here at the root, but /articles/:id and /categories/:id exist
+// on their own sub-paths so collision is moot — still placed first for
+// posture parity with sibling /stats routes).
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "from must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "to must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    const [articles, totalCategories] = await Promise.all([
+      prisma.kbArticle.findMany({
+        where,
+        select: { isPublished: true, views: true, updatedAt: true },
+      }),
+      prisma.kbCategory.count({ where: { tenantId: req.user.tenantId } }),
+    ]);
+
+    const articlesByStatus = {};
+    let publishedCount = 0;
+    let totalViews = 0;
+    let lastPublishedAt = null;
+
+    for (const a of articles) {
+      const bucket = a.isPublished ? "Published" : "Draft";
+      articlesByStatus[bucket] = (articlesByStatus[bucket] || 0) + 1;
+      if (a.isPublished) {
+        publishedCount += 1;
+        if (a.updatedAt) {
+          const ua = a.updatedAt instanceof Date ? a.updatedAt : new Date(a.updatedAt);
+          if (!lastPublishedAt || ua > lastPublishedAt) lastPublishedAt = ua;
+        }
+      }
+      totalViews += Number(a.views) || 0;
+    }
+
+    res.json({
+      totalArticles: articles.length,
+      articlesByStatus,
+      publishedCount,
+      totalCategories,
+      totalViews,
+      lastPublishedAt: lastPublishedAt ? lastPublishedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[KB][stats]", err);
+    res.status(500).json({ error: "Failed to compute knowledge-base stats" });
+  }
+});
+
 // GET /api/knowledge-base/categories — list with article counts
 router.get("/categories", async (req, res) => {
   try {

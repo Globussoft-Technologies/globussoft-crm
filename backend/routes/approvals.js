@@ -49,6 +49,13 @@ async function hydrateUsers(requests, _tenantId) {
 }
 
 // ── GET /api/approvals ─ list approval requests for tenant ───────
+// #920 slice 34 — ?fields=summary opt-in returns a slim row shape (id,
+// entity, entityId, status, requestedBy, approvedBy, requestedAt) suitable
+// for compact list views / badges / queue picker chrome. Slim path drops
+// the free-text `reason` + `comment` columns (potentially long) AND skips
+// the hydrateUsers() roundtrip (which fans an extra prisma.user.findMany
+// for requester/approver objects). Existing callers (no ?fields, or any
+// non-exact value) get the full hydrated row shape unchanged.
 router.get("/", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -58,10 +65,28 @@ router.get("/", verifyToken, async (req, res) => {
     if (status) where.status = status;
     if (entity) where.entity = entity;
 
-    const requests = await prisma.approvalRequest.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: { requestedAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        entity: true,
+        entityId: true,
+        status: true,
+        requestedBy: true,
+        approvedBy: true,
+        requestedAt: true,
+      };
+    }
+
+    const requests = await prisma.approvalRequest.findMany(findManyArgs);
+    if (isSummary) {
+      // Slim path: skip the user hydration roundtrip entirely.
+      return res.json(requests);
+    }
     const hydrated = await hydrateUsers(requests, tenantId);
     res.json(hydrated);
   } catch (err) {

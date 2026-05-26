@@ -139,15 +139,34 @@ async function buildVariableMap({ tenantId, userId, contactId, dealId, overrides
 
 // ── CRUD ─────────────────────────────────────────────────────────────
 
-// GET / — list (optional ?type=)
+// GET / — list (optional ?type= and ?fields=summary)
 router.get("/", async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
     if (req.query.type) where.type = String(req.query.type);
-    const templates = await prisma.documentTemplate.findMany({
+    // #920 slice 36: ?fields=summary slim-shape opt-in. Mirrors slices 1-33.
+    // DocumentTemplate has one heavy column (content @db.LongText — full HTML
+    // template body with {{variable}} placeholders) plus the variables @db.Text
+    // JSON list. When the caller passes ?fields=summary we drop both heavy
+    // columns + tenantId + createdAt, returning only the chrome columns needed
+    // for picker / dropdown UI (id, name, type, updatedAt). Opt-in additive —
+    // existing callers (no ?fields, or any non-exact value) get the full row
+    // shape unchanged so DocumentTemplates.jsx editor + render flows continue
+    // to receive content + variables.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: { updatedAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        type: true,
+        updatedAt: true,
+      };
+    }
+    const templates = await prisma.documentTemplate.findMany(findManyArgs);
     res.json(templates);
   } catch (err) {
     console.error("[DocTemplates] list error:", err);

@@ -333,4 +333,172 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/csp/violations/stats — tenant-wide CSP-violation aggregate rollup
+// (#917 CSP hardening slice 5).
+//
+// Sibling to GET /violations (slice 3): same data source (AuditLog rows where
+// entity='CSPViolation' + action='REPORT'), same tenant-scoping, same ADMIN
+// gate. While /violations is the paginated listing surface for forensic
+// triage, /violations/stats is the at-a-glance KPI surface — what the
+// CSPViolations admin dashboard renders in its header summary strip:
+//   "5 violations · script-src: 3, img-src: 2 · last reported 2h ago"
+//
+// Without this, the frontend has to fetch the full /violations slice and
+// reduce client-side over a paginated window — which would systematically
+// undercount once the table grows past `limit` rows (see the 2026-05-07
+// wave-2 standing rule on client-side aggregation over paginated endpoints).
+//
+// Mirrors /suppliers/stats + /commission-profiles/stats posture across the
+// rollup family — same {total, byX:{}, lastActivityAt} envelope, same
+// INVALID_DATE error code on bad ?from/?to, same NO-audit-row contract.
+//
+// Sub-brand handling
+// ──────────────────
+// Slice 2 hardcoded tenantId=1 and didn't carry any sub-brand discriminator
+// (CSP reports are emitted by the browser, not by an authenticated user, so
+// there's no sub-brand context at ingest time). Stats endpoint is therefore
+// tenant-scoped only — no sub-brand narrowing required or possible. This
+// matches how the sibling /violations listing scopes (tenantId only).
+//
+// Query params
+// ────────────
+//   ?from — optional ISO date lower bound on createdAt; invalid → 400 INVALID_DATE
+//   ?to   — optional ISO date upper bound on createdAt; invalid → 400 INVALID_DATE
+//
+// Response envelope
+// ─────────────────
+//   {
+//     total:           <int>                — count of CSP violation rows
+//     byDirective:     { "script-src": N }  — count by violated-directive,
+//                                              parsed from details JSON
+//     byBlockedUri:    { "eval": N }        — count by blocked-uri, top-10
+//                                              entries only (cap)
+//     lastReportedAt:  ISO | null           — max(createdAt) across matched rows
+//   }
+//
+// Auth: verifyToken + verifyRole(['ADMIN']). Defense-in-depth matching the
+// sibling /violations endpoint above.
+//
+// NO audit row written — anodyne read-only meta surface.
+//
+// Express route ordering: this is a literal-path /violations/stats. The
+// /violations listing handler at line 229 above takes no path-suffix args
+// so there's no /:id collision risk, but we place this BEFORE module.exports
+// for symmetry with the rollup-family ordering convention.
+// ============================================================================
+const STATS_FETCH_CAP = 5000;
+const BY_BLOCKED_URI_TOP_N = 10;
+
+router.get(
+  "/violations/stats",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const where = {
+        tenantId: req.user.tenantId,
+        entity: "CSPViolation",
+        action: "REPORT",
+      };
+
+      // ?from / ?to ISO date bounds on createdAt. Bad input → 400 INVALID_DATE
+      // (matches /suppliers/stats + /commission-profiles/stats convention).
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+      }
+
+      // Fetch + count in parallel. We pull the rows (capped) for in-memory
+      // aggregation because directive + blockedUri both live inside the
+      // JSON-stringified `details` column — there's no index-side groupBy
+      // available. count() runs over the full where so `total` is accurate
+      // even when the row population exceeds STATS_FETCH_CAP.
+      const [rows, total] = await Promise.all([
+        prisma.auditLog.findMany({
+          where,
+          select: { details: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: STATS_FETCH_CAP,
+        }),
+        prisma.auditLog.count({ where }),
+      ]);
+
+      const byDirective = {};
+      const byBlockedUriAll = {};
+      let lastReportedAt = null;
+
+      for (const row of rows) {
+        // lastReportedAt — max(createdAt). Skip rows with null/invalid
+        // createdAt defensively (count() still includes them in `total`).
+        if (row.createdAt) {
+          const ts = row.createdAt instanceof Date
+            ? row.createdAt
+            : new Date(row.createdAt);
+          if (!Number.isNaN(ts.getTime())) {
+            if (!lastReportedAt || ts > lastReportedAt) lastReportedAt = ts;
+          }
+        }
+
+        // Parse details + extract the normalised W3C/Reporting-API fields
+        // using the same helpers as /violations so the bucket keys stay
+        // consistent across the listing + stats surfaces.
+        const parsed = parseDetails(row.details);
+        const fields = extractReportFields(parsed);
+
+        if (fields.directive) {
+          const key = String(fields.directive);
+          byDirective[key] = (byDirective[key] || 0) + 1;
+        }
+        if (fields.blockedUri) {
+          const key = String(fields.blockedUri);
+          byBlockedUriAll[key] = (byBlockedUriAll[key] || 0) + 1;
+        }
+      }
+
+      // Cap byBlockedUri to the top-N to keep the response payload bounded.
+      // Sort by count desc, then key asc for deterministic tie-breaking.
+      const byBlockedUri = {};
+      const sortedBlockedEntries = Object.entries(byBlockedUriAll)
+        .sort((a, b) => {
+          if (b[1] !== a[1]) return b[1] - a[1];
+          return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+        })
+        .slice(0, BY_BLOCKED_URI_TOP_N);
+      for (const [k, v] of sortedBlockedEntries) byBlockedUri[k] = v;
+
+      return res.json({
+        total,
+        byDirective,
+        byBlockedUri,
+        lastReportedAt: lastReportedAt ? lastReportedAt.toISOString() : null,
+      });
+    } catch (err) {
+      console.error("[CSP][violations/stats] failed:", err && err.message);
+      return res.status(500).json({
+        error: "Failed to fetch CSP violation stats",
+        code: "CSP_VIOLATIONS_STATS_FAILED",
+      });
+    }
+  },
+);
+
 module.exports = router;

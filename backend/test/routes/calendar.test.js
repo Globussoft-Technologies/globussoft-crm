@@ -9,11 +9,11 @@
  *                                        orderBy startTime asc; default take=50;
  *                                        ?limit= override; parseInt(NaN)||50
  *                                        fallback for non-numeric limit.
- *   2. GET /api/calendar/integrations  — per-user scoping ONLY (NO tenantId
- *                                        in the where clause — see "BUG-WATCH"
- *                                        below); enforced `select` projection
- *                                        of { id, provider, syncEnabled,
- *                                        lastSyncAt, calendarId }.
+ *   2. GET /api/calendar/integrations  — per-user + per-tenant scoping
+ *                                        (defense-in-depth, see "BUG-WATCH"
+ *                                        history below); enforced `select`
+ *                                        projection of { id, provider,
+ *                                        syncEnabled, lastSyncAt, calendarId }.
  *   3. GET /api/calendar/upcoming      — per-user + per-tenant scoping;
  *                                        startTime gte now (±2s tolerance);
  *                                        orderBy startTime asc; take=10.
@@ -36,17 +36,16 @@
  *
  * Before this file there was NO route-level test for calendar.js itself.
  *
- * BUG-WATCH — GET /integrations missing tenantId (issue #975)
- * ────────────────────────────────────────────────────────────
- * The /integrations handler scopes findMany by `{ userId }` only, while the
- * other two handlers also scope by `tenantId`. With the current schema
- * (User.tenantId is an Int FK and a user belongs to exactly one tenant at a
- * time) the userId filter is functionally sufficient: a row's userId
- * implies its tenant. This is a defense-in-depth gap rather than a live
- * cross-tenant data-leak — filed as issue #975 so a future UserTenant join
- * table doesn't silently regress to a real leak. The current behaviour is
- * pinned by the `tenantId NOT in where` assertion so any tighter scoping
- * shows up as a green-→-red signal at the same time the gap is closed.
+ * BUG-WATCH — GET /integrations tenantId filter (issue #975 — CLOSED)
+ * ────────────────────────────────────────────────────────────────────
+ * Historical: the /integrations handler originally scoped findMany by
+ * `{ userId }` only, while the sibling /events and /upcoming handlers also
+ * scoped by `tenantId`. With the User.tenantId-as-Int schema the userId
+ * filter was functionally sufficient (a user belongs to exactly one tenant),
+ * so it was a defense-in-depth gap rather than a live data-leak — filed as
+ * issue #975 so a future UserTenant join table wouldn't silently regress to
+ * a real leak. Closed by the same commit that added `tenantId` to the where
+ * clause. The current-shape assertion now pins `{ userId, tenantId }`.
  *
  * Pattern
  * ───────
@@ -186,14 +185,10 @@ describe('GET /api/calendar/events', () => {
 });
 
 describe('GET /api/calendar/integrations', () => {
-  test('authed → 200 + array; where scoped to { userId } ONLY (no tenantId)', async () => {
-    // Pins the CURRENT shape — tenantId is NOT in the where clause. See the
-    // file header's "BUG-WATCH" section. With today's User.tenantId-as-Int
-    // schema the userId filter is functionally sufficient (a user belongs
-    // to exactly one tenant), so this is a defense-in-depth gap rather
-    // than a live data-leak. Tracker issue filed; see the skipped test
-    // below for the tightened-shape assertion that goes green once the
-    // source closes the gap.
+  test('authed → 200 + array; where scoped to { userId, tenantId } (defense in depth, #975)', async () => {
+    // Pins the post-#975 shape — tenantId is now part of the where clause,
+    // matching the sibling /events and /upcoming handlers. See the file
+    // header's "BUG-WATCH" section for the historical rationale.
     const rows = [
       { id: 1, provider: 'google', syncEnabled: true, lastSyncAt: null, calendarId: 'primary' },
     ];
@@ -207,9 +202,7 @@ describe('GET /api/calendar/integrations', () => {
     expect(Array.isArray(res.body)).toBe(true);
 
     const call = prisma.calendarIntegration.findMany.mock.calls[0][0];
-    expect(call.where).toEqual({ userId: 42 });
-    // Explicit pin: tenantId is NOT in the current where clause.
-    expect(call.where.tenantId).toBeUndefined();
+    expect(call.where).toEqual({ userId: 42, tenantId: 7 });
   });
 
   test('select projection enforced: { id, provider, syncEnabled, lastSyncAt, calendarId }', async () => {
@@ -227,14 +220,12 @@ describe('GET /api/calendar/integrations', () => {
     });
   });
 
-  // TODO(#975): When /integrations grows a tenantId filter alongside
-  // userId (defense in depth — guards against a future UserTenant join
-  // table making the userId-implies-tenantId invariant false), un-skip
-  // this test. It will go from .skip to green at the same commit that
-  // adds the tenantId filter to routes/calendar.js:23. At that point also
-  // tighten the current-shape test above's `expect(call.where).toEqual({
-  // userId: 42 })` to `{ userId: 42, tenantId: 7 }`.
-  test.skip('FUTURE: where should scope by both { userId, tenantId } (defense in depth)', async () => {
+  // Closed #975: this assertion was previously .skip'd as a FUTURE shape;
+  // it is now the live contract alongside the primary current-shape test
+  // above. Kept as a second assertion site so a future regression that
+  // accidentally drops tenantId from the where clause reds two tests, not
+  // one — the doubled signal is cheap insurance on a defense-in-depth fix.
+  test('where scopes by both { userId, tenantId } (defense in depth, #975)', async () => {
     await request(makeApp())
       .get('/api/calendar/integrations')
       .set('Authorization', `Bearer ${tokenFor({ userId: 42, tenantId: 7 })}`);

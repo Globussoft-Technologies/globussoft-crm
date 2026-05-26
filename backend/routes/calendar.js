@@ -20,7 +20,7 @@ router.get('/events', verifyToken, async (req, res) => {
 router.get('/integrations', verifyToken, async (req, res) => {
   try {
     const integrations = await prisma.calendarIntegration.findMany({
-      where: { userId: req.user.userId },
+      where: { userId: req.user.userId, tenantId: req.user.tenantId },
       select: { id: true, provider: true, syncEnabled: true, lastSyncAt: true, calendarId: true },
     });
     res.json(integrations);

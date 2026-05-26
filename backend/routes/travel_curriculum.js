@@ -457,6 +457,172 @@ router.get("/by-month", verifyToken, async (req, res) => {
   }
 });
 
+// ============================================================================
+// GET /api/travel-curriculum/by-quarter — tenant-wide curriculum-mapping
+// quarterly rollup (PRD_TRAVEL_TMC §3, Arc 2 Travel Gap).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-Q[1-4] bucket
+// for the tenant-scoped TravelCurriculumMapping population, with a count of
+// rows authored that quarter. Powers the per-quarter creation trend chart
+// on the Curriculum admin dashboard alongside /stats + /by-month.
+//
+// Sibling pattern: mirrors /api/travel/itineraries/by-quarter (#907 slice
+// 17) + /suppliers/by-quarter family. Same UTC YYYY-Q[1-4] bucketing
+// template, same defensive math (null/invalid createdAt → "unknown"
+// bucket; excluded when ?from / ?to is set, kept otherwise so count
+// surface stays accurate), same orderBy semantics, same pagination-after-
+// aggregation posture as /by-month above.
+//
+// Why no sub-brand bucket
+// -----------------------
+// Per the route file's header (L11-15) and the existing /stats + /by-month
+// handlers: curriculum authoring is tenant-wide ADMIN, not sub-brand-
+// scoped. The route mounts at /api/travel-curriculum (sibling-flat with
+// /api/embassy-rules) rather than under /api/travel/*, and there is no
+// requireTravelTenant / getSubBrandAccessSet machinery in this route
+// file. The /by-quarter endpoint follows the same posture — no
+// bySubBrand surface, no MANAGER narrowing, no sub-brand gate. The
+// TravelCurriculumMapping model has no subBrand column.
+//
+// Bucket key shape: "YYYY-Qn" where n ∈ {1,2,3,4}. Calendar quarter via
+// `Math.floor(month/3) + 1` where month is the 0-indexed UTC month:
+//   Q1: Jan–Mar (months 0..2)
+//   Q2: Apr–Jun (months 3..5)
+//   Q3: Jul–Sep (months 6..8)
+//   Q4: Oct–Dec (months 9..11)
+// UTC chosen deliberately so bucket labels stay stable across operator
+// timezones (matches /by-month posture).
+//
+// Query params (all optional):
+//   - ?from / ?to       — inclusive YYYY-Q[1-4] bounds; invalid →
+//                         400 INVALID_QUARTER_FORMAT
+//   - ?orderBy          — default quarter:asc; accepts quarter:{asc|desc},
+//                         count:{asc|desc}; unknown tokens degrade
+//                         silently
+//   - ?limit / ?offset  — default 8 / 0; limit caps at 40
+//
+// Response envelope:
+//   {
+//     total: <pre-pagination bucket count>,
+//     rows: [{ quarter: "2026-Q2", count: 3 }, ...]
+//   }
+//
+// No audit row written — read-only meta surface; matches /stats +
+// /by-month posture. USER-readable: anodyne (counts + quarter-string
+// tokens).
+//
+// Express route ordering: literal-path /by-quarter MUST be declared
+// BEFORE the /:id family or `:id="by-quarter"` would 400 INVALID_ID
+// before reaching this handler. Same convention as /stats + /by-month.
+// ============================================================================
+router.get("/by-quarter", verifyToken, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 8, 40);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+    // YYYY-Qn validation — quarter ∈ {1,2,3,4}, year is 4 digits.
+    const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+    if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "quarter:asc",
+      "quarter:desc",
+      "count:asc",
+      "count:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+    // Tenant-scoped where. No sub-brand narrowing — curriculum authoring
+    // is tenant-wide ADMIN; the model has no subBrand column.
+    const where = { tenantId: req.user.tenantId };
+
+    // Light projection — createdAt is enough for the bucket totals.
+    const rows = await prisma.travelCurriculumMapping.findMany({
+      where,
+      select: { createdAt: true },
+    });
+
+    // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { quarter, count }.
+    // Null/invalid createdAt rows land in "unknown".
+    const byQuarter = new Map();
+    for (const r of rows) {
+      let quarterKey = "unknown";
+      if (r.createdAt) {
+        const dt = r.createdAt instanceof Date
+          ? r.createdAt
+          : new Date(r.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+          quarterKey = `${yyyy}-Q${q}`;
+        }
+      }
+
+      let bucket = byQuarter.get(quarterKey);
+      if (!bucket) {
+        bucket = { quarter: quarterKey, count: 0 };
+        byQuarter.set(quarterKey, bucket);
+      }
+      bucket.count += 1;
+    }
+
+    let quarters = [...byQuarter.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" excluded when either
+    // bound is set (no comparable token); kept otherwise so the count
+    // surface remains complete. Mirrors /by-month posture.
+    if (fromRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+    }
+    if (toRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+    }
+
+    // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+    // chronological (Q1 < Q2 < Q3 < Q4 in ASCII, years naturally ordered).
+    // "unknown" sorts last in asc / first in desc (lexicographically >
+    // "9999-Q4") — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    quarters.sort((a, b) => {
+      if (field === "quarter") {
+        if (a.quarter < b.quarter) return -1 * mult;
+        if (a.quarter > b.quarter) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const total = quarters.length;
+
+    // Pagination AFTER aggregation + sort + filter, same as /by-month.
+    const paged = quarters.slice(skip, skip + take);
+
+    res.json({
+      total,
+      rows: paged,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-curriculum] by-quarter error:", e.message);
+    res.status(500).json({ error: "Failed to compute quarterly rollup" });
+  }
+});
+
 // GET /api/travel-curriculum/:id — single mapping (tenant-scoped).
 router.get("/:id", verifyToken, async (req, res) => {
   try {

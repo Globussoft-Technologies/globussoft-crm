@@ -370,6 +370,189 @@ router.get("/stats", verifyToken, requireTravelTenant, async (req, res) => {
   }
 });
 
+// GET /api/travel/sightseeing/by-year — annual rollup envelope.
+// MUST be declared BEFORE GET /:id so Express doesn't parse "by-year" as
+// a numeric :id and 400.
+//
+// Mirrors travel_invoices /invoices/by-year (commit 57bf25ea) but adapted
+// to TravelSightseeing (no status enum → simpler envelope with just count
+// + totalPriceReferenceValue per YYYY bucket). Sub-brand narrowing per
+// #976 fix — empty allow-set yields all-zeros / empty (NOT 403). First of
+// the eventual rollup triplet (by-month + by-quarter follow in later
+// slices).
+//
+// Envelope shape:
+//   {
+//     years: [{ year: "YYYY", count, totalPriceReferenceValue }],
+//     totalYears, grandCount, grandTotalValue, limit, offset
+//   }
+//
+// Query params:
+//   - limit  (default 10, clamped to [1, 30])
+//   - offset (default 0, applied AFTER aggregation/sort/filter)
+//   - from   (YYYY format, filters buckets to >= from)
+//   - to     (YYYY format, filters buckets to <= to)
+//   - orderBy (year:asc|year:desc|count:asc|count:desc|
+//              totalPriceReferenceValue:asc|totalPriceReferenceValue:desc)
+router.get("/by-year", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+    // YYYY validation — bucket labels we emit follow this exact shape so
+    // callers passing year-tokens to from/to should already be using it.
+    const YEAR_RE = /^\d{4}$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+    if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "year:asc",
+      "year:desc",
+      "count:asc",
+      "count:desc",
+      "totalPriceReferenceValue:asc",
+      "totalPriceReferenceValue:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+    // Canonical zeroed envelope — returned when caller has no sub-brand
+    // access. Single source of truth so empty-set + empty-result paths
+    // can't drift.
+    const zeroed = {
+      years: [],
+      totalYears: 0,
+      grandCount: 0,
+      grandTotalValue: 0,
+      limit: take,
+      offset: skip,
+    };
+
+    const where = { tenantId: req.travelTenant.id };
+
+    // Sub-brand narrowing — empty access set → zeroed shape (#976 fix),
+    // NOT 403. Sightseeing.subBrand is NULLABLE; mirror /stats handler
+    // posture (which scopes to where.subBrand = { in: [...] } when the
+    // access set is non-empty).
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed);
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY.
+    const items = await prisma.travelSightseeing.findMany({
+      where,
+      select: {
+        id: true,
+        priceReferenceMinor: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) =>
+      Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-year. Map "YYYY" → { count, totalPriceReferenceValue }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate. Null/invalid priceReferenceMinor contributes 0.
+    const byYear = new Map();
+    for (const it of items) {
+      let yearKey = "unknown";
+      if (it.createdAt) {
+        const dt = new Date(it.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          yearKey = String(dt.getUTCFullYear());
+        }
+      }
+
+      let row = byYear.get(yearKey);
+      if (!row) {
+        row = { year: yearKey, count: 0, totalPriceReferenceValue: 0 };
+        byYear.set(yearKey, row);
+      }
+
+      row.count += 1;
+      const price = Number(it.priceReferenceMinor);
+      if (Number.isFinite(price)) row.totalPriceReferenceValue += price;
+    }
+
+    let years = [...byYear.values()].map((r) => ({
+      year: r.year,
+      count: r.count,
+      totalPriceReferenceValue: round2(r.totalPriceReferenceValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set; when no bounds are set, "unknown" stays so the
+    // count surface remains complete.
+    if (fromRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+    }
+    if (toRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+    }
+
+    // Sort. "year" sorts lexicographically on YYYY which is also
+    // chronological (4-digit zero-padded years sort correctly as ASCII).
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    years.sort((a, b) => {
+      if (field === "year") {
+        if (a.year < b.year) return -1 * mult;
+        if (a.year > b.year) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalYears = years.length;
+    const grandCount = years.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.totalPriceReferenceValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter.
+    const paged = years.slice(skip, skip + take);
+
+    res.json({
+      years: paged,
+      totalYears,
+      grandCount,
+      grandTotalValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    console.error("[travel/sightseeing] by-year error:", err.message);
+    res.status(500).json({
+      error: "Failed to compute annual rollup",
+      code: "SIGHTSEEING_BY_YEAR_FAILED",
+    });
+  }
+});
+
 // GET /api/travel/sightseeing/:id
 router.get("/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

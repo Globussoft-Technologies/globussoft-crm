@@ -277,3 +277,237 @@ describe('cron/auditIntegrityEngine — emitted-row hash-chain anchoring', () =>
     expect(arg.data.hash).toBe(expected);
   });
 });
+
+// ----------------------------------------------------------------------------
+// Wave 11 extension (+8 cases) — pins under-covered branches of the SUT:
+//
+//   • Query contract — `findMany` is called with the documented `distinct`
+//     selector for tenant discovery + the `[createdAt asc, id asc]` tie-break
+//     order for chain walk. The tie-break comment in the SUT (lines 30-35)
+//     calls out that without `id asc`, the cron + /api/audit/verify can
+//     disagree on `brokenAt` for sub-millisecond writes; pinning the contract
+//     in a unit test guards against silent removal.
+//
+//   • Detection halts on first break — once a row fails validation, subsequent
+//     rows must NOT be walked (chainLength stops at the break point; the head
+//     emitted in details reflects the last-good row).
+//
+//   • Cross-tenant isolation of brokenAt — a break in tenant A's chain must
+//     not poison tenant B's brokenAt/reason; each tenant produces an
+//     independent summary entry.
+//
+//   • Genesis-position break — tampering the first row's prevHash (must equal
+//     GENESIS_<tenantId>) breaks the chain at row 1, NOT silently passes.
+//
+//   • Reason serialization — the human-readable reason string surfaces in the
+//     emitted integrity row's `details.reason` field for /audit-log reviewers.
+//
+//   • Integrity-row identity shape — every emitted row carries
+//     entity='AuditLog' + action='AUDIT_INTEGRITY' + entityId=null + userId=null
+//     across the multi-tenant case (not only the single-tenant happy path).
+//
+//   • createdAt is a Date instance — the integrity row's createdAt field is
+//     emitted as a JS Date (not a string), matching the schema column type and
+//     the helper's own `.toISOString()` call site.
+//
+//   • Empty-chain integrity row hash — the hash on an emitted row for a
+//     zero-row chain is correctly computed against GENESIS_<tenantId> with the
+//     row's own canonical payload (proves the SUT can extend a fresh chain
+//     even when there's nothing to verify).
+
+describe('cron/auditIntegrityEngine — query contract', () => {
+  test('uses distinct:["tenantId"] for tenant discovery and orderBy:[createdAt asc, id asc] for chain walk', async () => {
+    const tenantId = 11;
+    const rows = buildValidChain(tenantId, 2);
+    prisma.auditLog.findMany
+      .mockResolvedValueOnce([{ tenantId }])
+      .mockResolvedValueOnce(rows);
+
+    await runAuditIntegritySweep();
+
+    // First call — distinct tenant discovery
+    const distinctArg = prisma.auditLog.findMany.mock.calls[0][0];
+    expect(distinctArg).toMatchObject({
+      distinct: ['tenantId'],
+      select: { tenantId: true },
+    });
+
+    // Second call — chain walk for tenant 11
+    const walkArg = prisma.auditLog.findMany.mock.calls[1][0];
+    expect(walkArg.where).toEqual({ tenantId: 11 });
+    expect(walkArg.orderBy).toEqual([{ createdAt: 'asc' }, { id: 'asc' }]);
+    // Walk must select the fields required to recompute the hash.
+    expect(walkArg.select).toMatchObject({
+      id: true, action: true, entity: true, entityId: true, userId: true,
+      details: true, createdAt: true, prevHash: true, hash: true,
+    });
+  });
+});
+
+describe('cron/auditIntegrityEngine — break stops the walk', () => {
+  test('a break at row 2 does NOT process rows 3, 4, 5 — chainLength=2, head=row1.hash', async () => {
+    const tenantId = 1;
+    const rows = buildValidChain(tenantId, 5);
+    // Break row 2 by tampering its prevHash AND row 3+'s prevHash/hash so that
+    // if the walker erroneously continued past the break, the test would see
+    // chainLength > 2.
+    rows[1].prevHash = 'TAMPERED_AT_ROW_2';
+    prisma.auditLog.findMany
+      .mockResolvedValueOnce([{ tenantId }])
+      .mockResolvedValueOnce(rows);
+
+    const summary = await runAuditIntegritySweep();
+
+    expect(summary[0].chainLength).toBe(2);
+    expect(summary[0].brokenAt).toBe(rows[1].id);
+    // The emitted integrity row's head must reflect the LAST-GOOD row (row 1),
+    // not any row past the break — proving the walker exited the loop early.
+    const details = JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details);
+    expect(details.head).toBe(rows[0].hash);
+    expect(details.chainLength).toBe(2);
+  });
+
+  test('genesis-position break — row 1 with non-GENESIS prevHash breaks at row 1', async () => {
+    const tenantId = 5;
+    const rows = buildValidChain(tenantId, 3);
+    // Tamper row 1's prevHash so it no longer equals GENESIS_5. The walker
+    // MUST flag this as a break — silently accepting any "head" would let an
+    // attacker rewrite history by replacing the genesis row.
+    rows[0].prevHash = 'FAKE_GENESIS';
+    prisma.auditLog.findMany
+      .mockResolvedValueOnce([{ tenantId }])
+      .mockResolvedValueOnce(rows);
+
+    const summary = await runAuditIntegritySweep();
+
+    expect(summary[0].brokenAt).toBe(rows[0].id);
+    expect(summary[0].chainLength).toBe(1);
+    expect(summary[0].reason).toMatch(/prevHash mismatch/i);
+    // The emitted integrity row's head is null — no rows ever verified.
+    const details = JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details);
+    expect(details.head).toBeNull();
+  });
+});
+
+describe('cron/auditIntegrityEngine — cross-tenant isolation', () => {
+  test('a break in tenant 1 does NOT propagate brokenAt/reason to tenant 2', async () => {
+    const t1Rows = buildValidChain(1, 3);
+    t1Rows[1].prevHash = 'BROKEN_T1';
+    const t2Rows = buildValidChain(2, 2);
+    prisma.auditLog.findMany
+      .mockResolvedValueOnce([{ tenantId: 1 }, { tenantId: 2 }])
+      .mockResolvedValueOnce(t1Rows)
+      .mockResolvedValueOnce(t2Rows);
+
+    const summary = await runAuditIntegritySweep();
+
+    expect(summary).toHaveLength(2);
+    const t1 = summary.find((s) => s.tenantId === 1);
+    const t2 = summary.find((s) => s.tenantId === 2);
+    // Tenant 1: broken
+    expect(t1.brokenAt).toBe(t1Rows[1].id);
+    expect(t1.reason).toMatch(/prevHash mismatch/i);
+    expect(t1.chainLength).toBe(2);
+    // Tenant 2: clean — must not carry-over t1's brokenAt or reason
+    expect(t2.brokenAt).toBeNull();
+    expect(t2.reason).toBeNull();
+    expect(t2.chainLength).toBe(2);
+  });
+
+  test('multi-tenant integrity rows carry the canonical identity shape — entity, action, entityId, userId all match', async () => {
+    const t1Rows = buildValidChain(1, 1);
+    const t2Rows = buildValidChain(2, 1);
+    prisma.auditLog.findMany
+      .mockResolvedValueOnce([{ tenantId: 1 }, { tenantId: 2 }])
+      .mockResolvedValueOnce(t1Rows)
+      .mockResolvedValueOnce(t2Rows);
+
+    await runAuditIntegritySweep();
+
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+    for (const call of prisma.auditLog.create.mock.calls) {
+      expect(call[0].data.action).toBe('AUDIT_INTEGRITY');
+      expect(call[0].data.entity).toBe('AuditLog');
+      expect(call[0].data.entityId).toBeNull();
+      expect(call[0].data.userId).toBeNull();
+    }
+    // Per-tenant scope is preserved — emitted tenantId matches the chain's.
+    const emittedTenantIds = prisma.auditLog.create.mock.calls.map((c) => c[0].data.tenantId);
+    expect(emittedTenantIds).toEqual([1, 2]);
+  });
+});
+
+describe('cron/auditIntegrityEngine — emitted-row metadata', () => {
+  test('details.reason is null on a clean chain, populated on a broken chain', async () => {
+    const tenantId = 1;
+    const cleanRows = buildValidChain(tenantId, 2);
+    prisma.auditLog.findMany
+      .mockResolvedValueOnce([{ tenantId }])
+      .mockResolvedValueOnce(cleanRows);
+    await runAuditIntegritySweep();
+    const cleanDetails = JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details);
+    expect(cleanDetails.reason).toBeNull();
+
+    // Re-set + run broken case
+    prisma.auditLog.findMany.mockReset();
+    prisma.auditLog.create.mockReset();
+    prisma.auditLog.create.mockResolvedValue({});
+    const brokenRows = buildValidChain(tenantId, 2);
+    brokenRows[1].hash = 'TAMPERED';
+    prisma.auditLog.findMany
+      .mockResolvedValueOnce([{ tenantId }])
+      .mockResolvedValueOnce(brokenRows);
+    await runAuditIntegritySweep();
+    const brokenDetails = JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details);
+    expect(brokenDetails.reason).toMatch(/hash mismatch/i);
+    expect(brokenDetails.brokenAt).toBe(brokenRows[1].id);
+  });
+
+  test('createdAt is a Date instance and verifiedAt is a parseable ISO-8601 timestamp', async () => {
+    const tenantId = 1;
+    const rows = buildValidChain(tenantId, 1);
+    prisma.auditLog.findMany
+      .mockResolvedValueOnce([{ tenantId }])
+      .mockResolvedValueOnce(rows);
+
+    const before = Date.now();
+    await runAuditIntegritySweep();
+    const after = Date.now();
+
+    const arg = prisma.auditLog.create.mock.calls[0][0];
+    // Schema column is DateTime — emitted as a JS Date, not a string.
+    expect(arg.data.createdAt).toBeInstanceOf(Date);
+    expect(arg.data.createdAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(arg.data.createdAt.getTime()).toBeLessThanOrEqual(after);
+    // verifiedAt is the ISO string the human reviewer sees in /audit-log.
+    const details = JSON.parse(arg.data.details);
+    const verifiedAtMs = Date.parse(details.verifiedAt);
+    expect(Number.isFinite(verifiedAtMs)).toBe(true);
+    expect(verifiedAtMs).toBeGreaterThanOrEqual(before);
+    expect(verifiedAtMs).toBeLessThanOrEqual(after);
+  });
+
+  test('empty-chain integrity row: prevHash=GENESIS_<tenantId> AND hash is the canonical extension thereof', async () => {
+    const tenantId = 77;
+    prisma.auditLog.findMany
+      .mockResolvedValueOnce([{ tenantId }])
+      .mockResolvedValueOnce([]);
+
+    await runAuditIntegritySweep();
+
+    const arg = prisma.auditLog.create.mock.calls[0][0];
+    expect(arg.data.prevHash).toBe('GENESIS_77');
+    // The emitted hash must be the recomputed extension — proves the SUT can
+    // start a fresh chain even when the walk found zero rows.
+    const expected = computeHash(arg.data.prevHash, {
+      tenantId,
+      entity: 'AuditLog',
+      action: 'AUDIT_INTEGRITY',
+      entityId: null,
+      userId: null,
+      details: arg.data.details,
+      createdAt: arg.data.createdAt.toISOString(),
+    });
+    expect(arg.data.hash).toBe(expected);
+  });
+});

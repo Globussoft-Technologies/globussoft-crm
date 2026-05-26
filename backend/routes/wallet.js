@@ -240,6 +240,169 @@ router.get("/stats", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, 
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// D16 Wallet Top-up — Arc 1 polish slice (PRD_WALLET_TOPUP §3).
+//
+// GET /api/wallet/by-month — tenant-wide monthly rollup of wallet activity
+//
+// Sibling to /stats (above): /stats is the single point-in-time KPI tile;
+// /by-month is the per-month time series feeding the dashboard's wallet
+// trend chart. Mirrors routes/travel_suppliers.js /suppliers/by-month
+// template — same UTC YYYY-MM bucketing, same defensive math (null/invalid
+// createdAt → "unknown" bucket, excluded when ?from/?to is set), same
+// orderBy semantics, same pagination-after-aggregation posture.
+//
+// Aggregates only over WalletTransaction (Wallets are point-in-time, not
+// time-series): per-bucket topupCount + redeemCount + topupAmount +
+// redeemAmount. REDEEM amount-rupees are stored NEGATIVE per
+// routes/wallet.js:673 — surfaced as positive in redeemAmount via Math.abs.
+//
+// Query params:
+//   ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//                   400 INVALID_MONTH_FORMAT
+//   ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                   count:{asc|desc} (count = topupCount + redeemCount);
+//                   unknown tokens degrade silently to the default
+//   ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// RBAC: ADMIN+MANAGER only (mirrors /stats exactly). Tenant-wide aggregate
+// = owner-dashboard surface, intentionally tighter than the per-patient
+// phiReadGate set.
+//
+// No audit row written — read-only meta surface; matches /stats and
+// /suppliers/by-month posture.
+//
+// Express route ordering: literal-path /by-month MUST be declared BEFORE
+// the /:patientId/... family or `:patientId="by-month"` would 400 on
+// parseInt before reaching this handler.
+// ─────────────────────────────────────────────────────────────────────
+router.get("/by-month", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = Math.max(0, parseInt(req.query.offset, 10) || 0);
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    // YYYY-MM validation — mirrors /suppliers/by-month.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "count:asc",
+      "count:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Half-up round to 2dp — matches /stats posture.
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Light projection — type + amount + createdAt is all we need.
+    const txns = await prisma.walletTransaction.findMany({
+      where: { tenantId },
+      select: { type: true, amount: true, createdAt: true },
+    });
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → { month, topupCount,
+    // redeemCount, topupAmount, redeemAmount }. Null/invalid createdAt
+    // rows land in "unknown".
+    const byMonth = new Map();
+    for (const t of txns) {
+      let monthKey = "unknown";
+      if (t.createdAt) {
+        const dt = t.createdAt instanceof Date
+          ? t.createdAt
+          : new Date(t.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let bucket = byMonth.get(monthKey);
+      if (!bucket) {
+        bucket = {
+          month: monthKey,
+          topupCount: 0,
+          redeemCount: 0,
+          topupAmount: 0,
+          redeemAmount: 0,
+        };
+        byMonth.set(monthKey, bucket);
+      }
+      const amt = Number(t.amount) || 0;
+      if (t.type === "TOP_UP") {
+        bucket.topupCount += 1;
+        bucket.topupAmount += Math.abs(amt);
+      } else if (t.type === "REDEEM") {
+        bucket.redeemCount += 1;
+        bucket.redeemAmount += Math.abs(amt);
+      }
+    }
+
+    let months = [...byMonth.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" excluded when either
+    // bound is set (no comparable token); kept otherwise so the count
+    // surface remains complete. Mirrors /suppliers/by-month.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Round half-up after summation (Float drift on JS-side aggregation).
+    for (const r of months) {
+      r.topupAmount = round2(r.topupAmount);
+      r.redeemAmount = round2(r.redeemAmount);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM (also
+    // chronological). "count" sorts by total tx (topupCount + redeemCount).
+    // "unknown" sorts last in asc / first in desc (lexicographically >
+    // "9999-12") — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      // count = topupCount + redeemCount
+      const ac = (a.topupCount || 0) + (a.redeemCount || 0);
+      const bc = (b.topupCount || 0) + (b.redeemCount || 0);
+      return (ac - bc) * mult;
+    });
+
+    const total = months.length;
+
+    // Pagination AFTER aggregation + sort + filter.
+    const paged = months.slice(skip, skip + take);
+
+    return res.json({ total, rows: paged });
+  } catch (e) {
+    console.error("[wallet] by-month error:", e.message);
+    return res.status(500).json({ error: "Failed to summarise wallet by-month" });
+  }
+});
+
 /**
  * GET /api/wallet/:patientId/balance
  *

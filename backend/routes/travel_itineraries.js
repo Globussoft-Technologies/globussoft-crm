@@ -6,6 +6,7 @@
 //   GET    /api/travel/itineraries/by-month                  — tenant-wide monthly rollup (#907 slice 16)
 //   GET    /api/travel/itineraries/by-quarter                — tenant-wide quarterly rollup (#907 slice 17)
 //   GET    /api/travel/itineraries/by-year                   — tenant-wide annual rollup (#907 slice 18)
+//   GET    /api/travel/itineraries/stats                     — tenant-wide aggregate envelope (#907 rollup family completion)
 //   GET    /api/travel/itineraries/:id                      — fetch one with items
 //   PATCH  /api/travel/itineraries/:id                      — amend top-level fields (not items)
 //   POST   /api/travel/itineraries/:id/items                — append a polymorphic item
@@ -1058,6 +1059,203 @@ router.get("/itineraries/by-year", verifyToken, requireTravelTenant, async (req,
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-itin] by-year error:", e.message);
     res.status(500).json({ error: "Failed to compute annual rollup" });
+  }
+});
+
+// GET /api/travel/itineraries/stats — tenant-wide aggregate (#907 rollup
+// family completion). Mirrors the travel_quotes /stats envelope shape so
+// dashboard tiles share a stable contract across the rollup endpoints.
+//
+// Envelope:
+//   {
+//     total: <number>,
+//     byStatus: { draft|sent|revised|accepted|rejected|advance_paid|fully_paid:
+//                 { count, totalValue } },
+//     bySubBrand: { tmc|rfu|travelstall|visasure|_tenant: { count } },
+//     grandTotalValue: <number>,
+//     grandAcceptedValue: <number>,
+//     acceptanceRate: <0-1 or null>,
+//     lastUpdatedAt: <ISO or null>
+//   }
+//
+// Status enum is the canonical 7-value set from schema.prisma's Itinerary
+// model. accepted/advance_paid/fully_paid all roll up into
+// grandAcceptedValue (the agreement-secured set — Phase 2 50%-advance
+// booking flow treats advance_paid + fully_paid as continuations of
+// accepted, NOT separate categories). acceptanceRate uses
+// terminal-decision denominator (accepted + advance_paid + fully_paid +
+// rejected) — null when denom=0.
+//
+// Half-up 2dp on all money values. Defensive: null/non-numeric
+// totalAmount → 0. bySubBrand coalesces missing subBrand → "_tenant"
+// matching the /quotes/stats convention.
+//
+// Optional query:
+//   ?from=ISO — lower bound on createdAt (inclusive)
+//   ?to=ISO   — upper bound on createdAt (inclusive)
+//
+// Route-ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "stats" as a numeric :id (which would 400 INVALID_ID).
+router.get("/itineraries/stats", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+
+    // Optional ISO date bounds on createdAt.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Canonical zeroed envelope — returned when the caller has no
+    // sub-brand access OR when zero rows match. Single source of truth
+    // so the empty-set + empty-result paths can't drift.
+    const zeroed = {
+      total: 0,
+      byStatus: {
+        draft:        { count: 0, totalValue: 0 },
+        sent:         { count: 0, totalValue: 0 },
+        revised:      { count: 0, totalValue: 0 },
+        accepted:     { count: 0, totalValue: 0 },
+        rejected:     { count: 0, totalValue: 0 },
+        advance_paid: { count: 0, totalValue: 0 },
+        fully_paid:   { count: 0, totalValue: 0 },
+      },
+      bySubBrand: {},
+      grandTotalValue: 0,
+      grandAcceptedValue: 0,
+      acceptanceRate: null,
+      lastUpdatedAt: null,
+    };
+
+    // Sub-brand narrowing — empty access set → zeroed shape (#976 fix),
+    // NOT 403 — so not-yet-onboarded operators render an empty tile
+    // cleanly instead of a permission error.
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed);
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    const itineraries = await prisma.itinerary.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        status: true,
+        totalAmount: true,
+        updatedAt: true,
+      },
+    });
+
+    if (itineraries.length === 0) {
+      return res.json(zeroed);
+    }
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    const byStatus = {
+      draft:        { count: 0, totalValue: 0 },
+      sent:         { count: 0, totalValue: 0 },
+      revised:      { count: 0, totalValue: 0 },
+      accepted:     { count: 0, totalValue: 0 },
+      rejected:     { count: 0, totalValue: 0 },
+      advance_paid: { count: 0, totalValue: 0 },
+      fully_paid:   { count: 0, totalValue: 0 },
+    };
+    const bySubBrand = {};
+    let grandTotalValue = 0;
+    let grandAcceptedValue = 0;
+    let lastUpdatedAt = null;
+
+    // accepted | advance_paid | fully_paid all count as
+    // agreement-secured (see PRD §4.7 Phase 2 50%-advance booking).
+    const ACCEPTED_LIKE = new Set(["accepted", "advance_paid", "fully_paid"]);
+    // Terminal-decision set for acceptanceRate denominator: every status
+    // whose outcome is decided. rejected is the lone "decided no";
+    // accepted/advance_paid/fully_paid are the "decided yes" trio.
+    const TERMINAL = new Set(["accepted", "advance_paid", "fully_paid", "rejected"]);
+
+    for (const it of itineraries) {
+      const amt = Number(it.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      grandTotalValue += safeAmt;
+
+      if (byStatus[it.status]) {
+        byStatus[it.status].count += 1;
+        byStatus[it.status].totalValue += safeAmt;
+      }
+
+      if (ACCEPTED_LIKE.has(it.status)) {
+        grandAcceptedValue += safeAmt;
+      }
+
+      // bySubBrand: defensively coalesce null → "_tenant" matching
+      // /quotes/stats convention.
+      const sbKey = it.subBrand ? String(it.subBrand) : "_tenant";
+      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+      bySubBrand[sbKey].count += 1;
+
+      const ts = it.updatedAt instanceof Date ? it.updatedAt : new Date(it.updatedAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+      }
+    }
+
+    // Round per-status sums.
+    for (const s of Object.keys(byStatus)) {
+      byStatus[s].totalValue = round2(byStatus[s].totalValue);
+    }
+
+    // acceptanceRate: (accepted-like count) / (terminal count); null if
+    // denom=0. accepted+advance_paid+fully_paid all count toward the
+    // numerator (agreement-secured); rejected counts toward denominator
+    // only.
+    let acceptedLikeCount = 0;
+    let terminalCount = 0;
+    for (const it of itineraries) {
+      if (ACCEPTED_LIKE.has(it.status)) acceptedLikeCount += 1;
+      if (TERMINAL.has(it.status)) terminalCount += 1;
+    }
+    const acceptanceRate = terminalCount > 0
+      ? round2(acceptedLikeCount / terminalCount)
+      : null;
+
+    res.json({
+      total: itineraries.length,
+      byStatus,
+      bySubBrand,
+      grandTotalValue: round2(grandTotalValue),
+      grandAcceptedValue: round2(grandAcceptedValue),
+      acceptanceRate,
+      lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] stats error:", e.message);
+    res.status(500).json({
+      error: "Failed to fetch itinerary stats",
+      code: "ITINERARY_STATS_FAILED",
+    });
   }
 });
 

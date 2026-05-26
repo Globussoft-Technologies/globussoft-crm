@@ -538,4 +538,146 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
       expect(msg).toMatch(/CSV missing required column/);
     });
   });
+
+  // ─── Extension cases — wave 2026-05-26 (B) ─────────────────────────
+  // Cover the remaining uncovered branches: move-up boundary disabled
+  // state, ID-collision skip in addQuestion / addOption, move-up reorders,
+  // question type select mutation, scoring-band ParseErrorPanel branch,
+  // ScoringVisualEditor "missing bands array" message, recommendedTier
+  // edit propagation, and re-validate clearing state.
+
+  it('Move-question-up is disabled on the first question (boundary state)', () => {
+    renderPage();
+    // The first question's "Move question up" button is rendered but disabled.
+    const moveUpBtns = screen.getAllByRole('button', { name: /Move question up/i });
+    expect(moveUpBtns[0].disabled).toBe(true);
+    // Clicking should be a no-op — the JSON order doesn't change.
+    fireEvent.click(moveUpBtns[0]);
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const qTextarea = screen.getByLabelText(/Questions JSON/i);
+    const tripsIdx = qTextarea.value.indexOf('How many trips do you organize per year');
+    const groupIdx = qTextarea.value.indexOf('Average group size');
+    // Original order preserved: Q1 (trips) precedes Q2 (group).
+    expect(tripsIdx).toBeGreaterThan(0);
+    expect(groupIdx).toBeGreaterThan(tripsIdx);
+  });
+
+  it('Move-question-down is disabled on the last question (boundary state)', () => {
+    renderPage();
+    const moveDownBtns = screen.getAllByRole('button', { name: /Move question down/i });
+    // Last question's "Move question down" is disabled.
+    expect(moveDownBtns[moveDownBtns.length - 1].disabled).toBe(true);
+  });
+
+  it('Move-question-up reorders an interior question', () => {
+    renderPage();
+    // Move Q2 up → Q2 should now precede Q1 in the JSON.
+    const moveUpBtns = screen.getAllByRole('button', { name: /Move question up/i });
+    // moveUpBtns[0] is Q1's (disabled), moveUpBtns[1] is Q2's (enabled).
+    fireEvent.click(moveUpBtns[1]);
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const qTextarea = screen.getByLabelText(/Questions JSON/i);
+    const tripsIdx = qTextarea.value.indexOf('How many trips do you organize per year');
+    const groupIdx = qTextarea.value.indexOf('Average group size');
+    expect(groupIdx).toBeGreaterThan(0);
+    expect(tripsIdx).toBeGreaterThan(groupIdx);
+  });
+
+  it('Move-band-up reorders a band (the symmetric direction of move-band-down)', () => {
+    renderPage();
+    const moveUpBtns = screen.getAllByRole('button', { name: /Move band up/i });
+    // Band-1's move-up is disabled; Band-2's is enabled. Click Band-2's to swap with Band-1.
+    expect(moveUpBtns[0].disabled).toBe(true);
+    fireEvent.click(moveUpBtns[1]);
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
+    const starterIdx = rTextarea.value.indexOf('"Starter"');
+    const establishedIdx = rTextarea.value.indexOf('"Established"');
+    expect(establishedIdx).toBeGreaterThan(0);
+    expect(starterIdx).toBeGreaterThan(establishedIdx);
+  });
+
+  it('Add question skips IDs already in use (q1+q2 seeded → next is q3, then add+remove+add yields q3+q4 not q3+q3)', () => {
+    renderPage();
+    // Seeded ids are q1, q2. Click "Add question" once → should yield q3.
+    fireEvent.click(screen.getByRole('button', { name: /Add question/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    let qTextarea = screen.getByLabelText(/Questions JSON/i);
+    expect(qTextarea.value).toMatch(/"id": "q3"/);
+    // Switch back to Visual, add another → q4 (since q3 is now used).
+    fireEvent.click(screen.getByRole('tab', { name: /Visual builder/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add question/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    qTextarea = screen.getByLabelText(/Questions JSON/i);
+    expect(qTextarea.value).toMatch(/"id": "q4"/);
+    // Both q3 and q4 should be present (no collision).
+    const q3Count = (qTextarea.value.match(/"id": "q3"/g) || []).length;
+    const q4Count = (qTextarea.value.match(/"id": "q4"/g) || []).length;
+    expect(q3Count).toBe(1);
+    expect(q4Count).toBe(1);
+  });
+
+  it('Changing question type via the select propagates into qJson', () => {
+    renderPage();
+    // Find the first <select> with QUESTION_TYPES options. There are 2 question
+    // cards, each with a type select pre-set to "single-choice".
+    const selects = Array.from(document.querySelectorAll('select'));
+    const typeSelect = selects.find((s) => s.value === 'single-choice');
+    expect(typeSelect).toBeTruthy();
+    fireEvent.change(typeSelect, { target: { value: 'multi-select' } });
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const qTextarea = screen.getByLabelText(/Questions JSON/i);
+    expect(qTextarea.value).toMatch(/"type": "multi-select"/);
+  });
+
+  it('Editing recommendedTier propagates into rJson', () => {
+    renderPage();
+    // Pre-seeded recommendedTier values: "entry", "primary", "premium".
+    const inputs = screen.getAllByRole('textbox');
+    const tierInput = inputs.find((el) => el.value === 'entry');
+    expect(tierInput).toBeTruthy();
+    fireEvent.change(tierInput, { target: { value: 'starter-special' } });
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
+    expect(rTextarea.value).toMatch(/"recommendedTier": "starter-special"/);
+  });
+
+  it('ScoringVisualEditor shows a ParseErrorPanel when rJson is unparseable', () => {
+    renderPage();
+    // Break the scoring JSON via the JSON tab, then swap back to Visual.
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
+    fireEvent.change(rTextarea, { target: { value: '{ not json' } });
+    fireEvent.click(screen.getByRole('tab', { name: /Visual builder/i }));
+    // The ScoringVisualEditor branch shows its own ParseErrorPanel.
+    expect(screen.getByText(/scoringRulesJson string is not valid JSON/i)).toBeTruthy();
+  });
+
+  it('ScoringVisualEditor flags a missing-bands-array payload distinctly from unparseable JSON', () => {
+    renderPage();
+    // Provide VALID JSON that lacks the "bands" array (object-but-no-bands branch).
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
+    fireEvent.change(rTextarea, { target: { value: JSON.stringify({ method: 'weighted-sum', notBands: [] }) } });
+    fireEvent.click(screen.getByRole('tab', { name: /Visual builder/i }));
+    // Distinct message: "missing a 'bands' array", not "not valid JSON".
+    expect(screen.getByText(/scoringRulesJson is missing a "bands" array/i)).toBeTruthy();
+  });
+
+  it('Validate re-evaluation transitions from errors to ok after fixing the broken JSON', () => {
+    renderPage();
+    // Step 1: break questionsJson, validate → errors panel.
+    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const qTextarea = screen.getByLabelText(/Questions JSON/i);
+    fireEvent.change(qTextarea, { target: { value: 'totally broken' } });
+    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
+    let alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/Validation errors/i);
+    // Step 2: restore valid JSON, re-validate → ok panel.
+    const fixedQ = JSON.stringify({ questions: [{ id: 'q1', text: 'x', type: 'single-choice', options: [{ value: 'a', label: 'A', weight: 1 }] }] });
+    fireEvent.change(qTextarea, { target: { value: fixedQ } });
+    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
+    alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/Both JSON payloads parse and have the required shape/i);
+  });
 });

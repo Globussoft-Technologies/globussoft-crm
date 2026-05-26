@@ -259,6 +259,204 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/trip-billing/by-month — tenant-wide TMC instalment monthly
+// rollup (PRD_TRAVEL §TMC trip-billing).
+//
+// Sibling to /trip-billing/stats (slice shipped earlier — single point-in-time
+// KPI tile). /by-month is the per-month time series across the same TMC
+// instalment population — powers the trip-billing dashboard's trend chart so
+// the operator can see how cash collection has trended over time without
+// fan-out-and-reduce on the frontend.
+//
+// Mirrors /suppliers/by-month + /commission-profiles/by-month + /quotes/by-month
+// shape — one row per UTC YYYY-MM bucket, JS-side aggregation over a light
+// findMany projection, default orderBy=month:asc, pagination AFTER aggregation
+// + sort + filter, NO audit row written.
+//
+// TMC-locked: the whole travel_trip_billing.js route is sub-brand-gated to TMC
+// callers via requireTmcAccess (mirrors per-trip endpoints + /stats exactly).
+// A non-TMC MANAGER receives 403 SUB_BRAND_DENIED before any aggregation runs.
+//
+// Tenant scoping: TripInstalmentPayment children don't carry tenantId directly.
+// The schema scopes via FK → TmcTrip → tenantId. Canonical pattern (matching
+// /stats): fetch the trip-id set first (tenantId-scoped), then aggregate the
+// child rows scoped to those trip-ids.
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid → 400
+//                     INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// Per-bucket breakdown:
+//   - count: total instalment rows landing in this month bucket
+//   - byStatus: { pending, partial, paid, overdue } — the four
+//     VALID_INSTALMENT_STATUSES values, pre-seeded so every key exists on
+//     every bucket (schema is lowercase per prisma/schema.prisma:4594 — the
+//     instalment.status enum is lowercase strings, NOT uppercase; mirrors
+//     the /stats handler at the top of this file)
+//   - totalReceived: sum of paidAmount across this bucket's rows, half-up
+//     rounded to 2dp. Matches /stats's totalReceived semantics.
+//
+// "unknown" bucket: rows with null/invalid createdAt land here so the count
+// surface stays accurate. Excluded when ?from / ?to is set (no comparable
+// month token); included otherwise.
+//
+// Express route ordering: literal-path /trip-billing/by-month MUST be declared
+// BEFORE any /trips/:tripId/... handler or `:tripId="trip-billing"` would
+// 400 INVALID_ID before reaching this handler. Placed adjacent to
+// /trip-billing/stats at the top.
+// ============================================================================
+router.get(
+  "/trip-billing/by-month",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors /suppliers/by-month.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Tenant scoping — fetch this tenant's TMC trip-id set first.
+      const trips = await prisma.tmcTrip.findMany({
+        where: { tenantId },
+        select: { id: true },
+      });
+      const tripIds = trips.map((t) => t.id);
+
+      // Empty short-circuit — return zeroed envelope.
+      if (tripIds.length === 0) {
+        return res.json({
+          total: 0,
+          rows: [],
+        });
+      }
+
+      // Light projection — status + paidAmount + createdAt is enough for the
+      // bucket totals. tripId scoping replaces tenantId (children don't carry
+      // tenantId directly).
+      const instalments = await prisma.tripInstalmentPayment.findMany({
+        where: { tripId: { in: tripIds } },
+        select: { status: true, paidAmount: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → {count, byStatus, totalReceived}.
+      // Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const ins of instalments) {
+        let monthKey = "unknown";
+        if (ins.createdAt) {
+          const dt = ins.createdAt instanceof Date
+            ? ins.createdAt
+            : new Date(ins.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            month: monthKey,
+            count: 0,
+            byStatus: { pending: 0, partial: 0, paid: 0, overdue: 0 },
+            totalReceived: 0,
+          };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+
+        const status = String(ins.status || "pending");
+        if (VALID_INSTALMENT_STATUSES.includes(status)) {
+          bucket.byStatus[status] += 1;
+        }
+
+        const amt = Number(ins.paidAmount);
+        if (Number.isFinite(amt)) bucket.totalReceived += amt;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either bound
+      // is set (no comparable token); kept otherwise so the count surface
+      // remains complete. Mirrors /suppliers/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Half-up round totalReceived to 2dp per bucket — matches /stats and
+      // sibling /by-month endpoints' precision posture.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+      for (const r of months) r.totalReceived = round2(r.totalReceived);
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
+      // "unknown" sorts last in asc / first in desc (lexicographically >
+      // "9999-12") — acceptable for a defensive fallback bucket that should
+      // rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = months.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as /suppliers/by-month.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trip-billing] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
+
 // ─── Rooming ─────────────────────────────────────────────────────────
 
 router.get("/trips/:tripId/rooming", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {

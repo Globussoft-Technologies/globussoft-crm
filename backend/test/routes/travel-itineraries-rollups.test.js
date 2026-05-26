@@ -28,7 +28,9 @@
  *      (NOT 403) so dashboard tiles render cleanly for not-yet-onboarded
  *      operators. Confirmed: route returns the empty rollup envelope when
  *      `getSubBrandAccessSet` returns an empty Set. (See route comments
- *      at lines 360-377 / 634-651 / 904-921.)
+ *      at lines 360-377 / 634-651 / 904-921.) #976 resolved 2026-05-26 —
+ *      the helper now returns `new Set()` for explicit `"[]"` input so
+ *      these three cases exercise the all-zeros short-circuit cleanly.
  *   7. ?from / ?to format validation:
  *      - by-month: INVALID_MONTH_FORMAT on bad YYYY-MM token.
  *      - by-quarter: INVALID_QUARTER_FORMAT on bad YYYY-Qn token.
@@ -212,12 +214,11 @@ describe('GET /api/travel/itineraries/by-month (slice 16)', () => {
     expect(res.body.grandAcceptedValue).toBe(0);
   });
 
-  // TODO(#976): re-enable when getSubBrandAccessSet treats empty []
-  // subBrandAccess as an empty Set (not full access). Today the route's
-  // "empty access set → all-zeros" branch is unreachable for the natural
-  // not-yet-onboarded MANAGER case because the helper collapses [] to
-  // null (full access) at travelGuards.js:77.
-  test.skip('sub-brand allow-set empty → all-zeros rollup (NOT 403) [BLOCKED: #976]', async () => {
+  // #976 RESOLVED: getSubBrandAccessSet now returns empty Set for "[]"
+  // (deny-all), making the route's "allowed instanceof Set && allowed.size
+  // === 0" short-circuit reachable for the natural not-yet-onboarded
+  // MANAGER case.
+  test('sub-brand allow-set empty → all-zeros rollup (NOT 403)', async () => {
     prisma.user.findUnique.mockResolvedValue({
       role: 'MANAGER',
       subBrandAccess: JSON.stringify([]),
@@ -356,9 +357,9 @@ describe('GET /api/travel/itineraries/by-quarter (slice 17)', () => {
     expect(res.body.grandAcceptedValue).toBe(0);
   });
 
-  // TODO(#976): same root cause as the by-month skip — re-enable when
-  // getSubBrandAccessSet returns an empty Set for explicit [] input.
-  test.skip('sub-brand allow-set empty → all-zeros rollup (NOT 403) [BLOCKED: #976]', async () => {
+  // #976 RESOLVED: same root cause as the by-month case — empty Set from
+  // explicit "[]" input now reaches the route's all-zeros short-circuit.
+  test('sub-brand allow-set empty → all-zeros rollup (NOT 403)', async () => {
     prisma.user.findUnique.mockResolvedValue({
       role: 'MANAGER',
       subBrandAccess: JSON.stringify([]),
@@ -481,9 +482,9 @@ describe('GET /api/travel/itineraries/by-year (slice 18)', () => {
     expect(res.body.grandAcceptedValue).toBe(0);
   });
 
-  // TODO(#976): same root cause as the by-month skip — re-enable when
-  // getSubBrandAccessSet returns an empty Set for explicit [] input.
-  test.skip('sub-brand allow-set empty → all-zeros rollup (NOT 403) [BLOCKED: #976]', async () => {
+  // #976 RESOLVED: same root cause as the by-month case — empty Set from
+  // explicit "[]" input now reaches the route's all-zeros short-circuit.
+  test('sub-brand allow-set empty → all-zeros rollup (NOT 403)', async () => {
     prisma.user.findUnique.mockResolvedValue({
       role: 'MANAGER',
       subBrandAccess: JSON.stringify([]),

@@ -4,17 +4,49 @@ const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 
 // GET /api/contracts — list with optional status filter
+// GET /api/contracts?fields=summary
 router.get("/", async (req, res) => {
   try {
+    // #920 slice 14: ?fields=summary slim-shape opt-in. Mirrors slice 1
+    // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+    // badc9cca), slice 4 (tasks eec7d856), slice 5 (projects 257771a0),
+    // slice 6 (expenses e81e6cb5), slice 7 (notifications a3487518),
+    // slice 8 (surveys e71594d9), slice 9 (email-templates 0d4a63f9),
+    // slice 10 (knowledge-base 21ad3290), slice 12 (sequences).
+    // When the caller passes ?fields=summary we drop the heavy `terms`
+    // column (String? @db.Text — can be many KB of contract body text)
+    // and the contact + deal relation includes, returning only the
+    // columns the contract list renderer actually needs. Opt-in additive
+    // — existing callers (no ?fields, or any non-exact value) get the
+    // full row shape with relations unchanged.
     const { status } = req.query;
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
 
-    const contracts = await prisma.contract.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
-      include: { contact: true, deal: true },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        title: true,
+        status: true,
+        startDate: true,
+        endDate: true,
+        value: true,
+        tenantId: true,
+        contactId: true,
+        dealId: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    } else {
+      findManyArgs.include = { contact: true, deal: true };
+    }
+
+    const contracts = await prisma.contract.findMany(findManyArgs);
     res.json(contracts);
   } catch (err) {
     console.error(err);

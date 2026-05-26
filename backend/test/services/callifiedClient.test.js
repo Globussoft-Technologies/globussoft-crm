@@ -323,3 +323,228 @@ describe('fetchCallResult', () => {
     await expect(c.fetchCallResult({ tenantId: 1 })).rejects.toThrow(/callId required/);
   });
 });
+
+// ─── EXTENSION: +8 cases (tick of test-writing cron) ──────────────────
+//
+// Coverage targets the 4 under-pinned axes identified against the 165-LOC
+// SUT (existing 10 cases left these holes):
+//   • CJS self-mocking seam — regression pins for the THREE inter-function
+//     calls inside initiateCall that route via module.exports indirection
+//     (isEnabledForTenant, checkBudgetCap, resolveSubBrandPersona). This
+//     was the 2026-05-24 cron-learning that triggered the rule-of-3
+//     promotion (4th instance of CJS-self-mocking-seam pattern). If a
+//     refactor accidentally regresses these to local-binding calls, the
+//     unit tests' spy strategy silently breaks — these tests detect it.
+//   • initiateCall input guard fail-fast — missing tenantId / toPhone
+//     throws BEFORE the flag check fires (no prisma reads).
+//   • isEnabledForTenant fallback semantics — defaults true when row
+//     absent; coerces "1" as truthy (DC-7 admin-toggle contract).
+//   • checkBudgetCap at-cap boundary — withinCap is STRICT inequality
+//     (spent < cap), so spent === cap REJECTS. Pin the boundary.
+//   • computeMonthlySpendCents stub returns 0 — contract pin (the real
+//     impl must preserve the return TYPE while changing the value).
+//   • initiateCall persona resolution: when no explicit persona arg and
+//     sub-brand has a configured persona, initiateCall MUST use the
+//     subBrandConfigJson value (not "default" fallback).
+
+describe('callifiedClient — extension', () => {
+  test('CJS seam: initiateCall routes checkBudgetCap call via module.exports (NOT local binding)', async () => {
+    // Regression pin for the 2026-05-24 cron-learning. If somebody
+    // refactors line 108 of callifiedClient.js from
+    //   `await module.exports.checkBudgetCap(tenantId);`
+    // back to the local-binding form
+    //   `await checkBudgetCap(tenantId);`
+    // the vi.spyOn here STOPS intercepting and the test fails — caught
+    // at unit-test time rather than waiting for production cap-breach.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const c = loadClient();
+    const capSpy = vi.spyOn(c, 'checkBudgetCap').mockResolvedValue({
+      spentCents: 0,
+      capCents: 10000,
+      percent: 0,
+      withinCap: true,
+      alertThreshold: false,
+    });
+
+    await c.initiateCall({ tenantId: 42, toPhone: '+919999000010' });
+
+    expect(capSpy).toHaveBeenCalledTimes(1);
+    expect(capSpy).toHaveBeenCalledWith(42);
+
+    capSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  test('CJS seam: initiateCall routes isEnabledForTenant call via module.exports', async () => {
+    // Sibling regression pin: line 102 must call
+    // `module.exports.isEnabledForTenant(tenantId)`, NOT the local
+    // binding. Force-return false via spy → if the call routes through
+    // the spy we get AI_CALLING_DISABLED; if it bypasses the spy we'd
+    // hit the live prisma path (default → true) and the test passes
+    // silently for the wrong reason. So we ALSO assert the spy fired.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const c = loadClient();
+    const flagSpy = vi.spyOn(c, 'isEnabledForTenant').mockResolvedValue(false);
+
+    let caught;
+    try {
+      await c.initiateCall({ tenantId: 7, toPhone: '+919999000011' });
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(flagSpy).toHaveBeenCalledTimes(1);
+    expect(flagSpy).toHaveBeenCalledWith(7);
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe('AI_CALLING_DISABLED');
+
+    flagSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  test('CJS seam: initiateCall routes resolveSubBrandPersona call via module.exports', async () => {
+    // Third regression pin for the same pattern — line 111. Force-return
+    // a known persona via spy and assert it lands in the envelope. If
+    // the call bypasses module.exports, the spy never fires and the
+    // envelope falls back to 'default' — test fails on both the spy
+    // assertion AND the persona-value assertion.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const c = loadClient();
+    const personaSpy = vi
+      .spyOn(c, 'resolveSubBrandPersona')
+      .mockResolvedValue('spy-injected-persona-v9');
+
+    const out = await c.initiateCall({
+      tenantId: 42,
+      toPhone: '+919999000012',
+      subBrand: 'rfu',
+    });
+
+    expect(personaSpy).toHaveBeenCalledTimes(1);
+    expect(personaSpy).toHaveBeenCalledWith(42, 'rfu');
+    expect(out.persona).toBe('spy-injected-persona-v9');
+
+    personaSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  test('initiateCall throws on missing tenantId / toPhone BEFORE any prisma read', async () => {
+    // Fail-fast guard — protects against accidental flag/cap reads with
+    // tenantId=undefined which would either no-op (current getSetting
+    // behaviour returns the fallback for falsy tenantId) or, worse,
+    // silently apply tenant 0's settings if a future refactor coerces.
+    const c = loadClient();
+
+    await expect(
+      c.initiateCall({ toPhone: '+919999000013' }),
+    ).rejects.toThrow(/tenantId required/);
+
+    await expect(
+      c.initiateCall({ tenantId: 42 }),
+    ).rejects.toThrow(/toPhone required/);
+
+    // Neither failing path should have touched prisma.
+    expect(prismaMock.tenantSetting.findUnique).not.toHaveBeenCalled();
+    expect(prismaMock.tenant.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('isEnabledForTenant: defaults TRUE when no TenantSetting row exists', async () => {
+    // DC-7 contract: feature is ON unless an admin explicitly toggles
+    // it off. A missing row must NOT default to disabled.
+    const c = loadClient();
+    // prismaMock.tenantSetting.findUnique already returns null by
+    // default → the fallback:true branch fires.
+    const enabled = await c.isEnabledForTenant(42);
+    expect(enabled).toBe(true);
+  });
+
+  test('isEnabledForTenant: coerces "1" as truthy + "0"/other as falsy', async () => {
+    const c = loadClient();
+
+    // "1" → enabled (explicit on)
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: '1' });
+    expect(await c.isEnabledForTenant(42)).toBe(true);
+
+    // "0" → disabled (explicit off)
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: '0' });
+    expect(await c.isEnabledForTenant(42)).toBe(false);
+
+    // "anything-else" → disabled (only "true"/"1" coerce truthy per
+    // the SUT's coerce: v === 'true' || v === '1'). Pins the coercer
+    // contract so a future refactor to Boolean() doesn't silently
+    // make "anything-else" truthy.
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: 'enabled' });
+    expect(await c.isEnabledForTenant(42)).toBe(false);
+  });
+
+  test('checkBudgetCap: AT-cap (spent === cap) REJECTS (strict-less-than boundary)', async () => {
+    // evaluateCap pins withinCap as `spent < cap`, not `spent <= cap`.
+    // The contract is "at cap blocks" — the budget is fully consumed at
+    // the moment spent equals cap. Test the boundary explicitly so a
+    // future change to `<=` is caught.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    prismaMock.tenantSetting.findUnique.mockImplementation(({ where }) => {
+      if (
+        where &&
+        where.tenantId_key &&
+        where.tenantId_key.key === 'budgetCap_ai_calling_monthly_usd_cents'
+      ) {
+        return Promise.resolve({ value: '10000' });
+      }
+      return Promise.resolve(null);
+    });
+
+    const c = loadClient();
+    const spendSpy = vi.spyOn(c, 'computeMonthlySpendCents').mockResolvedValue(10000);
+
+    let caught;
+    try {
+      await c.checkBudgetCap(7);
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe('AI_CALLING_BUDGET_EXCEEDED');
+    expect(caught.spentCents).toBe(10000);
+    expect(caught.capCents).toBe(10000);
+
+    spendSpy.mockRestore();
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  test('initiateCall: when no explicit persona arg + sub-brand has configured persona, envelope reflects subBrandConfigJson value', async () => {
+    // Integration of the persona-resolution chain through initiateCall.
+    // The existing test #4 covers the persona-override path (explicit
+    // arg wins); this test covers the OTHER branch — when persona arg
+    // is undefined AND subBrand has a configured persona, the envelope
+    // should resolve to the JSON-configured value (NOT 'default').
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    // tenant row returns subBrandConfigJson with rfu persona configured.
+    prismaMock.tenant.findUnique.mockResolvedValueOnce({
+      subBrandConfigJson: JSON.stringify({
+        callifiedPersona_rfu: 'umrah-counsellor-v3',
+      }),
+    });
+
+    const c = loadClient();
+    const out = await c.initiateCall({
+      tenantId: 42,
+      toPhone: '+919999000014',
+      subBrand: 'rfu',
+      // persona NOT supplied — must resolve from subBrandConfigJson
+    });
+
+    expect(out.persona).toBe('umrah-counsellor-v3');
+    expect(out.subBrand).toBe('rfu');
+
+    logSpy.mockRestore();
+  });
+});

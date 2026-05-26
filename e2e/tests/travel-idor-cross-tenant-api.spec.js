@@ -3126,3 +3126,331 @@ test.describe("IDOR #919 slice 13 — by-year + expired-summary cross-tenant pro
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// #919 IDOR slice 14 — new rollup endpoints (this session's IMPL ticks)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Slice 14 propagates the slice-13 by-year + expired-summary probe pattern
+// to 12 additional rollup endpoints across the broader travel-vertical
+// surface. Each probe authenticates as the WELLNESS admin (non-travel
+// tenant) and asserts `[200, 403, 404]` — the cross-tenant request must
+// either be rejected (403 WRONG_VERTICAL from requireTravelTenant, OR 404
+// from the tenant-filter not-found path) OR return a wellness-scoped
+// empty/zero envelope (200 with no travel-tenant data leakage).
+//
+// Mount-path discoveries (per .claude/skills/verifying-gap-card-claims/
+// SKILL.md): `travel_curriculum` and `travel_personalised_destinations`
+// are mounted at ROOT paths `/api/travel-curriculum` and `/api/travel-
+// personalised-destinations` — NOT under `/api/travel/...` (server.js:751
+// + :752). Their probes use those paths verbatim; the other 10 endpoints
+// in slice 14 stay under `/api/travel/...` per the rest of the
+// travel_*.js mount table (server.js:711..749).
+//
+// Endpoint-shipping status (grep-verified at slice-14 author time):
+//
+//   SHIPPED today (200/403 expected, 404 only if guard refactor):
+//     - GET /api/travel-curriculum/by-month        (curriculum:353)
+//     - GET /api/travel/inbound/leads/by-quarter   (inbound_leads:1144)
+//     - GET /api/travel/cost-master/stats          (cost_master:175)
+//
+//   NOT YET SHIPPED today (404 expected; forward-compat pin — same
+//   pattern as /pricing/by-year in slice 13):
+//     - GET /api/travel/microsites/by-month
+//     - GET /api/travel/webcheckins/by-quarter
+//     - GET /api/travel/religious-packets/by-month
+//     - GET /api/travel/diagnostics/by-quarter
+//     - GET /api/travel/rfu-profiles/by-month
+//     - GET /api/travel-personalised-destinations/stats
+//     - GET /api/travel/trip-billing/stats
+//     - GET /api/travel/visa/applications/by-year
+//     - GET /api/travel/pricing/by-quarter
+//
+// Contract: `expect([200, 403, 404]).toContain(status)`. Same shape as
+// slice 13 — [200] valid for USER-readable rollups returning an empty/
+// zero envelope for non-travel callers (no cross-tenant data leak); [403]
+// valid where requireTravelTenant fires WRONG_VERTICAL before the
+// aggregate query runs; [404] valid where the endpoint hasn't shipped
+// yet OR returns the tenant-filter not-found path. A future regression
+// returning 200 with non-empty buckets containing another tenant's data
+// is the actual IDOR leak that route-level *-api.spec.js catches; slice
+// 14 pins the broad surface no-5xx + no-leak signal.
+test.describe("IDOR #919 slice 14 — new-rollup endpoint cross-tenant probes", () => {
+  test("wellness admin GET /api/travel/microsites/by-month → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/microsites/by-month`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /microsites/by-month: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel/webcheckins/by-quarter → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/webcheckins/by-quarter`,
+    );
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /webcheckins/by-quarter: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel-curriculum/by-month → [200, 403, 404]", async ({
+    request,
+  }) => {
+    // Mount path is root-level /api/travel-curriculum (server.js:751),
+    // NOT /api/travel/curriculum — slice-14 mount-path discovery per
+    // .claude/skills/verifying-gap-card-claims/. The route is gated by
+    // verifyToken only (no requireTravelTenant at the router level —
+    // see curriculum:353), so the wellness admin's JWT passes auth and
+    // the handler is responsible for tenant-scoping the aggregate query.
+    // 200 with empty buckets is the expected no-leak signal; a future
+    // regression that joined across tenants would surface here.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel-curriculum/by-month`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /travel-curriculum/by-month: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel/religious-packets/by-month → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/religious-packets/by-month`,
+    );
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /religious-packets/by-month: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel/diagnostics/by-quarter → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/diagnostics/by-quarter`,
+    );
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /diagnostics/by-quarter: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel/rfu-profiles/by-month → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/rfu-profiles/by-month`,
+    );
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /rfu-profiles/by-month: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel-personalised-destinations/stats → [200, 403, 404]", async ({
+    request,
+  }) => {
+    // Mount path is root-level /api/travel-personalised-destinations
+    // (server.js:752), NOT /api/travel/personalised-destinations —
+    // slice-14 mount-path discovery per .claude/skills/verifying-gap-
+    // card-claims/.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel-personalised-destinations/stats`,
+    );
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /travel-personalised-destinations/stats: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      if (typeof body.total === "number") expect(body.total).toBe(0);
+      if (typeof body.count === "number") expect(body.count).toBe(0);
+    }
+  });
+
+  test("wellness admin GET /api/travel/trip-billing/stats → [200, 403, 404]", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/trip-billing/stats`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /trip-billing/stats: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      if (typeof body.total === "number") expect(body.total).toBe(0);
+      if (typeof body.count === "number") expect(body.count).toBe(0);
+    }
+  });
+
+  test("wellness admin GET /api/travel/cost-master/stats → [200, 403, 404]", async ({
+    request,
+  }) => {
+    // SHIPPED today at cost_master:175 with verifyToken +
+    // requireTravelTenant. Cross-vertical wellness admin hits 403
+    // WRONG_VERTICAL — the aggregate query never runs.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/cost-master/stats`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /cost-master/stats: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      if (typeof body.total === "number") expect(body.total).toBe(0);
+      if (typeof body.count === "number") expect(body.count).toBe(0);
+    }
+  });
+
+  test("wellness admin GET /api/travel/inbound/leads/by-quarter → [200, 403, 404]", async ({
+    request,
+  }) => {
+    // SHIPPED today at inbound_leads:1144 (no router-level guard — the
+    // handler is responsible for tenant-scoping the aggregate). The
+    // wellness admin's JWT passes auth; the handler must return either
+    // an empty quarter-bucket array for the wellness tenant OR a 403/
+    // 404. A future regression that crossed-joined tenants would surface
+    // here.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/inbound/leads/by-quarter`,
+    );
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /inbound/leads/by-quarter: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel/visa/applications/by-year → [200, 403, 404]", async ({
+    request,
+  }) => {
+    // Phase 3 Visa Sure surface — sibling to /visa/analytics/by-year
+    // (slice 13). NOT YET SHIPPED at the /visa/applications/ path today;
+    // 404 forward-compat pin. When it ships, the probe asserts no PII /
+    // passport / Aadhaar / cross-tenant email leakage.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/visa/applications/by-year`,
+    );
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /visa/applications/by-year: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /passport|aadhaar|yasin@travelstall/,
+      );
+    }
+  });
+
+  test("wellness admin GET /api/travel/pricing/by-quarter → [200, 403, 404]", async ({
+    request,
+  }) => {
+    // Sibling to /pricing/by-year (slice 13). NOT YET SHIPPED today;
+    // 404 forward-compat pin. When it ships, the probe asserts no
+    // cross-tenant supplier / season-rule leakage.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(request, token, `/api/travel/pricing/by-quarter`);
+    expect(
+      [200, 403, 404],
+      `wellness admin GET /pricing/by-quarter: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+    if (res.status() === 200) {
+      const body = await res.json();
+      const blob = JSON.stringify(body);
+      expect(blob.toLowerCase()).not.toMatch(
+        /yasin@travelstall|travelstall\.in/,
+      );
+    }
+  });
+});

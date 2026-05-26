@@ -190,6 +190,138 @@ describe('GET /api/sequences (list)', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/sequences?fields=summary — slim-shape opt-in (#920 slice 12)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirror of slice 1 (contacts), slice 2 (deals), slice 3 (tickets),
+// slice 4 (tasks), slice 5 (projects), slice 6 (expenses), slice 7
+// (notifications), slice 8 (surveys), slice 9 (email-templates), slice 10
+// (knowledge-base). When the caller passes ?fields=summary, the route
+// emits a slim Prisma `select` keyed on the columns the Sequences list
+// renderer actually consumes and drops the heavy `nodes`/`edges` columns
+// (Sequence.nodes/edges are `String? @db.Text` JSON blobs storing legacy
+// ReactFlow canvas — many KB per row) plus the `_count.enrollments`
+// include. Opt-in additive.
+
+describe('GET /api/sequences?fields=summary — slim-shape opt-in (#920 slice 12)', () => {
+  test('?fields=summary triggers prisma.sequence.findMany with `select` (slim cols), not the default include shape', async () => {
+    prisma.sequence.findMany.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/sequences?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+
+    const args = prisma.sequence.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.select).toEqual({
+      id: true,
+      name: true,
+      isActive: true,
+      tenantId: true,
+      createdAt: true,
+      updatedAt: true,
+    });
+    // Slim shape must NOT pull the heavy Text `nodes`/`edges` JSON blobs.
+    expect(args.select.nodes).toBeUndefined();
+    expect(args.select.edges).toBeUndefined();
+    // include must NOT be set on slim path — `_count.enrollments` is dropped.
+    expect(args.include).toBeUndefined();
+  });
+
+  test('default (no ?fields) preserves the full-row + _count.enrollments include shape — no `select` arg passed to findMany', async () => {
+    prisma.sequence.findMany.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/sequences')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+
+    const args = prisma.sequence.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    expect(args.include).toMatchObject({
+      _count: { select: { enrollments: true } },
+    });
+  });
+
+  test('?fields=summary response rows reflect the slim Prisma select verbatim (no nodes/edges JSON in body)', async () => {
+    // Prisma `select` honours only the chosen columns. The route forwards
+    // whatever Prisma returns, so we pin the contract by mocking the slim
+    // rows and confirming `nodes`/`edges`/`_count` are absent in the
+    // response body too.
+    prisma.sequence.findMany.mockResolvedValue([
+      {
+        id: 1, name: 'Welcome drip', isActive: true, tenantId: 1,
+        createdAt: new Date('2026-05-26T00:00:00Z'),
+        updatedAt: new Date('2026-05-26T01:00:00Z'),
+      },
+      {
+        id: 2, name: 'Re-engagement', isActive: false, tenantId: 1,
+        createdAt: new Date('2026-05-26T02:00:00Z'),
+        updatedAt: new Date('2026-05-26T03:00:00Z'),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/sequences?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    for (const row of res.body) {
+      expect(row.id).toBeDefined();
+      expect(row.name).toBeDefined();
+      expect(row.isActive).toBeDefined();
+      expect(row.nodes).toBeUndefined(); // heavy Text blob gone
+      expect(row.edges).toBeUndefined();
+      expect(row._count).toBeUndefined(); // enrollments count not pulled
+    }
+  });
+
+  test('?fields=summary preserves tenant isolation on the where clause', async () => {
+    prisma.sequence.findMany.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/sequences?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor({ tenantId: 99 })}`);
+
+    const args = prisma.sequence.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 99 });
+    // Slim select still applied — the tenant scope and the slim opt-in
+    // are independent contracts that compose cleanly.
+    expect(args.select).toBeDefined();
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=other (any non-exact value) falls through to the default include shape', async () => {
+    // Only the literal string "summary" opts into slim — every other value
+    // (including "Summary", "full", arbitrary tokens) must preserve the
+    // existing wire shape so we don't accidentally trim production callers.
+    prisma.sequence.findMany.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/sequences?fields=Summary')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+
+    const args = prisma.sequence.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    expect(args.include).toMatchObject({
+      _count: { select: { enrollments: true } },
+    });
+
+    // Same for arbitrary tokens.
+    prisma.sequence.findMany.mockReset();
+    prisma.sequence.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/sequences?fields=full')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    const args2 = prisma.sequence.findMany.mock.calls[0][0];
+    expect(args2.select).toBeUndefined();
+    expect(args2.include).toMatchObject({
+      _count: { select: { enrollments: true } },
+    });
+  });
+});
+
 // ─── POST / (create) ──────────────────────────────────────────────────
 
 describe('POST /api/sequences (create)', () => {

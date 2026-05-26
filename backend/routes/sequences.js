@@ -209,15 +209,42 @@ const sanitizeNodes = (nodes) => {
 };
 
 // Fetch all drip sequences
+// GET /api/sequences?fields=summary
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const sequences = await prisma.sequence.findMany({
+    // #920 slice 12: ?fields=summary slim-shape opt-in. Mirrors slice 1
+    // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+    // badc9cca), slice 4 (tasks eec7d856), slice 5 (projects 257771a0),
+    // slice 6 (expenses e81e6cb5), slice 7 (notifications a3487518),
+    // slice 8 (surveys e71594d9), slice 9 (email-templates 0d4a63f9),
+    // slice 10 (knowledge-base 21ad3290).
+    // When the caller passes ?fields=summary we drop the heavy
+    // `nodes`/`edges` columns (Sequence.nodes/edges are `String? @db.Text`
+    // JSON blobs storing legacy ReactFlow canvas — can be many KB per row)
+    // and the `_count` include, returning only the columns the sequence
+    // list renderer actually needs. Opt-in additive — existing callers
+    // (no ?fields, or any non-exact value) get the full row shape unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId: req.user.tenantId },
-      include: {
+      orderBy: { createdAt: 'desc' },
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        isActive: true,
+        tenantId: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    } else {
+      findManyArgs.include = {
         _count: { select: { enrollments: true } }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+      };
+    }
+
+    const sequences = await prisma.sequence.findMany(findManyArgs);
     res.json(sequences);
   } catch(_err) {
     res.status(500).json({ error: "Failed to read marketing sequences." });

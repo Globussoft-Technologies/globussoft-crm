@@ -293,6 +293,9 @@ jobs:
             tests/subscriptions-api.spec.js \
             tests/funnel-api.spec.js \
             tests/win-loss-api.spec.js \
+            tests/marketplace-leads-api.spec.js \
+            tests/approvals-api.spec.js \
+            tests/sso-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

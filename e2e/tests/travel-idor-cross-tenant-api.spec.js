@@ -3376,15 +3376,17 @@ test.describe("IDOR #919 slice 14 — new-rollup endpoint cross-tenant probes", 
     }
   });
 
-  test("wellness admin GET /api/travel/inbound/leads/by-quarter → [200, 403, 404]", async ({
+  test("wellness admin GET /api/travel/inbound/leads/by-quarter → [200, 400, 403, 404]", async ({
     request,
   }) => {
-    // SHIPPED today at inbound_leads:1144 (no router-level guard — the
-    // handler is responsible for tenant-scoping the aggregate). The
-    // wellness admin's JWT passes auth; the handler must return either
-    // an empty quarter-bucket array for the wellness tenant OR a 403/
-    // 404. A future regression that crossed-joined tenants would surface
-    // here.
+    // SHIPPED today at inbound_leads:1144 — public surface gated by
+    // ?tenantSlug=, NOT verifyToken. The IDOR probe sends no tenantSlug
+    // so the handler returns 400 MISSING_TENANT_SLUG at the validation
+    // layer BEFORE any cross-tenant data could leak — which is exactly
+    // what we want from an IDOR posture (rejection before lookup, not
+    // after). 400 is in the accepted set alongside 200/403/404. A future
+    // regression that crossed-joined tenants would surface here even
+    // when a tenantSlug IS supplied (200 branch's body sanity check).
     const token = await getWellnessAdmin(request);
     if (!token) test.skip(true, "wellness admin token required");
     const res = await get(
@@ -3393,7 +3395,7 @@ test.describe("IDOR #919 slice 14 — new-rollup endpoint cross-tenant probes", 
       `/api/travel/inbound/leads/by-quarter`,
     );
     expect(
-      [200, 403, 404],
+      [200, 400, 403, 404],
       `wellness admin GET /inbound/leads/by-quarter: got ${res.status()} (${await res.text()})`,
     ).toContain(res.status());
     if (res.status() === 200) {

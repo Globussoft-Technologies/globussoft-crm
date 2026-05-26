@@ -65,13 +65,45 @@ function computeStats(test) {
 }
 
 // ── GET / — list AB tests ────────────────────────────────────────
+//
+// Slim-shape opt-in (#920 slice 45): when called with ?fields=summary,
+// the handler drops the heavy `variantA`/`variantB` JSON-text columns
+// from the Prisma select and skips the `serialize()` + `computeStats()`
+// decoration — useful for the marketing-AB-test admin index /
+// autocomplete / picker surfaces that only need id+name+status+counter
+// columns and don't render the variant bodies. Existing callers (no
+// ?fields, or any non-exact value) get the full row shape with parsed
+// variants + stats envelope unchanged. Same strict opt-in pattern as
+// routes/canned_responses.js + routes/sla.js (slices 1-42).
 router.get("/", async (req, res) => {
   try {
     const tenantId = tenantOf(req);
-    const tests = await prisma.abTest.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        campaignId: true,
+        status: true,
+        winningVariant: true,
+        variantASent: true,
+        variantBSent: true,
+        variantAClicked: true,
+        variantBClicked: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
+    const tests = await prisma.abTest.findMany(findManyArgs);
+    if (isSummary) {
+      // Slim rows ship as-is — no variant JSON to parse, no stats envelope.
+      res.json(tests);
+      return;
+    }
     res.json(tests.map((t) => ({ ...serialize(t), stats: computeStats(t) })));
   } catch (err) {
     console.error("[ab_tests/list]", err);

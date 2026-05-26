@@ -21,13 +21,32 @@ function shape(inbox) {
 }
 
 // ── GET / — list shared inboxes for tenant ──────────────────────────
+// Supports ?fields=summary opt-in slim shape that drops the `members`
+// JSON string column (often hundreds of bytes per inbox once a tenant
+// has many roster entries) to lighten admin list-view payloads and
+// reduce PII surface (userId enumeration) on the wire. Mirrors prior
+// slices of #920.
 router.get("/", async (req, res) => {
   try {
-    const inboxes = await prisma.sharedInbox.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findArgs = {
       where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
-    });
-    res.json(inboxes.map(shape));
+    };
+    if (isSummary) {
+      findArgs.select = {
+        id: true,
+        name: true,
+        emailAddress: true,
+        tenantId: true,
+        createdAt: true,
+      };
+    }
+    const inboxes = await prisma.sharedInbox.findMany(findArgs);
+    // Full shape parses the JSON-string `members` column back to an array
+    // for the wire. Summary mode dropped that column so the post-process
+    // is skipped — the slim rows go through as-is.
+    res.json(isSummary ? inboxes : inboxes.map(shape));
   } catch (err) {
     console.error("[shared-inbox] list error:", err);
     res.status(500).json({ error: "Failed to list shared inboxes." });

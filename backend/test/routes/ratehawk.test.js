@@ -310,3 +310,205 @@ describe('GET /api/ratehawk/cap-status', () => {
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Extended coverage (tick #N, +8 cases) — pinning the un-tested edges of the
+// wrapper: search auth-gate + remaining missing-field validators + generic
+// error fall-through; book MANAGER acceptance + cap-exceeded passthrough;
+// cancel happy + USER 403 + audit; cap-status MANAGER 403.
+//
+// Mirrors the adsgpt.test.js extended-coverage block (commit 0d66a74) for
+// consistency.
+// ---------------------------------------------------------------------------
+describe('POST /api/ratehawk/search — extended coverage', () => {
+  test('missing checkInDate → 400 MISSING_CHECKIN', async () => {
+    const res = await request(makeApp())
+      .post('/api/ratehawk/search')
+      .send({
+        destinationCity: 'Mumbai',
+        checkOutDate: '2026-06-05',
+      })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_CHECKIN' });
+    expect(ratehawkClient.searchHotels).not.toHaveBeenCalled();
+  });
+
+  test('missing Authorization header → 401 (verifyToken gate)', async () => {
+    const res = await request(makeApp())
+      .post('/api/ratehawk/search')
+      .send({
+        destinationCity: 'Mumbai',
+        checkInDate: '2026-06-01',
+        checkOutDate: '2026-06-05',
+      });
+    // No Authorization header set.
+
+    expect(res.status).toBe(401);
+    expect(ratehawkClient.searchHotels).not.toHaveBeenCalled();
+  });
+
+  test('generic client error (no .code, no .status) → 500 "Failed to search hotels"', async () => {
+    ratehawkClient.searchHotels.mockRejectedValue(new Error('upstream blew up'));
+
+    const res = await request(makeApp())
+      .post('/api/ratehawk/search')
+      .send({
+        destinationCity: 'Mumbai',
+        checkInDate: '2026-06-01',
+        checkOutDate: '2026-06-05',
+      })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to search hotels' });
+  });
+});
+
+describe('POST /api/ratehawk/book — extended coverage', () => {
+  test('missing hotelId → 400 MISSING_HOTEL_ID (validator short-circuits before sub-brand resolve)', async () => {
+    const res = await request(makeApp())
+      .post('/api/ratehawk/book')
+      .send({
+        roomType: 'deluxe',
+        checkInDate: '2026-06-01',
+        checkOutDate: '2026-06-05',
+      })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_HOTEL_ID' });
+    expect(ratehawkClient.bookHotel).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('MANAGER role accepted (ADMIN/MANAGER gate — not ADMIN-only)', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, role: 'MANAGER', tenantId: 1, isActive: true,
+    });
+    ratehawkClient.bookHotel.mockResolvedValue({
+      stub: true, bookingId: 'BKG-MGR-1', status: 'pending-cred-drop', tenantId: 1,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/ratehawk/book')
+      .send({
+        hotelId: 'HTL-7',
+        roomType: 'standard',
+        checkInDate: '2026-06-01',
+        checkOutDate: '2026-06-05',
+      })
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ stub: true, bookingId: 'BKG-MGR-1' });
+    expect(ratehawkClient.bookHotel).toHaveBeenCalled();
+    expect(prisma.auditLog.create).toHaveBeenCalled();
+  });
+
+  test('client throws RATEHAWK_BUDGET_EXCEEDED on book → 402 + structured error + NO audit', async () => {
+    const err = new Error('Monthly RateHawk spend cap reached for this tenant.');
+    err.code = 'RATEHAWK_BUDGET_EXCEEDED';
+    err.spentCents = 9100;
+    err.capCents = 5000;
+    ratehawkClient.bookHotel.mockRejectedValue(err);
+
+    const res = await request(makeApp())
+      .post('/api/ratehawk/book')
+      .send({
+        hotelId: 'HTL-42',
+        roomType: 'deluxe',
+        checkInDate: '2026-06-01',
+        checkOutDate: '2026-06-05',
+      })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(402);
+    expect(res.body).toMatchObject({
+      code: 'RATEHAWK_BUDGET_EXCEEDED',
+      spentCents: 9100,
+      capCents: 5000,
+    });
+    // Audit must NOT fire when the client throws before booking succeeds.
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/ratehawk/cancel/:bookingId', () => {
+  test('ADMIN happy path returns the cancel envelope and writes CANCEL audit row', async () => {
+    const cannedEnvelope = {
+      stub: true,
+      bookingId: 'BKG-STUB-1',
+      status: 'cancelled',
+      cancelledAt: '2026-05-26T10:00:00.000Z',
+      tenantId: 1,
+    };
+    ratehawkClient.cancelBooking.mockResolvedValue(cannedEnvelope);
+
+    const res = await request(makeApp())
+      .post('/api/ratehawk/cancel/BKG-STUB-1')
+      .send({ reason: 'client requested' })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ stub: true, bookingId: 'BKG-STUB-1', status: 'cancelled' });
+    expect(ratehawkClient.cancelBooking).toHaveBeenCalledWith({
+      tenantId: 1,
+      bookingId: 'BKG-STUB-1',
+      reason: 'client requested',
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalled();
+    const auditArgs = prisma.auditLog.create.mock.calls[0][0];
+    expect(auditArgs.data).toMatchObject({
+      entity: 'RateHawkBooking',
+      action: 'CANCEL',
+      userId: 7,
+      tenantId: 1,
+    });
+  });
+
+  test('USER role → 403 (ADMIN/MANAGER gate fires before client + audit)', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, role: 'USER', tenantId: 1, isActive: true,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/ratehawk/cancel/BKG-STUB-1')
+      .send({ reason: 'change of plans' })
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(403);
+    expect(ratehawkClient.cancelBooking).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('generic client error on cancel (no .code, no .status) → 500 "Failed to cancel booking"', async () => {
+    ratehawkClient.cancelBooking.mockRejectedValue(new Error('provider 500'));
+
+    const res = await request(makeApp())
+      .post('/api/ratehawk/cancel/BKG-STUB-1')
+      .send({ reason: 'test' })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to cancel booking' });
+    // Audit must NOT fire when the cancel itself throws.
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/ratehawk/cap-status — extended coverage', () => {
+  test('MANAGER → 403 (ADMIN-only gate, distinct from /book which accepts MANAGER)', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, role: 'MANAGER', tenantId: 1, isActive: true,
+    });
+
+    const res = await request(makeApp())
+      .get('/api/ratehawk/cap-status')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(403);
+    expect(ratehawkClient.checkBudgetCap).not.toHaveBeenCalled();
+  });
+});

@@ -363,3 +363,148 @@ describe('cron/reportEngine — error containment + initReportCron registration'
     expect(prisma.reportSchedule.update).toHaveBeenCalledTimes(1);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────
+// Extended coverage — additional 8 cases.
+//
+// Gaps targeted (none of the 17 baseline cases pin these):
+//   1. Weekly-frequency lookback window math (only daily + monthly were pinned).
+//   2. Monthly cadence due-after-30d (only daily 25h was pinned).
+//   3. Empty schedule list → cron tick is a clean no-op (zero downstream calls).
+//   4. enabled:false rows never reach processSchedule (findMany where filter).
+//   5. Mid-batch isolation: one schedule's failure doesn't poison its sibling.
+//   6. Multi-recipient fan-out: recipients.join(', ') over a 3-element array still
+//      lands the lastRunAt update (no cardinality bug).
+//   7. agent-performance with zero users → empty fanout, no per-user queries,
+//      lastRunAt still updates (vacuous-truth contract).
+//   8. shouldScheduleRun default branch: unknown frequency reuses the weekly
+//      167h threshold (regression-pin against future enum drift).
+// ───────────────────────────────────────────────────────────────────────
+
+describe('cron/reportEngine — extended coverage (frequency windows + multi-schedule semantics)', () => {
+  test('weekly frequency uses a ~7-day lookback window', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await reportEngine.processSchedule(schedule({ frequency: 'weekly' }));
+    logSpy.mockRestore();
+    const where = prisma.deal.count.mock.calls[0][0].where;
+    const diffMs = where.createdAt.lte - where.createdAt.gte;
+    // 7 days ± a day to absorb DST transitions
+    expect(diffMs).toBeGreaterThan(6 * 86400 * 1000);
+    expect(diffMs).toBeLessThan(8 * 86400 * 1000);
+  });
+
+  test('shouldScheduleRun semantics: monthly schedule run 31d ago IS due (>=719h)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    reportEngine.initReportCron();
+    prisma.reportSchedule.findMany.mockResolvedValue([
+      schedule({
+        id: 77,
+        lastRunAt: new Date(Date.now() - 31 * 86400 * 1000),
+        frequency: 'monthly',
+      }),
+    ]);
+    const tick = scheduleMock.mock.calls[0][1];
+    await tick();
+    logSpy.mockRestore();
+    expect(prisma.reportSchedule.update).toHaveBeenCalledTimes(1);
+    expect(prisma.reportSchedule.update.mock.calls[0][0].where.id).toBe(77);
+  });
+
+  test('cron tick: empty schedule list is a clean no-op (no downstream queries)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    reportEngine.initReportCron();
+    prisma.reportSchedule.findMany.mockResolvedValue([]);
+    const tick = scheduleMock.mock.calls[0][1];
+    await tick();
+    logSpy.mockRestore();
+    expect(prisma.reportSchedule.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.deal.count).not.toHaveBeenCalled();
+    expect(prisma.reportSchedule.update).not.toHaveBeenCalled();
+  });
+
+  test('cron tick: findMany where clause filters enabled:true (disabled rows never reach processSchedule)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    reportEngine.initReportCron();
+    prisma.reportSchedule.findMany.mockResolvedValue([]);
+    const tick = scheduleMock.mock.calls[0][1];
+    await tick();
+    logSpy.mockRestore();
+    // The findMany clause is the only gate against disabled rows — pin it.
+    expect(prisma.reportSchedule.findMany).toHaveBeenCalledWith({
+      where: { enabled: true },
+    });
+  });
+
+  test('mid-batch isolation: schedule #1 failure does NOT block schedule #2 from running', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    reportEngine.initReportCron();
+    prisma.reportSchedule.findMany.mockResolvedValue([
+      schedule({ id: 100, lastRunAt: null }),
+      schedule({ id: 200, lastRunAt: null }),
+    ]);
+    // First processSchedule's deal.count throws; second succeeds.
+    prisma.deal.count
+      .mockRejectedValueOnce(new Error('transient DB blip'))
+      .mockResolvedValue(0);
+    const tick = scheduleMock.mock.calls[0][1];
+    await expect(tick()).resolves.not.toThrow();
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    // Schedule #1 threw before its lastRunAt update; schedule #2 must still update.
+    expect(prisma.reportSchedule.update).toHaveBeenCalledTimes(1);
+    expect(prisma.reportSchedule.update.mock.calls[0][0].where.id).toBe(200);
+  });
+
+  test('multi-recipient fan-out: 3-element recipients array still lands a single lastRunAt update', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await reportEngine.processSchedule(
+      schedule({
+        recipients: JSON.stringify([
+          'alice@x.com',
+          'bob@y.com',
+          'carol@z.com',
+        ]),
+      })
+    );
+    logSpy.mockRestore();
+    // Send is a single email with comma-joined recipients — not 3 separate ones.
+    // Net effect on the DB is exactly one lastRunAt write.
+    expect(prisma.reportSchedule.update).toHaveBeenCalledTimes(1);
+  });
+
+  test('agent-performance with zero users → no per-user fanout, lastRunAt still updates', async () => {
+    prisma.user.findMany.mockResolvedValue([]);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await reportEngine.processSchedule(
+      schedule({ reportType: 'agent-performance', format: 'PDF' })
+    );
+    logSpy.mockRestore();
+    expect(prisma.user.findMany).toHaveBeenCalledTimes(1);
+    // Zero users → zero per-user prisma fanout queries
+    expect(prisma.deal.count).not.toHaveBeenCalled();
+    expect(prisma.deal.aggregate).not.toHaveBeenCalled();
+    expect(prisma.callLog.count).not.toHaveBeenCalled();
+    expect(prisma.emailMessage.count).not.toHaveBeenCalled();
+    // But the schedule still ran end-to-end (PDF generated, lastRunAt bumped)
+    expect(prisma.reportSchedule.update).toHaveBeenCalledTimes(1);
+  });
+
+  test('shouldScheduleRun default branch: unknown frequency reuses the weekly 167h threshold', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    reportEngine.initReportCron();
+    // Unknown frequency, lastRun 200h ago → past the 167h default → DUE.
+    prisma.reportSchedule.findMany.mockResolvedValue([
+      schedule({
+        id: 555,
+        lastRunAt: new Date(Date.now() - 200 * 3600 * 1000),
+        frequency: 'fortnightly', // not in the switch
+      }),
+    ]);
+    const tick = scheduleMock.mock.calls[0][1];
+    await tick();
+    logSpy.mockRestore();
+    expect(prisma.reportSchedule.update).toHaveBeenCalledTimes(1);
+    expect(prisma.reportSchedule.update.mock.calls[0][0].where.id).toBe(555);
+  });
+});

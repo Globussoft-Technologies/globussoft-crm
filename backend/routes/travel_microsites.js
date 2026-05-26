@@ -660,6 +660,167 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/microsites/by-quarter — tenant-wide microsite quarterly rollup
+// (PRD_TRAVEL §6.x).
+//
+// Sibling to /microsites/stats + /microsites/by-month. Mirrors the
+// rollup-triplet pattern (by-month + by-quarter + by-year) established by
+// /itineraries/by-quarter — same UTC YYYY-Q[1-4] bucketing, same defensive
+// math (null/invalid createdAt → "unknown" bucket; excluded when ?from / ?to
+// is set), same orderBy semantics. Returns one row per UTC quarter bucket
+// with count + bySubBrand breakdown so the Microsites library page can
+// render a "microsites published per quarter" trend tile.
+//
+// Sub-brand note: TripMicrosite has NO subBrand column (the model is
+// TMC-locked by design per Q21 — microsites live on tmc.travelstall.in).
+// Same rationale as /microsites/stats + /microsites/by-month. We surface
+// a bySubBrand map per bucket for envelope-shape parity with the
+// rollup-triplet family; every row lands in the "_tenant" fallback bucket
+// since `subBrand` is undefined on the projection. WHERE narrowing mirrors
+// /microsites/by-month EXACTLY: tenantId only (admins and sub-brand-scoped
+// operators see the same population).
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-Q[1-4] bounds; invalid →
+//                     400 INVALID_QUARTER_FORMAT
+//   - ?orderBy      — default quarter:asc; accepts quarter:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 8 / 0; limit caps at 40
+//
+// No audit row written — read-only meta surface; matches /microsites/stats
+// + /microsites/by-month posture. USER-readable: anodyne (counts +
+// quarter-string tokens).
+//
+// Express route ordering: literal-path /microsites/by-quarter MUST be
+// declared BEFORE the /microsites/public/:publicUuid family so the
+// UUID-regex check on the public path doesn't first 400 INVALID_UUID
+// against the literal "by-quarter". Same convention as /microsites/stats
+// and /microsites/by-month.
+// ============================================================================
+router.get(
+  "/microsites/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const take = Math.min(parseInt(req.query.limit, 10) || 8, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+      // YYYY-Q[1-4] validation — mirrors /itineraries/by-quarter slice 17.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Q[1-4] format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Q[1-4] format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+      // Tenant-scoped where. Sub-brand narrowing matches /microsites/stats
+      // and /microsites/by-month EXACTLY: no narrowing applied because
+      // TripMicrosite has no subBrand column (TMC-only model per Q21).
+      const where = { tenantId };
+
+      // Light projection — subBrand + createdAt. subBrand will be undefined
+      // on every row since the model has no such column; the bySubBrand
+      // aggregator coerces falsy values to "_tenant" so the envelope shape
+      // stays consistent with the rollup-triplet family.
+      const rows = await prisma.tripMicrosite.findMany({
+        where,
+        select: { subBrand: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-quarter. Map "YYYY-Q[1-4]" → { quarter, count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byQuarter = new Map();
+      for (const r of rows) {
+        let quarterKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${q}`;
+          }
+        }
+
+        let bucket = byQuarter.get(quarterKey);
+        if (!bucket) {
+          bucket = { quarter: quarterKey, count: 0, bySubBrand: {} };
+          byQuarter.set(quarterKey, bucket);
+        }
+        bucket.count += 1;
+        const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+        bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+      }
+
+      let quarters = [...byQuarter.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable quarter token); kept otherwise so the
+      // count surface remains complete. Mirrors /microsites/by-month.
+      if (fromRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Q[1-4] which is
+      // also chronological (Q1 < Q2 < Q3 < Q4 in ASCII, years naturally
+      // ordered). "unknown" sorts last in asc / first in desc by virtue
+      // of being lexicographically > "9999-Q4" — acceptable for a
+      // defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = quarters.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as
+      // /microsites/by-month.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-microsite] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
+
 // ─── PUBLIC info endpoint (no auth) ──────────────────────────────────
 
 // GET /api/travel/microsites/public/:publicUuid

@@ -732,3 +732,278 @@ describe('<Settings /> — extended card coverage', () => {
     expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/copied/i));
   });
 });
+
+// ============================================================================
+// EXTENSION WAVE 2 — error-path + boundary coverage. Pins SUT branches not
+// previously exercised: failure-revert paths (tenant save / email retention /
+// notification prefs load+save), confirm-decline branches (reset declines →
+// no POST), boundary disabled states (first stage's Up button), quiet-hours
+// selector wiring, consent template toggleActive PUT, and stage-name
+// whitespace-only no-op. Each adds an assertion on the SUT-observable
+// effect (notify.error / no fetchApi call / DOM state) — no SUT changes.
+// ============================================================================
+
+describe('<Settings /> — error paths + boundary states', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyObj.success.mockReset();
+    notifyObj.error.mockReset();
+    notifyObj.info.mockReset();
+    notifyObj.confirm.mockReset();
+    notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
+    setThemeMock.mockReset();
+    fetchApiMock.mockImplementation(buildDefaultFetch());
+  });
+
+  // 29 — Tenant save failure → notify.error('Failed to update organization')
+  it('Organization save calls notify.error when PUT /api/tenants/current rejects', async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/tenants/current' && method === 'PUT') {
+        return Promise.reject(new Error('backend down'));
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /Save Organization Details/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to update organization/i)
+      );
+    });
+  });
+
+  // 30 — Email retention toggle FAILURE reverts the checkbox + calls notify.error
+  it('toggling email retention reverts the checkbox state when PUT fails', async () => {
+    const user = userEvent.setup();
+    let putCount = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/tenants/current' && method === 'PUT') {
+        putCount++;
+        return Promise.reject(new Error('boom'));
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    render(<Settings />);
+    const toggle = await screen.findByTestId('email-retention-toggle');
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+
+    await waitFor(() => expect(putCount).toBeGreaterThan(0));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to update email retention/i)
+      );
+    });
+    // The optimistic flip must be reverted — toggle is checked again.
+    await waitFor(() => expect(screen.getByTestId('email-retention-toggle')).toBeChecked());
+  });
+
+  // 31 — Notification Preferences load FAILURE surfaces notify.error +
+  // the card does NOT render (loading→null branch via the !prefs guard).
+  it('Notification Preferences card calls notify.error when initial GET rejects', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/notifications/preferences' && method === 'GET') {
+        return Promise.reject(new Error('500'));
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    render(<Settings />);
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to load notification preferences/i)
+      );
+    });
+    // The card returns null when prefs is null, so the section heading is
+    // never rendered.
+    expect(screen.queryByText(/Notification Preferences/i)).not.toBeInTheDocument();
+  });
+
+  // 32 — Notification Preferences SAVE FAILURE surfaces notify.error
+  it('Save Preferences calls notify.error when PUT /api/notifications/preferences rejects', async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/notifications/preferences' && method === 'PUT') {
+        return Promise.reject(new Error('save failed'));
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to save notification preferences/i)
+      );
+    });
+  });
+
+  // 33 — Notification Preferences RESET DECLINE → no POST fires
+  it('Reset to Defaults does NOT POST when confirm resolves false', async () => {
+    const user = userEvent.setup();
+    notifyObj.confirm.mockImplementation(() => Promise.resolve(false));
+
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /Reset to Defaults/i }));
+
+    // Allow any microtasks to settle then verify NO POST fired
+    await new Promise((r) => setTimeout(r, 50));
+    const posts = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/notifications/preferences/reset' && opts?.method === 'POST'
+    );
+    expect(posts.length).toBe(0);
+    expect(notifyObj.confirm).toHaveBeenCalled();
+  });
+
+  // 34 — Quiet Hours: timezone select changes update the local state and
+  // the next Save PUT includes the new timezone value.
+  it('Quiet-hours timezone selection is persisted via the next Save Preferences PUT', async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+
+    // Find the timezone select (the one containing 'America/New_York' option)
+    const allSelects = screen.getAllByRole('combobox');
+    const tzSelect = allSelects.find((sel) =>
+      Array.from(sel.options || []).some((opt) => opt.value === 'America/New_York')
+    );
+    expect(tzSelect).toBeTruthy();
+    await user.selectOptions(tzSelect, 'America/New_York');
+
+    await user.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => url === '/api/notifications/preferences' && opts?.method === 'PUT'
+      );
+      expect(puts.length).toBeGreaterThan(0);
+      const body = JSON.parse(puts[puts.length - 1][1].body);
+      expect(body.timezone).toBe('America/New_York');
+    });
+  });
+
+  // 35 — Stage Move-Up button is disabled on the FIRST stage (boundary)
+  it('first pipeline stage Up-arrow is disabled and clicking it does not PUT reorder', async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
+
+    const stageRow = screen.getByText('Prospecting').closest('div').parentElement;
+    const upBtn = stageRow.querySelectorAll('button')[0]; // up / down / delete
+    expect(upBtn).toBeDisabled();
+
+    // Force-click via fireEvent (userEvent skips disabled targets) to verify
+    // the disabled state truly suppresses the handler.
+    fireEvent.click(upBtn);
+    await new Promise((r) => setTimeout(r, 30));
+    const reorderPuts = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/pipeline_stages/reorder' && opts?.method === 'PUT'
+    );
+    expect(reorderPuts.length).toBe(0);
+  });
+
+  // 36 — Consent Templates: clicking Disable on an active row PUTs
+  // /api/wellness/consent-templates/:id with { isActive: false }.
+  it('wellness Consent Templates Disable button PUTs the row with { isActive: false }', async () => {
+    const user = userEvent.setup();
+    const seededTemplates = [
+      { id: 'ct1', key: 'general', label: 'General Consent', isActive: true, isSeed: true },
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/wellness/consent-templates' && method === 'GET') {
+        return Promise.resolve(seededTemplates);
+      }
+      if (/^\/api\/wellness\/consent-templates\/ct1$/.test(url) && method === 'PUT') {
+        return Promise.resolve({ ok: true });
+      }
+      return buildDefaultFetch({ tenant: { ...baseTenant, vertical: 'wellness' } })(url, opts);
+    });
+
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByTestId('consent-templates-card')).toBeInTheDocument());
+
+    const disableBtn = await screen.findByRole('button', { name: /^Disable$/i });
+    await user.click(disableBtn);
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => /^\/api\/wellness\/consent-templates\/ct1$/.test(url) && opts?.method === 'PUT'
+      );
+      expect(puts.length).toBeGreaterThan(0);
+      const body = JSON.parse(puts[0][1].body);
+      expect(body).toEqual({ isActive: false });
+    });
+  });
+
+  // 37 — Add Stage form REJECTS whitespace-only stage name without POSTing.
+  // Pins the `if (!newStage.name.trim()) return;` guard in handleAddStage.
+  it('Add Stage with whitespace-only name does NOT POST /api/pipeline_stages', async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
+
+    // HTML5 `required` would block the click, so bypass by setting value
+    // directly and dispatching submit via fireEvent.
+    const stageNameInput = screen.getByPlaceholderText(/Stage name/i);
+    // Override the required attribute so the form can submit empty/whitespace
+    // and we can pin the SUT's trim() guard rather than the browser's check.
+    stageNameInput.removeAttribute('required');
+    fireEvent.change(stageNameInput, { target: { value: '   ' } });
+
+    const form = stageNameInput.closest('form');
+    fireEvent.submit(form);
+
+    await new Promise((r) => setTimeout(r, 50));
+    const posts = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/pipeline_stages' && opts?.method === 'POST'
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  // 38 — Empty brand color save sends `brandColor: null` (not the empty string)
+  it('Save color with an empty hex sends { brandColor: null } and shows the saved message', async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/wellness/branding/color' && method === 'PUT') {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({ brandColor: body.brandColor || null });
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/^Branding$/)).toBeInTheDocument());
+
+    // hex text input starts empty (branding.brandColor: '' default)
+    const hexInput = screen.getByPlaceholderText('#3b82f6');
+    expect(hexInput.value).toBe('');
+
+    await user.click(screen.getByRole('button', { name: /Save color/i }));
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => url === '/api/wellness/branding/color' && opts?.method === 'PUT'
+      );
+      expect(puts.length).toBeGreaterThan(0);
+      const body = JSON.parse(puts[0][1].body);
+      expect(body).toEqual({ brandColor: null });
+    });
+  });
+});

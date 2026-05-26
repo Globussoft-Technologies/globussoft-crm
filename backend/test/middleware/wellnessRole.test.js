@@ -16,7 +16,6 @@ import { verifyWellnessRole } from '../../middleware/wellnessRole.js';
 // can swap it with a deterministic fake here. The eslint rule is fine
 // with this pattern — it's the standard "module reference patch" used
 // throughout the test suite.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const requirePermissionModule = require('../../middleware/requirePermission.js');
 const realGetUserPermissions = requirePermissionModule.getUserPermissions;
 

@@ -47,6 +47,11 @@ const tenantWhere = (req, extra = {}) => ({
 const adminGate = verifyWellnessRole(["admin", "manager"], {
   anyOfPermissions: [{ module: "pos", action: "manage" }],
 });
+// DD-5.7 round-2 RESOLVED 2026-05-25: void + refund endpoints are
+// ADMIN-only (manager explicitly denied). See the §3.9 block below.
+const strictAdminGate = verifyWellnessRole(["admin"], {
+  anyOfPermissions: [{ module: "pos", action: "manage" }],
+});
 // "clinical" meta-token covers ALL clinical staff (doctor, professional,
 // nurse, stylist, plus any future custom clinical role with
 // canTakeVisits=true). Telecaller + helper stay as literals because they

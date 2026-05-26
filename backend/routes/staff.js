@@ -1154,7 +1154,6 @@ function validateGoalBody(body, { partial = false } = {}) {
   // Legacy `userId` in body would silently be dropped — caller must use
   // targetUserId. The ESLint no-restricted-syntax rule enforces this on
   // future writes; the helper here is the runtime backstop.
-  // eslint-disable-next-line no-restricted-syntax
   const inputUserId =
     body.targetUserId !== undefined ? body.targetUserId : body.userId;
   if (!partial || inputUserId !== undefined) {
@@ -1305,8 +1304,7 @@ router.post("/revenue-goals", verifyRole(["ADMIN"]), async (req, res) => {
     } = req.body;
     // PRD Gap §1.6 follow-up: prefer targetUserId (non-stripped name).
     // eslint-disable-next-line no-restricted-syntax
-    const resolvedUserId =
-      targetUserId !== undefined ? targetUserId : req.body.userId;
+    const resolvedUserId = targetUserId !== undefined ? targetUserId : req.body.userId;
     // Verify user belongs to this tenant.
     const target = await prisma.user.findFirst({
       where: { id: parseInt(resolvedUserId, 10), tenantId: req.user.tenantId },

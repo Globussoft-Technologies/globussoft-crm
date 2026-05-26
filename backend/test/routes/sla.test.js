@@ -177,6 +177,89 @@ describe('GET /policies — list SLA policies', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /policies?fields=summary — #920 slice 20 slim-shape opt-in
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('GET /policies?fields=summary — slim-shape opt-in (#920 slice 20)', () => {
+  test('passes a Prisma select that drops tenantId + createdAt when ?fields=summary is set', async () => {
+    prisma.slaPolicy.findMany.mockResolvedValue([
+      { id: 1, name: 'Gold', priority: 'High', responseMinutes: 30, resolveMinutes: 240, isActive: true },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/sla/policies?fields=summary');
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.slaPolicy.findMany.mock.calls[0][0];
+    expect(callArg.select).toEqual({
+      id: true,
+      name: true,
+      priority: true,
+      responseMinutes: true,
+      resolveMinutes: true,
+      isActive: true,
+    });
+    // tenantId + createdAt deliberately absent from the slim select.
+    expect(callArg.select).not.toHaveProperty('tenantId');
+    expect(callArg.select).not.toHaveProperty('createdAt');
+  });
+
+  test('preserves tenant scoping + ordering when slim-shape is requested', async () => {
+    prisma.slaPolicy.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 99 })).get('/api/sla/policies?fields=summary');
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.slaPolicy.findMany.mock.calls[0][0];
+    expect(callArg.where).toEqual({ tenantId: 99 });
+    expect(callArg.orderBy).toEqual([
+      { isActive: 'desc' },
+      { priority: 'asc' },
+      { createdAt: 'desc' },
+    ]);
+  });
+
+  test('omits select entirely (full row shape) when ?fields is absent', async () => {
+    prisma.slaPolicy.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/sla/policies');
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.slaPolicy.findMany.mock.calls[0][0];
+    expect(callArg.select).toBeUndefined();
+  });
+
+  test('omits select when ?fields=full (any non-exact value falls through to full shape)', async () => {
+    prisma.slaPolicy.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/sla/policies?fields=full');
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.slaPolicy.findMany.mock.calls[0][0];
+    expect(callArg.select).toBeUndefined();
+  });
+
+  test('omits select on ?fields=SUMMARY (case-sensitive exact match — only lowercase "summary" opts in)', async () => {
+    prisma.slaPolicy.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/sla/policies?fields=SUMMARY');
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.slaPolicy.findMany.mock.calls[0][0];
+    expect(callArg.select).toBeUndefined();
+  });
+
+  test('returns the rows verbatim from Prisma without post-processing in slim mode', async () => {
+    const slimRow = { id: 5, name: 'Bronze', priority: 'Low', responseMinutes: 240, resolveMinutes: 1440, isActive: true };
+    prisma.slaPolicy.findMany.mockResolvedValue([slimRow]);
+
+    const res = await request(makeApp()).get('/api/sla/policies?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([slimRow]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // POST /policies — create with #465 zero/negative-minutes guard
 // ─────────────────────────────────────────────────────────────────────────
 

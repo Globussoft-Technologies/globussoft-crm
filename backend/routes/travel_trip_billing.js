@@ -4,6 +4,7 @@
 // All sub-routes are scoped to a TmcTrip via :tripId in the URL.
 //
 // Endpoints:
+//   GET    /api/travel/trip-billing/stats                     — USER+ tenant-wide TMC rollup
 //   GET    /api/travel/trips/:tripId/rooming                  — list rooms
 //   POST   /api/travel/trips/:tripId/rooming                  ADMIN+MGR
 //   PATCH  /api/travel/trips/:tripId/rooming/:roomId          ADMIN+MGR
@@ -60,6 +61,203 @@ async function loadTrip(req) {
   }
   return trip;
 }
+
+// ============================================================================
+// GET /api/travel/trip-billing/stats — tenant-wide TMC trip-billing rollup
+// (PRD_TRAVEL §TMC).
+//
+// First rollup endpoint for backend/routes/travel_trip_billing.js. Mirrors
+// the canonical /suppliers/stats + /commission-profiles/stats shape — a
+// USER-readable anodyne aggregate that powers the TMC ops dashboard's
+// trip-billing KPI strip ("4 plans · 23 instalments [12 paid · 8 pending ·
+// 2 partial · 1 overdue] · ₹4.5L received · 6 rooms · last plan 3h ago").
+//
+// Distinct from /trips/:tripId/{rooming,payment-plan,instalments} per-trip
+// surfaces — this is the tenant-wide aggregate across ALL TMC trips in the
+// caller's tenant. Without this, the frontend would have to fan-out a per-
+// trip fetch and reduce client-side — same anti-pattern flagged by the
+// "client-side aggregation over paginated endpoint" standing rule.
+//
+// TMC-locked: the whole travel_trip_billing.js route is sub-brand-gated to
+// TMC callers via requireTmcAccess (mirrors per-trip endpoints exactly).
+// A non-TMC MANAGER receives 403 SUB_BRAND_DENIED before any aggregation
+// runs.
+//
+// Children don't carry tenantId directly. The schema scopes RoomingAssignment,
+// TripPaymentPlan, and TripInstalmentPayment via FK → TmcTrip → tenantId.
+// Canonical pattern: fetch the trip-id set first (tenantId-scoped), then
+// aggregate the 3 child models scoped to those trip-ids.
+//
+// Behaviour:
+//   - Empty tenant: zeroed envelope with empty buckets + lastPlanCreatedAt=null.
+//   - totalTrips: count of trips owning at least one billing row (plan or
+//     instalment or rooming).
+//   - totalPlans: count of TripPaymentPlan rows for tenant's trips.
+//   - totalInstalments: count of TripInstalmentPayment rows.
+//   - instalmentsByStatus: { pending, partial, paid, overdue } per the
+//     VALID_INSTALMENT_STATUSES enum, pre-seeded so every key exists.
+//   - totalReceived: sum of paidAmount on instalments where status='paid',
+//     rounded to 2dp.
+//   - totalRoomingAssignments: count of RoomingAssignment rows.
+//   - lastPlanCreatedAt: ISO of max(createdAt) across plans, or null.
+//
+// ?from / ?to (ISO date bounds) filter ALL 3 child rows by their createdAt.
+// Invalid date → 400 INVALID_DATE.
+//
+// USER-readable: anodyne aggregate (counts + sums + timestamps); safe.
+// No audit row written — read-only meta surface; matches /suppliers/stats.
+//
+// Express route ordering: literal-path /trip-billing/stats MUST be declared
+// BEFORE any /trips/:tripId/... handler — otherwise a stray request to
+// /trips/trip-billing/anything would 400 INVALID_ID before reaching here.
+// Placed at the top of the route declarations for safety.
+// ============================================================================
+router.get(
+  "/trip-billing/stats",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Optional ISO date bounds on the child rows' createdAt
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      let fromDate = null;
+      let toDate = null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        fromDate = d;
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        toDate = d;
+      }
+
+      // Fetch this tenant's trip-id set first. Children don't carry tenantId
+      // directly — they scope via FK → TmcTrip → tenantId.
+      const trips = await prisma.tmcTrip.findMany({
+        where: { tenantId },
+        select: { id: true },
+      });
+      const tripIds = trips.map((t) => t.id);
+
+      // Empty short-circuit — return zeroed shape.
+      if (tripIds.length === 0) {
+        return res.json({
+          totalTrips: 0,
+          totalPlans: 0,
+          totalInstalments: 0,
+          instalmentsByStatus: { pending: 0, partial: 0, paid: 0, overdue: 0 },
+          totalReceived: 0,
+          totalRoomingAssignments: 0,
+          lastPlanCreatedAt: null,
+        });
+      }
+
+      // Build a createdAt clause shared across all child queries.
+      const createdAtClause = {};
+      if (fromDate) createdAtClause.gte = fromDate;
+      if (toDate) createdAtClause.lte = toDate;
+      const hasDateClause = Object.keys(createdAtClause).length > 0;
+
+      const planWhere = { tripId: { in: tripIds } };
+      const instalmentWhere = { tripId: { in: tripIds } };
+      const roomingWhere = { tripId: { in: tripIds } };
+      if (hasDateClause) {
+        planWhere.createdAt = createdAtClause;
+        instalmentWhere.createdAt = createdAtClause;
+        roomingWhere.createdAt = createdAtClause;
+      }
+
+      // Aggregate the 3 child models scoped to tripIds.
+      const [
+        plans,
+        instalments,
+        totalRoomingAssignments,
+      ] = await Promise.all([
+        prisma.tripPaymentPlan.findMany({
+          where: planWhere,
+          select: { tripId: true, createdAt: true },
+        }),
+        prisma.tripInstalmentPayment.findMany({
+          where: instalmentWhere,
+          select: { tripId: true, status: true, paidAmount: true },
+        }),
+        prisma.roomingAssignment.count({ where: roomingWhere }),
+      ]);
+
+      // Counts + per-status bucketing.
+      const instalmentsByStatus = { pending: 0, partial: 0, paid: 0, overdue: 0 };
+      let totalReceived = 0;
+      for (const ins of instalments) {
+        const status = String(ins.status || "pending");
+        if (VALID_INSTALMENT_STATUSES.includes(status)) {
+          instalmentsByStatus[status] += 1;
+        }
+        if (status === "paid") {
+          const amt = Number(ins.paidAmount);
+          if (Number.isFinite(amt)) totalReceived += amt;
+        }
+      }
+
+      // lastPlanCreatedAt: max(createdAt) across plans.
+      let lastPlanCreatedAt = null;
+      for (const p of plans) {
+        const ts = p.createdAt instanceof Date ? p.createdAt : new Date(p.createdAt);
+        if (Number.isNaN(ts.getTime())) continue;
+        if (!lastPlanCreatedAt || ts > lastPlanCreatedAt) lastPlanCreatedAt = ts;
+      }
+
+      // totalTrips: count of distinct trip-ids appearing in any of the 3
+      // child sets. A trip with at least one billing row counts.
+      const tripsWithBilling = new Set();
+      for (const p of plans) tripsWithBilling.add(p.tripId);
+      for (const ins of instalments) tripsWithBilling.add(ins.tripId);
+      // Rooming is fetched as a count above (perf — most ops dashboards just
+      // need the bare number). For the totalTrips set we add rooming-only
+      // trips via a lightweight distinct-id fetch IF any rooming rows exist.
+      if (totalRoomingAssignments > 0) {
+        const roomingTrips = await prisma.roomingAssignment.findMany({
+          where: roomingWhere,
+          select: { tripId: true },
+          distinct: ["tripId"],
+        });
+        for (const r of roomingTrips) tripsWithBilling.add(r.tripId);
+      }
+
+      // Half-up round to 2dp — matches sibling stats endpoints.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      res.json({
+        totalTrips: tripsWithBilling.size,
+        totalPlans: plans.length,
+        totalInstalments: instalments.length,
+        instalmentsByStatus,
+        totalReceived: round2(totalReceived),
+        totalRoomingAssignments,
+        lastPlanCreatedAt: lastPlanCreatedAt ? lastPlanCreatedAt.toISOString() : null,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trip-billing] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise trip billing" });
+    }
+  },
+);
 
 // ─── Rooming ─────────────────────────────────────────────────────────
 

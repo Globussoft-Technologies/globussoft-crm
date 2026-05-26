@@ -209,7 +209,7 @@ router.get("/leads", async (req, res) => {
 
 router.post("/leads", async (req, res) => {
   try {
-    const { name, phone, email, source, note, utm } = req.body;
+    const { name, phone, email, source, note, utm, externalId } = req.body;
     if (!name && !phone && !email) {
       return res.status(400).json({ error: "name, phone, or email required", code: "INSUFFICIENT_IDENTITY" });
     }
@@ -264,10 +264,24 @@ router.post("/leads", async (req, res) => {
       assignedToId: assignee.userId,
       firstResponseDueAt,
       tenantId: req.tenantId,
+      // Task 12: store partner-supplied external ID if provided.
+      // The @@unique([tenantId, externalId]) constraint deduplicates on this
+      // key too — see upsert path below.
+      externalId: externalId ? String(externalId) : null,
     };
     let contact;
     let deduped = false;
-    if (email) {
+    // Dedupe priority: externalId first (most specific), then email.
+    if (externalId) {
+      const byExtId = await prisma.contact.findFirst({
+        where: { externalId: String(externalId), tenantId: req.tenantId },
+      });
+      if (byExtId) {
+        contact = byExtId;
+        deduped = true;
+      }
+    }
+    if (!contact && email) {
       // Upsert on the compound unique key (email + tenantId)
       const existing = await prisma.contact.findFirst({
         where: { email, tenantId: req.tenantId },
@@ -278,7 +292,9 @@ router.post("/leads", async (req, res) => {
       } else {
         contact = await prisma.contact.create({ data: contactData });
       }
-    } else {
+    }
+    // No externalId hit AND no email (or email was not in DB) — plain create.
+    if (!contact) {
       contact = await prisma.contact.create({ data: contactData });
     }
 
@@ -552,6 +568,165 @@ router.post("/appointments", async (req, res) => {
   } catch (e) {
     console.error("[external] create appointment:", e.message);
     res.status(500).json({ error: "Failed to create appointment", detail: e.message });
+  }
+});
+
+// ── Lead stage transitions (Task 9 — GP-CRM integration) ──────────
+//
+// Accepts either GP stage vocabulary (NEW/QUALIFIED/WON/LOST/DNC) or
+// CRM status vocabulary (Lead/Prospect/Customer/Churned/Junk) so callers
+// can use either side of the mapping. Both are idempotent when the status
+// is already set.
+//
+// GP stage → CRM status mapping (mirrors CRM_STATUS_TO_GP_STAGE in GP backend):
+//   NEW       → Lead
+//   QUALIFIED → Prospect
+//   WON       → Customer
+//   LOST      → Churned
+//   DNC       → Junk
+
+const GP_STAGE_TO_CRM_STATUS = {
+  NEW: "Lead",
+  QUALIFIED: "Prospect",
+  WON: "Customer",
+  LOST: "Churned",
+  DNC: "Junk",
+};
+const ALLOWED_CRM_STATUSES = new Set(["Lead", "Prospect", "Customer", "Churned", "Junk"]);
+
+router.patch("/leads/:id/stage", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { stage, status: directStatus } = req.body;
+
+    // Resolve to a CRM status string
+    let newStatus;
+    if (stage) {
+      newStatus = GP_STAGE_TO_CRM_STATUS[String(stage).toUpperCase()];
+      if (!newStatus) {
+        return res.status(400).json({
+          error: `Unknown stage '${stage}'. Expected: NEW, QUALIFIED, WON, LOST, DNC`,
+          code: "INVALID_STAGE",
+        });
+      }
+    } else if (directStatus) {
+      if (!ALLOWED_CRM_STATUSES.has(directStatus)) {
+        return res.status(400).json({
+          error: `Unknown status '${directStatus}'. Expected: Lead, Prospect, Customer, Churned, Junk`,
+          code: "INVALID_STATUS",
+        });
+      }
+      newStatus = directStatus;
+    } else {
+      return res.status(400).json({ error: "stage or status required", code: "MISSING_STAGE" });
+    }
+
+    const existing = await prisma.contact.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Lead not found" });
+
+    const contact = await prisma.contact.update({ where: { id }, data: { status: newStatus } });
+
+    // Notify registered webhooks that the stage changed (fire-and-forget)
+    if (existing.status !== newStatus) {
+      try {
+        const { deliverWebhooks } = require("../lib/webhookDelivery");
+        await deliverWebhooks("lead.stage_changed", {
+          id: contact.id,
+          status: contact.status,
+          previousStatus: existing.status,
+          assignedToId: contact.assignedToId,
+          tenantId: req.tenantId,
+        }, req.tenantId);
+      } catch (_e) { /* fire-and-forget */ }
+    }
+
+    res.json(contact);
+  } catch (e) {
+    console.error("[external] patch lead stage:", e.message);
+    res.status(500).json({ error: "Failed to update lead stage" });
+  }
+});
+
+// ── Webhook self-serve subscription (Task 11 — GP-CRM integration) ─
+//
+// Partners register a callback URL + event pattern(s) they want to receive.
+// One Webhook DB row is created per event pattern. Supports exact-match
+// ("lead.new") and wildcard ("lead.*") — deliverWebhooks() in
+// lib/webhookDelivery.js queries for both forms on every emission.
+//
+// Auth: same X-API-Key as all other external endpoints. The userId from the
+// API key is used as the Webhook.userId FK (the "owner" of the subscription).
+//
+// HMAC secret: set WEBHOOK_HMAC_SECRET in the CRM's .env to have deliveries
+// signed with X-Globussoft-Signature (Stripe-style t=<ts>,v1=<hex>).
+// Partners verify using the same secret.
+
+router.post("/webhooks", async (req, res) => {
+  try {
+    const { url, event, events } = req.body;
+    if (!url) return res.status(400).json({ error: "url required", code: "MISSING_URL" });
+
+    // Validate URL syntax
+    try { new URL(url); } catch (_e) {
+      return res.status(400).json({ error: "url must be a valid HTTP or HTTPS URL", code: "INVALID_URL" });
+    }
+
+    // Accept single event string or an array
+    const eventList = Array.isArray(events)
+      ? events
+      : events
+        ? [events]
+        : event
+          ? [event]
+          : [];
+    if (eventList.length === 0) {
+      return res.status(400).json({ error: "event or events required", code: "MISSING_EVENT" });
+    }
+
+    const created = await Promise.all(
+      eventList.map((ev) =>
+        prisma.webhook.create({
+          data: {
+            event: String(ev),
+            targetUrl: url,
+            isActive: true,
+            tenantId: req.tenantId,
+            userId: req.user.id,
+          },
+        })
+      )
+    );
+
+    res.status(201).json({ created });
+  } catch (e) {
+    console.error("[external] create webhook:", e.message);
+    res.status(500).json({ error: "Failed to register webhook" });
+  }
+});
+
+router.get("/webhooks", async (req, res) => {
+  try {
+    const webhooks = await prisma.webhook.findMany({
+      where: tenantWhere(req, { isActive: true }),
+      orderBy: { createdAt: "desc" },
+    });
+    res.json({ data: webhooks, total: webhooks.length });
+  } catch (e) {
+    console.error("[external] list webhooks:", e.message);
+    res.status(500).json({ error: "Failed to list webhooks" });
+  }
+});
+
+router.delete("/webhooks/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.webhook.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Webhook not found" });
+    await prisma.webhook.update({ where: { id }, data: { isActive: false } });
+    res.json({ deactivated: true });
+  } catch (e) {
+    console.error("[external] deactivate webhook:", e.message);
+    res.status(500).json({ error: "Failed to deactivate webhook" });
   }
 });
 

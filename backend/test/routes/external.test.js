@@ -186,6 +186,7 @@ prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
 prisma.contact.findMany = vi.fn();
 prisma.contact.create = vi.fn();
+prisma.contact.update = vi.fn();   // Task 9: PATCH /leads/:id/stage
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn();
 prisma.activity = prisma.activity || {};
@@ -207,6 +208,12 @@ prisma.location.findMany = vi.fn();
 prisma.visit = prisma.visit || {};
 prisma.visit.findMany = vi.fn();
 prisma.visit.create = vi.fn();
+// Task 11: webhook self-serve subscription
+prisma.webhook = prisma.webhook || {};
+prisma.webhook.create = vi.fn();
+prisma.webhook.findMany = vi.fn();
+prisma.webhook.findFirst = vi.fn();
+prisma.webhook.update = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -236,6 +243,11 @@ beforeEach(() => {
   prisma.location.findMany.mockReset();
   prisma.visit.findMany.mockReset();
   prisma.visit.create.mockReset();
+  prisma.contact.update.mockReset();
+  prisma.webhook.create.mockReset();
+  prisma.webhook.findMany.mockReset().mockResolvedValue([]);
+  prisma.webhook.findFirst.mockReset();
+  prisma.webhook.update.mockReset();
 
   classifyLeadMock.mockReset().mockResolvedValue({
     isJunk: false,
@@ -673,5 +685,295 @@ describe('GET /api/v1/external/services + appointments — catalog shape', () =>
     expect(args.where.tenantId).toBe(7);
     expect(args.where.visitDate.gte).toEqual(new Date('2026-06-01T00:00:00Z'));
     expect(args.where.visitDate.lte).toEqual(new Date('2026-06-30T23:59:59Z'));
+  });
+});
+
+// ── Task 9 — PATCH /api/v1/external/leads/:id/stage ────────────────────────
+//
+// Accepts GP stage vocab (NEW/QUALIFIED/WON/LOST/DNC) or CRM status direct
+// (Lead/Prospect/Customer/Churned/Junk). Returns updated contact row.
+
+describe('PATCH /api/v1/external/leads/:id/stage (Task 9)', () => {
+  const existingContact = {
+    id: 200,
+    name: 'Ritu Mehta',
+    phone: '+919876543210',
+    email: 'ritu@example.com',
+    status: 'Lead',
+    assignedToId: 4,
+    tenantId: 7,
+  };
+
+  test('happy path: GP stage NEW → CRM status Lead (no-op) → 200', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(existingContact);
+    prisma.contact.update.mockResolvedValueOnce({ ...existingContact, status: 'Lead' });
+
+    const app = makeApp();
+    const res = await request(app)
+      .patch('/api/v1/external/leads/200/stage')
+      .send({ stage: 'NEW' });
+
+    expect(res.status).toBe(200);
+    const updateArgs = prisma.contact.update.mock.calls[0][0];
+    expect(updateArgs.data.status).toBe('Lead');
+  });
+
+  test('GP stage QUALIFIED → CRM status Prospect', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(existingContact);
+    prisma.contact.update.mockResolvedValueOnce({ ...existingContact, status: 'Prospect' });
+
+    const app = makeApp();
+    const res = await request(app)
+      .patch('/api/v1/external/leads/200/stage')
+      .send({ stage: 'QUALIFIED' });
+
+    expect(res.status).toBe(200);
+    const updateArgs = prisma.contact.update.mock.calls[0][0];
+    expect(updateArgs.data.status).toBe('Prospect');
+  });
+
+  test('GP stage WON → Customer, LOST → Churned, DNC → Junk', async () => {
+    const app = makeApp();
+    for (const [stage, expectedStatus] of [['WON', 'Customer'], ['LOST', 'Churned'], ['DNC', 'Junk']]) {
+      prisma.contact.findFirst.mockResolvedValueOnce({ ...existingContact, status: 'Lead' });
+      prisma.contact.update.mockResolvedValueOnce({ ...existingContact, status: expectedStatus });
+
+      const res = await request(app)
+        .patch('/api/v1/external/leads/200/stage')
+        .send({ stage });
+
+      expect(res.status).toBe(200);
+      const lastUpdate = prisma.contact.update.mock.calls.slice(-1)[0][0];
+      expect(lastUpdate.data.status).toBe(expectedStatus);
+    }
+  });
+
+  test('stage is case-insensitive: "qualified" same as "QUALIFIED"', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(existingContact);
+    prisma.contact.update.mockResolvedValueOnce({ ...existingContact, status: 'Prospect' });
+
+    const app = makeApp();
+    const res = await request(app)
+      .patch('/api/v1/external/leads/200/stage')
+      .send({ stage: 'qualified' });
+
+    expect(res.status).toBe(200);
+    const updateArgs = prisma.contact.update.mock.calls[0][0];
+    expect(updateArgs.data.status).toBe('Prospect');
+  });
+
+  test('direct CRM status "Customer" accepted when sent as status field', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(existingContact);
+    prisma.contact.update.mockResolvedValueOnce({ ...existingContact, status: 'Customer' });
+
+    const app = makeApp();
+    const res = await request(app)
+      .patch('/api/v1/external/leads/200/stage')
+      .send({ status: 'Customer' });
+
+    expect(res.status).toBe(200);
+    const updateArgs = prisma.contact.update.mock.calls[0][0];
+    expect(updateArgs.data.status).toBe('Customer');
+  });
+
+  test('unknown stage → 400 INVALID_STAGE', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .patch('/api/v1/external/leads/200/stage')
+      .send({ stage: 'MAYBE' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_STAGE');
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('invalid CRM status direct → 400 INVALID_STATUS', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .patch('/api/v1/external/leads/200/stage')
+      .send({ status: 'Unknown' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_STATUS');
+  });
+
+  test('missing stage AND status → 400 MISSING_STAGE', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .patch('/api/v1/external/leads/200/stage')
+      .send({ something: 'else' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('MISSING_STAGE');
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('contact not found in tenant → 404', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(null); // not in tenant
+
+    const app = makeApp();
+    const res = await request(app)
+      .patch('/api/v1/external/leads/999/stage')
+      .send({ stage: 'WON' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('update is scoped to tenantId (tenantWhere enforced)', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(existingContact);
+    prisma.contact.update.mockResolvedValueOnce({ ...existingContact, status: 'Prospect' });
+
+    const app = makeApp();
+    await request(app)
+      .patch('/api/v1/external/leads/200/stage')
+      .send({ stage: 'QUALIFIED' });
+
+    const findArgs = prisma.contact.findFirst.mock.calls[0][0];
+    expect(findArgs.where.tenantId).toBe(7); // externalAuthState.tenantId
+    expect(findArgs.where.id).toBe(200);
+  });
+});
+
+// ── Task 11 — Webhook self-serve subscription ──────────────────────────────
+//
+// POST /webhooks: register callback URL + event pattern(s).
+// GET  /webhooks: list active subscriptions for tenant.
+// DELETE /webhooks/:id: deactivate (soft-delete via isActive=false).
+
+describe('POST /api/v1/external/webhooks (Task 11)', () => {
+  test('happy path: single event → 201 + { created: [webhook] }', async () => {
+    prisma.webhook.create.mockResolvedValueOnce({
+      id: 1, event: 'lead.*', targetUrl: 'https://gp.example/webhooks/crm',
+      isActive: true, tenantId: 7, userId: 4, createdAt: new Date(),
+    });
+
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/v1/external/webhooks')
+      .send({ url: 'https://gp.example/webhooks/crm', event: 'lead.*' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).toHaveLength(1);
+    expect(res.body.created[0].event).toBe('lead.*');
+    expect(res.body.created[0].targetUrl).toBe('https://gp.example/webhooks/crm');
+
+    const createArgs = prisma.webhook.create.mock.calls[0][0].data;
+    expect(createArgs.tenantId).toBe(7);
+    expect(createArgs.userId).toBe(4); // req.user.id = apiKey.userId
+    expect(createArgs.isActive).toBe(true);
+  });
+
+  test('events array → creates one row per pattern', async () => {
+    // 3 event patterns → 3 webhook rows
+    prisma.webhook.create
+      .mockResolvedValueOnce({ id: 1, event: 'lead.new', targetUrl: 'https://x.test/wh', isActive: true })
+      .mockResolvedValueOnce({ id: 2, event: 'lead.assigned', targetUrl: 'https://x.test/wh', isActive: true })
+      .mockResolvedValueOnce({ id: 3, event: 'contact.updated', targetUrl: 'https://x.test/wh', isActive: true });
+
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/v1/external/webhooks')
+      .send({ url: 'https://x.test/wh', events: ['lead.new', 'lead.assigned', 'contact.updated'] });
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).toHaveLength(3);
+    expect(prisma.webhook.create).toHaveBeenCalledTimes(3);
+  });
+
+  test('missing url → 400 MISSING_URL', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/v1/external/webhooks')
+      .send({ event: 'lead.*' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('MISSING_URL');
+    expect(prisma.webhook.create).not.toHaveBeenCalled();
+  });
+
+  test('invalid URL → 400 INVALID_URL', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/v1/external/webhooks')
+      .send({ url: 'not-a-url', event: 'lead.*' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_URL');
+    expect(prisma.webhook.create).not.toHaveBeenCalled();
+  });
+
+  test('missing event AND events → 400 MISSING_EVENT', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/v1/external/webhooks')
+      .send({ url: 'https://x.test/wh' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('MISSING_EVENT');
+    expect(prisma.webhook.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/v1/external/webhooks (Task 11)', () => {
+  test('returns active webhooks for tenant in { data, total } shape', async () => {
+    prisma.webhook.findMany.mockResolvedValueOnce([
+      { id: 1, event: 'lead.*', targetUrl: 'https://gp.test/wh', isActive: true, tenantId: 7 },
+      { id: 2, event: 'contact.updated', targetUrl: 'https://gp.test/wh', isActive: true, tenantId: 7 },
+    ]);
+
+    const app = makeApp();
+    const res = await request(app).get('/api/v1/external/webhooks');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.total).toBe(2);
+
+    const findArgs = prisma.webhook.findMany.mock.calls[0][0];
+    expect(findArgs.where.tenantId).toBe(7);
+    expect(findArgs.where.isActive).toBe(true);
+  });
+
+  test('empty tenant → { data: [], total: 0 }', async () => {
+    // webhook.findMany default mock returns [] from beforeEach
+    const app = makeApp();
+    const res = await request(app).get('/api/v1/external/webhooks');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+    expect(res.body.total).toBe(0);
+  });
+});
+
+describe('DELETE /api/v1/external/webhooks/:id (Task 11)', () => {
+  test('happy path: soft-deactivates (isActive=false), returns { deactivated: true }', async () => {
+    prisma.webhook.findFirst.mockResolvedValueOnce({
+      id: 5, event: 'lead.*', targetUrl: 'https://gp.test/wh', isActive: true, tenantId: 7,
+    });
+    prisma.webhook.update.mockResolvedValueOnce({
+      id: 5, isActive: false,
+    });
+
+    const app = makeApp();
+    const res = await request(app).delete('/api/v1/external/webhooks/5');
+
+    expect(res.status).toBe(200);
+    expect(res.body.deactivated).toBe(true);
+
+    const updateArgs = prisma.webhook.update.mock.calls[0][0];
+    expect(updateArgs.where.id).toBe(5);
+    expect(updateArgs.data.isActive).toBe(false);
+  });
+
+  test('not-found in tenant → 404', async () => {
+    prisma.webhook.findFirst.mockResolvedValueOnce(null);
+
+    const app = makeApp();
+    const res = await request(app).delete('/api/v1/external/webhooks/999');
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+    expect(prisma.webhook.update).not.toHaveBeenCalled();
   });
 });

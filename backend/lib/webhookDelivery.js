@@ -1,4 +1,12 @@
+const crypto = require("crypto");
 const prisma = require("./prisma");
+
+// Shared HMAC secret for Stripe-style webhook signatures.
+// Set WEBHOOK_HMAC_SECRET in .env on the CRM side. Partner receivers (e.g.
+// GlobusPhone) configure the same value as their inbound verification secret.
+// When the variable is absent, deliveries are still sent but unsigned —
+// backwards-compatible with partners that don't yet verify signatures.
+const HMAC_SECRET = process.env.WEBHOOK_HMAC_SECRET || "";
 
 /**
  * Deliver outbound HTTP POST to all registered Webhooks matching an event.
@@ -67,6 +75,12 @@ async function deliverWebhooks(event, payload, tenantId) {
 /**
  * Fire a single outbound webhook HTTP POST.
  *
+ * Task 10 [GP-CRM integration]: Stripe-style HMAC signing.
+ * When WEBHOOK_HMAC_SECRET is set, the delivery includes:
+ *   X-Globussoft-Signature: t=<unix_epoch_sec>,v1=<hmac_sha256_hex>
+ * where the signed string is `<t>.<body>` (same body bytes sent in the POST).
+ * Partners verify: HMAC-SHA256(secret, "<t>.<body>") == hex from header.
+ *
  * @param {string} url       Target URL
  * @param {string} event     Event name
  * @param {object} payload   Event data
@@ -79,18 +93,37 @@ async function deliverSingle(url, event, payload, tenantId) {
   }
 
   try {
+    // Use a single epoch-second timestamp so the signature and the body
+    // timestamp are perfectly consistent.
+    const tSec = Math.floor(Date.now() / 1000);
+    const bodyObj = {
+      event,
+      timestamp: new Date(tSec * 1000).toISOString(),
+      data: payload,
+    };
+    const bodyStr = JSON.stringify(bodyObj);
+
+    const headers = {
+      "Content-Type": "application/json",
+      "X-CRM-Event": event,
+      "X-CRM-Tenant": String(tenantId),
+    };
+
+    // Compute Stripe-style HMAC when a shared secret is configured.
+    // Signed string format: "<tSec>.<bodyStr>" — identical to GP-side verification
+    // in backend/app/security/webhook_auth.py.
+    if (HMAC_SECRET) {
+      const sig = crypto
+        .createHmac("sha256", HMAC_SECRET)
+        .update(`${tSec}.${bodyStr}`)
+        .digest("hex");
+      headers["X-Globussoft-Signature"] = `t=${tSec},v1=${sig}`;
+    }
+
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CRM-Event": event,
-        "X-CRM-Tenant": String(tenantId),
-      },
-      body: JSON.stringify({
-        event,
-        timestamp: new Date().toISOString(),
-        data: payload,
-      }),
+      headers,
+      body: bodyStr,
       signal: AbortSignal.timeout(10000),
     });
     console.log(`[Webhook] ${event} -> ${url}: ${response.status}`);

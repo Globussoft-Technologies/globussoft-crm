@@ -328,6 +328,23 @@ router.post('/', async (req, res) => {
 
     const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
     try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
+    // Task 8 [GP-CRM integration]: fire lead.new to registered webhooks (e.g.
+    // GlobusPhone) when a Lead contact is created. deliverWebhooks is
+    // fire-and-forget; failures must never block the 201 response.
+    if (contact.status === "Lead") {
+      try {
+        const { deliverWebhooks } = require('../lib/webhookDelivery');
+        await deliverWebhooks("lead.new", {
+          id: contact.id,
+          name: contact.name,
+          phone: contact.phone,
+          email: contact.email,
+          status: contact.status,
+          assignedToId: contact.assignedToId,
+          tenantId: req.user.tenantId,
+        }, req.user.tenantId);
+      } catch (_e) { /* webhook delivery is fire-and-forget */ }
+    }
     // #179: audit row for new contact.
     await writeAudit('Contact', 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
     res.status(201).json(contact);
@@ -443,6 +460,31 @@ router.put('/:id', async (req, res) => {
         );
       }
     } catch (_e) {}
+
+    // Task 8 [GP-CRM integration]: push contact.updated + (when status changed)
+    // lead.stage_changed to registered webhooks (e.g. GlobusPhone). Both are
+    // fire-and-forget; failures must never block the update response.
+    try {
+      const { deliverWebhooks } = require('../lib/webhookDelivery');
+      await deliverWebhooks("contact.updated", {
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        email: contact.email,
+        status: contact.status,
+        assignedToId: contact.assignedToId,
+        tenantId: req.user.tenantId,
+      }, req.user.tenantId);
+      if (existing.status !== contact.status) {
+        await deliverWebhooks("lead.stage_changed", {
+          id: contact.id,
+          status: contact.status,
+          previousStatus: existing.status,
+          assignedToId: contact.assignedToId,
+          tenantId: req.user.tenantId,
+        }, req.user.tenantId);
+      }
+    } catch (_e) { /* webhook delivery is fire-and-forget */ }
 
     // Bug #283 [wellness]: when a contact transitions into Customer on a
     // wellness tenant, the downstream wellness app needs a Patient row to
@@ -622,6 +664,19 @@ router.put('/:id/assign', async (req, res) => {
       data: { assignedToId: assignedToId ? parseInt(assignedToId) : null },
       include: { assignedTo: { select: { id: true, name: true, email: true } } }
     });
+    // Task 8 [GP-CRM integration]: notify registered webhooks (e.g. GlobusPhone)
+    // that this contact/lead has been re-assigned. Fire-and-forget.
+    try {
+      const { deliverWebhooks } = require('../lib/webhookDelivery');
+      await deliverWebhooks("lead.assigned", {
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        status: contact.status,
+        assignedToId: contact.assignedToId,
+        tenantId: req.user.tenantId,
+      }, req.user.tenantId);
+    } catch (_e) { /* webhook delivery is fire-and-forget */ }
     res.json(contact);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to assign agent' });

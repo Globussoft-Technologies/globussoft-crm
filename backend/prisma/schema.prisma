@@ -588,6 +588,19 @@ model Contact {
   // resolves to a row in TravelCommissionProfile.
   commissionProfileId Int?
 
+  // Task 12 [GP-CRM integration]: opaque external ID set by partner systems
+  // (e.g. GlobusPhone lead ULID). Lets partners push a stable ID at create
+  // time so that subsequent API calls (PATCH /external/leads/:id/stage,
+  // PATCH /external/calls/:id) can reference the CRM contact by either the
+  // CRM integer PK or by this external key.
+  // Nullable — existing contacts and any contact not created through the
+  // partner API leave this null. The compound unique (tenantId + externalId)
+  // prevents duplicates within a tenant while allowing the same external ID
+  // to exist in different tenants (each tenant's CRM is isolated).
+  // Postgres treats NULL != NULL in unique indexes so multiple null rows are
+  // permitted — no migration risk on back-filling existing data.
+  externalId String?
+
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
@@ -631,6 +644,10 @@ model Contact {
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
+  /// Task 12 [GP-CRM integration]: partner-assigned external ID is unique
+  /// within a tenant. NULL values are excluded from uniqueness enforcement
+  /// (Postgres semantics: NULL != NULL) so un-linked contacts are unaffected.
+  @@unique([tenantId, externalId])
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
   @@index([tenantId, assignedToId])

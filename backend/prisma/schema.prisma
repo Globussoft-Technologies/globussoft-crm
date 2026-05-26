@@ -2998,7 +2998,7 @@ model Patient {
   /// tags column today, so this also establishes the shape for a symmetric
   /// Contact.tags field if/when bulk-tag-add ships for Contact too. Route
   /// layer stringifies on write + JSON.parses on read. Null = no tags.
-  tags          String?   @db.Text
+  tagsJson      String?   @db.Text
 
   // CRM-style classification used by the create-customer modal.
   //   taxType         : "individual" | "business" — drives downstream
@@ -3784,7 +3784,6 @@ model ProductCategory {
   tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name      String
   color     String? // Category color for UI (hex code)
-  imageUrl  String? // Category image URL
   // Self-referential hierarchy for sub-categories ("Consumables > Sterile >
   // Needles"). SetNull so deleting a parent doesn't cascade-delete children;
   // they bubble up to the root and the admin can re-nest manually.
@@ -4874,6 +4873,16 @@ model Tag {
   // deterministic theme colour at the UI layer when null.
   color     String?
   tenantId  Int
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patients  PatientTag[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Travel CRM vertical — Day 2 schema migration (Phase 1 scaffolding)
 // ─────────────────────────────────────────────────────────────────────
@@ -5869,10 +5878,16 @@ model TravelCurriculumMapping {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  patients PatientTag[]
-
-  @@unique([tenantId, name])
-  @@index([tenantId])
+  // Block duplicate rows for the same (tenant, curriculum, grade, subject,
+  // outcome) combination — advisors should edit existing rows, not duplicate.
+  // Key-byte budget: 8 (Int) + 32*4 + 32*4 + 64*4 + 300*4 = 1720 bytes,
+  // well under MySQL's 3072-byte utf8mb4 limit. Tick #178's 500-char
+  // learningOutcome overflowed the budget (4300 bytes) — tick #179 triage.
+  @@unique([tenantId, curriculum, grade, subject, learningOutcome])
+  // Diagnostic-engine lookup path: "given a student's curriculum+grade+subject,
+  // surface candidate destinations sorted by fitScore."
+  @@index([curriculum, grade, subject])
+  @@index([tenantId, isActive])
 }
 
 model PatientTag {
@@ -5885,16 +5900,6 @@ model PatientTag {
   @@id([patientId, tagId])
   @@index([patientId])
   @@index([tagId])
-  // Block duplicate rows for the same (tenant, curriculum, grade, subject,
-  // outcome) combination — advisors should edit existing rows, not duplicate.
-  // Key-byte budget: 8 (Int) + 32*4 + 32*4 + 64*4 + 300*4 = 1720 bytes,
-  // well under MySQL's 3072-byte utf8mb4 limit. Tick #178's 500-char
-  // learningOutcome overflowed the budget (4300 bytes) — tick #179 triage.
-  @@unique([tenantId, curriculum, grade, subject, learningOutcome])
-  // Diagnostic-engine lookup path: "given a student's curriculum+grade+subject,
-  // surface candidate destinations sorted by fitScore."
-  @@index([curriculum, grade, subject])
-  @@index([tenantId, isActive])
 }
 
 // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles.

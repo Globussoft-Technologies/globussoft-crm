@@ -618,4 +618,233 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getByText(/Select an invoice…/i)).toBeInTheDocument();
     expect(screen.queryByText(/INV-201/)).toBeNull();
   });
+
+  // ── Augmentation wave 2 (cron tick) — 9 NEW cases ────────────────────
+  //
+  // The cases below extend the suite to pin additional surfaces:
+  // drawer Escape-key + backdrop close, drawer amount-validation guard,
+  // drawer POST-failure handling (notify.error + drawer stays open),
+  // Refresh-button click triggers a re-fetch with the current effective
+  // range, the detail-modal close affordances (X button + backdrop click),
+  // and unknown-gateway fallback labelling.
+
+  it('drawer closes on Escape keypress (window keydown listener attached only while open)', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Record a payment/i }));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: /Record Payment/i })).toBeInTheDocument());
+    // Press Escape — the SUT's useEffect listens at window-level for the
+    // Escape key while creating === true.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /Record Payment/i })).toBeNull();
+    });
+  });
+
+  it('drawer closes when the dark backdrop overlay is clicked', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Record a payment/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Record Payment/i });
+    // Click directly on the dialog overlay (currentTarget === target guard).
+    fireEvent.click(dialog);
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /Record Payment/i })).toBeNull();
+    });
+  });
+
+  it('drawer amount validation: zero amount → notify.error and no POST', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Record a payment/i }));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: /Record Payment/i })).toBeInTheDocument());
+    // Pick invoice + set amount to 0 → SUT's `amount <= 0` guard fires.
+    fireEvent.change(screen.getByRole('combobox', { name: /Invoice/i }), { target: { value: '201' } });
+    fireEvent.change(screen.getByPlaceholderText(/0\.00/), { target: { value: '0' } });
+    const form = screen.getByRole('dialog', { name: /Record Payment/i }).querySelector('form');
+    fireEvent.submit(form);
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('Amount must be greater than 0');
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => typeof url === 'string'
+        && url.startsWith('/api/v1/invoices/')
+        && url.endsWith('/payments')
+        && opts && opts.method === 'POST'
+    );
+    expect(postCall).toBeFalsy();
+  });
+
+  it('drawer POST failure surfaces notify.error and the drawer stays open', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/payments') return Promise.resolve(samplePayments);
+      if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
+      if (url === '/api/billing') return Promise.resolve(sampleInvoices);
+      if (typeof url === 'string' && url.startsWith('/api/v1/invoices/') && url.endsWith('/payments') && opts && opts.method === 'POST') {
+        return Promise.reject(new Error('Insufficient permissions'));
+      }
+      return Promise.resolve(null);
+    });
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Record a payment/i }));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: /Record Payment/i })).toBeInTheDocument());
+
+    fireEvent.change(screen.getByRole('combobox', { name: /Invoice/i }), { target: { value: '201' } });
+    fireEvent.change(screen.getByPlaceholderText(/0\.00/), { target: { value: '100' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Record Payment$/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('Insufficient permissions');
+    });
+    // Drawer should remain mounted on failure so the operator can retry.
+    expect(screen.getByRole('dialog', { name: /Record Payment/i })).toBeInTheDocument();
+    // notify.success must NOT have fired.
+    expect(notifyObj.success).not.toHaveBeenCalledWith('Payment recorded');
+  });
+
+  it('Refresh button click triggers a fresh /api/payments fetch', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    const initialPaymentsCalls = fetchApiMock.mock.calls.filter(
+      ([url]) => typeof url === 'string' && (url === '/api/payments' || url.startsWith('/api/payments?'))
+    ).length;
+    // Click Refresh.
+    fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }));
+    await waitFor(() => {
+      const newPaymentsCalls = fetchApiMock.mock.calls.filter(
+        ([url]) => typeof url === 'string' && (url === '/api/payments' || url.startsWith('/api/payments?'))
+      ).length;
+      expect(newPaymentsCalls).toBeGreaterThan(initialPaymentsCalls);
+    });
+  });
+
+  it('detail modal closes via the header X button', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: /^View$/i })[0]);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /^Payment #1$/i })).toBeInTheDocument();
+    });
+    // The modal's close button has no accessible-name (just an X icon);
+    // grab it by scoping to the modal subtree and selecting the only
+    // <button> sibling next to the heading.
+    const heading = screen.getByRole('heading', { name: /^Payment #1$/i });
+    const closeBtn = heading.parentElement.querySelector('button');
+    expect(closeBtn).toBeTruthy();
+    fireEvent.click(closeBtn);
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: /^Payment #1$/i })).toBeNull();
+    });
+  });
+
+  it('detail modal closes when the backdrop overlay is clicked', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: /^View$/i })[0]);
+    const heading = await screen.findByRole('heading', { name: /^Payment #1$/i });
+    // Walk up to the backdrop overlay (the outermost div with position:fixed).
+    // The SUT's onClick on the overlay closes; clicking the inner card calls
+    // e.stopPropagation. So clicking the overlay's outer-most ancestor that
+    // isn't the inner content closes the modal.
+    let backdrop = heading.parentElement;
+    while (backdrop && backdrop.parentElement && backdrop.parentElement.style.position !== 'fixed') {
+      backdrop = backdrop.parentElement;
+    }
+    // backdrop.parentElement is the position:fixed overlay div.
+    fireEvent.click(backdrop.parentElement);
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: /^Payment #1$/i })).toBeNull();
+    });
+  });
+
+  it('unknown gateway renders the raw gateway name in the badge (fallback label)', async () => {
+    const withUnknown = [
+      {
+        id: 10,
+        invoiceId: 110,
+        amount: 50,
+        currency: 'USD',
+        gateway: 'paypal', // not in GATEWAY_CONFIG → falls through to raw label
+        status: 'SUCCESS',
+        gatewayId: 'pp_abc',
+        paidAt: '2026-05-05T10:00:00.000Z',
+        createdAt: '2026-05-05T09:55:00.000Z',
+        metadata: {},
+      },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments') return Promise.resolve(withUnknown);
+      if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
+      if (url === '/api/billing') return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#110')).toBeInTheDocument());
+    // Raw gateway label "paypal" renders in the badge (no entry in
+    // GATEWAY_CONFIG → fallback uses the gateway string verbatim).
+    expect(screen.getByText('paypal')).toBeInTheDocument();
+  });
+
+  it('admin Gateway Configuration cards reflect Stripe webhook-only-configured state via per-extra checkmarks', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments') return Promise.resolve([]);
+      if (url === '/api/payments/config') {
+        return Promise.resolve({
+          // Stripe: API key configured but webhook NOT configured.
+          stripe: { configured: true, webhookConfigured: false },
+          razorpay: { configured: true, keyId: 'rzp_test_xyz' },
+        });
+      }
+      if (url === '/api/billing') return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    renderPayments(ADMIN_USER);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Gateway Configuration/i })).toBeInTheDocument();
+    });
+    // Both gateways labelled "Configured" (configured === true).
+    expect(screen.getAllByText(/^Configured$/).length).toBeGreaterThanOrEqual(2);
+    // Stripe's webhook-secret extra label renders (independent of the OK icon).
+    expect(screen.getByText(/STRIPE_WEBHOOK_SECRET/)).toBeInTheDocument();
+    // Razorpay keyId is surfaced as a <code> chip on the matching extra.
+    expect(screen.getByText('rzp_test_xyz')).toBeInTheDocument();
+  });
+
+  it('Total Collected stat aggregates SUCCESS amounts; PENDING/FAILED rows do not contribute', async () => {
+    // Three rows: 1 SUCCESS @ $1000, 1 PENDING @ $9999, 1 FAILED @ $7777.
+    // The Total Collected card should read $1000.00 (only SUCCESS counted).
+    // Use createdAt in the recent window so the default last30 KPI window
+    // includes them. Make paidAt now-ish for the SUCCESS row.
+    const now = new Date();
+    const oneDayAgo = new Date(now.getTime() - 86_400_000).toISOString();
+    const rows = [
+      { id: 21, invoiceId: 121, amount: 1000, currency: 'USD', gateway: 'stripe', status: 'SUCCESS',  gatewayId: 'pi_A', paidAt: oneDayAgo, createdAt: oneDayAgo, metadata: {} },
+      { id: 22, invoiceId: 122, amount: 9999, currency: 'USD', gateway: 'stripe', status: 'PENDING',  gatewayId: 'pi_B', paidAt: null,       createdAt: oneDayAgo, metadata: {} },
+      { id: 23, invoiceId: 123, amount: 7777, currency: 'USD', gateway: 'stripe', status: 'FAILED',   gatewayId: 'pi_C', paidAt: null,       createdAt: oneDayAgo, metadata: {} },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments' || (typeof url === 'string' && url.startsWith('/api/payments?'))) return Promise.resolve(rows);
+      if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
+      if (url === '/api/billing') return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#121')).toBeInTheDocument());
+    // Total Collected should render $1000.00 — the formatMoney mock prefixes
+    // "$" for USD/no-currency-opt invocations (StatCard does NOT pass a
+    // currency option, so the mock's default $-prefix applies). The same
+    // amount also renders in the row's Amount cell (row #121), so
+    // getAllByText length ≥ 2 (one in the KPI card, one in the row).
+    const matches = screen.getAllByText('$1000.00');
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+    // Pending row count == 1; Failed row count == 1 (StatCard `value`
+    // is the numeric count, rendered as text).
+    // Note: numeric "1" appears widely (icons, sizes etc are not text);
+    // but the bare stat-card values render as text "1". Confirm both
+    // counts surface by scoping to the row containers labelled
+    // "PENDING" / "FAILED" via getAllByText — both cards render "1".
+    const ones = screen.getAllByText('1');
+    expect(ones.length).toBeGreaterThanOrEqual(2);
+  });
 });

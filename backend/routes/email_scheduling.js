@@ -98,7 +98,7 @@ router.put("/signature", async (req, res) => {
 
 // ── Scheduled Emails ────────────────────────────────────────────────
 
-// GET list — defaults to next 7 days, filterable by status
+// GET list — defaults to next 7 days, filterable by status (and ?fields=summary)
 router.get("/", async (req, res) => {
   try {
     const { status, all } = req.query;
@@ -109,11 +109,39 @@ router.get("/", async (req, res) => {
       const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
       where.scheduledFor = { gte: now, lte: in7Days };
     }
-    const records = await prisma.scheduledEmail.findMany({
+
+    // #920 slice 44: ?fields=summary slim-shape opt-in. Mirrors slices 1-42.
+    // ScheduledEmail carries two heavy text columns — `body` (@db.Text, the
+    // full email body that's been signature-appended on POST and may include
+    // the tracking-pixel injection on send-now) and `errorMessage` (@db.Text,
+    // up to ~64KB of SendGrid rejection envelope text per the #524 follow-up
+    // widening). When the caller passes ?fields=summary we drop BOTH, plus
+    // tenantId (already implicit in the scoped query), returning only the
+    // chrome columns a list UI needs (id, to, subject, scheduledFor, status,
+    // sentAt, contactId, userId, createdAt). Opt-in additive — existing
+    // callers (no ?fields, or any non-exact value) get the full row shape
+    // unchanged so detail-view / debugging flows continue to receive `body`
+    // and `errorMessage` when they need them.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: { scheduledFor: "asc" },
       take: 200,
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        to: true,
+        subject: true,
+        scheduledFor: true,
+        status: true,
+        sentAt: true,
+        contactId: true,
+        userId: true,
+        createdAt: true,
+      };
+    }
+    const records = await prisma.scheduledEmail.findMany(findManyArgs);
     res.json(records);
   } catch (err) {
     console.error("[ScheduledEmail] List error:", err);

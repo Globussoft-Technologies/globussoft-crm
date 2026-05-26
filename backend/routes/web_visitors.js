@@ -138,17 +138,46 @@ router.get("/stats", async (req, res) => {
 });
 
 // ── AUTHENTICATED: List visitors (default last 7 days) ─────────────
+// Supports ?fields=summary opt-in slim shape that drops the heavy `userAgent`
+// (often hundreds of bytes per row) and `pages` JSON-string column (LongText,
+// can hit 200 entries × ~80 bytes ≈ 16KB per row) AND skips the per-row
+// contact-hydration round-trip. Identification stays surfaced via the boolean
+// `identified` + `contactId` so admin index views can still show an "is-lead"
+// chip without paying for the full hydration. Mirrors prior slices of #920.
 router.get("/", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const days = parseInt(req.query.days, 10) || 7;
     const since = new Date(); since.setDate(since.getDate() - days);
+    const isSummary = req.query.fields === "summary";
 
-    const visitors = await prisma.webVisitor.findMany({
+    const findArgs = {
       where: { tenantId, lastSeen: { gte: since } },
       orderBy: { lastSeen: "desc" },
       take: 200,
-    });
+    };
+    if (isSummary) {
+      findArgs.select = {
+        id: true,
+        sessionId: true,
+        country: true,
+        city: true,
+        identified: true,
+        contactId: true,
+        firstSeen: true,
+        lastSeen: true,
+        tenantId: true,
+      };
+    }
+
+    const visitors = await prisma.webVisitor.findMany(findArgs);
+
+    if (isSummary) {
+      // Slim mode: no contact hydration, no JSON parse of `pages`, no
+      // userAgent/ipAddress/pageCount/firstUrl/lastUrl post-process. The
+      // wire shape is exactly the selected columns.
+      return res.json(visitors);
+    }
 
     // Hydrate contact info for identified visitors
     const contactIds = visitors.filter(v => v.contactId).map(v => v.contactId);

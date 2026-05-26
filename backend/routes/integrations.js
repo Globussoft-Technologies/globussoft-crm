@@ -81,11 +81,42 @@ const AVAILABLE_INTEGRATIONS = [
 
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const connected = await prisma.integration.findMany({
+    // #920 slice 35: ?fields=summary slim-shape opt-in. Mirrors slices 1-33.
+    // The default catalogue-overlay row carries marketing-card metadata
+    // (name, description, category) plus connectedAt for the Settings →
+    // Integrations UI. Status-check-only callers (cap banners, dashboard
+    // "any active integration?" probes, OwnerDashboard fetch at
+    // wellness/OwnerDashboard.jsx:147) don't need the metadata — they only
+    // read provider + isActive (+ id for routing-by-row). When the caller
+    // passes ?fields=summary we project to that minimal set. Opt-in additive
+    // — existing callers (no ?fields, or any non-exact value) get the full
+    // catalogue-overlay shape unchanged. The slim Prisma select also drops
+    // any potential sensitive columns (token, settings) from the underlying
+    // findMany even though the existing overlay never surfaces them — slim
+    // by default is defense-in-depth in case the overlay shape ever drifts.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId: req.user.tenantId },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        provider: true,
+        isActive: true,
+      };
+    }
+    const connected = await prisma.integration.findMany(findManyArgs);
     const connectedMap = {};
     for (const c of connected) connectedMap[c.provider] = c;
+
+    if (isSummary) {
+      const integrations = AVAILABLE_INTEGRATIONS.map((a) => ({
+        provider: a.provider,
+        isActive: connectedMap[a.provider]?.isActive || false,
+        id: connectedMap[a.provider]?.id || null,
+      }));
+      return res.json(integrations);
+    }
 
     const integrations = AVAILABLE_INTEGRATIONS.map((a) => ({
       ...a,

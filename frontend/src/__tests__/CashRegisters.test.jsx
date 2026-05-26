@@ -910,3 +910,306 @@ describe('CashRegisters — non-admin permission gating', () => {
     () => {},
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// EXTENSION — additional uncovered branches:
+//   • header singular ("1 register") vs plural ("2 registers")
+//   • "Pick a location" form guard (separate from name guard)
+//   • "Activated <name>" toast on toggleActive of an inactive register
+//   • loadLocations / loadShiftDetail error paths
+//   • Closing total NaN guard (parallel to opening-float NaN)
+//   • Withdraw amount-cancel and reason-cancel silent aborts
+//   • Tab aria-selected wiring on switch
+//   • Empty bookings-tab copy when shift has no CASH sales
+//   • Loading… banner before list resolves
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — extension coverage', () => {
+  it('header pluralises "register" correctly — singular when exactly 1', async () => {
+    fetchApiMock.mockImplementation(makeMock({ registers: [REGISTER_OPEN] }));
+    renderPage();
+
+    // "1 register" — no trailing 's'. The strict-match regex
+    // `\b1 register\b(?!s)` avoids accidentally matching "1 registers".
+    await waitFor(() =>
+      expect(screen.getByText(/\b1 register\b(?!s)/i)).toBeInTheDocument(),
+    );
+  });
+
+  it('blocks submit + toasts "Pick a location" when name is set but location is blank', async () => {
+    fetchApiMock.mockImplementation(makeMock({ registers: [] }));
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/No cash registers yet/i)).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /New register/i }));
+
+    fireEvent.change(screen.getByLabelText(/Register name/i), {
+      target: { value: 'Valid Name' },
+    });
+    // Location intentionally NOT set. Bypass HTML5 `required` by submitting
+    // the form directly (same pattern as the float-negative guard above).
+    fireEvent.submit(
+      screen.getByLabelText(/Register name/i).closest('form'),
+    );
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Pick a location/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/pos/registers' && opts?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('clicking the Activate icon on an INACTIVE register PUTs { isActive: true } + toasts "Activated"', async () => {
+    // Build a fixture with one inactive register so the toggleActive flow
+    // routes through the "Activate" branch (reg.isActive is false → flip true).
+    const inactiveReg = { ...REGISTER_OPEN, id: 21, isActive: false, name: 'Old Counter' };
+    fetchApiMock.mockImplementation(
+      makeMock({ registers: [inactiveReg], openShiftFor: {} }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Old Counter')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText(/Activate Old Counter/i));
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => url === '/api/pos/registers/21' && opts?.method === 'PUT',
+      );
+      expect(puts.length).toBe(1);
+      const body = JSON.parse(puts[0][1].body);
+      expect(body).toEqual({ isActive: true });
+    });
+    expect(notify.success).toHaveBeenCalledWith(
+      expect.stringMatching(/Activated.*Old Counter/i),
+    );
+  });
+
+  it('loadLocations failure is silent (no toast, page still mounts)', async () => {
+    // Locations endpoint throws — page should still render registers
+    // without toasting (loadLocations swallows in a catch-block).
+    fetchApiMock.mockImplementation((url, opts = {}) => {
+      const method = opts.method || 'GET';
+      if (url === '/api/pos/registers' && method === 'GET') {
+        return Promise.resolve([REGISTER_OPEN]);
+      }
+      if (url === '/api/wellness/locations') {
+        return Promise.reject(new Error('Locations 500'));
+      }
+      if (/^\/api\/pos\/shifts\?registerId=/.test(url)) {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    // Locations error must NOT surface a toast (silent catch).
+    expect(notify.error).not.toHaveBeenCalled();
+  });
+
+  it('GET /api/pos/shifts/:id failure surfaces an error toast + nulls the detail panel', async () => {
+    fetchApiMock.mockImplementation((url, opts = {}) => {
+      const method = opts.method || 'GET';
+      if (url === '/api/pos/registers' && method === 'GET') {
+        return Promise.resolve([REGISTER_OPEN]);
+      }
+      if (url === '/api/wellness/locations') return Promise.resolve(LOCATIONS);
+      if (/^\/api\/pos\/shifts\?registerId=11/.test(url)) {
+        return Promise.resolve([OPEN_SHIFT]);
+      }
+      // Shift detail throws.
+      if (/^\/api\/pos\/shifts\/999$/.test(url) && method === 'GET') {
+        return Promise.reject(new Error('Shift detail boom'));
+      }
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(notify.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Shift detail boom/i),
+      ),
+    );
+    // selectedShift cleared → status header should fall back to CLOSED.
+    expect(screen.getByTestId('status-header')).toHaveTextContent(/REGISTER CLOSED/i);
+  });
+
+  it('Close shift NaN closingTotal triggers non-negative error (parseFloat("") branch)', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+    );
+    // Leave closingTotal blank — parseFloat('') === NaN.
+    fireEvent.click(screen.getByRole('button', { name: /Close shift/i }));
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalledWith(
+        expect.stringMatching(/non-negative/i),
+      );
+    });
+    const closes = fetchApiMock.mock.calls.filter(
+      ([url, opts]) =>
+        /^\/api\/pos\/shifts\/\d+\/close$/.test(url) && opts?.method === 'POST',
+    );
+    expect(closes.length).toBe(0);
+  });
+
+  it('cancelling the WITHDRAW amount prompt aborts silently (no POST, no error toast)', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Withdraw cash/i })).toBeInTheDocument(),
+    );
+
+    // window.prompt returns null when the user clicks Cancel.
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValueOnce(null);
+    fireEvent.click(screen.getByRole('button', { name: /Withdraw cash/i }));
+
+    const withdraws = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => /\/withdraw$/.test(url) && opts?.method === 'POST',
+    );
+    expect(withdraws.length).toBe(0);
+    expect(notify.error).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it('cancelling the REASON prompt (after providing amount) aborts silently — no POST', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Deposit cash/i })).toBeInTheDocument(),
+    );
+
+    // Amount OK, but user cancels the reason prompt.
+    const promptSpy = vi.spyOn(window, 'prompt')
+      .mockReturnValueOnce('500')
+      .mockReturnValueOnce(null);
+    fireEvent.click(screen.getByRole('button', { name: /Deposit cash/i }));
+
+    const deposits = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => /\/deposit$/.test(url) && opts?.method === 'POST',
+    );
+    expect(deposits.length).toBe(0);
+    // Reason-cancel is silent (no toast).
+    expect(notify.error).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it('aria-selected reflects the active transaction tab', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /Bookings Cash/i })).toBeInTheDocument(),
+    );
+    // Default: bookings selected.
+    expect(screen.getByRole('tab', { name: /Bookings Cash/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('tab', { name: /Partial Cash/i })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Partial Cash/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /Partial Cash/i })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
+    expect(screen.getByRole('tab', { name: /Bookings Cash/i })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+  });
+
+  it('Bookings tab renders the per-bucket empty-state copy when no CASH sales exist', async () => {
+    const noCashShift = {
+      ...OPEN_SHIFT,
+      sales: [
+        // Only a COMBINED sale — bookings bucket will be empty.
+        {
+          id: 8001,
+          invoiceNumber: 'POS-COMBO-ONLY',
+          total: 999,
+          paymentMethod: 'COMBINED',
+          status: 'COMPLETED',
+          patientId: 50,
+        },
+      ],
+    };
+    fetchApiMock.mockImplementation(
+      makeMock({
+        openShiftFor: { 11: OPEN_SHIFT },
+        shiftDetail: noCashShift,
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /Bookings Cash/i })).toBeInTheDocument(),
+    );
+    // Default tab is bookings; the bucket-empty copy should be present.
+    await waitFor(() =>
+      expect(
+        screen.getByText(/No cash bookings yet on this shift/i),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it('shows the Loading… banner while the initial GET /registers is in flight', async () => {
+    // Build a controllable promise so we can assert the loading state
+    // BEFORE the resolver fires.
+    let resolveRegisters;
+    const registersPromise = new Promise((resolve) => {
+      resolveRegisters = resolve;
+    });
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/pos/registers') return registersPromise;
+      if (url === '/api/wellness/locations') return Promise.resolve(LOCATIONS);
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    // The Loading… banner is present before the resolver fires.
+    expect(screen.getByText(/Loading…/i)).toBeInTheDocument();
+
+    // Resolve — banner should disappear after loadRegisters finishes.
+    resolveRegisters([REGISTER_OPEN]);
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByText(/^Loading…$/i)).not.toBeInTheDocument(),
+    );
+  });
+});

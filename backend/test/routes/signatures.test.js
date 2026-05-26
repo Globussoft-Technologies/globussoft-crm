@@ -492,3 +492,159 @@ describe('POST /:id/resend — resend signing email', () => {
     expect(res.body.error).toMatch(/cannot resend.*SIGNED/i);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920 slice 39)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirrors the slim-shape contract pinned in slices 1-36. The default (no
+// ?fields) path continues to return the full row including signature blob +
+// signToken + signerEmail. The ?fields=summary path drops the heavy
+// `signature @db.LongText` column AND the sensitive `signToken` (URL key
+// that bypasses the global auth guard) AND `signerEmail` (PII), passing a
+// `select` to Prisma so the wire payload (and the DB read) stay narrow.
+// Anything other than the exact string "summary" is treated as default
+// (no `select` key forwarded).
+describe('GET /?fields=summary — slim-shape opt-in', () => {
+  test('omitted ?fields returns full row with signature + signToken + signerEmail (no select forwarded)', async () => {
+    prisma.signatureRequest.findMany.mockResolvedValue([
+      {
+        id: 1,
+        documentType: 'Contract',
+        documentId: 100,
+        signerName: 'Asha Patel',
+        signerEmail: 'asha@example.com',
+        signature: 'data:image/png;base64,iVBOR-very-long-blob',
+        signedAt: new Date('2026-01-10T12:00:00Z'),
+        status: 'SIGNED',
+        signToken: 'a'.repeat(64),
+        tenantId: 42,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        expiresAt: new Date('2026-01-08T00:00:00Z'),
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/signatures');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].signature).toBe('data:image/png;base64,iVBOR-very-long-blob');
+    expect(res.body[0].signToken).toBe('a'.repeat(64));
+    expect(res.body[0].signerEmail).toBe('asha@example.com');
+    // No `select` key forwarded — full-row default path.
+    const arg = prisma.signatureRequest.findMany.mock.calls[0][0];
+    expect(arg.select).toBeUndefined();
+    expect(arg).toEqual({
+      where: { tenantId: 42 },
+      orderBy: { createdAt: 'desc' },
+    });
+  });
+
+  test('?fields=summary forwards select with chrome columns only (drops signature + signToken + signerEmail + tenantId)', async () => {
+    prisma.signatureRequest.findMany.mockResolvedValue([
+      {
+        id: 1,
+        documentType: 'Contract',
+        documentId: 100,
+        signerName: 'Asha Patel',
+        status: 'PENDING',
+        expiresAt: new Date('2026-01-08T00:00:00Z'),
+        signedAt: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+      },
+      {
+        id: 2,
+        documentType: 'Quote',
+        documentId: 200,
+        signerName: 'Ravi Kumar',
+        status: 'SIGNED',
+        expiresAt: new Date('2026-01-15T00:00:00Z'),
+        signedAt: new Date('2026-01-10T00:00:00Z'),
+        createdAt: new Date('2026-01-05T00:00:00Z'),
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/signatures?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    const arg = prisma.signatureRequest.findMany.mock.calls[0][0];
+    // Pin exact slim shape: ONLY chrome columns the list UI needs.
+    expect(arg.select).toEqual({
+      id: true,
+      documentType: true,
+      documentId: true,
+      signerName: true,
+      status: true,
+      expiresAt: true,
+      signedAt: true,
+      createdAt: true,
+    });
+    // Heavy LongText + sensitive token + PII MUST NOT be in select.
+    expect(arg.select.signature).toBeUndefined();
+    expect(arg.select.signToken).toBeUndefined();
+    expect(arg.select.signerEmail).toBeUndefined();
+    expect(arg.select.tenantId).toBeUndefined();
+    // where + orderBy unchanged from default path.
+    expect(arg.where).toEqual({ tenantId: 42 });
+    expect(arg.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=summary composes with ?status + ?documentType filters — both narrow the read', async () => {
+    prisma.signatureRequest.findMany.mockResolvedValue([
+      {
+        id: 1,
+        documentType: 'Contract',
+        documentId: 100,
+        signerName: 'Asha Patel',
+        status: 'PENDING',
+        expiresAt: new Date('2026-01-08T00:00:00Z'),
+        signedAt: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/signatures?fields=summary&status=PENDING&documentType=Contract');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.signatureRequest.findMany.mock.calls[0][0];
+    expect(arg.where).toEqual({ tenantId: 1, status: 'PENDING', documentType: 'Contract' });
+    expect(arg.select).toEqual({
+      id: true,
+      documentType: true,
+      documentId: true,
+      signerName: true,
+      status: true,
+      expiresAt: true,
+      signedAt: true,
+      createdAt: true,
+    });
+  });
+
+  test('?fields=full (anything not exactly "summary") falls back to default full-row shape', async () => {
+    prisma.signatureRequest.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/signatures?fields=full');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.signatureRequest.findMany.mock.calls[0][0];
+    // Exact-string gate: only "summary" trips the slim branch.
+    expect(arg.select).toBeUndefined();
+  });
+
+  test('?fields=SUMMARY (uppercase) is treated as default — case-sensitive gate', async () => {
+    prisma.signatureRequest.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/signatures?fields=SUMMARY');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.signatureRequest.findMany.mock.calls[0][0];
+    // The gate is `req.query.fields === "summary"` (case-sensitive). Pin
+    // the contract so a future refactor to .toLowerCase() shows up as a
+    // deliberate spec edit, not a silent behaviour change.
+    expect(arg.select).toBeUndefined();
+  });
+});

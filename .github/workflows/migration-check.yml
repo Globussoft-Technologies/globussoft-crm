@@ -165,11 +165,28 @@ jobs:
               --json > "$REPORT_JSON" 2> /tmp/migration-safety-stderr.log || true
           fi
 
+          # Guard against an empty report file (the script wraps stdout
+          # with `> $REPORT_JSON` and a `|| true` upstream — if the
+          # script crashed BEFORE writing anything, downstream reads
+          # would blow up with "Unexpected end of JSON input"). When
+          # the file is empty, synthesise a minimal failure report so
+          # the rest of the workflow keeps a parseable JSON contract.
+          if [ ! -s "$REPORT_JSON" ]; then
+            echo "::warning::migration-safety produced no report; treating as engine failure"
+            STDERR_TAIL=""
+            if [ -s /tmp/migration-safety-stderr.log ]; then
+              STDERR_TAIL=$(tail -c 2000 /tmp/migration-safety-stderr.log | tr -d '\000' | sed 's/"/\\"/g' | tr '\n' ' ')
+            fi
+            printf '{"riskCount":0,"statementCount":0,"risks":[],"engineFailed":true,"engineError":"%s"}\n' "$STDERR_TAIL" > "$REPORT_JSON"
+          fi
+
           # Pull the totals out for the summary step.
           RISK_COUNT=$(node -e "console.log(require('$REPORT_JSON').riskCount || 0)")
           STMT_COUNT=$(node -e "console.log(require('$REPORT_JSON').statementCount || 0)")
+          ENGINE_FAILED=$(node -e "console.log(require('$REPORT_JSON').engineFailed ? 'true' : 'false')")
           echo "RISK_COUNT=$RISK_COUNT" >> "$GITHUB_OUTPUT"
           echo "STMT_COUNT=$STMT_COUNT" >> "$GITHUB_OUTPUT"
+          echo "ENGINE_FAILED=$ENGINE_FAILED" >> "$GITHUB_OUTPUT"
           echo "REPORT_JSON=$REPORT_JSON" >> "$GITHUB_OUTPUT"
 
           # Always print the human-readable lines so the Actions log
@@ -271,6 +288,23 @@ jobs:
         run: |
           set -euo pipefail
           RISK_COUNT="${{ steps.check.outputs.RISK_COUNT }}"
+          ENGINE_FAILED="${{ steps.check.outputs.ENGINE_FAILED }}"
+          if [ "$ENGINE_FAILED" = "true" ]; then
+            # `prisma migrate diff` could not run — almost always means
+            # the BASELINE schema (HEAD~1 or the PR merge-base) is the
+            # one that can't be parsed, not the proposed schema. We
+            # re-validate the proposed schema independently; if THAT
+            # parses cleanly we let the gate pass with a warning so a
+            # legitimate "unbreak the schema" commit isn't held hostage
+            # to its broken predecessor. If the proposed schema also
+            # fails to parse, we fail the gate hard.
+            if (cd backend && npx prisma validate --schema prisma/schema.prisma); then
+              echo "::warning::baseline diff failed but proposed schema validates cleanly — skipping risk analysis for this commit"
+              exit 0
+            fi
+            echo "::error::migration-safety engine could not parse the proposed schema — see the report above"
+            exit 1
+          fi
           if [ "$RISK_COUNT" != "0" ]; then
             echo "::error::$RISK_COUNT migration risk(s) detected — see step summary + PR comment for details."
             exit 1

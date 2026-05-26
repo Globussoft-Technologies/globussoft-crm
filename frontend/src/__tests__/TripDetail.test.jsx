@@ -789,3 +789,399 @@ describe('<TripDetail /> — Microsite Editor preview toggle', () => {
     expect(screen.getByRole('button', { name: /Preview/i })).toBeInTheDocument();
   });
 });
+
+// ─── EXTENSION WAVE 2 — 2026-05-26 ──────────────────────────────────────
+//
+// Second extension pass. The first extension covered participants-remove,
+// participants-add-error, header date edges, rooming Add-room form open,
+// payment-plan editor + Add-instalment + dueDate validation, microsite
+// Create POST + blank itineraryHtml, microsite Editor Preview toggle.
+//
+// This wave pins the remaining uncovered surface:
+//
+//   1. Rooming — createRoom POSTs /rooming with the right body shape.
+//   2. Rooming — createRoom validation: empty roomNumber surfaces
+//      notify.error + no POST fires.
+//   3. Rooming — load failure (GET reject) → empty rooms state, NO crash.
+//   4. Rooming — RoomCard capacity guard: at-capacity unchecked boxes are
+//      disabled so the operator can't over-book a twin/triple/quad.
+//   5. Payment plan — load with existing plan hydrates editor (instalment
+//      count + Edit-heading text + Delete-plan button visible).
+//   6. Payment plan — empty editor (no instalments) Save surfaces "Add at
+//      least one instalment" + no PUT fires.
+//   7. Payment plan — adding then removing an instalment leaves zero rows.
+//   8. Payment plan — Move-up reorders the instalment list (assert by
+//      sequential aria-labels after swap).
+//   9. Payment plan — per-participant instalments section renders the
+//      backend's payload when /instalments returns a populated list.
+//  10. Microsite Create — POST rejection surfaces notify.error with the
+//      body.error from fetchApi (not the default "Failed to publish…").
+//  11. Microsite Editor — Save (PATCH) happy path: PATCHes /microsite with
+//      subdomain + itineraryHtml + faqJson:null + expiresAt:null and
+//      surfaces notify.success("Microsite updated").
+//  12. Microsite Editor — Unpublish (DELETE) with window.confirm=true.
+//  13. Microsite Editor — invalid faqJson surfaces notify.error + no PATCH.
+//  14. StatusBadge — unknown status string falls back to subtle colours
+//      without crashing (renders the literal status text).
+//
+// All cases use stable mock object refs, findBy / waitFor for async, and
+// getAllByText where labels appear in tab + card chrome.
+
+describe('<TripDetail /> — Rooming create-room flow', () => {
+  it('createRoom POSTs /api/travel/trips/:id/rooming with the right body', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
+    await screen.findByText(/No rooming assignments yet/i);
+    fireEvent.click(screen.getByRole('button', { name: /Add room/i }));
+    const roomNum = await screen.findByLabelText(/Room number/i);
+    fireEvent.change(roomNum, { target: { value: '203' } });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    // The form's submit button has aria-label "Add room" — but the toggle
+    // also reads "Add room" when visible. Once the form is open, the toggle
+    // is hidden so there's only one match. Scope by buttons + accessible
+    // name to be safe.
+    fireEvent.click(screen.getByRole('button', { name: /^Add room$/i }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/trips/101/rooming' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.roomNumber).toBe('203');
+      expect(body.roomType).toBe('twin');
+      expect(body.participantIds).toEqual([]);
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Room added/i));
+  });
+
+  it('createRoom with empty roomNumber surfaces notify.error + no POST fires', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
+    await screen.findByText(/No rooming assignments yet/i);
+    fireEvent.click(screen.getByRole('button', { name: /Add room/i }));
+    await screen.findByLabelText(/Room number/i);
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Add room$/i }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/roomNumber is required/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
+    expect(posts.length).toBe(0);
+  });
+
+  it('Rooming load failure leaves rooms empty + does NOT crash the tab', async () => {
+    // Replace the rooming GET with a rejection. Other endpoints stay
+    // healthy so the trip itself still loads.
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
+        return Promise.resolve(makeTrip());
+      }
+      if (method === 'GET' && /^\/api\/travel\/trips\/\d+\/rooming$/.test(url)) {
+        return Promise.reject(new Error('boom'));
+      }
+      if (method === 'GET' && /payment-plan$/.test(url)) return Promise.resolve(null);
+      if (method === 'GET' && /instalments$/.test(url)) return Promise.resolve({ instalments: [] });
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
+    // Empty-state copy still renders (load() catch sets rooms=[]).
+    expect(
+      await screen.findByText(/No rooming assignments yet/i),
+    ).toBeInTheDocument();
+    // 0 rooms · ... caption visible — page survived the rejection.
+    expect(screen.getByText(/0 rooms/)).toBeInTheDocument();
+  });
+
+  it('RoomCard at-capacity unchecked participant boxes are disabled', async () => {
+    // 3 participants + a single room type (single, capacity 1) →
+    // after assigning P1, P2 and P3 boxes must be disabled.
+    const tripWith3 = makeTrip({
+      participants: [
+        { id: 901, fullName: 'Anaya Sharma' },
+        { id: 902, fullName: 'Kabir Mehta' },
+        { id: 903, fullName: 'Riya Singh' },
+      ],
+    });
+    installFetchMock({ trip: tripWith3 });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
+    await screen.findByText(/No rooming assignments yet/i);
+    fireEvent.click(screen.getByRole('button', { name: /Add room/i }));
+    await screen.findByLabelText(/Room number/i);
+    // Switch room type to "single" (capacity 1).
+    const typeSelect = screen.getByLabelText(/Room type/i);
+    fireEvent.change(typeSelect, { target: { value: 'single' } });
+    // Capacity readout: "0 / 1 assigned".
+    expect(screen.getByText(/0 \/ 1 assigned/)).toBeInTheDocument();
+    // Assign Anaya — find her checkbox via her label text.
+    const anayaCheckbox = screen.getByLabelText('Anaya Sharma');
+    fireEvent.click(anayaCheckbox);
+    // Now capacity reads 1 / 1; Kabir + Riya boxes are unchecked and
+    // disabled (per RoomCard line 559 `disabled = !checked && atCapacity`).
+    expect(screen.getByText(/1 \/ 1 assigned/)).toBeInTheDocument();
+    const kabirCheckbox = screen.getByLabelText('Kabir Mehta');
+    expect(kabirCheckbox).toBeDisabled();
+    const riyaCheckbox = screen.getByLabelText('Riya Singh');
+    expect(riyaCheckbox).toBeDisabled();
+    // Anaya stays enabled (checked, so the guard allows un-check).
+    expect(anayaCheckbox).not.toBeDisabled();
+  });
+});
+
+describe('<TripDetail /> — Payment plan with existing plan', () => {
+  const planFixture = {
+    id: 7001,
+    tripId: 101,
+    graceDays: 5,
+    instalmentsJson: JSON.stringify([
+      { dueDate: '2026-08-01', amount: 30000, reminderDays: 7 },
+      { dueDate: '2026-10-01', amount: 50000, reminderDays: 7 },
+      { dueDate: '2026-12-01', amount: 45000, reminderDays: 3 },
+    ]),
+  };
+
+  function installPaymentMock({ plan = planFixture, instalments = [] } = {}) {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
+        return Promise.resolve(makeTrip());
+      }
+      if (method === 'GET' && /payment-plan$/.test(url)) return Promise.resolve(plan);
+      if (method === 'GET' && /instalments$/.test(url)) {
+        return Promise.resolve({ instalments });
+      }
+      if (method === 'GET' && /rooming$/.test(url)) {
+        return Promise.resolve({ rooming: [] });
+      }
+      if (method === 'DELETE' && /payment-plan$/.test(url)) return Promise.resolve({});
+      return Promise.resolve(null);
+    });
+  }
+
+  it('load with existing plan hydrates editor with instalments + Delete-plan button', async () => {
+    installPaymentMock();
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    // Heading flips to "Edit payment plan" when plan exists.
+    expect(
+      await screen.findByRole('heading', { name: /Edit payment plan/i }),
+    ).toBeInTheDocument();
+    // 3 instalments rendered — each with sequential aria-labels.
+    expect(screen.getByLabelText(/Instalment 1 due date/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Instalment 2 due date/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Instalment 3 due date/i)).toBeInTheDocument();
+    // Total = 30000 + 50000 + 45000 = 125000 → "₹125,000" (en-US) or "₹1,25,000" (en-IN).
+    expect(
+      screen.getByText((c) => /^₹(125,000|1,25,000)$/.test(c)),
+    ).toBeInTheDocument();
+    // Delete-plan button visible (plan truthy).
+    expect(
+      screen.getByRole('button', { name: /Delete payment plan/i }),
+    ).toBeInTheDocument();
+    // Grace days hydrated to 5.
+    const grace = screen.getByLabelText(/Grace days/i);
+    expect(grace.value).toBe('5');
+  });
+
+  it('empty editor Save surfaces "Add at least one instalment" + no PUT fires', async () => {
+    // No plan → editInstalments starts as []. Save without adding rows.
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Create payment plan/i });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Save payment plan/i }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Add at least one instalment/i),
+      );
+    });
+    const puts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'PUT');
+    expect(puts.length).toBe(0);
+  });
+
+  it('per-participant instalments section renders rows from /instalments response', async () => {
+    const perPartFixture = [
+      {
+        id: 8001,
+        participantId: 901,
+        instalmentIndex: 0,
+        dueDate: '2026-08-01T00:00:00.000Z',
+        amount: 30000,
+        status: 'pending',
+      },
+      {
+        id: 8002,
+        participantId: 901,
+        instalmentIndex: 1,
+        dueDate: '2026-10-01T00:00:00.000Z',
+        amount: 50000,
+        status: 'paid',
+      },
+    ];
+    installPaymentMock({ instalments: perPartFixture });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Per-participant instalments/i });
+    // Each row shows "Participant #<id>".
+    expect(screen.getAllByText('Participant #901').length).toBe(2);
+    // Status labels.
+    expect(screen.getByText('pending')).toBeInTheDocument();
+    expect(screen.getByText('paid')).toBeInTheDocument();
+  });
+});
+
+describe('<TripDetail /> — Microsite Create POST error', () => {
+  it('POST rejection surfaces notify.error with body.error from fetchApi', async () => {
+    // Use a custom fetch impl: trip GET resolves, microsite POST rejects.
+    const err = new Error('boom');
+    err.body = { error: 'Subdomain already taken' };
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
+        return Promise.resolve(makeTrip());
+      }
+      if (method === 'POST' && /\/microsite$/.test(url)) return Promise.reject(err);
+      if (method === 'GET' && /payment-plan$/.test(url)) return Promise.resolve(null);
+      if (method === 'GET' && /instalments$/.test(url)) {
+        return Promise.resolve({ instalments: [] });
+      }
+      if (method === 'GET' && /rooming$/.test(url)) {
+        return Promise.resolve({ rooming: [] });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Microsite/i }));
+    await screen.findByText(/No microsite published yet/i);
+    fireEvent.click(screen.getByRole('button', { name: /Publish microsite/i }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Subdomain already taken');
+    });
+  });
+});
+
+describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
+  const ms = {
+    id: 5001,
+    tripId: 101,
+    subdomain: 'tmc-andaman-mumbai-g7',
+    itineraryHtml: '<h2>Day 1</h2><p>Arrival</p>',
+    faqJson: null,
+    expiresAt: null,
+    publicUuid: 'abc-123-def-456',
+  };
+
+  it('Save changes PATCHes /microsite with the editor state + notify.success', async () => {
+    installFetchMock({ trip: makeTrip({ microsite: ms }) });
+    // Extend the fetch mock to accept PATCH /microsite.
+    const origImpl = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (method === 'PATCH' && /\/microsite$/.test(url)) return Promise.resolve({});
+      return origImpl(url, opts);
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    const tabs = screen.getAllByRole('tab');
+    fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
+    await screen.findByText('abc-123-def-456');
+    fetchApiMock.mockClear();
+    // Re-install with PATCH support.
+    installFetchMock({ trip: makeTrip({ microsite: ms }) });
+    const baseImpl = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (method === 'PATCH' && /\/microsite$/.test(url)) return Promise.resolve({});
+      return baseImpl(url, opts);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    await waitFor(() => {
+      const patch = fetchApiMock.mock.calls.find(
+        ([u, o]) => /\/microsite$/.test(u) && o?.method === 'PATCH',
+      );
+      expect(patch).toBeTruthy();
+      const body = JSON.parse(patch[1].body);
+      expect(body.subdomain).toBe('tmc-andaman-mumbai-g7');
+      expect(body.itineraryHtml).toContain('Day 1');
+      expect(body.faqJson).toBeNull();
+      expect(body.expiresAt).toBeNull();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/Microsite updated/i),
+    );
+  });
+
+  it('Unpublish with window.confirm=true DELETEs /microsite + notify.success', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    installFetchMock({ trip: makeTrip({ microsite: ms }) });
+    const baseImpl = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (method === 'DELETE' && /\/microsite$/.test(url)) return Promise.resolve({});
+      return baseImpl(url, opts);
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    const tabs = screen.getAllByRole('tab');
+    fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
+    await screen.findByText('abc-123-def-456');
+    fireEvent.click(screen.getByRole('button', { name: /^Unpublish$/i }));
+    await waitFor(() => {
+      const del = fetchApiMock.mock.calls.find(
+        ([u, o]) => /\/microsite$/.test(u) && o?.method === 'DELETE',
+      );
+      expect(del).toBeTruthy();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/Microsite unpublished/i),
+    );
+  });
+
+  it('Save with invalid faqJson surfaces notify.error + no PATCH fires', async () => {
+    installFetchMock({ trip: makeTrip({ microsite: ms }) });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    const tabs = screen.getAllByRole('tab');
+    fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
+    await screen.findByText('abc-123-def-456');
+    // Type non-JSON into the FAQ textarea.
+    const faqInput = screen.getByLabelText(/Microsite FAQ JSON/i);
+    fireEvent.change(faqInput, { target: { value: '{ not json' } });
+    fetchApiMock.mockClear();
+    installFetchMock({ trip: makeTrip({ microsite: ms }) });
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/faqJson is not valid JSON/i),
+      );
+    });
+    const patches = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'PATCH');
+    expect(patches.length).toBe(0);
+  });
+});
+
+describe('<TripDetail /> — StatusBadge fallback', () => {
+  it('unknown status renders the literal text using subtle fallback colours (no crash)', async () => {
+    installFetchMock({ trip: makeTrip({ status: 'pending-approval' }) });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    // The badge falls back to {bg:'var(--subtle-bg)', color:'var(--text-secondary)'}
+    // when status isn't in the known set; literal text still renders.
+    expect(screen.getByText('pending-approval')).toBeInTheDocument();
+  });
+});

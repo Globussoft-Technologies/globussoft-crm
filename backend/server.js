@@ -747,6 +747,7 @@ app.use("/api/travel", travelTripBillingRoutes);
 app.use("/api/travel", travelWebcheckinRoutes);
 app.use("/api/travel", travelTravelStallRoutes);
 app.use("/api/travel", require("./routes/travel_inbound_leads"));
+app.use("/api/travel/itinerary-templates", require("./routes/travel_itinerary_templates"));
 app.use("/api/travel/sightseeing", require("./routes/travel_sightseeing"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);

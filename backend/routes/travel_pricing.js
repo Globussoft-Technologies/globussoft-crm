@@ -968,6 +968,196 @@ router.get(
   },
 );
 
+// ─── /pricing/by-quarter ─────────────────────────────────────────────
+
+// GET /api/travel/pricing/by-quarter — tenant-wide quarterly rollup.
+//
+// Quarterly complement to /pricing/by-month + /pricing/by-year — completes
+// the rollup triplet (sibling to /stats). Pricing-config churn often
+// reads more naturally on a quarterly cadence than monthly (operator
+// reviews; YoY comparisons against the prior-quarter window), so this
+// surface pairs with the monthly + annual views in the same dashboard
+// tile family.
+//
+// Buckets BOTH TravelSeasonCalendar AND TravelMarkupRule rows by
+// createdAt UTC YYYY-Q[1-4]. Unlike by-month / by-year (which split
+// counts into seasonCount / markupCount), this endpoint emits a unified
+// `count` per bucket plus a per-bucket `bySubBrand` breakdown — same
+// shape as /itineraries/by-quarter + /suppliers/by-quarter etc.
+//
+// PRD anchors:
+//   - PRD_TRAVEL_GST_COMPLIANCE — pricing-engine quarterly review
+//     surfaces this rollup for cost-master + season + markup-rule
+//     change-rate analysis.
+//
+// Query params:
+//   - ?from / ?to     — optional inclusive YYYY-Q[1-4] bounds; invalid →
+//                       400 INVALID_QUARTER_FORMAT
+//   - ?orderBy        — default quarter:asc; accepts quarter:{asc|desc},
+//                       count:{asc|desc}; unknown tokens degrade silently
+//                       to the default
+//   - ?limit / ?offset — default 8 / 0; limit caps at 40
+//
+// Behaviour:
+//   - Sub-brand-scoped: MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' rows. Mirrors /pricing/by-month exactly.
+//     Empty access set → all-zeros envelope (not 403) so the dashboard
+//     tile renders cleanly for not-yet-onboarded operators.
+//   - JS-side aggregation over light findMany projections
+//     ({ subBrand, createdAt }) — population bounded by tenant scale.
+//   - Per-bucket `bySubBrand`: object keyed on subBrand string → count;
+//     falsy/null subBrand coerces to "_tenant" (matches /pricing/stats).
+//   - "unknown" bucket: rows with null/invalid createdAt land here so
+//     the count surface stays accurate. Excluded when ?from / ?to is
+//     set; included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter.
+//
+// No audit row written — read-only meta surface.
+//
+// Express route ordering: literal-path /pricing/by-quarter is declared
+// BEFORE /pricing/quote (and any future /pricing/:id family) for
+// consistency with the sibling by-month + by-year handlers.
+router.get(
+  "/pricing/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 8, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+      // YYYY-Q[1-4] validation — 4-digit year + literal Q + 1-4 quarter.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Q[1-4] format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Q[1-4] format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+      // Sub-brand narrowing — mirrors /pricing/by-month exactly.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json({
+          total: 0,
+          rows: [],
+        });
+      }
+
+      const seasonWhere = { tenantId: req.travelTenant.id };
+      const ruleWhere = { tenantId: req.travelTenant.id };
+      if (allowed instanceof Set) {
+        const brandList = [...allowed];
+        seasonWhere.subBrand = { in: brandList };
+        ruleWhere.subBrand = { in: brandList };
+      }
+
+      const [seasons, rules] = await Promise.all([
+        prisma.travelSeasonCalendar.findMany({
+          where: seasonWhere,
+          select: { subBrand: true, createdAt: true },
+        }),
+        prisma.travelMarkupRule.findMany({
+          where: ruleWhere,
+          select: { subBrand: true, createdAt: true },
+        }),
+      ]);
+
+      // Aggregate per-UTC-quarter. Map "YYYY-Q[1-4]" → bucket. Null/invalid
+      // createdAt → "unknown" bucket (kept unless ?from / ?to set).
+      const byQuarter = new Map();
+
+      function bucketFor(quarterKey) {
+        let b = byQuarter.get(quarterKey);
+        if (!b) {
+          b = {
+            quarter: quarterKey,
+            count: 0,
+            bySubBrand: {},
+          };
+          byQuarter.set(quarterKey, b);
+        }
+        return b;
+      }
+
+      function quarterKeyFor(createdAt) {
+        if (!createdAt) return "unknown";
+        const dt = createdAt instanceof Date ? createdAt : new Date(createdAt);
+        if (Number.isNaN(dt.getTime())) return "unknown";
+        const yyyy = dt.getUTCFullYear();
+        const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+        return `${yyyy}-Q${q}`;
+      }
+
+      function addToBucket(row) {
+        const bucket = bucketFor(quarterKeyFor(row.createdAt));
+        bucket.count += 1;
+        const sbKey = row.subBrand ? String(row.subBrand) : "_tenant";
+        bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+      }
+
+      for (const s of seasons) addToBucket(s);
+      for (const r of rules) addToBucket(r);
+
+      let rows = [...byQuarter.values()];
+
+      // ?from / ?to bucket filter. "unknown" excluded when either bound
+      // is set (no comparable token).
+      if (fromRaw !== null) {
+        rows = rows.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+      }
+      if (toRaw !== null) {
+        rows = rows.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Q[1-4] which is
+      // also chronological (Q1 < Q2 < Q3 < Q4 in ASCII, years naturally
+      // ordered).
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      rows.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = rows.length;
+
+      // Pagination AFTER aggregation + sort + filter.
+      const paged = rows.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-pricing] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
+
 // ─── /pricing/quote ──────────────────────────────────────────────────
 
 // POST /api/travel/pricing/quote

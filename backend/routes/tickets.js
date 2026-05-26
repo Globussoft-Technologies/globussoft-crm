@@ -28,6 +28,155 @@ router.get("/", async (req, res) => {
   }
 });
 
+// ============================================================================
+// GET /api/tickets/stats — tenant-wide ticket KPI rollup (CRM polish — first
+// /stats endpoint on the support ticket route).
+//
+// Mirrors backend/routes/deals.js /stats + backend/routes/travel_suppliers.js
+// /suppliers/stats posture. Read-only meta surface that powers the support
+// dashboard's header tile strip ("12 open · 4 high-priority · 2 SLA-breached
+// · avg resolution 8.5h") without forcing the frontend to fire N+1 list +
+// per-status count + per-priority count round-trips.
+//
+// Behaviour:
+//   - Tenant-scoped via req.user.tenantId.
+//   - Optional ?from / ?to (ISO date bounds) filter Ticket.createdAt; invalid
+//     → 400 INVALID_DATE.
+//   - Aggregates over prisma.ticket using findMany + in-process bucketing
+//     (mirrors travel_suppliers/stats — keeps mocking simple in tests and
+//     yields a single shape regardless of which DB engine is behind Prisma).
+//   - byStatus / byPriority cover EXACTLY the schema enums
+//     (status: Open/Pending/Resolved/Closed; priority: Low/Medium/High/Urgent).
+//   - openCount = count where status NOT IN terminal set (Resolved/Closed).
+//   - slaBreachedCount = count where breachedAt IS NOT NULL. (Ticket schema
+//     uses `breached` Boolean + `breachedAt` DateTime — sibling /sla
+//     surfaces use breachedAt as the canonical "breached at this instant".)
+//   - avgResolutionHours = average (resolvedAt - createdAt) / 3_600_000 across
+//     tickets where resolvedAt IS NOT NULL; null when no resolved tickets.
+//     Half-up to 2dp.
+//   - lastCreatedAt = max(createdAt) ISO or null.
+//
+// No audit row written — read-only meta surface (mirrors travel_suppliers/stats
+// + deals/stats).
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family or `:id="stats"` would route into GET /:id and fail with the
+// `parseInt(...)` → NaN findFirst lookup.
+// ============================================================================
+const TERMINAL_TICKET_STATUSES = new Set(["resolved", "closed", "cancelled"]);
+
+router.get("/stats", async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // Optional ISO date bounds on Ticket.createdAt
+    const where = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    const tickets = await prisma.ticket.findMany({
+      where,
+      select: {
+        status: true,
+        priority: true,
+        createdAt: true,
+        resolvedAt: true,
+        breachedAt: true,
+      },
+    });
+
+    // Empty short-circuit — return zeroed shape with null avg + lastCreatedAt.
+    if (tickets.length === 0) {
+      return res.json({
+        total: 0,
+        byStatus: {},
+        byPriority: {},
+        openCount: 0,
+        slaBreachedCount: 0,
+        avgResolutionHours: null,
+        lastCreatedAt: null,
+      });
+    }
+
+    const byStatus = {};
+    const byPriority = {};
+    let openCount = 0;
+    let slaBreachedCount = 0;
+    let lastCreatedAt = null;
+    let resolvedSumMs = 0;
+    let resolvedCount = 0;
+
+    for (const t of tickets) {
+      const status = t.status || "Open";
+      const priority = t.priority || "Low";
+
+      byStatus[status] = (byStatus[status] || 0) + 1;
+      byPriority[priority] = (byPriority[priority] || 0) + 1;
+
+      const statusLc = String(status).trim().toLowerCase();
+      if (!TERMINAL_TICKET_STATUSES.has(statusLc)) {
+        openCount += 1;
+      }
+
+      if (t.breachedAt != null) {
+        slaBreachedCount += 1;
+      }
+
+      const created = t.createdAt instanceof Date ? t.createdAt : new Date(t.createdAt);
+      if (!Number.isNaN(created.getTime())) {
+        if (!lastCreatedAt || created > lastCreatedAt) lastCreatedAt = created;
+      }
+
+      if (t.resolvedAt != null) {
+        const resolved = t.resolvedAt instanceof Date ? t.resolvedAt : new Date(t.resolvedAt);
+        if (!Number.isNaN(resolved.getTime()) && !Number.isNaN(created.getTime())) {
+          resolvedSumMs += (resolved.getTime() - created.getTime());
+          resolvedCount += 1;
+        }
+      }
+    }
+
+    // Half-up round to 2dp — matches sibling stats endpoints.
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const avgResolutionHours = resolvedCount > 0
+      ? round2((resolvedSumMs / resolvedCount) / 3_600_000)
+      : null;
+
+    res.json({
+      total: tickets.length,
+      byStatus,
+      byPriority,
+      openCount,
+      slaBreachedCount,
+      avgResolutionHours,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[tickets] stats error:", err.message);
+    res.status(500).json({ error: "Failed to compute ticket stats" });
+  }
+});
+
 // GET /:id — single ticket
 router.get("/:id", async (req, res) => {
   try {

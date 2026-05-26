@@ -706,3 +706,308 @@ describe('KnowledgeBase — extended surface coverage', () => {
     expect(putCalls).toHaveLength(0);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * 2026-05-26 extension wave — fills gaps not covered above:
+ *   - Category DELETE (confirm + cancel + selected-category reset)
+ *   - Unpublish round-trip (toggling from published → draft)
+ *   - Total-views aggregation across articles
+ *   - Public article link only renders for PUBLISHED rows + uses
+ *     /kb/<tenant-slug>/<article-slug> path
+ *   - Tenant-name prefix in the page header
+ *   - Status-filter toggle round-trip (click Published twice → filter clears)
+ *   - Category select inside the edit form lists categories + "Uncategorized"
+ *   - Non-array API responses are handled defensively (no crash)
+ *   - Slug field only renders in edit-mode, not in new-article mode
+ * Stable mock-object pattern (per the 2026-05-23 RTL standing rule).
+ * ------------------------------------------------------------------ */
+
+describe('KnowledgeBase — category CRUD + unpublish + portal + defensive coverage', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    // Restore default confirm in case an earlier describe swapped it
+    notifyObj.confirm = () => Promise.resolve(true);
+  });
+
+  // -------- 12) Category DELETE — confirmed path fires DELETE --------
+  it('clicking the category trash icon fires DELETE on confirmation', async () => {
+    const confirmSpy = vi.fn(() => Promise.resolve(true));
+    notifyObj.confirm = confirmSpy;
+    const categories = [{ id: 71, name: 'To-Be-Deleted', articleCount: 0 }];
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/knowledge-base/categories' && (!opts || !opts.method)) {
+        return Promise.resolve(categories);
+      }
+      if (url === '/api/knowledge-base/articles') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/categories/71' && opts?.method === 'DELETE') {
+        return Promise.resolve({});
+      }
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('To-Be-Deleted')).toBeInTheDocument();
+    });
+    const trashBtn = screen.getByTitle(/Delete category/i);
+    await act(async () => {
+      fireEvent.click(trashBtn);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(confirmSpy).toHaveBeenCalled();
+    const deleteCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === '/api/knowledge-base/categories/71' && c[1]?.method === 'DELETE'
+    );
+    expect(deleteCalls).toHaveLength(1);
+  });
+
+  // -------- 13) Category DELETE — rejected confirm skips the call --------
+  it('cancelling the category-delete confirm does NOT fire DELETE', async () => {
+    notifyObj.confirm = () => Promise.resolve(false);
+    const categories = [{ id: 72, name: 'Survivor-Cat', articleCount: 3 }];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve(categories);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Survivor-Cat')).toBeInTheDocument();
+    });
+    const trashBtn = screen.getByTitle(/Delete category/i);
+    await act(async () => {
+      fireEvent.click(trashBtn);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const deleteCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[1]?.method === 'DELETE'
+    );
+    expect(deleteCalls).toHaveLength(0);
+  });
+
+  // -------- 14) Unpublish round-trip — published → draft flips status --------
+  it('clicking Unpublish on a published article fires POST /unpublish + toasts', async () => {
+    const articles = [makeArticle(801, { title: 'Already live', isPublished: true })];
+    const articlesAfter = [{ ...articles[0], isPublished: false }];
+    let articleCalls = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles' && (!opts || !opts.method)) {
+        const payload = articleCalls === 0 ? articles : articlesAfter;
+        articleCalls += 1;
+        return Promise.resolve(payload);
+      }
+      if (url === '/api/knowledge-base/articles/801/unpublish' && opts?.method === 'POST') {
+        return Promise.resolve(articlesAfter[0]);
+      }
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Already live')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/^Unpublish$/)).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/^Unpublish$/));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const unpublishCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === '/api/knowledge-base/articles/801/unpublish' && c[1]?.method === 'POST'
+    );
+    expect(unpublishCalls).toHaveLength(1);
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/unpublished successfully/i),
+    );
+  });
+
+  // -------- 15) Total views stat aggregates across all articles --------
+  it('stats bar displays sum of views across all articles (toLocaleString-formatted)', async () => {
+    const articles = [
+      { ...makeArticle(901, { isPublished: true }), views: 1200 },
+      { ...makeArticle(902, { isPublished: true }), views: 250 },
+      { ...makeArticle(903, { isPublished: false }), views: 50 },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      return Promise.resolve({});
+    });
+    renderKB();
+    // 1200 + 250 + 50 = 1500 → "1,500" via toLocaleString
+    await waitFor(() => {
+      expect(screen.getByText(/1,500 total views/)).toBeInTheDocument();
+    });
+  });
+
+  // -------- 16) Public View link renders only for published articles --------
+  it('public View link renders for published articles but not for drafts', async () => {
+    const articles = [
+      makeArticle(1001, { title: 'Live article', isPublished: true }),
+      makeArticle(1002, { title: 'Hidden draft', isPublished: false }),
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Live article')).toBeInTheDocument();
+    });
+    // The published article row has an <a> with title "View public article".
+    // (The /^View$/ text also matches a <strong>View</strong> in the portal-info
+    // card explanation, so we target the link via its title attribute.)
+    const anchor = screen.getByTitle(/View public article/i);
+    expect(anchor.tagName).toBe('A');
+    expect(anchor.getAttribute('href')).toBe('/kb/test-org/article-1001');
+    expect(anchor.getAttribute('target')).toBe('_blank');
+    // Only one such anchor — the draft row does NOT render a View link
+    const allAnchors = document.querySelectorAll('a[title="View public article"]');
+    expect(allAnchors).toHaveLength(1);
+  });
+
+  // -------- 17) Tenant name appears in the page header --------
+  it('renders "<TenantName> Knowledge Base" header when tenant.name is set', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    renderKB();
+    // TENANT is { name: 'Test Org', ... } per the module-top constant
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', { name: /Test Org Knowledge Base/i }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // -------- 18) Status filter pill round-trips off on a second click --------
+  it('clicking the Published pill toggles the published filter ON then OFF', async () => {
+    const articles = [
+      makeArticle(1101, { title: 'Pub one', isPublished: true }),
+      makeArticle(1102, { title: 'Pub two', isPublished: true }),
+      makeArticle(1103, { title: 'Draft uno', isPublished: false }),
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Pub one')).toBeInTheDocument();
+    });
+    // All three visible initially
+    expect(screen.getByText('Draft uno')).toBeInTheDocument();
+
+    // First click — filter to published only
+    fireEvent.click(screen.getByText(/2 Published/));
+    await waitFor(() => {
+      expect(screen.queryByText('Draft uno')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Pub one')).toBeInTheDocument();
+
+    // Second click — clears the filter, draft visible again
+    fireEvent.click(screen.getByText(/2 Published/));
+    await waitFor(() => {
+      expect(screen.getByText('Draft uno')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Pub one')).toBeInTheDocument();
+  });
+
+  // -------- 19) Edit form's Category <select> lists categories + Uncategorized --------
+  it('edit-form Category select contains "Uncategorized" plus every loaded category', async () => {
+    const categories = [
+      { id: 1201, name: 'FAQ', articleCount: 1 },
+      { id: 1202, name: 'How-To', articleCount: 0 },
+    ];
+    const articles = [makeArticle(1210, { title: 'Editable', categoryId: 1201, isPublished: false })];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve(categories);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Editable')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText(/^Edit$/));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit Article/i)).toBeInTheDocument();
+    });
+    // The select has three options — Uncategorized, FAQ, How-To
+    const uncategorizedOpt = screen.getByRole('option', { name: /Uncategorized/i });
+    expect(uncategorizedOpt).toBeInTheDocument();
+    const faqOpt = screen.getByRole('option', { name: /^FAQ$/ });
+    expect(faqOpt).toBeInTheDocument();
+    const howToOpt = screen.getByRole('option', { name: /^How-To$/ });
+    expect(howToOpt).toBeInTheDocument();
+  });
+
+  // -------- 20) Non-array API responses are handled defensively --------
+  it('does not crash when /categories or /articles return a non-array payload', async () => {
+    // Simulate a backend regression returning { error: '...' } instead of []
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') {
+        return Promise.resolve({ error: 'unauthorized' });
+      }
+      if (url === '/api/knowledge-base/articles') {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve({});
+    });
+    renderKB();
+    // No crash + empty-state renders (0 articles + empty categories list)
+    await waitFor(() => {
+      expect(screen.getByText(/0 articles/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/No articles yet/i)).toBeInTheDocument();
+    // The header CTA is still present (page hasn't blown up)
+    expect(screen.getByRole('button', { name: /New Article/i })).toBeInTheDocument();
+  });
+
+  // -------- 21) Slug field only appears in edit-mode, not new-article mode --------
+  it('Slug field appears in edit-mode but is hidden in new-article mode', async () => {
+    const articles = [makeArticle(1301, { title: 'Has slug', isPublished: false })];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Has slug')).toBeInTheDocument();
+    });
+
+    // New-article mode — no Slug field
+    fireEvent.click(screen.getByRole('button', { name: /New Article/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Create Article/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByPlaceholderText(/auto-generated from title/i)).not.toBeInTheDocument();
+
+    // Cancel + open edit-mode — Slug field IS rendered (pre-filled from article.slug).
+    // After cancel the form is gone; the table row is visible again. We detect
+    // the return-to-list state by the absence of the "Create Article" submit
+    // button (which only renders inside the new-article form).
+    fireEvent.click(screen.getByText(/Cancel/i));
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Create Article/i })).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText(/^Edit$/));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit Article/i)).toBeInTheDocument();
+    });
+    const slugInput = screen.getByPlaceholderText(/auto-generated from title/i);
+    expect(slugInput).toBeInTheDocument();
+    expect(slugInput.value).toBe('article-1301');
+  });
+});

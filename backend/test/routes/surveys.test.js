@@ -394,3 +394,136 @@ describe('GET /:id/responses — list responses with contact info', () => {
   });
 });
 
+// ── GET /?fields=summary — slim-shape opt-in (#920 slice 8) ──────────
+//
+// Mirror of slice 1 (contacts), slice 2 (deals), slice 3 (tickets),
+// slice 4 (tasks), slice 5 (projects), slice 6 (expenses), slice 7
+// (notifications). When the caller passes ?fields=summary, the route
+// emits a slim Prisma `select` keyed on the columns a survey list view
+// actually renders (id, name, type, isActive, createdAt) and drops the
+// per-survey response rollup (responseCount / avgScore / npsScore) +
+// the heavier `question` column.
+
+describe('GET /?fields=summary — slim-shape opt-in (#920 slice 8)', () => {
+  test('?fields=summary triggers prisma.survey.findMany with `select` (slim cols), not the default no-select shape', async () => {
+    prisma.survey.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/surveys/?fields=summary');
+
+    const args = prisma.survey.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.select).toEqual({
+      id: true,
+      name: true,
+      type: true,
+      isActive: true,
+      createdAt: true,
+    });
+    // Slim shape must NOT include the heavier `question` column or the
+    // computed rollup fields (those are server-computed on the full path).
+    expect(args.select.question).toBeUndefined();
+    expect(args.select.tenantId).toBeUndefined();
+    expect(args.select.updatedAt).toBeUndefined();
+    // include must NOT be set on slim path.
+    expect(args.include).toBeUndefined();
+  });
+
+  test('default (no ?fields) preserves the full-row shape — no `select` arg passed to findMany', async () => {
+    prisma.survey.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, type: 'NPS', name: 'Q', question: 'q?', isActive: true },
+    ]);
+    prisma.surveyResponse.findMany.mockResolvedValue([{ surveyId: 1, score: 9 }]);
+
+    await request(makeApp()).get('/api/surveys/');
+
+    const args = prisma.survey.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    expect(args.include).toBeUndefined();
+    // Full path still queries response counts for the rollup whenever
+    // surveys exist — this is the cost the slim opt-in avoids.
+    expect(prisma.surveyResponse.findMany).toHaveBeenCalled();
+  });
+
+  test('?fields=summary response rows reflect the slim Prisma select verbatim and DROP the rollup fields', async () => {
+    // Prisma `select` honours only the chosen columns. The route forwards
+    // whatever Prisma returns, so we pin the contract by mocking the slim
+    // rows and confirming heavy keys + rollup are absent in the body.
+    prisma.survey.findMany.mockResolvedValue([
+      { id: 1, name: 'Slim A', type: 'NPS', isActive: true, createdAt: new Date('2026-05-26T00:00:00Z') },
+      { id: 2, name: 'Slim B', type: 'CSAT', isActive: false, createdAt: new Date('2026-05-26T01:00:00Z') },
+    ]);
+
+    const res = await request(makeApp()).get('/api/surveys/?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(2);
+    for (const row of res.body) {
+      expect(row.id).toBeDefined();
+      expect(row.name).toBeDefined();
+      expect(row.type).toBeDefined();
+      expect(row.isActive).toBeDefined();
+      // Heavy + server-computed fields MUST be absent in the slim shape.
+      expect(row.question).toBeUndefined();
+      expect(row.responseCount).toBeUndefined();
+      expect(row.avgScore).toBeUndefined();
+      expect(row.npsScore).toBeUndefined();
+    }
+    // The slim path must NOT call surveyResponse.findMany — opt-in skips
+    // the per-survey rollup query entirely (cheap-list contract).
+    expect(prisma.surveyResponse.findMany).not.toHaveBeenCalled();
+  });
+
+  test('?fields=summary preserves tenant isolation on the where clause', async () => {
+    prisma.survey.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 42 })).get('/api/surveys/?fields=summary');
+
+    const args = prisma.survey.findMany.mock.calls[0][0];
+    // tenantId is sourced from req.user (JWT), not the query.
+    expect(args.where).toEqual({ tenantId: 42 });
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=other (any non-exact value) falls through to the default enriched shape', async () => {
+    // Only the literal string "summary" opts into slim — every other value
+    // (including "Summary", "full", arbitrary tokens) must preserve the
+    // existing wire shape so we don't accidentally trim production callers.
+    prisma.survey.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, type: 'NPS', name: 'Q', question: 'q?', isActive: true },
+    ]);
+    prisma.surveyResponse.findMany.mockResolvedValue([
+      { surveyId: 1, score: 10 }, { surveyId: 1, score: 9 }, { surveyId: 1, score: 0 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/surveys/?fields=Summary');
+
+    expect(res.status).toBe(200);
+    expect(prisma.survey.findMany.mock.calls[0][0].select).toBeUndefined();
+    // Full enriched shape includes the rollup fields.
+    expect(res.body[0]).toEqual(expect.objectContaining({
+      id: 1,
+      question: 'q?',
+      responseCount: 3,
+      npsScore: expect.any(Number),
+      avgScore: expect.any(Number),
+    }));
+  });
+
+  test('?fields=summary still orders by createdAt desc and scopes to req.user.tenantId', async () => {
+    prisma.survey.findMany.mockResolvedValue([
+      { id: 3, name: 'Newest', type: 'NPS', isActive: true, createdAt: new Date('2026-05-26T03:00:00Z') },
+      { id: 2, name: 'Older',  type: 'NPS', isActive: true, createdAt: new Date('2026-05-26T02:00:00Z') },
+      { id: 1, name: 'Oldest', type: 'NPS', isActive: false, createdAt: new Date('2026-05-26T01:00:00Z') },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 7 })).get('/api/surveys/?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body.map(r => r.id)).toEqual([3, 2, 1]);
+    const args = prisma.survey.findMany.mock.calls[0][0];
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.where).toEqual({ tenantId: 7 });
+  });
+});
+

@@ -222,6 +222,31 @@ router.post("/public/:id/respond", async (req, res) => {
 // GET / — list surveys (with response counts)
 router.get("/", async (req, res) => {
   try {
+    // #920 slice 8: ?fields=summary slim-shape opt-in. Mirrors slices 1-7
+    // (contacts/deals/tickets/tasks/projects/expenses/notifications). When
+    // the caller passes ?fields=summary we (a) restrict the Prisma `select`
+    // to the columns a list view actually renders (id, name, type,
+    // isActive, createdAt) and (b) skip the per-survey response rollup
+    // (responseCount / avgScore / npsScore) so the route stays cheap.
+    // Opt-in additive — existing callers (no ?fields, or any non-exact
+    // value) get the full enriched row shape unchanged.
+    const isSummary = req.query.fields === "summary";
+
+    if (isSummary) {
+      const slim = await prisma.survey.findMany({
+        where: { tenantId: req.user.tenantId },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          isActive: true,
+          createdAt: true,
+        },
+      });
+      return res.json(slim);
+    }
+
     const surveys = await prisma.survey.findMany({
       where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },

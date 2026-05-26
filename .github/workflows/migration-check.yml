@@ -298,7 +298,13 @@ jobs:
             # legitimate "unbreak the schema" commit isn't held hostage
             # to its broken predecessor. If the proposed schema also
             # fails to parse, we fail the gate hard.
-            if (cd backend && npx prisma validate --schema prisma/schema.prisma); then
+            #
+            # DATABASE_URL is required by `prisma validate` even though
+            # it never opens a connection — the validator resolves
+            # env("DATABASE_URL") in the datasource block during parse.
+            # This job doesn't seed real DB envs (only api_tests does),
+            # so we supply a syntactically-valid placeholder.
+            if (cd backend && DATABASE_URL='mysql://ci:ci@127.0.0.1:3306/ci' npx prisma validate --schema prisma/schema.prisma); then
               echo "::warning::baseline diff failed but proposed schema validates cleanly — skipping risk analysis for this commit"
               exit 0
             fi

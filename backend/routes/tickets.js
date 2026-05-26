@@ -13,15 +13,37 @@ const RESPONSIVE_STATUSES = ["in progress", "pending", "replied"];
 const TERMINAL_STATUSES = ["resolved", "closed", "cancelled"];
 
 // GET / — list all tickets in current tenant
+//
+// #920 slice 3: ADDITIVE ?fields=summary slim-shape opt-in. Mirrors slice 1
+// contacts (f7790241) + slice 2 deals (6786c2da). When ?fields=summary, returns
+// a slim Prisma `select` of {id, subject, status, priority, assigneeId,
+// tenantId, createdAt} and drops the nested assignee include + heavier columns
+// (description, slaResponseDue, slaResolveDue, firstResponseAt, resolvedAt,
+// breached, breachedAt, updatedAt). Opt-in only on EXACT `summary` value —
+// any other value (or absence) returns the full shape unchanged.
 router.get("/", async (req, res) => {
   try {
-    const tickets = await prisma.ticket.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId: req.user.tenantId },
-      include: {
-        assignee: { select: { id: true, name: true, email: true } },
-      },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        subject: true,
+        status: true,
+        priority: true,
+        assigneeId: true,
+        tenantId: true,
+        createdAt: true,
+      };
+    } else {
+      findManyArgs.include = {
+        assignee: { select: { id: true, name: true, email: true } },
+      };
+    }
+    const tickets = await prisma.ticket.findMany(findManyArgs);
     res.json(tickets);
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch tickets." });

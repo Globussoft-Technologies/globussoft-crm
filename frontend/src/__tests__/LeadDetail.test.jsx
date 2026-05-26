@@ -251,4 +251,164 @@ describe("LeadDetail — page contract", () => {
       expect(screen.queryByText(/TMC Trips/)).toBeNull();
     });
   });
+
+  // ─── Extended cases (round-2) ─────────────────────────────────────
+  // These pin uncovered branches the SUT actually has — the page is
+  // read-only (no disposition / conversion / timeline / AI-score
+  // affordances in the current 419L source) so we target the
+  // conditional render paths instead: contact load failure, RFU
+  // profile link gating, "+N more" diagnostics link, TMC trip-row
+  // navigation, INR lakh currency formatting, trips-error gating,
+  // and the cross-tenant 404 surface.
+
+  it("renders the contact-not-found error surface when /api/contacts/:id throws", async () => {
+    // Contact endpoint rejects → page shows error message + back-link
+    // (not the page header / sections). Notify.error fires once with
+    // the same message — pins the dual-surface error contract.
+    fetchApiMock.mockImplementation(
+      makeFetchImpl({
+        contact: { kind: "throw", error: { body: { error: "Contact not found" } } },
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText(/Contact not found/i)).toBeTruthy();
+    const back = screen.getByText(/Back to leads/i).closest("a");
+    expect(back?.getAttribute("href")).toBe("/travel/leads");
+    // Section headers should NOT render in the error path.
+    expect(screen.queryByText(/Latest diagnostic/i)).toBeNull();
+    expect(screen.queryByText(/Itineraries/)).toBeNull();
+    await waitFor(() => expect(notifyObj.error).toHaveBeenCalledTimes(1));
+    expect(notifyObj.error).toHaveBeenCalledWith("Contact not found");
+  });
+
+  it("hides the RFU profile link when no diagnostic OR itinerary has subBrand=rfu", async () => {
+    // All current fixtures are subBrand=tmc — the cross-link to
+    // /travel/rfu/customers/:id must NOT render. Only the generic
+    // CRM contact link is shown.
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    await waitFor(() => expect(screen.queryAllByText(/Sharada School Trust/).length).toBeGreaterThan(0));
+    expect(screen.getByText(/Open in CRM Contacts/i)).toBeTruthy();
+    expect(screen.queryByText(/Open RFU profile/i)).toBeNull();
+  });
+
+  it("shows the RFU profile link when ≥1 diagnostic has subBrand=rfu", async () => {
+    // Swap the latest diagnostic to subBrand=rfu → the conditional
+    // RFU cross-link should render with the right href.
+    const RFU_DIAG = { ...DIAG, subBrand: "rfu", classificationLabel: "Umrah-ready" };
+    fetchApiMock.mockImplementation(
+      makeFetchImpl({
+        diagnostics: {
+          kind: "ok",
+          data: { diagnostics: [RFU_DIAG], total: 1, limit: 5, offset: 0 },
+        },
+      }),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.queryAllByText(/Sharada School Trust/).length).toBeGreaterThan(0));
+    const rfuLink = (await screen.findByText(/Open RFU profile/i)).closest("a");
+    expect(rfuLink?.getAttribute("href")).toBe("/travel/rfu/customers/77");
+  });
+
+  it("renders the '+N more' diagnostics link only when total > 1", async () => {
+    // total=3, list length=1 → "+2 more" link visible with the right
+    // querystring back to the diagnostics list view.
+    fetchApiMock.mockImplementation(
+      makeFetchImpl({
+        diagnostics: {
+          kind: "ok",
+          data: { diagnostics: [DIAG], total: 3, limit: 5, offset: 0 },
+        },
+      }),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.queryAllByText(/Sharada School Trust/).length).toBeGreaterThan(0));
+    const moreLink = (await screen.findByText(/\+2 more/)).closest("a");
+    expect(moreLink?.getAttribute("href")).toBe("/travel/diagnostics?contactId=77");
+  });
+
+  it("renders TMC trip rows with status badge + pax count, clickable for navigation", async () => {
+    // Pin the TMC trips table contract — trip code, status badge,
+    // pax count from _count.participants, and row-level role=link
+    // aria-label for keyboard / a11y users.
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    await waitFor(() => expect(screen.queryAllByText(/Sharada School Trust/).length).toBeGreaterThan(0));
+    const tripRow = await screen.findByLabelText(/Open trip goa-jan-2026/i);
+    expect(tripRow).toBeTruthy();
+    expect(tripRow.getAttribute("role")).toBe("link");
+    // Pax count comes from _count.participants
+    expect(screen.getByText("32")).toBeTruthy();
+    // Status badge "confirmed" rendered (uppercased via CSS, query case-insensitive)
+    expect(screen.getByText(/^confirmed$/i)).toBeTruthy();
+  });
+
+  it("formats INR amounts ≥1 lakh as compact ₹X.XXL", async () => {
+    // ITIN_A.totalAmount = 145000 INR → "₹1.45L"
+    // ITIN_B.totalAmount = 220000 INR → "₹2.20L"
+    // Pins the fmtMoney() lakh-compaction branch.
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    await waitFor(() => expect(screen.queryAllByText(/Sharada School Trust/).length).toBeGreaterThan(0));
+    expect(await screen.findByText(/₹1\.45L/)).toBeTruthy();
+    expect(screen.getByText(/₹2\.20L/)).toBeTruthy();
+  });
+
+  it("hides the trips-unavailable error line when there is no RFU evidence", async () => {
+    // Trips endpoint throws but no diagnostic/itinerary is subBrand=rfu
+    // → the conditional "Trips unavailable" hint must NOT render to
+    // avoid polluting generic contact views. The TMC Trips section
+    // also stays hidden because tripsToShow.length === 0.
+    fetchApiMock.mockImplementation(
+      makeFetchImpl({
+        trips: { kind: "throw", error: { body: { error: "forbidden" } } },
+      }),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.queryAllByText(/Sharada School Trust/).length).toBeGreaterThan(0));
+    // Itineraries section still loads (subBrand=tmc, not rfu).
+    expect(await screen.findByText(/Goa programme Jan 2026/)).toBeTruthy();
+    // The trips-unavailable hint should be absent: hasRfu === false.
+    expect(screen.queryByText(/Trips unavailable/i)).toBeNull();
+    expect(screen.queryByText(/TMC Trips/)).toBeNull();
+  });
+
+  it("shows the trips-unavailable inline hint when trips error AND user has RFU evidence", async () => {
+    // Diagnostic with subBrand=rfu → hasRfu=true. Trips endpoint
+    // throws → tripsToShow.length === 0 AND tripsError truthy AND
+    // hasRfu === true → the inline hint renders.
+    const RFU_DIAG = { ...DIAG, subBrand: "rfu", classificationLabel: "Umrah-ready" };
+    fetchApiMock.mockImplementation(
+      makeFetchImpl({
+        diagnostics: {
+          kind: "ok",
+          data: { diagnostics: [RFU_DIAG], total: 1, limit: 5, offset: 0 },
+        },
+        trips: { kind: "throw", error: { body: { error: "forbidden" } } },
+      }),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.queryAllByText(/Sharada School Trust/).length).toBeGreaterThan(0));
+    expect(await screen.findByText(/Trips unavailable: forbidden/i)).toBeTruthy();
+    // TMC Trips header still absent (tripsToShow.length === 0).
+    expect(screen.queryByText(/TMC Trips/)).toBeNull();
+  });
+
+  it("renders the diagnostics-error surface inline (independent of contact load)", async () => {
+    // Diagnostics endpoint throws but contact + itineraries succeed
+    // → the page still renders header + itineraries; the diagnostics
+    // section shows the inline error string (not the empty state).
+    fetchApiMock.mockImplementation(
+      makeFetchImpl({
+        diagnostics: { kind: "throw", error: { body: { error: "diag service down" } } },
+      }),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.queryAllByText(/Sharada School Trust/).length).toBeGreaterThan(0));
+    expect(await screen.findByText(/Diagnostics unavailable: diag service down/i)).toBeTruthy();
+    // The "No diagnostic on file" empty state should NOT show — error wins.
+    expect(screen.queryByText(/No diagnostic on file yet/i)).toBeNull();
+    // Itineraries section still loads independently.
+    expect(screen.getByText(/Goa programme Jan 2026/)).toBeTruthy();
+  });
 });

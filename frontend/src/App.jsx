@@ -174,6 +174,10 @@ const TravelCostMaster = lazy(() => import("./pages/travel/CostMaster"));
 // admin-facing CRUD surface. Framed as "the 6th category in Cost Master"
 // per #907, so placed adjacent to TravelCostMaster.
 const TravelSightseeingMaster = lazy(() => import("./pages/travel/SightseeingMaster"));
+// Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates wire-in. SUT page
+// shipped slice 7 (f8768836); this lazy import + Route below register the
+// admin-facing CRUD surface for reusable itinerary templates.
+const TravelItineraryTemplates = lazy(() => import("./pages/travel/ItineraryTemplates"));
 const TravelLeads = lazy(() => import("./pages/travel/Leads"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
@@ -1320,6 +1324,10 @@ export default function App() {
                   CRUD surface. Adjacent to cost-master per #907's "6th
                   category in Cost Master" framing. SUT page commit ca052d20. */}
               <Route path="travel/sightseeing" element={<TravelOnly><TravelSightseeingMaster /></TravelOnly>} />
+              {/* Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates admin
+                  CRUD surface. Adjacent to sightseeing because both are #907
+                  admin pages. SUT page commit f8768836. */}
+              <Route path="travel/itinerary-templates" element={<TravelOnly><TravelItineraryTemplates /></TravelOnly>} />
               <Route path="travel/leads" element={<TravelOnly><TravelLeads /></TravelOnly>} />
               <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />
               <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />

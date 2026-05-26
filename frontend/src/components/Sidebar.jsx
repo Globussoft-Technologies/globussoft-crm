@@ -113,6 +113,10 @@ import {
   // Sightseeing is framed as "the 6th category in Cost Master" per #907,
   // so the entry sits adjacent to Cost Master in renderTravelNav.
   Camera,
+  // Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates nav entry icon.
+  // Reusable itinerary template scaffolds — placed adjacent to Sightseeing
+  // Master because both are #907 admin pages.
+  LayoutTemplate,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -1117,6 +1121,9 @@ function renderTravelNav({
           Adjacent to Cost Master because #907 frames Sightseeing as "the
           6th category in Cost Master". */}
       <Link to="/travel/sightseeing" icon={Camera} label="Sightseeing Master" />
+      {/* Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates admin entry.
+          Adjacent to Sightseeing Master because both are #907 admin pages. */}
+      <Link to="/travel/itinerary-templates" icon={LayoutTemplate} label="Itinerary Templates" />
       {isAdmin && <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" />}
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />
       <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" />

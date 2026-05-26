@@ -111,7 +111,13 @@ export default function ServiceCategories() {
   };
 
   const remove = async (cat) => {
-    if (!confirm(`Delete "${cat.name}"? Services in this category will keep working but lose the link.`)) return;
+    const ok = await notify.confirm({
+      title: 'Delete service category',
+      message: `Delete "${cat.name}"? Services in this category will keep working but lose the link.`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/service-categories/${cat.id}`, { method: 'DELETE' });
       notify.success(`Deleted "${cat.name}"`);

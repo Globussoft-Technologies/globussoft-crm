@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { X, FileText, UploadCloud, Download, FileSignature, Trash2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney } from '../utils/money';
+import { useNotify } from '../utils/notify';
 import CPQBuilder from './CPQBuilder';
 
 const API_BASE = "";
 
 export default function DealModal({ deal, onClose }) {
+  const notify = useNotify();
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -122,7 +124,7 @@ export default function DealModal({ deal, onClose }) {
 
         if (!response.ok) {
           console.error("Open failed with status:", response.status, response.statusText);
-          alert(`Failed to open PDF: ${response.status} ${response.statusText}`);
+          notify.error(`Failed to open PDF: ${response.status} ${response.statusText}`);
           return;
         }
 
@@ -138,7 +140,7 @@ export default function DealModal({ deal, onClose }) {
 
         if (!response.ok) {
           console.error("Download failed with status:", response.status, response.statusText);
-          alert(`Failed to open PDF: ${response.status} ${response.statusText}`);
+          notify.error(`Failed to open PDF: ${response.status} ${response.statusText}`);
           return;
         }
 
@@ -149,7 +151,7 @@ export default function DealModal({ deal, onClose }) {
       window.open(url, '_blank');
     } catch (err) {
       console.error("Open error:", err);
-      alert(`Error opening PDF: ${err.message}`);
+      notify.error(`Error opening PDF: ${err.message}`);
     }
   };
 

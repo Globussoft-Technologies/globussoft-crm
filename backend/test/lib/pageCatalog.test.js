@@ -91,6 +91,11 @@ describe('canAccessPath', () => {
     'patients.read',
     'appointments.read',
     'appointments.write',
+    // `calendar` is a separate permission module from `appointments` —
+    // doctors get both so the day-grid view + booking flows work
+    // end-to-end. Mirrors DOCTOR_PERMISSIONS in ensureRbacOnBoot.js.
+    'calendar.read',
+    'calendar.write',
     'prescriptions.read',
   ]);
 
@@ -133,6 +138,10 @@ describe('canAccessPath', () => {
       'patients.update',
       'appointments.read',
       'appointments.update',
+      // Nurse views the Calendar day-grid for context; doesn't write to
+      // it (booking / rescheduling is Doctor / Receptionist work).
+      // Mirrors NURSE_PERMISSIONS in ensureRbacOnBoot.js.
+      'calendar.read',
       'visits.read',
       'visits.write',
       'visits.update',
@@ -171,11 +180,13 @@ describe('canAccessPath', () => {
 
 describe('getAccessiblePages', () => {
   it('returns only pages whose required perms the user satisfies', () => {
-    // Doctor-shape perms (includes appointments.write).
+    // Doctor-shape perms (includes appointments.write + calendar.*).
     const perms = new Set([
       'patients.read',
       'appointments.read',
       'appointments.write',
+      'calendar.read',
+      'calendar.write',
       'prescriptions.read',
     ]);
     const pages = getAccessiblePages(perms);
@@ -194,6 +205,7 @@ describe('getAccessiblePages', () => {
     const perms = new Set([
       'patients.read', 'patients.write', 'patients.update',
       'appointments.read', 'appointments.write', 'appointments.update',
+      'calendar.read', 'calendar.write',
       'visits.read', 'visits.write', 'visits.update',
       'prescriptions.read', 'prescriptions.write', 'prescriptions.update',
       'consents.read', 'consents.write',

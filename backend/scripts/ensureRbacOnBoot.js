@@ -93,6 +93,11 @@ const USER_PERMISSIONS = [
 const DOCTOR_PERMISSIONS = [
   'patients.read', 'patients.write', 'patients.update',
   'appointments.read', 'appointments.write', 'appointments.update',
+  // `calendar` is a sibling-permission to `appointments` — separated so
+  // admins can grant view-only Calendar access independently of the
+  // Appointments list / Book Appointment form. Doctors get both since
+  // they live in the Calendar day-grid view.
+  'calendar.read', 'calendar.write',
   'visits.read', 'visits.write', 'visits.update',
   'prescriptions.read', 'prescriptions.write', 'prescriptions.update',
   'consents.read', 'consents.write',
@@ -108,6 +113,9 @@ const DOCTOR_PERMISSIONS = [
 const NURSE_PERMISSIONS = [
   'patients.read', 'patients.update',
   'appointments.read', 'appointments.update',
+  // Nurse views the Calendar day-grid for context but doesn't book or
+  // reschedule (that's Doctor / Receptionist work). Read-only on calendar.
+  'calendar.read',
   'visits.read', 'visits.write', 'visits.update',
   // Nurse manages BOTH catalog (recording new products as they arrive)
   // AND ledger (logging receipts + adjustments on consumption). They're
@@ -122,6 +130,9 @@ const NURSE_PERMISSIONS = [
 const RECEPTIONIST_PERMISSIONS = [
   'patients.read', 'patients.write',
   'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete',
+  // Receptionist is THE primary calendar user — books slots, reschedules,
+  // cancels via drag-to-reschedule and right-click-cancel.
+  'calendar.read', 'calendar.write',
   'services.read',
   // Receptionist views the product catalog to look up items for POS
   // sales but doesn't edit it; no stock-ledger access.
@@ -140,6 +151,9 @@ const TELECALLER_PERMISSIONS = [
   'leads.read', 'leads.write', 'leads.update',
   'contacts.read', 'contacts.write',
   'appointments.read', 'appointments.write',
+  // Telecaller books appointments from outbound calls — they need
+  // calendar read+write to pick a slot during the call.
+  'calendar.read', 'calendar.write',
   'communications.read', 'communications.write',
   'sms.read', 'sms.write',
   'whatsapp.read', 'whatsapp.write',

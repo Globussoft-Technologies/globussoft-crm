@@ -92,7 +92,20 @@ function resolveEntity(req, res) {
 
 function gateFor(def, mode) {
   // mode: "read" for template/export, "write" for import.
-  return verifyWellnessRole(mode === "write" ? def.writeGate : def.readGate);
+  // The role array (def.readGate / def.writeGate) controls who passes
+  // by wellnessRole; def.readPermissions / def.writePermissions opens
+  // the SAME endpoint to custom RBAC roles granted the matching
+  // module.action permission — so a Radiologist role with
+  // `calendar.read` can export bookings without needing a clinical
+  // wellnessRole. Falls back to literal-only behaviour when the entity
+  // doesn't declare permissions (back-compat).
+  const allowed = mode === "write" ? def.writeGate : def.readGate;
+  const anyOfPermissions =
+    mode === "write" ? def.writePermissions : def.readPermissions;
+  const opts = Array.isArray(anyOfPermissions) && anyOfPermissions.length > 0
+    ? { anyOfPermissions }
+    : {};
+  return verifyWellnessRole(allowed, opts);
 }
 
 function sendCsv(res, filename, body) {

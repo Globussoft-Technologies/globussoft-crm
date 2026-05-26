@@ -106,7 +106,12 @@ export default function Leave() {
   };
 
   const onApprove = async (id) => {
-    if (!confirm('Approve this leave request?')) return;
+    const ok = await notify.confirm({
+      title: 'Approve leave',
+      message: 'Approve this leave request?',
+      confirmText: 'Approve',
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/leave/requests/${id}/approve`, { method: 'POST', body: JSON.stringify({}) });
       notify.success('Approved');
@@ -117,7 +122,13 @@ export default function Leave() {
   };
 
   const onReject = async (id) => {
-    const notes = prompt('Reason for rejection?') || '';
+    const input = await notify.prompt({
+      title: 'Reject leave',
+      message: 'Reason for rejection?',
+      confirmText: 'Reject',
+    });
+    if (input === null) return;
+    const notes = input || '';
     try {
       await fetchApi(`/api/leave/requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ notes }) });
       notify.success('Rejected');
@@ -128,7 +139,13 @@ export default function Leave() {
   };
 
   const onCancel = async (id) => {
-    if (!confirm('Cancel this leave request?')) return;
+    const ok = await notify.confirm({
+      title: 'Cancel leave',
+      message: 'Cancel this leave request?',
+      confirmText: 'Cancel leave',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/leave/requests/${id}/cancel`, { method: 'POST', body: JSON.stringify({}) });
       notify.success('Cancelled');

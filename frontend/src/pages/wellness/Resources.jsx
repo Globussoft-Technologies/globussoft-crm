@@ -78,7 +78,13 @@ export default function Resources() {
   };
 
   const remove = async (r) => {
-    if (!window.confirm(`Delete resource "${r.name}"? Existing visits will keep their slot but lose the resource pointer.`)) return;
+    const ok = await notify.confirm({
+      title: 'Delete resource',
+      message: `Delete resource "${r.name}"? Existing visits will keep their slot but lose the resource pointer.`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/resources/${r.id}`, { method: 'DELETE' });
       notify.success(`Deleted "${r.name}"`);

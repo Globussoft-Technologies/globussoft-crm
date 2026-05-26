@@ -168,19 +168,63 @@ const tenantWhere = (req, extra = {}) => ({
 //
 // Tenant.vertical check is inherited from verifyWellnessRole — non-wellness
 // tenants get 403 WELLNESS_TENANT_REQUIRED before the role check runs.
-const phiReadGate = verifyWellnessRole([
-  "doctor",
-  "professional",
-  "telecaller",
-  "admin",
-  "manager",
-]);
-const phiWriteGate = verifyWellnessRole([
-  "doctor",
-  "professional",
-  "admin",
-  "manager",
-]);
+// "clinical" is a meta-token resolved by verifyWellnessRole against the
+// per-tenant WellnessRoleType catalog — ANY wellnessRole with
+// `canTakeVisits = true` (doctor, professional, nurse, stylist, plus any
+// future custom clinical role added in Settings → Wellness Role Types)
+// passes the gate automatically with NO code change. The literal
+// "doctor" / "professional" entries stay alongside it so existing JWTs +
+// the legacy PHI_READ_ROLES contract pinned in wellnessOwnership.test.js
+// continue to work unchanged; the literal match short-circuits the
+// catalog DB lookup for the common case.
+//
+// `anyOfPermissions` opens a SECOND door alongside the wellnessRole
+// match: any user with one of the listed RBAC permissions (granted via
+// Roles & Permissions admin) passes the gate even without a matching
+// wellnessRole. Each entry mirrors the corresponding page in the
+// backend page catalog (lib/pageCatalog.js) — granting the page's
+// listed `requiredPermissions` to a custom role makes that role
+// immediately usable end-to-end (sidebar → page → API).
+const phiReadGate = verifyWellnessRole(
+  ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
+  {
+    anyOfPermissions: [
+      { module: "patients", action: "read" },
+      { module: "appointments", action: "read" },
+      { module: "calendar", action: "read" },
+      { module: "visits", action: "read" },
+      { module: "prescriptions", action: "read" },
+      { module: "consents", action: "read" },
+    ],
+  },
+);
+const phiWriteGate = verifyWellnessRole(
+  ["clinical", "doctor", "professional", "admin", "manager"],
+  {
+    anyOfPermissions: [
+      { module: "patients", action: "write" },
+      { module: "appointments", action: "write" },
+      { module: "calendar", action: "write" },
+      { module: "visits", action: "write" },
+      { module: "prescriptions", action: "write" },
+      { module: "consents", action: "write" },
+    ],
+  },
+);
+
+// `adminOrPerm(module, action)` is the canonical factory for admin-only
+// wellness routes that ALSO want to accept a specific RBAC permission
+// grant. Replaces every `verifyWellnessRole(["admin", "manager"])`
+// declaration with a per-route permission unlock — so a custom RBAC
+// role granted e.g. `services.write` can create services even without
+// a matching wellnessRole. The literal `["admin", "manager"]` array
+// stays so RBAC ADMIN/MANAGER continue to short-circuit before any
+// permission lookup (no DB hit on the hot path).
+const adminOrPerm = (module, action) =>
+  verifyWellnessRole(
+    ["admin", "manager"],
+    { anyOfPermissions: [{ module, action }] },
+  );
 
 // Plan #PAT-FILTERS / #PAT-TAGS — querystring helpers shared by the
 // patient list + export + bulk-tag endpoints.
@@ -387,7 +431,15 @@ function parseTenantDateInput(input) {
 // hole #326 closed earlier today.
 router.get(
   "/activetreatment",
-  verifyWellnessRole(["doctor", "professional", "manager", "admin"]),
+  verifyWellnessRole(
+    ["clinical", "doctor", "professional", "manager", "admin"],
+    {
+      anyOfPermissions: [
+        { module: "patients", action: "read" },
+        { module: "visits", action: "read" },
+      ],
+    },
+  ),
   getAllTreatmentPlans,
 );
 router.put("/treatment-plans/:id", requireClinicalRole, updateTreatmentPlan);
@@ -3033,7 +3085,10 @@ router.get("/consents", phiReadGate, async (req, res) => {
 // row level; capturedByUserId stamps the staff member who facilitated.
 router.post(
   "/consents",
-  verifyWellnessRole(["doctor", "professional", "admin"]),
+  verifyWellnessRole(
+    ["clinical", "doctor", "professional", "admin"],
+    { anyOfPermissions: [{ module: "consents", action: "write" }] },
+  ),
   async (req, res) => {
     try {
       const {
@@ -3202,7 +3257,10 @@ router.post(
 // #207/#216: consent metadata edits are admin-only (matches existing body
 // check). The verifyWellnessRole gate just produces a clean 403 with the
 // shared WELLNESS_ROLE_FORBIDDEN code before we touch the DB.
-router.put("/consents/:id", verifyWellnessRole(["admin"]), async (req, res) => {
+router.put("/consents/:id", verifyWellnessRole(
+  ["admin"],
+  { anyOfPermissions: [{ module: "consents", action: "write" }] },
+), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.consentForm.findFirst({
@@ -3668,7 +3726,7 @@ function normalizeSupportedBookingTypesInput(raw) {
   return { value: JSON.stringify(normalized) };
 }
 
-router.post("/services", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
   try {
     const { name, category, ticketTier, basePrice, durationMin, targetRadiusKm, description, supportedBookingTypes, imageUrls } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
@@ -3752,7 +3810,7 @@ router.post("/services", verifyWellnessRole(["admin", "manager"]), async (req, r
   }
 });
 
-router.put("/services/:id", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+router.put("/services/:id", adminOrPerm("services", "write"), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.service.findFirst({ where: tenantWhere(req, { id }) });
@@ -3825,6 +3883,161 @@ router.put("/services/:id", verifyWellnessRole(["admin", "manager"]), async (req
     const mapped = httpFromPrismaError(e);
     if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to update service" });
+  }
+});
+
+// ── Wellness role catalog ──────────────────────────────────────────
+//
+// Per-tenant catalog that replaces the old hard-coded VALID_WELLNESS_ROLES
+// whitelist in routes/staff.js. Admins maintain rows like
+// {key:"nurse", label:"Nurse", canTakeVisits:true} from Settings; the
+// Calendar grid + Staff edit form read this list to discover which
+// wellnessRole values are valid for the tenant.
+//
+// `key` is a slug stored on User.wellnessRole — it's the value the rest
+// of the codebase already compares against. Changing it for an in-use
+// role would orphan every staff member with that wellnessRole, so the
+// PUT handler refuses key-edits on rows in use. DELETE is similarly
+// refused while in use.
+
+const {
+  ensureRoleKey,
+  ensureRoleLabel,
+  listForTenant: listRoleTypes,
+} = require("../lib/wellnessRoleTypes");
+
+router.get("/role-types", async (req, res) => {
+  try {
+    const activeOnly = req.query.activeOnly === "1" || req.query.activeOnly === "true";
+    const rows = await listRoleTypes(req.user.tenantId, { activeOnly });
+    res.json(rows);
+  } catch (e) {
+    console.error("[wellness] list role-types error:", e.message);
+    res.status(500).json({ error: "Failed to list role types" });
+  }
+});
+
+router.post("/role-types", adminOrPerm("settings", "manage"), async (req, res) => {
+  try {
+    const { key, label, icon, color, canTakeVisits, sortOrder } = req.body || {};
+    const keyErr = ensureRoleKey(key);
+    if (keyErr) return res.status(keyErr.status).json(keyErr);
+    const labelErr = ensureRoleLabel(label);
+    if (labelErr) return res.status(labelErr.status).json(labelErr);
+    const dupe = await prisma.wellnessRoleType.findFirst({
+      where: { tenantId: req.user.tenantId, key },
+      select: { id: true },
+    });
+    if (dupe) return res.status(409).json({ error: `Role key "${key}" already exists`, code: "ROLE_KEY_DUPLICATE" });
+    const row = await prisma.wellnessRoleType.create({
+      data: {
+        key,
+        label,
+        icon: icon || null,
+        color: color || null,
+        canTakeVisits: canTakeVisits === undefined ? true : Boolean(canTakeVisits),
+        sortOrder: Number.isFinite(Number(sortOrder)) ? parseInt(sortOrder, 10) : 0,
+        tenantId: req.user.tenantId,
+      },
+    });
+    try {
+      await writeAudit("WellnessRoleType", "CREATE", row.id, req.user.userId, req.user.tenantId, {
+        key: row.key, label: row.label, canTakeVisits: row.canTakeVisits,
+      });
+    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    res.status(201).json(row);
+  } catch (e) {
+    console.error("[wellness] create role-type error:", e.message);
+    res.status(500).json({ error: "Failed to create role type" });
+  }
+});
+
+router.put("/role-types/:id", adminOrPerm("settings", "manage"), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.wellnessRoleType.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Role type not found" });
+    const data = {};
+    if (req.body.label !== undefined) {
+      const labelErr = ensureRoleLabel(req.body.label);
+      if (labelErr) return res.status(labelErr.status).json(labelErr);
+      data.label = req.body.label;
+    }
+    if (req.body.key !== undefined && req.body.key !== existing.key) {
+      // Renaming the key would orphan every User with wellnessRole=oldKey.
+      // Refuse if any staff currently uses it; admins can deactivate the
+      // old row + create a new one + reassign staff manually.
+      const inUse = await prisma.user.count({
+        where: { tenantId: req.user.tenantId, wellnessRole: existing.key },
+      });
+      if (inUse > 0) {
+        return res.status(409).json({
+          error: `Cannot rename key while ${inUse} staff member(s) use it. Reassign them first.`,
+          code: "ROLE_KEY_IN_USE",
+        });
+      }
+      const keyErr = ensureRoleKey(req.body.key);
+      if (keyErr) return res.status(keyErr.status).json(keyErr);
+      const dupe = await prisma.wellnessRoleType.findFirst({
+        where: { tenantId: req.user.tenantId, key: req.body.key, NOT: { id } },
+        select: { id: true },
+      });
+      if (dupe) return res.status(409).json({ error: `Role key "${req.body.key}" already exists`, code: "ROLE_KEY_DUPLICATE" });
+      data.key = req.body.key;
+    }
+    if (req.body.icon !== undefined) data.icon = req.body.icon || null;
+    if (req.body.color !== undefined) data.color = req.body.color || null;
+    if (req.body.canTakeVisits !== undefined) data.canTakeVisits = Boolean(req.body.canTakeVisits);
+    if (req.body.isActive !== undefined) data.isActive = Boolean(req.body.isActive);
+    if (req.body.sortOrder !== undefined) {
+      const n = Number(req.body.sortOrder);
+      if (Number.isFinite(n)) data.sortOrder = parseInt(n, 10);
+    }
+    const updated = await prisma.wellnessRoleType.update({ where: { id }, data });
+    try {
+      const changes = diffFields(existing, updated, Object.keys(data));
+      if (Object.keys(changes).length > 0) {
+        await writeAudit("WellnessRoleType", "UPDATE", updated.id, req.user.userId, req.user.tenantId, {
+          changedFields: changes,
+        });
+      }
+    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] update role-type error:", e.message);
+    res.status(500).json({ error: "Failed to update role type" });
+  }
+});
+
+router.delete("/role-types/:id", adminOrPerm("settings", "manage"), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.wellnessRoleType.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Role type not found" });
+    const inUse = await prisma.user.count({
+      where: { tenantId: req.user.tenantId, wellnessRole: existing.key },
+    });
+    if (inUse > 0) {
+      return res.status(409).json({
+        error: `Cannot delete role while ${inUse} staff member(s) use it. Deactivate instead or reassign staff first.`,
+        code: "ROLE_IN_USE",
+        inUseCount: inUse,
+      });
+    }
+    await prisma.wellnessRoleType.delete({ where: { id } });
+    try {
+      await writeAudit("WellnessRoleType", "DELETE", id, req.user.userId, req.user.tenantId, {
+        key: existing.key, label: existing.label,
+      });
+    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("[wellness] delete role-type error:", e.message);
+    res.status(500).json({ error: "Failed to delete role type" });
   }
 });
 
@@ -3990,7 +4203,7 @@ router.get("/membership-plans/:id", async (req, res) => {
 // /services pattern at line 1955).
 router.post(
   "/membership-plans",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("services", "write"),
   async (req, res) => {
     try {
       const { name, description, durationDays, price, currency, entitlements } =
@@ -4088,7 +4301,7 @@ router.post(
 
 router.put(
   "/membership-plans/:id",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("services", "write"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -4187,7 +4400,7 @@ router.put(
 // until expiry. Only stops new sales of this plan.
 router.delete(
   "/membership-plans/:id",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("services", "write"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -4624,7 +4837,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
 // matches how the existing Memberships card describes value to admins.
 router.get(
   "/memberships/dashboard",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("services", "read"),
   async (req, res) => {
     try {
       const now = new Date();
@@ -4699,7 +4912,7 @@ router.get(
 // stamps cancelledAt + cancelReason. Idempotent if already cancelled (200).
 router.post(
   "/memberships/:id/cancel",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("services", "write"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -4833,7 +5046,7 @@ router.get("/recommendations", async (req, res) => {
 // the gate just makes the 403 match the rest of the wellness shape.
 router.put(
   "/recommendations/:id",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "write"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id);
@@ -4911,7 +5124,7 @@ router.put(
 
 router.post(
   "/recommendations/:id/approve",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "write"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id);
@@ -5000,7 +5213,7 @@ router.post(
 // missing verifyWellnessRole gate to all four manual run endpoints.
 router.post(
   "/orchestrator/run",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const result = await runForTenant(req.user.tenantId);
@@ -5019,7 +5232,7 @@ router.post(
 // as such; no enforcement). verifyWellnessRole emits WELLNESS_ROLE_FORBIDDEN.
 router.post(
   "/reminders/run",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const { processTenant } = require("../cron/appointmentRemindersEngine");
@@ -5043,7 +5256,7 @@ router.post(
 // caller's tenant, returns { scored, flagged, notified }.
 router.post(
   "/no-show-risk/run",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const {
@@ -5062,7 +5275,7 @@ router.post(
 
 router.post(
   "/ops/run",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const {
@@ -5091,7 +5304,7 @@ router.post(
 // #216: gate to admin/manager — emails staff and creates notifications.
 router.post(
   "/inventory/low-stock/run",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const { runLowStockForTenant } = require("../cron/lowStockEngine");
@@ -5113,7 +5326,7 @@ router.post(
 
 router.post(
   "/recommendations/:id/reject",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "write"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id);
@@ -5227,7 +5440,7 @@ router.get("/locations", async (req, res) => {
 // #216: clinic locations are operational config — admin/manager only.
 router.post(
   "/locations",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const {
@@ -5311,7 +5524,7 @@ router.post(
 
 router.put(
   "/locations/:id",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id);
@@ -5391,13 +5604,24 @@ router.put(
 
 router.get(
   "/resources",
-  verifyWellnessRole([
-    "doctor",
-    "professional",
-    "telecaller",
-    "admin",
-    "manager",
-  ]),
+  verifyWellnessRole(
+    ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
+    {
+      // Resources back the Calendar page (calendar.read), Appointments
+      // list (appointments.read), the Resources admin page (settings.read),
+      // and any clinical surface that needs to check room availability.
+      // Any one of these read grants unlocks the endpoint so admins
+      // don't have to grant an exact-matching permission — just the
+      // permission for the page the user is trying to use.
+      anyOfPermissions: [
+        { module: "calendar", action: "read" },
+        { module: "appointments", action: "read" },
+        { module: "settings", action: "read" },
+        { module: "patients", action: "read" },
+        { module: "visits", action: "read" },
+      ],
+    },
+  ),
   async (req, res) => {
     try {
       const where = tenantWhere(req);
@@ -5421,7 +5645,7 @@ router.get(
 
 router.post(
   "/resources",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const { name, type, locationId, isActive, serviceIds } = req.body;
@@ -5484,7 +5708,7 @@ router.post(
 
 router.put(
   "/resources/:id",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -5543,7 +5767,7 @@ router.put(
 
 router.delete(
   "/resources/:id",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -5573,7 +5797,21 @@ router.delete(
   },
 );
 
-router.get("/holidays", verifyWellnessRole(["doctor", "professional", "telecaller", "admin", "manager"]), async (req, res) => {
+router.get("/holidays", verifyWellnessRole(
+  ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
+  {
+    // Holidays back the Calendar page + Holidays admin page. Any clinical
+    // or scheduling-related read grant unlocks the endpoint so partial
+    // permission sets don't strand the user on a half-loaded calendar.
+    anyOfPermissions: [
+      { module: "calendar", action: "read" },
+      { module: "appointments", action: "read" },
+      { module: "settings", action: "read" },
+      { module: "patients", action: "read" },
+      { module: "visits", action: "read" },
+    ],
+  },
+), async (req, res) => {
   try {
     const { from, to } = req.query;
     // Two-bucket fetch: (a) date-bounded non-recurring rows, (b) all
@@ -5638,7 +5876,7 @@ router.get("/holidays", verifyWellnessRole(["doctor", "professional", "telecalle
   }
 });
 
-router.post("/holidays", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+router.post("/holidays", adminOrPerm("settings", "manage"), async (req, res) => {
   try {
     const { date, name, locationId, doctorId, recurringAnnually } = req.body;
     if (!date) return res.status(400).json({ error: "date is required", code: "DATE_REQUIRED" });
@@ -5667,7 +5905,7 @@ router.post("/holidays", verifyWellnessRole(["admin", "manager"]), async (req, r
 
 router.delete(
   "/holidays/:id",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -5699,13 +5937,28 @@ router.delete(
 
 router.get(
   "/working-hours",
-  verifyWellnessRole([
-    "doctor",
-    "professional",
-    "telecaller",
-    "admin",
-    "manager",
-  ]),
+  verifyWellnessRole(
+    [
+      "clinical",
+      "doctor",
+      "professional",
+      "telecaller",
+      "admin",
+      "manager",
+    ],
+    {
+      // Working hours back the Calendar page + admin config page. Same
+      // wide read set as resources/holidays so partial permissions don't
+      // 403 calendar peripherals.
+      anyOfPermissions: [
+        { module: "calendar", action: "read" },
+        { module: "appointments", action: "read" },
+        { module: "settings", action: "read" },
+        { module: "patients", action: "read" },
+        { module: "visits", action: "read" },
+      ],
+    },
+  ),
   async (req, res) => {
     try {
       const where = tenantWhere(req);
@@ -5725,7 +5978,7 @@ router.get(
 
 router.put(
   "/working-hours/:doctorId",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("settings", "manage"),
   async (req, res) => {
     try {
       const doctorId = parseInt(req.params.doctorId, 10);
@@ -6251,7 +6504,7 @@ async function computePerLocation(req) {
 
 router.get(
   "/reports/pnl-by-service",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "read"),
   async (req, res) => {
     try {
       const result = await computePnlByService(req);
@@ -6267,7 +6520,7 @@ router.get(
 
 router.get(
   "/reports/per-professional",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "read"),
   async (req, res) => {
     try {
       const result = await computePerProfessional(req);
@@ -6285,7 +6538,7 @@ router.get(
 
 router.get(
   "/reports/attribution",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "read"),
   async (req, res) => {
     try {
       const result = await computeAttribution(req);
@@ -6301,7 +6554,7 @@ router.get(
 
 router.get(
   "/reports/per-location",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "read"),
   async (req, res) => {
     try {
       const result = await computePerLocation(req);
@@ -6528,7 +6781,7 @@ const fmtMoney = (n) => {
 
 router.get(
   "/reports/pnl-by-service.csv",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computePnlByService(req);
@@ -6572,7 +6825,7 @@ router.get(
 
 router.get(
   "/reports/pnl-by-service.pdf",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computePnlByService(req);
@@ -6623,7 +6876,7 @@ router.get(
 
 router.get(
   "/reports/pnl-by-service.xlsx",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computePnlByService(req);
@@ -6676,7 +6929,7 @@ router.get(
 
 router.get(
   "/reports/per-professional.csv",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computePerProfessional(req);
@@ -6706,7 +6959,7 @@ router.get(
 
 router.get(
   "/reports/per-professional.pdf",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computePerProfessional(req);
@@ -6743,7 +6996,7 @@ router.get(
 
 router.get(
   "/reports/per-professional.xlsx",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computePerProfessional(req);
@@ -6782,7 +7035,7 @@ router.get(
 
 router.get(
   "/reports/per-location.csv",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computePerLocation(req);
@@ -6826,7 +7079,7 @@ router.get(
 
 router.get(
   "/reports/per-location.pdf",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computePerLocation(req);
@@ -6877,7 +7130,7 @@ router.get(
 
 router.get(
   "/reports/per-location.xlsx",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computePerLocation(req);
@@ -6930,7 +7183,7 @@ router.get(
 
 router.get(
   "/reports/attribution.csv",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computeAttribution(req);
@@ -6977,7 +7230,7 @@ router.get(
 
 router.get(
   "/reports/attribution.pdf",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computeAttribution(req);
@@ -7031,7 +7284,7 @@ router.get(
 
 router.get(
   "/reports/attribution.xlsx",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "export"),
   async (req, res) => {
     try {
       const result = await computeAttribution(req);
@@ -7091,7 +7344,7 @@ router.get(
 // the full clinic financials. Lock to admin/manager.
 router.get(
   "/dashboard",
-  verifyWellnessRole(["admin", "manager"]),
+  adminOrPerm("reports", "read"),
   async (req, res) => {
     try {
       const tenantId = req.user.tenantId;
@@ -8414,7 +8667,10 @@ router.get("/consents/:id/pdf", async (req, res) => {
 // action; staff initiates it.
 router.post(
   "/consents/:id/archive",
-  verifyWellnessRole(["doctor", "professional", "admin"]),
+  verifyWellnessRole(
+    ["clinical", "doctor", "professional", "admin"],
+    { anyOfPermissions: [{ module: "consents", action: "write" }] },
+  ),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id);

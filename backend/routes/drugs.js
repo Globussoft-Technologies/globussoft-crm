@@ -21,8 +21,21 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const router = express.Router();
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
-const readGate = verifyWellnessRole(["admin", "manager", "doctor"]);
-const writeGate = verifyWellnessRole(["admin", "manager"]);
+// "clinical" meta-token resolves dynamically against the per-tenant
+// WellnessRoleType catalog (doctor / professional / nurse / stylist /
+// any future custom clinical role with canTakeVisits=true).
+// `anyOfPermissions` adds an RBAC-permission unlock: any custom role
+// granted `prescriptions.read` (the same permission that surfaces the
+// Drug Catalogue page in the sidebar, per the page catalog) hits the
+// route — no code change needed.
+const readGate = verifyWellnessRole(
+  ["admin", "manager", "clinical", "doctor"],
+  { anyOfPermissions: [{ module: "prescriptions", action: "read" }] },
+);
+const writeGate = verifyWellnessRole(
+  ["admin", "manager"],
+  { anyOfPermissions: [{ module: "prescriptions", action: "write" }] },
+);
 
 // ── Drug CRUD + typeahead ─────────────────────────────────────────
 

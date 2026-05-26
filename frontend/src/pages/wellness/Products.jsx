@@ -154,7 +154,13 @@ export default function Products() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this product?')) return;
+    const ok = await notify.confirm({
+      title: 'Delete product',
+      message: 'Delete this product?',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
 
     try {
       await fetchApi(`/api/wellness/products/${id}`, { method: 'DELETE' });

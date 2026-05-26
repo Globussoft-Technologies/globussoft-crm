@@ -79,12 +79,13 @@ const PAGE_CATALOG = [
     label: 'Calendar',
     description: 'Day-grid view of appointments + bookings',
     category: 'Clinical',
-    // .read — viewing the day grid is a read action. The slot-click-to-
-    // book action inside the page is gated separately on appointments.write
-    // at the page level + by the POST /api/wellness/visits backend gate.
-    // Sidebar gating policy: lowest action that gives the page meaning,
-    // so a role with only .read sees the page in the nav.
-    requiredPermissions: [{ module: 'appointments', action: 'read' }],
+    // .read on the dedicated `calendar` module — separated from
+    // `appointments` so admins can grant view-only Calendar access
+    // without also exposing the Appointments list, Book Appointment
+    // form, and My Appointments page. Slot-click-to-book and
+    // drag-to-reschedule inside the Calendar are gated on
+    // `calendar.write` at the action level.
+    requiredPermissions: [{ module: 'calendar', action: 'read' }],
   },
   {
     path: '/wellness/appointments',

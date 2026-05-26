@@ -219,13 +219,41 @@ router.get(
 );
 
 // Fetch all ledgers for current tenant
+// GET /api/billing?fields=summary
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const invoices = await prisma.invoice.findMany({
+    // #920 slice 31: ?fields=summary slim-shape opt-in. Mirrors slices 1-30.
+    // The default list handler eager-loads `contact: true` + `deal: true` —
+    // two heavy joins that the Invoices/Payments/Billing pages don't need
+    // when rendering ledger chrome (status chip, invoice number, amount,
+    // due date). When the caller passes ?fields=summary we drop both joins
+    // + tenantId + createdAt + updatedAt + the recurrence metadata
+    // (isRecurring, recurFrequency, nextRecurDate, parentInvoiceId, paidAt,
+    // legalEntityCode, visitId), returning only the columns needed for the
+    // ledger row + status filter. Opt-in additive — existing callers (no
+    // ?fields, or any non-exact value) get the full nested row shape
+    // unchanged. fieldFilter still runs on the slim-shape result so
+    // FieldPermissions UI rules continue to strip restricted columns.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId: req.user.tenantId },
-      include: { contact: true, deal: true },
-      orderBy: [{ status: "desc" }, { dueDate: "asc" }]
-    });
+      orderBy: [{ status: "desc" }, { dueDate: "asc" }],
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        invoiceNum: true,
+        amount: true,
+        status: true,
+        dueDate: true,
+        issuedDate: true,
+        contactId: true,
+        dealId: true,
+      };
+    } else {
+      findManyArgs.include = { contact: true, deal: true };
+    }
+    const invoices = await prisma.invoice.findMany(findManyArgs);
     // #577: strip read-restricted fields per the caller's role.
     const filtered = await filterReadFields(invoices, req.user.role, "Invoice", req.user.tenantId);
     res.json(filtered);

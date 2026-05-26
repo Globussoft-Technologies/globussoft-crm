@@ -298,7 +298,7 @@ router.delete("/categories/:id", async (req, res) => {
   }
 });
 
-// GET /api/knowledge-base/articles?categoryId=&published=
+// GET /api/knowledge-base/articles?categoryId=&published=&fields=summary
 router.get("/articles", async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
@@ -306,10 +306,35 @@ router.get("/articles", async (req, res) => {
     if (req.query.published === "true") where.isPublished = true;
     if (req.query.published === "false") where.isPublished = false;
 
-    const articles = await prisma.kbArticle.findMany({
+    // #920 slice 10: ?fields=summary slim-shape opt-in. Mirrors slice 1
+    // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+    // badc9cca), slice 4 (tasks eec7d856), slice 5 (projects 257771a0),
+    // slice 6 (expenses e81e6cb5), slice 7 (notifications a3487518).
+    // When the caller passes ?fields=summary we drop the heavy `content`
+    // column (KbArticle.content is `@db.LongText` — potentially many KB
+    // of HTML per row) and return only the columns the KB list renderer
+    // actually needs. Opt-in additive — existing callers (no ?fields,
+    // or any non-exact value) get the full row shape unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: { updatedAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        title: true,
+        slug: true,
+        categoryId: true,
+        isPublished: true,
+        views: true,
+        tenantId: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
+
+    const articles = await prisma.kbArticle.findMany(findManyArgs);
     res.json(articles);
   } catch (err) {
     console.error("[KB][articles]", err);

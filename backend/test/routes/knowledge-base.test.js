@@ -460,6 +460,141 @@ describe('GET /articles — list articles', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /articles?fields=summary — slim-shape opt-in (#920 slice 10)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirror of slice 1 (contacts), slice 2 (deals), slice 3 (tickets),
+// slice 4 (tasks), slice 5 (projects), slice 6 (expenses), slice 7
+// (notifications). When the caller passes ?fields=summary, the route
+// emits a slim Prisma `select` keyed on the columns the KB list
+// renderer actually consumes and drops the heavy `content` column
+// (KbArticle.content is `@db.LongText` — can be many KB of HTML per
+// row, dominates list-payload size). Opt-in additive.
+
+describe('GET /articles?fields=summary — slim-shape opt-in (#920 slice 10)', () => {
+  test('?fields=summary triggers prisma.kbArticle.findMany with `select` (slim cols), not the default no-select shape', async () => {
+    prisma.kbArticle.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 }))
+      .get('/api/knowledge-base/articles?fields=summary');
+
+    const args = prisma.kbArticle.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.select).toEqual({
+      id: true,
+      title: true,
+      slug: true,
+      categoryId: true,
+      isPublished: true,
+      views: true,
+      tenantId: true,
+      createdAt: true,
+      updatedAt: true,
+    });
+    // Slim shape must NOT pull the heavy LongText `content` body.
+    expect(args.select.content).toBeUndefined();
+    // include must NOT be set on slim path.
+    expect(args.include).toBeUndefined();
+  });
+
+  test('default (no ?fields) preserves the full-row shape — no `select` arg passed to findMany', async () => {
+    prisma.kbArticle.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 }))
+      .get('/api/knowledge-base/articles');
+
+    const args = prisma.kbArticle.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    expect(args.include).toBeUndefined();
+  });
+
+  test('?fields=summary response rows reflect the slim Prisma select verbatim (no content body in body)', async () => {
+    // Prisma `select` honours only the chosen columns. The route forwards
+    // whatever Prisma returns, so we pin the contract by mocking the slim
+    // rows and confirming `content` is absent in the response body too.
+    prisma.kbArticle.findMany.mockResolvedValue([
+      {
+        id: 1, title: 'Welcome', slug: 'welcome', categoryId: 5,
+        isPublished: true, views: 42, tenantId: 1,
+        createdAt: new Date('2026-05-26T00:00:00Z'),
+        updatedAt: new Date('2026-05-26T01:00:00Z'),
+      },
+      {
+        id: 2, title: 'FAQ', slug: 'faq', categoryId: 5,
+        isPublished: false, views: 7, tenantId: 1,
+        createdAt: new Date('2026-05-26T02:00:00Z'),
+        updatedAt: new Date('2026-05-26T03:00:00Z'),
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/knowledge-base/articles?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    for (const row of res.body) {
+      expect(row.id).toBeDefined();
+      expect(row.title).toBeDefined();
+      expect(row.slug).toBeDefined();
+      expect(row.isPublished).toBeDefined();
+      expect(row.content).toBeUndefined(); // the heavy LongText is gone
+    }
+  });
+
+  test('?fields=summary preserves tenant isolation on the where clause', async () => {
+    prisma.kbArticle.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 99 }))
+      .get('/api/knowledge-base/articles?fields=summary');
+
+    const args = prisma.kbArticle.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 99 });
+    // Slim select still applied — the tenant scope and the slim opt-in
+    // are independent contracts that compose cleanly.
+    expect(args.select).toBeDefined();
+  });
+
+  test('?fields=summary combines with existing filters (categoryId, published) on the where clause', async () => {
+    prisma.kbArticle.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 }))
+      .get('/api/knowledge-base/articles?fields=summary&categoryId=5&published=true');
+
+    const args = prisma.kbArticle.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({
+      tenantId: 1,
+      categoryId: 5,
+      isPublished: true,
+    });
+    // Slim select + orderBy preserved alongside the where filters.
+    expect(args.select).toBeDefined();
+    expect(args.select.id).toBe(true);
+    expect(args.orderBy).toEqual({ updatedAt: 'desc' });
+  });
+
+  test('?fields=other (any non-exact value) falls through to the default full-row shape', async () => {
+    // Only the literal string "summary" opts into slim — every other value
+    // (including "Summary", "full", arbitrary tokens) must preserve the
+    // existing wire shape so we don't accidentally trim production callers.
+    prisma.kbArticle.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 }))
+      .get('/api/knowledge-base/articles?fields=Summary');
+
+    const args = prisma.kbArticle.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+
+    // Same for arbitrary tokens.
+    prisma.kbArticle.findMany.mockReset();
+    prisma.kbArticle.findMany.mockResolvedValue([]);
+    await request(makeApp({ tenantId: 1 }))
+      .get('/api/knowledge-base/articles?fields=full');
+    const args2 = prisma.kbArticle.findMany.mock.calls[0][0];
+    expect(args2.select).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // POST /articles — create with auto-slug
 // ─────────────────────────────────────────────────────────────────────────
 

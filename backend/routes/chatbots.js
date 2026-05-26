@@ -124,6 +124,33 @@ function runEngine(flow, currentNodeId, userMessage) {
 router.get("/", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
+    // #920 slice 19 — payload reduction via opt-in slim shape. When the
+    // caller passes ?fields=summary, GET /api/chatbots returns a slim
+    // Prisma select dropping the heavy `flow` column (a LongText JSON node
+    // graph that runs into KB per row for non-trivial bots) and the
+    // per-row groupBy `conversationCount` decoration. The slim branch is
+    // suitable for picker / directory / dashboard-counter UIs that only
+    // need id + name + isActive + tenantId + timestamps. ADDITIVE: when
+    // ?fields is absent or any other value, the prior full-row shape is
+    // preserved (full row + parsed flow + conversationCount) so the
+    // existing Marketing → Chatbots admin page keeps getting the rich
+    // payload it currently renders.
+    const isSummary = req.query.fields === "summary";
+    if (isSummary) {
+      const bots = await prisma.chatbot.findMany({
+        where: { tenantId },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true,
+          name: true,
+          isActive: true,
+          tenantId: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+      return res.json(bots);
+    }
     const bots = await prisma.chatbot.findMany({
       where: { tenantId },
       orderBy: { updatedAt: "desc" },

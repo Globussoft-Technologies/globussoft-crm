@@ -447,4 +447,461 @@ describe('<ItineraryTemplates /> — filter behaviour', () => {
       expect(call).toBeTruthy();
     });
   });
+
+  it('changing sub-brand filter re-fetches with ?subBrand=… in the URL', async () => {
+    renderPage();
+    await screen.findByText('Bali Family Holiday');
+    fetchApiMock.mockClear();
+    installFetchMock({
+      list: { items: [ITEMS_DEFAULT[1]], total: 1, limit: 20, offset: 0 },
+    });
+
+    fireEvent.change(screen.getByLabelText(/Sub-brand filter/i), {
+      target: { value: 'travelstall' },
+    });
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === 'string'
+          && u.includes('subBrand=travelstall')
+          && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('typing in destination filter re-fetches with ?destinationName=… (trimmed) in the URL', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+    fetchApiMock.mockClear();
+    installFetchMock();
+
+    fireEvent.change(screen.getByLabelText(/Destination filter/i), {
+      target: { value: '  Bali  ' },
+    });
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === 'string'
+          && u.includes('destinationName=Bali')
+          && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+      // Trimmed — raw " Bali " not present
+      expect(call[0]).not.toMatch(/destinationName=\+Bali\+/);
+    });
+  });
+
+  it('un-checking "Active only" re-fetches with ?isActive=false (default is true)', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+
+    // First load defaults to isActive=true.
+    const firstCall = fetchApiMock.mock.calls.find(
+      ([u, o]) =>
+        typeof u === 'string'
+        && u.startsWith('/api/travel/itinerary-templates?')
+        && (!o?.method || o.method === 'GET'),
+    );
+    expect(firstCall[0]).toMatch(/isActive=true/);
+
+    fetchApiMock.mockClear();
+    installFetchMock();
+
+    fireEvent.click(screen.getByLabelText(/Active only/i));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === 'string'
+          && u.includes('isActive=false')
+          && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+});
+
+describe('<ItineraryTemplates /> — formatting helpers (cell render)', () => {
+  it('formats base price with currency symbol (₹ for INR) and falls back to "—" when basePriceMinor is null', async () => {
+    installFetchMock({
+      list: {
+        items: [
+          makeItem({
+            id: 701,
+            name: 'INR Priced',
+            basePriceMinor: 12500000,
+            currency: 'INR',
+          }),
+          makeItem({
+            id: 702,
+            name: 'USD Priced',
+            basePriceMinor: 250000,
+            currency: 'USD',
+          }),
+          makeItem({
+            id: 703,
+            name: 'EUR Priced',
+            basePriceMinor: 199000,
+            currency: 'EUR',
+          }),
+          makeItem({
+            id: 704,
+            name: 'GBP Priced',
+            basePriceMinor: 99900,
+            currency: 'GBP',
+          }),
+          makeItem({
+            id: 705,
+            name: 'No Price',
+            basePriceMinor: null,
+            currency: 'INR',
+          }),
+        ],
+        total: 5,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    renderPage();
+    await screen.findByText('INR Priced');
+
+    // Note: toLocaleString() output varies by ICU locale (e.g. en-IN groups
+    // as 1,25,000; en-US as 125,000). We use locale-aware expected values via
+    // the same Number#toLocaleString() the SUT uses, so the assertion stays
+    // portable across CI/local ICU builds (per CLAUDE.md ICU-build standing rule).
+    const inrRow = screen.getByText('INR Priced').closest('tr');
+    expect(
+      within(inrRow).getByText(`₹${(125000).toLocaleString()}`),
+    ).toBeInTheDocument();
+
+    const usdRow = screen.getByText('USD Priced').closest('tr');
+    expect(
+      within(usdRow).getByText(`$${(2500).toLocaleString()}`),
+    ).toBeInTheDocument();
+
+    const eurRow = screen.getByText('EUR Priced').closest('tr');
+    expect(
+      within(eurRow).getByText(`€${(1990).toLocaleString()}`),
+    ).toBeInTheDocument();
+
+    // Unknown currency falls back to `${cur} ` prefix
+    const gbpRow = screen.getByText('GBP Priced').closest('tr');
+    expect(
+      within(gbpRow).getByText(`GBP ${(999).toLocaleString()}`),
+    ).toBeInTheDocument();
+
+    const noPriceRow = screen.getByText('No Price').closest('tr');
+    // Multiple "—" expected across columns (category/markup if null) — assert at least one
+    const dashes = within(noPriceRow).getAllByText('—');
+    expect(dashes.length).toBeGreaterThan(0);
+  });
+
+  it('formats duration as "1 day" (singular) for 1 and "N days" for others', async () => {
+    installFetchMock({
+      list: {
+        items: [
+          makeItem({ id: 801, name: 'One Day Trip', durationDays: 1 }),
+          makeItem({ id: 802, name: 'Two Day Trip', durationDays: 2 }),
+          makeItem({ id: 803, name: 'Fortnight Trip', durationDays: 14 }),
+        ],
+        total: 3,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    renderPage();
+    await screen.findByText('One Day Trip');
+
+    const oneDayRow = screen.getByText('One Day Trip').closest('tr');
+    expect(within(oneDayRow).getByText('1 day')).toBeInTheDocument();
+
+    const twoDayRow = screen.getByText('Two Day Trip').closest('tr');
+    expect(within(twoDayRow).getByText('2 days')).toBeInTheDocument();
+
+    const fortnightRow = screen.getByText('Fortnight Trip').closest('tr');
+    expect(within(fortnightRow).getByText('14 days')).toBeInTheDocument();
+  });
+
+  it('formats default markup percent to one decimal (e.g. "15.0%") and "—" when null', async () => {
+    installFetchMock({
+      list: {
+        items: [
+          makeItem({ id: 901, name: 'Whole Markup', defaultMarkupPercent: 15 }),
+          makeItem({ id: 902, name: 'Fractional Markup', defaultMarkupPercent: 8.5 }),
+          makeItem({ id: 903, name: 'Null Markup', defaultMarkupPercent: null }),
+        ],
+        total: 3,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    renderPage();
+    await screen.findByText('Whole Markup');
+
+    const wholeRow = screen.getByText('Whole Markup').closest('tr');
+    expect(within(wholeRow).getByText('15.0%')).toBeInTheDocument();
+
+    const fractRow = screen.getByText('Fractional Markup').closest('tr');
+    expect(within(fractRow).getByText('8.5%')).toBeInTheDocument();
+  });
+
+  it('renders sub-brand as uppercase badge when present, "tenant" placeholder when null', async () => {
+    installFetchMock({
+      list: {
+        items: [
+          makeItem({ id: 1001, name: 'RFU Template', subBrand: 'rfu' }),
+          makeItem({ id: 1002, name: 'Tenant-Wide Template', subBrand: null }),
+        ],
+        total: 2,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    renderPage();
+    await screen.findByText('RFU Template');
+
+    const rfuRow = screen.getByText('RFU Template').closest('tr');
+    // Badge contains the raw value "rfu" — CSS textTransform makes it visually uppercase.
+    expect(within(rfuRow).getByText('rfu')).toBeInTheDocument();
+
+    const tenantRow = screen.getByText('Tenant-Wide Template').closest('tr');
+    expect(within(tenantRow).getByText('tenant')).toBeInTheDocument();
+  });
+
+  it('renders usageCount (falsy 0 still renders as "0", not blank/—)', async () => {
+    installFetchMock({
+      list: {
+        items: [
+          makeItem({ id: 1101, name: 'Used Template', usageCount: 42 }),
+          makeItem({ id: 1102, name: 'Zero-Usage Template', usageCount: 0 }),
+        ],
+        total: 2,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    renderPage();
+    await screen.findByText('Used Template');
+
+    const usedRow = screen.getByText('Used Template').closest('tr');
+    expect(within(usedRow).getByText('42')).toBeInTheDocument();
+
+    const zeroRow = screen.getByText('Zero-Usage Template').closest('tr');
+    expect(within(zeroRow).getByText('0')).toBeInTheDocument();
+  });
+
+  it('renders isActive=false rows with Active="No"', async () => {
+    installFetchMock({
+      list: {
+        items: [
+          makeItem({ id: 1201, name: 'Active Template', isActive: true }),
+          makeItem({ id: 1202, name: 'Archived Template', isActive: false }),
+        ],
+        total: 2,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    renderPage();
+    await screen.findByText('Active Template');
+
+    const activeRow = screen.getByText('Active Template').closest('tr');
+    expect(within(activeRow).getByText('Yes')).toBeInTheDocument();
+
+    const archivedRow = screen.getByText('Archived Template').closest('tr');
+    expect(within(archivedRow).getByText('No')).toBeInTheDocument();
+  });
+});
+
+describe('<ItineraryTemplates /> — pagination', () => {
+  it('renders "Showing 1-3 of 3" summary and disables both Prev + Next when total fits in one page', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+
+    expect(screen.getByText(/Showing 1-3 of 3/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Previous page/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Next page/i })).toBeDisabled();
+  });
+
+  it('shows "No results" when total=0 (no items)', async () => {
+    installFetchMock({ list: { items: [], total: 0, limit: 20, offset: 0 } });
+    renderPage();
+    await screen.findByText(/No itinerary templates yet/i);
+    expect(screen.getByText(/No results/i)).toBeInTheDocument();
+  });
+
+  it('clicking Next advances offset → re-fetches with ?offset=20', async () => {
+    // Simulate a large list — total=50 so we have multiple pages.
+    const bigItems = Array.from({ length: 20 }).map((_, i) =>
+      makeItem({ id: 2000 + i, name: `Template ${i + 1}` }),
+    );
+    installFetchMock({
+      list: { items: bigItems, total: 50, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await screen.findByText('Template 1');
+
+    expect(screen.getByText(/Showing 1-20 of 50/i)).toBeInTheDocument();
+    const nextBtn = screen.getByRole('button', { name: /Next page/i });
+    expect(nextBtn).not.toBeDisabled();
+
+    fetchApiMock.mockClear();
+    installFetchMock({
+      list: {
+        items: Array.from({ length: 20 }).map((_, i) =>
+          makeItem({ id: 3000 + i, name: `Template ${i + 21}` }),
+        ),
+        total: 50,
+        limit: 20,
+        offset: 20,
+      },
+    });
+
+    fireEvent.click(nextBtn);
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === 'string'
+          && u.includes('offset=20')
+          && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+});
+
+describe('<ItineraryTemplates /> — create form extras', () => {
+  it('currency input auto-uppercases input (e.g. typing "usd" yields "USD")', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+
+    const currencyInput = screen.getByLabelText('currency');
+    fireEvent.change(currencyInput, { target: { value: 'usd' } });
+    expect(currencyInput.value).toBe('USD');
+  });
+
+  it('LLM source field round-trips in the POST payload (llmGeneratedBy)', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+
+    fireEvent.change(screen.getByLabelText('name'), {
+      target: { value: 'AI-Drafted Template' },
+    });
+    fireEvent.change(screen.getByLabelText('destinationName'), {
+      target: { value: 'Generic Destination' },
+    });
+    fireEvent.change(screen.getByLabelText('durationDays'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('llmGeneratedBy'), {
+      target: { value: 'gemini-2.5-flash' },
+    });
+
+    fetchApiMock.mockClear();
+    installFetchMock();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/itinerary-templates' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.llmGeneratedBy).toBe('gemini-2.5-flash');
+    });
+  });
+
+  it('un-checking isActive in the form sends isActive:false in the POST payload', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+
+    fireEvent.change(screen.getByLabelText('name'), {
+      target: { value: 'Draft Template' },
+    });
+    fireEvent.change(screen.getByLabelText('destinationName'), {
+      target: { value: 'Test Destination' },
+    });
+    fireEvent.change(screen.getByLabelText('durationDays'), { target: { value: '3' } });
+    fireEvent.click(screen.getByLabelText('isActive'));
+
+    fetchApiMock.mockClear();
+    installFetchMock();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/itinerary-templates' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.isActive).toBe(false);
+    });
+  });
+
+  it('Cancel button closes the form without POSTing', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+    expect(screen.getByLabelText('name')).toBeInTheDocument();
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+
+    expect(screen.queryByLabelText('name')).toBeNull();
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/itinerary-templates' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+});
+
+describe('<ItineraryTemplates /> — delete flow extras', () => {
+  it('delete is aborted when notify.confirm resolves false; no DELETE fires', async () => {
+    renderPage();
+    const rowName = await screen.findByText('Makkah-Madinah 10-day Umrah');
+    const tr = rowName.closest('tr');
+
+    fetchApiMock.mockClear();
+    installFetchMock();
+    notifyConfirm.mockResolvedValueOnce(false);
+
+    fireEvent.click(
+      within(tr).getByRole('button', { name: /Delete Makkah-Madinah 10-day Umrah/i }),
+    );
+
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalled();
+    });
+
+    // No DELETE fires when confirm = false
+    const deletes = fetchApiMock.mock.calls.filter(
+      ([u, o]) =>
+        /^\/api\/travel\/itinerary-templates\/\d+$/.test(u) && o?.method === 'DELETE',
+    );
+    expect(deletes.length).toBe(0);
+    expect(notifySuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('<ItineraryTemplates /> — error surfacing', () => {
+  it('GET error surfaces notify.error and falls back to empty list', async () => {
+    const err = new Error('Network down');
+    err.body = { error: 'Service unavailable' };
+    installFetchMock({ list: err });
+    renderPage();
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Service unavailable');
+    });
+    expect(
+      await screen.findByText(/No itinerary templates yet\. Add one above\./i),
+    ).toBeInTheDocument();
+  });
 });

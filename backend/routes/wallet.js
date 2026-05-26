@@ -52,6 +52,7 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const { writeAudit } = require("../lib/audit");
 
@@ -83,6 +84,161 @@ function capLimit(raw, { def = 25, max = 100 } = {}) {
   if (!Number.isFinite(n) || n <= 0) return def;
   return Math.min(n, max);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// D16 Wallet Top-up — Arc 1 polish slice (PRD_WALLET_TOPUP §3).
+//
+// GET /api/wallet/stats — tenant-wide KPI aggregate
+//
+// First tenant-wide aggregate for the wallet route — the existing 4
+// endpoints are all per-patient (/:patientId/balance|transactions|
+// topup|redeem). This powers the owner dashboard's wallet tile
+// ("3 wallets · ₹4.2K balance · ₹500 in topups this week ·
+// 2 active credit batches · 1 expiring in 30 days").
+//
+// Mirrors routes/travel_suppliers.js /suppliers/stats + similar
+// /commission-profiles/stats posture — anodyne aggregate, NO audit row
+// written (read-only meta surface). USER role intentionally excluded
+// from this gate (unlike the per-patient endpoints which use the
+// clinical phiReadGate including doctor/professional/telecaller) — the
+// tenant-wide aggregate is an owner-dashboard / management surface, so
+// ADMIN+MANAGER only minimises the PII surface and keeps the data
+// flow consistent with /suppliers/stats + wallet_admin.js.
+//
+// Query params:
+//   ?from / ?to — optional ISO date bounds on WalletTransaction.createdAt.
+//                 Narrows totalTopups + totalRedemptions + lastTopupAt
+//                 (NOT totalWallets — that's point-in-time count).
+//
+// Aggregates:
+//   - totalWallets        — Wallet rows for the tenant
+//   - totalBalance        — sum of Wallet.balance (round half-up 2dp)
+//   - totalTopups         — sum of WalletTransaction.amount type='TOP_UP'
+//                           in date range (round half-up 2dp; absolute val)
+//   - totalRedemptions    — sum of WalletTransaction.amount type='REDEEM'
+//                           in date range (round half-up 2dp; absolute val
+//                           since REDEEM rows are stored as negative
+//                           amount-rupees per routes/wallet.js:673)
+//   - activeCreditBatches — WalletCreditBatch with status='ACTIVE',
+//                           remainingCents > 0, and (expiresAt > now OR
+//                           expiresAt null — principal never expires)
+//   - expiringSoonCount   — WalletCreditBatch with status='ACTIVE',
+//                           remainingCents > 0, expiresAt in (now, now+30d)
+//                           — feeds dashboard expiry alerts
+//   - lastTopupAt         — most-recent WalletTransaction.createdAt where
+//                           type='TOP_UP' in date range (or null)
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE
+// the /:patientId/... family or `:patientId="stats"` would 400 on
+// parseInt with "Invalid patientId" before reaching this handler.
+// ─────────────────────────────────────────────────────────────────────
+router.get("/stats", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // Optional ISO date bounds on WalletTransaction.createdAt.
+    const txnWhere = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      txnWhere.createdAt = Object.assign(txnWhere.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      txnWhere.createdAt = Object.assign(txnWhere.createdAt || {}, { lte: d });
+    }
+
+    // Half-up round to 2dp — matches /suppliers/stats posture.
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    const now = new Date();
+    const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    // Wallets are point-in-time — NOT narrowed by the txn ?from/?to window.
+    const wallets = await prisma.wallet.findMany({
+      where: { tenantId },
+      select: { balance: true },
+    });
+
+    const totalWallets = wallets.length;
+    const totalBalance = round2(
+      wallets.reduce((sum, w) => sum + (Number(w.balance) || 0), 0),
+    );
+
+    // Transaction aggregates — narrowed by ?from/?to if supplied.
+    const topupTxns = await prisma.walletTransaction.findMany({
+      where: { ...txnWhere, type: "TOP_UP" },
+      select: { amount: true, createdAt: true },
+    });
+    const redeemTxns = await prisma.walletTransaction.findMany({
+      where: { ...txnWhere, type: "REDEEM" },
+      select: { amount: true },
+    });
+
+    const totalTopups = round2(
+      topupTxns.reduce((sum, t) => sum + Math.abs(Number(t.amount) || 0), 0),
+    );
+    const totalRedemptions = round2(
+      redeemTxns.reduce((sum, t) => sum + Math.abs(Number(t.amount) || 0), 0),
+    );
+
+    // Most-recent top-up timestamp — picks the newest createdAt across
+    // the (already window-filtered) top-up rows.
+    let lastTopupAt = null;
+    for (const t of topupTxns) {
+      const ts = t.createdAt instanceof Date ? t.createdAt : new Date(t.createdAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastTopupAt || ts > lastTopupAt) lastTopupAt = ts;
+      }
+    }
+
+    // Credit-batch aggregates — point-in-time (NOT narrowed by txn
+    // window; expiry windows are absolute-now-based, not relative).
+    const activeCreditBatches = await prisma.walletCreditBatch.count({
+      where: {
+        tenantId,
+        status: "ACTIVE",
+        remainingCents: { gt: 0 },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+    });
+
+    const expiringSoonCount = await prisma.walletCreditBatch.count({
+      where: {
+        tenantId,
+        status: "ACTIVE",
+        remainingCents: { gt: 0 },
+        expiresAt: { gt: now, lt: thirtyDaysFromNow },
+      },
+    });
+
+    return res.json({
+      totalWallets,
+      totalBalance,
+      totalTopups,
+      totalRedemptions,
+      activeCreditBatches,
+      expiringSoonCount,
+      lastTopupAt: lastTopupAt ? lastTopupAt.toISOString() : null,
+    });
+  } catch (e) {
+    console.error("[wallet] stats error:", e.message);
+    return res.status(500).json({ error: "Failed to summarise wallet stats" });
+  }
+});
 
 /**
  * GET /api/wallet/:patientId/balance

@@ -159,6 +159,9 @@ model Tenant {
   travelDiagQuestionBanks  TravelDiagnosticQuestionBank[]
   itineraries              Itinerary[]
   travelCostMasters        TravelCostMaster[]
+  // #907 slice 1 — Sightseeing master (destination → POIs). Future slices
+  // wire CRUD route + admin UI page + Cost Master "6th category" surface.
+  travelSightseeing        TravelSightseeing[]
   travelSeasonCalendars    TravelSeasonCalendar[]
   travelMarkupRules        TravelMarkupRule[]
   tmcTrips                 TmcTrip[]
@@ -4439,6 +4442,36 @@ model TravelCostMaster {
 
   @@index([tenantId, subBrand, category, isActive])
   @@index([tenantId, supplierId])
+}
+
+// ── Sightseeing master (#907 slice 1) ────────────────────────────────
+// Destination → POI mapping (description, image, duration, price ref).
+// Free-form destinationName for now; future slice may FK to a dedicated
+// TravelDestination model. Subsequent slices land CRUD route + admin UI
+// page + Cost Master integration (the "6th category" requirement) +
+// day-by-day editor + LLM "Suggest itinerary" button.
+model TravelSightseeing {
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int
+  destinationName     String // free-form for now; future FK to TravelDestination
+  name                String // POI name e.g. "Eiffel Tower"
+  description         String?  @db.Text // 1-2 paragraphs
+  imageUrl            String?  @db.Text // thumbnail / hero image
+  durationMinutes     Int? // typical visit time
+  priceReferenceMinor Int? // INR minor units, indicative entry/ticket
+  currency            String?  @db.VarChar(3) // ISO 4217; nullable, defaults to tenant default at call site
+  category            String? // free-form tag: "monument" | "museum" | "nature" | "religious" | ...
+  subBrand            String? // routes inheritance to existing sub-brand filtering
+  notes               String?  @db.Text // ops/coordinator notes
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, destinationName])
+  @@index([tenantId, subBrand])
 }
 
 model TravelSeasonCalendar {

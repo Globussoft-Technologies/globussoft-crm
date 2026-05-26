@@ -107,11 +107,35 @@ router.get("/", verifyToken, async (req, res) => {
     // #172: pagination
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset) || 0);
-    const tasks = await prisma.task.findMany({
+
+    // #920 slice 4: ?fields=summary slim-shape opt-in. Mirrors slice 1
+    // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+    // badc9cca). When the caller passes ?fields=summary we drop the
+    // nested contact + user includes (which fan out PII — email, phone,
+    // company, etc.) and return only the columns needed for list-page
+    // rendering. Opt-in additive — existing callers (no ?fields, or any
+    // non-exact value) get the full include shape unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where, take: limit, skip: offset,
-      include: { contact: true, user: true },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        title: true,
+        status: true,
+        priority: true,
+        dueDate: true,
+        contactId: true,
+        userId: true,
+        tenantId: true,
+        createdAt: true,
+      };
+    } else {
+      findManyArgs.include = { contact: true, user: true };
+    }
+    const tasks = await prisma.task.findMany(findManyArgs);
 
     // Sort by priority in-memory (Critical first)
     tasks.sort(

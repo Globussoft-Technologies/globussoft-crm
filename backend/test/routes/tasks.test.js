@@ -296,6 +296,107 @@ describe('GET / — list', () => {
   });
 });
 
+// ── GET /?fields=summary — slim-shape opt-in (#920 slice 4) ──────────
+//
+// Mirrors slice 1 contacts (f7790241), slice 2 deals (6786c2da), slice 3
+// tickets (badc9cca). When the caller passes ?fields=summary, the route
+// drops the nested `contact` + `user` includes (which fan out PII — email,
+// phone, company, walletBalance, etc.) and returns only the columns needed
+// for list-page rendering. Opt-in additive — existing callers (no ?fields,
+// or any non-exact value) get the full include shape unchanged.
+
+describe('GET /?fields=summary — slim-shape opt-in (#920 slice 4)', () => {
+  test('?fields=summary triggers prisma.task.findMany with `select` (slim cols), not `include`', async () => {
+    prisma.task.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/tasks?fields=summary')
+      .set('Authorization', makeBearer());
+    const args = prisma.task.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.include).toBeUndefined();
+    // Confirm the slim columns the slice pins (no PII-fan-out via nested contact/user)
+    expect(args.select).toEqual({
+      id: true,
+      title: true,
+      status: true,
+      priority: true,
+      dueDate: true,
+      contactId: true,
+      userId: true,
+      tenantId: true,
+      createdAt: true,
+    });
+  });
+
+  test('?fields=summary response rows have ONLY the slim keys (no nested contact/user objects)', async () => {
+    // Simulate what Prisma returns when invoked with `select` — only the chosen cols.
+    prisma.task.findMany.mockResolvedValue([
+      {
+        id: 1, title: 'Follow up', status: 'Pending', priority: 'High',
+        dueDate: null, contactId: 50, userId: 7, tenantId: 1,
+        createdAt: new Date('2026-05-25T10:00:00Z'),
+      },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/tasks?fields=summary')
+      .set('Authorization', makeBearer());
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).not.toHaveProperty('contact');
+    expect(res.body[0]).not.toHaveProperty('user');
+    expect(res.body[0].title).toBe('Follow up');
+    expect(res.body[0].contactId).toBe(50);
+  });
+
+  test('?fields= (empty) preserves the existing full include shape', async () => {
+    prisma.task.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/tasks?fields=')
+      .set('Authorization', makeBearer());
+    const args = prisma.task.findMany.mock.calls[0][0];
+    expect(args.include).toEqual({ contact: true, user: true });
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=anything-else (non-exact value) preserves the existing full include shape', async () => {
+    prisma.task.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/tasks?fields=full')
+      .set('Authorization', makeBearer());
+    const args = prisma.task.findMany.mock.calls[0][0];
+    expect(args.include).toEqual({ contact: true, user: true });
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=summary preserves auth gate + tenant isolation on where clause', async () => {
+    // No bearer → 401 (verifyToken middleware still gates the slim shape)
+    const unauth = await request(makeApp())
+      .get('/api/tasks?fields=summary');
+    expect(unauth.status).toBe(401);
+
+    // With bearer → where.tenantId still scoped to req.user.tenantId
+    prisma.task.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/tasks?fields=summary')
+      .set('Authorization', makeBearer({ tenantId: 7 }));
+    const args = prisma.task.findMany.mock.calls[0][0];
+    expect(args.where.tenantId).toBe(7);
+    expect(args.where.deletedAt).toBeNull(); // soft-delete hide preserved
+  });
+
+  test('?fields=summary honors pagination params (?limit + ?offset) alongside the slim select', async () => {
+    prisma.task.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/tasks?fields=summary&limit=25&offset=50')
+      .set('Authorization', makeBearer());
+    const args = prisma.task.findMany.mock.calls[0][0];
+    expect(args.take).toBe(25);
+    expect(args.skip).toBe(50);
+    expect(args.select).toBeDefined();
+    expect(args.include).toBeUndefined();
+  });
+});
+
 // ── POST / — create with validation, assignee fallback, audit ────────
 
 describe('POST / — create', () => {

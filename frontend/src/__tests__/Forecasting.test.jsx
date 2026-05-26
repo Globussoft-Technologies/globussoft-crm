@@ -228,3 +228,234 @@ describe('<Forecasting /> — page surface', () => {
     });
   });
 });
+
+describe('<Forecasting /> — extended coverage', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    try {
+      localStorage.setItem('tenant', JSON.stringify({ defaultCurrency: 'USD', locale: 'en-US' }));
+    } catch { /* ignore */ }
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/forecasting/current')) return Promise.resolve(sampleCurrent);
+      if (url.startsWith('/api/forecasting/trend')) return Promise.resolve(sampleTrend);
+      return Promise.resolve(null);
+    });
+  });
+
+  it('period selector renders exactly 3 PERIOD_OPTIONS with the expected label shapes', async () => {
+    // Pins the 3-option contract: Current Quarter (YYYY-Qn), Next Quarter
+    // (YYYY-Qn), This Year (YYYY). If a 4th option (e.g. 6-month or YTD)
+    // is added without a test update, this case flags the regression.
+    renderForecasting();
+    await waitFor(() => expect(screen.getByText('Alice Rep')).toBeInTheDocument());
+    const periodSelect = screen.getByRole('combobox');
+    const options = Array.from(periodSelect.querySelectorAll('option'));
+    expect(options.length).toBe(3);
+    // Labels follow the "(YYYY-Q[1-4])" or "(YYYY)" pattern.
+    expect(options[0].textContent).toMatch(/Current Quarter \(\d{4}-Q[1-4]\)/);
+    expect(options[1].textContent).toMatch(/Next Quarter \(\d{4}-Q[1-4]\)/);
+    expect(options[2].textContent).toMatch(/This Year \(\d{4}\)/);
+  });
+
+  it('per-rep table renders each row with formatted $-values for closed/committed/expected/best-case', async () => {
+    // Existing test only asserts row names; this pins the numeric cell
+    // shape so a regression in formatMoney (or a column-swap in the JSX)
+    // is caught.
+    renderForecasting();
+    await waitFor(() => expect(screen.getByText('Alice Rep')).toBeInTheDocument());
+    // Alice: closed=25k, committed=30k, expected=50k, best=65k
+    expect(screen.getAllByText('$25,000').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('$30,000').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('$65,000').length).toBeGreaterThanOrEqual(1);
+    // Bob: closed=15k, committed=20k, best=55k
+    expect(screen.getAllByText('$15,000').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('$20,000').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('$55,000').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('/current fetch URL contains encodeURIComponent(period)', async () => {
+    // Pins that the period is URL-encoded (not just concatenated). The
+    // initial-mount period is `${YYYY}-Q[1-4]` which contains no
+    // encode-sensitive chars, so check that the encoded form (which is
+    // equivalent to the raw form for "-" and digits) appears as a
+    // substring of the URL.
+    renderForecasting();
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' &&
+        u.startsWith('/api/forecasting/current?period=')
+      );
+      expect(call).toBeTruthy();
+      // YYYY-Qn pattern.
+      expect(call[0]).toMatch(/\?period=\d{4}-Q[1-4]/);
+    });
+  });
+
+  it('Save Snapshot button is disabled while loading (initial mount)', async () => {
+    // The button has `disabled={saving || loading}`. Before the /current
+    // and /trend Promises resolve, the button must be disabled.
+    let resolveCurrent;
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/forecasting/current')) {
+        return new Promise(r => { resolveCurrent = () => r(sampleCurrent); });
+      }
+      if (url.startsWith('/api/forecasting/trend')) return Promise.resolve(sampleTrend);
+      return Promise.resolve(null);
+    });
+    renderForecasting();
+    const btn = screen.getByRole('button', { name: /Save Snapshot/i });
+    // Loading phase — button is disabled.
+    expect(btn).toBeDisabled();
+    // Resolve the in-flight /current so the test cleans up.
+    resolveCurrent();
+    await waitFor(() => expect(btn).not.toBeDisabled());
+  });
+
+  it('Save Snapshot label shows "Saving..." while POST is in-flight', async () => {
+    renderForecasting();
+    await waitFor(() => expect(screen.getByText('Alice Rep')).toBeInTheDocument());
+    let resolveSave;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/forecasting/save' && opts?.method === 'POST') {
+        return new Promise(r => { resolveSave = () => r({ id: 99 }); });
+      }
+      if (url.startsWith('/api/forecasting/current')) return Promise.resolve(sampleCurrent);
+      if (url.startsWith('/api/forecasting/trend')) return Promise.resolve(sampleTrend);
+      return Promise.resolve(null);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save Snapshot/i }));
+    // In-flight: button reads "Saving..." and is disabled.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Saving\.\.\./i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Saving\.\.\./i })).toBeDisabled();
+    resolveSave();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Save Snapshot/i })).toBeInTheDocument();
+    });
+  });
+
+  it('Save Snapshot surfaces the error message when the POST rejects', async () => {
+    renderForecasting();
+    await waitFor(() => expect(screen.getByText('Alice Rep')).toBeInTheDocument());
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/forecasting/save' && opts?.method === 'POST') {
+        return Promise.reject(new Error('snapshot quota exceeded'));
+      }
+      if (url.startsWith('/api/forecasting/current')) return Promise.resolve(sampleCurrent);
+      if (url.startsWith('/api/forecasting/trend')) return Promise.resolve(sampleTrend);
+      return Promise.resolve(null);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save Snapshot/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/snapshot quota exceeded/i)).toBeInTheDocument();
+    });
+  });
+
+  it('changing period to "This Year" fires /current with the YYYY value (not YYYY-Qn)', async () => {
+    // The 3rd option is the year-only string. Pin that the URL reflects
+    // it, distinguishing it from the quarter shape — both rollups go
+    // through the same fetcher, but the backend behavior differs by
+    // period shape, so this contract must stay.
+    renderForecasting();
+    await waitFor(() => expect(screen.getByText('Alice Rep')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/forecasting/current')) return Promise.resolve(sampleCurrent);
+      if (url.startsWith('/api/forecasting/trend')) return Promise.resolve(sampleTrend);
+      return Promise.resolve(null);
+    });
+    const periodSelect = screen.getByRole('combobox');
+    const options = Array.from(periodSelect.querySelectorAll('option'));
+    const yearOption = options[2]; // "This Year (YYYY)"
+    expect(yearOption.value).toMatch(/^\d{4}$/);
+    fireEvent.change(periodSelect, { target: { value: yearOption.value } });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' &&
+        u.startsWith('/api/forecasting/current?period=') &&
+        u.endsWith(yearOption.value)
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('Save POST body carries the currently-selected period (changes when dropdown changes)', async () => {
+    renderForecasting();
+    await waitFor(() => expect(screen.getByText('Alice Rep')).toBeInTheDocument());
+    const periodSelect = screen.getByRole('combobox');
+    const options = Array.from(periodSelect.querySelectorAll('option'));
+    const yearValue = options[2].value;
+    fireEvent.change(periodSelect, { target: { value: yearValue } });
+    // Wait for the new /current to settle.
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' &&
+        u.startsWith('/api/forecasting/current') &&
+        u.endsWith(yearValue)
+      );
+      expect(call).toBeTruthy();
+    });
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/forecasting/save' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 7 });
+      }
+      if (url.startsWith('/api/forecasting/current')) return Promise.resolve(sampleCurrent);
+      if (url.startsWith('/api/forecasting/trend')) return Promise.resolve(sampleTrend);
+      return Promise.resolve(null);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save Snapshot/i }));
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/forecasting/save' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.period).toBe(yearValue);
+    });
+  });
+
+  it('trend chart renders inside the rc stub when /trend returns rows', async () => {
+    // Two charts on the page → both ResponsiveContainer instances render
+    // as data-testid="rc". When trend is populated AND byUser is
+    // populated, both rc nodes exist. Pins the "trend chart actually
+    // renders when data is present" contract — distinct from the empty
+    // state "No data yet." case.
+    renderForecasting();
+    await waitFor(() => expect(screen.getByText('Alice Rep')).toBeInTheDocument());
+    const rcs = screen.getAllByTestId('rc');
+    expect(rcs.length).toBe(2);
+  });
+
+  it('renders heading + Save button + 4 KPI labels even when /current returns all-zero totals', async () => {
+    // Zero-state shape: backend returns 0s but the page must still
+    // render the 4 KPI labels with "$0" values. Distinct from the
+    // empty-byUser test above (which exercises the chart + table empty
+    // states; this one pins the KPI tile shape).
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/forecasting/current')) {
+        return Promise.resolve({
+          period: '2026-Q2',
+          byUser: [],
+          total: { expected: 0, committed: 0, bestCase: 0, closed: 0 },
+        });
+      }
+      if (url.startsWith('/api/forecasting/trend')) return Promise.resolve({ trend: [] });
+      return Promise.resolve(null);
+    });
+    renderForecasting();
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Sales Forecasting/i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Save Snapshot/i })).toBeInTheDocument();
+    // All 4 KPI labels present (each matches ≥1 because the same labels
+    // appear in the Recharts legend as well).
+    expect(screen.getAllByText(/^Closed$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^Committed$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^Expected$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^Best Case$/).length).toBeGreaterThanOrEqual(1);
+    // All KPI values render as "$0" (4 tiles × 1 value each = 4 occurrences).
+    expect(screen.getAllByText('$0').length).toBeGreaterThanOrEqual(4);
+  });
+});

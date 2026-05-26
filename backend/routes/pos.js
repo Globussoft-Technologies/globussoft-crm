@@ -1221,6 +1221,175 @@ router.get("/sales/stats", adminGate, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// GET /api/pos/sales/by-month — tenant-wide POS sale monthly rollup
+// (D17 POS polish slice — PRD_POS_NEW_SALE).
+//
+// Sibling of /sales/stats. Where /stats returns a single tenant-wide
+// KPI envelope, /by-month returns a per-UTC-month time series for the
+// owner-dashboard POS trend chart. Mirrors /api/travel/suppliers/by-month
+// (slice 24) + /api/travel/quotes/by-month + /api/travel/flyer-templates/
+// by-month — same UTC YYYY-MM bucketing, JS-side aggregation, same
+// orderBy / limit / offset / from / to surface, same NO-audit-row
+// read-only meta contract.
+//
+// Auth: adminGate (verifyWellnessRole(['admin', 'manager'])) — same
+// posture as /sales/stats; tenant-wide aggregate is an owner-dashboard
+// surface, minimise PII exposure. Wellness-vertical-gated (NOT
+// verifyRole).
+//
+// Query params:
+//   ?from / ?to   optional inclusive YYYY-MM bounds; invalid → 400 INVALID_MONTH_FORMAT
+//   ?orderBy      default 'month:asc'; accepts month:{asc|desc}, count:{asc|desc}
+//   ?limit        default 12, capped at 60
+//   ?offset       default 0
+//
+// Aggregation:
+//   - Map<string, {month, count, byStatus, totalRevenue}> keyed on UTC
+//     'YYYY-MM' from Sale.createdAt
+//   - 'unknown' bucket for null/invalid createdAt (excluded when ?from/?to set)
+//   - byStatus: { DRAFT, COMPLETED, VOIDED, REFUNDED, PARTIALLY_REFUNDED }
+//   - totalRevenue: sum of Sale.total where status='COMPLETED' (half-up 2dp)
+//   - Pagination applied AFTER aggregation + sort + bucket filter
+//
+// Response envelope:
+//   {
+//     total: <pre-pagination bucket count>,
+//     rows: [{ month, count, byStatus, totalRevenue }, ...]
+//   }
+//
+// Sale status enum (schema.prisma + routes/pos.js void/refund handlers):
+//   DRAFT | COMPLETED | VOIDED | REFUNDED | PARTIALLY_REFUNDED
+// Revenue column = Sale.total (Float, default 0).
+//
+// NO audit row written (read-only meta surface, mirrors all sibling
+// /by-month + /stats endpoints).
+//
+// Express route ordering: literal-path /sales/by-month MUST be declared
+// BEFORE the /sales/:id family below or `:id="by-month"` would 400
+// INVALID_ID via parseInt before reaching this handler. Same convention
+// as /sales/stats above.
+// ─────────────────────────────────────────────────────────────────────
+router.get("/sales/by-month", adminGate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // YYYY-MM validation — mirrors /suppliers/by-month + /quotes/by-month.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const orderByRaw = req.query.orderBy
+      ? String(req.query.orderBy)
+      : "month:asc";
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "count:asc",
+      "count:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Half-up round to 2dp — matches /sales/stats sibling.
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Light projection — total + status + createdAt is all we need.
+    const sales = await prisma.sale.findMany({
+      where: { tenantId },
+      select: { total: true, status: true, createdAt: true },
+    });
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → bucket. Null/invalid
+    // createdAt rows land in "unknown".
+    const byMonth = new Map();
+    for (const s of sales) {
+      let monthKey = "unknown";
+      if (s.createdAt) {
+        const dt = s.createdAt instanceof Date
+          ? s.createdAt
+          : new Date(s.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let bucket = byMonth.get(monthKey);
+      if (!bucket) {
+        bucket = {
+          month: monthKey,
+          count: 0,
+          byStatus: {},
+          totalRevenue: 0,
+        };
+        byMonth.set(monthKey, bucket);
+      }
+      bucket.count += 1;
+      const status = s.status || "UNKNOWN";
+      bucket.byStatus[status] = (bucket.byStatus[status] || 0) + 1;
+      if (status === "COMPLETED") {
+        bucket.totalRevenue += Number(s.total) || 0;
+      }
+    }
+
+    // Round totalRevenue per bucket (half-up 2dp) once aggregation is done.
+    let months = [...byMonth.values()].map((b) => ({
+      ...b,
+      totalRevenue: round2(b.totalRevenue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" excluded when either
+    // bound is set (no comparable token); kept otherwise so the rollup
+    // surface remains complete.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
+    // "unknown" sorts last in asc / first in desc (lexicographically >
+    // "9999-12") — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const total = months.length;
+
+    // Pagination AFTER aggregation + sort + filter.
+    const rows = months.slice(skip, skip + take);
+
+    return res.json({ total, rows });
+  } catch (e) {
+    console.error("[pos] sales/by-month error:", e.message);
+    return res.status(500).json({ error: "Failed to compute monthly rollup" });
+  }
+});
+
 router.get("/sales/:id", cashierGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);

@@ -793,4 +793,277 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(joinLink).toHaveAttribute('target', '_blank');
     expect(joinLink).toHaveAttribute('rel', expect.stringMatching(/noopener/));
   });
+
+  // ── EXTENSION BATCH (2026-05-26): handler-catch coverage + Outlook modal + ──
+  //   miscellaneous branches missed by the prior two waves.
+  //
+  // The 2026-05-26 wave pins:
+  //  - handleConnect's CATCH branch (fetchApi throws, not just empty-authUrl)
+  //  - handleCreateEvent / handleEditEvent failure toasts
+  //  - Delete-event CANCEL (notify.confirm resolves false → no DELETE)
+  //  - Delete-event FAILURE (DELETE rejects → "Failed to delete event" toast)
+  //  - Edit-event Cancel button flips back to view mode (NOT close modal)
+  //  - Outlook variant of the Create-Event modal heading
+  //  - Event row with attendees renders the attendee-count badge
+  //  - ?error=<msg> URL branch with outlook (parity with the connect branch)
+  //  - Unknown ?connected value (falls through both branches — no toast)
+  //  - Events past the slice(0, 50) limit are NOT rendered (limit clamp)
+
+  it('Connect catch: fetchApi rejects → "Error:" toast renders + no redirect', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/calendar/google/events') return Promise.reject(new Error('not connected'));
+      if (url === '/api/calendar/outlook/events') return Promise.reject(new Error('not connected'));
+      if (url === '/api/calendar/google/connect') {
+        return Promise.reject(new Error('oauth init blew up'));
+      }
+      return Promise.resolve(null);
+    });
+    render(<CalendarSync />);
+
+    const connectBtns = await screen.findAllByRole('button', { name: /Connect/i });
+    fireEvent.click(connectBtns[0]);
+
+    expect(
+      await screen.findByText(/Error: oauth init blew up/i),
+    ).toBeInTheDocument();
+    expect(locStub.hrefSetter).not.toHaveBeenCalled();
+  });
+
+  it('Create-Event failure: when POST /events rejects, the "Failed to create event" toast renders', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/calendar/google/events' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(sampleGoogleEvents);
+      }
+      if (url === '/api/calendar/outlook/events') {
+        return Promise.reject(new Error('not connected'));
+      }
+      if (url === '/api/calendar/google/events' && opts?.method === 'POST') {
+        return Promise.reject(new Error('quota exceeded'));
+      }
+      return Promise.resolve(null);
+    });
+    render(<CalendarSync />);
+
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+    await screen.findByRole('heading', { name: /Create Event in Google/i });
+
+    fireEvent.change(screen.getByPlaceholderText(/Team Meeting, Client Call/i), {
+      target: { value: 'Doomed kickoff' },
+    });
+    const dtInputs = document.querySelectorAll('input[type="datetime-local"]');
+    fireEvent.change(dtInputs[0], { target: { value: '2026-09-01T10:00' } });
+    fireEvent.change(dtInputs[1], { target: { value: '2026-09-01T11:00' } });
+
+    const submitBtn = screen.getByRole('button', { name: /^Create Event$/i });
+    await waitFor(() => expect(submitBtn).not.toBeDisabled());
+    fireEvent.click(submitBtn);
+
+    expect(
+      await screen.findByText(/Failed to create event: quota exceeded/i),
+    ).toBeInTheDocument();
+  });
+
+  it('Edit-Event failure: when PUT /events/<id> rejects, the "Failed to update event" toast renders', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/calendar/google/events' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(sampleGoogleEvents);
+      }
+      if (url === '/api/calendar/outlook/events') {
+        return Promise.reject(new Error('not connected'));
+      }
+      if (url === '/api/calendar/events/g-evt-1' && opts?.method === 'PUT') {
+        return Promise.reject(new Error('write conflict'));
+      }
+      return Promise.resolve(null);
+    });
+    render(<CalendarSync />);
+
+    fireEvent.click(await screen.findByText(/Quarterly client review/i));
+    fireEvent.click(await screen.findByRole('button', { name: /Edit/i }));
+    await screen.findByRole('heading', { name: /Edit Event/i });
+
+    const saveBtn = screen.getByRole('button', { name: /Save Changes/i });
+    // Title pre-populated from selectedEvent → Save should already be enabled.
+    fireEvent.click(saveBtn);
+
+    expect(
+      await screen.findByText(/Failed to update event: write conflict/i),
+    ).toBeInTheDocument();
+  });
+
+  it('Delete cancel: when notify.confirm resolves false, NO DELETE /events/<id> fires', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock());
+    render(<CalendarSync />);
+
+    fireEvent.click(await screen.findByText(/Quarterly client review/i));
+    // User clicks Cancel on the confirm prompt.
+    notifyConfirm.mockResolvedValueOnce(false);
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock());
+
+    fireEvent.click(await screen.findByRole('button', { name: /Delete/i }));
+
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalledWith(
+        expect.stringMatching(/Are you sure you want to delete this event/i),
+      );
+    });
+    // Drain microtasks then assert no DELETE fired against /api/calendar/events/.
+    await new Promise((r) => setTimeout(r, 0));
+    const delCall = fetchApiMock.mock.calls.find(
+      ([u, o]) => u === '/api/calendar/events/g-evt-1' && o?.method === 'DELETE',
+    );
+    expect(delCall).toBeUndefined();
+  });
+
+  it('Delete-Event failure: when DELETE rejects, the "Failed to delete event" toast renders', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/calendar/google/events' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(sampleGoogleEvents);
+      }
+      if (url === '/api/calendar/outlook/events') {
+        return Promise.reject(new Error('not connected'));
+      }
+      if (url === '/api/calendar/events/g-evt-1' && opts?.method === 'DELETE') {
+        return Promise.reject(new Error('permission denied'));
+      }
+      return Promise.resolve(null);
+    });
+    render(<CalendarSync />);
+
+    fireEvent.click(await screen.findByText(/Quarterly client review/i));
+    notifyConfirm.mockResolvedValueOnce(true);
+    fireEvent.click(await screen.findByRole('button', { name: /Delete/i }));
+
+    expect(
+      await screen.findByText(/Failed to delete event: permission denied/i),
+    ).toBeInTheDocument();
+  });
+
+  it('Edit Cancel button: flips back to view mode (heading reverts) without closing the modal', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock());
+    render(<CalendarSync />);
+
+    fireEvent.click(await screen.findByText(/Quarterly client review/i));
+    fireEvent.click(await screen.findByRole('button', { name: /Edit/i }));
+    await screen.findByRole('heading', { name: /Edit Event/i });
+
+    // The Edit form has TWO buttons named Cancel (one form, one nowhere else)
+    // — getByRole + name should pick the form's Cancel button uniquely.
+    const cancelBtn = screen.getByRole('button', { name: /^Cancel$/i });
+    fireEvent.click(cancelBtn);
+
+    // View-mode heading (the event title) is now back; Edit-mode heading gone.
+    await waitFor(() => {
+      // The Edit heading should disappear.
+      expect(screen.queryByRole('heading', { name: /Edit Event/i })).not.toBeInTheDocument();
+    });
+    // And the modal is still open — Close button still in DOM.
+    expect(screen.getByRole('button', { name: /^Close$/i })).toBeInTheDocument();
+  });
+
+  it('Create-Event modal (Outlook variant): heading reads "Create Event in Outlook"', async () => {
+    // Outlook is the connected provider this round.
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/calendar/outlook/events' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve([]);
+      }
+      if (url === '/api/calendar/google/events') {
+        return Promise.reject(new Error('not connected'));
+      }
+      return Promise.resolve(null);
+    });
+    render(<CalendarSync />);
+
+    await screen.findByText(/^Connected$/i);
+    // Only the Outlook card has the "+" button (Google is offline).
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+
+    expect(
+      await screen.findByRole('heading', { name: /Create Event in Outlook/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('event with attendees: row renders the attendee-count badge from JSON-string attendees', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock());
+    render(<CalendarSync />);
+
+    // sampleGoogleEvents[0].attendees is a JSON string of length 2.
+    await screen.findByText(/Quarterly client review/i);
+    // The attendee-count badge renders the number 2 in the row (next to a
+    // Users icon). The badge is rendered as text inside the row.
+    const eventRow = screen.getByText(/Quarterly client review/i).closest('div').parentElement;
+    expect(eventRow).toBeTruthy();
+    // The number appears within the row alongside the Users icon.
+    expect(within(eventRow.parentElement).getByText(/^2$/)).toBeInTheDocument();
+  });
+
+  it('?error=<msg> on mount (no provider connect): clears URL even when no providers online', async () => {
+    locStub.restore();
+    locStub = stubLocation({ search: '?error=invalid_grant', pathname: '/calendar-sync' });
+
+    fetchApiMock.mockImplementation(makeOfflineMock());
+    render(<CalendarSync />);
+
+    expect(
+      await screen.findByText(/Connection failed: invalid_grant/i),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(locStub.replaceState).toHaveBeenCalledWith({}, '', '/calendar-sync');
+    });
+    // No success toast leaked from the other branch.
+    expect(screen.queryByText(/Calendar connected!/i)).not.toBeInTheDocument();
+  });
+
+  it('?connected with unknown provider value: falls through, no toast, no replaceState', async () => {
+    // The URL-parse branch only acts on `connected === 'google'` / `'outlook'`
+    // — any other value is a no-op (no toast, no replaceState).
+    locStub.restore();
+    locStub = stubLocation({ search: '?connected=teams', pathname: '/calendar-sync' });
+
+    fetchApiMock.mockImplementation(makeOfflineMock());
+    render(<CalendarSync />);
+
+    // Let the loadAll() + URL-param effect both settle.
+    await screen.findAllByText(/Not connected/i);
+    // No toast in the DOM (toast text would have been "Teams Calendar connected!"
+    // if the branch fired — it doesn't).
+    expect(screen.queryByText(/Teams Calendar connected!/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Calendar connected!/i)).not.toBeInTheDocument();
+    // And replaceState was not invoked for the unknown branch.
+    expect(locStub.replaceState).not.toHaveBeenCalled();
+  });
+
+  it('events list truncates at 50: with 51 events returned, only the first 50 render', async () => {
+    // Build a 51-event response sorted by startTime so we can pin the 50th
+    // (rendered) and the 51st (NOT rendered) by title.
+    const big = Array.from({ length: 51 }, (_, i) => ({
+      id: `g-evt-${i + 1}`,
+      title: `Bulk meeting ${String(i + 1).padStart(3, '0')}`,
+      startTime: new Date(2026, 6, 1, 9, i).toISOString(),
+      endTime: new Date(2026, 6, 1, 10, i).toISOString(),
+      attendees: '[]',
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/calendar/google/events' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(big);
+      }
+      if (url === '/api/calendar/outlook/events') {
+        return Promise.reject(new Error('not connected'));
+      }
+      return Promise.resolve(null);
+    });
+    render(<CalendarSync />);
+
+    // The 50th item (sorted index 49) IS rendered.
+    expect(
+      await screen.findByText(/Bulk meeting 050/i),
+    ).toBeInTheDocument();
+    // The 51st item is NOT rendered.
+    expect(screen.queryByText(/Bulk meeting 051/i)).not.toBeInTheDocument();
+    // The "51 events" header counter still reflects the TRUE collected count
+    // — the slice(0, 50) only clamps RENDER, not the events array length.
+    expect(screen.getByText(/51 events/i)).toBeInTheDocument();
+  });
 });

@@ -8,14 +8,34 @@ const { writeAudit, diffFields } = require("../lib/audit");
 // pipeline list to file deals against it).
 const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 
-// ── GET / ─ list all pipelines for tenant (with deal counts) ─────
+// ── GET /?fields=summary ─ list all pipelines for tenant (with deal counts) ─
 router.get("/", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const pipelines = await prisma.pipeline.findMany({
+    // #920 slice 23: ?fields=summary slim-shape opt-in. Mirrors slices 1-20.
+    // Pipeline is a thin model (no nested includes today — PipelineStage is
+    // a separate tenant-shared model, NOT a relation on Pipeline). When the
+    // caller passes ?fields=summary we drop the tenantId (leaks tenant
+    // identity to clients that don't need it), description (free-form text
+    // not needed by dropdown / picker chrome), createdAt + updatedAt
+    // (metadata). Returns only id + name + isDefault. dealCount is still
+    // attached post-query because it's the headline metric the Pipelines
+    // page selector renders alongside the name. Opt-in additive — existing
+    // callers (no ?fields, or any non-exact value) get the full row shape
+    // unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId },
       orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        isDefault: true,
+      };
+    }
+    const pipelines = await prisma.pipeline.findMany(findManyArgs);
 
     // Attach deal counts per pipeline
     const counts = await prisma.deal.groupBy({

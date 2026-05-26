@@ -363,4 +363,164 @@ describe('<FieldPermissions /> — extended surface', () => {
     // way the empty-state row renders.)
     expect(screen.getByText(/No fields configured for this entity/i)).toBeInTheDocument();
   });
+
+  // ── Additional surface coverage (Wave: 547L SUT / extending past 366L) ──
+
+  it('shows error banner when initial /field-permissions load rejects', async () => {
+    // The OUTER try/catch in loadAll wraps the /field-permissions call. If it
+    // rejects, the SUT renders an error banner with the message. (The
+    // /entities and /matrix calls have inner try/catch with fallbacks, so
+    // they don't trip the outer catch.)
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/field-permissions/entities') return Promise.resolve({});
+      if (url === '/api/field-permissions/matrix') return Promise.reject(new Error('matrix-down'));
+      if (url === '/api/field-permissions') return Promise.reject(new Error('Bulk-load exploded'));
+      return Promise.resolve({});
+    });
+
+    render(<FieldPermissions />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading permissions/i)).not.toBeInTheDocument();
+    });
+    // Error banner rendered with the rejection message.
+    expect(screen.getByText(/Bulk-load exploded/i)).toBeInTheDocument();
+    // SUT still falls back to FALLBACK_ENTITIES matrix, so Deal tab + fields still render.
+    expect(screen.getByRole('button', { name: /^Deal$/ })).toBeInTheDocument();
+    expect(screen.getByText('title')).toBeInTheDocument();
+  });
+
+  it('view toggle: clicking Per-field after matrix hides the matrix table and shows entity tabs', async () => {
+    render(<FieldPermissions />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading permissions/i)).not.toBeInTheDocument();
+    });
+    // Flip to matrix view first.
+    fireEvent.click(screen.getByTestId('fp-view-matrix'));
+    await waitFor(() => {
+      expect(screen.getByTestId('fp-matrix-table')).toBeInTheDocument();
+    });
+    // Flip back to per-field view.
+    fireEvent.click(screen.getByTestId('fp-view-fields'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('fp-matrix-table')).not.toBeInTheDocument();
+    });
+    // Per-field surface returns: 'title' field row + Deal entity tab + the
+    // legend phrase about read-revokes-write are all rendered.
+    expect(screen.getByText('title')).toBeInTheDocument();
+    expect(screen.getByText(/Revoking Read automatically revokes Write/i)).toBeInTheDocument();
+  });
+
+  it('view toggle: active button has btn-primary class indicating current view', async () => {
+    render(<FieldPermissions />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading permissions/i)).not.toBeInTheDocument();
+    });
+    // Initial: 'fields' view active.
+    const fieldsBtn = screen.getByTestId('fp-view-fields');
+    const matrixBtn = screen.getByTestId('fp-view-matrix');
+    expect(fieldsBtn.className).toMatch(/btn-primary/);
+    expect(matrixBtn.className).not.toMatch(/btn-primary/);
+
+    // Flip — class assignment swaps.
+    fireEvent.click(matrixBtn);
+    await waitFor(() => {
+      expect(matrixBtn.className).toMatch(/btn-primary/);
+    });
+    expect(fieldsBtn.className).not.toMatch(/btn-primary/);
+  });
+
+  it('Save button disables during save and re-enables on success', async () => {
+    render(<FieldPermissions />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading permissions/i)).not.toBeInTheDocument();
+    });
+
+    // Make bulk-update hang so we can observe the saving state mid-flight.
+    let resolveSave;
+    fetchApiMock.mockImplementationOnce(() => new Promise((res) => { resolveSave = res; }));
+
+    const saveBtn = screen.getByRole('button', { name: /Save Changes/i });
+    expect(saveBtn).not.toBeDisabled();
+    fireEvent.click(saveBtn);
+
+    // While the save promise is pending: button is disabled and the label
+    // reads "Saving…".
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Saving/i })).toBeDisabled();
+    });
+
+    // Resolve the pending save → button returns to enabled state.
+    resolveSave({ ok: true });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Save Changes/i })).not.toBeDisabled();
+    });
+  });
+
+  it('ADMIN matrix cell title attr reflects implicit-allow bypass', async () => {
+    render(<FieldPermissions />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading permissions/i)).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('fp-view-matrix'));
+    await waitFor(() => {
+      expect(screen.getByTestId('fp-matrix-table')).toBeInTheDocument();
+    });
+    // ADMIN cells get a "ADMIN bypass: implicit allow" tooltip — non-ADMIN
+    // cells get a flip-state tooltip ("Allowed (click to deny)" or
+    // "Denied (click to allow)").
+    const adminCell = screen.getByTestId('fp-cell-Deal-ADMIN-DELETE');
+    expect(adminCell.getAttribute('title')).toMatch(/ADMIN bypass/i);
+
+    const managerCell = screen.getByTestId('fp-cell-Deal-MANAGER-DELETE');
+    expect(managerCell.getAttribute('title')).toMatch(/Allowed \(click to deny\)/i);
+  });
+
+  it('Save payload emits a star rule per (entity, role, action) tuple — all 4 ACTIONS represented', async () => {
+    render(<FieldPermissions />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading permissions/i)).not.toBeInTheDocument();
+    });
+
+    fetchApiMock.mockResolvedValueOnce({ ok: true });
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      const last = fetchApiMock.mock.calls[fetchApiMock.mock.calls.length - 1];
+      expect(last[0]).toBe('/api/field-permissions/bulk-update');
+    });
+
+    const last = fetchApiMock.mock.calls[fetchApiMock.mock.calls.length - 1];
+    const body = JSON.parse(last[1].body);
+    // Star rules (field='*', emitted by the moduleMatrix block) must include
+    // all 4 actions for the canonical RBAC roles.
+    const dealStarRules = body.rules.filter(
+      (r) => r.entity === 'Deal' && r.field === '*' && r.role === 'MANAGER',
+    );
+    const actionSet = new Set(dealStarRules.map((r) => r.action));
+    expect(actionSet.has('READ')).toBe(true);
+    expect(actionSet.has('WRITE')).toBe(true);
+    expect(actionSet.has('DELETE')).toBe(true);
+    expect(actionSet.has('EXPORT')).toBe(true);
+
+    // Per-field rules (non-star) all have action='WRITE' — that's the legacy
+    // bucket comment in buildRulesPayload.
+    const dealAmountRule = body.rules.find(
+      (r) => r.entity === 'Deal' && r.field === 'amount' && r.role === 'USER',
+    );
+    expect(dealAmountRule).toBeTruthy();
+    expect(dealAmountRule.action).toBe('WRITE');
+  });
+
+  it('renders all FALLBACK Deal fields as per-field rows (10 fields × 3 roles)', async () => {
+    render(<FieldPermissions />);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading permissions/i)).not.toBeInTheDocument();
+    });
+    // FALLBACK_ENTITIES.Deal has 8 fields (title, amount, currency,
+    // probability, stage, expectedClose, ownerId, lostReason). Each must
+    // render as a row.
+    for (const f of ['title', 'amount', 'currency', 'probability', 'stage', 'expectedClose', 'ownerId', 'lostReason']) {
+      expect(screen.getByText(f)).toBeInTheDocument();
+    }
+  });
 });

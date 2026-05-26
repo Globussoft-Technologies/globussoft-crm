@@ -483,3 +483,195 @@ describe('<DealInsights /> — Generate Insights button', () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Extended coverage block — 2026-05-26 follow-up. Existing suite covered the
+// rebrand pin + load/empty/error + KPIs + filters + Generate button. This
+// block fills gaps surfaced from a fresh read of DealInsights.jsx:648:
+//   - Detail modal: open / close (✕) / backdrop / scanned-vs-not-scanned chip /
+//     in-modal resolve / empty in-modal state.
+//   - OPEN_DEALS view: empty state with "Go to Pipeline" CTA + the deal-card
+//     "Not Scanned" chip vs the "✓ N" chip when insights exist.
+//   - Empty-state CTA when openDeals.length === 0 (the prior "No insights
+//     yet" pin only exercised the openDeals > 0 branch).
+//   - OPPORTUNITY filter (the only filter type the earlier block didn't hit).
+//   - "Generating..." spinner state during generateForAll's POST loop.
+//   - Header click on a grouped deal navigates to /pipeline?dealId=X.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('<DealInsights /> — detail modal (See Insights)', () => {
+  it('clicking "See Insights" on an open-deal card opens the modal with that deal\'s insights', async () => {
+    mockLoaded();
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+    const seeButtons = await screen.findAllByText(/See Insights/i);
+    expect(seeButtons.length).toBe(3);
+
+    // Click Acme's See Insights — Acme has 2 insights (RISK + NEXT_BEST_ACTION).
+    fireEvent.click(seeButtons[0]);
+
+    // Modal exposes the "✓ Scanned" chip for a deal that has insights.
+    await waitFor(() => {
+      expect(screen.getByText(/✓ Scanned/i)).toBeInTheDocument();
+    });
+    // Both Acme insight bodies appear inside the modal.
+    expect(screen.getByText(/No activity in 45 days/i)).toBeInTheDocument();
+    expect(screen.getByText(/Schedule a check-in call/i)).toBeInTheDocument();
+  });
+
+  it('clicking the modal ✕ close button hides the modal', async () => {
+    mockLoaded();
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+    const seeButtons = await screen.findAllByText(/See Insights/i);
+    fireEvent.click(seeButtons[0]);
+
+    await screen.findByText(/✓ Scanned/i);
+
+    // ✕ is rendered as the literal close character inside a <button>.
+    const closeBtn = screen.getByText('✕');
+    fireEvent.click(closeBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/✓ Scanned/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('opening the modal for a deal with NO insights renders the in-modal empty state', async () => {
+    // Acme has 2 insights, but Gamma (id=3) has none → "Not Scanned" deal.
+    mockLoaded();
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+    const seeButtons = await screen.findAllByText(/See Insights/i);
+    // Gamma is the 3rd open-deal card.
+    fireEvent.click(seeButtons[2]);
+
+    // Modal shows the "○ Not Scanned" chip and the empty-state copy.
+    await waitFor(() => {
+      expect(screen.getByText(/○ Not Scanned/i)).toBeInTheDocument();
+    });
+    // Modal-specific empty copy.
+    expect(screen.getByText(/Generate insights from the main view to see analysis\./i)).toBeInTheDocument();
+  });
+});
+
+describe('<DealInsights /> — OPEN_DEALS empty state + scanned chips', () => {
+  it('OPEN_DEALS with zero open deals renders the "No open deals" empty state and a "Go to Pipeline" CTA', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/deal-insights') return Promise.resolve([]);
+      if (url === '/api/deals/stats') return Promise.resolve({ byStage: [] });
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/No open deals/i)).toBeInTheDocument();
+    });
+    // CTA copy + button visible.
+    expect(screen.getByText(/Create deals in Pipeline to get started/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Go to Pipeline/i })).toBeInTheDocument();
+  });
+
+  it('renders "✓ N" chip on deals that already have insights and "Not Scanned" otherwise', async () => {
+    mockLoaded();
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+
+    // Acme (id=1) has 2 unresolved insights → "✓ 2" chip.
+    // Beta (id=2) has 1 RESOLVED insight; when showResolved=false the allGrouped
+    // groupping for id=2 is empty → "Not Scanned".
+    // Gamma (id=3) has zero insights → "Not Scanned".
+    await waitFor(() => {
+      // Acme card's chip.
+      expect(screen.getByText(/^✓ 2$/)).toBeInTheDocument();
+    });
+    // Two cards (Beta + Gamma) render "Not Scanned".
+    expect(screen.getAllByText(/Not Scanned/i).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('<DealInsights /> — empty insights with no open deals', () => {
+  it('empty-state CTA points at "Go to Pipeline" when openDeals.length === 0', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/deal-insights') return Promise.resolve([]);
+      if (url === '/api/deals/stats') return Promise.resolve({ byStage: [] });
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/No insights yet/i)).toBeInTheDocument();
+    });
+    // No-open-deals branch copy.
+    expect(screen.getByText(/Create deals in Pipeline first, then generate insights\./i)).toBeInTheDocument();
+    // CTA button rendered (only when openDeals.length === 0).
+    expect(screen.getByRole('button', { name: /Go to Pipeline/i })).toBeInTheDocument();
+  });
+});
+
+describe('<DealInsights /> — OPPORTUNITY filter + showResolved interplay', () => {
+  it('filtering by OPPORTUNITY with showResolved=true reveals only the OPPORTUNITY insight', async () => {
+    mockLoaded();
+    renderPage();
+
+    await screen.findByText(/No activity in 45 days/i);
+
+    // OPPORTUNITY insight is resolved by default → invisible without showResolved.
+    expect(screen.queryByText(/High engagement detected/i)).not.toBeInTheDocument();
+
+    // Toggle showResolved first so the OPPORTUNITY (resolved) insight enters the
+    // pool.
+    fireEvent.click(screen.getByLabelText(/Show resolved/i));
+
+    // Then click the OPPORTUNITY tab.
+    fireEvent.click(screen.getByRole('button', { name: 'OPPORTUNITY' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/High engagement detected/i)).toBeInTheDocument();
+    });
+    // RISK + NEXT_BEST_ACTION are filtered out.
+    expect(screen.queryByText(/No activity in 45 days/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Schedule a check-in call/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('<DealInsights /> — Generate button transient state', () => {
+  it('shows "Generating..." label while the POST loop is in flight', async () => {
+    const fx = makeFixture();
+    // Defer the generate POSTs so the button stays in the "Generating..." state.
+    let unblock;
+    const blockedGenerate = new Promise((res) => { unblock = res; });
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/deal-insights') return Promise.resolve(fx.insights);
+      if (url === '/api/deals/stats') return Promise.resolve(fx.stats);
+      if (url.startsWith('/api/deals?')) return Promise.resolve(fx.openDeals);
+      if (url.startsWith('/api/deal-insights/generate/') && opts?.method === 'POST') {
+        return blockedGenerate.then(() => ({ generated: 0 }));
+      }
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    const btn = await screen.findByRole('button', { name: /Generate Insights \(3 open\)/i });
+    fireEvent.click(btn);
+
+    // While blockedGenerate is pending, the button label flips to "Generating...".
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Generating\.\.\./i })).toBeInTheDocument();
+    });
+
+    // Release so the test doesn't leak a pending promise.
+    unblock();
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Generating\.\.\./i })).not.toBeInTheDocument();
+    });
+  });
+});

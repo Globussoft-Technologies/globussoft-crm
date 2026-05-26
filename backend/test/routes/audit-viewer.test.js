@@ -332,3 +332,132 @@ describe('audit_viewer query semantics + CSV contract', () => {
     expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * #920 slice 24 — `?fields=summary` slim-shape opt-in.
+ *
+ * Audit rows carry heavy `details` JSON (often PII diffs of CREATE/UPDATE
+ * payloads) plus hash-chain bookkeeping (`prevHash`/`hash`) that's
+ * forensically essential for the integrity verifier but irrelevant to a
+ * paginated list view. The slim shape drops those + the nested user
+ * include — list-view consumers (AuditLog.jsx, future ops dashboards)
+ * can opt into the lighter payload without breaking existing callers.
+ *
+ * What this block pins
+ * ────────────────────
+ *   1. Default (no ?fields) — preserves full shape: uses `include`, no
+ *      `select` (back-compat — existing callers keep working).
+ *   2. ?fields=summary — switches to `select` with the 7-field projection
+ *      (id, entity, entityId, action, userId, tenantId, createdAt) and
+ *      drops the user `include` entirely.
+ *   3. Slim `select` excludes `details` (the PII column motivation for #920).
+ *   4. Slim `select` excludes `prevHash` + `hash` (hash-chain bookkeeping).
+ *   5. Non-exact `?fields` values (typos, casing) fall back to the full
+ *      shape — opt-in is strict-equality, not heuristic.
+ */
+describe('audit_viewer ?fields=summary slim-shape opt-in — #920 slice 24', () => {
+  test('GET / (no ?fields) — preserves full-shape contract: uses include, no select', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .get('/api/audit-viewer')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    // Back-compat: callers that don't pass ?fields keep the user join.
+    expect(call.include).toEqual({
+      user: { select: { id: true, name: true, email: true } },
+    });
+    // Crucially: no `select` is passed alongside, which would conflict with
+    // include and cause a Prisma validation error.
+    expect(call.select).toBeUndefined();
+  });
+
+  test('GET /?fields=summary → slim `select` with 7-field projection (no user include)', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .get('/api/audit-viewer?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    // Slim shape switches include → select.
+    expect(call.include).toBeUndefined();
+    expect(call.select).toEqual({
+      id: true,
+      entity: true,
+      entityId: true,
+      action: true,
+      userId: true,
+      tenantId: true,
+      createdAt: true,
+    });
+  });
+
+  test('GET /?fields=summary → slim shape EXCLUDES `details` (PII column motivation for #920)', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .get('/api/audit-viewer?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    // The core #920 motivation: audit details often carry PII diffs of
+    // CREATE/UPDATE payloads. Slim list-view callers shouldn't pull it.
+    expect(call.select.details).toBeUndefined();
+    // Sanity: select exists and has the expected non-details keys.
+    expect(call.select.id).toBe(true);
+    expect(call.select.entity).toBe(true);
+  });
+
+  test('GET /?fields=summary → slim shape EXCLUDES `prevHash` + `hash` (hash-chain bookkeeping)', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .get('/api/audit-viewer?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    // #558's hash-chain columns are essential for the integrity verifier
+    // (GET /api/audit/verify) but the list-view UI never reads them. Slim
+    // shape drops both so list queries stop pulling Text columns that can
+    // grow large for malformed/multi-row diffs.
+    expect(call.select.prevHash).toBeUndefined();
+    expect(call.select.hash).toBeUndefined();
+  });
+
+  test('GET /?fields=summary still scopes tenantId + still paginates (orthogonal to slim shape)', async () => {
+    prisma.auditLog.findMany.mockResolvedValueOnce([
+      // Slim rows: no `user` field, no `details`, no `prevHash`/`hash`.
+      { id: 1, entity: 'Deal', entityId: 100, action: 'CREATE', userId: 7, tenantId: 1, createdAt: new Date() },
+      { id: 2, entity: 'Contact', entityId: 200, action: 'UPDATE', userId: 7, tenantId: 1, createdAt: new Date() },
+    ]);
+    prisma.auditLog.count.mockResolvedValueOnce(2);
+    const app = makeApp();
+    const res = await request(app)
+      .get('/api/audit-viewer?fields=summary&page=1&limit=50')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    // Tenant isolation still pinned to req.user.tenantId (1 per tokenFor).
+    expect(call.where.tenantId).toBe(1);
+    // Pagination math unchanged: skip = (page - 1) * limit.
+    expect(call.skip).toBe(0);
+    expect(call.take).toBe(50);
+    // Envelope still emits paginated meta.
+    expect(res.body).toMatchObject({ total: 2, page: 1, limit: 50, pages: 1 });
+    expect(res.body.logs).toHaveLength(2);
+  });
+
+  test('GET /?fields=Summary (wrong casing) → falls back to full shape (strict-equality opt-in)', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .get('/api/audit-viewer?fields=Summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    // Strict `=== 'summary'` opt-in — typos and casing variants don't
+    // accidentally enter slim mode (preserves principle-of-least-surprise:
+    // either you ask for summary exactly, or you get the full row).
+    expect(call.select).toBeUndefined();
+    expect(call.include).toEqual({
+      user: { select: { id: true, name: true, email: true } },
+    });
+  });
+});

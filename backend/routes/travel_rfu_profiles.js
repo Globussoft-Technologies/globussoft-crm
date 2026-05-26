@@ -502,6 +502,176 @@ router.get(
   },
 );
 
+// ─── By-quarter — tenant-wide RFU profile quarterly rollup ──────────
+//
+// GET /api/travel/rfu-profiles/by-quarter
+// (PRD_TRAVEL_RFU §3 — operator-facing dashboard quarterly trend).
+//
+// USER-readable meta endpoint (within RFU-gated callers). Returns one
+// row per UTC YYYY-Q[1-4] bucket for the tenant-scoped RfuLeadProfile
+// population so the operator dashboard can render a "pilgrims onboarded
+// over quarter" trend chart without N round-trips per quarter. Sibling
+// to /rfu-profiles/stats + /rfu-profiles/by-month — same pattern, same
+// posture, quarter granularity.
+//
+// Mirrors /itineraries/by-quarter + /suppliers/by-quarter — same UTC
+// YYYY-Q[1-4] bucketing template, same defensive math (null/invalid
+// createdAt → "unknown" bucket; excluded when ?from / ?to is set, kept
+// otherwise so count surface stays accurate), same orderBy semantics.
+//
+// Sub-brand handling: RFU is a SINGLE-SUB-BRAND surface
+// (requireRfuAccess gates everything in this file). RfuLeadProfile has
+// NO subBrand column (the model is RFU-exclusive by design — see
+// schema.prisma:4752). The where-clause therefore needs NO additional
+// subBrand narrowing — the middleware already gates access. No
+// bySubBrand bucket emitted; matches /rfu-profiles/stats + /by-month
+// posture.
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-Q[1-4] bounds; invalid →
+//                     400 INVALID_QUARTER_FORMAT
+//   - ?orderBy      — default quarter:asc; accepts quarter:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 8 / 0; limit caps at 40
+//
+// Behaviour:
+//   - JS-side aggregation over a light findMany projection
+//     ({ createdAt }) — the population is bounded by tenant scale (low
+//     thousands), and the mock-friendly JS aggregation matches the
+//     rationale on /rfu-profiles/stats + /by-month. No groupBy for
+//     marginal efficiency.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so
+//     the count surface stays accurate. Excluded when ?from / ?to is
+//     set (no comparable quarter token); included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter —
+//     same posture as /by-month + /itineraries/by-quarter.
+//
+// No audit row written — read-only meta surface. USER-readable
+// (within RFU-gated callers): anodyne (counts + quarter-string tokens).
+//
+// Express route ordering: literal-path /by-quarter MUST be declared
+// BEFORE the /:id family (line 411+) or `:id="by-quarter"` would 400
+// INVALID_ID before reaching this handler. Same convention as the
+// other literal-path siblings above.
+router.get(
+  "/rfu-profiles/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  requireRfuAccess,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 8, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+      // YYYY-Q[1-4] validation — mirrors /itineraries/by-quarter.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Q[1-4] format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Q[1-4] format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+      // Tenant-scoped where. NO sub-brand narrowing —
+      // requireRfuAccess already gated this caller, and
+      // RfuLeadProfile has no subBrand column.
+      const where = { tenantId: req.travelTenant.id };
+
+      // Light projection — createdAt is all we need for the bucket
+      // totals. No JSON columns pulled.
+      const rows = await prisma.rfuLeadProfile.findMany({
+        where,
+        select: { createdAt: true },
+      });
+
+      // Aggregate per-UTC-quarter. Map "YYYY-Q[1-4]" → { quarter, count }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byQuarter = new Map();
+      for (const r of rows) {
+        let quarterKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${q}`;
+          }
+        }
+
+        let bucket = byQuarter.get(quarterKey);
+        if (!bucket) {
+          bucket = { quarter: quarterKey, count: 0 };
+          byQuarter.set(quarterKey, bucket);
+        }
+        bucket.count += 1;
+      }
+
+      let quarters = [...byQuarter.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. Mirrors /by-month posture.
+      if (fromRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Q[1-4] which is
+      // also chronological (Q1 < Q2 < Q3 < Q4 in ASCII, years naturally
+      // ordered). "unknown" sorts last in asc / first in desc
+      // (lexicographically > "9999-Q4") — acceptable for a defensive
+      // fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = quarters.length;
+
+      // Pagination AFTER aggregation + sort + filter.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      console.error("[travel-rfu] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
+
 // ─── Phase 2 — preflight duplicate check (PRD §4.5) ──────────────────
 //
 // The Phase 2 "full pop-up flow with preferences" needs a check-without-

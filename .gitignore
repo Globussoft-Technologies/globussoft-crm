@@ -11,6 +11,10 @@ build
 npm-debug.log*
 .DS_Store
 
+# Vitest-generated PDF artifacts (travel_quotes test scaffolding).
+# Regenerated on every test run — not source.
+backend/uploads/
+
 # Deployment scripts containing server credentials — NEVER commit
 deploy.py
 deploy_frontend.sh

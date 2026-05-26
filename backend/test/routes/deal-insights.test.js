@@ -550,6 +550,161 @@ describe('POST /run — manual deal-insights engine trigger (G-13)', () => {
 // attachDealContext helper — exported surface
 // ─────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920 slice 51)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// The slim-shape opt-in lets dashboard count-badges and open-insights-by-deal
+// pickers fetch just the ids + severity + isResolved keys WITHOUT the heavy
+// `insight` @db.Text body AND WITHOUT the dealContext enrichment join. These
+// tests pin the contract:
+//
+//   - ?fields=summary triggers a Prisma `select` of the slim columns only;
+//     the `insight` text body is NOT included in the query, so it cannot
+//     leak in the response.
+//   - the dealContext enrichment is SKIPPED — `prisma.deal.findMany` is
+//     never called when isSummary, so the rows ship without `dealContext`.
+//   - no `?fields` (or any non-exact value like ?fields=full,
+//     ?fields=summary,extra, ?fields=Summary) keeps the legacy enriched
+//     envelope unchanged — the existing dealContext join still fires.
+//   - filters (?severity, ?dealId, ?isResolved) compose with ?fields=summary
+//     in the where clause unchanged from the legacy path.
+//   - tenant scoping is preserved on the slim path — every findMany call
+//     carries tenantId from req.user.
+
+describe('GET /?fields=summary — slim-shape opt-in (#920 slice 51)', () => {
+  test('?fields=summary triggers Prisma select of slim columns, drops `insight` text + dealContext join', async () => {
+    // Slim rows arrive WITHOUT an `insight` field on them — Prisma's
+    // `select` projects only the chosen keys.
+    prisma.dealInsight.findMany.mockResolvedValue([
+      { id: 1, dealId: 10, type: 'RISK',        severity: 'WARNING',  isResolved: false, generatedAt: new Date() },
+      { id: 2, dealId: 11, type: 'OPPORTUNITY', severity: 'INFO',     isResolved: false, generatedAt: new Date() },
+    ]);
+
+    const res = await request(makeApp()).get('/api/deal-insights/?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    // Slim columns present.
+    expect(res.body[0]).toEqual(expect.objectContaining({
+      id: 1, dealId: 10, type: 'RISK', severity: 'WARNING', isResolved: false,
+    }));
+    // No `insight` body shipped (the heavy @db.Text field) — slim picker
+    // contract.
+    expect(res.body[0]).not.toHaveProperty('insight');
+    // No `dealContext` enrichment shipped — the join was skipped.
+    expect(res.body[0]).not.toHaveProperty('dealContext');
+    expect(res.body[1]).not.toHaveProperty('insight');
+    expect(res.body[1]).not.toHaveProperty('dealContext');
+
+    // Prisma findMany was called with a `select` clause carrying ONLY the
+    // slim keys (no `insight`).
+    expect(prisma.dealInsight.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: {
+        id: true,
+        dealId: true,
+        type: true,
+        severity: true,
+        isResolved: true,
+        generatedAt: true,
+      },
+    }));
+    const arg = prisma.dealInsight.findMany.mock.calls[0][0];
+    expect(arg.select).not.toHaveProperty('insight');
+    // dealContext enrichment join was NOT fired on the slim path.
+    expect(prisma.deal.findMany).not.toHaveBeenCalled();
+  });
+
+  test('no ?fields → legacy enriched envelope (dealContext join fires, no slim `select`)', async () => {
+    prisma.dealInsight.findMany.mockResolvedValue([
+      { id: 1, dealId: 10, tenantId: 1, type: 'RISK', severity: 'WARNING',
+        insight: 'No activity in 30 days.', isResolved: false, generatedAt: new Date() },
+    ]);
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 10, title: 'Acme renewal', amount: 5000, currency: 'USD',
+        stage: 'proposal', probability: 60, expectedClose: null, deletedAt: null,
+        contact: { name: 'Jane', company: 'Acme' } },
+    ]);
+
+    const res = await request(makeApp()).get('/api/deal-insights/');
+
+    expect(res.status).toBe(200);
+    // Legacy path preserves the full `insight` body + populated dealContext.
+    expect(res.body[0]).toHaveProperty('insight', 'No activity in 30 days.');
+    expect(res.body[0].dealContext).toEqual(expect.objectContaining({
+      id: 10, title: 'Acme renewal', isMissing: false,
+    }));
+    // The findMany call must NOT carry a `select` clause on the legacy path
+    // (Prisma would silently drop fields if it did).
+    const arg = prisma.dealInsight.findMany.mock.calls[0][0];
+    expect(arg).not.toHaveProperty('select');
+    // dealContext enrichment fired.
+    expect(prisma.deal.findMany).toHaveBeenCalled();
+  });
+
+  test('non-exact ?fields values (?fields=full, ?fields=Summary, ?fields=summary,extra) keep legacy envelope', async () => {
+    // The opt-in is strict equality on the literal "summary" string. Any
+    // other value falls through to the legacy path.
+    for (const fields of ['full', 'Summary', 'summary,extra', 'summary ']) {
+      prisma.dealInsight.findMany.mockReset();
+      prisma.deal.findMany.mockReset();
+      prisma.dealInsight.findMany.mockResolvedValue([
+        { id: 1, dealId: 10, tenantId: 1, type: 'RISK', severity: 'WARNING',
+          insight: 'Heavy body.', isResolved: false, generatedAt: new Date() },
+      ]);
+      prisma.deal.findMany.mockResolvedValue([
+        { id: 10, title: 'D', amount: 1, currency: 'USD', stage: 'lead', probability: 10, expectedClose: null, deletedAt: null, contact: null },
+      ]);
+
+      const res = await request(makeApp())
+        .get(`/api/deal-insights/?fields=${encodeURIComponent(fields)}`);
+
+      expect(res.status).toBe(200);
+      // Legacy enriched envelope — `insight` body present, dealContext attached.
+      expect(res.body[0]).toHaveProperty('insight', 'Heavy body.');
+      expect(res.body[0]).toHaveProperty('dealContext');
+      const arg = prisma.dealInsight.findMany.mock.calls[0][0];
+      expect(arg).not.toHaveProperty('select');
+      expect(prisma.deal.findMany).toHaveBeenCalled();
+    }
+  });
+
+  test('?fields=summary composes with ?severity + ?dealId + ?isResolved filters in where clause', async () => {
+    prisma.dealInsight.findMany.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/deal-insights/?fields=summary&severity=CRITICAL&dealId=42&isResolved=true');
+
+    expect(prisma.dealInsight.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, severity: 'CRITICAL', dealId: 42, isResolved: true },
+      select: expect.objectContaining({ id: true, severity: true }),
+    }));
+    // dealContext enrichment still skipped under summary mode regardless of
+    // filter composition.
+    expect(prisma.deal.findMany).not.toHaveBeenCalled();
+  });
+
+  test('?fields=summary preserves tenant scoping (tenantId from req.user lands in where + dealContext skipped)', async () => {
+    prisma.dealInsight.findMany.mockResolvedValue([
+      { id: 1, dealId: 99, type: 'RISK', severity: 'WARNING', isResolved: false, generatedAt: new Date() },
+    ]);
+
+    // tenant 7 in req.user — must propagate to where.tenantId.
+    const app = makeApp({ tenantId: 7, userId: 100, role: 'ADMIN' });
+    const res = await request(app).get('/api/deal-insights/?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(prisma.dealInsight.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 7 }),
+    }));
+    // No cross-tenant deal lookup fired (slim path skips the join entirely).
+    expect(prisma.deal.findMany).not.toHaveBeenCalled();
+    // Slim rows have no insight body — confirmed at response surface.
+    expect(res.body[0]).not.toHaveProperty('insight');
+    expect(res.body[0]).not.toHaveProperty('dealContext');
+  });
+});
+
 describe('attachDealContext helper — exported envelope', () => {
   test('insights with an orphan dealId get a populated isMissing=true sentinel (NOT dealContext=null)', async () => {
     // Only id=20 resolves; id=21 is orphan → sentinel.

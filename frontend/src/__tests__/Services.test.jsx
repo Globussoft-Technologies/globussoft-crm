@@ -568,3 +568,320 @@ describe('<Services /> — CSV export button state', () => {
     expect(fileInputs[0].accept).toMatch(/csv/);
   });
 });
+
+// =====================================================================
+// EXTENSION WAVE 2 — uncovered branches in ServiceCard save validation,
+// PackageBuilder dynamic recompute, ActiveTreatmentsTab populated state,
+// CSV import path, and per-card render details (category text + tier badge).
+// =====================================================================
+
+describe('<Services /> — Catalog card render details', () => {
+  beforeEach(() => {
+    fetchApi.mockReset();
+    fetchApi.mockImplementation(defaultFetchRouter);
+  });
+
+  it('renders category in uppercase and tier badge for each card', async () => {
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+
+    // category text is uppercased via CSS text-transform; the DOM still
+    // contains the raw value. Confirm both rows surface their category.
+    expect(screen.getByText('hair-restoration')).toBeInTheDocument();
+    expect(screen.getByText('aesthetics')).toBeInTheDocument();
+    // Tier badges
+    expect(screen.getByText(/^high$/)).toBeInTheDocument();
+    expect(screen.getByText(/^medium$/)).toBeInTheDocument();
+  });
+
+  it('renders "Unlimited" radius when targetRadiusKm is null/0/missing', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/wellness/services') {
+        return Promise.resolve([
+          { id: 99, name: 'Unbounded Service', category: 'aesthetics', ticketTier: 'low', basePrice: 1000, durationMin: 30, targetRadiusKm: null, isActive: true },
+        ]);
+      }
+      if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
+      return Promise.resolve({});
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('Unbounded Service')).toBeInTheDocument());
+    expect(screen.getByText(/Unlimited/i)).toBeInTheDocument();
+  });
+});
+
+describe('<Services /> — ServiceCard inline-edit validation', () => {
+  beforeEach(() => {
+    fetchApi.mockReset();
+    fetchApi.mockImplementation(defaultFetchRouter);
+  });
+
+  it('Save with zero price short-circuits before firing PUT', async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+
+    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    // Clear price + set to 0
+    const priceInput = screen.getByDisplayValue('8500');
+    await user.clear(priceInput);
+    await user.type(priceInput, '0');
+
+    const before = fetchApi.mock.calls.filter(
+      ([url, opts]) => url === '/api/wellness/services/10' && opts?.method === 'PUT'
+    ).length;
+    await user.click(screen.getByRole('button', { name: /^Save$/i }));
+    // Allow microtasks to flush
+    await new Promise((r) => setTimeout(r, 0));
+    const after = fetchApi.mock.calls.filter(
+      ([url, opts]) => url === '/api/wellness/services/10' && opts?.method === 'PUT'
+    ).length;
+    expect(after).toBe(before); // no PUT fired
+  });
+
+  it('Save with zero duration short-circuits before firing PUT', async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+
+    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    const durationInput = screen.getByDisplayValue('90');
+    await user.clear(durationInput);
+    await user.type(durationInput, '0');
+
+    const before = fetchApi.mock.calls.filter(
+      ([url, opts]) => url === '/api/wellness/services/10' && opts?.method === 'PUT'
+    ).length;
+    await user.click(screen.getByRole('button', { name: /^Save$/i }));
+    await new Promise((r) => setTimeout(r, 0));
+    const after = fetchApi.mock.calls.filter(
+      ([url, opts]) => url === '/api/wellness/services/10' && opts?.method === 'PUT'
+    ).length;
+    expect(after).toBe(before);
+  });
+
+  it('Save with negative radius short-circuits before firing PUT', async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+
+    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    const radiusInput = screen.getByDisplayValue('25');
+    await user.clear(radiusInput);
+    await user.type(radiusInput, '-5');
+
+    const before = fetchApi.mock.calls.filter(
+      ([url, opts]) => url === '/api/wellness/services/10' && opts?.method === 'PUT'
+    ).length;
+    await user.click(screen.getByRole('button', { name: /^Save$/i }));
+    await new Promise((r) => setTimeout(r, 0));
+    const after = fetchApi.mock.calls.filter(
+      ([url, opts]) => url === '/api/wellness/services/10' && opts?.method === 'PUT'
+    ).length;
+    expect(after).toBe(before);
+  });
+
+  it('editing description field round-trips into the PUT body', async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+
+    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    // Description textarea is the only textarea inside the edit form.
+    const textarea = document.querySelector('textarea');
+    expect(textarea).toBeTruthy();
+    await user.type(textarea, 'Premium graft service for hair restoration.');
+
+    await user.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => {
+      const putCall = fetchApi.mock.calls.find(
+        ([url, opts]) => url === '/api/wellness/services/10' && opts?.method === 'PUT'
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.description).toMatch(/Premium graft service/);
+    });
+  });
+});
+
+describe('<Services /> — PackageBuilder dynamic recompute', () => {
+  beforeEach(() => {
+    fetchApi.mockReset();
+    fetchApi.mockImplementation(defaultFetchRouter);
+  });
+
+  it('changing the sessions slider recomputes gross / savings / net', async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /^Packages$/i }));
+    await waitFor(() => expect(screen.getByText(/51,000/)).toBeInTheDocument());
+
+    // Sessions slider is the first range input
+    const sliders = document.querySelectorAll('input[type="range"]');
+    expect(sliders.length).toBe(2);
+    // jsdom: fireEvent change instead of user.type (range input is non-typable)
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.change(sliders[0], { target: { value: '10' } });
+
+    // 8500 * 10 = 85,000 ; discount 15% = 12,750 ; net = 72,250
+    await waitFor(() => expect(screen.getByText(/85,000/)).toBeInTheDocument());
+    expect(screen.getByText(/12,750/)).toBeInTheDocument();
+  });
+
+  it('changing discount to 0 yields gross === net (no savings)', async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /^Packages$/i }));
+    await waitFor(() => expect(screen.getByText(/51,000/)).toBeInTheDocument());
+
+    // Discount slider is the second range input
+    const sliders = document.querySelectorAll('input[type="range"]');
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.change(sliders[1], { target: { value: '0' } });
+
+    // gross = 51,000, savings = 0, net = 51,000 — gross + net both show 51,000
+    await waitFor(() => {
+      const matches = screen.getAllByText(/51,000/);
+      // At least gross row + net row both render 51,000 → ≥ 2 matches.
+      expect(matches.length).toBeGreaterThanOrEqual(2);
+    });
+    // Discount label updated to 0% — the value is rendered inside <strong>,
+    // separate text node from the "Discount:" prefix, so query the <strong>.
+    const strongs = Array.from(document.querySelectorAll('strong'));
+    const discountStrong = strongs.find((s) => s.textContent === '0%');
+    expect(discountStrong).toBeTruthy();
+  });
+
+  it('package builder shows "No services available" when services list is empty', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
+      return Promise.resolve({});
+    });
+    render(
+      <MemoryRouter initialEntries={['/wellness/services?tab=packages']}>
+        <Services />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(screen.getByText(/Build a package/i)).toBeInTheDocument());
+
+    // The select has the "No services available" option AND the summary
+    // shows the "Pick a service" placeholder.
+    expect(screen.getByText(/No services available/i)).toBeInTheDocument();
+    expect(screen.getByText(/Pick a service to see pricing/i)).toBeInTheDocument();
+  });
+});
+
+describe('<Services /> — Active Treatments populated state', () => {
+  beforeEach(() => {
+    fetchApi.mockReset();
+  });
+
+  it('renders treatment cards when /api/wellness/activetreatment returns rows', async () => {
+    const user = userEvent.setup();
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/activetreatment') {
+        return Promise.resolve({
+          data: [
+            {
+              id: 501,
+              name: 'GFC 6-session course',
+              status: 'active',
+              totalSessions: 6,
+              completedSessions: 2,
+              totalPrice: 51000,
+              startedAt: '2026-04-01T00:00:00Z',
+              nextDueAt: '2026-06-01T00:00:00Z',
+              patient: { name: 'Asha Iyer', email: 'asha@example.com', phone: '+91-9000011111' },
+              service: { name: 'GFC Hair', durationMin: 90, basePrice: 8500, targetRadiusKm: 25, category: 'hair-restoration' },
+            },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+
+    // Treatment heading + patient label + sessions counter
+    await waitFor(() => expect(screen.getByText('GFC 6-session course')).toBeInTheDocument());
+    expect(screen.getByText(/Asha Iyer/)).toBeInTheDocument();
+    expect(screen.getByText(/2\/6 sessions/)).toBeInTheDocument();
+    // Active treatments empty-state copy MUST NOT render when rows exist
+    expect(screen.queryByText(/No active treatment plans yet\./i)).not.toBeInTheDocument();
+  });
+});
+
+describe('<Services /> — CSV import handler', () => {
+  beforeEach(() => {
+    fetchApi.mockReset();
+    fetchApi.mockImplementation(defaultFetchRouter);
+  });
+
+  it('selecting a file on the hidden input triggers a multipart fetch to /api/csv/services/import.csv', async () => {
+    // The import path uses native fetch (not fetchApi) for multipart upload.
+    // Stub it on globalThis so we can capture the call.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ imported: 2, skipped: 0, errors: [] }),
+    });
+
+    const user = userEvent.setup();
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+
+    // Locate the file input + upload a fake CSV
+    const fileInput = document.querySelector('input[type="file"]');
+    expect(fileInput).toBeTruthy();
+    const csvFile = new File(['name,basePrice\nTestSvc,1000\n'], 'svc.csv', { type: 'text/csv' });
+    await user.upload(fileInput, csvFile);
+
+    await waitFor(() => {
+      const importCall = fetchSpy.mock.calls.find(
+        ([url, opts]) => url === '/api/csv/services/import.csv' && opts?.method === 'POST'
+      );
+      expect(importCall).toBeTruthy();
+      // Body is a FormData instance carrying the file as "file"
+      expect(importCall[1].body).toBeInstanceOf(FormData);
+    });
+
+    fetchSpy.mockRestore();
+  });
+});
+
+describe('<Services /> — Packages CTA scroll anchor', () => {
+  beforeEach(() => {
+    fetchApi.mockReset();
+    fetchApi.mockImplementation(defaultFetchRouter);
+  });
+
+  it('"Create Package" button invokes scrollIntoView on the builder anchor', async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /^Packages$/i }));
+    await waitFor(() => expect(screen.getByText(/Build a package/i)).toBeInTheDocument());
+
+    // Patch scrollIntoView on the anchor element. jsdom does not implement
+    // it natively — patching avoids the "not a function" error and lets us
+    // assert the call shape.
+    const anchor = document.getElementById('package-builder-anchor');
+    expect(anchor).toBeTruthy();
+    const scrollSpy = vi.fn();
+    anchor.scrollIntoView = scrollSpy;
+
+    await user.click(screen.getByRole('button', { name: /Create Package/i }));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(scrollSpy.mock.calls[0][0]).toMatchObject({ behavior: 'smooth', block: 'start' });
+  });
+});

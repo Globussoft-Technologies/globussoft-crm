@@ -501,4 +501,207 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/csp/violations/by-day — tenant-wide CSP-violation daily rollup
+// (#917 CSP hardening slice 6).
+//
+// Sibling to GET /violations/stats (slice 5) and GET /violations (slice 3):
+// same data source (AuditLog rows where entity='CSPViolation' +
+// action='REPORT'), same tenant-scoping, same ADMIN gate. While /stats is the
+// at-a-glance KPI surface and /violations is the paginated forensic listing,
+// /by-day is the daily TIME-SERIES surface — what the CSPViolations admin
+// dashboard renders as a Recharts area chart of violation volume over time.
+//
+// Without this, the frontend would have to fetch the full /violations slice
+// and reduce client-side, undercounting once the row population exceeds the
+// pagination window (the 2026-05-07 wave-2 standing rule on client-side
+// aggregation over paginated endpoints).
+//
+// Mirrors /suppliers/by-month posture (UTC-bucket aggregation with
+// JS-side rollup + post-aggregation sort + post-aggregation pagination) but
+// at daily resolution. AuditLog-backed not Prisma-model-backed —
+// `details` is a JSON-stringified W3C / Reporting-API payload that we parse
+// with parseDetails + extractReportFields for shape parity with /stats.
+//
+// Query params
+// ────────────
+//   ?from   — optional inclusive YYYY-MM-DD lower bound; invalid → 400
+//             INVALID_DATE_FORMAT
+//   ?to     — optional inclusive YYYY-MM-DD upper bound; invalid → 400
+//             INVALID_DATE_FORMAT
+//   ?orderBy — default 'day:asc'; accepts day:{asc|desc}, count:{asc|desc}
+//   ?limit  — default 30, capped at 90
+//   ?offset — default 0
+//
+// Response envelope
+// ─────────────────
+//   {
+//     total: <pre-pagination day-bucket count>,
+//     rows: [
+//       { day: "2026-05-15", count: 3, byDirective: { "script-src": 2, "img-src": 1 } },
+//       ...
+//     ]
+//   }
+//
+// Aggregation discipline
+// ──────────────────────
+//   - UTC YYYY-MM-DD bucketing (date-bucket sort is lexicographic = chronological).
+//   - "unknown" bucket for null/invalid createdAt; excluded when ?from/?to set
+//     (no comparable token).
+//   - Pagination AFTER aggregation + sort + ?from/?to filter, mirroring
+//     /suppliers/by-month posture.
+//
+// Auth: verifyToken + verifyRole(['ADMIN']). Defense-in-depth matching the
+// sibling /violations + /violations/stats endpoints.
+//
+// NO audit row written — anodyne read-only meta surface.
+//
+// Express route ordering: literal-path /violations/by-day. Placed BEFORE
+// module.exports for symmetry with the slice-5 stats handler. No /:id family
+// exists today on this router, so there's no collision risk — but matching
+// the convention keeps future readers grepping for the right place to slot
+// any /violations/:id endpoint a future slice might add.
+// ============================================================================
+const BY_DAY_FETCH_CAP = 5000;
+const BY_DAY_DEFAULT_LIMIT = 30;
+const BY_DAY_MAX_LIMIT = 90;
+const DAY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const BY_DAY_VALID_ORDER_BY = new Set([
+  "day:asc",
+  "day:desc",
+  "count:asc",
+  "count:desc",
+]);
+
+router.get(
+  "/violations/by-day",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      // ── Validation ────────────────────────────────────────────────────
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !DAY_DATE_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM-DD format",
+          code: "INVALID_DATE_FORMAT",
+        });
+      }
+      if (toRaw !== null && !DAY_DATE_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM-DD format",
+          code: "INVALID_DATE_FORMAT",
+        });
+      }
+
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "day:asc";
+      const orderBy = BY_DAY_VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "day:asc";
+
+      let limit = parseInt(req.query.limit, 10);
+      if (!Number.isFinite(limit) || limit <= 0) limit = BY_DAY_DEFAULT_LIMIT;
+      if (limit > BY_DAY_MAX_LIMIT) limit = BY_DAY_MAX_LIMIT;
+
+      let offset = parseInt(req.query.offset, 10);
+      if (!Number.isFinite(offset) || offset < 0) offset = 0;
+
+      // ── Where clause: tenant-scoped, CSPViolation/REPORT only ─────────
+      const where = {
+        tenantId: req.user.tenantId,
+        entity: "CSPViolation",
+        action: "REPORT",
+      };
+
+      // ── Fetch + JS-side aggregation ───────────────────────────────────
+      // Pull rows + parse details client-side because the directive lives
+      // inside the JSON-string `details` column (no SQL-side groupBy).
+      // STATS_FETCH_CAP-sized take is enough for the day rollup — even a
+      // year of moderate-noise CSP traffic stays well under 5k violations.
+      const rows = await prisma.auditLog.findMany({
+        where,
+        select: { details: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: BY_DAY_FETCH_CAP,
+      });
+
+      // Aggregate per-UTC-day. Map "YYYY-MM-DD" → { day, count, byDirective }.
+      const byDay = new Map();
+      for (const row of rows) {
+        let dayKey = "unknown";
+        if (row.createdAt) {
+          const dt = row.createdAt instanceof Date
+            ? row.createdAt
+            : new Date(row.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            const dd = String(dt.getUTCDate()).padStart(2, "0");
+            dayKey = `${yyyy}-${mm}-${dd}`;
+          }
+        }
+
+        let bucket = byDay.get(dayKey);
+        if (!bucket) {
+          bucket = { day: dayKey, count: 0, byDirective: {} };
+          byDay.set(dayKey, bucket);
+        }
+        bucket.count += 1;
+
+        // Per-bucket directive breakdown — mirrors /stats helper usage so
+        // the keys stay consistent across the listing + stats + by-day
+        // surfaces.
+        const parsed = parseDetails(row.details);
+        const fields = extractReportFields(parsed);
+        if (fields.directive) {
+          const key = String(fields.directive);
+          bucket.byDirective[key] = (bucket.byDirective[key] || 0) + 1;
+        }
+      }
+
+      let days = [...byDay.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. Mirrors /suppliers/by-month posture.
+      if (fromRaw !== null) {
+        days = days.filter((r) => r.day !== "unknown" && r.day >= fromRaw);
+      }
+      if (toRaw !== null) {
+        days = days.filter((r) => r.day !== "unknown" && r.day <= toRaw);
+      }
+
+      // Sort. "day" sorts lexicographically on YYYY-MM-DD (= chronological).
+      // "unknown" sorts last in asc / first in desc (lexicographically >
+      // "9999-12-31") — acceptable for a defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      days.sort((a, b) => {
+        if (field === "day") {
+          if (a.day < b.day) return -1 * mult;
+          if (a.day > b.day) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = days.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as
+      // /suppliers/by-month + /flyer-templates/by-month posture.
+      const paged = days.slice(offset, offset + limit);
+
+      return res.json({
+        total,
+        rows: paged,
+      });
+    } catch (err) {
+      console.error("[CSP][violations/by-day] failed:", err && err.message);
+      return res.status(500).json({
+        error: "Failed to fetch CSP violation daily rollup",
+        code: "CSP_VIOLATIONS_BY_DAY_FAILED",
+      });
+    }
+  },
+);
+
 module.exports = router;

@@ -1077,6 +1077,150 @@ router.get("/sales", cashierGate, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// GET /api/pos/sales/stats — tenant-wide POS sale aggregate
+// (D17 POS polish slice — PRD_POS_NEW_SALE).
+//
+// First tenant-wide aggregate endpoint on /api/pos. The 30+ existing
+// endpoints are per-sale / per-shift / per-register; this one rolls up
+// the entire tenant's Sale population for the owner-dashboard POS tile.
+//
+// Mirrors /api/wallet/stats (D16) + /api/travel/suppliers/stats (#903
+// slice 23) + /api/travel/commission-profiles/stats — same KPI-surface
+// posture, same half-up 2dp rounding, same ?from/?to date-window
+// narrowing, same NO-audit-row read-only meta contract.
+//
+// Auth: adminGate (verifyWellnessRole(['admin', 'manager'])) — tighter
+// than cashierGate. Tenant-wide aggregate is an owner-dashboard surface,
+// minimise PII exposure. Clinical staff (doctor/professional/telecaller/
+// helper) intentionally NOT allowed (matches the wallet-stats RBAC
+// posture).
+//
+// Query params:
+//   ?from / ?to  optional ISO date bounds on Sale.createdAt; invalid → 400 INVALID_DATE
+//
+// Response envelope:
+//   {
+//     total: N,
+//     totalRevenue: N.NN,              // sum of Sale.total across COMPLETED rows
+//     byStatus: { COMPLETED: N, VOIDED: M, REFUNDED: K, PARTIALLY_REFUNDED: J, DRAFT: I },
+//     refundCount: N,                  // status='REFUNDED' OR 'PARTIALLY_REFUNDED'
+//     voidCount: N,                    // status='VOIDED'
+//     averageSaleValue: N.NN,          // totalRevenue / count(status='COMPLETED'); 0 if no completed
+//     lastSaleAt: ISO | null,
+//   }
+//
+// Sale status enum (schema.prisma:4028 + routes/pos.js void/refund handlers):
+//   DRAFT | COMPLETED | VOIDED | REFUNDED | PARTIALLY_REFUNDED
+//
+// Why divide by COMPLETED count (not total count) for averageSaleValue:
+//   drafts + voids + refunds are not "completed economic events" so
+//   including them in the denominator would skew the per-sale average
+//   downward / produce a misleading figure.
+//
+// NO audit row written (read-only meta surface, mirrors all sibling /stats).
+//
+// Express route ordering: literal-path /sales/stats MUST be declared
+// BEFORE the /sales/:id family below or `:id="stats"` would 400
+// INVALID_ID via parseInt before reaching this handler.
+// ─────────────────────────────────────────────────────────────────────
+router.get("/sales/stats", adminGate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // Optional ISO date bounds on Sale.createdAt.
+    const where = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Half-up round to 2dp — matches sibling /stats endpoints.
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Bounded fetch — Sale rows are small, but cap to keep memory
+    // bounded for unusually large tenant windows.
+    const sales = await prisma.sale.findMany({
+      where,
+      select: { total: true, status: true, createdAt: true },
+    });
+
+    // Empty short-circuit — return zeroed shape.
+    if (sales.length === 0) {
+      return res.json({
+        total: 0,
+        totalRevenue: 0,
+        byStatus: {},
+        refundCount: 0,
+        voidCount: 0,
+        averageSaleValue: 0,
+        lastSaleAt: null,
+      });
+    }
+
+    let totalRevenue = 0;
+    let completedCount = 0;
+    let refundCount = 0;
+    let voidCount = 0;
+    let lastSaleAt = null;
+    const byStatus = {};
+
+    for (const s of sales) {
+      const status = s.status || "UNKNOWN";
+      byStatus[status] = (byStatus[status] || 0) + 1;
+
+      if (status === "COMPLETED") {
+        totalRevenue += Number(s.total) || 0;
+        completedCount += 1;
+      }
+      if (status === "VOIDED") voidCount += 1;
+      if (status === "REFUNDED" || status === "PARTIALLY_REFUNDED") {
+        refundCount += 1;
+      }
+
+      const ts = s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastSaleAt || ts > lastSaleAt) lastSaleAt = ts;
+      }
+    }
+
+    const averageSaleValue = completedCount > 0
+      ? round2(totalRevenue / completedCount)
+      : 0;
+
+    return res.json({
+      total: sales.length,
+      totalRevenue: round2(totalRevenue),
+      byStatus,
+      refundCount,
+      voidCount,
+      averageSaleValue,
+      lastSaleAt: lastSaleAt ? lastSaleAt.toISOString() : null,
+    });
+  } catch (e) {
+    console.error("[pos] sales/stats error:", e.message);
+    return res.status(500).json({ error: "Failed to summarise sales stats" });
+  }
+});
+
 router.get("/sales/:id", cashierGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);

@@ -571,4 +571,248 @@ describe('Contacts.jsx — top-level page contract', () => {
     // The dialog heading + count should read "0 groups".
     expect(screen.getByText(/Duplicate Contacts \(0 groups\)/i)).toBeInTheDocument();
   });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Extended cases (cron tick 2 — merge / dismiss / inline email / staff)
+  //
+  // The prior 28 cases pinned CRUD + filter + CSV + add-modal happy/sad path
+  // plus the #592 dup-modal trigger. These pin the remaining duplicate-group
+  // surface (Merge confirm + POST + cancel + failure; Dismiss confirm + POST
+  // + cancel + failure), the on-blur email validator, the staff-fetch
+  // absorption, and the duplicates group rendering with real data — all
+  // currently uncovered branches in Contacts.jsx.
+  // ────────────────────────────────────────────────────────────────────────
+
+  const DUP_GROUP = {
+    reason: 'email',
+    primary: { id: 1, name: 'Aarav Sharma', email: 'aarav@acme.in', company: 'Acme', aiScore: 82 },
+    duplicates: [
+      { id: 91, name: 'Aarav S', email: 'aarav@acme.in', company: 'Acme Logistics', aiScore: 71 },
+    ],
+  };
+
+  it('Find Duplicates renders Primary + Dup rows + Match reason for each group', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Duplicate Contacts \(1 groups\)/i)).toBeInTheDocument();
+    });
+    // Both PRIMARY badge and DUP badge labels render once per group.
+    expect(screen.getByText(/^Primary$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Dup$/i)).toBeInTheDocument();
+    // Match-reason chip carries the server's `reason` token verbatim.
+    expect(screen.getByText(/Match: email/i)).toBeInTheDocument();
+    // Score line for the primary row reads "Score: <aiScore>".
+    expect(screen.getByText(/Score: 82/i)).toBeInTheDocument();
+    // Duplicate row's score also rendered.
+    expect(screen.getByText(/Score: 71/i)).toBeInTheDocument();
+  });
+
+  it('#592: Merge confirm + POST /api/contacts/merge fires with {primaryId, secondaryIds}', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => expect(screen.getByText(/Match: email/i)).toBeInTheDocument());
+
+    // Stub the merge POST.
+    fetchApiMock.mockImplementationOnce(() => Promise.resolve({ merged: true }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge into Primary/i }));
+
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalled());
+    expect(notifyObj.confirm.mock.calls[0][0]).toMatchObject({ destructive: true, confirmText: 'Merge' });
+
+    await waitFor(() => {
+      const mergeCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/merge' && opts?.method === 'POST',
+      );
+      expect(mergeCall).toBeTruthy();
+      expect(JSON.parse(mergeCall[1].body)).toEqual({ primaryId: 1, secondaryIds: [91] });
+    });
+  });
+
+  it('#592: Merge cancel via notify.confirm=false suppresses the POST', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    notifyObj.confirm.mockResolvedValueOnce(false);
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => expect(screen.getByText(/Match: email/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Merge into Primary/i }));
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalled());
+
+    // Brief settle — no POST.
+    await new Promise(r => setTimeout(r, 20));
+    const mergeCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === '/api/contacts/merge' && opts?.method === 'POST',
+    );
+    expect(mergeCall).toBeFalsy();
+  });
+
+  it('#592: Merge failure surfaces notify.error("Merge failed")', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => expect(screen.getByText(/Match: email/i)).toBeInTheDocument());
+
+    fetchApiMock.mockImplementationOnce(() => Promise.reject(new Error('500')));
+    fireEvent.click(screen.getByRole('button', { name: /Merge into Primary/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('Merge failed');
+    });
+  });
+
+  it('#592: Dismiss confirm + POST /api/contacts/duplicates/dismiss fires with primaryId + secondaryIds', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => expect(screen.getByText(/Match: email/i)).toBeInTheDocument());
+
+    fetchApiMock.mockImplementationOnce(() => Promise.resolve({ dismissed: true }));
+    fireEvent.click(screen.getByRole('button', { name: /Dismiss duplicate group/i }));
+
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalled());
+    expect(notifyObj.confirm.mock.calls[0][0]).toMatchObject({ confirmText: 'Dismiss' });
+
+    await waitFor(() => {
+      const dismissCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/duplicates/dismiss' && opts?.method === 'POST',
+      );
+      expect(dismissCall).toBeTruthy();
+      expect(JSON.parse(dismissCall[1].body)).toEqual({ primaryId: 1, secondaryIds: [91] });
+    });
+  });
+
+  it('#592: Dismiss failure surfaces notify.error("Dismiss failed")', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => expect(screen.getByText(/Match: email/i)).toBeInTheDocument());
+
+    fetchApiMock.mockImplementationOnce(() => Promise.reject(new Error('403')));
+    fireEvent.click(screen.getByRole('button', { name: /Dismiss duplicate group/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('Dismiss failed');
+    });
+  });
+
+  it('Find Duplicates: GET /api/contacts/duplicates/find failure is silently absorbed (no toast, no dialog)', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.reject(new Error('500'));
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    // Brief settle. The catch fires `setDupes([])` only — `setShowDupes(true)`
+    // sits INSIDE the try block, so the dialog does NOT open on failure.
+    await new Promise(r => setTimeout(r, 30));
+    expect(screen.queryByText(/Duplicate Contacts/i)).not.toBeInTheDocument();
+    // notify.error should NOT have fired — the catch is silent.
+    expect(notifyObj.error).not.toHaveBeenCalled();
+    // Verify the GET actually happened (so we know the click wired through).
+    const findCall = fetchApiMock.mock.calls.find(([url]) => url === '/api/contacts/duplicates/find');
+    expect(findCall).toBeTruthy();
+  });
+
+  it('#607: on-blur email validator surfaces inline error without submitting', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
+    const emailInput = screen.getByPlaceholderText('Email');
+
+    fireEvent.change(emailInput, { target: { value: 'not-a-valid-email' } });
+    fireEvent.blur(emailInput);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/Please enter a valid email address/i);
+    });
+    // aria-invalid flips to true on the input.
+    expect(emailInput.getAttribute('aria-invalid')).toBe('true');
+
+    // Typing again clears the error (per onChange branch that resets emailError when set).
+    fireEvent.change(emailInput, { target: { value: 'fixed@example.com' } });
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
+  it('#607: on-blur with an empty email field does NOT set the inline error', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
+    const emailInput = screen.getByPlaceholderText('Email');
+    // Blur with an empty value — the validator only fires when v is non-empty.
+    fireEvent.blur(emailInput);
+
+    // No inline alert; aria-invalid stays false.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(emailInput.getAttribute('aria-invalid')).toBe('false');
+  });
+
+  it('absorbs a /api/staff fetch failure without breaking the page render', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.reject(new Error('staff 500'));
+      return Promise.resolve(null);
+    });
+    renderContacts();
+
+    // Rows still render; the assigned-to dropdowns just have no staff options.
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+    const row = screen.getByText('Aarav Sharma').closest('tr');
+    const select = within(row).getByRole('combobox');
+    // Only the 'Unassigned' option present (staff list empty).
+    expect(select.querySelectorAll('option').length).toBe(1);
+    expect(select.querySelector('option').textContent).toMatch(/Unassigned/i);
+  });
 });

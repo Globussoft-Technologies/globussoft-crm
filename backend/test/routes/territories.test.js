@@ -234,6 +234,179 @@ describe('GET / — list territories under tenant scope', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920 slice 22)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirrors slices 1-20. When the caller passes ?fields=summary, the route
+// returns ONLY id + name + regions (parsed) + assignedUserIds (parsed) — the
+// tenantId / createdAt / updatedAt metadata and the contactCount rollup are
+// dropped. Opt-in additive: legacy callers (no ?fields, or any non-exact
+// value) get the full row shape unchanged.
+
+describe('GET /?fields=summary — slim-shape opt-in (#920 slice 22)', () => {
+  test('?fields=summary returns slim shape with id+name+regions+assignedUserIds only', async () => {
+    prisma.territory.findMany.mockResolvedValue([
+      {
+        id: 10,
+        name: 'North Region',
+        regions: JSON.stringify(['IN-DL', 'IN-HR']),
+        assignedUserIds: JSON.stringify([2, 5]),
+      },
+      {
+        id: 11,
+        name: 'South Region',
+        regions: JSON.stringify(['IN-KA']),
+        assignedUserIds: JSON.stringify([]),
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/territories?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    // Slim shape: only the 4 columns; no tenantId, no createdAt, no
+    // contactCount.
+    expect(res.body[0]).toEqual({
+      id: 10,
+      name: 'North Region',
+      regions: ['IN-DL', 'IN-HR'],
+      assignedUserIds: [2, 5],
+    });
+    expect(res.body[1]).toEqual({
+      id: 11,
+      name: 'South Region',
+      regions: ['IN-KA'],
+      assignedUserIds: [],
+    });
+  });
+
+  test('?fields=summary calls findMany with a Prisma select dropping heavy/leak fields', async () => {
+    prisma.territory.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 })).get('/api/territories?fields=summary');
+
+    // Pin the exact select — slim shape MUST drop tenantId + createdAt +
+    // updatedAt (the only metadata columns on Territory). Adding/removing
+    // a field here is a wire-shape change for downstream consumers.
+    expect(prisma.territory.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        regions: true,
+        assignedUserIds: true,
+      },
+    });
+  });
+
+  test('?fields=summary skips the contact.groupBy rollup (cross-table aggregate not needed for picker)', async () => {
+    prisma.territory.findMany.mockResolvedValue([
+      { id: 10, name: 'A', regions: '[]', assignedUserIds: '[]' },
+      { id: 11, name: 'B', regions: '[]', assignedUserIds: '[]' },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/territories?fields=summary');
+
+    expect(res.status).toBe(200);
+    // groupBy is NEVER called in summary mode — even with ids present in the
+    // findMany result. This is the perf win: no cross-table aggregate when
+    // the caller asked for a dropdown / picker shape.
+    expect(prisma.contact.groupBy).not.toHaveBeenCalled();
+    // And the response has no contactCount field.
+    expect(res.body[0]).not.toHaveProperty('contactCount');
+  });
+
+  test('no ?fields query returns full shape (back-compat) — contactCount + tenantId preserved', async () => {
+    prisma.territory.findMany.mockResolvedValue([
+      {
+        id: 10, name: 'North',
+        regions: JSON.stringify(['IN-DL']),
+        assignedUserIds: JSON.stringify([2]),
+        tenantId: 1,
+        createdAt: new Date('2026-01-01').toISOString(),
+        updatedAt: new Date('2026-01-02').toISOString(),
+      },
+    ]);
+    prisma.contact.groupBy.mockResolvedValue([
+      { territoryId: 10, _count: { _all: 4 } },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/territories');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      id: 10,
+      name: 'North',
+      regions: ['IN-DL'],
+      assignedUserIds: [2],
+      tenantId: 1,
+      contactCount: 4,
+    });
+    // Legacy findMany call — no select clause; full row shape returned.
+    expect(prisma.territory.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      orderBy: { id: 'asc' },
+    });
+    expect(prisma.contact.groupBy).toHaveBeenCalled();
+  });
+
+  test('?fields=other (non-exact value) falls through to full shape (only "summary" triggers opt-in)', async () => {
+    prisma.territory.findMany.mockResolvedValue([
+      {
+        id: 10, name: 'North',
+        regions: JSON.stringify(['IN-DL']),
+        assignedUserIds: JSON.stringify([2]),
+        tenantId: 1,
+      },
+    ]);
+    prisma.contact.groupBy.mockResolvedValue([
+      { territoryId: 10, _count: { _all: 1 } },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/territories?fields=full');
+
+    expect(res.status).toBe(200);
+    // Full shape — contactCount present, tenantId present, no select clause.
+    expect(res.body[0]).toMatchObject({
+      id: 10,
+      tenantId: 1,
+      contactCount: 1,
+    });
+    expect(prisma.territory.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      orderBy: { id: 'asc' },
+    });
+  });
+
+  test('?fields=summary remains tenant-scoped — cross-tenant rows never returned', async () => {
+    prisma.territory.findMany.mockResolvedValue([
+      { id: 10, name: 'Tenant-7 Only', regions: '[]', assignedUserIds: '[]' },
+    ]);
+
+    await request(makeApp({ tenantId: 7 }))
+      .get('/api/territories?fields=summary');
+
+    // Even with the slim select, where.tenantId is sourced from req.user
+    // (NOT any caller-supplied input). The opt-in shape MUST NOT relax
+    // tenant isolation.
+    expect(prisma.territory.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 7 },
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        regions: true,
+        assignedUserIds: true,
+      },
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // POST / — create territory (admin-only)
 // ─────────────────────────────────────────────────────────────────────────
 

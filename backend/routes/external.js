@@ -363,6 +363,24 @@ router.post("/calls", async (req, res) => {
     }
 
     const dir = String(direction).toUpperCase();
+
+    // Gap 2 fix [GP-CRM integration]: when no contactId is supplied, try to
+    // auto-link the call to a contact by phone suffix so it appears on the
+    // contact's timeline in the CRM UI. Uses the same last-10-digit suffix
+    // match as the lookup endpoint. Best-effort: no error if lookup misses.
+    let resolvedContactId = contactId ? parseInt(contactId) : null;
+    if (!resolvedContactId) {
+      const lookupPhone = dir === "INBOUND" ? (callerNumber || phone) : (calleeNumber || phone);
+      const suf = normalizedSuffix(lookupPhone);
+      if (suf) {
+        const linked = await prisma.contact.findFirst({
+          where: { tenantId: req.tenantId, phone: { contains: suf } },
+          select: { id: true },
+        }).catch(() => null);
+        if (linked) resolvedContactId = linked.id;
+      }
+    }
+
     const call = await prisma.callLog.create({
       data: {
         direction: dir,
@@ -374,7 +392,7 @@ router.post("/calls", async (req, res) => {
         callerNumber: callerNumber || (dir === "INBOUND" ? phone : null),
         calleeNumber: calleeNumber || (dir === "OUTBOUND" ? phone : null),
         notes: notes || null,
-        contactId: contactId ? parseInt(contactId) : null,
+        contactId: resolvedContactId,
         userId: agentUserId ? parseInt(agentUserId) : null,
         tenantId: req.tenantId,
       },

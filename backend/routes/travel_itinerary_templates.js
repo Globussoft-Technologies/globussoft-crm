@@ -240,6 +240,208 @@ router.post(
   },
 );
 
+// GET /api/travel/itinerary-templates/stats — tenant-wide aggregate envelope.
+// MUST be declared BEFORE GET /:id so Express doesn't try to parse "stats"
+// as a numeric :id and 400.
+//
+// Envelope shape mirrors travel_sightseeing /stats (commit b0f702f5) but
+// adapted to ItineraryTemplate (no status enum → group by category +
+// isActive instead; adds averageDurationDays, averageBasePriceMinor,
+// averageDefaultMarkupPercent, totalUsageCount, topByUsage). Sub-brand
+// narrowing per #976 fix — empty allow-set yields a zeroed envelope,
+// NOT 403.
+router.get("/stats", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+
+    // Optional ISO date bounds on createdAt.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Canonical zeroed envelope — returned when caller has no sub-brand
+    // access OR when zero rows match. Single source of truth so the
+    // empty-set + empty-result paths can't drift.
+    const zeroed = {
+      total: 0,
+      activeCount: 0,
+      inactiveCount: 0,
+      byCategory: {},
+      bySubBrand: {},
+      averageDurationDays: null,
+      averageBasePriceMinor: null,
+      averageDefaultMarkupPercent: null,
+      totalUsageCount: 0,
+      topDestinations: [],
+      topByUsage: [],
+      lastUpdatedAt: null,
+    };
+
+    // Sub-brand narrowing — empty access set → zeroed shape (#976 fix),
+    // NOT 403. ItineraryTemplate.subBrand is NULLABLE; tenant-wide rows
+    // (subBrand=null) are visible to everyone, named-subBrand rows are
+    // intersected with the caller's allowed set.
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed);
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    const items = await prisma.itineraryTemplate.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        destinationName: true,
+        subBrand: true,
+        category: true,
+        isActive: true,
+        durationDays: true,
+        basePriceMinor: true,
+        defaultMarkupPercent: true,
+        usageCount: true,
+        updatedAt: true,
+      },
+    });
+
+    if (items.length === 0) {
+      return res.json(zeroed);
+    }
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    let activeCount = 0;
+    let inactiveCount = 0;
+    const byCategory = {};
+    const bySubBrand = {};
+    const byDestination = {};
+    let durationSum = 0;
+    let durationCount = 0;
+    let basePriceSum = 0;
+    let basePriceCount = 0;
+    let markupSum = 0;
+    let markupCount = 0;
+    let totalUsageCount = 0;
+    let lastUpdatedAt = null;
+
+    for (const it of items) {
+      if (it.isActive) activeCount += 1;
+      else inactiveCount += 1;
+
+      const catKey = it.category ? String(it.category) : "_uncategorized";
+      if (!byCategory[catKey]) byCategory[catKey] = 0;
+      byCategory[catKey] += 1;
+
+      // bySubBrand: coalesce null → "_tenant" matching sightseeing /stats
+      // convention.
+      const sbKey = it.subBrand ? String(it.subBrand) : "_tenant";
+      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+      bySubBrand[sbKey].count += 1;
+
+      const destKey = it.destinationName ? String(it.destinationName) : "_unknown";
+      if (!byDestination[destKey]) byDestination[destKey] = 0;
+      byDestination[destKey] += 1;
+
+      const dur = Number(it.durationDays);
+      if (Number.isFinite(dur)) {
+        durationSum += dur;
+        durationCount += 1;
+      }
+
+      const price = Number(it.basePriceMinor);
+      if (Number.isFinite(price)) {
+        basePriceSum += price;
+        basePriceCount += 1;
+      }
+
+      const markup = Number(it.defaultMarkupPercent);
+      if (Number.isFinite(markup)) {
+        markupSum += markup;
+        markupCount += 1;
+      }
+
+      const usage = Number(it.usageCount);
+      if (Number.isFinite(usage)) totalUsageCount += usage;
+
+      const ts = it.updatedAt instanceof Date ? it.updatedAt : new Date(it.updatedAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+      }
+    }
+
+    // Top 5 destinations by count, sorted desc.
+    const topDestinations = Object.entries(byDestination)
+      .map(([destinationName, count]) => ({ destinationName, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    // Top 5 templates by usageCount, sorted desc.
+    const topByUsage = items
+      .map((it) => ({
+        id: it.id,
+        name: it.name,
+        usageCount: Number.isFinite(Number(it.usageCount)) ? Number(it.usageCount) : 0,
+      }))
+      .sort((a, b) => b.usageCount - a.usageCount)
+      .slice(0, 5);
+
+    const averageDurationDays = durationCount > 0
+      ? round2(durationSum / durationCount)
+      : null;
+    const averageBasePriceMinor = basePriceCount > 0
+      ? round2(basePriceSum / basePriceCount)
+      : null;
+    const averageDefaultMarkupPercent = markupCount > 0
+      ? round2(markupSum / markupCount)
+      : null;
+
+    res.json({
+      total: items.length,
+      activeCount,
+      inactiveCount,
+      byCategory,
+      bySubBrand,
+      averageDurationDays,
+      averageBasePriceMinor,
+      averageDefaultMarkupPercent,
+      totalUsageCount,
+      topDestinations,
+      topByUsage,
+      lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    console.error("[travel/itinerary-templates] Stats error:", err.message);
+    res.status(500).json({
+      error: "Failed to fetch itinerary template stats",
+      code: "ITINERARY_TEMPLATE_STATS_FAILED",
+    });
+  }
+});
+
 // GET /api/travel/itinerary-templates/:id
 router.get("/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

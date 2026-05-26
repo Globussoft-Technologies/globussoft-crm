@@ -610,3 +610,108 @@ describe('POST /:id/test — manually fire rule', () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/workflows?fields=summary — opt-in slim shape (#920 slice 17)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirrors slices 1-16 (contacts/deals/tickets/tasks/projects/expenses/
+// notifications/surveys/email-templates/knowledge-base/playbooks/sequences/
+// estimates/contracts/staff/etc.). When ?fields=summary on GET /api/workflows,
+// Prisma is called with an explicit slim `select` that drops the heavy
+// targetState + condition `@db.Text` JSON blobs — both are unbounded
+// payloads (multi-clause condition arrays, templated email bodies, webhook
+// URLs/headers) and are never needed by the directory / picker UI in
+// Workflows.jsx which only renders name + trigger + action + active toggle.
+// ADDITIVE: when ?fields is absent OR any other value, the prior full-row
+// findMany (no `select`) is preserved so the builder UI + workflow engine
+// keep getting the full row.
+
+describe('GET /api/workflows?fields=summary — opt-in slim shape (#920 slice 17)', () => {
+  test('default (no ?fields) → prisma.automationRule.findMany called WITHOUT a select (full-row payload)', async () => {
+    prisma.automationRule.findMany.mockResolvedValue([]);
+    const res = await request(makeApp({ tenantId: 99 })).get('/api/workflows');
+    expect(res.status).toBe(200);
+    const args = prisma.automationRule.findMany.mock.calls[0][0];
+    // Full branch: no select key. Engine + builder UI still get heavy fields.
+    expect(args.select).toBeUndefined();
+    expect(args.where).toEqual({ tenantId: 99 });
+  });
+
+  test('?fields=summary → prisma.automationRule.findMany called with SLIM select dropping targetState + condition', async () => {
+    prisma.automationRule.findMany.mockResolvedValue([]);
+    const res = await request(makeApp({ tenantId: 99 })).get('/api/workflows?fields=summary');
+    expect(res.status).toBe(200);
+    const args = prisma.automationRule.findMany.mock.calls[0][0];
+    expect(args.select).toEqual({
+      id: true,
+      name: true,
+      triggerType: true,
+      actionType: true,
+      isActive: true,
+      tenantId: true,
+    });
+    // The heavy @db.Text JSON blobs MUST be dropped from the slim shape.
+    expect(args.select.targetState).toBeUndefined();
+    expect(args.select.condition).toBeUndefined();
+    // Sanity: no include snuck in.
+    expect(args.include).toBeUndefined();
+  });
+
+  test('?fields=summary → response rows expose ONLY the slim keys (no targetState, no condition)', async () => {
+    // Prisma honours the `select` clause server-side; we emulate that here so
+    // the response-shape assertion pins what real callers see in production.
+    prisma.automationRule.findMany.mockResolvedValue([
+      {
+        id: 1,
+        name: 'Welcome new contacts',
+        triggerType: 'contact.created',
+        actionType: 'send_email',
+        isActive: true,
+        tenantId: 7,
+      },
+    ]);
+    const res = await request(makeApp({ tenantId: 7 })).get('/api/workflows?fields=summary');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    const row = res.body[0];
+    expect(row.id).toBe(1);
+    expect(row.name).toBe('Welcome new contacts');
+    expect(row.triggerType).toBe('contact.created');
+    expect(row.actionType).toBe('send_email');
+    expect(row.isActive).toBe(true);
+    // Heavy fields ABSENT in slim shape.
+    expect(row).not.toHaveProperty('targetState');
+    expect(row).not.toHaveProperty('condition');
+  });
+
+  test('?fields=summary preserves tenant-isolation — where.tenantId mirrors req.user.tenantId', async () => {
+    prisma.automationRule.findMany.mockResolvedValue([]);
+    await request(makeApp({ tenantId: 4242 })).get('/api/workflows?fields=summary');
+    const args = prisma.automationRule.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 4242 });
+  });
+
+  test('?fields=other → falls back to FULL findMany shape (only the literal "summary" string opts in)', async () => {
+    prisma.automationRule.findMany.mockResolvedValue([]);
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/workflows?fields=other');
+    expect(res.status).toBe(200);
+    const args = prisma.automationRule.findMany.mock.calls[0][0];
+    // No select clause — full-row shape preserved for any non-"summary" value.
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=summary + empty result set → still returns 200 [] with the slim select applied', async () => {
+    prisma.automationRule.findMany.mockResolvedValue([]);
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/workflows?fields=summary');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+    const args = prisma.automationRule.findMany.mock.calls[0][0];
+    // Even on empty result, the slim select must still be applied — pin the
+    // contract so a future refactor that conditionally drops the select on
+    // empty branches still goes through this test.
+    expect(args.select).toBeDefined();
+    expect(args.select.id).toBe(true);
+  });
+});

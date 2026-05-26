@@ -739,6 +739,197 @@ router.get("/by-month", verifyToken, requireTravelTenant, async (req, res) => {
   }
 });
 
+// GET /api/travel/sightseeing/by-quarter — quarterly rollup envelope.
+// MUST be declared BEFORE GET /:id so Express doesn't parse "by-quarter"
+// as a numeric :id and 400.
+//
+// Completes the sightseeing rollup triplet — /by-year (327c0693) +
+// /by-month (9d406d55) + this /by-quarter. Mirrors travel_invoices
+// /invoices/by-quarter envelope shape but adapted to TravelSightseeing —
+// no status enum → simpler envelope with just count + totalPriceReferenceValue
+// per YYYY-Q[1-4] bucket. Sub-brand narrowing per #976 fix — empty
+// allow-set yields all-zeros / empty (NOT 403).
+//
+// Envelope shape:
+//   {
+//     quarters: [{ quarter: "YYYY-Q[1-4]", count, totalPriceReferenceValue }],
+//     totalQuarters, grandCount, grandTotalValue, limit, offset
+//   }
+//
+// Query params:
+//   - limit  (default 8, clamped to [1, 40])
+//   - offset (default 0, applied AFTER aggregation/sort/filter)
+//   - from   (YYYY-Q[1-4] format, filters buckets to >= from)
+//   - to     (YYYY-Q[1-4] format, filters buckets to <= to)
+//   - orderBy (quarter:asc|quarter:desc|count:asc|count:desc|
+//              totalPriceReferenceValue:asc|totalPriceReferenceValue:desc)
+router.get("/by-quarter", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 8, 40);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+    // YYYY-Q[1-4] validation — bucket labels we emit follow this exact
+    // shape. Only Q1..Q4 valid.
+    const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-Q[1-4] format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+    if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-Q[1-4] format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "quarter:asc",
+      "quarter:desc",
+      "count:asc",
+      "count:desc",
+      "totalPriceReferenceValue:asc",
+      "totalPriceReferenceValue:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+    // Canonical zeroed envelope — returned when caller has no sub-brand
+    // access. Single source of truth so empty-set + empty-result paths
+    // can't drift.
+    const zeroed = {
+      quarters: [],
+      totalQuarters: 0,
+      grandCount: 0,
+      grandTotalValue: 0,
+      limit: take,
+      offset: skip,
+    };
+
+    const where = { tenantId: req.travelTenant.id };
+
+    // Sub-brand narrowing — empty access set → zeroed shape (#976 fix),
+    // NOT 403. Sightseeing.subBrand is NULLABLE; mirror /by-month handler
+    // posture (which scopes to where.subBrand = { in: [...] } when the
+    // access set is non-empty).
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed);
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-Q[1-4].
+    const items = await prisma.travelSightseeing.findMany({
+      where,
+      select: {
+        id: true,
+        priceReferenceMinor: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) =>
+      Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-quarter. Map "YYYY-Q[1-4]" → { count, totalPriceReferenceValue }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate. Null/invalid priceReferenceMinor contributes 0.
+    // Quarter derivation: month 1-3 → Q1, 4-6 → Q2, 7-9 → Q3, 10-12 → Q4.
+    const byQuarter = new Map();
+    for (const it of items) {
+      let quarterKey = "unknown";
+      if (it.createdAt) {
+        const dt = new Date(it.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const month = dt.getUTCMonth() + 1; // 1..12
+          const q = Math.floor((month - 1) / 3) + 1; // 1..4
+          quarterKey = `${yyyy}-Q${q}`;
+        }
+      }
+
+      let row = byQuarter.get(quarterKey);
+      if (!row) {
+        row = { quarter: quarterKey, count: 0, totalPriceReferenceValue: 0 };
+        byQuarter.set(quarterKey, row);
+      }
+
+      row.count += 1;
+      const price = Number(it.priceReferenceMinor);
+      if (Number.isFinite(price)) row.totalPriceReferenceValue += price;
+    }
+
+    let quarters = [...byQuarter.values()].map((r) => ({
+      quarter: r.quarter,
+      count: r.count,
+      totalPriceReferenceValue: round2(r.totalPriceReferenceValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set; when no bounds are set, "unknown" stays so the
+    // count surface remains complete.
+    if (fromRaw !== null) {
+      quarters = quarters.filter(
+        (r) => r.quarter !== "unknown" && r.quarter >= fromRaw,
+      );
+    }
+    if (toRaw !== null) {
+      quarters = quarters.filter(
+        (r) => r.quarter !== "unknown" && r.quarter <= toRaw,
+      );
+    }
+
+    // Sort. "quarter" sorts lexicographically on YYYY-Q[1-4] which is also
+    // chronological (4-digit year + Q1..Q4 token sort correctly as ASCII).
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    quarters.sort((a, b) => {
+      if (field === "quarter") {
+        if (a.quarter < b.quarter) return -1 * mult;
+        if (a.quarter > b.quarter) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalQuarters = quarters.length;
+    const grandCount = quarters.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.totalPriceReferenceValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter.
+    const paged = quarters.slice(skip, skip + take);
+
+    res.json({
+      quarters: paged,
+      totalQuarters,
+      grandCount,
+      grandTotalValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    console.error("[travel/sightseeing] by-quarter error:", err.message);
+    res.status(500).json({
+      error: "Failed to compute quarterly rollup",
+      code: "SIGHTSEEING_BY_QUARTER_FAILED",
+    });
+  }
+});
+
 // GET /api/travel/sightseeing/:id
 router.get("/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

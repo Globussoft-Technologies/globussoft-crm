@@ -3,17 +3,40 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 
 // GET /api/projects — list with optional status filter
+//
+// #920 slice 5 — opt-in slim shape via `?fields=summary`. When set, returns a
+// Prisma `select` dropping nested includes (owner/contact/deal/tasks) and
+// heavy flat columns from the wire. ADDITIVE only: any non-`summary` value
+// (or absent param) preserves the existing full-shape include path. Mirrors
+// the contacts/deals/tickets/tasks shape from slices 1-4.
 router.get("/", async (req, res) => {
   try {
     const { status } = req.query;
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
 
-    const projects = await prisma.project.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
-      include: { owner: true, contact: true, deal: true, tasks: true },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        status: true,
+        priority: true,
+        startDate: true,
+        endDate: true,
+        ownerId: true,
+        tenantId: true,
+        createdAt: true,
+      };
+    } else {
+      findManyArgs.include = { owner: true, contact: true, deal: true, tasks: true };
+    }
+
+    const projects = await prisma.project.findMany(findManyArgs);
     res.json(projects);
   } catch (err) {
     console.error(err);

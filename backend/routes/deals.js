@@ -256,7 +256,7 @@ router.post("/", async (req, res) => {
     // #464: strip write-restricted fields BEFORE destructuring so a USER
     // who has canWrite=false on Deal.amount can't push a value through.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, subBrand } = req.body;
+    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
     // #162: validate amount, probability, stage so bad inputs return 400.
     const inputErr = validateDealInput(req.body, { isUpdate: false });
@@ -274,6 +274,13 @@ router.post("/", async (req, res) => {
     if (pipelineId) data.pipelineId = parseInt(pipelineId);
     if (expectedClose) data.expectedClose = new Date(expectedClose);
     if (subBrand) data.subBrand = String(subBrand);
+    // #977: POST was previously dropping lostReason / winLossReasonId on the
+    // floor (destructure didn't include them), so a deal created directly in
+    // the 'lost' stage with a free-text reason had no reason persisted —
+    // GET /api/win-loss/analysis byReason then silently omitted the row.
+    // Mirror PUT's thread-through (line 357-358) so create + update agree.
+    if (lostReason !== undefined) data.lostReason = lostReason;
+    if (winLossReasonId !== undefined) data.winLossReasonId = parseInt(winLossReasonId);
     if (currency) {
       data.currency = currency;
     } else {

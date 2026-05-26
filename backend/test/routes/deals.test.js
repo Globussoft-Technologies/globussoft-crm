@@ -285,6 +285,44 @@ describe('POST /api/deals — create (#162 #168 #173 validation)', () => {
     expect(res.body.code).toBe('INVALID_PROBABILITY');
     expect(prisma.deal.create).not.toHaveBeenCalled();
   });
+
+  // #977 — POST destructure was previously missing `lostReason` and
+  // `winLossReasonId`, so a deal created directly in the 'lost' stage with a
+  // free-text reason had no reason persisted. GET /api/win-loss/analysis then
+  // omitted the row from byReason (analysis groups by lostReason fallback).
+  // Pin that both fields are now threaded through to prisma.deal.create's data.
+  test('#977: lostReason is persisted when POSTing a deal directly in stage=lost', async () => {
+    prisma.deal.create.mockResolvedValue({
+      id: 12, title: 'Lost Deal', amount: 500, probability: 50,
+      stage: 'lost', currency: 'USD', tenantId: 1, ownerId: 7,
+      lostReason: 'price too high', winLossReasonId: null,
+      contactId: null, contact: null, owner: null,
+    });
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/deals')
+      .send({ title: 'Lost Deal', amount: 500, stage: 'lost', lostReason: 'price too high' });
+    expect(res.status).toBe(201);
+    const createArgs = prisma.deal.create.mock.calls[0][0];
+    expect(createArgs.data.stage).toBe('lost');
+    expect(createArgs.data.lostReason).toBe('price too high');
+  });
+
+  test('#977: winLossReasonId is persisted (and coerced to int) when POSTing a lost deal', async () => {
+    prisma.deal.create.mockResolvedValue({
+      id: 13, title: 'Lost Deal 2', amount: 500, probability: 50,
+      stage: 'lost', currency: 'USD', tenantId: 1, ownerId: 7,
+      lostReason: null, winLossReasonId: 42,
+      contactId: null, contact: null, owner: null,
+    });
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/deals')
+      .send({ title: 'Lost Deal 2', amount: 500, stage: 'lost', winLossReasonId: '42' });
+    expect(res.status).toBe(201);
+    const createArgs = prisma.deal.create.mock.calls[0][0];
+    expect(createArgs.data.winLossReasonId).toBe(42);
+  });
 });
 
 // ─── PUT /:id — update + terminal-stage guard (#173) ─────────────────

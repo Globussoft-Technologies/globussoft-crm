@@ -47,6 +47,139 @@ router.get('/', async (req, res) => {
   }
 });
 
+// ============================================================================
+// GET /api/dashboards/stats — tenant-wide dashboard config rollup.
+//
+// CRM polish: first /stats surface for the Dashboard config route. The
+// frontend's Dashboards picker / admin page needs a single anodyne KPI
+// summary ("12 dashboards · 1 default · 4 shared · 8 private · 5 owners ·
+// last activity 3h ago") without firing the list endpoint + multiple
+// counts + a "where is the default" probe.
+//
+// Schema (verified against prisma/schema.prisma:2347-2357):
+//   - Dashboard.{ id, name, isDefault, layout, userId (nullable), tenantId,
+//     createdAt, updatedAt }
+//   - NO visibility column — shared/private is derived from userId
+//     (null = shared/tenant-wide, set = private to that user)
+//
+// Behaviour:
+//   - Auth: mirrors GET / list (router.use(verifyToken) at line 6 above).
+//   - Tenant-scoped: where.tenantId = req.user.tenantId.
+//   - Query params:
+//       ?from / ?to — optional ISO date bounds on createdAt. Invalid -> 400
+//                     INVALID_DATE. Independent validation (each errors
+//                     before the prisma call).
+//   - Aggregates:
+//       total              — count of all dashboards in tenant
+//       byVisibility       — { shared: <count where userId is null>,
+//                              private: <count where userId is set> }
+//       defaultDashboardId — id of the row where isDefault=true, or null
+//       totalOwners        — distinct userId count (excluding null)
+//       byOwner            — top 5 owners by count, { userId, count }[]
+//       lastCreatedAt      — max createdAt ISO, or null
+//
+// USER-readable: anodyne aggregate (counts + ids + timestamps); safe.
+// No audit row: read-only meta surface, mirrors /landing-pages/stats etc.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family or `:id="stats"` would Number-parse to NaN and 400.
+// ============================================================================
+router.get('/stats', async (req, res) => {
+  try {
+    const { tenantId } = req.user;
+
+    // Optional ISO date bounds on createdAt.
+    const where = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: 'from must be a valid ISO date',
+          code: 'INVALID_DATE',
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: 'to must be a valid ISO date',
+          code: 'INVALID_DATE',
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Single findMany — Dashboard config volume per tenant is small
+    // (typically <100), so in-process bucketing keeps the surface simple
+    // (no separate groupBy round trips needed).
+    const rows = await prisma.dashboard.findMany({
+      where,
+      select: {
+        id: true,
+        isDefault: true,
+        userId: true,
+        createdAt: true,
+      },
+    });
+
+    if (rows.length === 0) {
+      return res.json({
+        total: 0,
+        byVisibility: { shared: 0, private: 0 },
+        defaultDashboardId: null,
+        totalOwners: 0,
+        byOwner: [],
+        lastCreatedAt: null,
+      });
+    }
+
+    let sharedCount = 0;
+    let privateCount = 0;
+    let defaultDashboardId = null;
+    let lastCreatedAt = null;
+    const ownerCounts = new Map();
+
+    for (const r of rows) {
+      if (r.userId == null) {
+        sharedCount += 1;
+      } else {
+        privateCount += 1;
+        ownerCounts.set(r.userId, (ownerCounts.get(r.userId) || 0) + 1);
+      }
+      if (r.isDefault && defaultDashboardId == null) {
+        defaultDashboardId = r.id;
+      }
+      const ts = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastCreatedAt || ts > lastCreatedAt) lastCreatedAt = ts;
+      }
+    }
+
+    // Top 5 owners by count; ties broken by ascending userId for deterministic
+    // output across runs.
+    const byOwner = [...ownerCounts.entries()]
+      .map(([userId, count]) => ({ userId, count }))
+      .sort((a, b) => (b.count - a.count) || (a.userId - b.userId))
+      .slice(0, 5);
+
+    res.json({
+      total: rows.length,
+      byVisibility: { shared: sharedCount, private: privateCount },
+      defaultDashboardId,
+      totalOwners: ownerCounts.size,
+      byOwner,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error('[dashboards] stats failed', err);
+    res.status(500).json({ error: 'Failed to summarise dashboards' });
+  }
+});
+
 // GET /:id — fetch a single dashboard (tenant-scoped)
 router.get('/:id', async (req, res) => {
   try {

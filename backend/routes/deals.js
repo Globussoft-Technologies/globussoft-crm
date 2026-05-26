@@ -62,11 +62,37 @@ router.get("/", async (req, res) => {
     // #172: pagination support (was ignored entirely pre-fix).
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset) || 0);
-    const deals = await prisma.deal.findMany({
+    // #920 slice 2 — PII reduction via opt-in slim shape. Mirrors the
+    // contacts.js pattern shipped in slice 1 (f7790241). When the caller
+    // passes ?fields=summary the response drops the heavy nested includes
+    // (contact + owner) AND the heavy/sensitive flat columns (currency,
+    // probability, expectedClose, lostReason, winLossReasonId, diagnosticId,
+    // subBrand, deletedAt) by switching to an explicit Prisma `select`.
+    // ADDITIVE — when ?fields is absent or any other value, the existing
+    // full-shape `include` is preserved so no existing consumer (Pipeline,
+    // DealModal, Dashboard, CommandPalette, etc.) needs to change.
+    // filterReadFields() still applies on the slim shape (no-op for fields
+    // not present) so the #464 field-permission layer keeps composing.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where, take: limit, skip: offset,
-      include: { contact: true, owner: true },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        title: true,
+        amount: true,
+        stage: true,
+        ownerId: true,
+        contactId: true,
+        tenantId: true,
+        createdAt: true,
+      };
+    } else {
+      findManyArgs.include = { contact: true, owner: true };
+    }
+    const deals = await prisma.deal.findMany(findManyArgs);
     // #464: strip fields the caller's role can't read (e.g. amount hidden
     // for USER if FieldPermission rule says canRead=false on Deal.amount).
     const filtered = await filterReadFields(deals, req.user.role, "Deal", req.user.tenantId);

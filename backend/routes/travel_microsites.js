@@ -821,6 +821,167 @@ router.get(
   },
 );
 
+// GET /api/travel/microsites/by-year — tenant-wide microsite annual rollup
+// (PRD_TRAVEL §6.x).
+//
+// Completes the microsites rollup triplet (stats + by-month + by-quarter +
+// now by-year). Mirrors /itineraries/by-year + /suppliers/by-year shape at
+// year resolution: one row per UTC calendar year with count + bySubBrand
+// breakdown. Annual reviews (year-end CFO close, year-over-year trend
+// lines) need a single endpoint hit instead of summing 12 month rows or
+// 4 quarter rows client-side.
+//
+// Sub-brand note: TripMicrosite has NO subBrand column (the model is
+// TMC-locked by design per Q21 — microsites live on tmc.travelstall.in).
+// Same rationale as /microsites/stats + /microsites/by-month +
+// /microsites/by-quarter. We surface a bySubBrand map per bucket for
+// envelope-shape parity with the rollup-triplet family; every row lands
+// in the "_tenant" fallback bucket since `subBrand` is undefined on the
+// projection. WHERE narrowing mirrors /microsites/by-quarter EXACTLY:
+// tenantId only (admins and sub-brand-scoped operators see the same
+// population).
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY bounds; invalid →
+//                     400 INVALID_YEAR_FORMAT
+//   - ?orderBy      — default year:asc; accepts year:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 10 / 0; limit caps at 30
+//
+// No audit row written — read-only meta surface; matches /microsites/stats
+// + /microsites/by-month + /microsites/by-quarter posture. USER-readable:
+// anodyne (counts + year-string tokens).
+//
+// Express route ordering: literal-path /microsites/by-year MUST be
+// declared BEFORE the /microsites/public/:publicUuid family so the
+// UUID-regex check on the public path doesn't first 400 INVALID_UUID
+// against the literal "by-year". Same convention as /microsites/stats,
+// /microsites/by-month, and /microsites/by-quarter.
+// ============================================================================
+router.get(
+  "/microsites/by-year",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+      // YYYY validation — exactly 4 digits. Bucket labels we emit follow
+      // this shape so callers passing year-tokens to from/to should
+      // already be using it.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      // Tenant-scoped where. Sub-brand narrowing matches /microsites/stats,
+      // /microsites/by-month, and /microsites/by-quarter EXACTLY: no
+      // narrowing applied because TripMicrosite has no subBrand column
+      // (TMC-only model per Q21).
+      const where = { tenantId };
+
+      // Light projection — subBrand + createdAt. subBrand will be undefined
+      // on every row since the model has no such column; the bySubBrand
+      // aggregator coerces falsy values to "_tenant" so the envelope shape
+      // stays consistent with the rollup-triplet family.
+      const rows = await prisma.tripMicrosite.findMany({
+        where,
+        select: { subBrand: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-year. Map "YYYY" → { year, count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byYear = new Map();
+      for (const r of rows) {
+        let yearKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let bucket = byYear.get(yearKey);
+        if (!bucket) {
+          bucket = { year: yearKey, count: 0, bySubBrand: {} };
+          byYear.set(yearKey, bucket);
+        }
+        bucket.count += 1;
+        const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+        bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+      }
+
+      let years = [...byYear.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable year token); kept otherwise so the
+      // count surface remains complete. Mirrors /microsites/by-quarter.
+      if (fromRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+      }
+      if (toRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY which is also
+      // chronological (4-digit zero-padded years naturally ordered).
+      // "unknown" sorts last in asc / first in desc by virtue of being
+      // lexicographically > "9999" — acceptable for a defensive fallback
+      // bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = years.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as
+      // /microsites/by-quarter.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-microsite] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute annual rollup" });
+    }
+  },
+);
+
 // ─── PUBLIC info endpoint (no auth) ──────────────────────────────────
 
 // GET /api/travel/microsites/public/:publicUuid

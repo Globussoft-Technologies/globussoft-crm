@@ -530,4 +530,310 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     // No comparison-result block was painted.
     expect(screen.queryByTestId('comparison-result')).toBeNull();
   });
+
+  // ── EXTENSION wave: SUT branches not yet exercised by the cases above.
+  //    Targets parser-helper edge cases (formatAnswer arrays/objects/empty,
+  //    parseQuestionList direct-array shape, talkingPointsJson-as-object,
+  //    answersJson-as-object), MANAGER-role regen gate, "review" palette
+  //    colour, raw-classification fallback when classificationLabel is
+  //    absent, comparison-response stub-pill, in-flight button copy, and
+  //    the envelope.text-empty fallback. All cases use the stable
+  //    notifyObj reference per CLAUDE.md feedback rule.
+
+  it('formatAnswer joins array answers with ", " in the answers table', async () => {
+    const diagWithArrayAnswers = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      answersJson: JSON.stringify({
+        q1: ['Mecca', 'Medina', 'Jeddah'],
+        q2: 'October',
+        q3: '85000',
+      }),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagWithArrayAnswers));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Array elements collapse to comma-joined string in the answer cell.
+    expect(screen.getByText('Mecca, Medina, Jeddah')).toBeTruthy();
+  });
+
+  it('formatAnswer JSON.stringifies object answers and renders "—" for empty strings', async () => {
+    const diagWithObjectAnswer = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      answersJson: JSON.stringify({
+        q1: { adults: 2, kids: 2 },
+        q2: '',
+        q3: '85000',
+      }),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagWithObjectAnswer));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Object value is JSON.stringified verbatim.
+    expect(screen.getByText('{"adults":2,"kids":2}')).toBeTruthy();
+    // Empty-string answer renders the "—" placeholder. There may be other
+    // "—" cells (e.g. recommended tier or score nulls), so accept ≥1.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('parseQuestionList accepts the direct-array snapshot shape (no inner questionsJson)', async () => {
+    // Snapshot shape #2: top-level `questions` array, no inner stringified blob.
+    const diagDirectArray = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      questionsJson: JSON.stringify({
+        bankId: 1,
+        bankVersion: 1,
+        questions: [
+          { id: 'q1', text: 'Visa type?' },
+          { id: 'q2', label: 'Travel month?' },
+        ],
+      }),
+      answersJson: JSON.stringify({ q1: 'Tourist', q2: 'November' }),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagDirectArray));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Both question texts render — `text` AND `label` are both accepted.
+    expect(screen.getByText(/Visa type\?/i)).toBeTruthy();
+    expect(screen.getByText(/Travel month\?/i)).toBeTruthy();
+    expect(screen.getByText('Tourist')).toBeTruthy();
+    expect(screen.getByText('November')).toBeTruthy();
+  });
+
+  it('talkingPointsJson supplied as an already-parsed object renders correctly', async () => {
+    // Skips the JSON.parse branch in parseTalkingPointsEnvelope.
+    const diagWithObjectEnvelope = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      talkingPointsJson: TALKING_POINTS_ENVELOPE, // object, NOT a string
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagWithObjectEnvelope));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    const brief = await screen.findByTestId('talking-points-text');
+    expect(brief.textContent).toMatch(/high interest in Umrah/i);
+    expect(screen.getByText(/claude-3-opus-20240229/i)).toBeTruthy();
+  });
+
+  it('answersJson supplied as an already-parsed object skips the JSON.parse branch', async () => {
+    const diagWithObjectAnswers = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      answersJson: { q1: '4', q2: 'October', q3: '85000' }, // object, NOT a string
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagWithObjectAnswers));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Answers still render — the parser tolerated the object input shape.
+    expect(screen.getByText('4')).toBeTruthy();
+    expect(screen.getByText('October')).toBeTruthy();
+    expect(screen.getByText('85000')).toBeTruthy();
+  });
+
+  it('MANAGER role sees the regen button (parity with ADMIN gate)', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_WITH_BRIEF));
+    renderPage({ role: 'MANAGER' });
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // MANAGER is canRegen=true per the SUT's role gate.
+    expect(screen.getByRole('button', { name: /Regenerate talking points/i })).toBeTruthy();
+  });
+
+  it('USER-role empty-state hint says "Ask an admin or manager" (not the canRegen copy)', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_NO_BRIEF));
+    renderPage({ role: 'USER' });
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // USER sees the read-only nudge; the "Click Generate brief" copy is hidden.
+    expect(screen.getByText(/Ask an admin or manager to generate one/i)).toBeTruthy();
+    expect(screen.queryByText(/Click Generate brief/i)).toBeNull();
+  });
+
+  it('comparison.classification="review" paints the amber-palette colour', async () => {
+    const reviewResponse = {
+      ...COMPARE_RESPONSE_MATCH,
+      classification: 'review',
+      scorePercent: 70,
+      summary: 'Some answers diverge but the headline budget aligns.',
+    };
+    fetchApiMock.mockImplementation(
+      makeFetchImpl(DIAGNOSTIC_NO_BRIEF, { compareResponse: reviewResponse }),
+    );
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    const transcript = screen.getByLabelText(/Call transcript/i);
+    fireEvent.change(transcript, { target: { value: 'transcript' } });
+    fireEvent.click(screen.getByRole('button', { name: /Compare form vs call/i }));
+
+    const badge = await screen.findByTestId('comparison-classification-badge');
+    expect(badge.textContent.toLowerCase()).toBe('review');
+    const style = badge.getAttribute('style') || '';
+    // Review palette colour #9A6F2E == rgb(154, 111, 46).
+    expect(style).toMatch(/(#9A6F2E|rgb\(154,\s*111,\s*46\))/i);
+    expect(screen.getByText(/70%/)).toBeTruthy();
+  });
+
+  it('comparison.stub=true surfaces the STUB pill in the result row', async () => {
+    const stubCompare = { ...COMPARE_RESPONSE_MATCH, stub: true };
+    fetchApiMock.mockImplementation(
+      makeFetchImpl(DIAGNOSTIC_NO_BRIEF, { compareResponse: stubCompare }),
+    );
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    const transcript = screen.getByLabelText(/Call transcript/i);
+    fireEvent.change(transcript, { target: { value: 'transcript' } });
+    fireEvent.click(screen.getByRole('button', { name: /Compare form vs call/i }));
+
+    await screen.findByTestId('comparison-result');
+    // STUB pill renders inside the comparison-result block.
+    const pills = screen.getAllByText('STUB');
+    expect(pills.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('classification chip falls back to raw classification when classificationLabel is absent', async () => {
+    const noLabelDiag = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      classificationLabel: null,
+      classification: 'level_2',
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(noLabelDiag));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Raw value surfaces when no human-readable label is set.
+    expect(screen.getByLabelText(/Classification/i).textContent).toMatch(/level_2/);
+  });
+
+  it('SUT renders empty-answers-map "(empty)" copy when both questionsJson missing AND answersJson empty', async () => {
+    const stripped = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      questionsJson: null,
+      answersJson: JSON.stringify({}),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(stripped));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    expect(screen.getByText(/No question snapshot found/i)).toBeTruthy();
+    // Empty answers-map collapses to "(empty)" placeholder.
+    expect(screen.getByText(/\(empty\)/)).toBeTruthy();
+  });
+
+  it('envelope.text=null falls back to "(no text returned)" placeholder', async () => {
+    const emptyTextEnvelope = { ...TALKING_POINTS_ENVELOPE, text: '' };
+    const diagWithEmpty = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      talkingPointsJson: JSON.stringify(emptyTextEnvelope),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagWithEmpty));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    const brief = await screen.findByTestId('talking-points-text');
+    expect(brief.textContent).toMatch(/\(no text returned\)/i);
+  });
+
+  it('regen in-flight button copy flips to "Working…" while POST is pending', async () => {
+    let resolveRegen;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        return Promise.resolve(DIAGNOSTIC_NO_BRIEF);
+      }
+      if (url === '/api/travel/diagnostics/42/talking-points/regen' && opts?.method === 'POST') {
+        return new Promise((resolve) => { resolveRegen = resolve; });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    fireEvent.click(screen.getByRole('button', { name: /Generate talking points/i }));
+    // Mid-flight copy surfaces before the promise resolves.
+    await waitFor(() => {
+      expect(screen.getByText(/Working/i)).toBeTruthy();
+    });
+    // Release the pending promise so React doesn't carry a leaked state into the next test.
+    resolveRegen({ diagnostic: DIAGNOSTIC_WITH_BRIEF, talkingPoints: TALKING_POINTS_ENVELOPE });
+    await screen.findByTestId('talking-points-text');
+  });
+
+  it('compare in-flight button copy flips to "Comparing…" while the POST is pending', async () => {
+    let resolveCompare;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        return Promise.resolve(DIAGNOSTIC_NO_BRIEF);
+      }
+      if (url === '/api/travel/diagnostics/42/form-vs-call/compare' && opts?.method === 'POST') {
+        return new Promise((resolve) => { resolveCompare = resolve; });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    const transcript = screen.getByLabelText(/Call transcript/i);
+    fireEvent.change(transcript, { target: { value: 'transcript' } });
+    fireEvent.click(screen.getByRole('button', { name: /Compare form vs call/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Comparing/i)).toBeTruthy();
+    });
+    // Resolve to clean up.
+    resolveCompare(COMPARE_RESPONSE_MATCH);
+    await screen.findByTestId('comparison-result');
+  });
+
+  it('invalid (NaN) diagnostic id renders the 400 "Invalid diagnostic id" error path', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      // The SUT should NOT call /api/... for a non-numeric id because the
+      // Number.isFinite guard short-circuits the load before fetch fires.
+      return Promise.resolve(null);
+    });
+    // Render with a non-numeric id so parseInt yields NaN.
+    render(
+      <MemoryRouter initialEntries={['/travel/diagnostics/not-a-number']}>
+        <AuthContext.Provider
+          value={{
+            user: { userId: 1, role: 'ADMIN' },
+            setUser: vi.fn(),
+            token: 'tk',
+            tenant: { id: 1, vertical: 'travel' },
+            loading: false,
+          }}
+        >
+          <Routes>
+            <Route path="/travel/diagnostics/:id" element={<DiagnosticDetail />} />
+          </Routes>
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Invalid diagnostic id/i)).toBeTruthy();
+    });
+    // Network was never hit because the guard fired first.
+    const diagFetches = fetchApiMock.mock.calls.filter(([u]) =>
+      typeof u === 'string' && u.startsWith('/api/travel/diagnostics/'),
+    );
+    expect(diagFetches.length).toBe(0);
+  });
+
+  it('regen with a fetch that omits res.diagnostic falls back to a full reload', async () => {
+    let getCalls = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        getCalls += 1;
+        // First call returns the no-brief diagnostic, subsequent calls return
+        // the populated one so the page re-renders the brief block.
+        return Promise.resolve(getCalls === 1 ? DIAGNOSTIC_NO_BRIEF : DIAGNOSTIC_WITH_BRIEF);
+      }
+      if (url === '/api/travel/diagnostics/42/talking-points/regen' && opts?.method === 'POST') {
+        // Response omits `diagnostic` — the SUT must fall back to load().
+        return Promise.resolve({ talkingPoints: TALKING_POINTS_ENVELOPE });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    fireEvent.click(screen.getByRole('button', { name: /Generate talking points/i }));
+
+    await waitFor(() => {
+      // load() re-fires the GET — expect a SECOND /api/travel/diagnostics/42 call.
+      expect(getCalls).toBe(2);
+    });
+    await screen.findByTestId('talking-points-text');
+  });
 });

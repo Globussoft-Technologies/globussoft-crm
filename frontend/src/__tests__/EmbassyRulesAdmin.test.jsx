@@ -629,57 +629,33 @@ describe('<EmbassyRulesAdmin /> — additional filter combinations', () => {
 });
 
 describe('<EmbassyRulesAdmin /> — additional validation + modal-close paths', () => {
-  // TODO(#978): client-side ruleType-required gate is unreachable because the
-  // input has the HTML5 `required` attribute — the browser pre-empts submit
-  // and the custom error message never renders. Re-enable once #978 is fixed
-  // (either drop the dead gate code or drop `required` from the input).
-  it.skip('validation — missing ruleType fires inline error + does NOT POST', async () => {
+  // #978 closed: the missing-ruleType case is covered by the HTML5 `required`
+  // attribute on the input — the browser pre-empts submit before any JS gate
+  // can fire. Assert the attribute is in place so a future regression that
+  // drops `required` (and silently removes the native validation) reds.
+  it('validation — ruleType input carries HTML5 required (native browser validation)', async () => {
     renderPage();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fireEvent.click(screen.getByTestId('embassy-rule-new'));
     await screen.findByText(/New Embassy Rule/i);
 
-    // Country + actionLabel valid; ruleType deliberately left blank.
-    fireEvent.change(screen.getByTestId('embassy-rule-form-country'), { target: { value: 'US' } });
-    fireEvent.change(screen.getByTestId('embassy-rule-form-action-label'), {
-      target: { value: 'Document hand-over at consulate counter' },
-    });
-
-    fetchApiMock.mockClear();
-    fireEvent.click(screen.getByTestId('embassy-rule-form-submit'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/Rule type is required/i)).toBeInTheDocument();
-    });
-    const postCalls = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/embassy-rules' && o?.method === 'POST',
-    );
-    expect(postCalls.length).toBe(0);
+    const ruleTypeInput = screen.getByTestId('embassy-rule-form-rule-type');
+    expect(ruleTypeInput).toBeRequired();
+    expect(ruleTypeInput.tagName).toBe('INPUT');
   });
 
-  // TODO(#978): same root cause as the test above — actionLabel input has the
-  // HTML5 `required` attribute so the custom 'Action label is required' gate
-  // is dead code in normal browser flow. Re-enable once #978 is resolved.
-  it.skip('validation — missing actionLabel fires inline error + does NOT POST', async () => {
+  // #978 closed: same coverage pattern as the ruleType assertion above —
+  // actionLabel relies on HTML5 `required` for the missing-field case. Pin the
+  // attribute presence so it can't silently regress.
+  it('validation — actionLabel input carries HTML5 required (native browser validation)', async () => {
     renderPage();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fireEvent.click(screen.getByTestId('embassy-rule-new'));
     await screen.findByText(/New Embassy Rule/i);
 
-    fireEvent.change(screen.getByTestId('embassy-rule-form-country'), { target: { value: 'US' } });
-    fireEvent.change(screen.getByTestId('embassy-rule-form-rule-type'), { target: { value: 'document_required' } });
-    // actionLabel left blank.
-
-    fetchApiMock.mockClear();
-    fireEvent.click(screen.getByTestId('embassy-rule-form-submit'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/Action label.*required/i)).toBeInTheDocument();
-    });
-    const postCalls = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/embassy-rules' && o?.method === 'POST',
-    );
-    expect(postCalls.length).toBe(0);
+    const actionLabelInput = screen.getByTestId('embassy-rule-form-action-label');
+    expect(actionLabelInput).toBeRequired();
+    expect(actionLabelInput.tagName).toBe('INPUT');
   });
 
   it('Cancel button closes the modal without firing a POST', async () => {

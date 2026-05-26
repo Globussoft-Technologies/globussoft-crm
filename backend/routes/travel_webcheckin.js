@@ -20,6 +20,7 @@
 //   GET    /api/travel/webcheckins/stats                      — tenant-wide rollup
 //   GET    /api/travel/webcheckins/by-month                   — tenant-wide monthly creation rollup
 //   GET    /api/travel/webcheckins/by-quarter                 — tenant-wide quarterly creation rollup
+//   GET    /api/travel/webcheckins/by-year                    — tenant-wide annual creation rollup
 //   GET    /api/travel/webcheckins/:id                        — fetch one
 //   POST   /api/travel/webcheckins                            — admin manual create
 //   PATCH  /api/travel/webcheckins/:id                        — amend
@@ -27,9 +28,9 @@
 //   POST   /api/travel/webcheckins/:id/deliver                — mark delivered (stub WA)
 //   DELETE /api/travel/webcheckins/:id                        — ADMIN only
 //
-// Route-precedence note: /upcoming, /stats, /by-month AND /by-quarter
-// MUST mount before /:id so the
-// parseInt("upcoming"|"stats"|"by-month"|"by-quarter") → NaN trap
+// Route-precedence note: /upcoming, /stats, /by-month, /by-quarter AND
+// /by-year MUST mount before /:id so the
+// parseInt("upcoming"|"stats"|"by-month"|"by-quarter"|"by-year") → NaN trap
 // doesn't capture them (CLAUDE.md standing rule).
 //
 // WhatsApp dispatch on /deliver is stub-mode (console.log) pending
@@ -817,6 +818,231 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-webcheckin] by-quarter error:", e.message);
       res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
+
+// ─── Tenant-wide annual rollup ───────────────────────────────────────
+//
+// GET /api/travel/webcheckins/by-year — tenant-wide WebCheckin
+// creation rollup, one row per UTC YYYY bucket. Completes the rollup
+// triplet alongside /webcheckins/stats (snapshot), /webcheckins/by-month
+// (monthly trend), and /webcheckins/by-quarter (quarterly trend).
+// Mirrors the by-year template shipped on /itineraries/by-year (slice 18)
+// + /suppliers/by-year — same UTC YYYY bucketing, same defensive
+// "unknown" bucket math, same orderBy semantics, same pagination posture.
+//
+// Each row carries:
+//   - year        — "YYYY" UTC, or "unknown" for null/invalid createdAt
+//                   (excluded when from/to is set so the comparable
+//                   year-string token still works)
+//   - count       — total WebCheckin rows created in this year
+//   - bySubBrand  — { [sb]: count, _tenant: count } breakdown, derived
+//                   via parent Itinerary subBrand. Falsy/missing
+//                   subBrand (or null itineraryId on the WebCheckin)
+//                   coerces to "_tenant".
+//
+// PRD §4.6 — WebCheckin tracking dashboard annual view.
+//
+// Sub-brand narrowing: MIRRORS the /webcheckins/by-quarter handler
+// EXACTLY (which mirrors /by-month and /stats). WebCheckin has NO direct
+// subBrand column — the sub-brand lives on the parent Itinerary. When a
+// MANAGER's subBrandAccess set is restrictive, we resolve the visible
+// Itinerary id-set first (FIRST prisma.itinerary.findMany call), then
+// narrow the WebCheckin query by itineraryId IN. The SECOND
+// prisma.itinerary.findMany call resolves per-row subBrand for the
+// bySubBrand breakdown. WebCheckin rows whose itineraryId is null
+// (manual-create path) are KEPT when the caller is unrestricted and
+// DROPPED for a sub-brand-restricted MANAGER (no parent itinerary →
+// no sub-brand attribution → cannot prove access).
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY bounds; invalid →
+//                     400 INVALID_YEAR_FORMAT
+//   - ?orderBy      — default year:asc; accepts year:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade
+//                     silently to the default
+//   - ?limit / ?offset — default 10 / 0; limit caps at 30
+//
+// USER-readable anodyne aggregate — counts + year-string tokens; no
+// audit row written. Matches sibling by-year posture.
+//
+// Response envelope:
+//   {
+//     total: <pre-pagination bucket count>,
+//     rows: [{ year: "2026", count: 3, bySubBrand: { tmc: 2, _tenant: 1 } }, ...]
+//   }
+//
+// Express route ordering: literal-path /by-year MUST be declared
+// BEFORE the /:id family or `:id="by-year"` would 400 INVALID_ID
+// before reaching this handler. Same trap as /upcoming, /stats,
+// /by-month and /by-quarter above.
+const WEBCHECKIN_BY_YEAR_CAP = 5000;
+
+router.get(
+  "/webcheckins/by-year",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+      // YYYY validation — exactly 4 digits. Mirrors /itineraries/by-year
+      // slice 18.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      const tenantId = req.travelTenant.id;
+      const where = { tenantId };
+
+      // Sub-brand narrowing — WebCheckin lacks a subBrand column, so we
+      // resolve the visible Itinerary id-set up front (same as /stats,
+      // /by-month and /by-quarter). Unrestricted callers (allowed === null)
+      // skip this fetch entirely.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set) {
+        if (allowed.size === 0) {
+          return res.json({
+            total: 0,
+            rows: [],
+          });
+        }
+        const visibleItins = await prisma.itinerary.findMany({
+          where: { tenantId, subBrand: { in: [...allowed] } },
+          select: { id: true },
+          take: WEBCHECKIN_BY_YEAR_CAP,
+        });
+        if (visibleItins.length === 0) {
+          where.itineraryId = -1;
+        } else {
+          where.itineraryId = { in: visibleItins.map((i) => i.id) };
+        }
+      }
+
+      // Light projection — createdAt + itineraryId is enough for the
+      // bucket totals + bySubBrand breakdown. Same posture as by-quarter.
+      const rows = await prisma.webCheckin.findMany({
+        where,
+        select: { createdAt: true, itineraryId: true },
+      });
+
+      // Resolve sub-brand for the matched WebCheckin rows. One batched
+      // Itinerary findMany over the distinct itineraryIds; rows with
+      // null itineraryId land in the "_tenant" bucket.
+      const itinIds = Array.from(
+        new Set(
+          rows
+            .map((r) => r.itineraryId)
+            .filter((x) => Number.isFinite(x)),
+        ),
+      );
+      const itinSubBrandById = new Map();
+      if (itinIds.length > 0) {
+        const itins = await prisma.itinerary.findMany({
+          where: { tenantId, id: { in: itinIds } },
+          select: { id: true, subBrand: true },
+        });
+        for (const it of itins) {
+          itinSubBrandById.set(it.id, it.subBrand || null);
+        }
+      }
+
+      // Aggregate per-UTC-year. Map "YYYY" → { year, count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byYear = new Map();
+      for (const r of rows) {
+        let yearKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let bucket = byYear.get(yearKey);
+        if (!bucket) {
+          bucket = {
+            year: yearKey,
+            count: 0,
+            bySubBrand: {},
+          };
+          byYear.set(yearKey, bucket);
+        }
+        bucket.count += 1;
+
+        // Per-bucket bySubBrand: falsy/missing subBrand coerces to "_tenant".
+        let sbKey = "_tenant";
+        if (r.itineraryId != null) {
+          const sb = itinSubBrandById.get(r.itineraryId);
+          if (sb) sbKey = sb;
+        }
+        bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+      }
+
+      let years = [...byYear.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set; kept otherwise. Mirrors /itineraries/by-year
+      // (slice 18) posture exactly.
+      if (fromRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+      }
+      if (toRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY which is also
+      // chronological. "unknown" sorts last in asc / first in desc by
+      // virtue of being lexicographically > "9999".
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = years.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as siblings.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-webcheckin] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute annual rollup" });
     }
   },
 );

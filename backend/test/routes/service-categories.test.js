@@ -397,3 +397,192 @@ describe('Auth gate — POST/PUT/DELETE rejected when wellnessRole shim refuses'
     expect(prisma.serviceCategory.create).not.toHaveBeenCalled();
   });
 });
+
+// ── GET /?fields=summary — slim-shape opt-in (#920 slice 48) ──────
+//
+// #920 slice 48: mirror of the slim-shape opt-in pattern shipped across
+// slices 1-45 (canned_responses, sla, surveys, knowledge_base, ab_tests,
+// …). The slim branch drops the heavy `_count.{services, children}`
+// nested aggregate include from the Prisma findMany and ships only the
+// slim picker columns — useful for the wellness service-form category
+// picker / autocomplete that needs label+ordering only, NOT the per-row
+// child/service tallies the admin index renders. Contract pinned here:
+//   - `?fields=summary` swaps `include._count` for an explicit `select`
+//     with exactly 5 slim keys (id, name, parentId, displayOrder,
+//     isActive) and NO _count include.
+//   - The default branch (no ?fields) is byte-identical to pre-#920:
+//     the full row + `_count.{services, children}` aggregate include.
+//   - Any non-exact value (`?fields=full`, `?fields=`, `?fields=SUMMARY`
+//     casing) falls back to the full branch — strict opt-in.
+//   - Tenant scope (tenantId via tenantWhere) is preserved across both
+//     branches — critical for cross-tenant isolation in the slim shape.
+//   - The `?isActive=true` filter narrows the WHERE clause identically
+//     under both branches.
+
+describe('GET /?fields=summary — slim-shape opt-in', () => {
+  test('opt-in sets a select key on findMany with exactly the 5 slim columns and drops _count include', async () => {
+    prisma.serviceCategory.findMany.mockResolvedValueOnce([
+      { id: 1, name: 'Hair', parentId: null, displayOrder: 0, isActive: true },
+      { id: 2, name: 'Skin', parentId: null, displayOrder: 1, isActive: true },
+    ]);
+    const app = makeApp();
+
+    const res = await request(app).get(
+      '/api/wellness/service-categories?fields=summary'
+    );
+    expect(res.status).toBe(200);
+
+    const args = prisma.serviceCategory.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 7 });
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+    expect(args.select).toBeDefined();
+    expect(args.select.id).toBe(true);
+    expect(args.select.name).toBe(true);
+    expect(args.select.parentId).toBe(true);
+    expect(args.select.displayOrder).toBe(true);
+    expect(args.select.isActive).toBe(true);
+    // Slim select has exactly 5 keys — no aggregate `_count`, no nested
+    // relations, no timestamp columns the picker doesn't need.
+    expect(Object.keys(args.select).sort()).toEqual([
+      'displayOrder',
+      'id',
+      'isActive',
+      'name',
+      'parentId',
+    ]);
+    // Critical: the heavy `_count.{services, children}` aggregate is
+    // absent from the slim branch — that's the whole point of the
+    // opt-in (the picker doesn't render tallies).
+    expect(args.include).toBeUndefined();
+  });
+
+  test('slim response ships rows as-is — no _count aggregate decoration', async () => {
+    prisma.serviceCategory.findMany.mockResolvedValueOnce([
+      { id: 1, name: 'Slim picker row', parentId: null, displayOrder: 0, isActive: true },
+    ]);
+    const app = makeApp();
+
+    const res = await request(app).get(
+      '/api/wellness/service-categories?fields=summary'
+    );
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    // Slim row absent the `_count` aggregate (the default-branch include
+    // would surface a `_count: { services, children }` envelope on
+    // every row — the slim branch doesn't have it).
+    expect(res.body[0]._count).toBeUndefined();
+    // Slim columns present and unaltered.
+    expect(res.body[0].id).toBe(1);
+    expect(res.body[0].name).toBe('Slim picker row');
+    expect(res.body[0].parentId).toBeNull();
+    expect(res.body[0].displayOrder).toBe(0);
+    expect(res.body[0].isActive).toBe(true);
+  });
+
+  test('default branch (no ?fields) is byte-identical to pre-#920 contract — _count aggregate include preserved', async () => {
+    prisma.serviceCategory.findMany.mockResolvedValueOnce([
+      {
+        id: 5,
+        name: 'Full-shape probe',
+        parentId: null,
+        displayOrder: 0,
+        isActive: true,
+        _count: { services: 4, children: 2 },
+      },
+    ]);
+    const app = makeApp();
+
+    const res = await request(app).get('/api/wellness/service-categories');
+    expect(res.status).toBe(200);
+
+    // Default branch does NOT set a `select` key (full row returned via
+    // include) — that's the pre-#920 contract.
+    const args = prisma.serviceCategory.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    expect(args.include).toEqual({
+      _count: { select: { services: true, children: true } },
+    });
+    expect(args.where).toEqual({ tenantId: 7 });
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+
+    // _count aggregate present in the row — admin index renders these.
+    expect(res.body[0]._count).toEqual({ services: 4, children: 2 });
+  });
+
+  test('non-exact ?fields values fall back to the full branch (strict opt-in)', async () => {
+    prisma.serviceCategory.findMany.mockResolvedValueOnce([
+      {
+        id: 9,
+        name: 'Strict opt-in probe',
+        parentId: null,
+        displayOrder: 0,
+        isActive: true,
+        _count: { services: 0, children: 0 },
+      },
+    ]);
+    const app = makeApp();
+
+    // Casing mismatch — the canonical "any other value" probe.
+    const res = await request(app).get(
+      '/api/wellness/service-categories?fields=SUMMARY'
+    );
+    expect(res.status).toBe(200);
+
+    const args = prisma.serviceCategory.findMany.mock.calls[0][0];
+    // No select key — full branch fired.
+    expect(args.select).toBeUndefined();
+    expect(args.include).toEqual({
+      _count: { select: { services: true, children: true } },
+    });
+    // Full-branch decoration present.
+    expect(res.body[0]._count).toEqual({ services: 0, children: 0 });
+  });
+
+  test('slim branch preserves tenant scope via tenantWhere (cross-tenant isolation intact)', async () => {
+    authState.tenantId = 99;
+    prisma.serviceCategory.findMany.mockResolvedValueOnce([]);
+    const app = makeApp();
+
+    const res = await request(app).get(
+      '/api/wellness/service-categories?fields=summary'
+    );
+    expect(res.status).toBe(200);
+
+    const args = prisma.serviceCategory.findMany.mock.calls[0][0];
+    // tenantId injection unchanged in the slim branch — critical: the
+    // slim shape MUST still filter by tenant, never leak across.
+    expect(args.where).toEqual({ tenantId: 99 });
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+    expect(args.select).toBeDefined();
+    expect(args.include).toBeUndefined();
+  });
+
+  test('slim branch composes with ?isActive=true (where narrowed identically)', async () => {
+    prisma.serviceCategory.findMany.mockResolvedValueOnce([]);
+    const app = makeApp();
+
+    const res = await request(app).get(
+      '/api/wellness/service-categories?fields=summary&isActive=true'
+    );
+    expect(res.status).toBe(200);
+
+    const args = prisma.serviceCategory.findMany.mock.calls[0][0];
+    // The isActive narrower fires on the same `where` object before the
+    // slim/full branch decides on select vs include — both narrows compose.
+    expect(args.where).toEqual({ tenantId: 7, isActive: true });
+    expect(args.select).toBeDefined();
+    expect(args.include).toBeUndefined();
+  });
+
+  test('500 envelope on Prisma fault under the slim branch', async () => {
+    prisma.serviceCategory.findMany.mockRejectedValueOnce(new Error('db down'));
+    const app = makeApp();
+
+    const res = await request(app).get(
+      '/api/wellness/service-categories?fields=summary'
+    );
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to list service categories' });
+  });
+});

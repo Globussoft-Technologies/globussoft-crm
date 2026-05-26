@@ -150,6 +150,93 @@ describe('GET /api/canned-responses', () => {
   });
 });
 
+// ─── GET /api/canned-responses?fields=summary — #920 slice 21 ────────
+
+describe('GET /api/canned-responses?fields=summary', () => {
+  test('?fields=summary attaches a slim select dropping content + tenantId + createdAt + updatedAt', async () => {
+    prisma.cannedResponse.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ user: { userId: 1, tenantId: 7, role: 'USER' } })).get(
+      '/api/canned-responses?fields=summary',
+    );
+
+    const args = prisma.cannedResponse.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.select).toEqual({
+      id: true,
+      name: true,
+      category: true,
+    });
+    // Heavy / metadata columns MUST NOT be in the slim select.
+    expect(args.select.content).toBeUndefined();
+    expect(args.select.tenantId).toBeUndefined();
+    expect(args.select.createdAt).toBeUndefined();
+    expect(args.select.updatedAt).toBeUndefined();
+  });
+
+  test('no ?fields param → full-row shape (NO select attached, back-compat)', async () => {
+    prisma.cannedResponse.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/canned-responses');
+
+    const args = prisma.cannedResponse.findMany.mock.calls[0][0];
+    // Back-compat: the legacy callers (SLA.jsx fetches /api/canned-responses
+    // with no query string) keep getting the full row including content.
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=full (non-exact match) → full-row shape (only EXACT "summary" opts in)', async () => {
+    prisma.cannedResponse.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/canned-responses?fields=full');
+
+    const args = prisma.cannedResponse.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=SUMMARY (wrong case) → full-row shape (case-sensitive opt-in)', async () => {
+    prisma.cannedResponse.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/canned-responses?fields=SUMMARY');
+
+    const args = prisma.cannedResponse.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=summary + ?category= combine — both tenant + category in where AND select attached', async () => {
+    prisma.cannedResponse.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ user: { userId: 1, tenantId: 4, role: 'USER' } })).get(
+      '/api/canned-responses?fields=summary&category=Billing',
+    );
+
+    const args = prisma.cannedResponse.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 4, category: 'Billing' });
+    expect(args.orderBy).toEqual([{ category: 'asc' }, { name: 'asc' }]);
+    expect(args.select).toEqual({
+      id: true,
+      name: true,
+      category: true,
+    });
+  });
+
+  test('?fields=summary returns rows verbatim (route does not post-process Prisma output)', async () => {
+    const slim = [
+      { id: 1, name: 'Acknowledge', category: 'General' },
+      { id: 2, name: 'Refund Policy', category: 'Billing' },
+    ];
+    prisma.cannedResponse.findMany.mockResolvedValue(slim);
+
+    const res = await request(makeApp()).get('/api/canned-responses?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(slim);
+    // Confirm the route did not re-attach content / tenantId fields server-side.
+    expect(res.body[0]).not.toHaveProperty('content');
+    expect(res.body[0]).not.toHaveProperty('tenantId');
+  });
+});
+
 // ─── POST /api/canned-responses ──────────────────────────────────────
 
 describe('POST /api/canned-responses', () => {

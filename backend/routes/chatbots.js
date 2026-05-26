@@ -166,6 +166,138 @@ router.post("/", ...adminOnly, async (req, res) => {
   }
 });
 
+// ============================================================================
+// GET /api/chatbots/stats — tenant-wide chatbot rollup
+//
+// Marketing/Support polish — first /stats endpoint on the chatbots route.
+// Powers a future Marketing → Chatbots dashboard KPI strip without
+// firing N+1 round-trips (list + count(isActive=true) + groupBy(status) +
+// max(createdAt)). Mirrors the /stats template established by
+// travel-suppliers / sequences / accounting / billing / tickets etc.
+//
+// Schema reality (verified against prisma/schema.prisma):
+//   - Chatbot has NO channel column (only id, name, flow, isActive,
+//     tenantId, createdAt, updatedAt). The "byChannel" envelope key
+//     described in the prompt is therefore intentionally OMITTED — there
+//     is no source column to bucket by. The closest available dimension
+//     is ChatbotConversation.status ('ACTIVE' / 'COMPLETED' / 'ABANDONED'),
+//     surfaced as byConversationStatus.
+//   - byBotStatus buckets the Chatbot rows by isActive (active / inactive).
+//
+// Behaviour:
+//   - Auth: verifyToken only (mirrors GET / list, which is open to all
+//     authenticated users; only mutate endpoints are admin-only).
+//   - Tenant-scoped via req.user.tenantId.
+//   - ?from / ?to optional ISO date bounds on Chatbot.createdAt.
+//     Invalid → 400 INVALID_DATE.
+//   - Aggregates:
+//       totalBots                — count of Chatbot rows in window
+//       activeBots               — count where isActive=true
+//       inactiveBots             — count where isActive=false
+//       byBotStatus              — { active, inactive } convenience map
+//       totalConversations       — count of ChatbotConversation rows
+//                                  attached to bots in the window
+//       byConversationStatus     — { ACTIVE, COMPLETED, ABANDONED } counts
+//       lastCreatedAt            — max(Chatbot.createdAt) as ISO or null
+//   - NO audit row written (read-only meta surface).
+//
+// Express route ordering: this literal-path /stats MUST be declared BEFORE
+// the /:id family or `:id="stats"` would 404 (NaN parseInt) before
+// reaching this handler.
+// ============================================================================
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // Optional ISO date bounds on Chatbot.createdAt
+    const where = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    const bots = await prisma.chatbot.findMany({
+      where,
+      select: { id: true, isActive: true, createdAt: true },
+      orderBy: [{ id: "asc" }],
+    });
+
+    // Empty short-circuit — return zeroed shape.
+    if (bots.length === 0) {
+      return res.json({
+        totalBots: 0,
+        activeBots: 0,
+        inactiveBots: 0,
+        byBotStatus: { active: 0, inactive: 0 },
+        totalConversations: 0,
+        byConversationStatus: { ACTIVE: 0, COMPLETED: 0, ABANDONED: 0 },
+        lastCreatedAt: null,
+      });
+    }
+
+    let activeBots = 0;
+    let inactiveBots = 0;
+    let lastCreatedAt = null;
+    for (const b of bots) {
+      if (b.isActive) activeBots += 1;
+      else inactiveBots += 1;
+      const ts = b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastCreatedAt || ts > lastCreatedAt) lastCreatedAt = ts;
+      }
+    }
+
+    // Conversation rollup — tenant-scoped + restricted to the
+    // window-matching bot ids so ?from/?to flows downstream correctly.
+    const botIds = bots.map((b) => b.id);
+    const convoGroups = await prisma.chatbotConversation.groupBy({
+      by: ["status"],
+      where: { tenantId, chatbotId: { in: botIds } },
+      _count: { _all: true },
+    });
+
+    const byConversationStatus = { ACTIVE: 0, COMPLETED: 0, ABANDONED: 0 };
+    let totalConversations = 0;
+    for (const g of convoGroups) {
+      const n = (g._count && g._count._all) || 0;
+      totalConversations += n;
+      const key = String(g.status || "ACTIVE");
+      byConversationStatus[key] = (byConversationStatus[key] || 0) + n;
+    }
+
+    res.json({
+      totalBots: bots.length,
+      activeBots,
+      inactiveBots,
+      byBotStatus: { active: activeBots, inactive: inactiveBots },
+      totalConversations,
+      byConversationStatus,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[chatbots/stats]", err);
+    res.status(500).json({ error: "Stats failed" });
+  }
+});
+
 // GET /api/chatbots/:id
 router.get("/:id", async (req, res) => {
   try {

@@ -295,6 +295,86 @@ describe('DELETE /api/email_templates/:id', () => {
   });
 });
 
+describe('GET /api/email_templates?fields=summary — #920 slice 9 slim-shape opt-in', () => {
+  // Mirrors slices 1-7. Pins:
+  //   (a) ?fields=summary forwards a slim Prisma `select` that drops the
+  //       heavy `body` column (@db.Text, multi-KB HTML payloads).
+  //   (b) absent / unknown ?fields values stay on the full-row default
+  //       (back-compat — existing callers like SequenceBuilder must keep
+  //       receiving the full shape).
+  //   (c) tenant scope + orderBy contract is preserved on the summary branch.
+
+  test('?fields=summary forwards slim select dropping body', async () => {
+    const rows = [
+      { id: 11, name: 'Welcome', subject: 'Hi', category: 'General', tenantId: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    ];
+    prisma.emailTemplate.findMany.mockResolvedValueOnce(rows);
+
+    const app = makeApp();
+    const res = await request(app).get('/api/email_templates?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(rows);
+
+    const args = prisma.emailTemplate.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.select).toEqual({
+      id: true,
+      name: true,
+      subject: true,
+      category: true,
+      tenantId: true,
+      createdAt: true,
+      updatedAt: true,
+    });
+    // body is intentionally absent — that's the whole point of the slim shape.
+    expect(args.select.body).toBeUndefined();
+  });
+
+  test('default (no ?fields) does NOT forward select — back-compat preserved', async () => {
+    prisma.emailTemplate.findMany.mockResolvedValueOnce([]);
+
+    const app = makeApp();
+    await request(app).get('/api/email_templates');
+
+    const args = prisma.emailTemplate.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // Full-row shape — Prisma returns every scalar column including `body`.
+  });
+
+  test('?fields=anythingElse falls back to full-row shape (exact match only)', async () => {
+    prisma.emailTemplate.findMany.mockResolvedValueOnce([]);
+
+    const app = makeApp();
+    await request(app).get('/api/email_templates?fields=full');
+
+    const args = prisma.emailTemplate.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=SUMMARY (uppercase) falls back to full-row — case-sensitive opt-in', async () => {
+    prisma.emailTemplate.findMany.mockResolvedValueOnce([]);
+
+    const app = makeApp();
+    await request(app).get('/api/email_templates?fields=SUMMARY');
+
+    const args = prisma.emailTemplate.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=summary preserves tenant scope + updatedAt-desc order', async () => {
+    prisma.emailTemplate.findMany.mockResolvedValueOnce([]);
+
+    const app = makeApp({ user: { userId: 7, tenantId: 42, role: 'ADMIN' } });
+    await request(app).get('/api/email_templates?fields=summary');
+
+    const args = prisma.emailTemplate.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 42 });
+    expect(args.orderBy).toEqual({ updatedAt: 'desc' });
+    expect(args.select).toBeDefined(); // slim-shape branch fired
+  });
+});
+
 describe('Auth surface — req.user contract', () => {
   // The route itself has NO local auth middleware; protection is via the
   // global verifyToken gate in server.js. These tests document that contract:

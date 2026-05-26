@@ -552,3 +552,156 @@ describe('POST /api/custom-reports/:id/run', () => {
     expect(res.body.error).toMatch(/unsupported entity/i);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920 slice 41)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirrors the slim-shape contract pinned in slices 1-39. The default list
+// path returns the full CustomReport row including the heavy `config`
+// @db.LongText JSON column (entity / filters / columns / groupBy /
+// chartType — easily multi-KB for complex saved reports). When the caller
+// passes ?fields=summary the route projects to id + name + description
+// only via Prisma `select` so the heavy LongText never leaves the DB.
+// Anything other than the exact string "summary" is treated as default
+// (full row, with `config` JSON-parsed via safeParse).
+describe('GET /api/custom-reports?fields=summary — slim-shape opt-in', () => {
+  test('omitted ?fields returns default shape (full row, config parsed)', async () => {
+    prisma.customReport.findMany.mockResolvedValue([
+      {
+        id: 1,
+        name: 'Won deals by stage',
+        description: null,
+        config: JSON.stringify({ entity: 'Deal', groupBy: 'stage' }),
+        userId: 7,
+        tenantId: 1,
+        createdAt: '2026-05-01T00:00:00Z',
+        updatedAt: '2026-05-01T00:00:00Z',
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/custom-reports');
+
+    expect(res.status).toBe(200);
+    // Default path: config is parsed back into an object.
+    expect(res.body[0].config).toEqual({ entity: 'Deal', groupBy: 'stage' });
+    expect(res.body[0].userId).toBe(7);
+    expect(res.body[0].createdAt).toBeDefined();
+
+    const arg = prisma.customReport.findMany.mock.calls[0][0];
+    // Default path: NO `select` clause — full row returned for safeParse.
+    expect(arg.select).toBeUndefined();
+    expect(arg.where).toEqual({ tenantId: 1 });
+    expect(arg.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=summary forwards select with id+name+description only', async () => {
+    prisma.customReport.findMany.mockResolvedValue([
+      { id: 1, name: 'Won deals by stage', description: 'Pipeline rollup' },
+      { id: 2, name: 'Activity heatmap', description: null },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/custom-reports?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body[0]).toEqual({ id: 1, name: 'Won deals by stage', description: 'Pipeline rollup' });
+    // Slim path: `config` MUST NOT leak through the envelope.
+    expect(res.body[0].config).toBeUndefined();
+
+    const arg = prisma.customReport.findMany.mock.calls[0][0];
+    // Heavy `config` LongText + userId + createdAt + updatedAt MUST NOT
+    // appear in the slim select.
+    expect(arg.select).toEqual({
+      id: true,
+      name: true,
+      description: true,
+    });
+    expect(arg.select.config).toBeUndefined();
+    expect(arg.select.userId).toBeUndefined();
+    expect(arg.select.createdAt).toBeUndefined();
+    expect(arg.select.updatedAt).toBeUndefined();
+    // where + orderBy unchanged from default path.
+    expect(arg.where).toEqual({ tenantId: 1 });
+    expect(arg.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=summary respects tenant scoping (cross-tenant token → different where)', async () => {
+    prisma.customReport.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 99 }))
+      .get('/api/custom-reports?fields=summary');
+
+    const arg = prisma.customReport.findMany.mock.calls[0][0];
+    expect(arg.where).toEqual({ tenantId: 99 });
+    expect(arg.select).toEqual({
+      id: true,
+      name: true,
+      description: true,
+    });
+  });
+
+  test('?fields=full (anything not exactly "summary") falls back to default shape', async () => {
+    prisma.customReport.findMany.mockResolvedValue([
+      {
+        id: 5,
+        name: 'X',
+        description: null,
+        config: JSON.stringify({ entity: 'Contact' }),
+        userId: 1,
+        tenantId: 1,
+        createdAt: '2026-05-01T00:00:00Z',
+        updatedAt: '2026-05-01T00:00:00Z',
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/custom-reports?fields=full');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.customReport.findMany.mock.calls[0][0];
+    // Exact-string gate: only "summary" trips the slim branch. Anything
+    // else falls back to the full-row path with no `select` clause.
+    expect(arg.select).toBeUndefined();
+    // Default path round-trips the LongText through safeParse.
+    expect(res.body[0].config).toEqual({ entity: 'Contact' });
+  });
+
+  test('?fields=SUMMARY (uppercase) is treated as default — case-sensitive gate', async () => {
+    prisma.customReport.findMany.mockResolvedValue([
+      {
+        id: 9,
+        name: 'Y',
+        description: null,
+        config: JSON.stringify({ entity: 'Task' }),
+        userId: 1,
+        tenantId: 1,
+        createdAt: '2026-05-01T00:00:00Z',
+        updatedAt: '2026-05-01T00:00:00Z',
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/custom-reports?fields=SUMMARY');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.customReport.findMany.mock.calls[0][0];
+    // The gate is `req.query.fields === "summary"` (case-sensitive). Pin
+    // the contract so a future refactor to .toLowerCase() shows up as a
+    // deliberate spec edit, not a silent behaviour change.
+    expect(arg.select).toBeUndefined();
+    expect(res.body[0].config).toEqual({ entity: 'Task' });
+  });
+
+  test('?fields=summary returns 500 envelope on Prisma blow-up (defensive try/catch covers slim branch too)', async () => {
+    prisma.customReport.findMany.mockRejectedValue(new Error('boom-slim'));
+
+    const res = await request(makeApp())
+      .get('/api/custom-reports?fields=summary');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/failed/i);
+  });
+});

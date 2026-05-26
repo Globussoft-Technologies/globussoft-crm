@@ -934,6 +934,215 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/diagnostics/by-year — tenant-wide Diagnostic submissions
+// annual rollup (PRD_TRAVEL_RFU_DIAGNOSTIC §3).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY bucket for
+// the tenant-scoped (and sub-brand-narrowed) Diagnostic submission
+// population. Each row carries count + bySubBrand breakdown so the
+// Diagnostics dashboard can render an annual trend tile + per-year
+// sub-brand drill-down.
+//
+// Completes the diagnostics rollup triplet: /by-month (slice 25),
+// /by-quarter (slice 26), /by-year (this slice — slice 27). Pairs with
+// /diagnostics/stats (KPI tile). Mirrors /itineraries/by-year (#907
+// slice 18) + /suppliers/by-year + /visa/applications/by-year +
+// /flyer-templates/by-year — same UTC YYYY bucketing template, same
+// defensive math (null/invalid createdAt → "unknown" bucket; excluded
+// when ?from / ?to is set, kept otherwise so count surface stays
+// accurate), same orderBy semantics.
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY bounds; invalid →
+//                     400 INVALID_YEAR_FORMAT
+//   - ?orderBy      — default year:asc; accepts year:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 10 / 0; limit caps at 30
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' diagnostics in the rollup. Same gate as
+//     /diagnostics/by-quarter — TravelDiagnostic.subBrand is NON-nullable
+//     in the schema, so we do NOT add a `{ subBrand: null }` OR clause.
+//     The narrowing is a pure `subBrand: { in: [...allowed] }`. Empty
+//     access set → force-empty `subBrand: "__none__"` so the response
+//     stays a clean zero-rollup envelope.
+//   - JS-side aggregation over a light findMany projection
+//     ({ subBrand, createdAt }) — matches /by-quarter posture.
+//   - "unknown" bucket: rows with null/invalid createdAt land here.
+//     Excluded when ?from / ?to is set; included otherwise.
+//   - Per-year bySubBrand: each bucket carries a `bySubBrand` map keyed
+//     by sub-brand token (falsy → "_tenant" for forward-compat, mirrors
+//     /stats + /by-month + /by-quarter).
+//   - Pagination applied AFTER aggregation + sort + bucket filter.
+//
+// No audit row written — read-only meta surface; matches /diagnostics/stats
+// + /by-month + /by-quarter posture. USER-readable: anodyne (counts +
+// year-string tokens).
+//
+// Express route ordering: literal-path /by-year MUST be declared BEFORE
+// the /:id family or `:id="by-year"` would 400 INVALID_ID before
+// reaching this handler. Same convention as /by-month + /by-quarter +
+// /stats.
+// ============================================================================
+router.get(
+  "/diagnostics/by-year",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "year:asc";
+
+      // YYYY validation — exactly 4 digits. Mirrors /itineraries/by-year +
+      // /suppliers/by-year.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw)
+        ? orderByRaw
+        : "year:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors /by-quarter
+      // sub-brand gate: subBrand-restricted callers see only their
+      // allowed sub-brands' diagnostics; admins (allowed=null) see all.
+      // Empty allowed set → force-empty `subBrand: "__none__"` for a
+      // clean zero-rollup envelope (not 403).
+      //
+      // Note: TravelDiagnostic.subBrand is NON-nullable, so we do NOT
+      // mix in a `{ subBrand: null }` OR clause (that's the
+      // flyer-templates pattern). The narrowing is a pure
+      // `subBrand: { in: [...allowed] }`, mirroring /by-quarter.
+      const where = { tenantId: req.travelTenant.id };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          where.subBrand = { in: [...allowed] };
+        } else {
+          where.subBrand = "__none__";
+        }
+      }
+
+      // Light projection — subBrand + createdAt is enough for the
+      // bucket totals + per-bucket bySubBrand breakdown.
+      const rows = await prisma.travelDiagnostic.findMany({
+        where,
+        select: { subBrand: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-year. Map "YYYY" → { count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byYear = new Map();
+      for (const r of rows) {
+        let yearKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let bucket = byYear.get(yearKey);
+        if (!bucket) {
+          bucket = {
+            year: yearKey,
+            count: 0,
+            bySubBrand: {},
+          };
+          byYear.set(yearKey, bucket);
+        }
+        bucket.count += 1;
+
+        // bySubBrand: defensively coalesce falsy → "_tenant" to match
+        // /diagnostics/stats + /by-month + /by-quarter posture
+        // (forward-compat against any future schema change to nullable
+        // subBrand).
+        const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+        if (!bucket.bySubBrand[sbKey]) bucket.bySubBrand[sbKey] = { count: 0 };
+        bucket.bySubBrand[sbKey].count += 1;
+      }
+
+      let years = [...byYear.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise. Mirrors
+      // /by-month + /by-quarter + /itineraries/by-year.
+      if (fromRaw !== null) {
+        years = years.filter(
+          (r) => r.year !== "unknown" && r.year >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        years = years.filter(
+          (r) => r.year !== "unknown" && r.year <= toRaw,
+        );
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY which is also
+      // chronological (4-digit zero-padded years naturally ordered).
+      // "unknown" sorts last in asc / first in desc by virtue of being
+      // lexicographically > "9999".
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalYears = years.length;
+      const grandCount = years.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as /by-quarter.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        years: paged,
+        totalYears,
+        grandCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute annual rollup" });
+    }
+  },
+);
+
 // GET /api/travel/diagnostics/:id
 router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

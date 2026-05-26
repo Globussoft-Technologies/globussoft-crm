@@ -192,6 +192,96 @@ test.describe('Developer API — POST /apikeys name validation (#720)', () => {
   });
 });
 
+// ── #899 Part A: per-sub-brand API key scoping ────────────────────
+//
+// ApiKey.subBrand additive nullable column scopes a key to ONE Travel
+// sub-brand (tmc / rfu / travelstall / visasure). null = tenant-wide
+// (legacy, backward-compatible). POST accepts the optional field and
+// validates against the whitelist; GET returns it in the listing so
+// the Developer UI can label each key by scope.
+test.describe('Developer API — POST /apikeys sub-brand scoping (#899 Part A)', () => {
+  test('omitted subBrand → 201 with subBrand=null (tenant-wide key)', async ({ request }) => {
+    const token = await getAdmin(request);
+    test.skip(!token, 'admin login unavailable');
+    const r = await post(request, token, '/api/developer/apikeys', {
+      name: `${RUN_TAG} tenant-wide-key`,
+    });
+    expect(r.status(), `tenant-wide: ${await r.text()}`).toBe(201);
+    const body = await r.json();
+    expect(body.key.subBrand).toBeNull();
+    createdKeyIds.add(body.key.id);
+  });
+
+  test('valid subBrand=tmc → 201 with subBrand persisted', async ({ request }) => {
+    const token = await getAdmin(request);
+    test.skip(!token, 'admin login unavailable');
+    const r = await post(request, token, '/api/developer/apikeys', {
+      name: `${RUN_TAG} tmc-scoped-key`,
+      subBrand: 'tmc',
+    });
+    expect(r.status(), `tmc-scoped: ${await r.text()}`).toBe(201);
+    const body = await r.json();
+    expect(body.key.subBrand).toBe('tmc');
+    createdKeyIds.add(body.key.id);
+  });
+
+  test('invalid subBrand=foo → 400 INVALID_SUB_BRAND', async ({ request }) => {
+    const token = await getAdmin(request);
+    test.skip(!token, 'admin login unavailable');
+    const r = await post(request, token, '/api/developer/apikeys', {
+      name: `${RUN_TAG} bogus-scope-key`,
+      subBrand: 'foo',
+    });
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.code).toBe('INVALID_SUB_BRAND');
+  });
+
+  test('all 4 valid sub-brands accepted (tmc / rfu / travelstall / visasure)', async ({ request }) => {
+    const token = await getAdmin(request);
+    test.skip(!token, 'admin login unavailable');
+    for (const sb of ['tmc', 'rfu', 'travelstall', 'visasure']) {
+      const r = await post(request, token, '/api/developer/apikeys', {
+        name: `${RUN_TAG} ${sb}-key`,
+        subBrand: sb,
+      });
+      expect(r.status(), `${sb}: ${await r.text()}`).toBe(201);
+      const body = await r.json();
+      expect(body.key.subBrand).toBe(sb);
+      createdKeyIds.add(body.key.id);
+    }
+  });
+
+  test('GET /apikeys returns subBrand field on each key', async ({ request }) => {
+    const token = await getAdmin(request);
+    test.skip(!token, 'admin login unavailable');
+    // Create a scoped + an unscoped key, then list.
+    const r1 = await post(request, token, '/api/developer/apikeys', {
+      name: `${RUN_TAG} get-rfu-key`,
+      subBrand: 'rfu',
+    });
+    expect(r1.status()).toBe(201);
+    const scopedId = (await r1.json()).key.id;
+    createdKeyIds.add(scopedId);
+
+    const r2 = await request.get(`${BASE_URL}/api/developer/apikeys`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r2.status()).toBe(200);
+    const list = await r2.json();
+    expect(Array.isArray(list)).toBe(true);
+    const scoped = list.find((k) => k.id === scopedId);
+    expect(scoped, `created scoped key ${scopedId} missing from listing`).toBeTruthy();
+    expect(scoped.subBrand).toBe('rfu');
+    // Every key in the listing must have the subBrand field present (null or string).
+    for (const k of list) {
+      expect(k).toHaveProperty('subBrand');
+      expect(k.subBrand === null || typeof k.subBrand === 'string').toBe(true);
+    }
+  });
+});
+
 // ── #713: webhook URL scheme + host allowlist ─────────────────────
 
 test.describe('Developer API — POST /webhooks URL validation (#713)', () => {

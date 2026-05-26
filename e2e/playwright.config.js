@@ -8,7 +8,14 @@ module.exports = defineConfig({
   testDir: '.',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 3 : 1,
+  // 3 retries piled up too much wall-clock under demo contention (run
+  // 26121861939: shards 3+4 had 16+18 flaky tests passing only on retry #2-3,
+  // consuming minutes per spec; shards 1+2 hit the 45min ceiling and got
+  // cancelled). Dropping to 2 retries keeps CF-blip resilience (most blips
+  // are <30s, single retry recovers) while shaving ~25% off per-shard
+  // wall-clock when flakes pile up. The 5xx-retry login + createContact
+  // helpers (96d7076) absorb the chronic CF-blip case independently.
+  retries: process.env.CI ? 2 : 1,
   workers: process.env.CI ? 2 : undefined,
   // Default per-test timeout. Playwright's 30s default is too tight against demo
   // under e2e-full's concurrent 4-shard load — `POST /send-email` (SendGrid) +
@@ -36,7 +43,19 @@ module.exports = defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'on-first-retry',
-    actionTimeout: 15000,
+    // 15s was too tight under 8-shard contention (run 26057150278 cascade-
+    // failed 545 tests when beforeAll login POSTs fell back to 15s). Bumped
+    // to 60s for the 8-shard experiment; reverted to 4 shards after that
+    // experiment failed (cancelled mid-flight, see e2e-full.yml header).
+    // 30s is the new baseline: still 2× the original 15s headroom (absorbs
+    // CF blips + warm-cache contention), but doesn't waste 60s per slow call
+    // when the demo is in steady state. At 4 shards × 2 workers = 8 concurrent
+    // test workers, the demo origin handles requests in <5s steady state, so
+    // 30s catches real hangs while letting legitimate slowness pass. The
+    // retry-on-5xx login/createContact helpers (commit 96d7076) cover the
+    // residual CF-blip case independently of this timeout.
+    actionTimeout: 30000,
+    // Navigation pairs with actionTimeout — same rationale.
     navigationTimeout: 30000,
   },
 

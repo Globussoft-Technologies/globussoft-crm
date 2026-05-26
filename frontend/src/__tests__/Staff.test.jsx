@@ -53,10 +53,13 @@ const STAFF_ROWS = [
   { id: 4,  name: 'Inactive Aman',   email: 'aman@enhancedwellness.in',    role: 'USER',  wellnessRole: 'helper',     createdAt: '2026-01-04T00:00:00Z', deactivatedAt: '2026-04-01T00:00:00Z' },
 ];
 
-function renderStaff(viewerRole = 'ADMIN') {
+function renderStaff(viewerRole = 'ADMIN', overrides = {}) {
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
+    if (overrides[url] !== undefined) return Promise.resolve(overrides[url]);
     if (url === '/api/staff') return Promise.resolve(STAFF_ROWS);
+    if (url === '/api/staff/commission-profiles') return Promise.resolve([]);
+    if (url.startsWith('/api/staff/revenue-goals')) return Promise.resolve([]);
     return Promise.resolve({});
   });
   return render(
@@ -129,5 +132,96 @@ describe('<Staff /> — row action buttons (#618)', () => {
     expect(screen.queryByTestId('staff-edit-modal')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('staff-action-edit-2'));
     expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument();
+  });
+});
+
+// #818 — Staff edit modal surfaces revenue-goal summary chips so an admin
+// editing a staff member can see their per-period goals at-a-glance and
+// link out to /revenue-goals?userId=X for full CRUD. StaffRevenueGoal is
+// one-to-many on User (each goal pins a period like Q1/2026), so the
+// modal does NOT try to persist a single `revenueGoalId` FK — that would
+// be data-model incorrect. Instead it shows up to 4 active goals as
+// chips with target / achieved / pct, plus a Manage deep-link.
+describe('<Staff /> — revenue goal chips in edit modal (#818)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+  });
+
+  it('shows empty-state when staff member has no revenue goals', async () => {
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('staff-action-edit-2'));
+    await waitFor(() => expect(screen.getByTestId('staff-edit-revenue-goals')).toBeInTheDocument());
+    // Empty-state copy renders.
+    expect(await screen.findByTestId('staff-edit-revenue-goals-empty')).toBeInTheDocument();
+  });
+
+  it('renders one chip per goal with period + target + achieved + pct', async () => {
+    const goals = [
+      { id: 71, userId: 2, period: 'MONTHLY',   targetAmount: '100000', achievedAmount: '50000',  periodStart: '2026-05-01', periodEnd: '2026-06-01', scope: 'ALL' },
+      { id: 72, userId: 2, period: 'QUARTERLY', targetAmount: '300000', achievedAmount: '270000', periodStart: '2026-04-01', periodEnd: '2026-07-01', scope: 'ALL' },
+      { id: 73, userId: 2, period: 'YEARLY',    targetAmount: '1200000', achievedAmount: '1300000', periodStart: '2026-01-01', periodEnd: '2027-01-01', scope: 'ALL' },
+    ];
+    renderStaff('ADMIN', { '/api/staff/revenue-goals?userId=2': goals });
+    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('staff-action-edit-2'));
+
+    // All 3 chips render with their id-keyed testid.
+    expect(await screen.findByTestId('staff-edit-revenue-goal-71')).toBeInTheDocument();
+    expect(screen.getByTestId('staff-edit-revenue-goal-72')).toBeInTheDocument();
+    expect(screen.getByTestId('staff-edit-revenue-goal-73')).toBeInTheDocument();
+
+    // Pct math: 50%, 90%, 108% (capped at 999 not 100 — we show overshoot).
+    expect(screen.getByTestId('staff-edit-revenue-goal-71').textContent).toMatch(/50%/);
+    expect(screen.getByTestId('staff-edit-revenue-goal-72').textContent).toMatch(/90%/);
+    expect(screen.getByTestId('staff-edit-revenue-goal-73').textContent).toMatch(/108%/);
+
+    // Period labels render.
+    expect(screen.getByTestId('staff-edit-revenue-goal-71').textContent).toMatch(/MONTHLY/);
+    expect(screen.getByTestId('staff-edit-revenue-goal-72').textContent).toMatch(/QUARTERLY/);
+    expect(screen.getByTestId('staff-edit-revenue-goal-73').textContent).toMatch(/YEARLY/);
+
+    // Empty-state must NOT appear when at least one goal exists.
+    expect(screen.queryByTestId('staff-edit-revenue-goals-empty')).not.toBeInTheDocument();
+  });
+
+  it('Manage link deep-links to /revenue-goals filtered by the staff userId', async () => {
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('staff-action-edit-2'));
+    const link = await screen.findByTestId('staff-edit-manage-revenue-goals');
+    // userId in the href matches the staff row's id (member 2 = Dr. Harsh).
+    expect(link.getAttribute('href')).toBe('/revenue-goals?userId=2');
+    // Link text + icon present.
+    expect(link.textContent).toMatch(/Manage/i);
+  });
+
+  it('caps the chip cluster at 4 + shows "+N more" overflow indicator', async () => {
+    const goals = Array.from({ length: 6 }).map((_, i) => ({
+      id: 100 + i,
+      userId: 2,
+      period: 'MONTHLY',
+      targetAmount: '50000',
+      achievedAmount: String(i * 10000),
+      periodStart: '2026-05-01',
+      periodEnd: '2026-06-01',
+      scope: 'ALL',
+    }));
+    renderStaff('ADMIN', { '/api/staff/revenue-goals?userId=2': goals });
+    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('staff-action-edit-2'));
+
+    // Exactly 4 chips render.
+    await waitFor(() => expect(screen.getByTestId('staff-edit-revenue-goal-100')).toBeInTheDocument());
+    expect(screen.getByTestId('staff-edit-revenue-goal-100')).toBeInTheDocument();
+    expect(screen.getByTestId('staff-edit-revenue-goal-101')).toBeInTheDocument();
+    expect(screen.getByTestId('staff-edit-revenue-goal-102')).toBeInTheDocument();
+    expect(screen.getByTestId('staff-edit-revenue-goal-103')).toBeInTheDocument();
+    // Beyond the 4th chip — not rendered.
+    expect(screen.queryByTestId('staff-edit-revenue-goal-104')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('staff-edit-revenue-goal-105')).not.toBeInTheDocument();
+    // Overflow indicator surfaces the remaining count.
+    const modal = screen.getByTestId('staff-edit-revenue-goals');
+    expect(modal.textContent).toMatch(/\+2 more/);
   });
 });

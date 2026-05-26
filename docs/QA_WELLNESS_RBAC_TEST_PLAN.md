@@ -3,7 +3,7 @@
 > **Audience:** QA engineers + agents writing/maintaining RBAC regression specs.
 > **Scope:** every authenticated route under `/api/wellness/*` plus the patient portal and public booking surfaces.
 > **Source of truth:** [backend/routes/wellness.js](../backend/routes/wellness.js), [backend/middleware/wellnessRole.js](../backend/middleware/wellnessRole.js), [backend/middleware/auth.js](../backend/middleware/auth.js), [backend/prisma/seed-wellness.js](../backend/prisma/seed-wellness.js) (seed accounts).
-> **Last refreshed:** 2026-05-13 (v3.7.7).
+> **Last refreshed:** 2026-05-17 (v3.7.16) — #732 doc-correction + #734 (audit-read path) + #735 (GDPR retention path) + #738 (double-slash WONTFIX) + #740 (PDF endpoints now require auth, §9.5 gap closed).
 > **Companions:** [QA_README.md](QA_README.md), [QA_WELLNESS_PROMPT.md](QA_WELLNESS_PROMPT.md), [PENDING_USER_AND_OPERATOR.md](PENDING_USER_AND_OPERATOR.md).
 
 ---
@@ -85,7 +85,7 @@ Every test case below uses one of these accounts (all password `password123`). S
 | Email | role | wellnessRole | Use for testing |
 |---|---|---|---|
 | `rishu@enhancedwellness.in` | ADMIN | null | Tenant owner / ADMIN override / branding writes |
-| `admin@wellness.demo` | ADMIN | null | Sibling ADMIN — cross-tenant probe baseline |
+| `admin@wellness.demo` | ADMIN | null | Same-tenant co-ADMIN (tenantId=2) — useful for same-tenant ADMIN-vs-OWNER privilege probes and as the "wellness ADMIN" token in cross-vertical probes against generic-tenant admin |
 | `manager@enhancedwellness.in` | MANAGER | null | MANAGER override / ops endpoints |
 | `drharsh@enhancedwellness.in` | USER | `doctor` | Clinical writes, Rx, consents |
 | `drmeena@enhancedwellness.in` | USER | `doctor` | Cross-doctor isolation (alt doctor) |
@@ -100,9 +100,11 @@ Every test case below uses one of these accounts (all password `password123`). S
 
 | Email | role | wellnessRole | Use for testing |
 |---|---|---|---|
-| `admin@globussoft.com` | ADMIN | null | Cross-vertical probe — must get `WELLNESS_TENANT_REQUIRED` on every wellness route |
+| `admin@globussoft.com` | ADMIN | null | Cross-vertical probe — must get `WELLNESS_TENANT_REQUIRED` on every wellness route. Also the **cross-tenant probe baseline** for §5.1 — paired with `rishu@enhancedwellness.in` (or `admin@wellness.demo`) to assert that no wellness-route tenant-scoped query leaks Tenant A → Tenant B data. |
 | `manager@crm.com` | MANAGER | null | Same — cross-vertical MANAGER probe |
 | `user@crm.com` | USER | null | Same — cross-vertical USER probe |
+
+> **Note on cross-tenant probes (#732):** Earlier revisions of this doc described `admin@wellness.demo` as a "sibling ADMIN — cross-tenant probe baseline", implying it lived on a **separate** wellness tenant. In reality both `rishu@enhancedwellness.in` and `admin@wellness.demo` are seeded onto **the same tenant** (`tenantId=2`, Enhanced Wellness). There is currently no second wellness tenant in the demo seed. Cross-tenant data-isolation probes (§5.1) therefore use the generic-vs-wellness pairing instead: `admin@globussoft.com` (tenantId=1, generic) as the **Tenant A** baseline and any wellness-tenant ADMIN (`rishu@enhancedwellness.in` or `admin@wellness.demo`, both tenantId=2) as the **Tenant B** counterpart. This is the pattern already used by `e2e/tests/tenant-isolation-api.spec.js`, `attribution-api.spec.js`, `audit-api.spec.js`, and `auth-revocation-api.spec.js`. Same-tenant ADMIN-vs-OWNER privilege probes (e.g. is the owner-only flag truly owner-only, or does any co-ADMIN pass?) still use the `rishu` + `admin@wellness.demo` pair, since they share `tenantId=2` but only `rishu@` matches `Tenant.ownerEmail`.
 
 ### Patient portal
 
@@ -270,7 +272,7 @@ Note: `manager` is **NOT** in this gate's allowed array. Manager-override token 
 
 **Routes (~30):**
 - Owner dashboard: `GET /api/wellness/dashboard`
-- Recommendations: `PUT /api/wellness/recommendations/:id`, `/approve`, `/reject`
+- Recommendations: `GET /api/wellness/recommendations` (admin-gated post-#733), `PUT /api/wellness/recommendations/:id`, `/approve`, `/reject`
 - Orchestrator/cron triggers: `/orchestrator/run`, `/reminders/run`, `/no-show-risk/run`, `/ops/run`, `/inventory/low-stock/run`
 - Locations: `POST/PUT /api/wellness/locations*`
 - Resources: `POST/PUT/DELETE /api/wellness/resources*`
@@ -279,6 +281,20 @@ Note: `manager` is **NOT** in this gate's allowed array. Manager-override token 
 - Memberships: `GET /api/wellness/memberships/dashboard`, `POST /:id/cancel`, `POST/PUT/DELETE /membership-plans*`
 - Services catalog: `POST/PUT /api/wellness/services*`
 - Reports: `GET /api/wellness/reports/{pnl-by-service,per-professional,attribution,per-location}` (+ `.csv` + `.pdf` variants — 8 routes)
+
+**#733 update (2026-05-17):** QA RBAC audit flagged `GET /api/wellness/locations`,
+`GET /api/wellness/services`, and `GET /api/wellness/recommendations` as open to
+USER-with-no-wellnessRole. Disposition:
+- `GET /recommendations` — **tightened** to `verifyWellnessRole(["admin","manager"])`.
+  Owner Dashboard / Recommendations page tiles target operators, not clinical staff.
+- `GET /services` — **stays open by design.** Consumed by USER-facing selectors in
+  PatientDetail, Calendar, Memberships, TelecallerQueue, Leads, AutoConsumptionRules,
+  Resources. Locking down would regress every wellness sub-page that shows a service
+  picker. Catalog metadata (name, price, duration) is not PII.
+- `GET /locations` — **stays open BUT masks PII for low-trust viewers** (#679 already
+  shipped). Telecaller / helper / generic-USER see masked phone+email; admin /
+  manager / clinical staff see full contact info. Clinic street address is public
+  by intent (printed on prescriptions, booking widget).
 
 | Caller | Expected |
 |---|---|
@@ -408,19 +424,22 @@ Test:
 - Each rate-limited route returns 429 after the limiter threshold (see [publicBookLimiter at wellness.js:4692](../backend/routes/wellness.js#L4692)).
 - Cross-tenant probe — `/public/tenant/:slug` should never return data for a tenant whose `vertical !== "wellness"` (file a gap-test if so).
 
-### 4.17 Public clinical PDFs — no auth (but tied to a published visit/consent record)
+### 4.17 Clinical PDFs — `verifyToken` Bearer auth required (verified 2026-05-14, #740)
 
 **Routes (3):**
 - `GET /api/wellness/prescriptions/:id/pdf`
 - `GET /api/wellness/consents/:id/pdf`
 - `GET /api/wellness/invoices/:id/branded-pdf`
 
-These currently render **without auth** — a guessable integer id is the only secret. **Flag as a security concern** if not already filed; ideal behavior is to either gate behind verifyToken OR require a signed-token query param.
+~~These currently render **without auth** — a guessable integer id is the only secret. **Flag as a security concern** if not already filed; ideal behavior is to either gate behind verifyToken OR require a signed-token query param.~~
+
+**Verified 2026-05-14 (#740):** all three endpoints reject anonymous requests with **401 `Authentication required`**. The previously-flagged security gap is **CLOSED** — these routes sit behind the global `verifyToken` guard (mounted in [server.js](../backend/server.js)), so the wellness namespace inherits the auth check.
 
 Test:
-- 200 for any valid id (regardless of caller).
-- 404 for non-existent id.
-- 400 for non-numeric id (param middleware at wellness.js:118).
+- **401** for any anonymous request (no Authorization header). Gate runs **before** param validation, so `/prescriptions/abc/pdf` (non-numeric) and `/prescriptions/99999/pdf` (non-existent) **both 401** anonymously — no id-existence leak.
+- **200** for any authenticated wellness-tenant user with a valid id.
+- **404** for an authenticated caller hitting a non-existent id.
+- **400** for an authenticated caller hitting a non-numeric id (param middleware at wellness.js:118).
 
 ---
 
@@ -430,11 +449,14 @@ Test:
 
 For every authenticated route in §4, run a **cross-tenant probe**:
 
-1. Log in as `rishu@enhancedwellness.in` (tenant: enhanced-wellness). Create a Patient — record its id `P_W`.
-2. Log in as `admin@wellness.demo` (different wellness tenant). Attempt `GET /api/wellness/patients/${P_W}`.
-3. Expected: **404 "Patient not found"** — NOT 200 with cross-tenant leak. Every route MUST scope by `tenantId` from JWT.
+1. Log in as `rishu@enhancedwellness.in` (Tenant B — enhanced-wellness, tenantId=2). Create a Patient — record its id `P_W`.
+2. Log in as `admin@globussoft.com` (Tenant A — generic, tenantId=1). Attempt `GET /api/wellness/patients/${P_W}`.
+3. Expected: **403 WELLNESS_TENANT_REQUIRED** (the wellness-vertical gate fires first) OR **404 "Patient not found"** for any non-wellness-gated route that's tenant-scoped. Never 200 with cross-tenant leak. Every route MUST scope by `tenantId` from JWT, and every wellness-gated route MUST first reject the cross-vertical caller.
+4. For routes that do NOT carry the wellness-vertical gate (the `verifyRole(["ADMIN"])`-only routes in §4.9, the wallet credit/debit endpoints in §4.9, the loyalty reads in §4.13, the waitlist routes in §4.14), the expected outcome is **404 "not found"** because the generic-tenant ADMIN passes the role gate but the route's `where: { tenantId }` clause yields nothing. Spec covers both: a generic-tenant ADMIN gets a 200-empty / 404-not-found, never a 200 with Tenant B data.
 
-Reference: existing spec `e2e/tests/tenant-isolation-api.spec.js` covers many of these via the FK chain (Patient → Visit → Rx → Consent → TreatmentPlan).
+> Note: `admin@wellness.demo` lives on the SAME tenant as `rishu@enhancedwellness.in` (tenantId=2 — see §2). Using it as the "Tenant B → probes Tenant A" leg is a false-positive — it sees rishu's data legitimately. The cross-tenant probe MUST use a caller from a different tenant. The only second tenant seeded today is the generic one, so `admin@globussoft.com` is the load-bearing counterparty. If a future seed adds a second wellness tenant (e.g. `wellness-demo-org`), update this section and `e2e/tests/tenant-isolation-api.spec.js` to use it as a true wellness-to-wellness sibling probe (#732 follow-up).
+
+Reference: existing spec `e2e/tests/tenant-isolation-api.spec.js` already pairs `admin@globussoft.com` (Tenant A, generic) with `admin@wellness.demo` (Tenant B, wellness) and probes both directions — covers Contact/Patient/Visit/Rx/Consent/TreatmentPlan via the FK chain.
 
 ### 5.2 Cross-vertical tenant guard
 
@@ -475,6 +497,13 @@ For **any** portal route (§4.15):
 
 Endpoints that require a fresh stepUpToken include GDPR retention edits and Channels credential rotation (non-wellness specific). For wellness, current scope: `DELETE /api/wellness/patients/:id` and wallet `/credit` + `/debit` **should** require step-up. **Verify whether they do** — if not, file as a gap test.
 
+> **#735 correction:** the GDPR retention surface lives at **`/api/gdpr/retention-policies`** (org-level), **not** `/api/wellness/gdpr/retention-rules`. Endpoints:
+> - `GET /api/gdpr/retention-policies` — list current tenant's policies (no step-up).
+> - `PUT /api/gdpr/retention-policies` — upsert; **requires step-up** ([routes/gdpr.js:348](../backend/routes/gdpr.js#L348)).
+> - `POST /api/gdpr/retention/run` — manual sweep trigger; **ADMIN + step-up** ([routes/gdpr.js:468](../backend/routes/gdpr.js#L468)).
+>
+> ~~`/api/wellness/gdpr/retention-rules`~~ was never a real route — it's doc drift. GDPR is an org-level resource per [docs/API_NAMESPACING.md](API_NAMESPACING.md), so it has no wellness alias.
+
 Test:
 1. Log in → capture session JWT.
 2. Hit `DELETE /api/wellness/patients/:id` with only the session JWT.
@@ -511,6 +540,8 @@ Beyond the matrix in §4, every RBAC spec MUST include:
 14. **403 envelope shape pin** — for every WELLNESS_ROLE_FORBIDDEN: body must contain `{ error: "<canonical neutral copy>", code: "WELLNESS_ROLE_FORBIDDEN", allowed: [...] }`. The `allowed` field is contract per #274.
 15. **Audit row on every state change** — every successful 2xx that mutates state must emit an `AuditLog` row with the correct `action` + `userId` + `tenantId`. The audit-coverage-api.spec.js already pins this for Patient/Visit/Rx/Consent/TreatmentPlan; extend for any new gated mutation.
 
+    > **Read-back path (#734):** the audit log is queried via the **org-level** endpoint `GET /api/audit` (see [routes/audit.js](../backend/routes/audit.js)), **not** `/api/wellness/audit/*`. Per [docs/API_NAMESPACING.md](API_NAMESPACING.md) (#348), `/api/wellness/audit` and its sub-paths return `410 WELLNESS_NAMESPACE_INVALID` with a `canonical: "/api/audit"` pointer — audit is an org-level resource with no wellness alias. ~~Specs that probe `/api/wellness/audit/recent` are checking a phantom endpoint~~ → use `/api/audit?entityType=Patient&limit=5` (or similar filter) instead.
+
 ---
 
 ## 7. Test execution checklist
@@ -539,9 +570,10 @@ These are NOT real bugs to fix immediately — they're observations to either fi
 2. **`requireManagerPlus`** returns `"Manager or admin role required"` — same issue ([wellness.js:5728](../backend/routes/wellness.js#L5728)).
 3. **`requireClinicalRole`** returns `"Only clinical staff (doctor) may write prescriptions"` — also leaks taxonomy ([wellness.js:1576](../backend/routes/wellness.js#L1576)). All three pre-#590/#591 message strings should be normalized to the neutral RBAC_DENIED_MESSAGE in a future cleanup; the `code` already differentiates them programmatically.
 4. **Waitlist routes (§4.14)** are missing a wellness-vertical gate. A generic-tenant user could call them — possibly intentional, but document the contract either way.
-5. **PDF endpoints (§4.17)** render without auth — guessable integer id is the only secret. File as security concern if not already on the backlog.
+5. ~~**PDF endpoints (§4.17)** render without auth — guessable integer id is the only secret. File as security concern if not already on the backlog.~~ **CLOSED 2026-05-14 (#740):** all three PDF endpoints reject anonymous with 401; gate runs before param validation so no id-existence leak. See updated §4.17.
 6. **`/wallet/:walletId/credit` and `/wallet/:walletId/debit`** use `verifyRole(["ADMIN"])` without an explicit wellness-vertical gate. A generic-tenant ADMIN passes the role gate; verify the tenant-scoped Prisma query catches the cross-tenant cases (404 not 200).
 7. **Step-up auth for wellness destructive flows** — verify whether `DELETE /patients/:id` + wallet `/credit` + `/debit` require step-up; if not, file gap (§5.7).
+8. **No second wellness tenant in seed (#732 follow-up)** — current seed provisions exactly two tenants: generic (tenantId=1) and Enhanced Wellness (tenantId=2). True wellness-to-wellness cross-tenant probes (e.g. `Tenant.ownerEmail` is honoured per-tenant, branding doesn't bleed across wellness siblings) cannot be exercised. If product wants this surface tested, file an issue to add a second wellness tenant to `prisma/seed-wellness.js` (suggested slug `wellness-demo-org`) and provision a separate sibling ADMIN there. Until then, §5.1 uses the generic-vs-wellness pair as the load-bearing cross-tenant probe.
 
 ---
 
@@ -633,5 +665,22 @@ Run this checklist before merging any new wellness route into `main`.
 
 ---
 
-**Last reviewed:** 2026-05-13 (v3.7.7)
+## 11. Known Express behaviours (informational, intentional)
+
+These are NOT bugs — they're characteristics of the underlying framework / Node URL parser that QA harnesses sometimes flag during pen-tests. Disposition + rationale documented here so the next audit doesn't re-file them.
+
+### 11.1 Double-slash path collapse — `/api/wellness//waitlist` ≡ `/api/wellness/waitlist` (WONTFIX, #738)
+
+`GET /api/wellness//waitlist` returns the **same 200 response** as the single-slash variant. The path is normalized by Node's URL parser (and by Express's default router with `strict: false`) before the route matcher runs, so both forms hit the same handler.
+
+**Why this is not changed:**
+- **No privilege gained, no tenant leak** — the normalized path runs through the identical auth/role gates; the response body is byte-identical.
+- **`strict: true` on the Express router has knock-on effects** — it would also start rejecting trailing-slash variants (e.g. `/api/wellness/waitlist/`) that some existing clients send, and would invalidate any external partner integration that sends a non-canonical form. Net negative.
+- **The right defence layer is the proxy, not the app** — Nginx / CloudFront / a WAF can normalize or reject `//` at ingress (e.g. Nginx `merge_slashes on;` — the default — already does this for `proxy_pass` URIs). If your WAF/CDN exact-path cache rule needs to see only single-slash variants, configure normalization there.
+
+**Expected QA contract:** double-slash variants return the **same status code and body** as the single-slash variant. If a future routing change ever exposes a different handler for the `//` form, that's a real bug.
+
+---
+
+**Last reviewed:** 2026-05-17 (v3.7.16)
 **Maintained by:** engineering — update on every route addition that touches `verifyRole`, `verifyWellnessRole`, `requireClinicalRole`, `requireTenantAdmin`, `requireManagerPlus`, or `verifyPatientToken`.

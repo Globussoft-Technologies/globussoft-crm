@@ -1,28 +1,52 @@
 const jwt = require("jsonwebtoken");
 const prisma = require("../lib/prisma");
 
-// JWT_SECRET should ALWAYS be set in production. Fallback retained for dev compat only.
-if (!process.env.JWT_SECRET) {
-  console.error("[FATAL][auth] JWT_SECRET environment variable is NOT set! Falling back to insecure dev secret. " +
-    "Set JWT_SECRET in your .env immediately for any non-development environment.");
-}
-const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
+// JWT_SECRET resolution + the dev-fallback warning are centralized in
+// config/secrets.js (P1.3 — was duplicated across 6 files).
+const { JWT_SECRET } = require("../config/secrets");
+// #914 slice 2: cookie name comes from the same helper that SETS the
+// cookie on auth-success paths (slice 1). Single-source the name so a
+// future rename can't desync read+write sites.
+const { TOKEN_COOKIE } = require("../lib/authCookies");
 
 // #537 (PT-05): RFC 7235 semantics — missing/invalid credentials are 401
 // (not 403). 403 is reserved for "authenticated but not allowed". Also
 // emit the standard WWW-Authenticate response header on every 401 so
 // SDKs / SPAs can auto-trigger their token-refresh flow correctly.
-const WWW_AUTH = 'Bearer realm="api"';
+// #922 — drop the realm="api" diagnostic qualifier; SDKs auto-refresh
+// triggers off the scheme name alone, and the qualifier just gives passive
+// scanners free signal about the auth scheme + naming.
+const WWW_AUTH = "Bearer";
 function unauthorized(res, error) {
   res.set("WWW-Authenticate", WWW_AUTH);
   return res.status(401).json({ error });
 }
 
 const verifyToken = async (req, res, next) => {
+  // #914 slice 2 (revised): header-first, cookie-fallback. Slice 1 began
+  // sending an HttpOnly `auth_token` cookie alongside the response-body JWT
+  // on every auth-success path; this is the READ side. Both paths remain
+  // valid for the migration window so existing header-bearing consumers
+  // (frontend's localStorage today, every e2e spec, every Playwright API
+  // spec, the external API key mirror, SDK consumers) keep working
+  // unchanged. Order: HEADER WINS. The initial slice-2 implementation had
+  // cookie-first but that broke api_tests because Playwright's request
+  // fixture persists cookies across specs in the same context — a spec
+  // that authenticated set a cookie that then overrode the next spec's
+  // explicit `Authorization: Bearer <wellness-admin>` header, picking the
+  // first spec's user for tenant-isolation assertions. Header-first matches
+  // every existing test's intent (the explicit Authorization header is the
+  // load-bearing identity signal) and lets cookies coexist for cookie-only
+  // browser clients in slice 3+.
   const authHeader = req.headers.authorization;
-  if (!authHeader) return unauthorized(res, "Authentication required");
-
-  const token = authHeader.split(" ")[1];
+  let token;
+  if (authHeader) {
+    token = authHeader.split(" ")[1];
+  } else {
+    const cookieToken = req.cookies && req.cookies[TOKEN_COOKIE];
+    if (!cookieToken) return unauthorized(res, "Authentication required");
+    token = cookieToken;
+  }
   try {
     const verified = jwt.verify(token, JWT_SECRET);
 

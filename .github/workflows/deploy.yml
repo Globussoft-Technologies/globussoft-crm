@@ -201,11 +201,14 @@ jobs:
           # Apply schema to the empty CI database. Prisma `db push` is the
           # right call here (no migrations needed for a fresh CI DB).
           npx prisma db push --skip-generate --accept-data-loss
-          # Seed the generic + wellness tenants so the API specs have
-          # the demo creds + tenantId=2 they expect.
+          # Seed the generic + wellness + travel tenants so the API specs
+          # have the demo creds they expect.
           node prisma/seed.js
           if [ -f prisma/seed-wellness.js ]; then
             node prisma/seed-wellness.js
+          fi
+          if [ -f prisma/seed-travel.js ]; then
+            node prisma/seed-travel.js
           fi
           echo "::notice::Database seeded for CI"
 
@@ -300,7 +303,16 @@ jobs:
           #   - public-booking-api.spec.js   (24 tests: regression pin for #208/#218/#219/#279/#283/#291/#297/#378 — public booking + embed widget gate, P1 from regression-coverage-backlog item #14)
           #   - services-api.spec.js         (33 tests: regression pin for #115/#161/#209/#274/#364 — wellness service catalog validation + RBAC + structured-error contract, P2 from regression-coverage-backlog item #13)
           #   - deals_documents.spec.js      (10 tests: routes/deals_documents.js — upload + list + #585 binary-PDF generate-quote contract)
-          # Total: ~1594 API tests run on every push.
+          #   - knowledge-base-api.spec.js   (15 tests: routes/knowledge_base.js public + authed CRUD — orphan-wave 2026-05-17)
+          #   - landing-pages-api.spec.js    (41 tests: routes/landing_pages.js admin CRUD + duplicate + analytics — G-1 orphan-wave 2026-05-17)
+          #   - portal-api.spec.js           (16 tests: routes/portal.js public + auth gates + #238 verify-otp — orphan-wave 2026-05-17)
+          #   - tenant-switch-disabled-api.spec.js (5 tests: #555 lock-per-session policy contract — orphan-wave 2026-05-17)
+          #   - voice-transcription-api.spec.js (19 tests: routes/voice_transcription.js coverage push — orphan-wave 2026-05-17)
+          #   - channels-credentials-api.spec.js (10 tests: #651 SMS/WhatsApp/telephony credential masking + rotation + RBAC — orphan-wave 2026-05-18)
+          #   - wellness-consent-archive-api.spec.js (10 tests: #564 consent captureMethod allowlist + BLOB archive idempotence + RBAC — orphan-wave 2026-05-18)
+          #   - voyagr-lead-capture-api.spec.js (15 tests: routes/voyagr.js + middleware/voyagrAuth.js — cluster F1 voyagr/OJR CMS lead capture, locked 2026-05-23)
+          #   - wellness-patient-timeline-api.spec.js (13 tests: routes/wellness.js patient timeline JSON + CSV — ticks #198/#200)
+          # Total: ~1725 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -336,7 +348,9 @@ jobs:
             tests/wellness-rbac-api.spec.js \
             tests/auth-security-api.spec.js \
             tests/route-contracts-api.spec.js \
+            tests/admin-llm-spend-api.spec.js \
             tests/billing-api.spec.js \
+            tests/billing-export-api.spec.js \
             tests/lead-routing-api.spec.js \
             tests/search-api.spec.js \
             tests/workflows-api.spec.js \
@@ -417,6 +431,38 @@ jobs:
             tests/role-landing-path-api.spec.js \
             tests/widgets-api.spec.js \
             tests/page-catalog-api.spec.js \
+            tests/knowledge-base-api.spec.js \
+            tests/landing-pages-api.spec.js \
+            tests/portal-api.spec.js \
+            tests/tenant-switch-disabled-api.spec.js \
+            tests/voice-transcription-api.spec.js \
+            tests/channels-credentials-api.spec.js \
+            tests/wellness-consent-archive-api.spec.js \
+            tests/travel-diagnostics-api.spec.js \
+            tests/travel-digilocker-stub-api.spec.js \
+            tests/travel-itineraries-api.spec.js \
+            tests/travel-trips-api.spec.js \
+            tests/travel-cost-master-api.spec.js \
+            tests/travel-suppliers-api.spec.js \
+            tests/travel-microsites-api.spec.js \
+            tests/travel-religious-packets-api.spec.js \
+            tests/travel-rfu-profiles-api.spec.js \
+            tests/travel-pricing-api.spec.js \
+            tests/travel-trip-billing-api.spec.js \
+            tests/travel-webcheckin-api.spec.js \
+            tests/travel-csv-io-api.spec.js \
+            tests/travel-dashboard-api.spec.js \
+            tests/travel-reports-api.spec.js \
+            tests/travel-seed-taxonomy-api.spec.js \
+            tests/voyagr-lead-capture-api.spec.js \
+            tests/travel-travelstall-personalised-pdf-api.spec.js \
+            tests/travel-visa-analytics-api.spec.js \
+            tests/travel-visa-applications-api.spec.js \
+            tests/wellness-patient-timeline-api.spec.js \
+            tests/wallet-topup-api.spec.js \
+            tests/pos-sale-finalize-api.spec.js \
+            tests/travel-quote-lines-api.spec.js \
+            tests/travel-idor-cross-tenant-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"
@@ -694,6 +740,20 @@ jobs:
             if [ "${{ github.event.inputs.seed_wellness }}" = "true" ]; then
               echo "=== seed-wellness (operator-triggered) ==="
               node prisma/seed-wellness.js 2>&1 | tail -20
+            fi
+
+            # Travel vertical seed — runs UNCONDITIONALLY on every push to
+            # main because seed-travel.js is fully idempotent (upserts for
+            # Tenant + Users; .catch(() => null) on the other ~22
+            # cost-master / season / markup rows for safe re-runs). Unlike
+            # seed-wellness which generates ~50 patients + ~200 visits and
+            # is heavy, this seed is ~50 lightweight rows total. Without it
+            # the Travel Stall tenant + yasin@travelstall.in never get
+            # created on demo, so every travel-vertical gate spec fails
+            # `expect(token).toBeTruthy()` on `getTravelAdmin`.
+            if [ -f prisma/seed-travel.js ]; then
+              echo "=== seed-travel (always) ==="
+              node prisma/seed-travel.js 2>&1 | tail -20
             fi
 
             echo "=== pm2 restart ==="

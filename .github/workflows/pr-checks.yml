@@ -132,3 +132,64 @@ jobs:
           set -euo pipefail
           npm run lint
           echo "::notice::Frontend ESLint passed (errors=0; warnings allowed on legacy code)"
+
+  # ── SILENT-REVERT AUDIT (#755) ───────────────────────────────────────
+  # Closes #755 — the b78e484 / PR #566 / PR #710 / PR #729 silent-revert
+  # pattern: PRs branched from older commits silently revert any work
+  # landed on main between when the PR was cut and when it merged. Per
+  # CLAUDE.md "PR review against current main, not the PR's base":
+  #
+  #   git diff main..<pr_head> -- <file>  is the load-bearing read
+  #
+  # This job runs that audit automatically on every PR. It does NOT fail
+  # the PR — just emits ::warning lines listing files that have changed
+  # on main since the PR's merge-base AND are also touched by the PR.
+  # The maintainer reviews each flagged file's current-main vs PR-head
+  # diff before merging.
+  #
+  # Long-running branches (staging_crm in particular — see #755) tend to
+  # accumulate this risk silently across many small PRs. The annotations
+  # surface that risk inline on the PR's "Files changed" tab.
+  silent-revert-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Need history to compute merge-base + main diffs.
+          fetch-depth: 0
+      - name: Audit silent-revert risk
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          BASE_SHA=$(git merge-base origin/main HEAD)
+          HEAD_SHA=$(git rev-parse HEAD)
+          MAIN_SHA=$(git rev-parse origin/main)
+          AGE_COMMITS=$(git rev-list --count "$BASE_SHA..origin/main")
+          echo "Merge-base: $BASE_SHA"
+          echo "PR head:    $HEAD_SHA"
+          echo "main HEAD:  $MAIN_SHA"
+          echo "Commits on main since merge-base: $AGE_COMMITS"
+
+          # Files modified on main since the merge-base (excluding renames+deletes)
+          MAIN_DIFF=$(git diff --name-only "$BASE_SHA" "origin/main" | sort -u)
+          # Files this PR touches relative to merge-base
+          PR_DIFF=$(git diff --name-only "$BASE_SHA" HEAD | sort -u)
+          # Overlap = files that exist in both diffs (silent-revert candidates)
+          OVERLAP=$(comm -12 <(echo "$MAIN_DIFF") <(echo "$PR_DIFF") | grep -v '^$' || true)
+
+          if [ -z "$OVERLAP" ]; then
+            echo "::notice::No silent-revert risk: PR's touched files are unchanged on main since the merge-base (age=${AGE_COMMITS} commits)."
+            exit 0
+          fi
+
+          COUNT=$(echo "$OVERLAP" | wc -l)
+          echo "::warning::Silent-revert audit: this PR touches $COUNT file(s) that have changed on main since the merge-base (age=${AGE_COMMITS} commits). Review each against current main before merging — the PR's version may silently revert recent work. See CLAUDE.md 'PR review against current main' standing rule."
+          echo "$OVERLAP" | while IFS= read -r f; do
+            echo "::warning file=$f::Silent-revert candidate: this file changed on main since the merge-base. Verify the PR's version is not reverting recent fixes by running: git diff origin/main..HEAD -- '$f'"
+          done
+
+          # Don't fail the job — surface the risk and let the maintainer judge.
+          # Per #755, the action is "audit, don't block" because most overlaps
+          # are intentional (e.g. two engineers editing different functions in
+          # the same file). The warnings are the load-bearing artifact.

@@ -106,6 +106,81 @@ const helmetMiddleware = helmet({
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
 });
 
+// 1a-strict. #917 slice 1 — additive STRICT Content-Security-Policy in
+// Report-Only mode.
+//
+// The transitional CSP above (helmetMiddleware) ships 'unsafe-inline' on
+// script-src + style-src because the Vite-built SPA emits inline scripts/styles
+// and a small number of legacy inline event handlers haven't been migrated yet.
+// That allowance defeats one of the strongest XSS mitigations the browser
+// offers — a single un-escaped contact name / itinerary note / supplier
+// description becomes immediate account takeover when combined with the JWT
+// in sessionStorage (#914).
+//
+// Slice 1 (this commit): emit a SECOND CSP header — `Content-Security-Policy-
+// Report-Only` — WITHOUT 'unsafe-inline' on script-src + style-src. Browsers
+// log violations to devtools/`report-uri` but do NOT block them. This lets
+// us observe what would break under a strict enforce-mode CSP without
+// shipping a regression. A future slice promotes report-only → enforce-mode
+// after the SPA's inline-script/inline-style surface is migrated to external
+// bundles + nonces.
+//
+// Why a second helmet instance rather than `reportOnly: true` on the existing
+// one: we want BOTH headers on the response — the enforce-mode transitional
+// CSP (already shipping) for actual defense today, AND the strict
+// Report-Only header observing future-state violations. Helmet supports
+// emitting both: helmet 8.x's `contentSecurityPolicy.reportOnly: true`
+// switches the SINGLE CSP header from enforce → report-only mode, but we
+// can layer a second helmet just for the Report-Only header.
+const helmetStrictReportOnlyMiddleware = helmet({
+  // Disable every header this second helmet would otherwise duplicate; we
+  // only want the strict Report-Only CSP.
+  contentSecurityPolicy: {
+    useDefaults: false,
+    reportOnly: true,
+    directives: {
+      defaultSrc: ["'self'"],
+      // No 'unsafe-inline' — that's the whole point of slice 1.
+      // Future slice adds nonce-based allowance.
+      scriptSrc: ["'self'", 'https://cdn.jsdelivr.net'],
+      styleSrc: ["'self'", 'https://fonts.googleapis.com'],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+      connectSrc: [
+        "'self'",
+        'https://api.sendgrid.com',
+        'https://api.razorpay.com',
+        'https://checkout.razorpay.com',
+        'https://api.stripe.com',
+        'https://*.sentry.io',
+        'wss:',
+      ],
+      fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+      objectSrc: ["'none'"],
+      formAction: ["'self'"],
+      // Strict 'none' here (vs 'self' in transitional) — clickjacking defense
+      // tightens once observed-clean.
+      frameAncestors: ["'none'"],
+      baseUri: ["'self'"],
+    },
+  },
+  // Disable all other headers — the transitional helmetMiddleware above
+  // already sets them. Layering a second helmet should only contribute the
+  // strict Report-Only CSP header, nothing else.
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: false,
+  crossOriginResourcePolicy: false,
+  dnsPrefetchControl: false,
+  frameguard: false,
+  hidePoweredBy: false,
+  hsts: false,
+  ieNoOpen: false,
+  noSniff: false,
+  originAgentCluster: false,
+  permittedCrossDomainPolicies: false,
+  referrerPolicy: false,
+  xssFilter: false,
+});
+
 // 1b. Permissions-Policy — helmet 8.x doesn't ship this header, so set it
 // manually. Camera/mic OFF (consent canvas is pointer-events, not getUserMedia;
 // softphone uses Twilio's voice SDK which negotiates separately and we'll
@@ -202,4 +277,10 @@ function stripTenantOverride(req, res, next) {
   next();
 }
 
-module.exports = { helmetMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride };
+module.exports = {
+  helmetMiddleware,
+  helmetStrictReportOnlyMiddleware,
+  permissionsPolicyMiddleware,
+  sanitizeBody,
+  stripTenantOverride,
+};

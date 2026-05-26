@@ -88,15 +88,24 @@ function nextPhone() {
 }
 
 // Wave 11 GG booking-conflict gate: visits with the same (doctorId, UTC-hour)
-// collide with 409. This helper returns a never-collides visitDate by
-// combining a per-test random hour offset across a 720-hour spread (30 days)
-// starting 30+ days from now (always within #170 [now-5y, now+1y] window).
-// Each call returns a different ISO string, so retries don't collide either.
+// collide with 409 DOCTOR_DOUBLE_BOOKED. Iterations:
+//   v1 (pre-#64): Math.random()*720 — probabilistic; birthday-paradox
+//     collisions inevitable across 100+ tests on the same doctor.
+//   v2 (tick #64): monotonic counter — deterministic per-PROCESS but every
+//     Playwright worker starts with _visitDateOffset=0, so 4 workers all
+//     created visit #1 at hourOffset=720 → second-onwards POSTs hit 409.
+//     Surfaced as "DOCTOR_DOUBLE_BOOKED visit #232" on tick #71.
+//   v3 (this — tick #72): PID-bucketed monotonic. Each worker process gets
+//     a unique 200-hour range based on its PID; within the range,
+//     _visitDateOffset advances by 1 hour per call. 40 worker buckets * 200
+//     slots = 8000 unique (worker, hour) combinations, well within the
+//     [now+720h, now+8720h] window (~30d to ~1y, inside the #170 [now-5y,
+//     now+1y] guard).
 let _visitDateOffset = 0;
 function nextVisitDate() {
-  const dayOffset = 30 + _visitDateOffset++;
-  const hourOffset = Math.floor(Math.random() * 720) * 3600 * 1000;
-  return new Date(Date.now() + dayOffset * 86400000 + hourOffset).toISOString();
+  const workerBucket = (process.pid % 40) * 200;
+  const hourOffset = 720 + workerBucket + (_visitDateOffset++ % 200);
+  return new Date(Date.now() + hourOffset * 3600 * 1000).toISOString();
 }
 
 // ── Fixtures ───────────────────────────────────────────────────────
@@ -126,7 +135,15 @@ const userIdCache = {};
 async function login(request, who) {
   if (tokenCache[who]) return { token: tokenCache[who], userId: userIdCache[who] };
   const fixture = FIXTURES[who];
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // 4 attempts with 500/1000/1500ms backoff. Under 8-shard demo load, CloudFlare
+  // occasionally returns 502/520 mid-burst — the previous 2-attempt loop only
+  // retried on network errors (catch), not on 5xx HTTP responses, so a single
+  // CF blip during the describe-block beforeAll would cascade-fail the entire
+  // file's test list (run 26093112312 shard 7 hit this on wellness-clinical-
+  // api:1829 + 13 others). Retrying on 5xx HTTP statuses recovers from short
+  // CF blackouts. 4xx (401/403/429) still aborts immediately since retry with
+  // the same credentials wouldn't change the outcome.
+  for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const response = await request.post(`${BASE_URL}/api/auth/login`, {
         data: fixture,
@@ -139,8 +156,14 @@ async function login(request, who) {
         userIdCache[who] = data.user && data.user.id;
         return { token: tokenCache[who], userId: userIdCache[who] };
       }
+      const status = response.status();
+      // 5xx → CF blip / origin overload, worth retrying.
+      // 4xx → credentials or rate-limit issue, retry won't help.
+      if (status < 500 || attempt === 3) break;
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
     } catch (e) {
-      if (attempt === 0) continue;
+      if (attempt === 3) break;
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
     }
   }
   return { token: null, userId: null };
@@ -2818,5 +2841,407 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
     // No raw Prisma leakage in the user-facing error string.
     expect(body.error).not.toMatch(/P2002|prisma|UNIQUE constraint/i);
     expect(body.error).not.toMatch(/normalizedPhone/);
+  });
+});
+
+// ── #743 — Visit photos: serving + content-type contract ─────────────
+//
+// Pre-fix the upload route stored URLs as `/uploads/wellness/visits/<id>/<f>`
+// and relied on `app.use("/uploads", express.static(...))` for serving.
+// On the deployed box, Nginx / Cloudflare routed `/uploads/*` to the SPA
+// catch-all so every <img src> returned 200 + text/html (the SPA index
+// shell), thumbnails were broken on /wellness/patients/<id> → Photos tab.
+//
+// The fix: store + serve under `/api/wellness/visits/<id>/photos/<file>`
+// (proxied to the backend by the existing Nginx `location /api/` block),
+// and stamp the explicit image Content-Type. These tests pin:
+//   1. The stored URL shape carries the /api/ prefix.
+//   2. The GET serves with `Content-Type: image/png` (NOT text/html).
+//   3. Non-image uploads are rejected with 415 UNSUPPORTED_MEDIA.
+//   4. Path-traversal / cross-tenant visit IDs return 4xx.
+test.describe('#743 visit photos — content-type + URL shape', () => {
+  let visitForPhotos = null;
+
+  test.beforeAll(async ({ request }) => {
+    // Spin up a fresh patient + visit just for this describe block.
+    // Visit must be in a state where photo upload is allowed; the route
+    // doesn't gate on status, so any status works.
+    const p = await createPatient(request, { suffix: 'photo-743' });
+    const v = await authPost(request, '/api/wellness/visits', {
+      patientId: p.id,
+      serviceId: seededServiceId,
+      doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
+      status: 'booked',
+      notes: 'Photo route — content-type contract test',
+    });
+    expect(v.status(), `visit-create: ${await v.text()}`).toBe(201);
+    visitForPhotos = await v.json();
+  });
+
+  test('#743a uploaded photo URL uses /api/wellness/ prefix (not /uploads/)', async ({ request }) => {
+    // 1x1 transparent PNG; smallest valid bytes.
+    const pngHex = '89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4890000000D4944415478DA63F8FFFFFF3F0005FE02FED2D9A2240000000049454E44AE426082';
+    const buffer = Buffer.from(pngHex, 'hex');
+    const { token } = await login(request, 'admin');
+    const upload = await request.post(`${BASE_URL}/api/wellness/visits/${visitForPhotos.id}/photos`, {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        kind: 'before',
+        photos: { name: 'test.png', mimeType: 'image/png', buffer },
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(upload.status(), await upload.text()).toBe(201);
+    const result = await upload.json();
+    expect(Array.isArray(result.urls)).toBe(true);
+    expect(result.urls.length).toBeGreaterThan(0);
+    const last = result.urls[result.urls.length - 1];
+    // Pin the new URL shape — `/api/wellness/visits/<id>/photos/<filename>`.
+    expect(last).toMatch(/^\/api\/wellness\/visits\/\d+\/photos\/.+\.png$/i);
+    // And explicitly NOT the legacy /uploads/ shape that fell through to SPA.
+    expect(last).not.toMatch(/^\/uploads\//);
+
+    // 2. GET the served URL and check Content-Type.
+    const served = await request.get(`${BASE_URL}${last}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(served.status()).toBe(200);
+    const ct = served.headers()['content-type'] || '';
+    // The whole point of #743 — must be image/png (or generic image/*),
+    // never text/html (the SPA fallback symptom).
+    expect(ct).toMatch(/^image\//);
+    expect(ct).not.toMatch(/text\/html/);
+  });
+
+  test('#743b non-image upload rejected with 415 UNSUPPORTED_MEDIA', async ({ request }) => {
+    const { token } = await login(request, 'admin');
+    const upload = await request.post(`${BASE_URL}/api/wellness/visits/${visitForPhotos.id}/photos`, {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        kind: 'before',
+        photos: { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') },
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(upload.status()).toBe(415);
+    const body = await upload.json();
+    expect(body.code).toBe('UNSUPPORTED_MEDIA');
+  });
+
+  test('#743c GET /visits/:id/photos/:filename with path-traversal returns 400', async ({ request }) => {
+    const { token } = await login(request, 'admin');
+    // Express normalises `..` in path segments before route matching, so
+    // the cleanest path-traversal repro is via the encoded form. We get
+    // either 400 (filename validator) or 404 (file doesn't exist) — both
+    // are correct refusals; the wrong answer is a 200 with a non-image
+    // file's contents.
+    const r = await request.get(`${BASE_URL}/api/wellness/visits/${visitForPhotos.id}/photos/..%2Fpasswd`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([400, 404]).toContain(r.status());
+    const ct = r.headers()['content-type'] || '';
+    expect(ct).not.toMatch(/text\/html/);
+  });
+});
+
+// ── #745/#746 — Idempotency guard on duplicate treatment-plan + visit ─
+//
+// Pre-fix: a double-clicked Save or a retried seed-script loop generated
+// hundreds of identical rows (patient 433 had 183 treatment plans + 111
+// visits on demo). Fix is server-side dedupe: reject an exact-match
+// payload created within the last few minutes with 409 IDEMPOTENT_DUPLICATE.
+test.describe('#745/#746 idempotency on rapid duplicate writes', () => {
+  let patientForDupes = null;
+  test.beforeAll(async ({ request }) => {
+    const p = await createPatient(request, { suffix: 'dupe-guard' });
+    patientForDupes = p;
+  });
+
+  test('#745 POST /treatment-plans rejects identical follow-up within 5 min', async ({ request }) => {
+    const planBody = {
+      name: `E2E ${RUN_TAG} dupe-plan`,
+      totalSessions: 6,
+      totalPrice: 12000,
+      patientId: patientForDupes.id,
+      serviceId: seededServiceId,
+    };
+    const first = await authPost(request, '/api/wellness/treatment-plans', planBody);
+    expect(first.status(), await first.text()).toBe(201);
+    const firstBody = await first.json();
+    expect(firstBody.id).toBeTruthy();
+
+    // Second identical POST within the 5-min window → 409.
+    const second = await authPost(request, '/api/wellness/treatment-plans', planBody);
+    expect(second.status()).toBe(409);
+    const body = await second.json();
+    expect(body.code).toBe('IDEMPOTENT_DUPLICATE');
+    expect(body.existingId).toBe(firstBody.id);
+  });
+
+  test('#746 POST /visits rejects identical follow-up within 60s', async ({ request }) => {
+    const visitBody = {
+      patientId: patientForDupes.id,
+      serviceId: seededServiceId,
+      doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
+      status: 'booked',
+      notes: 'dupe-guard',
+    };
+    const first = await authPost(request, '/api/wellness/visits', visitBody);
+    expect(first.status(), await first.text()).toBe(201);
+    const firstBody = await first.json();
+
+    // Same payload, same visitDate → caught by either the existing
+    // booking-conflict gate (409 SLOT_CONFLICT) OR the new
+    // IDEMPOTENT_DUPLICATE guard. Both 409s; we accept either since
+    // the slot-conflict gate was already in place pre-#746 and only
+    // catches the doctor/resource/location-axis duplicate. The new
+    // guard adds patient-axis coverage.
+    const second = await authPost(request, '/api/wellness/visits', visitBody);
+    expect(second.status()).toBe(409);
+    const body = await second.json();
+    // Canonical conflict codes from backend/lib/bookingAvailability.js — agent F1's
+    // initial test used short names (`DOCTOR_BOOKED`) but the route emits the longer
+    // `DOCTOR_DOUBLE_BOOKED` / `RESOURCE_DOUBLE_BOOKED` codes.
+    expect(['IDEMPOTENT_DUPLICATE', 'DOCTOR_DOUBLE_BOOKED', 'RESOURCE_DOUBLE_BOOKED', 'HOLIDAY_BLOCKED', 'OUTSIDE_WORKING_HOURS']).toContain(body.code);
+    if (body.code === 'IDEMPOTENT_DUPLICATE') {
+      expect(body.existingId).toBe(firstBody.id);
+    }
+  });
+});
+
+// ── #749 — Loyalty auto-credit defense-in-depth ──────────────────────
+//
+// The visit-create route already 404s on a soft-deleted patient (#742).
+// This test pins the contract that a manual /loyalty/:patientId/credit
+// against a non-existent patient ID returns 404 — the existing guard at
+// line ~5905 — AND that the response shape carries error="Patient not
+// found" so the QA matrix in #749 stays stable. The defense-in-depth
+// inside maybeAutoCreditLoyalty itself is internal; testing it from
+// the route surface only would require simulating a write that bypasses
+// the visit-create guard. The 404 contract on the manual-credit surface
+// is what an integration test can pin.
+test.describe('#749 loyalty credit rejects invalid patient', () => {
+  test('POST /loyalty/<nonexistent>/credit returns 404', async ({ request }) => {
+    // Pick a patient ID that definitely doesn't exist on demo. 99999999
+    // is well above current seed IDs (low thousands).
+    const bogusId = 99999999;
+    const r = await authPost(request, `/api/wellness/loyalty/${bogusId}/credit`, {
+      points: 50,
+      reason: 'E2E #749 nonexistent patient',
+    });
+    expect(r.status()).toBe(404);
+    const body = await r.json();
+    expect(body.error).toMatch(/not found/i);
+  });
+});
+
+// ── #733/#736/#737 — RBAC normalization cluster ──────────────────────
+//
+// #733 GET /recommendations was initially fixed via verifyWellnessRole gate
+// (F1 wave 2026-05-17) but reverted same-session — the orchestrator-api spec
+// explicitly pinned that this route MUST stay reachable by generic admin (for
+// the cross-tenant probe at orchestrator-api.spec.js:707). Defense-in-depth
+// is via tenantWhere, not role-gating. The QA doc was the drift; #733 closed
+// as docs-only correction.
+test.describe('#733 GET /recommendations — tenant-scoped defense-in-depth (not role-gated)', () => {
+  test('telecaller wellnessRole → 200 (cross-tenant safety is via tenantWhere, not role-gate)', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/recommendations', 'telecaller');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('ADMIN gets 200', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/recommendations', 'admin');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body)).toBe(true);
+  });
+});
+
+test.describe('#736 hand-rolled 403 strings normalized', () => {
+  test('PUT /branding/color from non-ADMIN MANAGER → 403 with neutral copy + TENANT_ADMIN_REQUIRED', async ({ request }) => {
+    const r = await authPut(request, '/api/wellness/branding/color', { brandColor: '#265855' }, 'manager');
+    expect(r.status()).toBe(403);
+    const body = await r.json();
+    expect(body.code).toBe('TENANT_ADMIN_REQUIRED');
+    // Neutral copy — no taxonomy leakage. Pre-fix: "Tenant ADMIN required".
+    expect(body.error).not.toMatch(/Tenant ADMIN required/i);
+    expect(body.error).toMatch(/permission/i);
+  });
+
+  test('POST /loyalty/:id/credit from USER role → 403 with neutral copy + MANAGER_ROLE_REQUIRED', async ({ request }) => {
+    // Find a real patient first so we exercise requireManagerPlus and
+    // NOT the body-validation 400.
+    const list = await authGet(request, '/api/wellness/patients?limit=1', 'admin');
+    const listBody = await list.json();
+    const patientId = listBody.patients && listBody.patients[0] && listBody.patients[0].id;
+    if (!patientId) test.skip(true, 'no patient seeded');
+    // telecaller fixture has RBAC role USER + wellnessRole=telecaller —
+    // not manager/admin, so requireManagerPlus 403s.
+    const r = await authPost(request, `/api/wellness/loyalty/${patientId}/credit`, {
+      points: 10,
+      reason: 'E2E RBAC normalize test',
+    }, 'telecaller');
+    expect(r.status()).toBe(403);
+    const body = await r.json();
+    expect(body.code).toBe('MANAGER_ROLE_REQUIRED');
+    // Neutral copy — no taxonomy leakage. Pre-fix: "Manager or admin role required".
+    expect(body.error).not.toMatch(/Manager or admin role required/i);
+    expect(body.error).toMatch(/permission/i);
+  });
+
+  test('POST /prescriptions from non-clinical telecaller → 403 with neutral copy + CLINICAL_ROLE_REQUIRED', async ({ request }) => {
+    const r = await authPost(request, '/api/wellness/prescriptions', {
+      visitId: 1,
+      patientId: 1,
+      drugs: [{ name: 'aspirin' }],
+    }, 'telecaller');
+    expect(r.status()).toBe(403);
+    const body = await r.json();
+    expect(body.code).toBe('CLINICAL_ROLE_REQUIRED');
+    // Neutral copy — no taxonomy leakage.
+    expect(body.error).not.toMatch(/Only clinical staff/i);
+    expect(body.error).toMatch(/permission/i);
+  });
+});
+
+test.describe('#737 limit param cap (DoS-resistant)', () => {
+  test('GET /patients?limit=999999 clamped to 200', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/patients?limit=999999');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body.patients)).toBe(true);
+    expect(body.patients.length).toBeLessThanOrEqual(200);
+  });
+
+  test('GET /patients?limit=1&limit=999999 (polluted param) clamped to 200', async ({ request }) => {
+    // Polluted query string — Express puts both in req.query.limit as an
+    // array; capLimit picks the last entry and clamps it.
+    const r = await authGet(request, '/api/wellness/patients?limit=1&limit=999999');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.patients.length).toBeLessThanOrEqual(200);
+  });
+
+  test('GET /visits?limit=99999 clamped to 500 (route-specific cap)', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/visits?limit=99999');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBeLessThanOrEqual(500);
+  });
+
+  test('GET /patients?limit=notanumber falls back to default 50 (not NaN take)', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/patients?limit=notanumber');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    // Default is 50. Some tenants may have <50 patients seeded so we
+    // only assert the upper bound — non-numeric MUST NOT translate to
+    // an unbounded query.
+    expect(body.patients.length).toBeLessThanOrEqual(50);
+  });
+});
+
+// ── #747/#748 — Production data hygiene: teardown filter + archive guard
+//
+// Pre-fix the Memberships → Select a plan dropdown surfaced
+// `_teardown_csv_<ts> Good Plan` rows alongside real plans. A staff
+// user could click Confirm purchase against one and post a real charge
+// against an internal test fixture (#748). Two paired fixes:
+//   1. GET /membership-plans + /services + /locations filter out names
+//      starting with `_teardown_` / `_test_` from default lists.
+//   2. POST /patients/:id/memberships rejects a plan whose name still
+//      matches the teardown taxonomy even if isActive=true slipped
+//      through.
+async function authDelete(request, path, who = 'admin') {
+  const headers = await authHdr(request, who);
+  return request.delete(`${BASE_URL}${path}`, { headers, timeout: REQUEST_TIMEOUT });
+}
+
+test.describe('#747 teardown rows hidden from list endpoints', () => {
+  test('GET /membership-plans excludes _teardown_*-named rows', async ({ request }) => {
+    // Create a teardown-named active plan via the admin POST path
+    // (planet-of-the-apes scenario: the spec authoring environment is
+    // tagged the same as a teardown row).
+    const teardownName = `_teardown_csv_${Date.now()} HygieneTest Plan`;
+    const created = await authPost(request, '/api/wellness/membership-plans', {
+      name: teardownName,
+      durationDays: 90,
+      price: 5000,
+      currency: 'INR',
+      entitlements: JSON.stringify([{ serviceId: seededServiceId, quantity: 5 }]),
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const planId = (await created.json()).id;
+
+    // 1. Default list must NOT include it.
+    const list = await authGet(request, '/api/wellness/membership-plans');
+    expect(list.status()).toBe(200);
+    const visible = await list.json();
+    expect(visible.find((p) => p.id === planId), 'teardown plan must be hidden from default list').toBeUndefined();
+
+    // 2. With ?includeTeardown=1 (admin override), it MUST be visible.
+    const adminList = await authGet(request, '/api/wellness/membership-plans?includeTeardown=1');
+    expect(adminList.status()).toBe(200);
+    const adminVisible = await adminList.json();
+    expect(adminVisible.find((p) => p.id === planId), 'admin override must surface teardown plan').toBeTruthy();
+
+    // Cleanup — soft-delete the plan (no DELETE endpoint flips isActive).
+    await authDelete(request, `/api/wellness/membership-plans/${planId}`).catch(() => {});
+  });
+});
+
+test.describe('#748 archive guard on membership purchase', () => {
+  test('POST /patients/:id/memberships rejects teardown-named plan even when active', async ({ request }) => {
+    // Same setup as #747 — create a teardown plan that's flagged active.
+    const teardownName = `_teardown_csv_${Date.now()} BuyGuard Plan`;
+    const created = await authPost(request, '/api/wellness/membership-plans', {
+      name: teardownName,
+      durationDays: 90,
+      price: 5000,
+      currency: 'INR',
+      entitlements: JSON.stringify([{ serviceId: seededServiceId, quantity: 5 }]),
+    });
+    expect(created.status()).toBe(201);
+    const plan = await created.json();
+
+    // Spin up a real patient and try to buy the teardown plan.
+    const p = await createPatient(request, { suffix: 'buy-guard' });
+    const r = await authPost(request, `/api/wellness/patients/${p.id}/memberships`, {
+      planId: plan.id,
+    });
+    expect(r.status()).toBe(410);
+    const body = await r.json();
+    expect(body.code).toBe('PLAN_ARCHIVED_OR_TEST');
+
+    // Cleanup
+    await authDelete(request, `/api/wellness/membership-plans/${plan.id}`).catch(() => {});
+  });
+
+  test('POST /patients/:id/memberships rejects a soft-deleted (isActive=false) plan with PLAN_INACTIVE', async ({ request }) => {
+    // Pre-existing guard, re-pinned alongside the #748 fix for symmetry.
+    const created = await authPost(request, '/api/wellness/membership-plans', {
+      name: `${RUN_TAG} #748 InactivePlan`,
+      durationDays: 30,
+      price: 1000,
+      currency: 'INR',
+      entitlements: JSON.stringify([{ serviceId: seededServiceId, quantity: 1 }]),
+    });
+    expect(created.status()).toBe(201);
+    const plan = await created.json();
+    // Soft-delete to flip isActive=false.
+    await authDelete(request, `/api/wellness/membership-plans/${plan.id}`);
+
+    const p = await createPatient(request, { suffix: 'inactive-buy' });
+    const r = await authPost(request, `/api/wellness/patients/${p.id}/memberships`, {
+      planId: plan.id,
+    });
+    expect(r.status()).toBe(409);
+    expect((await r.json()).code).toBe('PLAN_INACTIVE');
   });
 });

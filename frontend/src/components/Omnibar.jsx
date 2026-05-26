@@ -22,8 +22,17 @@ export default function Omnibar() {
       if (e.key === 'Escape') setIsOpen(false);
     };
 
+    // #851 — let the Layout header's Search button open the Omnibar without
+    // needing to lift state into a context. Custom event keeps Omnibar
+    // self-contained while still being externally openable.
+    const handleExternalOpen = () => setIsOpen(true);
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('omnibar:open', handleExternalOpen);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('omnibar:open', handleExternalOpen);
+    };
   }, []);
 
   useEffect(() => {

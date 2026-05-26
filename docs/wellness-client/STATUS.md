@@ -1,5 +1,9 @@
 # Enhanced Wellness — Build Status
 
+> ⚠️ **SNAPSHOT — superseded.** This document froze at **v3.4.9 (2026-05-04)**. The wellness vertical has shipped ~14 releases since (current: **v3.8.3**) — POS / Cash Register, Attendance & Leave, Memberships, Wallet / Cashback / GiftCard / Coupon, WhatsApp 2-way threads, inventory backbone, booking-widget completion, and more. **The model counts, endpoint lists, "5 tabs" / coverage-baseline figures, and feature surface below reflect v3.4.9 and are NOT current.**
+>
+> For current state: [CHANGELOG.md](../../CHANGELOG.md) (per-release narrative) · [README.md](../../README.md) "At a glance" (live counts) · [TODOS.md](../../TODOS.md) (open items). Treat everything below as a 2026-05-04 historical record.
+
 **Companion to:** [PRD.md](PRD.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [EXTERNAL_API.md](EXTERNAL_API.md), [SANDBOX.md](SANDBOX.md)
 **Last updated:** 2026-05-04 (v3.4.9 tagged — multi-session test-infra + compliance arc since v3.3.0; the wellness vertical's product surface still aligns with v3.2.5 feature parity. The v3.4.x arc shipped wellness-relevant compliance + observability gains: T2.2 PHI read-audit on 6 staff GET handlers (v3.4.8), patient self-DSAR `/api/wellness/portal/export` for DPDP §15 / GDPR Art. 15 (v3.4.9), schema-relation hygiene complete with `tenant Tenant @relation` on 100% of multi-tenant models (#413, drift counter 49 → 0 across 4 batches), wellness.js split into 3 dedicated specs (G-17/G-18/G-19, ~146 tests). Per-push gate is now ~3,629 tests on every push. See [TODOS.md](../../TODOS.md) for the architect-priority sequencing + the long-tail open items.)
 **Live at:** https://crm.globusdemos.com

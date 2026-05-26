@@ -68,6 +68,10 @@ const { test, expect } = require('@playwright/test');
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const API = `${BASE_URL}/api`;
 const REQUEST_TIMEOUT = 60000;
+// Demo (e2e-full target) tenant-aggregate revenue numbers are polluted by
+// concurrent deal-creation across 7 other shards. Skip "lost deal contributes
+// to NONE of the open-deal metrics" on demo — runs in per-push gate.
+const IS_LOCAL_STACK = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(BASE_URL);
 
 const RUN_TAG = `E2E_FLOW_FORECAST_${Date.now()}`;
 
@@ -396,6 +400,7 @@ test.describe('Forecast Snapshot Engine — pipeline aggregates', () => {
   });
 
   test('lost deal contributes to NONE of the open-deal metrics', async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, 'tenant-aggregate equality is polluted by 8-shard concurrent deal creation on demo — per-push gate is deterministic');
     const before = await runSnapshot(request, tokens.admin);
     const beforeBody = (await before.json()).total;
 

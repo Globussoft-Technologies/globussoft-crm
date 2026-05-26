@@ -15,6 +15,33 @@
     <title>Globussoft CRM</title>
   </head>
   <body>
+    <!-- #868 (BUG-T19): apply theme BEFORE React mounts to avoid a white
+         flash on /login, /forgot-password, /reset-password (pre-auth routes
+         where App.jsx's theme useEffect has not yet run). Reads
+         localStorage.theme ("light" | "dark" | "system" | null); falls back
+         to prefers-color-scheme. Sets data-theme on <html> so the CSS
+         variables in index.css resolve correctly on the very first paint.
+         Mirrors the canonical FOUC-prevention pattern used by Vercel/
+         Netlify-style apps. The existing React effect in App.jsx still runs
+         post-mount and stays the source of truth for runtime theme changes;
+         this script only seeds the initial value. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('theme');
+          var effective = saved;
+          if (saved === 'system' || !saved) {
+            effective = window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+          }
+          document.documentElement.setAttribute('data-theme', effective);
+        } catch (e) {
+          /* localStorage blocked (private mode, restrictive CSP, etc.) —
+             default to no attr, which renders as light per index.css. */
+        }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

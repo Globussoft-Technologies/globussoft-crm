@@ -1,10 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { Plus, Trash2, Zap, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { io } from 'socket.io-client';
 import DealModal from '../components/DealModal';
+import { AuthContext } from '../App';
+
+// #897 (PRD_TRAVEL_PIPELINE_KANBAN) — Travel-vertical sub-brand filter.
+// 4 sub-brands per the multi-tenant travel architecture.
+const TRAVEL_SUB_BRANDS = [
+  { value: '', label: 'All sub-brands' },
+  { value: 'tmc', label: 'TMC (School trips)' },
+  { value: 'rfu', label: 'RFU (Umrah)' },
+  { value: 'travelstall', label: 'Travel Stall (Family)' },
+  { value: 'visasure', label: 'Visa Sure' },
+];
 
 const defaultStages = [
   { id: 'lead', title: 'New Lead', color: 'var(--accent-color)' },
@@ -15,6 +26,8 @@ const defaultStages = [
 
 const Pipeline = () => {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const isTravelTenant = user?.tenant?.vertical === 'travel';
   const [deals, setDeals] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [stages, setStages] = useState(defaultStages);
@@ -23,6 +36,10 @@ const Pipeline = () => {
   const [newDeal, setNewDeal] = useState({ title: '', company: '', contactName: '', amount: '', probability: '', stage: 'lead' });
   const [aiScoreModal, setAiScoreModal] = useState(null);
   const [selectedDeal, setSelectedDeal] = useState(null);
+  // #897 (PRD_TRAVEL_PIPELINE_KANBAN FR-5) — sub-brand filter for
+  // Travel-vertical tenants. Empty string = no filter (all sub-brands).
+  // Generic + wellness tenants don't see the dropdown; filter stays ''.
+  const [selectedSubBrand, setSelectedSubBrand] = useState('');
 
   const fetchAiScore = async (e, dealId) => {
     e.stopPropagation();
@@ -201,9 +218,34 @@ const Pipeline = () => {
           <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Sales Pipeline <span style={{fontSize: '0.8rem', color: 'var(--success-color)', marginLeft: '10px', padding: '2px 8px', borderRadius: '12px', border: '1px solid var(--success-color)', background: 'rgba(16, 185, 129, 0.1)'}}>Live Sync Active</span></h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Drag and drop deals to update stages in real-time across all users.</p>
         </div>
-        <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Plus size={18} /> Add Deal
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {/* #897 (PRD_TRAVEL_PIPELINE_KANBAN FR-5) — sub-brand filter
+              only renders for Travel-vertical tenants. Generic + wellness
+              tenants see no dropdown (subBrand isn't in their world). */}
+          {isTravelTenant && (
+            <select
+              value={selectedSubBrand}
+              onChange={(e) => setSelectedSubBrand(e.target.value)}
+              aria-label="Filter by sub-brand"
+              style={{
+                padding: '0.5rem 0.75rem',
+                borderRadius: '8px',
+                background: 'var(--input-bg)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)',
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+              }}
+            >
+              {TRAVEL_SUB_BRANDS.map((sb) => (
+                <option key={sb.value || 'all'} value={sb.value}>{sb.label}</option>
+              ))}
+            </select>
+          )}
+          <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Plus size={18} /> Add Deal
+          </button>
+        </div>
       </header>
 
       {loading ? (
@@ -211,14 +253,22 @@ const Pipeline = () => {
       ) : (
         <div style={{ display: 'flex', gap: '1.5rem', flex: 1, overflowX: 'auto', paddingBottom: '1rem' }}>
           {stages.map(stage => {
-            const stageDeals = deals.filter(d => d.stage === stage.id);
+            // #897 — filter cards by stage AND (Travel only) by sub-brand
+            const stageDeals = deals.filter(d =>
+              d.stage === stage.id &&
+              (!selectedSubBrand || d.subBrand === selectedSubBrand)
+            );
             const totalValue = stageDeals.reduce((sum, d) => sum + (d.amount || 0), 0);
 
             return (
-              <div 
-                key={stage.id} 
-                className="glass" 
-                style={{ width: '320px', flexShrink: 0, display: 'flex', flexDirection: 'column' }}
+              <div
+                key={stage.id}
+                className="glass"
+                // #877 — explicit --column-bg override (darker than --surface-color
+                // used by inner .card deal tiles) so columns visually separate
+                // from cards in both dark and light themes. Token defined in
+                // index.css across all 3 theme blocks.
+                style={{ width: '320px', flexShrink: 0, display: 'flex', flexDirection: 'column', background: 'var(--column-bg, var(--glass-bg))' }}
                 onDrop={(e) => handleDrop(e, stage.id)}
                 onDragOver={handleDragOver}
               >

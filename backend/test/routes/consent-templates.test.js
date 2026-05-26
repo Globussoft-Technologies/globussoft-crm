@@ -52,7 +52,10 @@ prisma.auditLog = {
   create: vi.fn().mockResolvedValue({ id: 1 }),
   findFirst: vi.fn().mockResolvedValue(null),
 };
-prisma.patient = prisma.patient || {};
+// #742: POST /consents now guards on patient existence — `prisma.patient.findFirst`
+// runs before the signature check, so every POST /consents test (incl. the 400
+// branches) needs this stubbed or the guard throws "not a function" → 500.
+prisma.patient = { ...(prisma.patient || {}), findFirst: vi.fn() };
 prisma.visit = prisma.visit || {};
 prisma.prescription = prisma.prescription || {};
 prisma.service = prisma.service || {};
@@ -95,6 +98,10 @@ beforeEach(() => {
   prisma.consentTemplate.delete.mockReset();
   prisma.consentForm.create.mockReset?.();
   prisma.auditLog.create?.mockReset?.();
+  // #742: default the patient-existence guard to "patient found" so the
+  // POST /consents snapshot + 400-branch tests reach the route logic.
+  prisma.patient.findFirst.mockReset();
+  prisma.patient.findFirst.mockResolvedValue({ id: 1 });
 });
 
 describe('GET /api/wellness/consent-templates', () => {

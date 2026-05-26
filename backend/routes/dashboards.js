@@ -28,7 +28,7 @@ const findTenantDashboard = async (id, tenantId) => {
 // GET / — list dashboards for current user (their own + tenant default)
 router.get('/', async (req, res) => {
   try {
-    const { tenantId, id: userId } = req.user;
+    const { tenantId, userId } = req.user;
     const dashboards = await prisma.dashboard.findMany({
       where: {
         tenantId,

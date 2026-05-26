@@ -308,8 +308,10 @@ describe('<PointOfSale /> — open-shift state', () => {
     await addLine({ refId: 100, name: 'Botox', quantity: 1, unitPrice: 500 });
     await waitFor(() => expect(screen.getByText('Botox')).toBeInTheDocument());
 
-    // The trash button has an aria-label="Remove line".
-    fireEvent.click(screen.getByRole('button', { name: /Remove line/i }));
+    // Per source (PointOfSale.jsx:1439) the trash button's aria-label is
+    // `Remove ${l.name}` — e.g. "Remove Botox" — not the generic "Remove
+    // line" the original test assumed. Match the dynamic shape.
+    fireEvent.click(screen.getByRole('button', { name: /^Remove Botox/i }));
 
     await waitFor(() => expect(screen.queryByText('Botox')).not.toBeInTheDocument());
     expect(screen.getByText(/No lines yet/i)).toBeInTheDocument();
@@ -426,6 +428,170 @@ describe('<PointOfSale /> — open-shift state', () => {
     });
     const call = fetchApiMock.mock.calls.find(
       ([url, opts]) => /\/close$/.test(url) && opts?.method === 'POST',
+    );
+    expect(call).toBeUndefined();
+  });
+});
+
+// ── #789 / WAL-002 — Wallet + Gift Card payment-method surface ────────────
+//
+// Acceptance criteria: Wallet and Gift Card visible as selectable payment
+// methods at POS; selecting Wallet surfaces the patient's wallet balance;
+// selecting Gift Card surfaces a redeem code-input that calls
+// /api/wellness/giftcards/redeem.
+describe('<PointOfSale /> — wallet + gift card payment methods (#789)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    notifyInfo.mockReset();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/pos/registers?isActive=true') return Promise.resolve(REGISTERS);
+      if (url === '/api/pos/shifts/current') return Promise.resolve(OPEN_SHIFT);
+      if (url === '/api/wellness/patients/42/wallet') {
+        return Promise.resolve({
+          patient: { id: 42, name: 'Asha Iyer' },
+          wallet: { id: 9, balance: 750 },
+          transactions: [],
+        });
+      }
+      if (opts?.method === 'POST' && url === '/api/wellness/giftcards/redeem') {
+        return Promise.resolve({
+          giftCard: { id: 5, amount: 500, status: 'redeemed' },
+          transaction: { id: 99 },
+        });
+      }
+      return Promise.resolve([]);
+    });
+  });
+
+  it('payment-method dropdown lists Wallet + Gift Card as human-readable options', async () => {
+    renderPos();
+    await waitFor(() => expect(screen.getByText(/Shift open/i)).toBeInTheDocument());
+
+    const pmSelect = screen.getByLabelText(/Payment method/i);
+    const options = within(pmSelect).getAllByRole('option').map((o) => o.textContent);
+    // Friendly labels (not raw enum codes).
+    expect(options).toEqual(
+      expect.arrayContaining(['Cash', 'Card', 'UPI', 'Wallet', 'Gift Card', 'Split / combined']),
+    );
+    // Value attribute still pins backend enum.
+    const walletOpt = within(pmSelect).getByRole('option', { name: /^Wallet$/ });
+    expect(walletOpt.getAttribute('value')).toBe('WALLET');
+    const giftOpt = within(pmSelect).getByRole('option', { name: /^Gift Card$/ });
+    expect(giftOpt.getAttribute('value')).toBe('GIFTCARD');
+  });
+
+  it('selecting Wallet with a Patient ID fetches + displays the wallet balance', async () => {
+    renderPos();
+    await waitFor(() => expect(screen.getByText(/Shift open/i)).toBeInTheDocument());
+
+    // Set patient id 42 in the Customer card.
+    fireEvent.change(controlForLabel(/Patient ID/i), { target: { value: '42' } });
+    // Switch the payment method to WALLET.
+    fireEvent.change(screen.getByLabelText(/Payment method/i), { target: { value: 'WALLET' } });
+
+    // Hint region + balance digits appear.
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /Wallet balance/i })).toBeInTheDocument();
+    });
+    // GET /api/wellness/patients/42/wallet was called.
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url]) => url === '/api/wellness/patients/42/wallet',
+      );
+      expect(call).toBeDefined();
+    });
+    // Balance digit ("750") shown — currency symbol depends on ICU build so
+    // we only pin the digits.
+    await waitFor(() => {
+      const balanceEl = screen.getByTestId('wallet-balance');
+      expect(balanceEl.textContent).toMatch(/750/);
+    });
+  });
+
+  it('selecting Wallet without a Patient ID surfaces a hint instead of fetching', async () => {
+    renderPos();
+    await waitFor(() => expect(screen.getByText(/Shift open/i)).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    // Switch to WALLET with no patientId in the Customer card.
+    fireEvent.change(screen.getByLabelText(/Payment method/i), { target: { value: 'WALLET' } });
+
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /Wallet balance/i })).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Enter a Patient ID/i)).toBeInTheDocument();
+    // No fetch attempted.
+    const walletCall = fetchApiMock.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/wallet'),
+    );
+    expect(walletCall).toBeUndefined();
+  });
+
+  it('selecting Gift Card shows a redeem form; Redeem fires POST /api/wellness/giftcards/redeem and auto-switches to Wallet', async () => {
+    renderPos();
+    await waitFor(() => expect(screen.getByText(/Shift open/i)).toBeInTheDocument());
+
+    // Set patient id 42 + switch to GIFTCARD.
+    fireEvent.change(controlForLabel(/Patient ID/i), { target: { value: '42' } });
+    fireEvent.change(screen.getByLabelText(/Payment method/i), { target: { value: 'GIFTCARD' } });
+
+    // Redeem mini-form rendered.
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /Gift card redemption/i })).toBeInTheDocument();
+    });
+    const codeInput = screen.getByLabelText(/^Gift card code$/i);
+    expect(codeInput).toBeInTheDocument();
+
+    // Enter a code + click Redeem.
+    fireEvent.change(codeInput, { target: { value: 'GIFT-AAAA-1111' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Redeem$/i }));
+
+    // POST sent with { code, patientId } shape.
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          url === '/api/wellness/giftcards/redeem' && opts?.method === 'POST',
+      );
+      expect(call).toBeDefined();
+      const body = JSON.parse(call[1].body);
+      expect(body.code).toBe('GIFT-AAAA-1111');
+      expect(body.patientId).toBe(42);
+    });
+    // Success toast fired.
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/redeemed/i));
+    });
+    // Payment method auto-switched to WALLET so the cashier can charge against
+    // the now-credited wallet.
+    await waitFor(() => {
+      const pmSelect = screen.getByLabelText(/Payment method/i);
+      expect(pmSelect.value).toBe('WALLET');
+    });
+  });
+
+  it('Gift Card redeem in guest-checkout mode is rejected with a clear notify.error (no POST)', async () => {
+    renderPos();
+    await waitFor(() => expect(screen.getByText(/Shift open/i)).toBeInTheDocument());
+
+    // Enable Guest checkout — wallet/giftcard need a registered patient.
+    fireEvent.click(screen.getByLabelText(/Guest checkout/i));
+    fireEvent.change(screen.getByLabelText(/Payment method/i), { target: { value: 'GIFTCARD' } });
+
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /Gift card redemption/i })).toBeInTheDocument();
+    });
+    const codeInput = screen.getByLabelText(/^Gift card code$/i);
+    fireEvent.change(codeInput, { target: { value: 'GIFT-AAAA-1111' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Redeem$/i }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/patient/i));
+    });
+    const call = fetchApiMock.mock.calls.find(
+      ([url, opts]) =>
+        url === '/api/wellness/giftcards/redeem' && opts?.method === 'POST',
     );
     expect(call).toBeUndefined();
   });

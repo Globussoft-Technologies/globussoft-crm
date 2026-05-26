@@ -28,6 +28,15 @@
  *      fires with that message instead of "Clocked in".
  *   9. Already-clocked-in 409 contract: a 409 with body.error="Already
  *      clocked in today" surfaces verbatim through notify.error.
+ *  10. #802 (Zylu-Gap ATT-001): manager KPI grid renders all six tiles
+ *      from the spec (Total, Absent, Present, Early, On-Time, Late) plus
+ *      Half-day and Total-minutes. Early + On-Time render 0 when the
+ *      backend omits them (gap surfaced in commit body).
+ *  11. #804 (Zylu-Gap ATT-003): the Export Payroll CSV button is visible
+ *      to managers, the date-range inputs are present, and clicking
+ *      Export triggers a /summary fetch with the picked range. Pinned
+ *      without asserting on the Blob — jsdom's URL.createObjectURL +
+ *      anchor-click isn't fully wired without extra polyfills.
  *
  * Backend contracts pinned by this test
  * ─────────────────────────────────────
@@ -414,6 +423,120 @@ describe('<Attendance /> — manager Staff section', () => {
     // byUser table has a row per entry. The component renders "User #<id>".
     expect(screen.getByText('User #7')).toBeInTheDocument();
     expect(screen.getByText('User #8')).toBeInTheDocument();
+  });
+
+  // #802 Zylu-Gap ATT-001 — pin the six-tile KPI grid layout.
+  it('renders all Zylu-spec KPI tiles (Total, Absent, Present, Early, On-Time, Late, Half-day)', async () => {
+    const summary = {
+      present: 4,
+      halfDay: 1,
+      late: 2,
+      absent: 3,
+      totalMinutes: 1800,
+      byUser: {},
+      // backend doesn't currently emit early/onTime — tiles should default to 0
+    };
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/attendance/me')) return Promise.resolve([]);
+      if (url.startsWith('/api/attendance/summary')) return Promise.resolve(summary);
+      return Promise.resolve(null);
+    });
+
+    renderAttendance({ user: adminUser });
+
+    // All six Zylu-spec tile labels must be present.
+    await waitFor(() => expect(screen.getByText(/^Total$/)).toBeInTheDocument());
+    expect(screen.getByText(/^Absent$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Present$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Early$/)).toBeInTheDocument();
+    expect(screen.getByText(/^On-Time$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Late$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Half-day$/)).toBeInTheDocument();
+
+    // Total = present + absent + late + halfDay = 4 + 3 + 2 + 1 = 10.
+    // The byUser is empty here so the "Nobody clocked in today yet." message
+    // shows; that exclusion is incidental to the KPI grid.
+    expect(screen.getByText('10')).toBeInTheDocument(); // Total
+    // Absent (3) value renders.
+    expect(screen.getByText('3')).toBeInTheDocument();
+    // Late (2) value renders.
+    expect(screen.getByText('2')).toBeInTheDocument();
+  });
+});
+
+// #804 Zylu-Gap ATT-003 — payroll-CSV export toolbar.
+describe('<Attendance /> — payroll CSV export (#804)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notify.success.mockReset();
+    notify.error.mockReset();
+  });
+
+  it('renders the Export Payroll CSV button + date inputs for managers', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/attendance/me')) return Promise.resolve([]);
+      if (url.startsWith('/api/attendance/summary')) return Promise.resolve({ byUser: {} });
+      return Promise.resolve(null);
+    });
+
+    renderAttendance({ user: adminUser });
+
+    await waitFor(() => expect(screen.getByText(/Today — All Staff/i)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Export Payroll CSV/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Payroll CSV from date/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Payroll CSV to date/i)).toBeInTheDocument();
+  });
+
+  it('does NOT show the Export Payroll CSV button to regular users', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/attendance/me')) return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    renderAttendance({ user: regularUser });
+
+    await waitFor(() => expect(screen.getByText(/My Last 30 Days/i)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /Export Payroll CSV/i })).not.toBeInTheDocument();
+  });
+
+  it('clicking Export fires GET /api/attendance/summary with the picked date range', async () => {
+    // Stub URL.createObjectURL — jsdom doesn't implement it by default.
+    const createObjectURLSpy = vi.fn(() => 'blob:csv-mock');
+    const revokeObjectURLSpy = vi.fn();
+    global.URL.createObjectURL = createObjectURLSpy;
+    global.URL.revokeObjectURL = revokeObjectURLSpy;
+
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/attendance/me')) return Promise.resolve([]);
+      if (url.startsWith('/api/attendance/summary')) {
+        return Promise.resolve({
+          byUser: {
+            7: { userId: 7, days: 5, minutes: 2400, late: 1, absent: 0, leaves: 0 },
+          },
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const user = userEvent.setup();
+    renderAttendance({ user: adminUser });
+
+    const exportBtn = await screen.findByRole('button', { name: /Export Payroll CSV/i });
+    await user.click(exportBtn);
+
+    await waitFor(() => {
+      // Two summary calls should fire — one for the today snapshot (mount-time)
+      // and one with the export date range (click-time). The export call uses
+      // the default 30-day window.
+      const summaryCalls = fetchApiMock.mock.calls.filter(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/attendance/summary?')
+      );
+      expect(summaryCalls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    // The Blob was URL.createObjectURL'd once (the CSV download path).
+    await waitFor(() => expect(createObjectURLSpy).toHaveBeenCalled());
+    expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/Payroll CSV exported/));
   });
 });
 

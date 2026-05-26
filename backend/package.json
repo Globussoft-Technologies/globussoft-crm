@@ -1,6 +1,6 @@
 {
   "name": "globussoft-crm-backend",
-  "version": "3.7.16",
+  "version": "3.9.2",
   "description": "Backend API for Globussoft CRM",
   "main": "server.js",
   "scripts": {
@@ -51,7 +51,7 @@
     "pdfkit": "^0.18.0",
     "qrcode": "^1.5.4",
     "razorpay": "^2.9.6",
-    "sanitize-html": "^2.17.3",
+    "sanitize-html": "^2.17.4",
     "socket.io": "^4.8.3",
     "speakeasy": "^2.0.0",
     "stripe": "^22.0.2",

@@ -1,6 +1,7 @@
 /**
  * Leads.jsx — client-side hardening tests for the Create-Lead form (#557 / HI-08)
- * + vertical-aware Lead form for the wellness tenant (#600).
+ * + vertical-aware Lead form for the wellness tenant (#600)
+ * + header CTA + drawer surface (#892).
  *
  * Scope: verifies the frontend guard rails added to the Create-Lead form so
  * users get fast feedback (no server round-trip) when they paste oversized
@@ -8,6 +9,12 @@
  * pins the wellness-vertical Lead form (Phone required, wellness sources,
  * treatment-of-interest, preferred clinic/practitioner) and confirms the
  * generic CRM form stays unchanged.
+ *
+ * #892 — Create Lead is no longer an always-visible inline form; it lives
+ * inside a drawer that opens via the "Create Lead" header CTA. Every test
+ * that interacts with the form first calls `openDrawer()` to click the CTA
+ * and reveal the inputs. The fields + submit logic are unchanged; only the
+ * trigger surface moved.
  *
  * The backend at routes/contacts.js + the global sanitizeBody middleware are
  * still the source of truth — these tests confirm the network call is NOT
@@ -25,6 +32,8 @@
  *      exists; submitting without phone → "Phone is required", no fetch.
  *   8. (#600) Generic tenant → Phone field is hidden, "WhatsApp" not in
  *      Source dropdown.
+ *   9. (#892) "Create Lead" header CTA is rendered; clicking it reveals
+ *      the form fields in a drawer.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -64,6 +73,15 @@ function renderLeads(authValue = null) {
       </AuthContext.Provider>
     </MemoryRouter>,
   );
+}
+
+// #892 — Create Lead lives in a drawer now. Click the header CTA to mount
+// the form before any field interaction. The CTA has aria-label "Create a
+// new lead" (which becomes the accessible-name); the visible text is
+// "Create Lead". Match on the aria-label since it takes precedence over
+// inner text for accessible-name lookup.
+function openDrawer() {
+  fireEvent.click(screen.getByRole('button', { name: /Create a new lead/i }));
 }
 
 function fillForm({ name, email, company, title }) {
@@ -108,6 +126,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     // Wait for initial fetch to settle
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
+    openDrawer();
 
     fillForm({
       name: '<script>alert(1)</script>',
@@ -131,6 +150,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     renderLeads();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
+    openDrawer();
 
     fillForm({
       name: '<img src=x onerror=alert(1)>',
@@ -157,6 +177,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     renderLeads();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
+    openDrawer();
 
     // Note: maxLength on the input clamps DOM-level value, but React's
     // controlled-input pathway still allows programmatic setState past
@@ -184,6 +205,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     renderLeads();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
+    openDrawer();
 
     fillForm({
       name: 'Alice\x00Smith',
@@ -204,6 +226,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     renderLeads();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
+    openDrawer();
 
     // Leave everything empty + try to submit. The HTML `required` attribute
     // would block the form natively, but `noValidate` is set on the form so
@@ -221,6 +244,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     renderLeads();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
+    openDrawer();
 
     fillForm({
       name: 'Alice Smith',
@@ -240,6 +264,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation(defaultFetchMock);
+    openDrawer();
 
     fillForm({
       name: 'Alice Smith',
@@ -268,11 +293,35 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
   it('input fields carry the correct maxLength attributes', async () => {
     renderLeads();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
 
     expect(screen.getByPlaceholderText('Full Name')).toHaveAttribute('maxLength', '191');
     expect(screen.getByPlaceholderText('Email Address')).toHaveAttribute('maxLength', '191');
     expect(screen.getByPlaceholderText('Company')).toHaveAttribute('maxLength', '191');
     expect(screen.getByPlaceholderText('Job Title')).toHaveAttribute('maxLength', '200');
+  });
+
+  // #892 — pin the CTA + drawer surface. Pre-#892 the form was always
+  // visible above the table; post-#892 it lives inside a drawer that
+  // opens via the header CTA. Without this test, a future change that
+  // accidentally re-renders the form inline would not red the suite.
+  it('renders the "Create Lead" CTA and the form is hidden until clicked', async () => {
+    renderLeads();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+
+    // CTA exists in the header (aria-label "Create a new lead").
+    expect(screen.getByRole('button', { name: /Create a new lead/i })).toBeInTheDocument();
+
+    // The form fields are NOT mounted until the CTA opens the drawer.
+    expect(screen.queryByPlaceholderText('Full Name')).toBeNull();
+    expect(screen.queryByPlaceholderText('Email Address')).toBeNull();
+
+    // Click the CTA → drawer opens → fields become reachable.
+    openDrawer();
+    expect(screen.getByPlaceholderText('Full Name')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Email Address')).toBeInTheDocument();
+    // Close button is rendered inside the drawer.
+    expect(screen.getByRole('button', { name: /Close/i })).toBeInTheDocument();
   });
 });
 
@@ -303,6 +352,7 @@ describe('Leads — vertical-aware form schema (#600)', () => {
   it('wellness tenant → Phone field renders and WhatsApp is in Source dropdown', async () => {
     renderLeads(wellnessAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
 
     // Phone input is rendered + required.
     const phone = screen.getByPlaceholderText(/Phone \(10-digit/i);
@@ -329,6 +379,7 @@ describe('Leads — vertical-aware form schema (#600)', () => {
     renderLeads(wellnessAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
+    openDrawer();
 
     fireEvent.change(screen.getByPlaceholderText('Full Name'), { target: { value: 'Anita Sharma' } });
     // Email is optional under wellness; phone is missing.
@@ -346,6 +397,7 @@ describe('Leads — vertical-aware form schema (#600)', () => {
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation(defaultFetchMock);
+    openDrawer();
 
     fireEvent.change(screen.getByPlaceholderText('Full Name'), { target: { value: 'Anita Sharma' } });
     fireEvent.change(screen.getByPlaceholderText(/Phone \(10-digit/i), {
@@ -377,6 +429,7 @@ describe('Leads — vertical-aware form schema (#600)', () => {
   it('generic tenant → Phone field is hidden and WhatsApp is NOT in Source dropdown', async () => {
     renderLeads(genericAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
 
     expect(screen.queryByPlaceholderText(/Phone \(10-digit/i)).toBeNull();
 

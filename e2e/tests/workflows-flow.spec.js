@@ -123,7 +123,18 @@ test.describe('Workflow engine — deep functional flows', () => {
   }
 
   async function createContact(request, headers, fixture) {
-    const res = await request.post(`${API}/contacts`, { headers, data: fixture });
+    // Retry-on-5xx with backoff. Under 8-shard demo load, CF occasionally
+    // returns 502/520 mid-burst — without retry, one blip cascade-fails the
+    // whole workflow flow (run 26093112312 shard 8 hit this on :259). Up to
+    // 3 attempts at 500/1000/1500ms back-off; 4xx aborts immediately because
+    // retry can't change a validation failure.
+    let res;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await request.post(`${API}/contacts`, { headers, data: fixture });
+      if (res.ok()) break;
+      if (res.status() < 500 || attempt === 2) break;
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+    }
     expect(res.status(), `contact create failed: ${await res.text()}`).toBe(201);
     return res.json();
   }

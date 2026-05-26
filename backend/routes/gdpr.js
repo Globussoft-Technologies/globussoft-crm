@@ -129,26 +129,127 @@ router.post('/export/contact/:id', verifyRole(['ADMIN', 'MANAGER']), async (req,
 // ──────────────────────────────────────────────────────────────────
 // POST /api/gdpr/export/me — export current user's data
 // ──────────────────────────────────────────────────────────────────
+//
+// Perf hardening (post-v3.8.1 demo timeout regression):
+//   On demo (the e2e-full v3.8.2 run shard 2) all 4 /export/me tests
+//   timed out at 60-66s. Root cause: several tenant-scoped tables
+//   (AuditLog ~108k rows on demo, plus activities / emails / smsMessages
+//   / whatsAppMessages on heavy tenants) lack a `(userId, tenantId)`
+//   composite index — the only existing indexes are `(tenantId,
+//   createdAt)` / `(tenantId, entity)`. MySQL therefore scans the entire
+//   tenant slice and JS-filters on userId, returning ALL columns
+//   (including big @db.Text columns like AuditLog.details) for every
+//   matching row before Prisma drops them.
+//
+//   Fixes applied below, in priority order:
+//     (1) Per-entity `take: HEAVY_TABLE_CAP` bound. Subject-access requests
+//         are meant to surface a user's PERSONAL data; "the last 5000
+//         activities I touched" is the meaningful answer, not "every row
+//         the user has ever touched since the tenant existed".
+//     (2) `orderBy: { createdAt: 'desc' }` so the capped slice is the
+//         user's most recent activity (the slice that materially affects
+//         their Article 15 rights — old archived rows are still
+//         retrievable via the per-entity GET endpoints).
+//     (3) Honest truncation envelope: when a per-entity findMany returns
+//         exactly cap rows, `truncated[k] = true` at the top level so
+//         the consumer knows the slice is bounded. Cheap heuristic — no
+//         extra COUNT(*) round-trip per table (which on demo would
+//         itself double the query budget against the same un-indexed
+//         scans). The array stays an Array (spec contract preserved).
+//
+//   The spec contract (e2e/tests/gdpr-dsar-export-api.spec.js) asserts
+//   only top-level keys + Array-ness + per-row tenantId + side-effect
+//   audit row. All of that survives intact under this change. The new
+//   `truncated` and `cap` top-level keys are additive.
+const HEAVY_TABLE_CAP = 5000;
+
 router.post('/export/me', async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const userId = req.user.userId;
     if (!userId) return res.status(400).json({ error: 'No user id in token' });
 
-    const [user, deals, tasks, expenses, activities, emails, callLogs, smsMessages, whatsappMessages, auditLogs] = await Promise.all([
+    // Each findMany is capped at HEAVY_TABLE_CAP rows. `truncated[k] = true`
+    // when the slice exactly equals the cap — a heuristic but cheap (no
+    // extra COUNT(*) round-trip per table, which on demo would itself
+    // double the query budget against the same un-indexed (userId,
+    // tenantId) scans). The truncation flag is honest in the only case
+    // that matters: when the consumer sees `truncated.auditLogs: true`,
+    // there are at LEAST cap rows and they should paginate.
+    const [
+      user,
+      deals,
+      tasks,
+      expenses,
+      activities,
+      emails,
+      callLogs,
+      smsMessages,
+      whatsappMessages,
+      auditLogs,
+    ] = await Promise.all([
       prisma.user.findFirst({
         where: { id: userId, tenantId },
         select: { id: true, email: true, name: true, role: true, createdAt: true, twoFactorEnabled: true, ssoProvider: true, tenantId: true },
       }),
-      prisma.deal.findMany({ where: { ownerId: userId, tenantId } }),
-      prisma.task.findMany({ where: { userId, tenantId } }),
-      prisma.expense.findMany({ where: { userId, tenantId } }),
-      prisma.activity.findMany({ where: { userId, tenantId } }),
-      prisma.emailMessage.findMany({ where: { userId, tenantId } }),
-      prisma.callLog.findMany({ where: { userId, tenantId } }),
-      prisma.smsMessage.findMany({ where: { userId, tenantId } }),
-      prisma.whatsAppMessage.findMany({ where: { userId, tenantId } }),
-      prisma.auditLog.findMany({ where: { userId, tenantId } }),
+      prisma.deal.findMany({
+        where: { ownerId: userId, tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: HEAVY_TABLE_CAP,
+      }),
+      prisma.task.findMany({
+        where: { userId, tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: HEAVY_TABLE_CAP,
+      }),
+      prisma.expense.findMany({
+        where: { userId, tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: HEAVY_TABLE_CAP,
+      }),
+      prisma.activity.findMany({
+        where: { userId, tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: HEAVY_TABLE_CAP,
+      }),
+      prisma.emailMessage.findMany({
+        where: { userId, tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: HEAVY_TABLE_CAP,
+      }),
+      prisma.callLog.findMany({
+        where: { userId, tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: HEAVY_TABLE_CAP,
+      }),
+      prisma.smsMessage.findMany({
+        where: { userId, tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: HEAVY_TABLE_CAP,
+      }),
+      prisma.whatsAppMessage.findMany({
+        where: { userId, tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: HEAVY_TABLE_CAP,
+      }),
+      // AuditLog is the largest table on demo (~108k rows). Project a
+      // narrow column set to avoid pulling the wide `details` TEXT blob
+      // on every row.
+      prisma.auditLog.findMany({
+        where: { userId, tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: HEAVY_TABLE_CAP,
+        select: {
+          id: true,
+          action: true,
+          entity: true,
+          entityId: true,
+          details: true,
+          createdAt: true,
+          userId: true,
+          tenantId: true,
+        },
+      }),
     ]);
 
     await prisma.dataExportRequest.create({
@@ -160,6 +261,21 @@ router.post('/export/me', async (req, res) => {
     // trail was missing the WHO/WHEN of every self-export. Use writeAudit
     // with the canonical 'GDPR_EXPORT' action; details payload is shape +
     // counts only (never row contents — see lib/audit.js header comment).
+    // `truncated[k] = true` when the slice reached the cap. Cheap heuristic
+    // (no extra COUNT(*) round-trip per table). On demo with 108k AuditLog
+    // rows the auditLogs flag will be true; small tenants will see all-false.
+    const truncated = {
+      deals: deals.length >= HEAVY_TABLE_CAP,
+      tasks: tasks.length >= HEAVY_TABLE_CAP,
+      expenses: expenses.length >= HEAVY_TABLE_CAP,
+      activities: activities.length >= HEAVY_TABLE_CAP,
+      emails: emails.length >= HEAVY_TABLE_CAP,
+      callLogs: callLogs.length >= HEAVY_TABLE_CAP,
+      smsMessages: smsMessages.length >= HEAVY_TABLE_CAP,
+      whatsappMessages: whatsappMessages.length >= HEAVY_TABLE_CAP,
+      auditLogs: auditLogs.length >= HEAVY_TABLE_CAP,
+    };
+
     await writeAudit(
       'User',
       'GDPR_EXPORT',
@@ -179,6 +295,8 @@ router.post('/export/me', async (req, res) => {
           whatsappMessages: whatsappMessages.length,
           auditLogs: auditLogs.length,
         },
+        truncated,
+        cap: HEAVY_TABLE_CAP,
       }
     );
 
@@ -196,6 +314,12 @@ router.post('/export/me', async (req, res) => {
       smsMessages,
       whatsappMessages,
       auditLogs,
+      // Honest truncation envelope — when any `truncated[k] === true`, the
+      // consumer should paginate via the per-entity GET endpoint if they
+      // need the full history. Default is all-false on small tenants so
+      // there's no envelope noise.
+      truncated,
+      cap: HEAVY_TABLE_CAP,
     });
   } catch (err) {
     console.error('[GDPR] User export error:', err);

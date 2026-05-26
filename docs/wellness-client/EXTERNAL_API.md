@@ -360,9 +360,50 @@ Currently the global rate limit is 5,000 requests / 15 minutes per IP. Partner t
 
 ---
 
+## 5.5. Webhook event catalogue (canonical)
+
+The CRM emits lifecycle webhooks on every major entity transition. **Subscription is via admin UI** (`/developer` → Webhooks) — self-serve registration via `/api/v1/external/webhooks` is roadmap (§6).
+
+Once registered, you'll receive `POST <your-url>` with body shape `{event, timestamp, payload}` and headers `X-CRM-Event: <event>` + `X-CRM-Tenant: <tenantId>`. Subscriber filter supports exact-match (`invoice.created`) and glob (`invoice.*` / `payment.*`).
+
+**Sales pipeline:**
+- `deal.created` / `deal.updated` / `deal.won` / `deal.lost`
+- `contact.created` / `contact.updated`
+
+**Invoicing + Payments:**
+- `invoice.created` — Estimate-to-Invoice conversion OR direct creation
+- `invoice.completed` — Invoice marked paid
+- `invoice.voided` — Invoice voided
+- `invoice.refunded` — Invoice refund issued
+- `payment.collected` — Razorpay/Stripe webhook confirms capture, OR manual mark-paid
+
+**Wellness POS / Wallet / Memberships:**
+- `wallet.topup` / `wallet.spent`
+- `giftcard.issued` / `giftcard.redeemed`
+- `cashback.credited`
+- `membership.plan_created` / `.enrolled` / `.renewed` / `.benefit_applied` / `.expired` / `.cancelled`
+
+**Attendance:**
+- `attendance.checked_in` / `attendance.checked_out`
+
+**Travel-vertical lifecycle (2026-05-23):**
+- `visa.status_changed` — VisaApplication PATCH on status transition (payload: `{id, contactId, subBrand, oldStatus, newStatus, tenantId, changedAt}`)
+- `quote.sent` — Estimate POST `/:id/email` on Draft → Sent (payload: `{id, estimateNumber, contactId, to, delivered, totalAmount, currency, validUntil, tenantId, sentAt}`)
+- `itinerary.accepted` — Itinerary POST `/:id/accept` on customer accept (payload: `{id, contactId, tripId, subBrand, totalAmount, currency, tenantId, acceptedAt}`)
+
+**Delivery contract:** fire-and-forget from CRM side. Subscriber failures (4xx/5xx response, timeout) are logged but do NOT roll back the originating action. Implement idempotency on your side using the payload's stable `id` field.
+
+**Example subscriber registration** (current — via admin UI):
+```bash
+# Globus admin registers your URL for the events you care about
+# (Self-serve registration coming v1.1 — see §6)
+```
+
+---
+
 ## 6. Roadmap (v1.1+)
 
-- **Webhooks** — `Webhook` model already exists. We'll let you POST to `/api/v1/external/webhooks` to register a URL, then we'll fire `lead.created`, `appointment.booked`, `call.logged`, etc. to your URL with HMAC signing. Replaces polling.
+- **Self-serve webhook registration** — `POST /api/v1/external/webhooks` to register URL + event-filter glob + HMAC secret, then we fire to your URL with HMAC signing. Replaces admin-UI setup for §5.5.
 - **POST `/patients`** — create a patient (not just a contact). Wellness-only.
 - **Idempotency on POSTs** — using `providerCallId` / `providerMsgId` to safely retry.
 - **GraphQL endpoint** — for partners that want one round-trip to fetch contact + 20 activities + last call + last appointment.

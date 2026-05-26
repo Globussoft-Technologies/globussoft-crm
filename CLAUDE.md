@@ -15,20 +15,20 @@ When a gap / backlog / regression-tracking file is **fully closed** (every entry
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.7.16 — see [CHANGELOG.md](CHANGELOG.md) for the full release history. Per-push gate runs across 6 mandatory deploy gates + a separate PR pre-merge checks workflow (vite build + ESLint). Counts (`e2e/tests/` Playwright, `backend/test/` vitest, `frontend/src/__tests__/` vitest, `.claude/skills/`) are surfaced in [README.md](README.md)'s "At a glance" table so they don't rot here.
+- **Version:** v3.8.3 — see [CHANGELOG.md](CHANGELOG.md) for the full release history. Per-push gate runs across 6 mandatory deploy gates + a separate PR pre-merge checks workflow (vite build + ESLint). Counts (`e2e/tests/` Playwright, `backend/test/` vitest, `frontend/src/__tests__/` vitest, `.claude/skills/`) are surfaced in [README.md](README.md)'s "At a glance" table so they don't rot here.
 - **Branch:** main (single-branch workflow)
 - **Deploy:** GitHub Actions auto-deploy on push to main ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) — health-check + rollback to HEAD~1 on fail. Local `ssh_deploy_*.py` scripts are legacy.
 
 ## Verticals
 
-Tenant.vertical ∈ `{generic, wellness}` drives:
+Tenant.vertical ∈ `{generic, wellness, travel}` drives:
 
-- **Sidebar layout** — wellness gets a slim clinic-focused nav (~25 items); generic gets the full 50+ item enterprise sidebar
-- **Theme** — wellness uses Dr. Haror's palette (teal `#265855`, blush `#CD9481`, cream bg) via scoped CSS under `[data-vertical="wellness"]`
-- **Landing route** — wellness users land on `/wellness`, generic on `/dashboard`
+- **Sidebar layout** — wellness gets a slim clinic-focused nav (~25 items); travel gets a slim travel-agency nav (~15 items, Day 1 scaffolding); generic gets the full 50+ item enterprise sidebar
+- **Theme** — wellness uses Dr. Haror's palette (teal `#265855`, blush `#CD9481`, cream bg) via scoped CSS under `[data-vertical="wellness"]`; travel uses placeholder navy `#122647` + warm gold `#C89A4E` on cream pending Yasin's brand handover (Q22)
+- **Landing route** — wellness users land on `/wellness`, travel users on `/travel`, generic on `/dashboard`
 - **Currency defaults** — tenant.defaultCurrency (INR/USD/EUR/etc.) + locale feed the `formatMoney()` helper everywhere
 
-Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `render<Vertical>Nav()` function in Sidebar, add a themed CSS file, seed + new pages as needed. No forks.
+Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `render<Vertical>Nav()` function in Sidebar, add a themed CSS file, seed + new pages as needed. No forks. **Travel** is the third vertical (Phase 1 in flight; see [docs/TRAVEL_CRM_PRD.md](docs/TRAVEL_CRM_PRD.md), [docs/TRAVEL_CRM_OPEN_QUESTIONS.md](docs/TRAVEL_CRM_OPEN_QUESTIONS.md), [docs/TRAVEL_CRM_RISKS.md](docs/TRAVEL_CRM_RISKS.md)). It hosts 4 sub-brands (TMC school trips, RFU Umrah, Travel Stall family holidays, Visa Sure) under a single tenant with `subBrandAccess[]` per User (Q25 decision).
 
 ## Tech Stack
 
@@ -43,7 +43,7 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 | Files | Multer (uploads), PDFKit, pdf-lib, xlsx, QRCode |
 | Monitoring | Sentry (@sentry/node) |
 | Production | PM2, Nginx reverse proxy, Certbot SSL |
-| Testing | Playwright E2E (e2e/ directory, 40 spec files) |
+| Testing | Playwright E2E (e2e/, 234 spec files) + vitest unit tests (98 backend + 76 frontend) — see README "At a glance" for live counts |
 
 ## Architecture
 
@@ -55,7 +55,7 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 - **middleware/validateInput.js** -- express-validator input sanitization
 - **middleware/fieldFilter.js** -- Field-level permission filtering
 - **middleware/sendLimiter.js** -- Email/SMS send rate limiting
-- **prisma/schema.prisma** -- MySQL via Prisma ORM (DATABASE_URL env var), 114 models
+- **prisma/schema.prisma** -- MySQL via Prisma ORM (DATABASE_URL env var), 152 models
 - **DISABLE_CRONS=1** env switch (v3.2.2) — server.js skips cron init when set; for side-by-side coverage instances
 - **Graceful SIGTERM/SIGINT shutdown** (v3.2.2) — required for c8 V8 coverage data to flush before exit
 - **prisma/seed.js** -- Seeds all models with demo data
@@ -64,7 +64,7 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 - Global auth guard protects all routes except /auth/login, /auth/signup, /auth/register, /health, /marketplace-leads/webhook
 - Rate limiting: 5000 req/15min general, 1000 req/15min on auth/login
 
-### Cron Engines (backend/cron/) -- 19 engines
+### Cron Engines (backend/cron/) -- 22 engines
 
 | Engine | File | Purpose |
 |--------|------|---------|
@@ -84,9 +84,15 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 | **Orchestrator** (v3.1) | orchestratorEngine.js | Wellness AI orchestration — daily 07:00 IST, generates Owner Dashboard recommendation cards |
 | **Appointment Reminders** (v3.1) | appointmentRemindersEngine.js | Every 15 min, queue SMS T-24h + T-1h before each booked wellness visit |
 | **Wellness Ops** (v3.1) | wellnessOpsEngine.js | Hourly, NPS survey 72h post-visit + 90-day junk-lead retention purge |
+| SLA Breach | slaBreachEngine.js | Every 5 min, ticket SLA breach detection |
+| Lead SLA | leadSlaEngine.js | Every 2 min, lead-response SLA breach detection |
+| Low Stock | lowStockEngine.js | Daily 09:00 IST, wellness inventory low-stock alerts |
+| Leave Policy | leavePolicyEngine.js | Daily 02:30, leave accrual / policy processing (wellness) |
+| Demo Hygiene | demoHygieneEngine.js | Hourly, purges E2E / test-data pollution from the demo box |
+| Audit Integrity | auditIntegrityEngine.js | Daily 04:00, audit hash-chain integrity sweep |
 
 
-### Libraries (backend/lib/) -- 8 modules
+### Libraries (backend/lib/) -- 28 modules (key modules below)
 
 - **prisma.js** -- Shared Prisma client instance
 - **eventBus.js** -- In-process event bus for decoupled modules
@@ -97,7 +103,7 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 - **leadAutoRouter.js** (v3.1) -- Keyword → service category → assigned specialist (doctor / professional / telecaller)
 - **fieldEncryption.js** (v3.1) -- AES-256-GCM helper for patient PII fields. Opt-in via `WELLNESS_FIELD_KEY` env var
 
-### Services (backend/services/) -- 6 services
+### Services (backend/services/) -- 7 services
 
 - **smsProvider.js** -- SMS delivery via MSG91/Twilio
 - **whatsappProvider.js** -- WhatsApp Cloud API messaging
@@ -114,7 +120,9 @@ API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globu
 - **routes/external.js** -- `/health`, `/me`, `/leads` (POST + GET poll), `/calls` (POST + PATCH for late transcripts), `/messages`, `/appointments`, `/contacts/lookup`, `/patients/lookup`, `/services`, `/staff`, `/locations`
 - Docs: docs/wellness-client/EXTERNAL_API.md
 
-### Routes (backend/routes/) -- 91 route files
+### Routes (backend/routes/) -- 103 route files
+
+> The grouped list below is a representative map. ~12 newer route files (pos, memberships, attendance, leave, drugs, inventory, service_categories, csv_io, v1_invoices, subscriptions, etc.) landed across v3.4–v3.8 and are not all enumerated here — see `backend/routes/` for the authoritative set.
 
 **Sales & Pipeline:** deals.js, pipelines.js, pipeline_stages.js, deal_insights.js, forecasting.js, quotas.js, win_loss.js, playbooks.js, funnel.js, cpq.js
 
@@ -142,18 +150,20 @@ API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globu
 
 **Wellness vertical (v3.1):** wellness.js (patients, visits, prescriptions, consents, treatments, services, locations, recommendations, dashboard, reports/pnl-by-service, /per-professional, /per-location, /attribution, photos, inventory, telecaller/queue + /dispose, portal/login + /me + /visits + /prescriptions, orchestrator/run, public/tenant/:slug + public/book)
 
+**Travel vertical (Phase 1, in flight):** travel.js + travel_diagnostics.js + travel_itineraries.js + travel_trips.js + travel_trip_billing.js + travel_microsites.js + travel_cost_master.js + travel_pricing.js + travel_suppliers.js + travel_rfu_profiles.js. Hosts 4 sub-brands under one tenant (TMC school trips / RFU Umrah / Travel Stall family holidays / Visa Sure) per Q25. See [docs/TRAVEL_CRM_PRD.md](docs/TRAVEL_CRM_PRD.md), [docs/TRAVEL_CRM_OPEN_QUESTIONS.md](docs/TRAVEL_CRM_OPEN_QUESTIONS.md), [docs/TRAVEL_CRM_RISKS.md](docs/TRAVEL_CRM_RISKS.md). Shared guards in [backend/middleware/travelGuards.js](backend/middleware/travelGuards.js); pure pricing math in [backend/lib/travelPricing.js](backend/lib/travelPricing.js); diagnostic scoring in [backend/lib/travelDiagnosticScoring.js](backend/lib/travelDiagnosticScoring.js). Schema: 21 new Prisma models (diagnostic banks + diagnostics, itineraries + items, TmcTrip + 5 children, supplier credentials vault + access log, microsite + OTP, VisaApplication + checklist, RfuLeadProfile, season calendar + markup rules).
+
 **External Partner API (v3.1):** external.js (/api/v1/external/* — health, me, leads, calls, messages, appointments, contacts/lookup, patients/lookup, services, staff, locations)
 
 ### Frontend (frontend/src/)
 
-- **App.jsx** -- AuthContext provider, React Router, Suspense + React.lazy() for 80 page components (code-split)
+- **App.jsx** -- AuthContext provider, React Router, Suspense + React.lazy() for 124 page components (code-split)
 - **utils/api.js** -- `fetchApi` helper with auto Bearer token and 401 redirect
 
-### Frontend Components (frontend/src/components/) -- 11 components
+### Frontend Components (frontend/src/components/) -- 16 components (key components below)
 
 CPQBuilder, CommandPalette, DealModal, EmailSignatureEditor, LanguageSwitcher, Layout, NotificationBell, Omnibar, Presence, Sidebar, Softphone
 
-### Frontend Pages (frontend/src/pages/) -- 80 pages
+### Frontend Pages (frontend/src/pages/) -- 124 pages
 
 **Sales:** Dashboard, Pipeline, Pipelines, Forecasting, Quotas, WinLoss, Playbooks, Funnel, DealInsights, CPQ
 
@@ -187,7 +197,9 @@ CPQBuilder, CommandPalette, DealModal, EmailSignatureEditor, LanguageSwitcher, L
 
 **Wellness theme (v3.1):** theme/wellness.css — scoped under `[data-vertical="wellness"]`. Activated in App.jsx by setting `data-vertical` on body based on tenant.vertical.
 
-### Prisma Models (114 total)
+### Prisma Models (152 total)
+
+> The enumeration below is the v3.1-era baseline (108 models). ~44 more landed across v3.4–v3.8 — POS (Register, Shift, Sale, PettyCashLedger), Attendance/Leave, Wallet/Cashback/GiftCard/Coupon, Resource/Holiday, inventory (ProductCategory, Vendor, InventoryReceipt, InventoryAdjustment), WhatsAppThread, and more. See [prisma/schema.prisma](backend/prisma/schema.prisma) for the authoritative list.
 
 Generic (99): AbTest, AccountingSync, Activity, ApiKey, ApprovalRequest, Attachment, AuditLog, AutomationRule, Booking, BookingPage, CalendarEvent, CalendarIntegration, CallLog, Campaign, CannedResponse, Chatbot, ChatbotConversation, ConsentRecord, Contact, ContactAttachment, Contract, Currency, CustomEntity, CustomField, CustomRecord, CustomReport, CustomValue, Dashboard, DataExportRequest, Deal, DealInsight, DocumentTemplate, DocumentView, EmailMessage, EmailTemplate, EmailTracking, Estimate, EstimateLineItem, Expense, FieldPermission, Forecast, IndustryTemplate, Integration, Invoice, KbArticle, KbCategory, LandingPage, LandingPageAnalytics, LeadRoutingRule, LiveChatMessage, LiveChatSession, MarketplaceConfig, MarketplaceLead, Notification, Payment, Pipeline, PipelineStage, Playbook, PlaybookProgress, Product, Project, PushNotification, PushSubscription, PushTemplate, Quota, Quote, QuoteLineItem, ReportSchedule, RetentionPolicy, SandboxSnapshot, ScheduledEmail, ScimToken, Sequence, SequenceEnrollment, SharedInbox, SignatureRequest, SlaPolicy, SmsConfig, SmsMessage, SmsTemplate, SocialMention, SocialPost, SsoConfig, Survey, SurveyResponse, Task, TelephonyConfig, Tenant, Territory, Ticket, Touchpoint, User, VoiceSession, WebVisitor, Webhook, WhatsAppConfig, WhatsAppMessage, WhatsAppTemplate, WinLossReason
 
@@ -232,12 +244,14 @@ Plus 12 professionals, 2 helpers, 1 telecaller (see `prisma/seed-wellness.js`).
 - **SSL:** Certbot (Let's Encrypt)
 - **PM2:** `globussoft-crm-backend` only (frontend served by Nginx directly)
 - **Monitoring:** Sentry (@sentry/node) for error tracking
-- **Deploy flow (canonical):** GitHub Actions workflow `.github/workflows/deploy.yml` — fires on push to `main` (skipping doc/test/script-only changes via `paths-ignore`) plus manual `workflow_dispatch`. Four mandatory parallel gates → deploy:
+- **Deploy flow (canonical):** GitHub Actions workflow `.github/workflows/deploy.yml` — fires on push to `main` (skipping doc/test/script-only changes via `paths-ignore`) plus manual `workflow_dispatch`. Six mandatory parallel gates → deploy:
   1. **build** — `npm ci` + `prisma generate` + `node --check` parse-check on every backend `.js` + frontend `vite build`
   2. **lint** — ESLint flat config (`backend/eslint.config.js`) + `npm audit` gate via `backend/scripts/check-audit.js` (allowlist at `backend/.audit-allowlist.json`). Project-specific rule blocks bare `req.user.id` (the JWT key is `userId`)
-  3. **api_tests** — MySQL 8 container + seed both tenants + boot backend on :5000 + 23 Playwright API specs / ~1,084 tests (the gate spec list lives in `deploy.yml`'s "Run API-only specs" step)
-  4. **unit_tests** — vitest over 22 backend test files / 674 tests covering `lib/`, `middleware/`, `services/`, `utils/`. ~1.2s test runtime
-  Deploy runs only if all four pass. Steps: SSH pull → npm install → prisma generate → pm2 restart → poll `/api/health` (auto-rollback to `HEAD~1` if unhealthy) → vite build → sudo rsync to `/var/www` → chown www-data → smoke check `/` + `/api/health`. Hotfix bypass via `workflow_dispatch.skip_tests=true` (manual UI only — a regular push can never bypass).
+  3. **api_tests** — MySQL 8 container + seed both tenants + boot backend on :5000 + the gated Playwright API specs (the gate spec list lives in `deploy.yml`'s "Run API-only specs" step — see README "At a glance" for current spec/test counts)
+  4. **unit_tests** — vitest over the `backend/test/` suite covering `lib/`, `middleware/`, `services/`, `utils/`, `cron/`
+  5. **frontend_unit_tests** — vitest + jsdom over the `frontend/src/__tests__/` component suite
+  6. **migration_check** — Prisma schema-safety detector (UNIQUE / NOT NULL / column-drop / type-narrow) with commit-message bless markers (`[allow-unique]` etc.)
+  Deploy runs only if all six pass. Steps: SSH pull → npm install → prisma generate → pm2 restart → poll `/api/health` (auto-rollback to `HEAD~1` if unhealthy) → vite build → sudo rsync to `/var/www` → chown www-data → smoke check `/` + `/api/health`. Hotfix bypass via `workflow_dispatch.skip_tests=true` (manual UI only — a regular push can never bypass).
 - **Release validation:** GitHub Actions workflow `.github/workflows/e2e-full.yml` — runs the full Playwright chromium + auth-tests + api-health suites (UI flows, wellness deep, a11y, integration) against the deployed demo on git tag push (`v*`), GitHub Release publish, or manual trigger. Per-commit pipeline stays fast; the heavy suite is opt-in by tagging a green main commit.
 - **Coverage measurement:** GitHub Actions workflow `.github/workflows/coverage.yml` — workflow_dispatch only. Spins an ephemeral backend with c8 instrumentation, runs the 23 gated API specs, reports lines/branches/functions/statements % + top-10 under-covered files. Replaces the old SSH cheat-sheet for the gate-spec methodology. Last measurement (commit `868b227`): 40.52% lines / 73.30% branches / 33.68% functions for routes; 79.01% lines for backend helpers (vitest c8).
 - **Secret scanning:** GitHub Actions workflow `.github/workflows/secret-scan.yml` — gitleaks runs on every push + PR (incremental diff, ~10-20s) + scheduled full-history scan Mondays at 06:30 UTC. Allowlist for known intentional demo creds + dev-fallback constants in `.gitleaks.toml` at repo root.
@@ -350,7 +364,7 @@ cd e2e && BASE_URL=https://crm.globusdemos.com npx playwright test --project=chr
 - `tests/demo-health.spec.js` + `tests/demo-hygiene-api.spec.js` + `tests/teardown-completeness.spec.js` — closed-loop demo cleanliness assertions backed by [demo-monitor.yml](.github/workflows/demo-monitor.yml) cron (every 30 min, opens a tracker issue on failure)
 - Plus ~150 module-level api specs (each `routes/*.js` has a `tests/<route>-api.spec.js` partner). Latest additions: `landing-pages-api`, `workflows-api`, `integrations-api`, `audit-api`, `search-api`, `email-api`.
 
-**~1,665 API tests on every push** (deploy.yml api_tests gate, **50 specs**) **+ 803 vitest unit tests** (deploy.yml unit_tests gate, **30 files**) = **~2,468 total per-push**. Plus ~2,500 broader UI/wellness/a11y tests on every release tag (e2e-full.yml). Demo-monitor cron polls the deployed box every 2 hours; auto-issue on failure (filed against a stable-title issue so re-runs comment instead of spamming).
+**Thousands of tests run on every push** across the 6 deploy gates (api_tests + unit_tests + frontend_unit_tests) — see README's "At a glance" table for current spec / file counts. Plus the broader UI / wellness / a11y suite on every release tag (e2e-full.yml). Demo-monitor cron polls the deployed box every 30 min; auto-issue on failure (filed against a stable-title issue so re-runs comment instead of spamming).
 
 ## GitHub
 
@@ -423,3 +437,19 @@ _(Last review 2026-05-07 dispositioned 14 of the day's 23 entries (commit `c3f84
 - **2026-05-13 evening — `fdc9075` — `test.describe.configure({ mode: 'serial', timeout: 120_000 })` is the right primitive for "tests that beat themselves up on a shared backend resource under concurrent-shard load."** v3.7.9 e2e-full had 2 hard failures in the audit-api `/verify hash-chain` describe — both 60s timeouts triggered by `apiRequestContext.post: Request context disposed` during `POST /api/contacts` seed calls. Demo backend was saturated by the other 3 shards' concurrent activity → seed POSTs took 10-30s each → playwright's 60s test timeout fired. Fix was the describe-level `mode: 'serial'` (forces tests in that describe to run sequentially within their shard — doesn't affect other describes / other shards) plus a 120s timeout headroom. Single-commit, single-file fix dropped hard failures from 2 to 1 (v3.7.9 → v3.7.10). **Pattern:** for any spec describe block where tests SHARE a backend resource (audit chain, sequential ID generators, single-row state, the same tenant's same entity), default to `mode: 'serial'` at the describe level. Trade a few seconds of test wall-clock for ~2× stability under shard load. Useful across audit-api, anything touching `/api/audit/backfill`, the hash-chain verifier, sequential-numbering routes, and ledger-style state machines. Worth a one-liner standing rule on next instance.
 
 - **2026-05-13 evening — `25828398754` (audit-api:533) — demo-state convergence helpers need to ACT every iteration, not just observe.** v3.7.10's 1 remaining hard failure was `audit-api.spec.js:533 (a fresh seed extends the chain by ≥1)`. Demo returned `integrityVerified: false, unhashedRows: 6, brokenAt: 154516, reason: null hash — row was never chained (run backfill)`. The chain was structurally healthy — but 6 rows were "in flight" from background-cron `writeAudit` (orchestrator/workflow/sentiment/scheduled-email/sequences) writing FASTER than the test's single backfill could process them. The existing `verifyEventually()` helper polled `/verify` 6×700ms but **only fired backfill once on initial null-hash observation** — under sustained write pressure, new unhashed rows appeared faster than the static poll could catch up. **Pattern:** convergence helpers like `verifyEventually` must re-fire the convergence-action (backfill / refresh / reconcile) on EVERY iteration where the convergence condition isn't met, not just on the first false reading. The general rule: under a demo with continuous background-cron writes, polling-without-acting loses; polling-and-re-acting wins. Worth a one-liner standing rule on next instance.
+
+- **2026-05-22 ~05:00 UTC — no-commit — Travel PRD-drive autonomous loop: queue exhausted post-refresh; recommend user CronDelete.** Final autonomous-doable pick shipped this tick (`621aab7` subBrandConfigJson consumer wiring + 7 cron + 3 endpoint integrations + 26 vitest cases). Per re-audit `e8cc0ac` §10 verbatim: "Round after that: verify pick #1 shipped via grep... If shipped → CronDelete the autonomous loop." Verified shipped. **Queue state:** §4 PRD-requirement layer is 74/78 SHIPPED (~95%) with the residual 4 PARTIAL stuck on creds; §7 page-row + Phase 1.5 layer is empty; remaining work is all cred-blocked (Q9 / Q3 / Q11 / Q19 / Q8 / Q1 / Q22), product-call (Q2 / Q13 / Q16), big-scope (Chrome plugin / airline automation / Phase 3 Visa Sure), or low-value admin-completeness (intentionally NOT promoted per §10's anti-busywork guidance). **Strict Step-5 condition (zero GAP-AUTONOMOUS AND zero GAP-STUB-ABLE) not literally met** — GAP-STUB-ABLE stays at 5, but those are cred-blocked items whose stubs are already in place (10 swap points inventoried); re-stubbing would be churn. Followed audit's spirit not prompt's strict letter. **Recommend user run CronDelete on the PRD-drive cron.** Re-evaluation triggers: cred Q-marker resolution (Q9 unlocks 7 WA crons + 3 endpoints to swap stub→real call), user redirect, or Phase 3 Visa Sure commit landing. **Session run history:** ~9 ticks; ~10 feature commits shipped (LeadDetail, ItineraryDetail, ReligiousPackets, LlmSpend, formVsCallJson persist, rooming XLSX, subBrandConfig wiring, etc.); SHIPPED count climbed 70 → 78 (~91% → ~100% of original denominator); 1 phantom-carry-over caught (DuplicateContactModal `b18c5c4` mis-listed as gap by re-audit `b81f2cb`); 2 re-audit refreshes performed.
+
+- **2026-05-23 ~05:55 UTC — `d0a4e36` → recovered `afdc61b` + `5d9a95e` — `git commit -F <file>` (without `--only`) commits everything STAGED in the index, NOT just newly-added files.** QA-cluster cron `00d468d5` tick #2 — 3 parallel agents on disjoint files (#894 Invoices.jsx, #895 Payments.jsx, #863+#864 travel.css). Dark-mode agent's `git stash pop` brought sibling Payments-agent's WIP back into their working tree (because the sibling had run `git add` before the dark-mode agent's stash captured state); dark-mode agent then `git add travel.css` + `git commit -F msg.txt` swept up the Payments staged files into commit `d0a4e36` along with the intended CSS. Recovered via soft-reset + unstage + recommit `afdc61b` (force-push); Payments agent then recommitted standalone as `5d9a95e`. **THIRD instance** of this hazard (prior: 2026-05-09 Wave 2 `prisma/schema.prisma` concurrent edits; 2026-05-09 Wave 2 `/tmp/` Windows path failure). **Promoting to a standing rule:** all parallel-agent dispatches MUST use `git commit --only <files>` (explicit path arg overrides the index) instead of `git commit` after `git add`. The `--only` flag scopes the commit to the listed paths regardless of what else is staged in the index — exactly the isolation parallel agents need. The `dispatching-parallel-agent-wave` skill already documents this template; promoting it from "recommended" to "hard requirement" because we now have 3 confirmed recovery cycles costing ~10-15 min each. Future cron prompts should explicitly include `git commit --only <files>` (not bare `git commit`) in the agent's commit-step template.
+
+- **2026-05-23 ~17:00 UTC — `62a4e5a` (initial) → `86a01fa` (full fix) — e2e test helpers allocating shared-DB resources need per-WORKER uniqueness, not just per-call.** Overnight-cron arc spanning ticks #63 → #72 had 2 deploy gate reds (commits `6b4ef38` + `962d82a`) both caused by `nextVisitDate()` in `e2e/tests/wellness-clinical-api.spec.js` colliding on the `(doctorId, UTC-hour)` booking-gate guard. Iterations: v1 was `Math.random()*720h` (birthday-paradox collisions with 100+ tests on the same drHarsh doctor); v2 (tick #64 `62a4e5a`) was a process-monotonic counter that fixed within-process collisions but every Playwright WORKER starts with `_visitDateOffset=0` so 4 workers all created visit-1 at hourOffset=720h → second-onwards POSTs returned 409 DOCTOR_DOUBLE_BOOKED; v3 (tick #72 `86a01fa`) PID-buckets the hour offset (`process.pid % 40 * 200 + counter % 200` = 8000 unique (worker, hour) combos within the [now+720h, now+8720h] window). **Pattern:** any e2e helper allocating a SHARED-DB resource (visit slot, sequence number, unique-name row, IDOR-target ID) needs a worker-discriminator built in — `process.pid` modulo K, `test.info().workerIndex`, or an env var. Pure process-monotonic looks correct in single-worker dev runs but cascade-fails the moment Playwright spawns >1 worker against a shared backend. SECOND instance of this multi-version triage class in this session (first was tick #64's random→monotonic; this was monotonic→pid-bucketed). Worth promoting to a one-liner standing rule on next instance — "e2e shared-DB helpers must include a per-worker discriminator (process.pid, workerIndex, or env)."
+
+- **2026-05-23 ~21:00 UTC — no-commit — 81-tick overnight cron arc exhausted; Step 4 trigger fired (3 consecutive 0-commit ticks #79 + #80 + #81).** Continuous cron arc from tick #16 (resumed from compacted prior session) through tick #81. Session deliverables: 154 commits / 44 GH closures / 2 follow-up issues filed (#932 + #933) / 1 cron-learning entry (entry above) / tri-doc tracker coverage of every remaining blocker — DECISIONS_TRACKER.md (192 design decisions across 33 PRDs, refreshed tick #65) + CREDS_TRACKER.md (47 credential/asset chases across 6 categories, authored tick #74) + MANUAL_CODING_BACKLOG.md cluster→PRD cross-refs (13 wired tick #77). Multi-slice CSV gap (#816) drained 4/5 across ticks #69-#73 — Products residual split to #933. 6 phantom-shipped audits (~3 agent-hours saved). 2 deploy gate triages cleanly absorbed (`62a4e5a` tick #64 + `86a01fa` tick #72 — both `nextVisitDate()` iterations per the entry above). **Termination signal:** Step 4 phase-transition threshold crossed at tick #75 (open issues 50 → 49) + cron-prompt's "Be efficient with agent budget" + the 3-consecutive-0-commit-ticks rule fired this tick. Remaining 49 issues fall in 4 buckets, none lean-tick-shape: 9 architectural Travel-Security/Gap (PRD-covered multi-day waves), 8 cred-blocked (CREDS_TRACKER tracks), 10 new-page/module (half-day-to-multi-day), 22 misc multi-day. **Recommend user CronDelete + redirect to:** (a) directed product-call session against DECISIONS_TRACKER + CREDS_TRACKER, (b) focused implementation wave on a specific architectural item (PRD-covered), or (c) cred-drop cycle (Q22 Yasin brand pack unblocks 4 PRDs simultaneously per CREDS_TRACKER tick #74 finding).
+
+- **2026-05-24 ~11:30 UTC — tick #106→#140 autonomous test-coverage drain arc — GENUINELY EXHAUSTED across every layer.** 34 consecutive ticks shipping 2 commits each (68+ test files + a handful of triage fixes + one cron-learning entry). Final inventory audit confirms: every `frontend/src/pages/**` file has a sibling test, every `frontend/src/utils/*.{js,jsx}` has a sibling test, every `backend/lib/*.js` has a sibling test, every `backend/services/*.js` has a sibling test, every `backend/middleware/*.js` has a sibling test, every `backend/cron/*.js` has a sibling test, every `frontend/src/components/*.jsx` has coverage via `ui-primitives.test.jsx` or `CapBanners.test.jsx`. Cap-consumer + travel-vertical + wellness-vertical + visa-Phase-3 page-level test classes ALL fully drained. **6 phantom-carry-overs caught + recovered** during the arc (tick #118 `LeadDetail`, plus 5 prior session instances). **3 deploy-infra 504s + 2 CI-only race flakes** triaged cleanly (tick #108 Patients + tick #126 Calendar findByText fixes; transient deploy 504s on `23c9656`/`0a94c42d`/`4fb87b9d`/`28f10c6c` were infra not code). **Net delta**: −259 LOC from CapBanners rule-of-3 retrofit + ~200+ vitest cases added. **NEXT-SESSION TRIGGER**: when the autonomous-overnight-cron fires and the "Step 4 stop conditions" all read complete (PRD-writer exhausted, GitHub open-issue count below 50, 22/22 cron engines covered, every layer audited shows zero untested files), the correct response is "log + idle, do NOT find work to fill time" per the 2026-05-07 wave-13 exhaustion entry. **DO NOT** revive the test-coverage drain stream; if user re-fires, surface explicit "queue exhausted — recommend CronDelete + redirect to (a) directed product-call session against DECISIONS_TRACKER, (b) focused architectural wave on a multi-day PRD-covered item, or (c) cred-drop cycle (Q22 Yasin brand pack unblocks 4 PRDs simultaneously)."
+
+- **2026-05-24 ~06:00 UTC — tick #118 Agent A — 6th phantom-carry-over instance: dispatcher-side test-file existence check absent.** Dispatched Agent A to author `TravelLeadDetail.test.jsx`, premising "currently has zero frontend test coverage." Agent A ran verifying-issue-before-pickup, found existing `frontend/src/__tests__/LeadDetail.test.jsx` (commit `a84289e`) with 6 cases covering the same SUT contracts; self-exited cleanly. **6th instance in this session arc** (prior 5 documented). Pattern persists: the dispatcher's prompt-premise verification gap recurs every 2-4 ticks under the test-coverage drain pattern. Tick #119 dispatcher-side fix: run `ls frontend/src/__tests__/ | sort` as a pre-flight grep BEFORE writing test-coverage prompts; cross-reference every candidate page against the existing test inventory; only dispatch where genuinely uncovered. Result: tick #119 picks (CostMaster + DiagnosticBuilder) verified-untested before dispatch — both shipped cleanly with no phantom returns. **The dispatcher-side fix is the actual standing-rule promotion needed**, not just "agent self-exits cleanly." The 2026-05-24 ~03:00 UTC entry below documented this gap for `git checkout HEAD --` premises specifically — now confirmed it generalises to ALL test-coverage prompts. Worth promoting to a standing rule: "test-coverage drain prompts run `ls __tests__/` first to enumerate existing coverage; only candidates absent from that list get dispatched." Cost saved per future correctly-pre-flighted tick: 30-180s of agent-budget per avoided phantom.
+
+- **2026-05-24 ~03:00 UTC — tick #106 init — `git checkout HEAD -- <file>` restores HEAD's clean content; conflict-marker artifact in the working tree does NOT imply the file was deleted from HEAD.** Tick #106 init found `backend/test/cron/visaRiskFlagEngine.test.js` with literal `<<<<<<< Updated upstream ... >>>>>>> Stashed changes` markers in the working tree (leftover from a prior tick's incomplete stash-pop). I ran `git checkout HEAD -- <file>` to clean it, then dispatched Agent C with a prompt premise that "the file was lost during conflict cleanup." **Wrong premise.** `git checkout HEAD -- <file>` REPLACES the working-tree version with HEAD's clean version (not "discards the file") — so the file was never lost; it was just temporarily ugly in the working tree. Agent C correctly ran `verifying-issue-before-pickup` first (per the standing rule from 2026-05-10 promotion), confirmed the file present at 733 lines / 34 tests, returned phantom-carry-over. **No-commit return saved ~30 min of fabricated-churn agent budget.** Pattern: when reasoning about "did this destructive-looking operation lose data?" — `git checkout HEAD -- <file>` is data-restoring (HEAD content wins over working tree), NOT data-destroying. Only `git rm` / `git checkout <other-branch> -- <file>` / `git reset --hard` are data-destroying for files. The init-time check should have been `git show HEAD:<file> | wc -l` BEFORE writing the agent prompt premise. **5th instance of phantom-carry-over** (prior 4: 2026-05-07 wave-3 #534, 2026-05-09 wave-3a #227, 2026-05-10 Wave 8 PRD Gap, 2026-05-22 `b18c5c4` re-audit). The verifying-issue-before-pickup standing rule fired correctly inside Agent C; the gap is that the DISPATCHER (me) didn't run the same check on my own init premise. Worth a one-liner extension to the standing rule: "the dispatcher runs verifying-issue-before-pickup on every prompt-premise too, not just the agent."
+
+- **2026-05-24 ~01:43 UTC — `safeEmitEvent` (tick #47, `eventBus.js`) → `adsGptClient` (tick #96, `9f35040`) → `ratehawkClient` (tick #97, `2852b82`) → `callifiedClient` (tick #98, `9ec52df`) — CJS self-mocking seam: inter-function calls within a CJS module MUST go through `module.exports.fn(...)` not the local closure binding, or `vi.spyOn(client, 'fn')` cannot intercept them.** Rule-of-3 trigger fired this session — 4 confirmed instances. Pattern: when module M exports both `f` and `g`, and `f` internally calls `g`, the test `vi.spyOn(M, 'g').mockResolvedValue(...)` does NOT intercept M's internal call because the local-binding closure references the original function directly, not the `module.exports.g` indirection. Fix: rewrite the call site in M as `module.exports.g(...)` so the spy on the exports surface catches it. The 3 service clients (adsGpt / ratehawk / callified) all wrote `module.exports.computeMonthlySpendCents(tenantId)` inside `checkBudgetCap` for exactly this reason; callifiedClient took it further with 4 inter-function calls all using module.exports indirection (`initiateCall` → `module.exports.{isEnabledForTenant, checkBudgetCap, resolveSubBrandPersona}`, plus `checkBudgetCap` → `module.exports.computeMonthlySpendCents`). **Promotion candidate:** encode into the `writing-vitest-unit-test` skill OR add a new "CJS self-mocking seam" subsection in `.claude/skills/dispatching-parallel-agent-wave/SKILL.md` (since most new vitest agents will hit this pattern when they add pre-call gates on a CJS module that ships testable side-effects). Cost saved per future agent that doesn't have to rediscover this: ~10-15 min of test-failure → spy-not-firing → why-not investigation.

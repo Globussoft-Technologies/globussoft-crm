@@ -130,6 +130,9 @@ describe('<Inbox /> — #623 composer Cc/Bcc', () => {
     expect(screen.queryByRole('button', { name: /show cc and bcc/i })).not.toBeInTheDocument();
   });
 
+  // Many user.click/type calls under userEvent's per-action wait — passes
+  // in isolation (~3.5s) but trips the 5s test timeout when the full
+  // 76-file suite runs under CPU contention. Bump to 15s for headroom.
   it('submitting the form sends cc + bcc through to /api/communications/send-email', async () => {
     const user = userEvent.setup();
     renderInbox();
@@ -158,7 +161,7 @@ describe('<Inbox /> — #623 composer Cc/Bcc', () => {
       expect(sentBody.subject).toBe('subject-here');
       expect(sentBody.body).toBe('body-here');
     });
-  });
+  }, 15_000);
 });
 
 describe('<Inbox /> — #624 Sent folder sub-tab', () => {

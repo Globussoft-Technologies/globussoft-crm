@@ -56,6 +56,34 @@ test.describe('payments API smoke', () => {
     expect(Array.isArray(body)).toBe(true);
   });
 
+  // ── #846 — date-range filter ────────────────────────────────────
+  // GET /api/payments accepts optional `?from=YYYY-MM-DD&to=YYYY-MM-DD`.
+  // Both params are independent + optional. Both must be Date-parseable,
+  // otherwise the route returns 400 with code INVALID_DATE_RANGE. The
+  // `to` boundary is auto-pushed to end-of-day when a date-only string
+  // is provided so the range is inclusive of the trailing calendar date.
+  test('#846 GET /?from&to filters by createdAt range', async ({ request }) => {
+    const res = await request.get(`${API}/payments?from=2026-01-01&to=2026-03-31`, { headers: auth() });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(true);
+    // Every returned row's createdAt must fall inside the window. (If the
+    // window has zero matching rows for the demo seed, an empty array is
+    // a valid + correct response — the filter applied, no row qualified.)
+    for (const p of body) {
+      const ts = new Date(p.createdAt).getTime();
+      expect(ts).toBeGreaterThanOrEqual(new Date('2026-01-01').getTime());
+      expect(ts).toBeLessThanOrEqual(new Date('2026-03-31T23:59:59.999').getTime());
+    }
+  });
+
+  test('#846 GET /?from=invalid returns 400 with INVALID_DATE_RANGE', async ({ request }) => {
+    const res = await request.get(`${API}/payments?from=not-a-date`, { headers: auth() });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body).toHaveProperty('code', 'INVALID_DATE_RANGE');
+  });
+
   test('GET /config exposes gateway configuration flags', async ({ request }) => {
     const res = await request.get(`${API}/payments/config`, { headers: auth() });
     expect(res.status()).toBe(200);

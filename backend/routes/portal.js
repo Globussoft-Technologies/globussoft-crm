@@ -5,7 +5,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 
-const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
+const { JWT_SECRET } = require("../config/secrets");
 const PORTAL_TOKEN_TTL = "7d";
 
 // In-memory reset token store: token -> { contactId, expiresAt }

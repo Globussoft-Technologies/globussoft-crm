@@ -191,7 +191,7 @@ export default function Reports() {
               <input type="date" className="input-field" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
             </div>
             {rangeInverted && (
-              <span style={{ color: '#ef4444', fontSize: '0.7rem', alignSelf: 'flex-start' }}>
+              <span className="report-error-text" style={{ fontSize: '0.7rem', alignSelf: 'flex-start' }}>
                 Start date must be on or before end date
               </span>
             )}
@@ -251,7 +251,7 @@ export default function Reports() {
               </select>
             </div>
 
-            <div style={{ marginTop: 'auto', padding: '1.5rem', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+            <div className="report-aggregate-card" style={{ marginTop: 'auto', padding: '1.5rem', borderRadius: '12px' }}>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.5rem' }}>Aggregate Total</p>
               <h2 style={{ fontSize: '1.75rem', fontWeight: 'bold', color: 'var(--accent-color)' }}>
                 {metric === 'revenue' || metric === 'invoices' || metric === 'expenses' ? formatMoney(totalValue) : totalValue}
@@ -466,11 +466,10 @@ export default function Reports() {
                     <td style={tdStyle}>{(() => { try { return JSON.parse(s.recipients).join(', '); } catch { return s.recipients; } })()}</td>
                     <td style={numericTdStyle}>{s.lastRunAt ? fmtDate(s.lastRunAt) : 'Never'}</td>
                     <td style={tdStyle}>
-                      <span style={{
-                        padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 'bold',
-                        backgroundColor: s.enabled ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                        color: s.enabled ? 'var(--success-color)' : '#ef4444'
-                      }}>
+                      <span
+                        className={`report-schedule-status-badge ${s.enabled ? 'report-schedule-status-badge--active' : 'report-schedule-status-badge--paused'}`}
+                        style={{ padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 'bold' }}
+                      >
                         {s.enabled ? 'Active' : 'Paused'}
                       </span>
                     </td>
@@ -482,7 +481,7 @@ export default function Reports() {
                         <button onClick={() => handleToggleSchedule(s.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.8rem' }}>
                           {s.enabled ? 'Pause' : 'Enable'}
                         </button>
-                        <button onClick={() => handleDeleteSchedule(s.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '0.8rem' }}>
+                        <button onClick={() => handleDeleteSchedule(s.id)} className="report-error-text" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }}>
                           Delete
                         </button>
                       </div>
@@ -562,15 +561,22 @@ function fmtDate(d) {
 }
 
 function StageBadge({ stage }) {
-  const colors = { won: '#10b981', lost: '#ef4444', lead: '#3b82f6', contacted: '#f59e0b', proposal: '#a855f7' };
-  const c = colors[stage] || '#6b7280';
-  return <span style={{ padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 'bold', backgroundColor: `${c}18`, color: c }}>{stage}</span>;
+  // Pre-refactor used a stage→hex map with inline RGBA fills; refactored to
+  // a `.report-pill report-pill--<variant>` class pair so the wellness/travel
+  // dark-mode theme can override the foreground+background tokens. Unknown
+  // stages fall through to `.report-pill--neutral`. See #873.
+  const variants = { won: 'success', lost: 'danger', lead: 'info', contacted: 'warning', proposal: 'accent' };
+  const variant = variants[stage] || 'neutral';
+  return <span className={`report-pill report-pill--${variant}`}>{stage}</span>;
 }
 
 function StatusBadge({ status }) {
+  // Pre-refactor used keyword bucketing → hex map; refactored to the same
+  // `.report-pill` variants used by StageBadge so badge styling is single-
+  // sourced. Status copy preserved verbatim (only the chrome flexes).
   const s = (status || '').toLowerCase();
-  const c = ['paid', 'completed', 'customer', 'active', 'approved', 'reimbursed'].some(x => s.includes(x)) ? '#10b981'
-    : ['overdue', 'rejected', 'churned', 'lost', 'urgent'].some(x => s.includes(x)) ? '#ef4444'
-    : ['pending', 'lead', 'draft', 'open'].some(x => s.includes(x)) ? '#f59e0b' : '#3b82f6';
-  return <span style={{ padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 'bold', backgroundColor: `${c}18`, color: c }}>{status}</span>;
+  const variant = ['paid', 'completed', 'customer', 'active', 'approved', 'reimbursed'].some(x => s.includes(x)) ? 'success'
+    : ['overdue', 'rejected', 'churned', 'lost', 'urgent'].some(x => s.includes(x)) ? 'danger'
+    : ['pending', 'lead', 'draft', 'open'].some(x => s.includes(x)) ? 'warning' : 'info';
+  return <span className={`report-pill report-pill--${variant}`}>{status}</span>;
 }

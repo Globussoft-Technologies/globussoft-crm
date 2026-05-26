@@ -213,10 +213,25 @@ export const fetchApi = async (url, options = {}) => {
 
   if (!response.ok) {
     if (response.status === 401) {
+      // #841 — background polls (Sidebar counters, dashboard refresh, queue
+      // pollers, etc.) pass {silent:true}. Before this fix, ANY 401 — even from
+      // a polling fetch that raced a token-rotation — force-navigated the user
+      // to /login mid-flow. Users clicking an in-app link would land on the
+      // login page because a sibling poll 401'd in the same tick.
+      //
+      // Foreground (user-initiated) requests still hard-redirect: a genuine
+      // expired session must boot the user out. Background polls fail silently;
+      // the next foreground request will surface the real 401 and redirect.
       clearAuthToken();
-      window.location.href = '/login';
-      // Throw anyway so awaiting callers don't continue past this point.
-      throw new Error('Session expired — please sign in again.');
+      if (!silent) {
+        window.location.href = '/login';
+        // Throw anyway so awaiting callers don't continue past this point.
+        throw new Error('Session expired — please sign in again.');
+      }
+      const err = new Error('Unauthorized');
+      err.status = 401;
+      err.silent = true;
+      throw err;
     }
 
     // #275: backend returns { error, code } (not { message }). Read both so

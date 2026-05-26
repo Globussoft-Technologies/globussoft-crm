@@ -1,6 +1,8 @@
 node_modules
 .env
 .env.*
+!.env.example
+!**/.env.example
 local.env
 dev.db
 dev.db-journal
@@ -98,3 +100,7 @@ e2e/.scratch/
 # invoices); the importer is local-DB only and not used in prod. Kept on
 # disk for re-runs, never committed.
 data-imports/
+
+# Travel CRM client docs — source-of-truth PDFs/DOCX from Yasin's team. Stay
+# local for review; the synthesized PRD lives at docs/TRAVEL_CRM_PRD.md.
+travel-crm/

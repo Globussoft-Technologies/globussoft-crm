@@ -78,6 +78,15 @@ module.exports = [
           selector: "MemberExpression[object.type='MemberExpression'][object.object.name='req'][object.property.name='user'][property.name='id']",
           message: "Use req.user.userId, not req.user.id. The JWT payload key set by verifyToken is 'userId' — bare req.user.id is undefined. See commit 6b1470f.",
         },
+        // #936: catch the destructure-rename form too —
+        //   const { id: userId } = req.user
+        // is the SAME bug class (id is undefined on req.user; the JWT payload
+        // key is userId). The bare-MemberExpression selector above doesn't
+        // see this form because it never reads `req.user.id` directly.
+        {
+          selector: "VariableDeclarator[init.type='MemberExpression'][init.object.name='req'][init.property.name='user'] > ObjectPattern > Property[key.name='id']",
+          message: "Don't destructure `id` from req.user — the JWT payload key is 'userId', so `{ id } = req.user` (or `{ id: foo } = req.user`) is always undefined. Use `{ userId } = req.user`. See issue #936.",
+        },
       ],
 
       // Hard errors — real bugs:
@@ -135,6 +144,11 @@ module.exports = [
         {
           selector: "MemberExpression[object.type='MemberExpression'][object.object.name='req'][object.property.name='user'][property.name='id']",
           message: "Use req.user.userId, not req.user.id. The JWT payload key set by verifyToken is 'userId' — bare req.user.id is undefined. See commit 6b1470f.",
+        },
+        // #936: same bug class, destructure-rename form
+        {
+          selector: "VariableDeclarator[init.type='MemberExpression'][init.object.name='req'][init.property.name='user'] > ObjectPattern > Property[key.name='id']",
+          message: "Don't destructure `id` from req.user — the JWT payload key is 'userId', so `{ id } = req.user` (or `{ id: foo } = req.user`) is always undefined. Use `{ userId } = req.user`. See issue #936.",
         },
         // #646: req.body.id / userId / tenantId / createdAt / updatedAt are
         // stripped before any handler runs. Reading them yields undefined.

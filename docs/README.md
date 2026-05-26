@@ -29,9 +29,11 @@ by audience.
 | Doc | What | Status |
 |---|---|---|
 | [../TODOS.md](../TODOS.md) | Engineering backlog at repo root | **Read first on every session start** |
-| [CALENDAR_INTEGRATION_GAPS.md](CALENDAR_INTEGRATION_GAPS.md) | 7-item calendar integration backlog (CAL-1..CAL-7) | Active |
+| [CALENDAR_INTEGRATION_GAPS.md](CALENDAR_INTEGRATION_GAPS.md) | 7-item calendar integration backlog (CAL-1..CAL-7) | ⚠️ snapshot 2026-05-11; verify before pickup |
 | [test-coverage-gaps.md](test-coverage-gaps.md) | Coverage gaps — Section A/B/C/D/E | ⚠️ snapshot 2026-05-06; verify before pickup |
-| [PENDING_USER_AND_OPERATOR.md](PENDING_USER_AND_OPERATOR.md) | Items blocked on the user or operator (CSV exports, Aadhaar/PAN, etc.) | Active |
+| [CREDS_TRACKER.md](CREDS_TRACKER.md) | Cred/asset chase across vendors + integrations | Active |
+| [DECISIONS_TRACKER.md](DECISIONS_TRACKER.md) | Product-call design decisions across PRDs | Active |
+| [MANUAL_CODING_BACKLOG.md](MANUAL_CODING_BACKLOG.md) | Clusters of multi-day work (D8-D20+) requiring focused sessions | Active |
 
 ## QA prompts
 
@@ -58,9 +60,20 @@ First vertical productization of the CRM. All wellness-specific docs are under
 | [wellness-client/SANDBOX.md](wellness-client/SANDBOX.md) | Sandbox snapshot/restore workflow |
 | [wellness-client/STATUS.md](wellness-client/STATUS.md) + [wellness-client/DEMO_14_4.md](wellness-client/DEMO_14_4.md) | Demo run-book |
 
+## PRDs (design docs awaiting product call)
+
+Top-of-folder `PRD_*.md` files document multi-day features whose implementation is gated on a product-call decision. They follow a strict §1-§10 template (background → use cases → functional reqs → non-functional → design decisions → AC → out-of-scope → deps → open questions → status). See [.claude/skills/writing-bonus-prd/SKILL.md](../.claude/skills/writing-bonus-prd/SKILL.md) for the template.
+
+23 PRDs currently shipped; clusters tracked in [MANUAL_CODING_BACKLOG.md](MANUAL_CODING_BACKLOG.md) (D8-D20+). Browse via `ls docs/PRD_*.md`.
+
+## Cron prompts
+
+- [CRON_TEST_WRITING_PROMPT.md](CRON_TEST_WRITING_PROMPT.md) — autonomous test-writing cron (parallel to the programming cron; targets 100% coverage; bug discoveries route to GH issues, never inline fixes).
+
 ## Archives
 
 - [handoffs-archive/](handoffs-archive/) — session-boundary handoffs from prior cycles. Kept for historical reconstruction, not active work. See `handoffs-archive/README.md` for the convention.
+- [archive/](archive/) — point-in-time audits + triage docs + closed-incident fix logs. See `archive/README.md` for the convention.
 - [gaps/archive/](gaps/archive/) — fully-closed gap / backlog / regression-tracking files. Recent additions: `E2E_GAPS-closed-2026-05-14.md` (G-1..G-25 all shipped), `regression-coverage-backlog-closed-2026-05-14.md` (all 24 items ☑). See `gaps/archive/README.md` for the convention.
 - [cron-learnings-archive.md](cron-learnings-archive.md) — dispositioned cron-learning entries that have been promoted to skills or standing rules (full rationale per entry).
 

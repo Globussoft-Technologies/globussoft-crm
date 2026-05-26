@@ -11,33 +11,44 @@
  * ───────────────────
  *   1. Thread list render — GET /api/whatsapp/threads renders one row per
  *      thread with display name + phone + unread badge + status pill.
- *   2. Status filter — selecting "Open" re-fetches with ?status=OPEN.
- *   3. Unread filter — toggling the "Unread" checkbox re-fetches with
- *      ?unread=true.
- *   4. Search box — typing a query + submitting the form re-fetches with
+ *   2. Tab strip (Zylu-Gap #796) — All / Unread / Blocked tabs render with
+ *      counts; selecting Unread re-fetches with ?unread=true; selecting
+ *      Blocked fetches /api/whatsapp/opt-outs and renders opt-out rows.
+ *   3. Search box — typing a query + submitting the form re-fetches with
  *      ?q=<query>.
- *   5. Open thread — clicking a row fetches /api/whatsapp/threads/:id and
+ *   4. Open thread — clicking a row fetches /api/whatsapp/threads/:id and
  *      renders messages from `detail.messages` in the right pane.
- *   6. Reply send — typing in the textarea + clicking Send POSTs
+ *   5. Reply send — typing in the textarea + clicking Send POSTs
  *      /api/whatsapp/send with { to: <contactPhone>, body: <reply> }.
  *      Ctrl+Enter inside the textarea also triggers send.
- *   7. Assign-to-me — POST /api/whatsapp/threads/:id/assign with
+ *   6. Assign-to-me — POST /api/whatsapp/threads/:id/assign with
  *      `targetUserId` (NOT `userId` — stripDangerous deletes the latter
  *      per CLAUDE.md standing rules; the bug at #646 was that the page
  *      was sending the stripped key, which the backend interpreted as
  *      "unassign").
- *   8. Close thread — POST /api/whatsapp/threads/:id/close after the
+ *   7. Close thread — POST /api/whatsapp/threads/:id/close after the
  *      confirm() resolves true.
- *   9. Snooze — prompt() collects hours; POST /snooze with `until` field
+ *   8. Snooze — prompt() collects hours; POST /snooze with `until` field
  *      (ISO timestamp `Date.now() + hours * 3.6e6`).
- *  10. Opt-out reply gate — when `detail.optedOut` is set, the right
+ *   9. Opt-out reply gate — when `detail.optedOut` is set, the right
  *      pane renders the DPDP/TRAI compliance chip AND the reply textarea
  *      + Send button are NOT rendered (DPDP-mandated reply lockout).
+ *  10. 24-hour window banner (Zylu-Gap #798) — banner reads OPEN when the
+ *      latest inbound is <24h old (free-form allowed) and CLOSED when
+ *      no inbound exists OR latest inbound is >24h ago (compose textarea
+ *      disabled). Server-side authoritative gate is OUTSIDE_24H_WINDOW
+ *      at routes/whatsapp.js:145.
+ *  11. Template picker (Zylu-Gap #797) — Templates button opens a modal,
+ *      fetches /api/whatsapp/templates, and substitutes {{name}} /
+ *      {{phone}} variables from the active thread when "Use this template"
+ *      drops the body into the reply textarea.
  *
  * Backend contracts pinned by this test
  * ─────────────────────────────────────
- *   - GET  /api/whatsapp/threads?limit=50[&status][&unread][&q]
+ *   - GET  /api/whatsapp/threads?limit=50[&unread][&q]
  *   - GET  /api/whatsapp/threads/:id            (returns { thread, messages, optedOut })
+ *   - GET  /api/whatsapp/opt-outs?limit=100     (Blocked tab data)
+ *   - GET  /api/whatsapp/templates              (template picker)
  *   - POST /api/whatsapp/threads/:id/mark-read  (auto-fired when unreadCount > 0)
  *   - POST /api/whatsapp/threads/:id/assign     ({ targetUserId })
  *   - POST /api/whatsapp/threads/:id/close
@@ -47,10 +58,11 @@
  * Why a frontend test, not a backend / API test
  * ─────────────────────────────────────────────
  *   The backend route shapes are covered by e2e/tests/whatsapp-api.spec.js.
- *   This file pins the page surface — that the filters wire to the right
- *   query strings, that the reply box honours the opt-out gate, that
- *   "Assign to me" sends `targetUserId` (which would silently break if a
- *   refactor reverted to `userId`).
+ *   This file pins the page surface — that the tab strip wires to the right
+ *   query strings, that the reply box honours the opt-out + 24h gates, that
+ *   the template picker substitutes variables, and that "Assign to me"
+ *   sends `targetUserId` (which would silently break if a refactor reverted
+ *   to `userId`).
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -62,18 +74,17 @@ vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
 }));
 
-const notifyError = vi.fn();
-const notifySuccess = vi.fn();
-const notifyConfirm = vi.fn(() => Promise.resolve(true));
-const notifyPrompt = vi.fn(() => Promise.resolve('4'));
+// RTL standing rule (CLAUDE.md) — return ONE stable mock object across the
+// run for hooks landed in useCallback / useMemo dependency arrays.
+const notifyObj = {
+  error: vi.fn(),
+  info: vi.fn(),
+  success: vi.fn(),
+  confirm: vi.fn(() => Promise.resolve(true)),
+  prompt: vi.fn(() => Promise.resolve('4')),
+};
 vi.mock('../utils/notify', () => ({
-  useNotify: () => ({
-    error: notifyError,
-    info: vi.fn(),
-    success: notifySuccess,
-    confirm: notifyConfirm,
-    prompt: notifyPrompt,
-  }),
+  useNotify: () => notifyObj,
   NotifyProvider: ({ children }) => children,
 }));
 
@@ -119,6 +130,7 @@ const sampleDetailOpen = {
     assignedTo: null,
     snoozedUntil: null,
   },
+  // Inbound 10 minutes ago — well inside the 24h window.
   messages: [
     {
       id: 1001,
@@ -133,6 +145,31 @@ const sampleDetailOpen = {
       body: 'Yes — sending you a slot link now.',
       status: 'SENT',
       createdAt: new Date(Date.now() - 300_000).toISOString(),
+    },
+  ],
+  optedOut: null,
+};
+
+// 24h-closed thread — last inbound was 2 days ago.
+const sampleDetailClosed = {
+  thread: {
+    id: 14,
+    contactPhone: '+919811112222',
+    contact: { name: 'Cold Contact' },
+    patient: null,
+    status: 'OPEN',
+    unreadCount: 0,
+    assignedTo: null,
+    snoozedUntil: null,
+    lastInboundAt: new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString(),
+  },
+  messages: [
+    {
+      id: 2001,
+      direction: 'INBOUND',
+      body: 'Old message',
+      status: 'DELIVERED',
+      createdAt: new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString(),
     },
   ],
   optedOut: null,
@@ -164,6 +201,40 @@ const sampleDetailOptedOut = {
   },
 };
 
+const sampleOptOuts = [
+  {
+    id: 501,
+    contactPhone: '+919999988888',
+    reason: 'STOP_KEYWORD',
+    capturedAt: new Date(Date.now() - 86_400_000).toISOString(),
+    notes: null,
+  },
+  {
+    id: 502,
+    contactPhone: '+919999977777',
+    reason: 'USER_REQUESTED',
+    capturedAt: new Date(Date.now() - 3_600_000).toISOString(),
+    notes: null,
+  },
+];
+
+const sampleTemplates = [
+  {
+    id: 901,
+    name: 'appointment_reminder',
+    body: 'Hi {{name}}, your appointment is tomorrow at {{appointment_time}}. — Globussoft Clinic',
+    status: 'APPROVED',
+    category: 'UTILITY',
+  },
+  {
+    id: 902,
+    name: 'welcome',
+    body: 'Welcome {{firstName}}! Reply YES to confirm.',
+    status: 'PENDING',
+    category: 'MARKETING',
+  },
+];
+
 function defaultFetch(url, opts) {
   if (!opts || !opts.method || opts.method === 'GET') {
     if (url.startsWith('/api/whatsapp/threads/11')) {
@@ -172,8 +243,17 @@ function defaultFetch(url, opts) {
     if (url.startsWith('/api/whatsapp/threads/13')) {
       return Promise.resolve(sampleDetailOptedOut);
     }
+    if (url.startsWith('/api/whatsapp/threads/14')) {
+      return Promise.resolve(sampleDetailClosed);
+    }
     if (url.startsWith('/api/whatsapp/threads')) {
       return Promise.resolve({ threads: sampleThreads });
+    }
+    if (url.startsWith('/api/whatsapp/opt-outs')) {
+      return Promise.resolve({ optOuts: sampleOptOuts });
+    }
+    if (url.startsWith('/api/whatsapp/templates')) {
+      return Promise.resolve(sampleTemplates);
     }
   }
   if (opts?.method === 'POST') {
@@ -184,12 +264,13 @@ function defaultFetch(url, opts) {
 
 beforeEach(() => {
   fetchApiMock.mockReset();
-  notifyError.mockReset();
-  notifySuccess.mockReset();
-  notifyConfirm.mockReset();
-  notifyConfirm.mockImplementation(() => Promise.resolve(true));
-  notifyPrompt.mockReset();
-  notifyPrompt.mockImplementation(() => Promise.resolve('4'));
+  notifyObj.error.mockReset();
+  notifyObj.info.mockReset();
+  notifyObj.success.mockReset();
+  notifyObj.confirm.mockReset();
+  notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
+  notifyObj.prompt.mockReset();
+  notifyObj.prompt.mockImplementation(() => Promise.resolve('4'));
   fetchApiMock.mockImplementation(defaultFetch);
   // Seed localStorage with a logged-in user for assign-to-me.
   window.localStorage.setItem(
@@ -220,38 +301,34 @@ describe('<WhatsAppThreads /> — thread list rendering', () => {
 
   it('renders an unread badge for threads with unreadCount > 0', async () => {
     render(<WhatsAppThreads />);
-    // The first thread has unreadCount=2.
-    expect(await screen.findByText('2')).toBeInTheDocument();
+    // The first thread has unreadCount=2 — the badge is the literal text "2"
+    // in the row. Use getAllByText since "2" is a common token (tab count
+    // for All also reads as numbers).
+    await screen.findByText('Rishu Goyal');
+    expect(screen.getAllByText('2').length).toBeGreaterThan(0);
   });
 });
 
-describe('<WhatsAppThreads /> — list filters', () => {
-  it('changing the status filter re-fetches with ?status=OPEN', async () => {
-    const user = userEvent.setup();
+// #796 — All / Unread / Blocked tab strip replaces the prior status-dropdown
+// + unread-checkbox surface.
+describe('<WhatsAppThreads /> — All/Unread/Blocked tabs (#796)', () => {
+  it('renders three tabs with counts on the left rail', async () => {
     render(<WhatsAppThreads />);
     await screen.findByText('Rishu Goyal');
 
-    fetchApiMock.mockClear();
-    // The status filter is the only <select> on the page.
-    const select = screen.getByRole('combobox');
-    await user.selectOptions(select, 'OPEN');
-
-    await waitFor(() => {
-      const call = fetchApiMock.mock.calls.find(
-        ([url]) => typeof url === 'string' && url.includes('status=OPEN')
-      );
-      expect(call).toBeTruthy();
-    });
+    const tablist = screen.getByTestId('whatsapp-thread-tabs');
+    expect(within(tablist).getByTestId('whatsapp-tab-all')).toBeInTheDocument();
+    expect(within(tablist).getByTestId('whatsapp-tab-unread')).toBeInTheDocument();
+    expect(within(tablist).getByTestId('whatsapp-tab-blocked')).toBeInTheDocument();
   });
 
-  it('toggling the Unread checkbox re-fetches with ?unread=true', async () => {
+  it('selecting the Unread tab re-fetches with ?unread=true', async () => {
     const user = userEvent.setup();
     render(<WhatsAppThreads />);
     await screen.findByText('Rishu Goyal');
 
     fetchApiMock.mockClear();
-    const unreadCheckbox = screen.getByRole('checkbox');
-    await user.click(unreadCheckbox);
+    await user.click(screen.getByTestId('whatsapp-tab-unread'));
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -261,6 +338,28 @@ describe('<WhatsAppThreads /> — list filters', () => {
     });
   });
 
+  it('selecting the Blocked tab fetches /api/whatsapp/opt-outs and renders opt-out rows', async () => {
+    const user = userEvent.setup();
+    render(<WhatsAppThreads />);
+    await screen.findByText('Rishu Goyal');
+
+    fetchApiMock.mockClear();
+    await user.click(screen.getByTestId('whatsapp-tab-blocked'));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url]) => typeof url === 'string' && url.startsWith('/api/whatsapp/opt-outs')
+      );
+      expect(call).toBeTruthy();
+    });
+
+    // Opt-out phones render in the rail.
+    expect(await screen.findByTestId('whatsapp-blocked-row-501')).toBeInTheDocument();
+    expect(screen.getByText('+919999988888')).toBeInTheDocument();
+  });
+});
+
+describe('<WhatsAppThreads /> — search box', () => {
   it('typing in search + clicking Go re-fetches with ?q=<query>', async () => {
     const user = userEvent.setup();
     render(<WhatsAppThreads />);
@@ -319,7 +418,7 @@ describe('<WhatsAppThreads /> — reply send', () => {
     render(<WhatsAppThreads />);
     await user.click(await screen.findByText('Rishu Goyal'));
 
-    const textarea = await screen.findByPlaceholderText(/Type a reply/i);
+    const textarea = await screen.findByTestId('whatsapp-reply-textarea');
     await user.type(textarea, 'Slot is at 4pm');
     await user.click(screen.getByRole('button', { name: /^Send$/ }));
 
@@ -339,7 +438,7 @@ describe('<WhatsAppThreads /> — reply send', () => {
     render(<WhatsAppThreads />);
     await user.click(await screen.findByText('Rishu Goyal'));
 
-    const textarea = await screen.findByPlaceholderText(/Type a reply/i);
+    const textarea = await screen.findByTestId('whatsapp-reply-textarea');
     await user.type(textarea, 'Reply via shortcut');
     // userEvent's keyboard syntax for Ctrl+Enter chord.
     await user.keyboard('{Control>}{Enter}{/Control}');
@@ -397,12 +496,12 @@ describe('<WhatsAppThreads /> — header actions', () => {
       expect(closeCall).toBeTruthy();
     });
     // Confirm() must have been invoked first — this is a destructive action.
-    expect(notifyConfirm).toHaveBeenCalled();
+    expect(notifyObj.confirm).toHaveBeenCalled();
   });
 
   it('clicking "Snooze" collects hours via prompt() then POSTs /snooze with an `until` ISO timestamp', async () => {
     const user = userEvent.setup();
-    notifyPrompt.mockImplementation(() => Promise.resolve('4'));
+    notifyObj.prompt.mockImplementation(() => Promise.resolve('4'));
     render(<WhatsAppThreads />);
     await user.click(await screen.findByText('Rishu Goyal'));
     await screen.findByText('Hi, can I book a follow-up?');
@@ -422,6 +521,119 @@ describe('<WhatsAppThreads /> — header actions', () => {
       expect(Number.isFinite(untilMs)).toBe(true);
       expect(untilMs).toBeGreaterThan(Date.now());
     });
+  });
+});
+
+// #798 — Meta 24-hour window banner gates free-form sends.
+describe('<WhatsAppThreads /> — 24-hour window banner (#798)', () => {
+  it('renders the OPEN banner when latest inbound is within 24h', async () => {
+    const user = userEvent.setup();
+    render(<WhatsAppThreads />);
+    await user.click(await screen.findByText('Rishu Goyal'));
+    const banner = await screen.findByTestId('whatsapp-24h-banner');
+    expect(banner).toBeInTheDocument();
+    expect(banner.getAttribute('data-window-open')).toBe('true');
+    expect(banner).toHaveTextContent(/24-hour window open/i);
+  });
+
+  it('renders the CLOSED banner + disables compose when latest inbound is >24h ago', async () => {
+    // Override list to put thread 14 (closed-window) in the inbox.
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (!opts || !opts.method || opts.method === 'GET') {
+        if (url.startsWith('/api/whatsapp/threads/14')) {
+          return Promise.resolve(sampleDetailClosed);
+        }
+        if (url.startsWith('/api/whatsapp/threads')) {
+          return Promise.resolve({
+            threads: [{
+              id: 14,
+              contactPhone: '+919811112222',
+              contact: { name: 'Cold Contact' },
+              patient: null,
+              unreadCount: 0,
+              status: 'OPEN',
+              lastMessageAt: new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString(),
+              assignedTo: null,
+            }],
+          });
+        }
+        if (url.startsWith('/api/whatsapp/templates')) {
+          return Promise.resolve(sampleTemplates);
+        }
+      }
+      return Promise.resolve({});
+    });
+
+    const user = userEvent.setup();
+    render(<WhatsAppThreads />);
+    await user.click(await screen.findByText('Cold Contact'));
+
+    const banner = await screen.findByTestId('whatsapp-24h-banner');
+    expect(banner.getAttribute('data-window-open')).toBe('false');
+    expect(banner).toHaveTextContent(/24-hour window closed/i);
+
+    // Compose textarea is disabled outside the window — only templates allowed.
+    const textarea = await screen.findByTestId('whatsapp-reply-textarea');
+    expect(textarea).toBeDisabled();
+    // Send button also disabled.
+    expect(screen.getByRole('button', { name: /^Send$/ })).toBeDisabled();
+  });
+});
+
+// #797 — Template picker with {{variable}} substitution.
+describe('<WhatsAppThreads /> — Template picker (#797)', () => {
+  it('clicking Templates opens the modal and fetches /api/whatsapp/templates', async () => {
+    const user = userEvent.setup();
+    render(<WhatsAppThreads />);
+    await user.click(await screen.findByText('Rishu Goyal'));
+    await screen.findByText('Hi, can I book a follow-up?');
+
+    await user.click(screen.getByTestId('whatsapp-pick-template'));
+
+    // Modal opens.
+    expect(await screen.findByTestId('whatsapp-template-modal')).toBeInTheDocument();
+    // Templates fetched.
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url]) => typeof url === 'string' && url === '/api/whatsapp/templates'
+      );
+      expect(call).toBeTruthy();
+    });
+    // Both template rows rendered.
+    expect(await screen.findByTestId('whatsapp-template-row-901')).toBeInTheDocument();
+    expect(screen.getByTestId('whatsapp-template-row-902')).toBeInTheDocument();
+  });
+
+  it('substitutes {{name}} from the active thread when previewing a template', async () => {
+    const user = userEvent.setup();
+    render(<WhatsAppThreads />);
+    await user.click(await screen.findByText('Rishu Goyal'));
+    await screen.findByText('Hi, can I book a follow-up?');
+
+    await user.click(screen.getByTestId('whatsapp-pick-template'));
+    await screen.findByTestId('whatsapp-template-row-901');
+
+    // The appointment_reminder body has "{{name}}" which should be replaced
+    // with the contact name "Rishu Goyal" in the preview text. The
+    // {{appointment_time}} variable has no source so it stays as-is.
+    const row = screen.getByTestId('whatsapp-template-row-901');
+    expect(row).toHaveTextContent(/Hi Rishu Goyal/);
+    expect(row).toHaveTextContent(/\{\{appointment_time\}\}/);
+  });
+
+  it('clicking "Use this template" drops the substituted body into the reply textarea', async () => {
+    const user = userEvent.setup();
+    render(<WhatsAppThreads />);
+    await user.click(await screen.findByText('Rishu Goyal'));
+    await screen.findByText('Hi, can I book a follow-up?');
+
+    await user.click(screen.getByTestId('whatsapp-pick-template'));
+    await user.click(await screen.findByTestId('whatsapp-template-use-902'));
+
+    const textarea = await screen.findByTestId('whatsapp-reply-textarea');
+    // Template 902 body is "Welcome {{firstName}}! Reply YES to confirm."
+    // firstName resolves to "Rishu" (first whitespace token of "Rishu Goyal").
+    expect(textarea.value).toContain('Welcome Rishu!');
   });
 });
 
@@ -478,7 +690,7 @@ describe('<WhatsAppThreads /> — opt-out reply gate (DPDP / TRAI)', () => {
 
     // The textarea must NOT be in the DOM (the page conditionally renders
     // the lockout copy instead of the reply box when optedOut is truthy).
-    expect(screen.queryByPlaceholderText(/Type a reply/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('whatsapp-reply-textarea')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Send$/ })).not.toBeInTheDocument();
 
     // The DPDP / TRAI lockout copy renders in its place.

@@ -42,7 +42,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import { fetchApi } from '../utils/api';
-import Calendar, { hoursForVisits } from '../pages/wellness/Calendar';
+import Calendar, { hoursForVisits, isHolidayForColumn } from '../pages/wellness/Calendar';
 
 const today = new Date();
 const isoDay = today.toISOString().slice(0, 10);
@@ -62,13 +62,14 @@ const patientsList = [
   { id: 201, name: 'Rohan Verma', phone: '+919876543211' },
 ];
 
-function setupFetch({ visits = [], waitlist = [] } = {}) {
+function setupFetch({ visits = [], waitlist = [], holidays = [] } = {}) {
   fetchApi.mockImplementation((url) => {
     if (url === '/api/staff') return Promise.resolve(staff);
     if (url.startsWith('/api/wellness/visits?')) return Promise.resolve(visits);
     if (url === '/api/wellness/services') return Promise.resolve(services);
     if (url === '/api/wellness/patients') return Promise.resolve(patientsList);
     if (url.startsWith('/api/wellness/waitlist')) return Promise.resolve(waitlist);
+    if (url.startsWith('/api/wellness/holidays')) return Promise.resolve(holidays);
     return Promise.resolve([]);
   });
 }
@@ -149,15 +150,19 @@ describe('<Calendar /> — #615 layout regressions', () => {
   it('renders the calendar grid with minmax(0, 1fr) tracks (ellipsis-friendly)', async () => {
     setupFetch({ visits: [] });
     const { container } = renderCalendar();
-    await waitFor(() => expect(screen.getByText(/Day view by practitioner/i)).toBeInTheDocument());
-
-    const grid = container.querySelector('.calendar-grid');
-    expect(grid).toBeTruthy();
-    // The grid template uses minmax(0, 1fr) per the standing rule —
-    // hard 120px floor was removed so columns can shrink and the
-    // ellipsis chain on practitioner names actually clips.
-    const tpl = grid.style.gridTemplateColumns;
-    expect(tpl).toMatch(/minmax\(0,\s*1fr\)/);
+    // Wait for the staff fetch to resolve AND the grid to actually mount.
+    // The "Day view by practitioner" heading renders before `loading` flips
+    // off, so under CI load the grid can still be absent when the heading
+    // appears. Anchor on a practitioner name (rendered inside .calendar-grid)
+    // to guarantee the grid is in the DOM before we read its style. Then
+    // poll until the inline gridTemplateColumns is non-empty — CI runners
+    // sometimes commit the element before the style attribute resolves.
+    await screen.findByText('Dr. Anjali Mukherjee');
+    await waitFor(() => {
+      const g = container.querySelector('.calendar-grid');
+      expect(g).toBeTruthy();
+      expect(g.style.gridTemplateColumns).toMatch(/minmax\(0,\s*1fr\)/);
+    });
   });
 
   it('renders practitioner column headers with a tooltip + ellipsis chain', async () => {
@@ -283,5 +288,107 @@ describe('<Calendar /> — #629 waitlist promote', () => {
       expect(body.status).toBe('booked');
       expect(body.visitDate).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:00:00\+05:30$/);
     });
+  });
+});
+
+// #807 (Zylu-Gap CAL-002) — Holiday UI on the calendar grid.
+describe('isHolidayForColumn() — #807 per-column holiday matcher', () => {
+  it('tenant-wide holiday (no location, no doctor) applies to every column', () => {
+    const hs = [{ id: 1, name: 'Republic Day', locationId: null, doctorId: null }];
+    expect(isHolidayForColumn(hs, { id: 5, isUnassigned: false })).toBeTruthy();
+    expect(isHolidayForColumn(hs, { id: 6, isUnassigned: false })).toBeTruthy();
+    // Even the synthetic Unassigned column gets the tenant-wide holiday.
+    expect(isHolidayForColumn(hs, { id: '__unassigned__', isUnassigned: true })).toBeTruthy();
+  });
+
+  it('practitioner-specific holiday (doctorId set) applies only to that column', () => {
+    const hs = [{ id: 2, name: 'Personal Day', locationId: null, doctorId: 5 }];
+    expect(isHolidayForColumn(hs, { id: 5, isUnassigned: false })).toBeTruthy();
+    expect(isHolidayForColumn(hs, { id: 6, isUnassigned: false })).toBeNull();
+  });
+
+  it('returns null when there are no holidays', () => {
+    expect(isHolidayForColumn([], { id: 5, isUnassigned: false })).toBeNull();
+    expect(isHolidayForColumn(null, { id: 5, isUnassigned: false })).toBeNull();
+    expect(isHolidayForColumn(undefined, { id: 5, isUnassigned: false })).toBeNull();
+  });
+
+  it('location-scoped holiday applies to non-Unassigned columns (until per-column location ships)', () => {
+    const hs = [{ id: 3, name: 'Holi (BLR)', locationId: 7, doctorId: null }];
+    // Practitioner column → greyed.
+    expect(isHolidayForColumn(hs, { id: 5, isUnassigned: false })).toBeTruthy();
+    // Unassigned synthetic column → spared.
+    expect(isHolidayForColumn(hs, { id: '__unassigned__', isUnassigned: true })).toBeNull();
+  });
+});
+
+describe('<Calendar /> — #807 Holiday UI', () => {
+  beforeEach(() => {
+    fetchApi.mockReset();
+  });
+
+  it('renders the holiday banner when /holidays returns at least one row', async () => {
+    setupFetch({
+      visits: [],
+      holidays: [{ id: 1, name: 'Republic Day', locationId: null, doctorId: null, date: today.toISOString() }],
+    });
+    renderCalendar();
+    const banner = await screen.findByTestId('holiday-banner');
+    expect(banner).toBeInTheDocument();
+    expect(banner.textContent).toMatch(/Republic Day/);
+  });
+
+  it('greys out practitioner columns under a tenant-wide holiday with a "Holiday — <name>" header tag', async () => {
+    setupFetch({
+      visits: [],
+      holidays: [{ id: 1, name: 'Republic Day', locationId: null, doctorId: null, date: today.toISOString() }],
+    });
+    renderCalendar();
+    await waitFor(() => expect(screen.getByText('Dr. Anjali Mukherjee')).toBeInTheDocument());
+
+    // Holiday tag appears under each practitioner's name in the column header.
+    const tags = screen.getAllByText(/Holiday — Republic Day/i);
+    expect(tags.length).toBeGreaterThanOrEqual(1);
+    // Tooltip on the header carries the holiday name.
+    const head = screen.getByText('Dr. Anjali Mukherjee').closest('[title]');
+    expect(head.getAttribute('title')).toMatch(/Republic Day/);
+  });
+
+  it('greys out only the matching practitioner column under a doctor-specific holiday', async () => {
+    setupFetch({
+      visits: [],
+      holidays: [{ id: 2, name: 'Personal Day', locationId: null, doctorId: 5, date: today.toISOString() }],
+    });
+    renderCalendar();
+    await waitFor(() => expect(screen.getByText('Dr. Anjali Mukherjee')).toBeInTheDocument());
+
+    // Doctor 5 (Anjali) → Holiday tag visible.
+    expect(screen.getAllByText(/Holiday — Personal Day/i).length).toBeGreaterThanOrEqual(1);
+    // The other practitioner's header has no holiday tag — its closest title
+    // attribute is the regular name+role tooltip, not the Holiday: prefix.
+    const sandeepHead = screen.getByText('Sandeep Bose').closest('[title]');
+    expect(sandeepHead.getAttribute('title')).not.toMatch(/Holiday:/);
+  });
+
+  it('blocks click-to-book on holiday cells (cursor: default, no New Visit modal)', async () => {
+    setupFetch({
+      visits: [],
+      holidays: [{ id: 1, name: 'Republic Day', locationId: null, doctorId: null, date: today.toISOString() }],
+    });
+    const user = userEvent.setup();
+    const { container } = renderCalendar();
+    await waitFor(() => expect(screen.getByText('Dr. Anjali Mukherjee')).toBeInTheDocument());
+
+    // No cells with `title^="Book "` should exist — all are gated by the
+    // tenant-wide holiday.
+    const bookable = container.querySelector('[title^="Book "]');
+    expect(bookable).toBeNull();
+
+    // Holiday cells expose a holiday-tooltip title prefix.
+    const holidayTitled = container.querySelector('[title^="Holiday:"]');
+    expect(holidayTitled).toBeTruthy();
+    await user.click(holidayTitled);
+    // Modal not opened.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

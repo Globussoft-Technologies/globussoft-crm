@@ -514,11 +514,19 @@ export default function Settings() {
             <Sun size={20} color="var(--warning-color)" /> Appearance
           </h3>
           <div style={{ minWidth: 0 }}>
-            <p style={{ fontWeight: '500', fontSize: '1rem', marginBottom: '1rem' }}>Theme</p>
+            <p id="appearance-theme-label" style={{ fontWeight: '500', fontSize: '1rem', marginBottom: '1rem' }}>Theme</p>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1rem' }}>
               Choose how the interface should appear.
             </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {/* #874 — role="radiogroup" + aria-labelledby gives screen readers
+                proper group semantics on the three theme options. Native
+                same-name radio inputs already handle arrow-key navigation
+                between options (one Tab stop into the group; arrows cycle). */}
+            <div
+              role="radiogroup"
+              aria-labelledby="appearance-theme-label"
+              style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}
+            >
               {[
                 { value: 'light', label: 'Light mode', icon: Sun },
                 { value: 'dark', label: 'Dark mode', icon: Moon },
@@ -563,6 +571,10 @@ export default function Settings() {
                     onChange={(e) => {
                       if (e.target.checked) {
                         setTheme(value);
+                        // #875 — confirm the preference landed. setTheme writes
+                        // to local state + localStorage synchronously, so by the
+                        // time this fires the choice is persisted.
+                        notify.success(`Theme set to ${label}`);
                       }
                     }}
                     style={{ cursor: 'pointer' }}

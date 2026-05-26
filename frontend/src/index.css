@@ -22,6 +22,12 @@
   --glass-border: rgba(255, 255, 255, 0.1);
   --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
 
+  /* #877 — Kanban column surface, deliberately darker than --surface-color
+     so deal cards (which use .card → --surface-color) stand out against
+     their column wrapper. Default mirrors dark-theme since :root is the
+     no-data-theme fallback (effectively dark on this app). */
+  --column-bg: rgba(8, 10, 14, 0.65);
+
   --transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 
   --input-bg: rgba(15, 23, 42, 0.6);
@@ -61,6 +67,11 @@
   --glass-border: rgba(0, 0, 0, 0.08);
   --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.08);
 
+  /* #877 — Light theme: column wrapper sits BEHIND cream-white cards.
+     Slight cream-warm tint visibly darker than --surface-color
+     (rgba(255,255,255,0.7)) so columns and cards have separation. */
+  --column-bg: rgba(238, 232, 220, 0.85);
+
   --input-bg: rgba(255, 255, 255, 0.8);
   --input-bg-focus: rgba(255, 255, 255, 0.95);
   --scrollbar-thumb: rgba(0, 0, 0, 0.15);
@@ -97,6 +108,12 @@
   --glass-bg: rgba(20, 22, 28, 0.5);
   --glass-border: rgba(255, 255, 255, 0.1);
   --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+
+  /* #877 — Dark theme: column wrapper deliberately darker than
+     --surface-color (rgba(22,24,29,0.6)) so deal cards (using .card →
+     --surface-color) stand out. Pre-fix the two were within ~5% lightness
+     and the kanban surface read as one large undifferentiated panel. */
+  --column-bg: rgba(8, 10, 14, 0.8);
 
   --input-bg: rgba(15, 23, 42, 0.6);
   --input-bg-focus: rgba(15, 23, 42, 0.8);

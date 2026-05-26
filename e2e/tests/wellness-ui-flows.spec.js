@@ -30,7 +30,10 @@ test.use({ storageState: { cookies: [], origins: [] } });
 async function loginAsWellnessAdmin(page) {
   await page.goto(`${BASE_URL}/login`);
   await page.waitForLoadState('domcontentloaded');
-  const demoAdminBtn = page.getByRole('button', { name: /Demo Admin/i });
+  // v3.9.0 added a Travel Stall "Demo Admin" button (admin@travelstall.demo)
+  // alongside the wellness one — anchor on the email suffix in the accessible
+  // name to keep the regex unique.
+  const demoAdminBtn = page.getByRole('button', { name: /Demo Admin\s+admin@wellness/i });
   await expect(demoAdminBtn).toBeVisible({ timeout: 15000 });
   await demoAdminBtn.click();
   await page.waitForURL(/\/wellness/, { timeout: 20000 });

@@ -82,6 +82,18 @@ function validateEstimateInput(body, { isUpdate = false } = {}) {
 
 // GET /api/estimates — list with optional status filter
 // #167: soft-deleted rows hidden by default; opt in with ?includeDeleted=true.
+// #920 slice 13: ?fields=summary slim-shape opt-in. Mirrors slice 1
+// (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+// badc9cca), slice 4 (tasks eec7d856), slice 5 (projects 257771a0),
+// slice 6 (expenses e81e6cb5), slice 7 (notifications a3487518),
+// slice 8 (surveys e71594d9), slice 9 (email-templates 0d4a63f9),
+// slice 10 (knowledge-base 21ad3290), slice 11 (playbooks),
+// slice 12 (sequences). When the caller passes ?fields=summary we drop
+// the heavy `lineItems` / `contact` / `deal` includes and `notes`
+// (`String? @db.Text`) — those can be many KB per row when an estimate
+// has 100+ line items each with long descriptions. Opt-in additive —
+// existing callers (no ?fields, or any non-exact value) get the full
+// row shape unchanged.
 router.get("/", async (req, res) => {
   try {
     const { status } = req.query;
@@ -92,11 +104,30 @@ router.get("/", async (req, res) => {
     // #172: pagination
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset) || 0);
-    const estimates = await prisma.estimate.findMany({
+
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where, take: limit, skip: offset,
-      include: { contact: true, deal: true, lineItems: true },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        estimateNum: true,
+        title: true,
+        status: true,
+        totalAmount: true,
+        validUntil: true,
+        createdAt: true,
+        contactId: true,
+        dealId: true,
+        tenantId: true,
+      };
+    } else {
+      findManyArgs.include = { contact: true, deal: true, lineItems: true };
+    }
+
+    const estimates = await prisma.estimate.findMany(findManyArgs);
     res.json(estimates);
   } catch (err) {
     console.error(err);

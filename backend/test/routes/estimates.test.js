@@ -545,3 +545,98 @@ describe('POST /api/estimates/:id/restore — undo soft-delete (#167)', () => {
     expect(updateArgs.data.deletedAt).toBe(null);
   });
 });
+
+// ─── GET /api/estimates?fields=summary — slim-shape opt-in (#920 slice 13) ──
+
+describe('GET /api/estimates?fields=summary — slim-shape opt-in (#920 slice 13)', () => {
+  test('?fields=summary → findMany called with `select` (slim columns) + NO `include`', async () => {
+    prisma.estimate.findMany.mockResolvedValue([
+      { id: 1, estimateNum: 'EST-A', title: 'Q1', status: 'Draft', totalAmount: 100,
+        validUntil: null, createdAt: new Date(), contactId: 42, dealId: null, tenantId: 1 },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/estimates?fields=summary');
+    expect(res.status).toBe(200);
+    expect(prisma.estimate.findMany).toHaveBeenCalledTimes(1);
+    const args = prisma.estimate.findMany.mock.calls[0][0];
+    expect(args).toHaveProperty('select');
+    expect(args).not.toHaveProperty('include');
+    // The slim select must drop the heavy relations (lineItems / contact / deal)
+    // and the `notes` Text column — those are the bytes the opt-in trims.
+    expect(args.select.lineItems).toBeUndefined();
+    expect(args.select.contact).toBeUndefined();
+    expect(args.select.deal).toBeUndefined();
+    expect(args.select.notes).toBeUndefined();
+    // …while preserving the columns the list renderer actually shows.
+    expect(args.select.id).toBe(true);
+    expect(args.select.estimateNum).toBe(true);
+    expect(args.select.title).toBe(true);
+    expect(args.select.status).toBe(true);
+    expect(args.select.totalAmount).toBe(true);
+    expect(args.select.validUntil).toBe(true);
+  });
+
+  test('no ?fields → existing full-shape contract preserved (include lineItems/contact/deal)', async () => {
+    prisma.estimate.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    const res = await request(app).get('/api/estimates');
+    expect(res.status).toBe(200);
+    const args = prisma.estimate.findMany.mock.calls[0][0];
+    expect(args).toHaveProperty('include');
+    expect(args).not.toHaveProperty('select');
+    expect(args.include).toEqual({ contact: true, deal: true, lineItems: true });
+  });
+
+  test('?fields=anything-else → falls through to FULL-shape (exact-match only)', async () => {
+    prisma.estimate.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    const res = await request(app).get('/api/estimates?fields=brief');
+    expect(res.status).toBe(200);
+    const args = prisma.estimate.findMany.mock.calls[0][0];
+    expect(args).toHaveProperty('include');
+    expect(args).not.toHaveProperty('select');
+  });
+
+  test('?fields=summary preserves tenant + soft-delete + status WHERE filters + pagination', async () => {
+    prisma.estimate.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    const res = await request(app)
+      .get('/api/estimates?fields=summary&status=Sent&limit=25&offset=50');
+    expect(res.status).toBe(200);
+    const args = prisma.estimate.findMany.mock.calls[0][0];
+    expect(args.where.tenantId).toBe(1);
+    expect(args.where.deletedAt).toBe(null); // soft-delete filter still applied
+    expect(args.where.status).toBe('Sent');
+    expect(args.take).toBe(25);
+    expect(args.skip).toBe(50);
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=summary returns the slim rows verbatim (no enrichment / shape transform)', async () => {
+    // The route just `res.json(estimates)` — proves slim payload reaches the wire.
+    const slim = [
+      { id: 1, estimateNum: 'EST-A', title: 'Q1', status: 'Draft', totalAmount: 100,
+        validUntil: null, createdAt: new Date('2026-05-01T00:00:00Z'),
+        contactId: 42, dealId: null, tenantId: 1 },
+      { id: 2, estimateNum: 'EST-B', title: 'Q2', status: 'Sent', totalAmount: 250,
+        validUntil: new Date('2026-12-01T00:00:00Z'),
+        createdAt: new Date('2026-04-15T00:00:00Z'),
+        contactId: 99, dealId: 7, tenantId: 1 },
+    ];
+    prisma.estimate.findMany.mockResolvedValue(slim);
+    const app = makeApp();
+    const res = await request(app).get('/api/estimates?fields=summary');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBe(2);
+    expect(res.body[0].id).toBe(1);
+    expect(res.body[0].estimateNum).toBe('EST-A');
+    expect(res.body[1].estimateNum).toBe('EST-B');
+    expect(res.body[1].dealId).toBe(7);
+    // Heavy fields are NOT in the wire payload — proves slim shape survives JSON.
+    expect(res.body[0].lineItems).toBeUndefined();
+    expect(res.body[0].contact).toBeUndefined();
+    expect(res.body[0].deal).toBeUndefined();
+    expect(res.body[0].notes).toBeUndefined();
+  });
+});

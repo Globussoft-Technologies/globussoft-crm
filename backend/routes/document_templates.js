@@ -2,6 +2,7 @@ const express = require("express");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 const prisma = require("../lib/prisma");
+const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -172,6 +173,76 @@ router.post("/", async (req, res) => {
   } catch (err) {
     console.error("[DocTemplates] create error:", err);
     res.status(500).json({ error: "Failed to create template" });
+  }
+});
+
+// GET /stats — CRM polish — canonical /stats posture for DocumentTemplate.
+//
+// Aggregates total + byType + lastCreatedAt for the requesting tenant.
+//
+// What this surface is / isn't
+// ────────────────────────────
+//   - Read-only meta. NO audit row written (mirrors landing-pages/stats and
+//     all other tenant-wide /stats endpoints in the CRM polish wave).
+//   - ?from / ?to (ISO date bounds on createdAt) optional; invalid -> 400
+//     INVALID_DATE (independent validation, no findMany call leaks out).
+//   - byType buckets keyed by DocumentTemplate.type ("PROPOSAL"|"NDA"|
+//     "CONTRACT"|"EMAIL"|<custom>); empty buckets omitted (no zero-noise).
+//   - NO isActive / usageCount fields exist on the model (verified against
+//     prisma/schema.prisma:2247-2257), so the envelope intentionally omits
+//     activeCount and usage-signal aggregates. The model is a pure CRUD
+//     entity — render + send-email happen on demand without engagement
+//     telemetry persisted back to the template row.
+//   - lastCreatedAt: max(createdAt) ISO across selected rows; null if empty.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family below — otherwise the dynamic /:id matcher catches the
+// literal "stats" string and parseInt yields NaN -> "Template not found".
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "from must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "to must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    const rows = await prisma.documentTemplate.findMany({
+      where,
+      select: { type: true, createdAt: true },
+    });
+
+    const byType = {};
+    let lastCreatedAt = null;
+    for (const r of rows) {
+      const bucket = r.type || "PROPOSAL";
+      byType[bucket] = (byType[bucket] || 0) + 1;
+      if (r.createdAt) {
+        const ca = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+        if (!lastCreatedAt || ca > lastCreatedAt) lastCreatedAt = ca;
+      }
+    }
+
+    res.json({
+      total: rows.length,
+      byType,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[DocTemplates][stats]", err);
+    res.status(500).json({ error: "Failed to compute document-template stats" });
   }
 });
 

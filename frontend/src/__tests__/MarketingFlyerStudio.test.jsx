@@ -407,3 +407,332 @@ describe('MarketingFlyerStudio — slice 5 load + save template wiring', () => {
     expect(notifyObj.success).not.toHaveBeenCalled();
   });
 });
+
+describe('MarketingFlyerStudio — extended composer affordances', () => {
+  /**
+   * EXTENDED CASES (15+) — adapt prompt requests to the actual SUT surface.
+   * The SUT is the slice-5 composer page (heading + 4 placeholder cards +
+   * save-as-template modal + ?template=<id> load lifecycle); it does NOT
+   * yet implement template gallery filter / preview iframe / palette+font
+   * customizer UI / PDF export / archive / duplicate flows (those land in
+   * follow-up ticks per the in-file TODO §3.1-§3.7 markers). Tests pin the
+   * affordances that EXIST today + assert the absence of the surfaces
+   * scheduled for future ticks so when they land the assertions catch the
+   * regression.
+   */
+
+  it('modal sub-brand select renders all 5 canonical options incl tenant-wide', () => {
+    renderStudio();
+    fireEvent.click(screen.getByTestId('save-as-template-button'));
+    const select = screen.getByTestId('save-template-sub-brand');
+    const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    // Canonical set: '' (tenant-wide) + 4 sub-brand ids.
+    expect(optionValues).toEqual(['', 'tmc', 'rfu', 'travelstall', 'visasure']);
+    // Option labels surface the human-readable copy.
+    const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent || '');
+    expect(optionLabels.some((l) => /tenant-wide/i.test(l))).toBe(true);
+    expect(optionLabels.some((l) => /TMC/.test(l))).toBe(true);
+    expect(optionLabels.some((l) => /RFU/.test(l))).toBe(true);
+  });
+
+  it('save modal pre-fills sub-brand from activeSubBrand on first open', () => {
+    activeSubBrandMockImpl.mockReturnValue({
+      activeSubBrand: 'travelstall',
+      setActiveSubBrand: () => {},
+    });
+    renderStudio();
+    fireEvent.click(screen.getByTestId('save-as-template-button'));
+    const select = screen.getByTestId('save-template-sub-brand');
+    // Active sub-brand pre-selected — saves operator a click.
+    expect(select.value).toBe('travelstall');
+  });
+
+  it('Cancel button closes the save modal without firing POST', () => {
+    renderStudio();
+    fireEvent.click(screen.getByTestId('save-as-template-button'));
+    expect(screen.getByTestId('save-template-modal')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('save-template-cancel'));
+    expect(screen.queryByTestId('save-template-modal')).toBeNull();
+    // No POST fired (composer state was never persisted).
+    expect(fetchApiMock).not.toHaveBeenCalled();
+  });
+
+  it('whitespace-only template name treated as empty → notify.error, no POST', () => {
+    renderStudio();
+    fireEvent.click(screen.getByTestId('save-as-template-button'));
+    fireEvent.change(screen.getByTestId('save-template-name'), {
+      target: { value: '    ' },
+    });
+    fireEvent.submit(screen.getByTestId('save-template-form'));
+    expect(notifyObj.error).toHaveBeenCalledWith(expect.stringMatching(/name.*required/i));
+    expect(fetchApiMock).not.toHaveBeenCalled();
+    // Modal stays open for retry.
+    expect(screen.queryByTestId('save-template-modal')).toBeTruthy();
+  });
+
+  it('?template=abc (non-numeric) is ignored — no GET fires', () => {
+    mockSearchParamsString = 'template=abc';
+    renderStudio();
+    // SUT regex /^\d+$/ rejects non-numeric ids — no load triggered.
+    expect(fetchApiMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('loaded-template-banner')).toBeNull();
+    // Scaffold banner is the fallback "no template" state.
+    expect(screen.queryByTestId('loading-template')).toBeNull();
+  });
+
+  it('loaded template banner uppercases the sub-brand label', async () => {
+    mockSearchParamsString = 'template=11';
+    fetchApiMock.mockResolvedValueOnce({
+      id: 11,
+      name: 'Goa Weekend',
+      subBrand: 'travelstall',
+      paletteJson: JSON.stringify({
+        primaryHex: '#111111',
+        secondaryHex: '#222222',
+        accentHex: '#333333',
+        textHex: '#444444',
+        bgHex: '#FFFFFF',
+      }),
+      layoutJson: JSON.stringify([
+        { type: 'text', x: 0, y: 0, width: 100, height: 20, content: 'Goa!' },
+      ]),
+      assetsJson: JSON.stringify({}),
+    });
+    renderStudio();
+    const banner = await screen.findByTestId('loaded-template-banner');
+    // Sub-brand uppercased in the banner display.
+    expect(banner.textContent || '').toMatch(/TRAVELSTALL/);
+    // Template name stays original-case.
+    expect(banner.textContent || '').toMatch(/Goa Weekend/);
+  });
+
+  it('loaded template without sub-brand renders banner without sub-brand suffix', async () => {
+    mockSearchParamsString = 'template=88';
+    fetchApiMock.mockResolvedValueOnce({
+      id: 88,
+      name: 'Tenant-wide Generic Flyer',
+      subBrand: null,
+      paletteJson: null,
+      layoutJson: null,
+      assetsJson: null,
+    });
+    renderStudio();
+    const banner = await screen.findByTestId('loaded-template-banner');
+    expect(banner.textContent || '').toMatch(/Tenant-wide Generic Flyer/);
+    // No " — XXX" suffix when subBrand is null/missing.
+    expect(banner.textContent || '').not.toMatch(/—\s+(TMC|RFU|TRAVELSTALL|VISASURE)/);
+  });
+
+  it('empty sub-brand on save is OMITTED from POST body (tenant-wide template)', async () => {
+    fetchApiMock.mockResolvedValueOnce({
+      id: 200,
+      name: 'Tenant Generic',
+      subBrand: null,
+    });
+    renderStudio();
+    fireEvent.click(screen.getByTestId('save-as-template-button'));
+    fireEvent.change(screen.getByTestId('save-template-name'), {
+      target: { value: 'Tenant Generic' },
+    });
+    // Leave sub-brand as default '' (Tenant-wide).
+    fireEvent.change(screen.getByTestId('save-template-sub-brand'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByTestId('save-template-submit'));
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalled();
+    });
+    const [, options] = fetchApiMock.mock.calls[0];
+    const parsedBody = JSON.parse(options.body);
+    // subBrand key absent — tenant-wide signal.
+    expect(parsedBody).not.toHaveProperty('subBrand');
+    expect(parsedBody.name).toBe('Tenant Generic');
+  });
+
+  it('post-load: opening save modal pre-fills name with "<original> (copy)" + matching sub-brand', async () => {
+    mockSearchParamsString = 'template=55';
+    fetchApiMock.mockResolvedValueOnce({
+      id: 55,
+      name: 'UK Visa Express',
+      subBrand: 'visasure',
+      paletteJson: null,
+      layoutJson: null,
+      assetsJson: null,
+    });
+    renderStudio();
+    // Wait for load to settle.
+    await screen.findByTestId('loaded-template-banner');
+    fireEvent.click(screen.getByTestId('save-as-template-button'));
+    const nameInput = screen.getByTestId('save-template-name');
+    expect(nameInput.value).toBe('UK Visa Express (copy)');
+    // Sub-brand pre-fills to the loaded template's sub-brand, not the
+    // (null) activeSubBrand.
+    const subBrandSelect = screen.getByTestId('save-template-sub-brand');
+    expect(subBrandSelect.value).toBe('visasure');
+  });
+
+  it('paletteJson / layoutJson / assetsJson POST defaults are valid JSON strings', async () => {
+    fetchApiMock.mockResolvedValueOnce({ id: 1, name: 'Defaults', subBrand: null });
+    renderStudio();
+    fireEvent.click(screen.getByTestId('save-as-template-button'));
+    fireEvent.change(screen.getByTestId('save-template-name'), {
+      target: { value: 'Defaults' },
+    });
+    fireEvent.click(screen.getByTestId('save-template-submit'));
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalled();
+    });
+    const [, options] = fetchApiMock.mock.calls[0];
+    const body = JSON.parse(options.body);
+    // Three required JSON-string columns — each parses to the expected shape.
+    const palette = JSON.parse(body.paletteJson);
+    expect(palette.primaryHex).toMatch(/^#[0-9a-fA-F]{6}$/);
+    expect(palette.secondaryHex).toMatch(/^#[0-9a-fA-F]{6}$/);
+    expect(palette.accentHex).toMatch(/^#[0-9a-fA-F]{6}$/);
+    expect(palette.textHex).toMatch(/^#[0-9a-fA-F]{6}$/);
+    expect(palette.bgHex).toMatch(/^#[0-9a-fA-F]{6}$/);
+    const layout = JSON.parse(body.layoutJson);
+    expect(Array.isArray(layout)).toBe(true);
+    expect(layout[0]).toEqual(
+      expect.objectContaining({ type: 'text' }),
+    );
+    const assets = JSON.parse(body.assetsJson);
+    expect(assets).toEqual({});
+  });
+
+  it('network error on save (no .status) → notify.error fired with message', async () => {
+    // Non-HTTP error path — the SUT re-surfaces these because fetchApi
+    // only auto-toasts on err.status (HTTP responses).
+    const err = new Error('Connection reset');
+    // No .status property — pure network failure.
+    fetchApiMock.mockRejectedValueOnce(err);
+    renderStudio();
+    fireEvent.click(screen.getByTestId('save-as-template-button'));
+    fireEvent.change(screen.getByTestId('save-template-name'), {
+      target: { value: 'Will Drop' },
+    });
+    fireEvent.click(screen.getByTestId('save-template-submit'));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/connection reset|failed to save template/i),
+      );
+    });
+    // Modal stays open — retry surface.
+    expect(screen.queryByTestId('save-template-modal')).toBeTruthy();
+  });
+
+  it('palette/font customizer + preview iframe + PDF export NOT YET RENDERED (Phase 2 TODO markers)', () => {
+    // Adapts the prompt's "render preview iframe / customize palette /
+    // customize font / export PDF" cases to today's SUT — these surfaces
+    // are scheduled in the in-file PRD §3.1 / §3.4 / §3.6 TODO markers
+    // but not implemented yet. Pin the absence so when they land the
+    // regression-class is caught (the test will turn red + need updating).
+    renderStudio();
+    // No preview iframe.
+    expect(document.querySelector('iframe')).toBeNull();
+    // No palette customizer surface — only the modal hint copy mentions
+    // "palette + layout + assets" as a textual blurb, not a real picker.
+    expect(screen.queryByLabelText(/primary hex/i)).toBeNull();
+    expect(screen.queryByLabelText(/secondary hex/i)).toBeNull();
+    expect(screen.queryByLabelText(/accent hex/i)).toBeNull();
+    // No font customizer.
+    expect(screen.queryByLabelText(/font family/i)).toBeNull();
+    // No PDF export button.
+    expect(screen.queryByRole('button', { name: /export.*pdf/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /download/i })).toBeNull();
+  });
+
+  it('template gallery filter (active/archived) + archive/duplicate buttons NOT YET RENDERED', () => {
+    // Adapts the prompt's "Template gallery filter / archive flow /
+    // duplicate flow" — these surfaces live on the LIST page
+    // (FlyerTemplates.jsx) per the in-file comment "FlyerTemplates.jsx
+    // (commit a64c1058) is the saved-templates LIST page". The composer
+    // page is load+save lifecycle only; gallery filter / archive /
+    // duplicate are not surfaced here. Pin the absence.
+    renderStudio();
+    expect(screen.queryByRole('tab', { name: /active/i })).toBeNull();
+    expect(screen.queryByRole('tab', { name: /archived/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /archive/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /duplicate/i })).toBeNull();
+    // No filter combobox surface either.
+    expect(screen.queryByRole('combobox', { name: /filter/i })).toBeNull();
+  });
+
+  it('"Save as Template" submit button shows "Saving…" copy while POST is in flight', async () => {
+    // Pin the saving=true intermediate state — the submit button's label
+    // flips to "Saving…" + disabled goes true while fetchApi is pending.
+    let resolveFetch;
+    fetchApiMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    renderStudio();
+    fireEvent.click(screen.getByTestId('save-as-template-button'));
+    fireEvent.change(screen.getByTestId('save-template-name'), {
+      target: { value: 'Pending Save' },
+    });
+    fireEvent.click(screen.getByTestId('save-template-submit'));
+    // Mid-flight state — submit button shows "Saving…" + is disabled.
+    await waitFor(() => {
+      const submit = screen.getByTestId('save-template-submit');
+      expect(submit.textContent || '').toMatch(/saving/i);
+      expect(submit.disabled).toBe(true);
+    });
+    // Cancel also disabled mid-flight.
+    expect(screen.getByTestId('save-template-cancel').disabled).toBe(true);
+    // Resolve so the test finishes cleanly.
+    resolveFetch({ id: 999, name: 'Pending Save', subBrand: null });
+    await waitFor(() => {
+      expect(screen.queryByTestId('save-template-modal')).toBeNull();
+    });
+  });
+
+  it('load with invalid JSON columns falls back to defaults without crashing', async () => {
+    mockSearchParamsString = 'template=66';
+    fetchApiMock.mockResolvedValueOnce({
+      id: 66,
+      name: 'Corrupt JSON Template',
+      subBrand: 'tmc',
+      // Malformed JSON strings — parseJsonField swallows + falls back to defaults.
+      paletteJson: 'not-valid-json{{{',
+      layoutJson: '###broken###',
+      assetsJson: '<<garbage>>',
+    });
+    renderStudio();
+    // Banner still renders because the metadata fields are valid; only
+    // the JSON columns are malformed.
+    const banner = await screen.findByTestId('loaded-template-banner');
+    expect(banner.textContent || '').toMatch(/Corrupt JSON Template/);
+    // Page stays mounted — defensive parseJsonField caught the throws.
+    expect(screen.getByTestId('marketing-flyer-studio')).toBeTruthy();
+    // notify.info still fired with load-success copy (load itself succeeded).
+    expect(notifyObj.info).toHaveBeenCalledWith(expect.stringMatching(/loaded template/i));
+  });
+
+  it('load with pre-parsed objects (not JSON strings) is accepted by parseJsonField', async () => {
+    mockSearchParamsString = 'template=77';
+    fetchApiMock.mockResolvedValueOnce({
+      id: 77,
+      name: 'Object Columns Template',
+      subBrand: 'rfu',
+      // Defensive: backend may evolve to send pre-parsed objects.
+      paletteJson: {
+        primaryHex: '#AABBCC',
+        secondaryHex: '#DDEEFF',
+        accentHex: '#001122',
+        textHex: '#334455',
+        bgHex: '#FFFFFF',
+      },
+      layoutJson: [
+        { type: 'text', x: 5, y: 5, width: 50, height: 25, content: 'Object' },
+      ],
+      assetsJson: { logo: '/uploads/rfu.png' },
+    });
+    renderStudio();
+    const banner = await screen.findByTestId('loaded-template-banner');
+    expect(banner.textContent || '').toMatch(/Object Columns Template/);
+    // Page stays mounted.
+    expect(screen.getByTestId('marketing-flyer-studio')).toBeTruthy();
+  });
+});

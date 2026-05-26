@@ -4,6 +4,7 @@
 // All sub-routes are scoped to a TmcTrip via :tripId in the URL.
 //
 // Endpoints:
+//   GET    /api/travel/trip-billing/stats                     — USER+ tenant-wide TMC rollup
 //   GET    /api/travel/trips/:tripId/rooming                  — list rooms
 //   POST   /api/travel/trips/:tripId/rooming                  ADMIN+MGR
 //   PATCH  /api/travel/trips/:tripId/rooming/:roomId          ADMIN+MGR
@@ -60,6 +61,401 @@ async function loadTrip(req) {
   }
   return trip;
 }
+
+// ============================================================================
+// GET /api/travel/trip-billing/stats — tenant-wide TMC trip-billing rollup
+// (PRD_TRAVEL §TMC).
+//
+// First rollup endpoint for backend/routes/travel_trip_billing.js. Mirrors
+// the canonical /suppliers/stats + /commission-profiles/stats shape — a
+// USER-readable anodyne aggregate that powers the TMC ops dashboard's
+// trip-billing KPI strip ("4 plans · 23 instalments [12 paid · 8 pending ·
+// 2 partial · 1 overdue] · ₹4.5L received · 6 rooms · last plan 3h ago").
+//
+// Distinct from /trips/:tripId/{rooming,payment-plan,instalments} per-trip
+// surfaces — this is the tenant-wide aggregate across ALL TMC trips in the
+// caller's tenant. Without this, the frontend would have to fan-out a per-
+// trip fetch and reduce client-side — same anti-pattern flagged by the
+// "client-side aggregation over paginated endpoint" standing rule.
+//
+// TMC-locked: the whole travel_trip_billing.js route is sub-brand-gated to
+// TMC callers via requireTmcAccess (mirrors per-trip endpoints exactly).
+// A non-TMC MANAGER receives 403 SUB_BRAND_DENIED before any aggregation
+// runs.
+//
+// Children don't carry tenantId directly. The schema scopes RoomingAssignment,
+// TripPaymentPlan, and TripInstalmentPayment via FK → TmcTrip → tenantId.
+// Canonical pattern: fetch the trip-id set first (tenantId-scoped), then
+// aggregate the 3 child models scoped to those trip-ids.
+//
+// Behaviour:
+//   - Empty tenant: zeroed envelope with empty buckets + lastPlanCreatedAt=null.
+//   - totalTrips: count of trips owning at least one billing row (plan or
+//     instalment or rooming).
+//   - totalPlans: count of TripPaymentPlan rows for tenant's trips.
+//   - totalInstalments: count of TripInstalmentPayment rows.
+//   - instalmentsByStatus: { pending, partial, paid, overdue } per the
+//     VALID_INSTALMENT_STATUSES enum, pre-seeded so every key exists.
+//   - totalReceived: sum of paidAmount on instalments where status='paid',
+//     rounded to 2dp.
+//   - totalRoomingAssignments: count of RoomingAssignment rows.
+//   - lastPlanCreatedAt: ISO of max(createdAt) across plans, or null.
+//
+// ?from / ?to (ISO date bounds) filter ALL 3 child rows by their createdAt.
+// Invalid date → 400 INVALID_DATE.
+//
+// USER-readable: anodyne aggregate (counts + sums + timestamps); safe.
+// No audit row written — read-only meta surface; matches /suppliers/stats.
+//
+// Express route ordering: literal-path /trip-billing/stats MUST be declared
+// BEFORE any /trips/:tripId/... handler — otherwise a stray request to
+// /trips/trip-billing/anything would 400 INVALID_ID before reaching here.
+// Placed at the top of the route declarations for safety.
+// ============================================================================
+router.get(
+  "/trip-billing/stats",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Optional ISO date bounds on the child rows' createdAt
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      let fromDate = null;
+      let toDate = null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        fromDate = d;
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        toDate = d;
+      }
+
+      // Fetch this tenant's trip-id set first. Children don't carry tenantId
+      // directly — they scope via FK → TmcTrip → tenantId.
+      const trips = await prisma.tmcTrip.findMany({
+        where: { tenantId },
+        select: { id: true },
+      });
+      const tripIds = trips.map((t) => t.id);
+
+      // Empty short-circuit — return zeroed shape.
+      if (tripIds.length === 0) {
+        return res.json({
+          totalTrips: 0,
+          totalPlans: 0,
+          totalInstalments: 0,
+          instalmentsByStatus: { pending: 0, partial: 0, paid: 0, overdue: 0 },
+          totalReceived: 0,
+          totalRoomingAssignments: 0,
+          lastPlanCreatedAt: null,
+        });
+      }
+
+      // Build a createdAt clause shared across all child queries.
+      const createdAtClause = {};
+      if (fromDate) createdAtClause.gte = fromDate;
+      if (toDate) createdAtClause.lte = toDate;
+      const hasDateClause = Object.keys(createdAtClause).length > 0;
+
+      const planWhere = { tripId: { in: tripIds } };
+      const instalmentWhere = { tripId: { in: tripIds } };
+      const roomingWhere = { tripId: { in: tripIds } };
+      if (hasDateClause) {
+        planWhere.createdAt = createdAtClause;
+        instalmentWhere.createdAt = createdAtClause;
+        roomingWhere.createdAt = createdAtClause;
+      }
+
+      // Aggregate the 3 child models scoped to tripIds.
+      const [
+        plans,
+        instalments,
+        totalRoomingAssignments,
+      ] = await Promise.all([
+        prisma.tripPaymentPlan.findMany({
+          where: planWhere,
+          select: { tripId: true, createdAt: true },
+        }),
+        prisma.tripInstalmentPayment.findMany({
+          where: instalmentWhere,
+          select: { tripId: true, status: true, paidAmount: true },
+        }),
+        prisma.roomingAssignment.count({ where: roomingWhere }),
+      ]);
+
+      // Counts + per-status bucketing.
+      const instalmentsByStatus = { pending: 0, partial: 0, paid: 0, overdue: 0 };
+      let totalReceived = 0;
+      for (const ins of instalments) {
+        const status = String(ins.status || "pending");
+        if (VALID_INSTALMENT_STATUSES.includes(status)) {
+          instalmentsByStatus[status] += 1;
+        }
+        if (status === "paid") {
+          const amt = Number(ins.paidAmount);
+          if (Number.isFinite(amt)) totalReceived += amt;
+        }
+      }
+
+      // lastPlanCreatedAt: max(createdAt) across plans.
+      let lastPlanCreatedAt = null;
+      for (const p of plans) {
+        const ts = p.createdAt instanceof Date ? p.createdAt : new Date(p.createdAt);
+        if (Number.isNaN(ts.getTime())) continue;
+        if (!lastPlanCreatedAt || ts > lastPlanCreatedAt) lastPlanCreatedAt = ts;
+      }
+
+      // totalTrips: count of distinct trip-ids appearing in any of the 3
+      // child sets. A trip with at least one billing row counts.
+      const tripsWithBilling = new Set();
+      for (const p of plans) tripsWithBilling.add(p.tripId);
+      for (const ins of instalments) tripsWithBilling.add(ins.tripId);
+      // Rooming is fetched as a count above (perf — most ops dashboards just
+      // need the bare number). For the totalTrips set we add rooming-only
+      // trips via a lightweight distinct-id fetch IF any rooming rows exist.
+      if (totalRoomingAssignments > 0) {
+        const roomingTrips = await prisma.roomingAssignment.findMany({
+          where: roomingWhere,
+          select: { tripId: true },
+          distinct: ["tripId"],
+        });
+        for (const r of roomingTrips) tripsWithBilling.add(r.tripId);
+      }
+
+      // Half-up round to 2dp — matches sibling stats endpoints.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      res.json({
+        totalTrips: tripsWithBilling.size,
+        totalPlans: plans.length,
+        totalInstalments: instalments.length,
+        instalmentsByStatus,
+        totalReceived: round2(totalReceived),
+        totalRoomingAssignments,
+        lastPlanCreatedAt: lastPlanCreatedAt ? lastPlanCreatedAt.toISOString() : null,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trip-billing] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise trip billing" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/trip-billing/by-month — tenant-wide TMC instalment monthly
+// rollup (PRD_TRAVEL §TMC trip-billing).
+//
+// Sibling to /trip-billing/stats (slice shipped earlier — single point-in-time
+// KPI tile). /by-month is the per-month time series across the same TMC
+// instalment population — powers the trip-billing dashboard's trend chart so
+// the operator can see how cash collection has trended over time without
+// fan-out-and-reduce on the frontend.
+//
+// Mirrors /suppliers/by-month + /commission-profiles/by-month + /quotes/by-month
+// shape — one row per UTC YYYY-MM bucket, JS-side aggregation over a light
+// findMany projection, default orderBy=month:asc, pagination AFTER aggregation
+// + sort + filter, NO audit row written.
+//
+// TMC-locked: the whole travel_trip_billing.js route is sub-brand-gated to TMC
+// callers via requireTmcAccess (mirrors per-trip endpoints + /stats exactly).
+// A non-TMC MANAGER receives 403 SUB_BRAND_DENIED before any aggregation runs.
+//
+// Tenant scoping: TripInstalmentPayment children don't carry tenantId directly.
+// The schema scopes via FK → TmcTrip → tenantId. Canonical pattern (matching
+// /stats): fetch the trip-id set first (tenantId-scoped), then aggregate the
+// child rows scoped to those trip-ids.
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid → 400
+//                     INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// Per-bucket breakdown:
+//   - count: total instalment rows landing in this month bucket
+//   - byStatus: { pending, partial, paid, overdue } — the four
+//     VALID_INSTALMENT_STATUSES values, pre-seeded so every key exists on
+//     every bucket (schema is lowercase per prisma/schema.prisma:4594 — the
+//     instalment.status enum is lowercase strings, NOT uppercase; mirrors
+//     the /stats handler at the top of this file)
+//   - totalReceived: sum of paidAmount across this bucket's rows, half-up
+//     rounded to 2dp. Matches /stats's totalReceived semantics.
+//
+// "unknown" bucket: rows with null/invalid createdAt land here so the count
+// surface stays accurate. Excluded when ?from / ?to is set (no comparable
+// month token); included otherwise.
+//
+// Express route ordering: literal-path /trip-billing/by-month MUST be declared
+// BEFORE any /trips/:tripId/... handler or `:tripId="trip-billing"` would
+// 400 INVALID_ID before reaching this handler. Placed adjacent to
+// /trip-billing/stats at the top.
+// ============================================================================
+router.get(
+  "/trip-billing/by-month",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors /suppliers/by-month.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Tenant scoping — fetch this tenant's TMC trip-id set first.
+      const trips = await prisma.tmcTrip.findMany({
+        where: { tenantId },
+        select: { id: true },
+      });
+      const tripIds = trips.map((t) => t.id);
+
+      // Empty short-circuit — return zeroed envelope.
+      if (tripIds.length === 0) {
+        return res.json({
+          total: 0,
+          rows: [],
+        });
+      }
+
+      // Light projection — status + paidAmount + createdAt is enough for the
+      // bucket totals. tripId scoping replaces tenantId (children don't carry
+      // tenantId directly).
+      const instalments = await prisma.tripInstalmentPayment.findMany({
+        where: { tripId: { in: tripIds } },
+        select: { status: true, paidAmount: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → {count, byStatus, totalReceived}.
+      // Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const ins of instalments) {
+        let monthKey = "unknown";
+        if (ins.createdAt) {
+          const dt = ins.createdAt instanceof Date
+            ? ins.createdAt
+            : new Date(ins.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            month: monthKey,
+            count: 0,
+            byStatus: { pending: 0, partial: 0, paid: 0, overdue: 0 },
+            totalReceived: 0,
+          };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+
+        const status = String(ins.status || "pending");
+        if (VALID_INSTALMENT_STATUSES.includes(status)) {
+          bucket.byStatus[status] += 1;
+        }
+
+        const amt = Number(ins.paidAmount);
+        if (Number.isFinite(amt)) bucket.totalReceived += amt;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either bound
+      // is set (no comparable token); kept otherwise so the count surface
+      // remains complete. Mirrors /suppliers/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Half-up round totalReceived to 2dp per bucket — matches /stats and
+      // sibling /by-month endpoints' precision posture.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+      for (const r of months) r.totalReceived = round2(r.totalReceived);
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
+      // "unknown" sorts last in asc / first in desc (lexicographically >
+      // "9999-12") — acceptable for a defensive fallback bucket that should
+      // rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = months.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as /suppliers/by-month.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trip-billing] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
 
 // ─── Rooming ─────────────────────────────────────────────────────────
 

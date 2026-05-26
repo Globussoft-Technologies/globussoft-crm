@@ -118,6 +118,37 @@ function tomorrowISO() {
   return d.toISOString().slice(0, 10);
 }
 
+// Statuses on which TDS withholding is meaningful to surface — TDS lines
+// are operator-relevant only AFTER an invoice has been issued (Draft +
+// Voided invoices' TDS lines are noise). Matches the slice 21 contract on
+// /:id/issue: the envelope adds { totalTds, payableAfterTds } at issue
+// time. Partial is excluded — once partial payment has landed the
+// payable-after-TDS figure is stale (deduct what's been received).
+const TDS_VISIBLE_STATUSES = new Set(["Issued", "Paid"]);
+
+// Slice 22 frontend mirror of backend/lib/tdsCalculation.js's
+// computeTdsFromLines — sums amounts on lines whose lineType==='tds',
+// half-up rounded to 2dp. The /:id/issue response envelope ships this
+// number too (slice 21) but the list-GET doesn't, so we re-compute
+// client-side from the lines returned by GET /:id?include=lines. Kept in
+// lockstep with the backend lib (any drift surfaces as a frontend test
+// fail because we pin the same canonical test vectors). The line shape
+// from prisma is `{ lineType, amount, id }` — amount may arrive as a
+// numeric string when Decimal columns serialize, so Number()-coerce
+// defensively (matches backend lib's coercion contract).
+function computeTotalTdsFromLines(lines) {
+  if (!Array.isArray(lines) || lines.length === 0) return 0;
+  let sum = 0;
+  for (const line of lines) {
+    if (!line || typeof line !== "object") continue;
+    if (line.lineType !== "tds") continue;
+    const n = Number(line.amount);
+    if (!Number.isFinite(n)) continue;
+    sum += Math.round((n + Number.EPSILON) * 100) / 100;
+  }
+  return Math.round((sum + Number.EPSILON) * 100) / 100;
+}
+
 function formatDate(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -153,6 +184,13 @@ export default function InvoicesAdmin() {
   // two browser-side downloads of the same blob).
   const [downloadingId, setDownloadingId] = useState(null);
 
+  // Slice 22 — TDS withholding tiles in the edit modal. When opening edit
+  // on an Issued / Paid invoice we lazy-fetch GET /:id?include=lines and
+  // client-side-sum the lineType==='tds' lines (mirror of slice 21 server
+  // math). totalTds=0 OR status not in {Issued,Paid} → tiles hidden so
+  // operators never see a "TDS: 0" row on routine invoices. PRD §3.
+  const [editingTds, setEditingTds] = useState(null); // { totalTds, totalAmount, currency } | null
+
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
@@ -182,6 +220,7 @@ export default function InvoicesAdmin() {
     setForm(EMPTY_FORM);
     setEditingId(null);
     setEditingStatus(null);
+    setEditingTds(null);
   };
 
   const openCreate = () => {
@@ -201,7 +240,33 @@ export default function InvoicesAdmin() {
     });
     setEditingId(inv.id);
     setEditingStatus(inv.status || "Draft");
+    setEditingTds(null);
     setShowForm(true);
+    // Slice 22 — only Issued / Paid invoices warrant fetching TDS detail.
+    // Hidden for Draft (no withholding yet computed) and Voided (terminal,
+    // the operator's audit need is past-tense and the issued envelope is
+    // the source of truth). For Partial we intentionally skip too — the
+    // payableAfterTds figure goes stale the moment the first payment is
+    // recorded so showing it would mislead.
+    if (inv?.id && TDS_VISIBLE_STATUSES.has(inv.status)) {
+      fetchApi(`/api/travel/invoices/${inv.id}?include=lines`)
+        .then((detail) => {
+          const lines = Array.isArray(detail?.lines) ? detail.lines : [];
+          const totalTds = computeTotalTdsFromLines(lines);
+          if (totalTds > 0) {
+            setEditingTds({
+              totalTds,
+              totalAmount: Number(detail?.totalAmount ?? inv.totalAmount),
+              currency: detail?.currency || inv.currency || "INR",
+            });
+          }
+        })
+        .catch(() => {
+          // Tiles silently absent if the detail GET fails — TDS context is
+          // a nice-to-have surface, not load-bearing. The list row's
+          // totalAmount still renders correctly via the canonical pathway.
+        });
+    }
   };
 
   // Allowed status options inside the modal. CREATE mode is unconstrained
@@ -395,6 +460,43 @@ export default function InvoicesAdmin() {
           aria-label="Filter by quote ID"
         />
       </div>
+
+      {showForm && editingTds && editingTds.totalTds > 0 && (
+        // Slice 22 — TDS withholding tiles. Rendered ONLY when the edit
+        // modal is open against an Issued/Paid invoice that actually has
+        // TDS lines (totalTds > 0). Hidden for Draft / Voided / Partial
+        // and for invoices with zero TDS so operators don't see "TDS: 0"
+        // noise on routine non-withholding invoices. PRD §3.
+        <div
+          className="glass"
+          data-testid="tds-tiles"
+          style={{
+            padding: 12,
+            marginBottom: 12,
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
+            gap: 10,
+          }}
+        >
+          <div style={tdsTile}>
+            <div style={tdsTileLabel}>Total TDS Withheld</div>
+            <div style={tdsTileValue}>
+              {formatMoney(editingTds.totalTds, { currency: editingTds.currency })}
+            </div>
+          </div>
+          <div style={tdsTile}>
+            <div style={tdsTileLabel}>Net Payable (After TDS)</div>
+            <div style={tdsTileValue}>
+              {formatMoney(
+                Number.isFinite(editingTds.totalAmount)
+                  ? editingTds.totalAmount - editingTds.totalTds
+                  : 0,
+                { currency: editingTds.currency },
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {showForm && (
         <form
@@ -736,4 +838,28 @@ const statusBadge = {
   borderRadius: 10,
   fontSize: 11,
   fontWeight: 600,
+};
+// Slice 22 — TDS tile styling. Primary-color border via the wellness
+// brand fallback (matches the rule for primary CTAs in CLAUDE.md so the
+// wellness vertical doesn't render salmon accents). Tiles use a tonal
+// background that reads OK in both light + dark themes via the
+// --surface-color CSS var.
+const tdsTile = {
+  padding: "10px 14px",
+  borderRadius: 8,
+  border: "1px solid var(--primary-color, var(--accent-color))",
+  background: "var(--surface-color, rgba(255,255,255,0.04))",
+};
+const tdsTileLabel = {
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: 0.5,
+  color: "var(--text-secondary)",
+  marginBottom: 4,
+  fontWeight: 600,
+};
+const tdsTileValue = {
+  fontSize: 18,
+  fontWeight: 700,
+  color: "var(--text-primary)",
 };

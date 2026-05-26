@@ -136,4 +136,173 @@ describe('DealModal', () => {
     render(<DealModal deal={deal} onClose={() => {}} />);
     expect(await screen.findByTestId('cpq-stub')).toBeInTheDocument();
   });
+
+  // ------------------------------------------------------------------
+  // Extension cases (2026-05-26)
+  //
+  // SUT note: DealModal is NOT a create/edit form — it's a Document
+  // Center modal that surfaces an EXISTING deal's read-only properties
+  // (amount, probability, close date) alongside attachments + notes +
+  // CPQ. The "create vs edit / form validation / stage select" cases
+  // suggested by the prompt don't apply to this SUT shape. The
+  // following cases pin the actually-observable behaviour: read-only
+  // property surface, click-stop on inner dialog, attachment open +
+  // delete + cancel-delete flow, upload POST, deal-property edge cases.
+  // Pure pin — no source changes.
+  // ------------------------------------------------------------------
+
+  it('renders read-only deal properties (probability + formatted close date + amount)', async () => {
+    render(<DealModal deal={deal} onClose={() => {}} />);
+    // probability surfaced as "65%"
+    expect(screen.getByText('65%')).toBeInTheDocument();
+    // formatted close date appears in the side pane (locale string, not raw ISO)
+    expect(screen.queryByText('2026-05-01')).not.toBeInTheDocument();
+    const closeDateText = new Date('2026-05-01').toLocaleDateString();
+    // at least one element contains the locale-formatted date
+    const dateNodes = screen.getAllByText(new RegExp(closeDateText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    expect(dateNodes.length).toBeGreaterThanOrEqual(1);
+    // amount renders inside header via formatMoney
+    expect(screen.getByText(/1,000|1000/)).toBeInTheDocument();
+  });
+
+  it('shows "Not Set" when deal has no expectedClose', async () => {
+    const noDateDeal = { ...deal, expectedClose: null };
+    render(<DealModal deal={noDateDeal} onClose={() => {}} />);
+    expect(screen.getByText('Not Set')).toBeInTheDocument();
+  });
+
+  it('clicking inside the inner dialog does NOT trigger onClose (stop-propagation guard)', () => {
+    const onClose = vi.fn();
+    render(<DealModal deal={deal} onClose={onClose} />);
+    const dialog = screen.getByRole('dialog');
+    // click on the dialog body — should NOT bubble to backdrop
+    fireEvent.click(dialog);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('delete attachment button opens confirm dialog with Cancel + Delete actions', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.includes('/attachments')) {
+        return Promise.resolve([
+          { id: 7, filename: 'spec.pdf', fileUrl: '/files/spec.pdf', createdAt: '2026-02-15' },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    render(<DealModal deal={deal} onClose={() => {}} />);
+    await screen.findByText('spec.pdf');
+    // the trash icon button is the second button in the attachment row
+    // (after "Open"). Find by its title attribute.
+    const deleteBtn = document.querySelector('button[title="Delete attachment"]');
+    expect(deleteBtn).not.toBeNull();
+    fireEvent.click(deleteBtn);
+    expect(await screen.findByText(/Delete Attachment\?/i)).toBeInTheDocument();
+    expect(screen.getByText(/This action cannot be undone/i)).toBeInTheDocument();
+    // Cancel + Delete buttons both present
+    expect(screen.getByText('Cancel')).toBeInTheDocument();
+    expect(screen.getByText('Delete')).toBeInTheDocument();
+  });
+
+  it('confirming delete fires DELETE to /api/deals_documents/:id', async () => {
+    const deleteCalls = [];
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url.includes('/attachments')) {
+        return Promise.resolve([
+          { id: 99, filename: 'doc.pdf', fileUrl: '/files/doc.pdf', createdAt: '2026-03-01' },
+        ]);
+      }
+      if (opts?.method === 'DELETE') {
+        deleteCalls.push(url);
+        return Promise.resolve({});
+      }
+      return Promise.resolve([]);
+    });
+    render(<DealModal deal={deal} onClose={() => {}} />);
+    await screen.findByText('doc.pdf');
+    fireEvent.click(document.querySelector('button[title="Delete attachment"]'));
+    await screen.findByText(/Delete Attachment\?/i);
+    fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => {
+      expect(deleteCalls).toContain('/api/deals_documents/99');
+    });
+  });
+
+  it('cancelling the delete confirm dismisses the dialog without firing DELETE', async () => {
+    let deleteFired = false;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url.includes('/attachments')) {
+        return Promise.resolve([
+          { id: 5, filename: 'invoice.pdf', fileUrl: '/files/i.pdf', createdAt: '2026-04-01' },
+        ]);
+      }
+      if (opts?.method === 'DELETE') {
+        deleteFired = true;
+        return Promise.resolve({});
+      }
+      return Promise.resolve([]);
+    });
+    render(<DealModal deal={deal} onClose={() => {}} />);
+    await screen.findByText('invoice.pdf');
+    fireEvent.click(document.querySelector('button[title="Delete attachment"]'));
+    await screen.findByText(/Delete Attachment\?/i);
+    fireEvent.click(screen.getByText('Cancel'));
+    await waitFor(() => {
+      expect(screen.queryByText(/Delete Attachment\?/i)).not.toBeInTheDocument();
+    });
+    expect(deleteFired).toBe(false);
+  });
+
+  it('file upload POSTs to /upload endpoint with FormData + bearer token', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, status: 200 });
+    fetchApiMock.mockResolvedValue([]);
+    const { container } = render(<DealModal deal={deal} onClose={() => {}} />);
+    const fileInput = container.querySelector('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    const file = new File(['hello'], 'upload.pdf', { type: 'application/pdf' });
+    // jsdom's input[type=file] needs an explicit FileList; fireEvent.change supports files prop
+    Object.defineProperty(fileInput, 'files', { value: [file] });
+    fireEvent.change(fileInput);
+    await waitFor(() => {
+      const uploadCall = fetchSpy.mock.calls.find(
+        ([url, opts]) => typeof url === 'string' && url.includes('/upload') && opts?.method === 'POST',
+      );
+      expect(uploadCall).toBeDefined();
+      // bearer token header is set
+      expect(uploadCall[1].headers.Authorization).toBe('Bearer test-token');
+      // body is a FormData
+      expect(uploadCall[1].body).toBeInstanceOf(FormData);
+    });
+    fetchSpy.mockRestore();
+  });
+
+  it('notes textarea pre-fills from deal.notes', async () => {
+    render(<DealModal deal={deal} onClose={() => {}} />);
+    const textarea = screen.getByPlaceholderText(/Log a call, meeting/i);
+    expect(textarea.value).toBe('Initial notes');
+  });
+
+  it('Save Note button is disabled while a save is in flight', async () => {
+    // delay the PUT response so we observe the in-flight state
+    let resolveSave;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url.includes('/attachments')) return Promise.resolve([]);
+      if (opts?.method === 'PUT') {
+        return new Promise((res) => {
+          resolveSave = res;
+        });
+      }
+      return Promise.resolve([]);
+    });
+    render(<DealModal deal={deal} onClose={() => {}} />);
+    const saveBtn = screen.getByText(/Save Note/i);
+    fireEvent.click(saveBtn);
+    // while in flight, label switches to "Saving..." and button is disabled
+    await waitFor(() => {
+      expect(screen.getByText(/Saving\.\.\./i)).toBeInTheDocument();
+    });
+    const savingBtn = screen.getByText(/Saving\.\.\./i).closest('button');
+    expect(savingBtn.disabled).toBe(true);
+    // resolve so the test cleans up
+    if (resolveSave) resolveSave({});
+  });
 });

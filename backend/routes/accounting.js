@@ -52,6 +52,128 @@ const requireProvider = (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /api/accounting/stats — tenant-wide AccountingSync rollup.
+//
+// CRM polish — first /stats endpoint on this route. Read-only KPI surface
+// for the finance integrations dashboard. Mirrors billing/stats and
+// travel-suppliers/stats posture (same JWT auth, same ?from/?to bounds,
+// same INVALID_DATE 400 shape, no audit row).
+//
+// Powers the integrations dashboard header strip ("87 sync attempts ·
+// 100% success · 42 tally · 35 quickbooks · 10 xero · 56 Invoice · 31
+// Expense · last sync 12m ago") — without this the frontend has to fire
+// N+1 round-trips (list + count by provider × 3 + count by entityType
+// × 3 + a separate max(syncedAt) probe).
+//
+// SCHEMA DRIFT NOTE — AccountingSync's actual columns (verified against
+// prisma/schema.prisma line 2442): id, provider, entityType, entityId,
+// externalId, syncedAt, tenantId. No `status`, `recordsSynced`,
+// `errorMessage`, or `createdAt` field. The original gap-card response
+// shape assumed those columns; this implementation pins to the schema:
+//   - `byEntityType` substitutes for `byStatus` (Invoice/Expense/Customer
+//     are the live entityType values per recordSync() callers in this
+//     file). Every row recorded in AccountingSync represents a
+//     SUCCESSFUL upsert (the route only writes the row AFTER the
+//     external-system stub returns), so:
+//   - `successRate` = 1.0 when total > 0, null when total = 0 (kept in
+//     the envelope for forward-compat when a `status` column lands).
+//   - `totalRecordsSynced` = total (1 row = 1 successfully synced
+//     record in the current schema; will diverge once batch-sync
+//     bookkeeping arrives).
+//   - `lastSuccessfulSyncAt` = max(syncedAt) — all rows are successful
+//     by construction.
+//
+// Query params:
+//   ?from / ?to — optional ISO date bounds on syncedAt (the only
+//                 timestamp column available — there's no createdAt on
+//                 AccountingSync). Invalid → 400 INVALID_DATE.
+//
+// Response envelope:
+//   { total, byEntityType, byProvider, successRate, totalRecordsSynced,
+//     lastSuccessfulSyncAt }
+//
+// Express route ordering: literal-path /stats is declared BEFORE the
+// /:provider family so the /providers + /stats literal handlers win
+// before the parameterized routes have a chance to match.
+// ─────────────────────────────────────────────────────────────────────────
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    // Validate optional date bounds independently so a bad ?from doesn't
+    // get masked by a missing ?to (mirrors billing-stats / travel-supplier
+    // -stats validation order).
+    const syncedAtClause = {};
+    if (req.query.from !== undefined) {
+      const fromDate = new Date(req.query.from);
+      if (Number.isNaN(fromDate.getTime())) {
+        return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE" });
+      }
+      syncedAtClause.gte = fromDate;
+    }
+    if (req.query.to !== undefined) {
+      const toDate = new Date(req.query.to);
+      if (Number.isNaN(toDate.getTime())) {
+        return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE" });
+      }
+      syncedAtClause.lte = toDate;
+    }
+
+    const where = { tenantId: req.user.tenantId };
+    if (Object.keys(syncedAtClause).length > 0) {
+      where.syncedAt = syncedAtClause;
+    }
+
+    // Pull only the columns we need to aggregate — avoids dragging the
+    // full row (externalId payloads etc.) into memory just to count.
+    const rows = await prisma.accountingSync.findMany({
+      where,
+      select: { provider: true, entityType: true, syncedAt: true },
+    });
+
+    const total = rows.length;
+    const byProvider = {};
+    const byEntityType = {};
+    let lastSyncedAt = null;
+
+    for (const r of rows) {
+      const provider = r.provider || "_unknown";
+      byProvider[provider] = (byProvider[provider] || 0) + 1;
+
+      const entityType = r.entityType || "_unknown";
+      byEntityType[entityType] = (byEntityType[entityType] || 0) + 1;
+
+      if (r.syncedAt) {
+        const ts = r.syncedAt instanceof Date ? r.syncedAt : new Date(r.syncedAt);
+        if (lastSyncedAt === null || ts > lastSyncedAt) {
+          lastSyncedAt = ts;
+        }
+      }
+    }
+
+    // Half-up 2dp rounding helper — mirrors billing-stats. EPSILON tweak
+    // collapses JS float noise (0.1+0.2 type artefacts).
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+    // successRate: every row in AccountingSync is a successful sync by
+    // construction (the route only persists AFTER the external upsert
+    // returns). Future: when a `status` column lands, this becomes
+    // successCount / total.
+    const successRate = total === 0 ? null : round2(1.0);
+
+    res.json({
+      total,
+      byEntityType,
+      byProvider,
+      successRate,
+      totalRecordsSynced: total,
+      lastSuccessfulSyncAt: lastSyncedAt ? lastSyncedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[accounting/stats]", err);
+    res.status(500).json({ error: "Failed to compute accounting stats" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // GET /api/accounting/providers
 // Return supported providers and per-tenant connection status.
 // ─────────────────────────────────────────────────────────────────────────

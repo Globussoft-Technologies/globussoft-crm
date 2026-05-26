@@ -158,17 +158,34 @@ async function publishToPlatform(platform, integration, post) {
 // ──────────────────────────────────────────────────────────────────
 
 // GET /api/social/posts — list posts
+// Supports ?fields=summary opt-in slim shape that drops heavy `content`
+// (`@db.Text`) + `mediaUrl` + `externalId` to lighten admin list-view payloads
+// and reduce PII surface on the wire. Mirrors prior slices of #920.
 router.get("/posts", async (req, res) => {
   try {
     const where = { tenantId: tenantId(req) };
     if (req.query.platform) where.platform = normalizePlatform(req.query.platform);
     if (req.query.status) where.status = req.query.status;
 
-    const posts = await prisma.socialPost.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findArgs = {
       where,
       orderBy: { createdAt: "desc" },
       take: 200,
-    });
+    };
+    if (isSummary) {
+      findArgs.select = {
+        id: true,
+        platform: true,
+        status: true,
+        scheduledFor: true,
+        publishedAt: true,
+        createdAt: true,
+        tenantId: true,
+      };
+    }
+
+    const posts = await prisma.socialPost.findMany(findArgs);
     res.json(posts);
   } catch (err) {
     console.error("[social] list posts error:", err);

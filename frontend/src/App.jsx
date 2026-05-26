@@ -126,6 +126,8 @@ const BookingExpediaSearch = lazy(() =>
 // ships next tick at slice 3). Page is robust to the route's absence —
 // 404 surfaces as empty-state + a "backend not yet deployed" banner.
 const WalletRules = lazy(() => import("./pages/admin/WalletRules"));
+// CSP violations operator-inspect — slice 4 of #917, consumes slice-3 GET /api/csp/violations.
+const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -167,6 +169,15 @@ const TravelTrips = lazy(() => import("./pages/travel/Trips"));
 const TravelTripDetail = lazy(() => import("./pages/travel/TripDetail"));
 const TravelWebCheckinQueue = lazy(() => import("./pages/travel/WebCheckinQueue"));
 const TravelCostMaster = lazy(() => import("./pages/travel/CostMaster"));
+// Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster wire-in. SUT page
+// shipped slice 3 (ca052d20); this lazy import + Route below register the
+// admin-facing CRUD surface. Framed as "the 6th category in Cost Master"
+// per #907, so placed adjacent to TravelCostMaster.
+const TravelSightseeingMaster = lazy(() => import("./pages/travel/SightseeingMaster"));
+// Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates wire-in. SUT page
+// shipped slice 7 (f8768836); this lazy import + Route below register the
+// admin-facing CRUD surface for reusable itinerary templates.
+const TravelItineraryTemplates = lazy(() => import("./pages/travel/ItineraryTemplates"));
 const TravelLeads = lazy(() => import("./pages/travel/Leads"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
@@ -1206,6 +1217,7 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
+                    <Route path="admin/csp-violations" element={<CSPViolations />} />
                     {/* PRD Gap §1.5 / §1.6 */}
                     <Route
                       path="commission-profiles"
@@ -1308,6 +1320,14 @@ export default function App() {
               <Route path="travel/web-checkins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
               <Route path="travel/webcheckins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
               <Route path="travel/cost-master" element={<TravelOnly><TravelCostMaster /></TravelOnly>} />
+              {/* Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster admin
+                  CRUD surface. Adjacent to cost-master per #907's "6th
+                  category in Cost Master" framing. SUT page commit ca052d20. */}
+              <Route path="travel/sightseeing" element={<TravelOnly><TravelSightseeingMaster /></TravelOnly>} />
+              {/* Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates admin
+                  CRUD surface. Adjacent to sightseeing because both are #907
+                  admin pages. SUT page commit f8768836. */}
+              <Route path="travel/itinerary-templates" element={<TravelOnly><TravelItineraryTemplates /></TravelOnly>} />
               <Route path="travel/leads" element={<TravelOnly><TravelLeads /></TravelOnly>} />
               <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />
               <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />

@@ -77,6 +77,31 @@ describe('formatMoney', () => {
     expect(formatMoney(0, 'INR')).toBe('Rs.0.00');
     expect(formatMoney(null, 'INR')).toBe('Rs.0.00');
   });
+  test('NaN coerces to 0.00 via `Number(NaN) || 0` fallback', () => {
+    // Pins the defensive `|| 0` short-circuit — without it, NaN would
+    // render as "Rs.NaN" which is downstream-unfriendly on the SMS body.
+    expect(formatMoney(NaN, 'INR')).toBe('Rs.0.00');
+  });
+  test('negative amounts pass through unmodified (no clamping)', () => {
+    // Pins that the formatter does NOT clamp negatives — refunds /
+    // adjustments may legitimately render as negative on a receipt. The
+    // policy decision about whether to show negatives lives at the
+    // composer / template layer, not in the formatter.
+    expect(formatMoney(-500, 'INR')).toBe('Rs.-500.00');
+  });
+  test('currency comparison is strictly case-sensitive (`inr` !== `INR`)', () => {
+    // Pins the `===` strict comparison — lowercase falls through to the
+    // raw-passthrough branch via `currency || ""`. Symptom if someone
+    // ever .toUpperCase()s the input: this test starts asserting the
+    // wrong shape.
+    expect(formatMoney(100, 'inr')).toBe('inr100.00');
+  });
+  test('null currency renders bare number (empty-string symbol fallback)', () => {
+    // Pins the `|| ""` defensive fallback — a tenant with no
+    // defaultCurrency configured should still produce a number, not
+    // "null100.00" or a crash.
+    expect(formatMoney(100, null)).toBe('100.00');
+  });
 });
 
 describe('composeSmsBody', () => {
@@ -104,6 +129,54 @@ describe('composeSmsBody', () => {
     });
     expect(body).toContain('1 item');
     expect(body).not.toContain('1 items');
+  });
+  test('lineCount=0 pluralises to "0 items" (only 1 is singular)', () => {
+    // Pins the `=== 1` strict-equality singular branch — every non-1
+    // value (including 0, which is grammatically debatable in English
+    // but consistent with the rest of the codebase) gets the plural
+    // suffix. Safer than re-deriving Intl.PluralRules here.
+    const body = composeSmsBody({
+      sale: { invoiceNumber: 'INV-EMPTY', total: 0 },
+      patientName: 'A',
+      clinicName: 'C',
+      currency: 'INR',
+      lineCount: 0,
+    });
+    expect(body).toContain('0 items');
+  });
+  test('missing patientName falls back to "Hi there,"', () => {
+    // Pins the `|| "there"` defensive fallback — if upstream forgets to
+    // pass patient.name (or it's null on the patient row), the receipt
+    // still reads as a polite greeting rather than "Hi undefined,".
+    const body = composeSmsBody({
+      sale: { invoiceNumber: 'INV-NONAME', total: 100 },
+      patientName: undefined,
+      clinicName: 'C',
+      currency: 'INR',
+      lineCount: 1,
+    });
+    expect(body).toContain('Hi there,');
+    expect(body).not.toContain('undefined');
+  });
+  test('SMS vs WhatsApp bodies diverge in content (same inputs → different strings)', () => {
+    // Pins that the two composers are NOT aliases — WhatsApp uses bullet
+    // separators and slightly different wording ("your purchase ... is
+    // confirmed" vs "thank you for your purchase"). If someone tries to
+    // collapse the two into a single helper, this test catches it.
+    const args = {
+      sale: { invoiceNumber: 'INV-DIV', total: 250 },
+      patientName: 'Rahul',
+      clinicName: 'EW',
+      currency: 'INR',
+      lineCount: 3,
+    };
+    const smsBody = composeSmsBody(args);
+    const waBody = composeWhatsappBody(args);
+    expect(smsBody).not.toBe(waBody);
+    expect(waBody).toContain('•'); // WhatsApp uses bullets
+    expect(smsBody).not.toContain('•'); // SMS doesn't (DLT-template safe)
+    expect(waBody).toContain('confirmed'); // WhatsApp wording
+    expect(smsBody).toContain('thank you'); // SMS wording
   });
 });
 
@@ -140,6 +213,19 @@ describe('dispatchReceiptForSale', () => {
   test('sale not found / wrong tenant → no-op', async () => {
     prisma.sale.findFirst.mockResolvedValue(null);
     await dispatchReceiptForSale({ payload: { saleId: 99 }, tenantId: 1 });
+    expect(prisma.smsMessage.create).not.toHaveBeenCalled();
+  });
+
+  test('sale found but status=DRAFT → no-op (post-fetch status re-check)', async () => {
+    // Pins the SUT's defensive sale.status re-check (line 149) — even
+    // when the payload says COMPLETED, the DB row's status is the
+    // authoritative source. Catches a race where the listener fires
+    // before a refund handler flips the row to DRAFT.
+    prisma.sale.findFirst.mockResolvedValue({
+      id: 1, status: 'DRAFT', invoiceNumber: 'INV-DRAFT', total: 100, patientId: 42, lineItems: [{}],
+    });
+    await dispatchReceiptForSale({ payload: { saleId: 1, status: 'COMPLETED' }, tenantId: 1 });
+    expect(prisma.patient.findFirst).not.toHaveBeenCalled();
     expect(prisma.smsMessage.create).not.toHaveBeenCalled();
   });
 

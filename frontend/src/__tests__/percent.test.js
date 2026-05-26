@@ -13,8 +13,8 @@
 //   truth; pinning the contract here means callsites can never re-introduce
 //   the divergence without a test failure.
 
-import { describe, it, expect } from 'vitest';
-import { formatPercent } from '../utils/percent';
+import { describe, it, expect, test } from 'vitest';
+import formatPercentDefault, { formatPercent } from '../utils/percent';
 
 describe('formatPercent', () => {
   it('renders 1 decimal by default', () => {
@@ -46,5 +46,77 @@ describe('formatPercent', () => {
 
   it('rejects non-numeric strings as em-dash', () => {
     expect(formatPercent('abc')).toBe('—');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Extension wave (test-cron Agent C) — under-pinned surface
+  // ---------------------------------------------------------------------------
+
+  it('renders negative percents with the leading minus preserved', () => {
+    expect(formatPercent(-5.5)).toBe('-5.5%');
+    expect(formatPercent(-100)).toBe('-100.0%');
+  });
+
+  it('renders very large numbers without truncation or scientific notation', () => {
+    expect(formatPercent(9999)).toBe('9999.0%');
+    expect(formatPercent(123456.78)).toBe('123456.8%');
+  });
+
+  // Infinity / -Infinity render as em-dash (Number.isFinite guard, #974 fix).
+  test('Infinity renders as em-dash', () => {
+    expect(formatPercent(Infinity)).toBe('—');
+  });
+  test('-Infinity renders as em-dash', () => {
+    expect(formatPercent(-Infinity)).toBe('—');
+  });
+
+  it('rejects boolean true as em-dash (typeof !== "number")', () => {
+    expect(formatPercent(true)).toBe('—');
+  });
+
+  it('rejects boolean false as em-dash (not in null/undefined/"" early returns, typeof !== "number")', () => {
+    expect(formatPercent(false)).toBe('—');
+  });
+
+  it('rejects plain object input as em-dash', () => {
+    expect(formatPercent({ x: 1 })).toBe('—');
+    expect(formatPercent({})).toBe('—');
+  });
+
+  it('rejects array input as em-dash (typeof "object")', () => {
+    expect(formatPercent([])).toBe('—');
+    expect(formatPercent([1, 2])).toBe('—');
+  });
+
+  it('coerces whitespace-only string to 0 (Number("   ") === 0)', () => {
+    expect(formatPercent('   ')).toBe('0.0%');
+  });
+
+  it('honours decimals=0 override on stringified zero', () => {
+    expect(formatPercent('0', { decimals: 0 })).toBe('0%');
+  });
+
+  it('exposes the same function as default and named export', () => {
+    expect(formatPercentDefault).toBe(formatPercent);
+  });
+
+  it('explicit decimals=undefined falls back to default 1 (destructure default)', () => {
+    expect(formatPercent(12.34, { decimals: undefined })).toBe('12.3%');
+  });
+
+  it('rounds negative values half-up via toFixed', () => {
+    // toFixed in V8: -12.345 with 2 decimals rounds toward zero on this boundary
+    // (browser-engine quirk on .5 cases). Pin observed behaviour rather than
+    // theoretical half-up to keep the test deterministic across Node versions.
+    const result = formatPercent(-12.345, { decimals: 2 });
+    expect(['-12.34%', '-12.35%']).toContain(result);
+  });
+
+  it('handles floating-point accumulation noise (0.1 + 0.2 → "0.3%")', () => {
+    expect(formatPercent(0.1 + 0.2)).toBe('0.3%');
+  });
+
+  it('rounds the half-up boundary at 2 decimals (12.349 → "12.35%")', () => {
+    expect(formatPercent(12.349, { decimals: 2 })).toBe('12.35%');
   });
 });

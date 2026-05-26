@@ -1,23 +1,163 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { verifyToken } = require("../middleware/auth");
 
 // GET /api/contracts — list with optional status filter
+// GET /api/contracts?fields=summary
 router.get("/", async (req, res) => {
   try {
+    // #920 slice 14: ?fields=summary slim-shape opt-in. Mirrors slice 1
+    // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+    // badc9cca), slice 4 (tasks eec7d856), slice 5 (projects 257771a0),
+    // slice 6 (expenses e81e6cb5), slice 7 (notifications a3487518),
+    // slice 8 (surveys e71594d9), slice 9 (email-templates 0d4a63f9),
+    // slice 10 (knowledge-base 21ad3290), slice 12 (sequences).
+    // When the caller passes ?fields=summary we drop the heavy `terms`
+    // column (String? @db.Text — can be many KB of contract body text)
+    // and the contact + deal relation includes, returning only the
+    // columns the contract list renderer actually needs. Opt-in additive
+    // — existing callers (no ?fields, or any non-exact value) get the
+    // full row shape with relations unchanged.
     const { status } = req.query;
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
 
-    const contracts = await prisma.contract.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
-      include: { contact: true, deal: true },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        title: true,
+        status: true,
+        startDate: true,
+        endDate: true,
+        value: true,
+        tenantId: true,
+        contactId: true,
+        dealId: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    } else {
+      findManyArgs.include = { contact: true, deal: true };
+    }
+
+    const contracts = await prisma.contract.findMany(findManyArgs);
     res.json(contracts);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch contracts" });
+  }
+});
+
+// GET /api/contracts/stats — tenant-wide aggregate KPI surface.
+//
+// CRM polish — first /stats endpoint for the Contract CRUD route.
+// Read-only KPI surface for the sales/legal dashboard. Mirrors
+// estimates/stats + travel-suppliers/stats posture. Without this, the
+// frontend has to fire {list, count-by-status×5, sum-value,
+// filter+sum-active, filter-expiring-soon} — N+1 round-trips for a single
+// visual surface.
+//
+// Behaviour:
+//   - Tenant-scoped via req.user.tenantId.
+//   - ?from / ?to (optional ISO date bounds on createdAt); invalid → 400 INVALID_DATE.
+//   - byStatus: groupBy status across the Contract enum
+//     (Draft / Sent / Active / Expired / Terminated — PascalCase per
+//     schema.prisma Contract.status default + comment).
+//   - totalValue: sum of value across all rows (half-up 2dp).
+//   - signedValue: sum of value where status='Active' (half-up 2dp).
+//     ("Active" is the equivalent terminal-active state; "Signed" is not
+//     in the Contract enum per the schema's status default comment).
+//   - activeCount: rows where status='Active' AND (endDate IS NULL OR
+//     endDate >= now). Open-ended contracts with no endDate stay active.
+//   - expiringSoonCount: rows where status='Active' AND endDate is within
+//     the next 30 days (endDate >= now AND endDate <= now+30d).
+//   - lastCreatedAt: max(createdAt) ISO, or null.
+//   - NO audit row written — anodyne aggregate.
+//
+// Express route ordering: literal /stats MUST be declared BEFORE the /:id
+// family or `:id="stats"` would parseInt → NaN and 400 Invalid contract
+// ID before reaching this handler. Mirrors estimates/stats convention.
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "from must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "to must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    const rows = await prisma.contract.findMany({
+      where,
+      select: { status: true, value: true, endDate: true, createdAt: true },
+    });
+
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const now = new Date();
+    const thirtyDaysOut = new Date(now.getTime() + 30 * 86400000);
+
+    const byStatus = {};
+    let totalValue = 0;
+    let signedValue = 0;
+    let activeCount = 0;
+    let expiringSoonCount = 0;
+    let lastCreatedAt = null;
+
+    for (const r of rows) {
+      const st = r.status || "Draft";
+      byStatus[st] = (byStatus[st] || 0) + 1;
+      const amt = Number(r.value) || 0;
+      totalValue += amt;
+
+      if (st === "Active") {
+        signedValue += amt;
+        // Open-ended (endDate null) OR not-yet-past endDate → active.
+        const ed = r.endDate ? new Date(r.endDate) : null;
+        if (!ed || ed >= now) {
+          activeCount += 1;
+        }
+        // Expiring within next 30 days: must have an endDate, must be in
+        // the [now, now+30d] window.
+        if (ed && ed >= now && ed <= thirtyDaysOut) {
+          expiringSoonCount += 1;
+        }
+      }
+
+      if (r.createdAt) {
+        const ca = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+        if (!lastCreatedAt || ca > lastCreatedAt) lastCreatedAt = ca;
+      }
+    }
+
+    res.json({
+      total: rows.length,
+      byStatus,
+      totalValue: round2(totalValue),
+      signedValue: round2(signedValue),
+      activeCount,
+      expiringSoonCount,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[contracts] stats error:", err.message);
+    res.status(500).json({ error: "Failed to compute contract stats" });
   }
 });
 

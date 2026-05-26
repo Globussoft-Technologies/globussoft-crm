@@ -17,6 +17,10 @@
 // Endpoints:
 //   GET    /api/travel/webcheckins                            — list
 //   GET    /api/travel/webcheckins/upcoming                   — window opens ≤48h
+//   GET    /api/travel/webcheckins/stats                      — tenant-wide rollup
+//   GET    /api/travel/webcheckins/by-month                   — tenant-wide monthly creation rollup
+//   GET    /api/travel/webcheckins/by-quarter                 — tenant-wide quarterly creation rollup
+//   GET    /api/travel/webcheckins/by-year                    — tenant-wide annual creation rollup
 //   GET    /api/travel/webcheckins/:id                        — fetch one
 //   POST   /api/travel/webcheckins                            — admin manual create
 //   PATCH  /api/travel/webcheckins/:id                        — amend
@@ -24,9 +28,10 @@
 //   POST   /api/travel/webcheckins/:id/deliver                — mark delivered (stub WA)
 //   DELETE /api/travel/webcheckins/:id                        — ADMIN only
 //
-// Route-precedence note: /upcoming MUST mount before /:id so the
-// parseInt("upcoming") → NaN trap doesn't capture it (CLAUDE.md
-// standing rule).
+// Route-precedence note: /upcoming, /stats, /by-month, /by-quarter AND
+// /by-year MUST mount before /:id so the
+// parseInt("upcoming"|"stats"|"by-month"|"by-quarter"|"by-year") → NaN trap
+// doesn't capture them (CLAUDE.md standing rule).
 //
 // WhatsApp dispatch on /deliver is stub-mode (console.log) pending
 // Wati BSP creds (Q9) — mirrors backend/cron/contactGreetingsEngine.js
@@ -40,7 +45,10 @@ const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
-const { requireTravelTenant } = require("../middleware/travelGuards");
+const {
+  requireTravelTenant,
+  getSubBrandAccessSet,
+} = require("../middleware/travelGuards");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
@@ -162,6 +170,882 @@ router.get("/webcheckins/upcoming", verifyToken, requireTravelTenant, async (req
     res.status(500).json({ error: "Failed to list upcoming check-ins" });
   }
 });
+
+// ─── Tenant-wide stats rollup ────────────────────────────────────────
+//
+// GET /api/travel/webcheckins/stats — tenant-wide WebCheckin rollup.
+// Mirrors #903 slice 23 /suppliers/stats + #905 slice 18
+// /commission-profiles/stats + #908 slice 19 /flyer-templates/global-stats.
+// USER-readable anodyne aggregate that powers a WebCheckin operations
+// dashboard tile strip ("47 total · 12 delivered · 35 pending · 8 windows
+// opening ≤48h · by-airline split · last delivered 2h ago"). Without
+// this, the dashboard would have to fan out N count queries per airline
+// and per sub-brand — N+1 round-trips for one visual surface.
+//
+// Behaviour:
+//   - Tenant-scoped: WHERE tenantId = req.travelTenant.id.
+//   - Sub-brand narrowing: WebCheckin has NO direct subBrand column —
+//     the sub-brand lives on the parent Itinerary. When a MANAGER's
+//     subBrandAccess set is restrictive, we resolve the visible
+//     Itinerary id-set first, then narrow the WebCheckin query by
+//     itineraryId IN. Defensive: WebCheckin rows whose itineraryId is
+//     null (manual-create path) are KEPT when the caller is unrestricted
+//     and DROPPED for a sub-brand-restricted MANAGER (no parent
+//     itinerary → no sub-brand attribution → cannot prove access).
+//   - Counts:
+//       total                 — count of all matching rows
+//       delivered             — count where deliveredAt IS NOT NULL
+//       pending               — count where deliveredAt IS NULL
+//       upcomingWindow        — count where windowOpenAt < now + 48h
+//                               AND deliveredAt IS NULL (i.e. coming due
+//                               but not yet handled)
+//   - Bucketed maps:
+//       byAirline: { [airlineCode]: { count } }    — defensive: missing
+//                                                    airlineCode → "_unknown"
+//       bySubBrand: { [sb]: { count }, _tenant: { count } }
+//                                — derived via the WebCheckin's parent
+//                                  Itinerary (one batched findMany on
+//                                  Itinerary id-set). WebCheckins with
+//                                  null itineraryId land in `_tenant`.
+//   - lastDeliveredAt          — ISO max(deliveredAt) across delivered
+//                                rows, or null when none are delivered.
+//   - ?from / ?to (ISO date bounds) filter WebCheckin.createdAt BEFORE
+//     aggregation. Invalid → 400 INVALID_DATE.
+//
+// Safety cap: process at most 2000 rows per call; if total > cap, return
+// counts but mark aggregateExceedsCap=true (byAirline/bySubBrand splits
+// would be incomplete past the cap).
+//
+// USER-readable: anodyne aggregate (counts + timestamps); same contract
+// as sibling /stats endpoints. No audit row.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE
+// the /:id family or `:id="stats"` would 400 INVALID_ID before reaching
+// this handler — same trap as /upcoming above.
+const WEBCHECKIN_STATS_CAP = 2000;
+
+router.get(
+  "/webcheckins/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      const where = { tenantId };
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+      }
+
+      // Sub-brand narrowing — WebCheckin lacks a subBrand column, so we
+      // resolve the visible Itinerary id-set up front. Unrestricted callers
+      // (allowed === null) skip this fetch entirely.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size === 0) {
+          // Empty allowed set = deny everything; force-empty query.
+          where.itineraryId = -1;
+        } else {
+          const visibleItins = await prisma.itinerary.findMany({
+            where: { tenantId, subBrand: { in: [...allowed] } },
+            select: { id: true },
+            take: WEBCHECKIN_STATS_CAP,
+          });
+          if (visibleItins.length === 0) {
+            where.itineraryId = -1;
+          } else {
+            where.itineraryId = { in: visibleItins.map((i) => i.id) };
+          }
+        }
+      }
+
+      const rows = await prisma.webCheckin.findMany({
+        where,
+        select: {
+          id: true,
+          airlineCode: true,
+          itineraryId: true,
+          deliveredAt: true,
+          windowOpenAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+        take: WEBCHECKIN_STATS_CAP,
+      });
+
+      const totalMatching = await prisma.webCheckin.count({ where });
+      const aggregateExceedsCap = totalMatching > WEBCHECKIN_STATS_CAP;
+
+      if (rows.length === 0) {
+        return res.json({
+          total: 0,
+          delivered: 0,
+          pending: 0,
+          upcomingWindow: 0,
+          byAirline: {},
+          bySubBrand: {},
+          lastDeliveredAt: null,
+          aggregateExceedsCap: false,
+        });
+      }
+
+      // Resolve sub-brand for the matched WebCheckin rows. One batched
+      // Itinerary findMany over the distinct itineraryIds; rows with null
+      // itineraryId land in the `_tenant` bucket.
+      const itinIds = Array.from(
+        new Set(rows.map((r) => r.itineraryId).filter((x) => Number.isFinite(x))),
+      );
+      const itinSubBrandById = new Map();
+      if (itinIds.length > 0) {
+        const itins = await prisma.itinerary.findMany({
+          where: { tenantId, id: { in: itinIds } },
+          select: { id: true, subBrand: true },
+        });
+        for (const it of itins) {
+          itinSubBrandById.set(it.id, it.subBrand || null);
+        }
+      }
+
+      const now = new Date();
+      const horizon = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+
+      let delivered = 0;
+      let pending = 0;
+      let upcomingWindow = 0;
+      let lastDeliveredAt = null;
+      const byAirline = {};
+      const bySubBrand = {};
+
+      for (const r of rows) {
+        const isDelivered = r.deliveredAt != null;
+        if (isDelivered) {
+          delivered += 1;
+          const ts =
+            r.deliveredAt instanceof Date
+              ? r.deliveredAt
+              : new Date(r.deliveredAt);
+          if (!Number.isNaN(ts.getTime())) {
+            if (!lastDeliveredAt || ts > lastDeliveredAt) lastDeliveredAt = ts;
+          }
+        } else {
+          pending += 1;
+          const w =
+            r.windowOpenAt instanceof Date
+              ? r.windowOpenAt
+              : new Date(r.windowOpenAt);
+          if (!Number.isNaN(w.getTime()) && w < horizon) {
+            upcomingWindow += 1;
+          }
+        }
+
+        const aKey = r.airlineCode ? String(r.airlineCode) : "_unknown";
+        if (!byAirline[aKey]) byAirline[aKey] = { count: 0 };
+        byAirline[aKey].count += 1;
+
+        let sbKey = "_tenant";
+        if (r.itineraryId != null) {
+          const sb = itinSubBrandById.get(r.itineraryId);
+          if (sb) sbKey = sb;
+        }
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+        bySubBrand[sbKey].count += 1;
+      }
+
+      res.json({
+        total: rows.length,
+        delivered,
+        pending,
+        upcomingWindow,
+        byAirline,
+        bySubBrand,
+        lastDeliveredAt: lastDeliveredAt ? lastDeliveredAt.toISOString() : null,
+        aggregateExceedsCap,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-webcheckin] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise web check-ins" });
+    }
+  },
+);
+
+// ─── Tenant-wide monthly rollup ──────────────────────────────────────
+//
+// GET /api/travel/webcheckins/by-month — tenant-wide WebCheckin creation
+// rollup, one row per UTC YYYY-MM bucket. Pairs with /webcheckins/stats
+// (the at-a-glance snapshot) to surface the WebCheckin operations trend
+// over time on the operator dashboard. Mirrors the by-month template
+// shipped on /flyer-templates/by-month (slice 21) + /quotes/by-month
+// (slice 16) + /invoices/by-month (slice 29) — same UTC YYYY-MM
+// bucketing, same defensive "unknown" bucket math, same orderBy
+// semantics, same pagination posture.
+//
+// Each row carries:
+//   - month            — "YYYY-MM" UTC, or "unknown" for null/invalid
+//                        createdAt (excluded when from/to is set so the
+//                        comparable month-string token still works)
+//   - count            — total WebCheckin rows created in this month
+//   - deliveredCount   — subset where deliveredAt IS NOT NULL
+//   - pendingCount     — remainder (count - deliveredCount)
+//
+// The delivered/pending split is the WebCheckin analogue of the flyer
+// active/archived split — gives the dashboard a "creation cadence vs.
+// follow-through cadence" delta at a glance.
+//
+// PRD §4.6 — WebCheckin tracking dashboard.
+//
+// Sub-brand narrowing: WebCheckin has NO direct subBrand column — the
+// sub-brand lives on the parent Itinerary (same as /stats). When a
+// MANAGER's subBrandAccess set is restrictive, we resolve the visible
+// Itinerary id-set first, then narrow the WebCheckin query by
+// itineraryId IN. Defensive: WebCheckin rows whose itineraryId is null
+// (manual-create path) are KEPT when the caller is unrestricted and
+// DROPPED for a sub-brand-restricted MANAGER (no parent itinerary →
+// no sub-brand attribution → cannot prove access). Same posture as
+// /webcheckins/stats above.
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//                     400 INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}, deliveredCount:{asc|desc};
+//                     unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// USER-readable anodyne aggregate — counts + month-string tokens; no
+// audit row written. Matches sibling by-month posture.
+//
+// Express route ordering: literal-path /by-month MUST be declared
+// BEFORE the /:id family or `:id="by-month"` would 400 INVALID_ID
+// before reaching this handler. Same trap as /upcoming and /stats above.
+const WEBCHECKIN_BY_MONTH_CAP = 5000;
+
+router.get(
+  "/webcheckins/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors /flyer-templates/by-month slice 21.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+        "deliveredCount:asc",
+        "deliveredCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      const tenantId = req.travelTenant.id;
+      const where = { tenantId };
+
+      // Sub-brand narrowing — WebCheckin lacks a subBrand column, so we
+      // resolve the visible Itinerary id-set up front (same as /stats).
+      // Unrestricted callers (allowed === null) skip this fetch entirely.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set) {
+        if (allowed.size === 0) {
+          return res.json({
+            months: [],
+            totalMonths: 0,
+            grandCount: 0,
+            grandDeliveredCount: 0,
+            limit: take,
+            offset: skip,
+          });
+        }
+        const visibleItins = await prisma.itinerary.findMany({
+          where: { tenantId, subBrand: { in: [...allowed] } },
+          select: { id: true },
+          take: WEBCHECKIN_BY_MONTH_CAP,
+        });
+        if (visibleItins.length === 0) {
+          where.itineraryId = -1;
+        } else {
+          where.itineraryId = { in: visibleItins.map((i) => i.id) };
+        }
+      }
+
+      // Light projection — createdAt + deliveredAt is enough for the
+      // bucket totals. No JSON columns pulled. Same posture as the
+      // sibling by-month endpoints — the population is bounded by
+      // tenant scale (low thousands of WebCheckins), and JS aggregation
+      // matches the rationale on /flyer-templates/by-month.
+      const rows = await prisma.webCheckin.findMany({
+        where,
+        select: { createdAt: true, deliveredAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { count, deliveredCount,
+      // pendingCount }. Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const r of rows) {
+        let monthKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            month: monthKey,
+            count: 0,
+            deliveredCount: 0,
+            pendingCount: 0,
+          };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.deliveredAt != null) bucket.deliveredCount += 1;
+        else bucket.pendingCount += 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set; kept otherwise. Mirrors slice 21 /flyer-templates/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also
+      // chronological). "unknown" sorts last in asc / first in desc.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandCount = months.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+      const grandDeliveredCount = months.reduce(
+        (acc, r) => acc + (Number(r.deliveredCount) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as siblings.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        months: paged,
+        totalMonths,
+        grandCount,
+        grandDeliveredCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-webcheckin] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
+
+// ─── Tenant-wide quarterly rollup ────────────────────────────────────
+//
+// GET /api/travel/webcheckins/by-quarter — tenant-wide WebCheckin
+// creation rollup, one row per UTC YYYY-Q[1-4] bucket. Completes the
+// rollup triplet alongside /webcheckins/stats (snapshot) and
+// /webcheckins/by-month (monthly trend). Mirrors the by-quarter
+// template shipped on /itineraries/by-quarter (slice 17) +
+// /suppliers/by-quarter + /trips/by-quarter — same UTC YYYY-Q[1-4]
+// bucketing, same defensive "unknown" bucket math, same orderBy
+// semantics, same pagination posture.
+//
+// Each row carries:
+//   - quarter     — "YYYY-Q[1-4]" UTC, or "unknown" for null/invalid
+//                   createdAt (excluded when from/to is set so the
+//                   comparable quarter-string token still works)
+//   - count       — total WebCheckin rows created in this quarter
+//   - bySubBrand  — { [sb]: count, _tenant: count } breakdown, derived
+//                   via parent Itinerary subBrand. Falsy/missing
+//                   subBrand (or null itineraryId on the WebCheckin)
+//                   coerces to "_tenant".
+//
+// PRD §4.6 — WebCheckin tracking dashboard quarterly view.
+//
+// Sub-brand narrowing: MIRRORS the /webcheckins/by-month handler
+// EXACTLY. WebCheckin has NO direct subBrand column — the sub-brand
+// lives on the parent Itinerary. When a MANAGER's subBrandAccess set
+// is restrictive, we resolve the visible Itinerary id-set first, then
+// narrow the WebCheckin query by itineraryId IN. WebCheckin rows whose
+// itineraryId is null (manual-create path) are KEPT when the caller is
+// unrestricted and DROPPED for a sub-brand-restricted MANAGER (no
+// parent itinerary → no sub-brand attribution → cannot prove access).
+// Same posture as /webcheckins/stats and /webcheckins/by-month above.
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-Q[1-4] bounds; invalid →
+//                     400 INVALID_QUARTER_FORMAT
+//   - ?orderBy      — default quarter:asc; accepts quarter:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade
+//                     silently to the default
+//   - ?limit / ?offset — default 8 / 0; limit caps at 40
+//
+// USER-readable anodyne aggregate — counts + quarter-string tokens; no
+// audit row written. Matches sibling by-quarter posture.
+//
+// Response envelope:
+//   {
+//     total: <pre-pagination bucket count>,
+//     rows: [{ quarter: "2026-Q2", count: 3, bySubBrand: { tmc: 2, rfu: 1 } }, ...]
+//   }
+//
+// Express route ordering: literal-path /by-quarter MUST be declared
+// BEFORE the /:id family or `:id="by-quarter"` would 400 INVALID_ID
+// before reaching this handler. Same trap as /upcoming, /stats and
+// /by-month above.
+const WEBCHECKIN_BY_QUARTER_CAP = 5000;
+
+router.get(
+  "/webcheckins/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 8, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+      // YYYY-Q[1-4] validation — mirrors /itineraries/by-quarter slice 17.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Q[1-4] format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Q[1-4] format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+      const tenantId = req.travelTenant.id;
+      const where = { tenantId };
+
+      // Sub-brand narrowing — WebCheckin lacks a subBrand column, so we
+      // resolve the visible Itinerary id-set up front (same as /stats
+      // and /by-month). Unrestricted callers (allowed === null) skip
+      // this fetch entirely.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set) {
+        if (allowed.size === 0) {
+          return res.json({
+            total: 0,
+            rows: [],
+          });
+        }
+        const visibleItins = await prisma.itinerary.findMany({
+          where: { tenantId, subBrand: { in: [...allowed] } },
+          select: { id: true },
+          take: WEBCHECKIN_BY_QUARTER_CAP,
+        });
+        if (visibleItins.length === 0) {
+          where.itineraryId = -1;
+        } else {
+          where.itineraryId = { in: visibleItins.map((i) => i.id) };
+        }
+      }
+
+      // Light projection — createdAt + itineraryId is enough for the
+      // bucket totals + bySubBrand breakdown. Same posture as by-month.
+      const rows = await prisma.webCheckin.findMany({
+        where,
+        select: { createdAt: true, itineraryId: true },
+      });
+
+      // Resolve sub-brand for the matched WebCheckin rows. One batched
+      // Itinerary findMany over the distinct itineraryIds; rows with
+      // null itineraryId land in the "_tenant" bucket.
+      const itinIds = Array.from(
+        new Set(
+          rows
+            .map((r) => r.itineraryId)
+            .filter((x) => Number.isFinite(x)),
+        ),
+      );
+      const itinSubBrandById = new Map();
+      if (itinIds.length > 0) {
+        const itins = await prisma.itinerary.findMany({
+          where: { tenantId, id: { in: itinIds } },
+          select: { id: true, subBrand: true },
+        });
+        for (const it of itins) {
+          itinSubBrandById.set(it.id, it.subBrand || null);
+        }
+      }
+
+      // Aggregate per-UTC-quarter. Map "YYYY-Q[1-4]" → { quarter, count,
+      // bySubBrand }. Null/invalid createdAt rows land in "unknown".
+      const byQuarter = new Map();
+      for (const r of rows) {
+        let quarterKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${q}`;
+          }
+        }
+
+        let bucket = byQuarter.get(quarterKey);
+        if (!bucket) {
+          bucket = {
+            quarter: quarterKey,
+            count: 0,
+            bySubBrand: {},
+          };
+          byQuarter.set(quarterKey, bucket);
+        }
+        bucket.count += 1;
+
+        // Per-bucket bySubBrand: falsy/missing subBrand coerces to "_tenant".
+        let sbKey = "_tenant";
+        if (r.itineraryId != null) {
+          const sb = itinSubBrandById.get(r.itineraryId);
+          if (sb) sbKey = sb;
+        }
+        bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+      }
+
+      let quarters = [...byQuarter.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set; kept otherwise. Mirrors /itineraries/by-quarter
+      // (slice 17) posture exactly.
+      if (fromRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Q[1-4] which is
+      // also chronological (Q1 < Q2 < Q3 < Q4 in ASCII, years naturally
+      // ordered). "unknown" sorts last in asc / first in desc by virtue
+      // of being lexicographically > "9999-Q4".
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = quarters.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as siblings.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-webcheckin] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
+
+// ─── Tenant-wide annual rollup ───────────────────────────────────────
+//
+// GET /api/travel/webcheckins/by-year — tenant-wide WebCheckin
+// creation rollup, one row per UTC YYYY bucket. Completes the rollup
+// triplet alongside /webcheckins/stats (snapshot), /webcheckins/by-month
+// (monthly trend), and /webcheckins/by-quarter (quarterly trend).
+// Mirrors the by-year template shipped on /itineraries/by-year (slice 18)
+// + /suppliers/by-year — same UTC YYYY bucketing, same defensive
+// "unknown" bucket math, same orderBy semantics, same pagination posture.
+//
+// Each row carries:
+//   - year        — "YYYY" UTC, or "unknown" for null/invalid createdAt
+//                   (excluded when from/to is set so the comparable
+//                   year-string token still works)
+//   - count       — total WebCheckin rows created in this year
+//   - bySubBrand  — { [sb]: count, _tenant: count } breakdown, derived
+//                   via parent Itinerary subBrand. Falsy/missing
+//                   subBrand (or null itineraryId on the WebCheckin)
+//                   coerces to "_tenant".
+//
+// PRD §4.6 — WebCheckin tracking dashboard annual view.
+//
+// Sub-brand narrowing: MIRRORS the /webcheckins/by-quarter handler
+// EXACTLY (which mirrors /by-month and /stats). WebCheckin has NO direct
+// subBrand column — the sub-brand lives on the parent Itinerary. When a
+// MANAGER's subBrandAccess set is restrictive, we resolve the visible
+// Itinerary id-set first (FIRST prisma.itinerary.findMany call), then
+// narrow the WebCheckin query by itineraryId IN. The SECOND
+// prisma.itinerary.findMany call resolves per-row subBrand for the
+// bySubBrand breakdown. WebCheckin rows whose itineraryId is null
+// (manual-create path) are KEPT when the caller is unrestricted and
+// DROPPED for a sub-brand-restricted MANAGER (no parent itinerary →
+// no sub-brand attribution → cannot prove access).
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY bounds; invalid →
+//                     400 INVALID_YEAR_FORMAT
+//   - ?orderBy      — default year:asc; accepts year:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade
+//                     silently to the default
+//   - ?limit / ?offset — default 10 / 0; limit caps at 30
+//
+// USER-readable anodyne aggregate — counts + year-string tokens; no
+// audit row written. Matches sibling by-year posture.
+//
+// Response envelope:
+//   {
+//     total: <pre-pagination bucket count>,
+//     rows: [{ year: "2026", count: 3, bySubBrand: { tmc: 2, _tenant: 1 } }, ...]
+//   }
+//
+// Express route ordering: literal-path /by-year MUST be declared
+// BEFORE the /:id family or `:id="by-year"` would 400 INVALID_ID
+// before reaching this handler. Same trap as /upcoming, /stats,
+// /by-month and /by-quarter above.
+const WEBCHECKIN_BY_YEAR_CAP = 5000;
+
+router.get(
+  "/webcheckins/by-year",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+      // YYYY validation — exactly 4 digits. Mirrors /itineraries/by-year
+      // slice 18.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      const tenantId = req.travelTenant.id;
+      const where = { tenantId };
+
+      // Sub-brand narrowing — WebCheckin lacks a subBrand column, so we
+      // resolve the visible Itinerary id-set up front (same as /stats,
+      // /by-month and /by-quarter). Unrestricted callers (allowed === null)
+      // skip this fetch entirely.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set) {
+        if (allowed.size === 0) {
+          return res.json({
+            total: 0,
+            rows: [],
+          });
+        }
+        const visibleItins = await prisma.itinerary.findMany({
+          where: { tenantId, subBrand: { in: [...allowed] } },
+          select: { id: true },
+          take: WEBCHECKIN_BY_YEAR_CAP,
+        });
+        if (visibleItins.length === 0) {
+          where.itineraryId = -1;
+        } else {
+          where.itineraryId = { in: visibleItins.map((i) => i.id) };
+        }
+      }
+
+      // Light projection — createdAt + itineraryId is enough for the
+      // bucket totals + bySubBrand breakdown. Same posture as by-quarter.
+      const rows = await prisma.webCheckin.findMany({
+        where,
+        select: { createdAt: true, itineraryId: true },
+      });
+
+      // Resolve sub-brand for the matched WebCheckin rows. One batched
+      // Itinerary findMany over the distinct itineraryIds; rows with
+      // null itineraryId land in the "_tenant" bucket.
+      const itinIds = Array.from(
+        new Set(
+          rows
+            .map((r) => r.itineraryId)
+            .filter((x) => Number.isFinite(x)),
+        ),
+      );
+      const itinSubBrandById = new Map();
+      if (itinIds.length > 0) {
+        const itins = await prisma.itinerary.findMany({
+          where: { tenantId, id: { in: itinIds } },
+          select: { id: true, subBrand: true },
+        });
+        for (const it of itins) {
+          itinSubBrandById.set(it.id, it.subBrand || null);
+        }
+      }
+
+      // Aggregate per-UTC-year. Map "YYYY" → { year, count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byYear = new Map();
+      for (const r of rows) {
+        let yearKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let bucket = byYear.get(yearKey);
+        if (!bucket) {
+          bucket = {
+            year: yearKey,
+            count: 0,
+            bySubBrand: {},
+          };
+          byYear.set(yearKey, bucket);
+        }
+        bucket.count += 1;
+
+        // Per-bucket bySubBrand: falsy/missing subBrand coerces to "_tenant".
+        let sbKey = "_tenant";
+        if (r.itineraryId != null) {
+          const sb = itinSubBrandById.get(r.itineraryId);
+          if (sb) sbKey = sb;
+        }
+        bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+      }
+
+      let years = [...byYear.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set; kept otherwise. Mirrors /itineraries/by-year
+      // (slice 18) posture exactly.
+      if (fromRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+      }
+      if (toRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY which is also
+      // chronological. "unknown" sorts last in asc / first in desc by
+      // virtue of being lexicographically > "9999".
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = years.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as siblings.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-webcheckin] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute annual rollup" });
+    }
+  },
+);
 
 // ─── Get / create / patch / delete ───────────────────────────────────
 

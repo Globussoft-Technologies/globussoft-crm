@@ -1146,3 +1146,243 @@ describe('<QuoteBuilder /> — Convert to invoice (slice 10)', () => {
     );
   });
 });
+
+// Slice 11 (THIS commit): Accept + Decline workflow buttons + confirm
+// modal. Backend ships dedicated POST /api/travel/quotes/:id/{accept,
+// decline} endpoints with status-transition guards + audit action codes
+// (TRAVEL_QUOTE_ACCEPTED / TRAVEL_QUOTE_DECLINED). Frontend adds two
+// header buttons; Decline opens a confirm modal with an optional reason
+// textarea (captured server-side in the audit details payload — schema
+// has no rejectionReason column in this slice).
+//
+// What's pinned here:
+//   - Both Accept + Decline buttons render in the action cluster (ADMIN).
+//   - Both disabled in NEW mode (no quoteId).
+//   - Both disabled when status is already Accepted / Rejected.
+//   - Accept click fires POST /accept; notify.success on 200.
+//   - Decline click opens the confirm modal; cancel closes without POST.
+//   - Decline confirm fires POST /decline with the reason body.
+//   - 409 INVALID_TRANSITION surfaces as notify.error.
+//   - alreadyAccepted=true surfaces notify.info, NOT notify.success.
+describe('<QuoteBuilder /> — slice 11 Accept / Decline workflow', () => {
+  it('renders Accept + Decline buttons in the action cluster', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: /Quote Builder/i });
+    expect(screen.getByRole('button', { name: /Accept quote/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decline quote/i })).toBeInTheDocument();
+  });
+
+  it('NEW mode: Accept + Decline both disabled (no quoteId yet)', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: /Quote Builder/i });
+    const acceptBtn = screen.getByRole('button', { name: /Accept quote/i });
+    const declineBtn = screen.getByRole('button', { name: /Decline quote/i });
+    expect(acceptBtn.disabled).toBe(true);
+    expect(declineBtn.disabled).toBe(true);
+  });
+
+  it('EDIT mode with Accepted status: Accept disabled, Decline disabled', async () => {
+    mockRouteId = '42';
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/travel/quotes/42') {
+        return Promise.resolve({
+          id: 42, contactId: 5001, status: 'Accepted', currency: 'INR', subBrand: 'tmc',
+        });
+      }
+      if (url === '/api/travel/quotes/42/lines') {
+        return Promise.resolve({ lines: [], total: 0 });
+      }
+      if (url.startsWith('/api/travel/suppliers')) {
+        return Promise.resolve({ suppliers: [], total: 0 });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText(/#42/);
+    const acceptBtn = await screen.findByRole('button', { name: /Accept quote/i });
+    const declineBtn = screen.getByRole('button', { name: /Decline quote/i });
+    await waitFor(() => {
+      expect(acceptBtn.disabled).toBe(true);
+      expect(declineBtn.disabled).toBe(true);
+    });
+  });
+
+  it('EDIT mode Draft: Accept click fires POST /accept and surfaces success', async () => {
+    mockRouteId = '42';
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/quotes/42' && method === 'GET') {
+        return Promise.resolve({
+          id: 42, contactId: 5001, status: 'Draft', currency: 'INR', subBrand: 'tmc',
+        });
+      }
+      if (url === '/api/travel/quotes/42/lines') {
+        return Promise.resolve({ lines: [], total: 0 });
+      }
+      if (url.startsWith('/api/travel/suppliers')) {
+        return Promise.resolve({ suppliers: [], total: 0 });
+      }
+      if (url === '/api/travel/quotes/42/accept' && method === 'POST') {
+        return Promise.resolve({
+          quote: { id: 42, status: 'Accepted', subBrand: 'tmc', contactId: 5001 },
+        });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText(/#42/);
+    const acceptBtn = await screen.findByRole('button', { name: /Accept quote/i });
+    await waitFor(() => expect(acceptBtn.disabled).toBe(false));
+    fireEvent.click(acceptBtn);
+    await waitFor(() => {
+      const acceptCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/quotes/42/accept' && o?.method === 'POST',
+      );
+      expect(acceptCall).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Quote #42 accepted/i),
+      );
+    });
+  });
+
+  it('Accept idempotency: alreadyAccepted=true → notify.info not notify.success', async () => {
+    mockRouteId = '42';
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/quotes/42' && method === 'GET') {
+        return Promise.resolve({
+          id: 42, contactId: 5001, status: 'Draft', currency: 'INR', subBrand: 'tmc',
+        });
+      }
+      if (url === '/api/travel/quotes/42/lines') return Promise.resolve({ lines: [], total: 0 });
+      if (url.startsWith('/api/travel/suppliers')) return Promise.resolve({ suppliers: [], total: 0 });
+      if (url === '/api/travel/quotes/42/accept' && method === 'POST') {
+        return Promise.resolve({
+          quote: { id: 42, status: 'Accepted', subBrand: 'tmc', contactId: 5001 },
+          alreadyAccepted: true,
+          code: 'ALREADY_ACCEPTED',
+        });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText(/#42/);
+    const acceptBtn = await screen.findByRole('button', { name: /Accept quote/i });
+    await waitFor(() => expect(acceptBtn.disabled).toBe(false));
+    fireEvent.click(acceptBtn);
+    await waitFor(() => {
+      expect(notifyInfo).toHaveBeenCalledWith(
+        expect.stringMatching(/Quote #42 was already accepted/i),
+      );
+    });
+    expect(notifySuccess).not.toHaveBeenCalledWith(
+      expect.stringMatching(/Quote #42 accepted$/i),
+    );
+  });
+
+  it('Decline button opens a confirm modal with a reason textarea; cancel does not POST', async () => {
+    mockRouteId = '42';
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/travel/quotes/42') {
+        return Promise.resolve({
+          id: 42, contactId: 5001, status: 'Draft', currency: 'INR', subBrand: 'tmc',
+        });
+      }
+      if (url === '/api/travel/quotes/42/lines') return Promise.resolve({ lines: [], total: 0 });
+      if (url.startsWith('/api/travel/suppliers')) return Promise.resolve({ suppliers: [], total: 0 });
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText(/#42/);
+    const declineBtn = await screen.findByRole('button', { name: /Decline quote/i });
+    await waitFor(() => expect(declineBtn.disabled).toBe(false));
+    fireEvent.click(declineBtn);
+    // Modal renders.
+    expect(await screen.findByRole('dialog', { name: /Confirm decline quote/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Decline reason/i)).toBeInTheDocument();
+    // Cancel → modal closes; no POST to /decline.
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /Confirm decline quote/i })).toBeNull();
+    });
+    const declineCalls = fetchApiMock.mock.calls.filter(
+      ([u]) => typeof u === 'string' && u.includes('/decline'),
+    );
+    expect(declineCalls.length).toBe(0);
+  });
+
+  it('Decline confirm with reason fires POST /decline with the reason body', async () => {
+    mockRouteId = '42';
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/quotes/42' && method === 'GET') {
+        return Promise.resolve({
+          id: 42, contactId: 5001, status: 'Sent', currency: 'INR', subBrand: 'tmc',
+        });
+      }
+      if (url === '/api/travel/quotes/42/lines') return Promise.resolve({ lines: [], total: 0 });
+      if (url.startsWith('/api/travel/suppliers')) return Promise.resolve({ suppliers: [], total: 0 });
+      if (url === '/api/travel/quotes/42/decline' && method === 'POST') {
+        return Promise.resolve({
+          quote: { id: 42, status: 'Rejected', subBrand: 'tmc', contactId: 5001 },
+          reason: 'Budget too high',
+        });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText(/#42/);
+    const declineBtn = await screen.findByRole('button', { name: /Decline quote/i });
+    await waitFor(() => expect(declineBtn.disabled).toBe(false));
+    fireEvent.click(declineBtn);
+    const textarea = await screen.findByLabelText(/Decline reason/i);
+    fireEvent.change(textarea, { target: { value: 'Budget too high' } });
+    fireEvent.click(screen.getByRole('button', { name: /Confirm decline quote/i }));
+    await waitFor(() => {
+      const declineCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/quotes/42/decline' && o?.method === 'POST',
+      );
+      expect(declineCall).toBeTruthy();
+      const body = JSON.parse(declineCall[1].body);
+      expect(body.reason).toBe('Budget too high');
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Quote #42 declined/i),
+      );
+    });
+  });
+
+  it('Accept 409 INVALID_TRANSITION → notify.error using server message', async () => {
+    mockRouteId = '42';
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/quotes/42' && method === 'GET') {
+        return Promise.resolve({
+          id: 42, contactId: 5001, status: 'Draft', currency: 'INR', subBrand: 'tmc',
+        });
+      }
+      if (url === '/api/travel/quotes/42/lines') return Promise.resolve({ lines: [], total: 0 });
+      if (url.startsWith('/api/travel/suppliers')) return Promise.resolve({ suppliers: [], total: 0 });
+      if (url === '/api/travel/quotes/42/accept' && method === 'POST') {
+        const err = new Error('Cannot accept a quote in status "Rejected"');
+        err.status = 409;
+        err.body = { error: 'Cannot accept a quote in status "Rejected"', code: 'INVALID_TRANSITION' };
+        return Promise.reject(err);
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText(/#42/);
+    const acceptBtn = await screen.findByRole('button', { name: /Accept quote/i });
+    await waitFor(() => expect(acceptBtn.disabled).toBe(false));
+    fireEvent.click(acceptBtn);
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Cannot accept a quote in status "Rejected"/),
+      );
+    });
+  });
+});

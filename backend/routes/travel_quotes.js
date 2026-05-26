@@ -6,6 +6,25 @@
  * (2026-05-24 tick #94) as the fork-side of the symmetric Quote/Billing/
  * Supplier decision. This module ships the operator-facing CRUD scaffold.
  *
+ * Slice 15 (THIS commit): GET /:id/audit-trail — read-only chronological
+ * audit history for a single quote. Joins TravelQuote rows (entityId = id)
+ * with TravelQuoteLine rows whose details payload references the same
+ * quoteId, sorts by createdAt asc, surfaces every CRUD/workflow verb the
+ * route file emits (CREATE, UPDATE, DELETE, TRAVEL_QUOTE_ACCEPTED,
+ * TRAVEL_QUOTE_DECLINED, TRAVEL_QUOTE_DUPLICATED, TRAVEL_QUOTE_EXTENDED,
+ * TRAVEL_QUOTE_CONVERTED, TRAVEL_QUOTE_PDF_DOWNLOADED, plus line-CRUD).
+ * Pure read; tenant + sub-brand scoped via loadParentQuote. PRD §3.8.1 +
+ * §3.8.3 — operator/compliance "who-changed-what" surface.
+ *
+ * Slice 11: POST /:id/accept + POST /:id/decline — dedicated semantic
+ * workflow endpoints with status-transition guards. Distinct from the
+ * catch-all PUT /:id (which permits arbitrary status writes) — these
+ * carry workflow-specific audit action codes (TRAVEL_QUOTE_ACCEPTED /
+ * TRAVEL_QUOTE_DECLINED), an idempotent 200 response on already-{Accepted,
+ * Rejected}, and a 409 INVALID_TRANSITION on attempts to flip from a
+ * terminal state. Decline takes an optional reason (≤1000 chars, captured
+ * in audit details — schema has no rejectionReason column in this slice).
+ *
  * Future slices (not in this commit): pricing engine + line items (PRD §3.2),
  * tax calculation per sub-brand default (DD-5.3 pending product call),
  * PDF render via pdfRenderer.js (DD-5.6 RESOLVED: extend existing),
@@ -41,6 +60,7 @@ const {
   descriptionForSac,
   groupLinesBySac,
 } = require("../lib/hsnSacMapper");
+const { computeQuoteAnalytics } = require("../lib/travelQuoteAnalytics");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
@@ -185,6 +205,1509 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
     res.status(500).json({ error: "Failed to list quotes" });
   }
 });
+
+// GET /api/travel/quotes/expired — any verified token (tenant + sub-brand-scoped).
+//
+// Slice 12 of #900 (PRD_TRAVEL_QUOTE_BUILDER OQ-9.7 — expiry workflow).
+// Surfaces quotes whose validUntil is in the past AND status is still
+// Draft or Sent — i.e. quotes that need operator attention (extend the
+// validity window, or move to terminal Accepted/Rejected). Read-only
+// derived list; no schema column for "Expired" status — the schema's
+// VALID_QUOTE_STATUSES intentionally has no Expired enum value (OQ-9.7
+// recommended a cron-driven status flip, but that requires schema work).
+// This slice ships the derived-list surface so operator dashboards can
+// render an "Expired quotes" tile + the sibling POST /:id/extend
+// endpoint lets operators rescue a quote by pushing validUntil forward.
+//
+// Sub-brand isolation: results are filtered to the caller's
+// subBrandAccess set. Operators without any grant get an empty list
+// (vs 403) — matches the GET /quotes index behaviour.
+//
+// Ordering: validUntil ASC (oldest expiry first — most-urgent at top).
+// Pagination: limit query-param (default 50, max 200) to keep the
+// payload bounded; no cursor since the use case is "dashboard tile"
+// not "infinite scroll".
+//
+// IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
+// doesn't match "expired" as a numeric :id (which would 400 INVALID_ID).
+router.get("/quotes/expired", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const limitRaw = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0
+      ? Math.min(limitRaw, 200)
+      : 50;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    // Empty access set = caller has no sub-brand grants; return [] rather
+    // than 403 so dashboard tiles render cleanly for not-yet-onboarded
+    // operators.
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({ quotes: [], count: 0 });
+    }
+
+    const where = {
+      tenantId: req.travelTenant.id,
+      status: { in: ["Draft", "Sent"] },
+      validUntil: { lt: new Date() },
+    };
+    // If allowed is a Set (not "all"), filter to those sub-brands.
+    if (allowed instanceof Set) {
+      where.subBrand = { in: Array.from(allowed) };
+    }
+
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      orderBy: [{ validUntil: "asc" }, { id: "asc" }],
+      take: limit,
+    });
+
+    res.json({ quotes, count: quotes.length });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] expired list error:", e.message);
+    res.status(500).json({ error: "Failed to list expired quotes" });
+  }
+});
+
+// GET /api/travel/quotes/expired-summary — any verified token (tenant + sub-brand-scoped).
+//
+// Slice of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — expiry-recovery rollup).
+// Companion to /quotes/expired (full list) + /quotes/stats (single
+// expiredCount aggregate). This endpoint returns an ACTIONABLE rollup
+// of currently-expired quotes (validUntil < now AND status IN
+// Draft|Sent) grouped by sub-brand, age range, and top customers —
+// the shape an operator dashboard "expiry-recovery" tile needs to
+// prioritise outreach.
+//
+// Response shape:
+//   {
+//     total,                // count of currently-expired quotes
+//     totalValue,           // sum of totalAmount across all expired (half-up 2dp)
+//     bySubBrand: { tmc: {count, value}, rfu: {count, value}, ..., _tenant: {count, value} },
+//     byAgeRange: {
+//       "0-7d":  {count, value},   // expired 0-7 days ago
+//       "8-30d": {count, value},   // expired 8-30 days ago
+//       "31-90d":{count, value},
+//       "90+d":  {count, value},
+//     },
+//     topCustomers: [       // top-5 customers by expired-quote count
+//       { contactId, count, totalValue },
+//       ...
+//     ],
+//     generatedAt,          // ISO timestamp
+//   }
+//
+// Scope rules:
+//   - Tenant-scoped on TravelQuote.tenantId.
+//   - Sub-brand restricted: MANAGER with subBrandAccess narrowed via
+//     getSubBrandAccessSet — empty set → zeroed shape (not 403) so
+//     dashboard tiles render cleanly for not-yet-onboarded operators.
+//   - USER-readable (anodyne aggregate; no quote bodies leak — only
+//     counts + sums + contactIds, no customer names).
+//
+// Defensive: null/non-numeric totalAmount → 0 (no NaN poisoning);
+// null subBrand coalesces to "_tenant" (matches /quotes/stats shape);
+// quotes with null validUntil are skipped (not "expired" without an
+// expiry policy); half-up 2dp rounding via Number.EPSILON.
+//
+// Age-range buckets are inclusive at the low bound:
+//   "0-7d"   → 0 <= ageDays <= 7
+//   "8-30d"  → 8 <= ageDays <= 30
+//   "31-90d" → 31 <= ageDays <= 90
+//   "90+d"   → 91 <= ageDays
+//
+// IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
+// doesn't match "expired-summary" as a numeric :id (which would 400
+// INVALID_ID).
+router.get("/quotes/expired-summary", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const zeroed = () => ({
+      total: 0,
+      totalValue: 0,
+      bySubBrand: {},
+      byAgeRange: {
+        "0-7d": { count: 0, value: 0 },
+        "8-30d": { count: 0, value: 0 },
+        "31-90d": { count: 0, value: 0 },
+        "90+d": { count: 0, value: 0 },
+      },
+      topCustomers: [],
+      generatedAt: new Date().toISOString(),
+    });
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    // Empty access set → zeroed shape (not 403).
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed());
+    }
+
+    const now = new Date();
+    const where = {
+      tenantId: req.travelTenant.id,
+      status: { in: ["Draft", "Sent"] },
+      validUntil: { lt: now },
+    };
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        contactId: true,
+        totalAmount: true,
+        validUntil: true,
+      },
+    });
+
+    if (quotes.length === 0) {
+      return res.json(zeroed());
+    }
+
+    const bySubBrand = {};
+    const byAgeRange = {
+      "0-7d": { count: 0, value: 0 },
+      "8-30d": { count: 0, value: 0 },
+      "31-90d": { count: 0, value: 0 },
+      "90+d": { count: 0, value: 0 },
+    };
+    const perContact = new Map();
+    let total = 0;
+    let totalValue = 0;
+    const nowMs = now.getTime();
+
+    for (const q of quotes) {
+      // Defensive: skip rows whose validUntil failed Prisma's lt filter
+      // (shouldn't happen, but the test mock returns whatever it likes).
+      if (!q.validUntil) continue;
+      const vu = q.validUntil instanceof Date ? q.validUntil : new Date(q.validUntil);
+      if (Number.isNaN(vu.getTime()) || vu.getTime() >= nowMs) continue;
+
+      const amt = Number(q.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+
+      total += 1;
+      totalValue += safeAmt;
+
+      // bySubBrand: null subBrand → "_tenant" (matches /quotes/stats shape).
+      const sbKey = q.subBrand ? String(q.subBrand) : "_tenant";
+      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0, value: 0 };
+      bySubBrand[sbKey].count += 1;
+      bySubBrand[sbKey].value += safeAmt;
+
+      // byAgeRange: how long ago did it expire (in days).
+      const ageDays = Math.floor((nowMs - vu.getTime()) / 86_400_000);
+      let bucket;
+      if (ageDays <= 7) bucket = "0-7d";
+      else if (ageDays <= 30) bucket = "8-30d";
+      else if (ageDays <= 90) bucket = "31-90d";
+      else bucket = "90+d";
+      byAgeRange[bucket].count += 1;
+      byAgeRange[bucket].value += safeAmt;
+
+      // perContact tally for topCustomers.
+      if (q.contactId != null) {
+        const cid = q.contactId;
+        if (!perContact.has(cid)) perContact.set(cid, { contactId: cid, count: 0, totalValue: 0 });
+        const entry = perContact.get(cid);
+        entry.count += 1;
+        entry.totalValue += safeAmt;
+      }
+    }
+
+    // Round per-bucket sums.
+    for (const sb of Object.keys(bySubBrand)) {
+      bySubBrand[sb].value = round2(bySubBrand[sb].value);
+    }
+    for (const ar of Object.keys(byAgeRange)) {
+      byAgeRange[ar].value = round2(byAgeRange[ar].value);
+    }
+
+    // topCustomers: sort desc by count (tie-break by totalValue desc), top 5.
+    const topCustomers = [...perContact.values()]
+      .sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        return b.totalValue - a.totalValue;
+      })
+      .slice(0, 5)
+      .map((c) => ({
+        contactId: c.contactId,
+        count: c.count,
+        totalValue: round2(c.totalValue),
+      }));
+
+    res.json({
+      total,
+      totalValue: round2(totalValue),
+      bySubBrand,
+      byAgeRange,
+      topCustomers,
+      generatedAt: now.toISOString(),
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] expired-summary error:", e.message);
+    res.status(500).json({ error: "Failed to summarise expired quotes" });
+  }
+});
+
+// GET /api/travel/quotes/analytics — any verified token (tenant + sub-brand scoped).
+//
+// Slice 13 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — quote analytics rollup).
+// Read-only aggregator over the caller's scoped TravelQuote rows. Returns
+// status counts, sub-brand breakdown, totals per status, acceptance rate
+// (over terminal-state quotes only), avg time-to-decision in days, and an
+// expired-count cross-reference. Consumed by the operator dashboard tile
+// + the /quotes list-page summary band.
+//
+// === Filters ===
+// Honors optional ?subBrand=tmc and ?from=ISO + ?to=ISO date-range
+// (matched against createdAt). Sub-brand isolation is enforced via
+// getSubBrandAccessSet — operators without access to a sub-brand never see
+// its quotes in the rollup, mirroring the GET /quotes index behaviour.
+// Empty access set → all-zeros rollup (not 403) so dashboard tiles render
+// cleanly for not-yet-onboarded operators.
+//
+// === Date range ===
+// ?from / ?to are parsed via new Date(); invalid values 400. When both
+// supplied, ?from must be <= ?to or 400 INVALID_RANGE. Either may be
+// omitted (open-ended on that side).
+//
+// === Mixed currencies ===
+// totalValueByStatus sums totalAmount naively without FX conversion. When
+// the scoped quotes span multiple currencies, the top-level `currency`
+// field is set to null as a signal to the dashboard ("can't show one $".
+// Mirrors the PRD's FR-3.4.3 stance — FX is locked at accept time, not
+// roll-up time.
+//
+// === Route ordering ===
+// IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
+// doesn't match "analytics" as a numeric :id (which would 400 INVALID_ID).
+router.get("/quotes/analytics", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+
+    if (req.query.subBrand) {
+      assertValidSubBrand(String(req.query.subBrand));
+      where.subBrand = String(req.query.subBrand);
+    }
+
+    if (req.query.from || req.query.to) {
+      const createdAt = {};
+      if (req.query.from) {
+        const fromDate = new Date(String(req.query.from));
+        if (Number.isNaN(fromDate.getTime())) {
+          return res.status(400).json({
+            error: "from must be a parseable date",
+            code: "INVALID_FROM",
+          });
+        }
+        createdAt.gte = fromDate;
+      }
+      if (req.query.to) {
+        const toDate = new Date(String(req.query.to));
+        if (Number.isNaN(toDate.getTime())) {
+          return res.status(400).json({
+            error: "to must be a parseable date",
+            code: "INVALID_TO",
+          });
+        }
+        createdAt.lte = toDate;
+      }
+      if (
+        createdAt.gte && createdAt.lte
+        && createdAt.gte.getTime() > createdAt.lte.getTime()
+      ) {
+        return res.status(400).json({
+          error: "from must be <= to",
+          code: "INVALID_RANGE",
+        });
+      }
+      where.createdAt = createdAt;
+    }
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    // Empty access set → all-zeros rollup (not 403). Matches the
+    // expired-list behaviour.
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(computeQuoteAnalytics([]));
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = where.subBrand
+        ? canAccessSubBrand(allowed, where.subBrand)
+          ? where.subBrand
+          : "__none__"
+        : { in: [...allowed] };
+    }
+
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        status: true,
+        totalAmount: true,
+        currency: true,
+        validUntil: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    res.json(computeQuoteAnalytics(quotes));
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] analytics error:", e.message);
+    res.status(500).json({ error: "Failed to compute analytics" });
+  }
+});
+
+// GET /api/travel/quotes/by-month — any verified token (tenant + sub-brand scoped).
+//
+// Slice 16 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — tenant-wide quote
+// analytics rolled up by calendar month). Mirrors #905 slice 15
+// (/commission-profiles/:id/summary/by-month) + #903 slice 18
+// (by-monthly) — same UTC YYYY-MM bucketing template, same defensive
+// math, same orderBy semantics. One row per UTC-month present in the
+// scoped quote set, summarising the count + status splits + value
+// sums for that month. Read-only; consumed by the operator-facing
+// "quotes trend" chart on the dashboard and the per-month picker for
+// drill-downs into the underlying /quotes list.
+//
+// Why a separate endpoint instead of extending /quotes/analytics:
+//   - Different aggregation granularity (per-month, not single-rollup).
+//   - Different natural sort (chronological time-series, not single row).
+//   - Pre-fills a different UI surface (line/bar chart vs KPI tile).
+//
+// Bucket key shape: ISO YYYY-MM string (e.g. "2026-05") derived from
+// TravelQuote.createdAt's UTC year + month. UTC chosen deliberately
+// so bucket labels stay stable across operator timezones — finance
+// reconciliation works in calendar-month UTC for cross-border volume.
+//
+// Scope rules:
+//   - Tenant-scoped on TravelQuote.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   status    optional Quote.status filter (Draft/Sent/Accepted/Rejected)
+//   from      optional inclusive lower bound on bucket (YYYY-MM); rows
+//             with month < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY-MM); rows
+//             with month > to are excluded
+//   orderBy   default "month:asc" (chronological); also accepts
+//             "month:desc", "totalValue:asc|desc", "quoteCount:asc|desc",
+//             "acceptedCount:asc|desc". Unknown tokens degrade silently
+//             to default (same graceful posture as slice 15).
+//   limit     default 12 (one year of months), max 60 (5 years).
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     months: [ {
+//       month: "2026-05",
+//       quoteCount, totalValue,
+//       draftCount, sentCount, acceptedCount, rejectedCount,
+//       acceptedValue
+//     } ],
+//     totalMonths,
+//     grandQuoteCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Defensive behaviour: null/invalid TravelQuote.totalAmount contributes
+// 0 (no NaN poisoning); null/invalid createdAt → "unknown" bucket
+// (excluded when ?from / ?to is set, kept otherwise so the count surface
+// stays accurate). Half-up 2dp rounding via Number.EPSILON, matching
+// the canonical round2 used in slice 15.
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-month" as a numeric :id (which would 400 INVALID_ID).
+router.get("/quotes/by-month", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    if (statusFilter) {
+      try {
+        assertValidStatus(statusFilter);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+    }
+
+    // YYYY-MM validation — same regex slice 15 uses. Bucket labels we
+    // emit follow this exact shape so callers passing month-tokens to
+    // from/to should already be using it.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+      "quoteCount:asc",
+      "quoteCount:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /quotes list handler — empty access set → all-zeros rollup (not
+    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+    // operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        months: [],
+        totalMonths: 0,
+        grandQuoteCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-MM. Input size bound is the same as
+    // /quotes/analytics (low thousands at platinum scale).
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts/sums }.
+    // Quotes with null/invalid createdAt go into "unknown" so counts
+    // stay accurate. Null/invalid totalAmount contributes 0.
+    const byMonth = new Map();
+    for (const q of quotes) {
+      let monthKey = "unknown";
+      if (q.createdAt) {
+        const dt = new Date(q.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let row = byMonth.get(monthKey);
+      if (!row) {
+        row = {
+          month: monthKey,
+          quoteCount: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          acceptedValue: 0,
+        };
+        byMonth.set(monthKey, row);
+      }
+
+      row.quoteCount += 1;
+      const amt = Number(q.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (q.status) {
+        case "Draft": row.draftCount += 1; break;
+        case "Sent": row.sentCount += 1; break;
+        case "Accepted":
+          row.acceptedCount += 1;
+          row.acceptedValue += safeAmt;
+          break;
+        case "Rejected": row.rejectedCount += 1; break;
+        default: break;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let months = [...byMonth.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable month token); when
+    // no bounds are set, "unknown" stays so the count surface remains
+    // complete. Mirrors slice 15's posture.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM which is also
+    // chronological. "unknown" sorts last in asc / first in desc by
+    // virtue of being lexicographically > "9999-12" — acceptable for
+    // a defensive fallback bucket that should rarely appear.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalMonths = months.length;
+    const grandQuoteCount = months.reduce(
+      (acc, r) => acc + (Number(r.quoteCount) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as slice 15.
+    const paged = months.slice(skip, skip + take);
+
+    res.json({
+      months: paged,
+      totalMonths,
+      grandQuoteCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] by-month error:", e.message);
+    res.status(500).json({ error: "Failed to compute monthly rollup" });
+  }
+});
+
+// GET /api/travel/quotes/by-quarter — any verified token (tenant + sub-brand scoped).
+//
+// Slice 17 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — tenant-wide quote
+// analytics rolled up by calendar quarter). Mirrors slice 16's
+// /quotes/by-month with the coarser-granularity quarter bucket
+// (Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec — calendar quarters,
+// not Indian-FY April-March). Same UTC rationale as by-month — finance
+// reconciliation works in calendar quarters; FY tooling is a future
+// overlay on top of this calendar-quarter primitive. Also mirrors #905
+// slice 16 (/commission-profiles/:id/summary/by-quarter) for shape
+// consistency across the tenant-wide and per-profile time-series
+// surfaces.
+//
+// Why a separate endpoint instead of aggregate=quarter on by-month:
+// callers expect different defaults (12 quarters = 3 years at quarter
+// granularity is a sensible UI default; 36 months ≠ 12 quarters in the
+// same fixed-width chart slot). Pre-fills the quarterly-trend tile on
+// the operator dashboard with ~12 bars.
+//
+// Bucket key shape: "YYYY-Qn" string (e.g. "2026-Q2") derived from
+// TravelQuote.createdAt's UTC year + quarter (`Math.floor(month/3)+1`).
+//
+// Scope rules:
+//   - Tenant-scoped on TravelQuote.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   status    optional Quote.status filter (Draft/Sent/Accepted/Rejected)
+//   from      optional inclusive lower bound on bucket (YYYY-Qn); rows
+//             with quarter < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY-Qn); rows
+//             with quarter > to are excluded
+//   orderBy   default "quarter:asc" (chronological); also accepts
+//             "quarter:desc", "totalValue:asc|desc", "quoteCount:asc|desc",
+//             "acceptedCount:asc|desc". Unknown tokens degrade silently
+//             to default.
+//   limit     default 12 (3 years of quarters), max 40 (10 years).
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     quarters: [ {
+//       quarter: "2026-Q2",
+//       quoteCount, totalValue,
+//       draftCount, sentCount, acceptedCount, rejectedCount,
+//       acceptedValue
+//     } ],
+//     totalQuarters,
+//     grandQuoteCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Defensive behaviour: null/invalid TravelQuote.totalAmount contributes
+// 0 (no NaN poisoning); null/invalid createdAt → "unknown" bucket
+// (excluded when ?from / ?to is set, kept otherwise so the count surface
+// stays accurate). Half-up 2dp rounding via Number.EPSILON.
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-quarter" as a numeric :id (which would 400 INVALID_ID).
+router.get("/quotes/by-quarter", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+    if (statusFilter) {
+      try {
+        assertValidStatus(statusFilter);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+    }
+
+    // YYYY-Qn validation — same regex #905 slice 16 uses. Bucket labels we
+    // emit follow this exact shape so callers passing quarter-tokens to
+    // from/to should already be using it. Anything else is a 400
+    // INVALID_QUARTER_FORMAT.
+    const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+    if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "quarter:asc",
+      "quarter:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+      "quoteCount:asc",
+      "quoteCount:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /quotes list handler — empty access set → all-zeros rollup (not
+    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+    // operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        quarters: [],
+        totalQuarters: 0,
+        grandQuoteCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-Qn. Input size bound is the same as
+    // /quotes/analytics + by-month (low thousands at platinum scale).
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts/sums }.
+    // Quotes with null/invalid createdAt go into "unknown" so counts
+    // stay accurate. Null/invalid totalAmount contributes 0.
+    const byQuarter = new Map();
+    for (const q of quotes) {
+      let quarterKey = "unknown";
+      if (q.createdAt) {
+        const dt = new Date(q.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const qn = Math.floor(dt.getUTCMonth() / 3) + 1;
+          quarterKey = `${yyyy}-Q${qn}`;
+        }
+      }
+
+      let row = byQuarter.get(quarterKey);
+      if (!row) {
+        row = {
+          quarter: quarterKey,
+          quoteCount: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          acceptedValue: 0,
+        };
+        byQuarter.set(quarterKey, row);
+      }
+
+      row.quoteCount += 1;
+      const amt = Number(q.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (q.status) {
+        case "Draft": row.draftCount += 1; break;
+        case "Sent": row.sentCount += 1; break;
+        case "Accepted":
+          row.acceptedCount += 1;
+          row.acceptedValue += safeAmt;
+          break;
+        case "Rejected": row.rejectedCount += 1; break;
+        default: break;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let quarters = [...byQuarter.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (no comparable token); when no bounds are set,
+    // "unknown" stays so the count surface remains complete.
+    if (fromRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+    }
+    if (toRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+    }
+
+    // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+    // chronological (Q1<Q2<Q3<Q4 sorts correctly as ASCII). "unknown"
+    // lexicographically > "9999-Q4" so it sorts last in asc / first in
+    // desc — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    quarters.sort((a, b) => {
+      if (field === "quarter") {
+        if (a.quarter < b.quarter) return -1 * mult;
+        if (a.quarter > b.quarter) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalQuarters = quarters.length;
+    const grandQuoteCount = quarters.reduce(
+      (acc, r) => acc + (Number(r.quoteCount) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as slice 16.
+    const paged = quarters.slice(skip, skip + take);
+
+    res.json({
+      quarters: paged,
+      totalQuarters,
+      grandQuoteCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] by-quarter error:", e.message);
+    res.status(500).json({ error: "Failed to compute quarterly rollup" });
+  }
+});
+
+// GET /api/travel/quotes/by-year — any verified token (tenant + sub-brand scoped).
+//
+// Slice 18 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — tenant-wide quote
+// analytics rolled up by calendar year). Completes the
+// by-month/by-quarter/by-year time-series triplet (slices 16/17/18) for
+// the operator dashboard. Mirrors slice 17's /quotes/by-quarter with the
+// coarsest-granularity year bucket; same UTC rationale as by-month +
+// by-quarter (finance reconciliation works in calendar years; FY tooling
+// is a future overlay on top of this calendar-year primitive). Also
+// mirrors #905 slice 17 (/commission-profiles/:id/summary/by-year) for
+// shape consistency across the tenant-wide and per-profile time-series
+// surfaces.
+//
+// Why a separate endpoint instead of aggregate=year on by-quarter:
+// callers expect different defaults (10 years is a sensible UI default
+// for an "annual trend" tile; 40 quarters ≠ 10 years in the same
+// fixed-width chart slot). Pre-fills the annual-trend tile on the
+// operator dashboard with ~10 bars.
+//
+// Bucket key shape: "YYYY" string (e.g. "2026") derived from
+// TravelQuote.createdAt's UTC year (`getUTCFullYear()`).
+//
+// Scope rules:
+//   - Tenant-scoped on TravelQuote.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   status    optional Quote.status filter (Draft/Sent/Accepted/Rejected)
+//   from      optional inclusive lower bound on bucket (YYYY); rows
+//             with year < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY); rows
+//             with year > to are excluded
+//   orderBy   default "year:asc" (chronological); also accepts
+//             "year:desc", "totalValue:asc|desc", "quoteCount:asc|desc",
+//             "acceptedCount:asc|desc". Unknown tokens degrade silently
+//             to default.
+//   limit     default 10 (a decade), max 30.
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     years: [ {
+//       year: "2026",
+//       quoteCount, totalValue,
+//       draftCount, sentCount, acceptedCount, rejectedCount,
+//       acceptedValue
+//     } ],
+//     totalYears,
+//     grandQuoteCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Defensive behaviour: null/invalid TravelQuote.totalAmount contributes
+// 0 (no NaN poisoning); null/invalid createdAt → "unknown" bucket
+// (excluded when ?from / ?to is set, kept otherwise so the count surface
+// stays accurate). Half-up 2dp rounding via Number.EPSILON.
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-year" as a numeric :id (which would 400 INVALID_ID).
+router.get("/quotes/by-year", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+    if (statusFilter) {
+      try {
+        assertValidStatus(statusFilter);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+    }
+
+    // YYYY validation — bucket labels we emit follow this exact shape so
+    // callers passing year-tokens to from/to should already be using it.
+    // Anything else is a 400 INVALID_YEAR_FORMAT.
+    const YEAR_RE = /^\d{4}$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+    if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "year:asc",
+      "year:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+      "quoteCount:asc",
+      "quoteCount:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /quotes list handler — empty access set → all-zeros rollup (not
+    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+    // operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        years: [],
+        totalYears: 0,
+        grandQuoteCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY. Input size bound is the same as
+    // /quotes/analytics + by-month + by-quarter (low thousands at
+    // platinum scale).
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-year. Map "YYYY" → { ...row counts/sums }.
+    // Quotes with null/invalid createdAt go into "unknown" so counts
+    // stay accurate. Null/invalid totalAmount contributes 0.
+    const byYear = new Map();
+    for (const q of quotes) {
+      let yearKey = "unknown";
+      if (q.createdAt) {
+        const dt = new Date(q.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          yearKey = String(dt.getUTCFullYear());
+        }
+      }
+
+      let row = byYear.get(yearKey);
+      if (!row) {
+        row = {
+          year: yearKey,
+          quoteCount: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          acceptedValue: 0,
+        };
+        byYear.set(yearKey, row);
+      }
+
+      row.quoteCount += 1;
+      const amt = Number(q.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (q.status) {
+        case "Draft": row.draftCount += 1; break;
+        case "Sent": row.sentCount += 1; break;
+        case "Accepted":
+          row.acceptedCount += 1;
+          row.acceptedValue += safeAmt;
+          break;
+        case "Rejected": row.rejectedCount += 1; break;
+        default: break;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let years = [...byYear.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (no comparable token); when no bounds are set,
+    // "unknown" stays so the count surface remains complete.
+    if (fromRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+    }
+    if (toRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+    }
+
+    // Sort. "year" sorts lexicographically on YYYY which is also
+    // chronological (4-digit zero-padded years sort correctly as ASCII).
+    // "unknown" lexicographically > "9999" so it sorts last in asc /
+    // first in desc — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    years.sort((a, b) => {
+      if (field === "year") {
+        if (a.year < b.year) return -1 * mult;
+        if (a.year > b.year) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalYears = years.length;
+    const grandQuoteCount = years.reduce(
+      (acc, r) => acc + (Number(r.quoteCount) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as
+    // slices 16 + 17.
+    const paged = years.slice(skip, skip + take);
+
+    res.json({
+      years: paged,
+      totalYears,
+      grandQuoteCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] by-year error:", e.message);
+    res.status(500).json({ error: "Failed to compute annual rollup" });
+  }
+});
+
+// ============================================================================
+// GET /api/travel/quotes/stats — tenant-wide TravelQuote rollup
+// (#900 slice 19, PRD_TRAVEL_QUOTE_BUILDER §3).
+//
+// Mirrors #903 slice 23 (/suppliers/stats), #905 slice 18
+// (/commission-profiles/stats) and #908 slice 19
+// (/flyer-templates/global-stats) — same point-in-time KPI-tile shape:
+// total + per-status breakdown (count + summed totalAmount) + per-sub-brand
+// count + grand totals + acceptanceRate (terminal-state denominator) +
+// expiredCount (non-terminal AND validUntil past) + lastUpdatedAt.
+//
+// Scope rules:
+//   - Tenant-scoped on TravelQuote.tenantId.
+//   - Sub-brand restricted: MANAGER with subBrandAccess narrowed via
+//     getSubBrandAccessSet — empty set → all-zeros (not 403) so dashboard
+//     tiles render cleanly for not-yet-onboarded operators.
+//   - USER-readable (anodyne aggregate; no quote bodies leak).
+//
+// Query string:
+//   from   optional ISO date — TravelQuote.createdAt >= from
+//   to     optional ISO date — TravelQuote.createdAt <= to
+//          Either may be omitted; both invalid → 400 INVALID_DATE.
+//
+// Response shape:
+//   {
+//     total,
+//     byStatus: {
+//       Draft:    { count, totalValue },
+//       Sent:     { count, totalValue },
+//       Accepted: { count, totalValue },
+//       Rejected: { count, totalValue },
+//     },
+//     bySubBrand: { tmc: {count}, rfu: {count}, ..., _tenant: {count} },
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     acceptanceRate,    // accepted / (accepted + rejected); null if denom=0
+//     expiredCount,      // status IN (Draft, Sent) AND validUntil < now
+//     lastUpdatedAt,     // ISO string of max(updatedAt) across scoped rows
+//   }
+//
+// Defensive math: null/non-numeric totalAmount → 0 (no NaN poisoning);
+// half-up 2dp rounding via Number.EPSILON; null subBrand defensively
+// coalesces to "_tenant" (matches the sibling /suppliers/stats shape and
+// is forward-compat with any future nullable migration).
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to parse
+// "stats" as a numeric :id (which would 400 INVALID_ID).
+// ============================================================================
+router.get("/quotes/stats", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+
+    // Optional ISO date bounds on createdAt.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Sub-brand narrowing — empty access set → zeroed shape (not 403).
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    const zeroed = {
+      total: 0,
+      byStatus: {
+        Draft: { count: 0, totalValue: 0 },
+        Sent: { count: 0, totalValue: 0 },
+        Accepted: { count: 0, totalValue: 0 },
+        Rejected: { count: 0, totalValue: 0 },
+      },
+      bySubBrand: {},
+      grandTotalValue: 0,
+      grandAcceptedValue: 0,
+      acceptanceRate: null,
+      expiredCount: 0,
+      lastUpdatedAt: null,
+    };
+
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed);
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    const quotes = await prisma.travelQuote.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        status: true,
+        totalAmount: true,
+        validUntil: true,
+        updatedAt: true,
+      },
+    });
+
+    if (quotes.length === 0) {
+      return res.json(zeroed);
+    }
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const now = Date.now();
+
+    const byStatus = {
+      Draft: { count: 0, totalValue: 0 },
+      Sent: { count: 0, totalValue: 0 },
+      Accepted: { count: 0, totalValue: 0 },
+      Rejected: { count: 0, totalValue: 0 },
+    };
+    const bySubBrand = {};
+    let grandTotalValue = 0;
+    let grandAcceptedValue = 0;
+    let expiredCount = 0;
+    let lastUpdatedAt = null;
+
+    for (const q of quotes) {
+      const amt = Number(q.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      grandTotalValue += safeAmt;
+
+      if (byStatus[q.status]) {
+        byStatus[q.status].count += 1;
+        byStatus[q.status].totalValue += safeAmt;
+      }
+
+      if (q.status === "Accepted") {
+        grandAcceptedValue += safeAmt;
+      }
+
+      // expiredCount: non-terminal status AND validUntil past.
+      if (
+        (q.status === "Draft" || q.status === "Sent")
+        && q.validUntil
+      ) {
+        const vu = q.validUntil instanceof Date ? q.validUntil : new Date(q.validUntil);
+        if (!Number.isNaN(vu.getTime()) && vu.getTime() < now) {
+          expiredCount += 1;
+        }
+      }
+
+      // bySubBrand: defensively coalesce null → "_tenant" to match
+      // /suppliers/stats shape.
+      const sbKey = q.subBrand ? String(q.subBrand) : "_tenant";
+      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+      bySubBrand[sbKey].count += 1;
+
+      const ts = q.updatedAt instanceof Date ? q.updatedAt : new Date(q.updatedAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+      }
+    }
+
+    // Round per-status sums.
+    for (const s of Object.keys(byStatus)) {
+      byStatus[s].totalValue = round2(byStatus[s].totalValue);
+    }
+
+    // acceptanceRate: accepted / (accepted + rejected); null if denom=0.
+    const acceptedCount = byStatus.Accepted.count;
+    const rejectedCount = byStatus.Rejected.count;
+    const terminalCount = acceptedCount + rejectedCount;
+    const acceptanceRate = terminalCount > 0
+      ? round2(acceptedCount / terminalCount)
+      : null;
+
+    res.json({
+      total: quotes.length,
+      byStatus,
+      bySubBrand,
+      grandTotalValue: round2(grandTotalValue),
+      grandAcceptedValue: round2(grandAcceptedValue),
+      acceptanceRate,
+      expiredCount,
+      lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-quotes] stats error:", e.message);
+    res.status(500).json({ error: "Failed to summarise quotes" });
+  }
+});
+
+// POST /api/travel/quotes/bulk-decline-expired — ADMIN | MANAGER.
+//
+// Slice 14 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3 — bulk operations on
+// expired quotes). Operator-dashboard cleanup tool: in one request,
+// decline every Draft|Sent quote whose validUntil < now within the
+// caller's sub-brand scope. Per-row audit (TRAVEL_QUOTE_DECLINED with
+// bulk: true detail) so the rejection trail matches the singular
+// /:id/decline endpoint shape — downstream audit consumers don't need
+// a separate code path for bulk vs single.
+//
+// Idempotent: re-running after a cleanup affects 0 rows (the second
+// invocation's findMany returns []). Always 200 — never an error for
+// "nothing to decline" since the cleanup tile may render the button
+// even when the list is empty.
+//
+// Body (optional):
+//   { reason?: string, subBrand?: 'tmc'|'rfu'|'travelstall'|'visasure' }
+//   - reason: string ≤1000 chars, captured in every audit row's details.
+//             Same truncation policy as POST /:id/decline (silent slice,
+//             not 400 — operators have no UI hint for the limit).
+//   - subBrand: scope the sweep to ONE sub-brand (must be in caller's
+//               access set, else 403 SUB_BRAND_DENIED). When omitted,
+//               the sweep covers ALL sub-brands the caller can access.
+//
+// Response:
+//   { declinedCount: N, declinedIds: [n,n,...], reason: string|null,
+//     subBrand: 'tmc'|null }
+//
+// Route-ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "bulk-decline-expired" as a numeric :id and 400.
+router.post(
+  "/quotes/bulk-decline-expired",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const body = req.body || {};
+
+      // Optional reason: string ≤1000 chars, blank → null.
+      let reason = null;
+      if (body.reason != null) {
+        if (typeof body.reason !== "string") {
+          return res.status(400).json({
+            error: "reason must be a string",
+            code: "INVALID_REASON",
+          });
+        }
+        reason = body.reason.trim().slice(0, 1000);
+        if (reason === "") reason = null;
+      }
+
+      // Optional sub-brand scope: must be valid + caller must have access.
+      let subBrandScope = null;
+      if (body.subBrand != null && body.subBrand !== "") {
+        if (typeof body.subBrand !== "string") {
+          return res.status(400).json({
+            error: "subBrand must be a string",
+            code: "INVALID_SUB_BRAND",
+          });
+        }
+        try {
+          assertValidSubBrand(body.subBrand);
+        } catch (e) {
+          return res.status(e.status || 400).json({ error: e.message, code: e.code });
+        }
+        subBrandScope = body.subBrand;
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      // Empty access set → caller has no sub-brand grants. Mirror the
+      // expired-list short-circuit: return zero-result envelope (not 403)
+      // so the dashboard tile's button stays clickable for not-yet-
+      // onboarded operators.
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.status(200).json({
+          declinedCount: 0,
+          declinedIds: [],
+          reason,
+          subBrand: subBrandScope,
+        });
+      }
+
+      // If a specific sub-brand was requested, the caller must be able
+      // to access it.
+      if (subBrandScope && !canAccessSubBrand(allowed, subBrandScope)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        status: { in: ["Draft", "Sent"] },
+        validUntil: { lt: new Date() },
+      };
+
+      if (subBrandScope) {
+        where.subBrand = subBrandScope;
+      } else if (allowed instanceof Set) {
+        // Non-admin caller: restrict to their access set.
+        where.subBrand = { in: Array.from(allowed) };
+      }
+      // allowed === null → admin / unrestricted: no subBrand clause needed.
+
+      // Load the doomed rows BEFORE the flip so each audit entry carries
+      // its previousStatus + per-row context.
+      const doomed = await prisma.travelQuote.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          contactId: true,
+          status: true,
+        },
+      });
+
+      if (doomed.length === 0) {
+        return res.status(200).json({
+          declinedCount: 0,
+          declinedIds: [],
+          reason,
+          subBrand: subBrandScope,
+        });
+      }
+
+      const doomedIds = doomed.map((q) => q.id);
+
+      await prisma.travelQuote.updateMany({
+        where: { id: { in: doomedIds }, tenantId: req.travelTenant.id },
+        data: { status: "Rejected" },
+      });
+
+      // Per-row audit so downstream consumers can join on the same action
+      // code that the singular /:id/decline emits. bulk: true distinguishes
+      // mass-cleanup events from operator-initiated single declines.
+      const declinedAt = new Date().toISOString();
+      for (const row of doomed) {
+        await writeAudit(
+          "TravelQuote",
+          "TRAVEL_QUOTE_DECLINED",
+          row.id,
+          req.user.userId,
+          req.travelTenant.id,
+          {
+            quoteId: row.id,
+            subBrand: row.subBrand,
+            contactId: row.contactId,
+            previousStatus: row.status,
+            declinedAt,
+            reason: reason || null,
+            bulk: true,
+          },
+        );
+      }
+
+      res.status(200).json({
+        declinedCount: doomed.length,
+        declinedIds: doomedIds,
+        reason,
+        subBrand: subBrandScope,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] bulk-decline-expired error:", e.message);
+      res.status(500).json({ error: "Failed to bulk-decline expired quotes" });
+    }
+  },
+);
 
 // GET /api/travel/quotes/:id
 router.get("/quotes/:id", verifyToken, requireTravelTenant, async (req, res) => {
@@ -1098,6 +2621,198 @@ router.post(
   },
 );
 
+// POST /api/travel/quotes/:id/accept — ADMIN/MANAGER only.
+//
+// Slice 11 of #900 (PRD_TRAVEL_QUOTE_BUILDER FR-3.1.3 status workflow +
+// FR-3.7.4 customer-accept transition). Dedicated semantic endpoint for
+// transitioning a quote into the "Accepted" state. Distinct from PUT
+// /quotes/:id which permits arbitrary status writes — accept/decline
+// carry workflow-specific transition guards + audit action codes that
+// downstream invoice-conversion + reporting surfaces can grep for.
+//
+// Status-transition guard (FR-3.1.3): only quotes in "Draft" or "Sent"
+// can move to "Accepted". "Rejected" → "Accepted" is rejected with 409
+// INVALID_TRANSITION; the operator must clone the quote (POST /duplicate)
+// rather than resurrect a rejected one. "Accepted" → "Accepted" is
+// idempotent (200 + alreadyAccepted: true) so double-clicks from the
+// operator UI don't surface a spurious error.
+//
+// Schema note: TravelQuote has no acceptedAt / acceptedBy columns
+// (schema frozen for this slice). The acceptance timestamp + actor are
+// captured in the audit row's details payload; downstream surfaces that
+// need "when was this accepted" read from the audit chain rather than
+// the quote envelope. A future slice can promote those into first-class
+// columns once the product call lands.
+router.post(
+  "/quotes/:id/accept",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!quote) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Idempotent accept: already-Accepted short-circuits with 200.
+      if (quote.status === "Accepted") {
+        return res.status(200).json({
+          quote,
+          alreadyAccepted: true,
+          code: "ALREADY_ACCEPTED",
+        });
+      }
+
+      // Transition guard: only Draft or Sent can move to Accepted.
+      // Rejected quotes must be cloned (POST /duplicate), not resurrected.
+      if (quote.status !== "Draft" && quote.status !== "Sent") {
+        return res.status(409).json({
+          error: `Cannot accept a quote in status "${quote.status}". Only Draft or Sent quotes can be accepted.`,
+          code: "INVALID_TRANSITION",
+        });
+      }
+
+      const updated = await prisma.travelQuote.update({
+        where: { id },
+        data: { status: "Accepted" },
+      });
+
+      await writeAudit(
+        "TravelQuote",
+        "TRAVEL_QUOTE_ACCEPTED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          quoteId: updated.id,
+          subBrand: updated.subBrand,
+          contactId: updated.contactId,
+          previousStatus: quote.status,
+          acceptedAt: new Date().toISOString(),
+        },
+      );
+
+      res.status(200).json({ quote: updated });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] accept error:", e.message);
+      res.status(500).json({ error: "Failed to accept quote" });
+    }
+  },
+);
+
+// POST /api/travel/quotes/:id/decline — ADMIN/MANAGER only.
+//
+// Slice 11 of #900 (PRD_TRAVEL_QUOTE_BUILDER FR-3.7.5 reject-with-reason).
+// Dedicated semantic endpoint paralleling /accept. Optional `reason`
+// body field (max 1000 chars) is captured in the audit row's details
+// payload — TravelQuote has no rejectionReason column (schema frozen
+// for this slice), so the audit chain is the source of truth for
+// rejection rationale until a future slice promotes it.
+//
+// Status-transition guard: only quotes in "Draft" or "Sent" can move
+// to "Rejected". "Accepted" → "Rejected" is rejected with 409
+// INVALID_TRANSITION; once accepted, the operator should treat the
+// downstream invoice as the cancellation surface. "Rejected" →
+// "Rejected" is idempotent (200 + alreadyRejected: true).
+router.post(
+  "/quotes/:id/decline",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      // Reason is optional but if provided must be a string ≤1000 chars.
+      // Longer strings get truncated rather than 400'd — operators have
+      // no UI hint for the limit and refusing the request would be
+      // user-hostile. Sanitization happens at the audit-write level.
+      const rawReason = req.body && req.body.reason;
+      let reason = null;
+      if (rawReason != null) {
+        if (typeof rawReason !== "string") {
+          return res.status(400).json({
+            error: "reason must be a string",
+            code: "INVALID_REASON",
+          });
+        }
+        reason = rawReason.trim().slice(0, 1000);
+        if (reason === "") reason = null;
+      }
+
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!quote) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      if (quote.status === "Rejected") {
+        return res.status(200).json({
+          quote,
+          alreadyRejected: true,
+          code: "ALREADY_REJECTED",
+        });
+      }
+
+      if (quote.status !== "Draft" && quote.status !== "Sent") {
+        return res.status(409).json({
+          error: `Cannot decline a quote in status "${quote.status}". Only Draft or Sent quotes can be declined.`,
+          code: "INVALID_TRANSITION",
+        });
+      }
+
+      const updated = await prisma.travelQuote.update({
+        where: { id },
+        data: { status: "Rejected" },
+      });
+
+      await writeAudit(
+        "TravelQuote",
+        "TRAVEL_QUOTE_DECLINED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          quoteId: updated.id,
+          subBrand: updated.subBrand,
+          contactId: updated.contactId,
+          previousStatus: quote.status,
+          declinedAt: new Date().toISOString(),
+          reason: reason || null,
+        },
+      );
+
+      res.status(200).json({ quote: updated, reason });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] decline error:", e.message);
+      res.status(500).json({ error: "Failed to decline quote" });
+    }
+  },
+);
+
 // GET /api/travel/quotes/:id/pricing-preview — any verified token.
 //
 // READ-ONLY composition surface (PRD_TRAVEL_QUOTE_BUILDER FR-3.3.2 / FR-3.3.4).
@@ -1421,6 +3136,292 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] tax-preview error:", e.message);
       res.status(500).json({ error: "Failed to compute tax preview" });
+    }
+  },
+);
+
+// POST /api/travel/quotes/:id/extend — ADMIN/MANAGER only.
+//
+// Slice 12 of #900 (PRD_TRAVEL_QUOTE_BUILDER OQ-9.7 — expiry workflow,
+// extend-by-N-days manual rescue). Pushes a quote's validUntil forward
+// without touching status / lines / totals / contact. Body accepts
+// either { days: <positive int, ≤365> } (relative — adds N days to
+// max(validUntil || now)) OR { newValidUntil: <ISO date> } (absolute —
+// sets validUntil verbatim, must parse + must be future). Exactly one
+// of the two must be supplied (400 EXTEND_PARAMS otherwise).
+//
+// Transition guard (mirror of accept/decline): only Draft or Sent
+// quotes can be extended. Accepted or Rejected quotes are terminal
+// — extending a terminal quote is meaningless (operator must clone
+// via POST /duplicate to revive a rejected scope). 409
+// INVALID_TRANSITION.
+//
+// Sub-brand isolation: standard sub-brand-access guard. Tenant scope
+// via the findFirst where clause.
+//
+// Audit: TRAVEL_QUOTE_EXTENDED with previousValidUntil + newValidUntil
+// + extensionMode ("days" | "absolute") + days (if days mode) in the
+// details payload. The audit row is the source of truth for the
+// extension trail; no first-class "extension history" column on the
+// quote envelope.
+router.post(
+  "/quotes/:id/extend",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const body = req.body || {};
+      const hasDays = body.days !== undefined && body.days !== null && body.days !== "";
+      const hasAbs = body.newValidUntil !== undefined && body.newValidUntil !== null && body.newValidUntil !== "";
+
+      // Exactly one of days / newValidUntil required.
+      if (hasDays === hasAbs) {
+        return res.status(400).json({
+          error: "Provide exactly one of { days } or { newValidUntil }",
+          code: "EXTEND_PARAMS",
+        });
+      }
+
+      let extensionMode = null;
+      let parsedDays = null;
+      let parsedAbs = null;
+
+      if (hasDays) {
+        const n = Number(body.days);
+        if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 365) {
+          return res.status(400).json({
+            error: "days must be a positive integer between 1 and 365",
+            code: "INVALID_DAYS",
+          });
+        }
+        parsedDays = n;
+        extensionMode = "days";
+      } else {
+        const d = new Date(body.newValidUntil);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "newValidUntil must be a parseable date",
+            code: "INVALID_VALID_UNTIL",
+          });
+        }
+        const todayMidnight = new Date();
+        todayMidnight.setHours(0, 0, 0, 0);
+        if (d.getTime() < todayMidnight.getTime()) {
+          return res.status(400).json({
+            error: "newValidUntil must be today or a future date",
+            code: "INVALID_VALID_UNTIL",
+          });
+        }
+        parsedAbs = d;
+        extensionMode = "absolute";
+      }
+
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!quote) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Transition guard: only Draft or Sent can be extended.
+      if (quote.status !== "Draft" && quote.status !== "Sent") {
+        return res.status(409).json({
+          error: `Cannot extend a quote in status "${quote.status}". Only Draft or Sent quotes can be extended.`,
+          code: "INVALID_TRANSITION",
+        });
+      }
+
+      // Compute newValidUntil.
+      //   days mode: base = max(existing validUntil, now); add N days.
+      //   absolute mode: verbatim parsedAbs.
+      let newValidUntil;
+      if (extensionMode === "days") {
+        const now = Date.now();
+        const existingMs = quote.validUntil ? new Date(quote.validUntil).getTime() : 0;
+        const base = Math.max(existingMs, now);
+        newValidUntil = new Date(base + parsedDays * 24 * 60 * 60 * 1000);
+      } else {
+        newValidUntil = parsedAbs;
+      }
+
+      const updated = await prisma.travelQuote.update({
+        where: { id },
+        data: { validUntil: newValidUntil },
+      });
+
+      await writeAudit(
+        "TravelQuote",
+        "TRAVEL_QUOTE_EXTENDED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          quoteId: updated.id,
+          subBrand: updated.subBrand,
+          previousValidUntil: quote.validUntil
+            ? new Date(quote.validUntil).toISOString()
+            : null,
+          newValidUntil: newValidUntil.toISOString(),
+          extensionMode,
+          days: parsedDays,
+        },
+      );
+
+      res.status(200).json({ quote: updated, extensionMode, days: parsedDays });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] extend error:", e.message);
+      res.status(500).json({ error: "Failed to extend quote" });
+    }
+  },
+);
+
+// GET /api/travel/quotes/:id/audit-trail — any verified token (tenant +
+// sub-brand-scoped via loadParentQuote).
+//
+// Slice 15 of #900 (PRD_TRAVEL_QUOTE_BUILDER §3.8.1 audit + §3.8.3 send-
+// history). Read-only chronological audit log for a single quote.
+//
+// === What it joins ===
+// Two audit-entity classes contribute to a quote's history:
+//   1. entity='TravelQuote'  AND entityId=<quoteId>
+//      → CREATE / UPDATE / DELETE / TRAVEL_QUOTE_ACCEPTED /
+//        TRAVEL_QUOTE_DECLINED / TRAVEL_QUOTE_DUPLICATED /
+//        TRAVEL_QUOTE_EXTENDED / TRAVEL_QUOTE_CONVERTED /
+//        TRAVEL_QUOTE_PDF_DOWNLOADED
+//   2. entity='TravelQuoteLine' whose details JSON contains "quoteId":<id>
+//      → line-level CREATE / UPDATE / DELETE.
+//
+// The line-rows query uses Prisma's `contains` on the JSON-string `details`
+// column (the route layer writes details via JSON.stringify), tenant-
+// scoped. This is the same pragmatic approach the audit_viewer route uses
+// for cross-entity filtering and avoids needing a relational column.
+//
+// Both result sets are merged in-memory and sorted by createdAt asc so the
+// timeline reads top-down (oldest first), with `details` re-parsed back
+// into a structured object so the operator UI doesn't have to.
+//
+// === Pagination ===
+// Optional ?limit (1..500, default 100). The list is bounded above by
+// design — a single quote should never legitimately have >500 audit rows.
+//
+// === Auth ===
+// Mirrors loadParentQuote — 400 INVALID_ID for non-numeric, 404
+// QUOTE_NOT_FOUND when no row, 403 SUB_BRAND_DENIED when caller lacks
+// access to the quote's sub-brand. Read-only; no RBAC tier required.
+//
+// === Route ordering ===
+// Sub-path under /quotes/:id; Express matches by segment count so this
+// won't conflict with GET /quotes/:id (2 segs vs 3).
+router.get(
+  "/quotes/:id/audit-trail",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const quoteId = parseInt(req.params.id, 10);
+      const quote = await loadParentQuote(req, res, quoteId);
+      if (!quote) return;
+
+      const limitRaw = parseInt(req.query.limit, 10);
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(limitRaw, 500)
+        : 100;
+
+      // Quote-entity audit rows: direct entityId match.
+      const quoteRows = await prisma.auditLog.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          entity: "TravelQuote",
+          entityId: quoteId,
+        },
+        select: {
+          id: true,
+          action: true,
+          entity: true,
+          entityId: true,
+          details: true,
+          userId: true,
+          createdAt: true,
+        },
+      });
+
+      // Line-entity audit rows: filter by JSON-substring match on the
+      // details column. The route layer writes details as JSON.stringify
+      // of an object that includes quoteId, so a substring match on
+      // `"quoteId":<id>` reliably picks up CREATE/UPDATE/DELETE on every
+      // line that ever belonged to this quote (including soft-deleted
+      // ones, which is the whole point of an audit trail).
+      const lineRows = await prisma.auditLog.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          entity: "TravelQuoteLine",
+          details: { contains: `"quoteId":${quoteId}` },
+        },
+        select: {
+          id: true,
+          action: true,
+          entity: true,
+          entityId: true,
+          details: true,
+          userId: true,
+          createdAt: true,
+        },
+      });
+
+      // Merge + sort by createdAt asc (oldest first) so the UI renders
+      // top-down chronologically. Tie-break on id for determinism.
+      const merged = [...quoteRows, ...lineRows].sort((a, b) => {
+        const aMs = new Date(a.createdAt).getTime();
+        const bMs = new Date(b.createdAt).getTime();
+        if (aMs !== bMs) return aMs - bMs;
+        return (a.id || 0) - (b.id || 0);
+      });
+
+      // Re-parse details into a structured object so the consumer doesn't
+      // have to. Tolerant of legacy null / malformed-JSON rows.
+      const entries = merged.slice(0, limit).map((row) => {
+        let parsedDetails = null;
+        if (row.details) {
+          try {
+            parsedDetails = JSON.parse(row.details);
+          } catch (_e) {
+            parsedDetails = { _raw: row.details };
+          }
+        }
+        return {
+          id: row.id,
+          action: row.action,
+          entity: row.entity,
+          entityId: row.entityId,
+          userId: row.userId,
+          createdAt: row.createdAt,
+          details: parsedDetails,
+        };
+      });
+
+      res.json({
+        quoteId,
+        subBrand: quote.subBrand,
+        count: entries.length,
+        truncated: merged.length > limit,
+        entries,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] audit-trail error:", e.message);
+      res.status(500).json({ error: "Failed to load audit trail" });
     }
   },
 );

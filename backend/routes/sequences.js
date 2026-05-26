@@ -39,6 +39,145 @@ router.get("/triggers", verifyToken, (req, res) => {
   res.json(listTriggersForVertical(vertical));
 });
 
+// ============================================================================
+// GET /api/sequences/stats — tenant-wide drip-sequence rollup
+//
+// CRM polish — first /stats endpoint for the drip-sequence route. Read-only
+// KPI surface for the Marketing → Sequences dashboard. Mirrors the
+// /api/travel/suppliers/stats posture: a single aggregate roundtrip that
+// replaces the N+1 the frontend would otherwise need ({list + count by
+// status + enrollment counts × 3 + last-created}).
+//
+// Schema reality (verified against prisma/schema.prisma → models Sequence
+// + SequenceEnrollment lines 996, 1018):
+//   - Sequence has NO `status` column. The active/paused flag is the
+//     `isActive` Boolean. So `byStatus` is sourced from isActive — keys
+//     'active' (true) and 'inactive' (false). No 'paused' / 'archived'
+//     buckets exist in the live schema; both map to inactive.
+//   - SequenceEnrollment.status is a free String defaulting to "Active",
+//     with documented values "Active" / "Paused" / "Completed" /
+//     "Unenrolled" (see schema comment + route handlers at
+//     /enrollments/:id/{pause,resume} + /enroll). The handler matches the
+//     case used by the writers (capitalised) so historical rows aren't
+//     double-counted. activeEnrollments := status === 'Active' (excludes
+//     Completed + Cancelled/Unenrolled + Paused).
+//
+// Query params:
+//   - ?from / ?to — optional ISO date bounds on Sequence.createdAt; invalid
+//     → 400 INVALID_DATE.
+//
+// Tenant-scoped via req.user.tenantId. Read-only meta surface — NO audit
+// row written.
+//
+// Response envelope:
+//   {
+//     total: N,
+//     byStatus: { active: N, inactive: M },
+//     totalEnrollments: N,
+//     activeEnrollments: N,
+//     completedEnrollments: N,
+//     cancelledEnrollments: N,
+//     lastCreatedAt: ISO | null,
+//   }
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family (line 142+) or `:id="stats"` would 400 INVALID_ID before
+// reaching this handler.
+// ============================================================================
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // Optional ISO date bounds on Sequence.createdAt
+    const sequenceWhere = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      sequenceWhere.createdAt = Object.assign(
+        sequenceWhere.createdAt || {},
+        { gte: d },
+      );
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      sequenceWhere.createdAt = Object.assign(
+        sequenceWhere.createdAt || {},
+        { lte: d },
+      );
+    }
+
+    // Pull the minimal column set we need for in-process aggregation.
+    // For a typical CRM tenant the sequence count is bounded in the low
+    // hundreds (one row per drip the team has authored) so no cap needed.
+    const sequences = await prisma.sequence.findMany({
+      where: sequenceWhere,
+      select: {
+        id: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+
+    let activeCount = 0;
+    let inactiveCount = 0;
+    let lastCreatedAt = null;
+    for (const s of sequences) {
+      if (s.isActive) activeCount += 1;
+      else inactiveCount += 1;
+      const ts = s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastCreatedAt || ts > lastCreatedAt) lastCreatedAt = ts;
+      }
+    }
+
+    // Enrollment counts — same date-window narrowing on Sequence.createdAt
+    // applies via the parent sequence join.
+    const enrollmentBaseWhere = { sequence: sequenceWhere };
+    const [totalEnrollments, activeEnrollments, completedEnrollments, cancelledEnrollments] =
+      await Promise.all([
+        prisma.sequenceEnrollment.count({ where: enrollmentBaseWhere }),
+        prisma.sequenceEnrollment.count({
+          where: { ...enrollmentBaseWhere, status: "Active" },
+        }),
+        prisma.sequenceEnrollment.count({
+          where: { ...enrollmentBaseWhere, status: "Completed" },
+        }),
+        prisma.sequenceEnrollment.count({
+          where: { ...enrollmentBaseWhere, status: "Unenrolled" },
+        }),
+      ]);
+
+    return res.json({
+      total: sequences.length,
+      byStatus: {
+        active: activeCount,
+        inactive: inactiveCount,
+      },
+      totalEnrollments,
+      activeEnrollments,
+      completedEnrollments,
+      cancelledEnrollments,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[sequences] stats error:", err.message);
+    return res.status(500).json({ error: "Failed to summarise sequences" });
+  }
+});
+
 // v3.4.11: sanitization helpers moved to backend/lib/sanitizeJson.js so the
 // 4 routes identified by the v3.4.10 audit (lead_routing, ab_tests, marketing,
 // report_schedules) can adopt the same toolkit. sanitizeText handles
@@ -70,15 +209,42 @@ const sanitizeNodes = (nodes) => {
 };
 
 // Fetch all drip sequences
+// GET /api/sequences?fields=summary
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const sequences = await prisma.sequence.findMany({
+    // #920 slice 12: ?fields=summary slim-shape opt-in. Mirrors slice 1
+    // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+    // badc9cca), slice 4 (tasks eec7d856), slice 5 (projects 257771a0),
+    // slice 6 (expenses e81e6cb5), slice 7 (notifications a3487518),
+    // slice 8 (surveys e71594d9), slice 9 (email-templates 0d4a63f9),
+    // slice 10 (knowledge-base 21ad3290).
+    // When the caller passes ?fields=summary we drop the heavy
+    // `nodes`/`edges` columns (Sequence.nodes/edges are `String? @db.Text`
+    // JSON blobs storing legacy ReactFlow canvas — can be many KB per row)
+    // and the `_count` include, returning only the columns the sequence
+    // list renderer actually needs. Opt-in additive — existing callers
+    // (no ?fields, or any non-exact value) get the full row shape unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId: req.user.tenantId },
-      include: {
+      orderBy: { createdAt: 'desc' },
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        isActive: true,
+        tenantId: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    } else {
+      findManyArgs.include = {
         _count: { select: { enrollments: true } }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+      };
+    }
+
+    const sequences = await prisma.sequence.findMany(findManyArgs);
     res.json(sequences);
   } catch(_err) {
     res.status(500).json({ error: "Failed to read marketing sequences." });

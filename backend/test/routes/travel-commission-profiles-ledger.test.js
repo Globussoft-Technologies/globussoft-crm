@@ -320,3 +320,157 @@ describe('GET /api/travel/commission-profiles/:id/ledger', () => {
     expect(prisma.deal.findMany).not.toHaveBeenCalled();
   });
 });
+
+// ----------------------------------------------------------------------------
+// Slice 11 — GET /:id/ledger.csv CSV export.
+//
+// Reuses the same Deal × Contact join + agentCommissionCalculator that slice 9
+// pins. Adds CSV-emission contract: UTF-8 BOM prefix + CRLF row separator +
+// double-quote escape for cells carrying commas / quotes / newlines. Filename
+// is exposed via Content-Disposition: attachment so a browser download saves
+// it as commission-ledger-<id>-<slug>.csv.
+// ----------------------------------------------------------------------------
+describe('GET /api/travel/commission-profiles/:id/ledger.csv', () => {
+  test('happy path: emits BOM + CRLF + header + one row per deal with commission column', async () => {
+    prisma.travelCommissionProfile.findFirst.mockResolvedValue(FLAT_5PCT_PROFILE);
+    prisma.deal.findMany.mockResolvedValue(SAMPLE_DEALS);
+
+    const res = await request(makeApp())
+      .get('/api/travel/commission-profiles/42/ledger.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.headers['content-disposition']).toMatch(/attachment;\s*filename=/);
+    expect(res.headers['content-disposition']).toMatch(/commission-ledger-42/);
+
+    const body = res.text;
+    // Must start with UTF-8 BOM so Excel auto-detects encoding.
+    expect(body.charCodeAt(0)).toBe(0xFEFF);
+    // CRLF line endings.
+    expect(body).toMatch(/\r\n/);
+
+    // Strip BOM, split by CRLF.
+    const lines = body.slice(1).split('\r\n').filter(Boolean);
+    // 1 header + 3 data rows.
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toContain('Deal ID');
+    expect(lines[0]).toContain('Deal Title');
+    expect(lines[0]).toContain('Commission');
+    expect(lines[0]).toContain('Breakdown');
+
+    // Row for deal 101 (Goa, ₹100000 @ 5% = 5000).
+    const row101 = lines.find((l) => l.startsWith('101,'));
+    expect(row101).toBeDefined();
+    expect(row101).toContain('Goa 5-day deal');
+    expect(row101).toContain('won');
+    expect(row101).toContain('100000');
+    expect(row101).toContain('5000');
+    expect(row101).toContain('Vinay Reseller');
+  });
+
+  test('empty ledger emits CSV with header row only (no data rows)', async () => {
+    prisma.travelCommissionProfile.findFirst.mockResolvedValue(FLAT_5PCT_PROFILE);
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/commission-profiles/42/ledger.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+
+    const lines = res.text.slice(1).split('\r\n').filter(Boolean);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('Deal ID');
+    expect(lines[0]).toContain('Commission');
+  });
+
+  test('?stage=won filter narrows the deal where clause for CSV export', async () => {
+    prisma.travelCommissionProfile.findFirst.mockResolvedValue(FLAT_5PCT_PROFILE);
+    prisma.deal.findMany.mockResolvedValue([SAMPLE_DEALS[0], SAMPLE_DEALS[1]]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/commission-profiles/42/ledger.csv?stage=won')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.deal.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ stage: 'won' }),
+      }),
+    );
+    // No `take`/`skip` — CSV export is intentionally un-paginated.
+    const callArgs = prisma.deal.findMany.mock.calls[0][0];
+    expect(callArgs.take).toBeUndefined();
+    expect(callArgs.skip).toBeUndefined();
+
+    const lines = res.text.slice(1).split('\r\n').filter(Boolean);
+    // header + 2 won deals.
+    expect(lines).toHaveLength(3);
+  });
+
+  test('cells containing commas / quotes are escaped per CSV RFC 4180', async () => {
+    prisma.travelCommissionProfile.findFirst.mockResolvedValue(FLAT_5PCT_PROFILE);
+    prisma.deal.findMany.mockResolvedValue([
+      {
+        id: 200,
+        title: 'Goa, Bali "Combo" deal',
+        stage: 'won',
+        amount: 100000,
+        currency: 'INR',
+        createdAt: new Date('2026-05-10T10:00:00Z'),
+        contact: { id: 21, name: 'A & B, Travels "Pvt"' },
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/commission-profiles/42/ledger.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const body = res.text;
+    // Title has a comma — must be double-quoted with embedded quotes doubled.
+    expect(body).toContain('"Goa, Bali ""Combo"" deal"');
+    expect(body).toContain('"A & B, Travels ""Pvt"""');
+  });
+
+  test('cross-tenant profile id returns 404 PROFILE_NOT_FOUND (no deal query fires)', async () => {
+    prisma.travelCommissionProfile.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .get('/api/travel/commission-profiles/9999/ledger.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'PROFILE_NOT_FOUND' });
+    expect(prisma.deal.findMany).not.toHaveBeenCalled();
+  });
+
+  test('MANAGER restricted to ["rfu"] reading "tmc"-scoped profile CSV gets 403 SUB_BRAND_DENIED', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelCommissionProfile.findFirst.mockResolvedValue(TMC_PROFILE);
+
+    const res = await request(makeApp())
+      .get('/api/travel/commission-profiles/45/ledger.csv')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'SUB_BRAND_DENIED' });
+    expect(prisma.deal.findMany).not.toHaveBeenCalled();
+  });
+
+  test('invalid :id segment (non-numeric) returns 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/commission-profiles/not-an-int/ledger.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+    expect(prisma.travelCommissionProfile.findFirst).not.toHaveBeenCalled();
+    expect(prisma.deal.findMany).not.toHaveBeenCalled();
+  });
+});

@@ -512,3 +512,401 @@ describe('CashRegisters — #781 transactions tabs', () => {
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// EXTENSIONS — register-form validation, edit/PUT, toggleActive,
+// shift-form validation, prompt cancellation, error states, balance
+// edge cases. Adapts to the actual SUT contract (no denomination
+// breakdown — single closingTotal field; no historical-shift list
+// surface; no date-range filter — these don't exist in CashRegisters.jsx
+// so we pin what DOES exist instead).
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — register form validation', () => {
+  it('blocks submit + toasts when register name is blank', async () => {
+    fetchApiMock.mockImplementation(makeMock({ registers: [] }));
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/No cash registers yet/i)).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /New register/i }));
+
+    // Fill location only; leave name blank.
+    fireEvent.change(screen.getByLabelText(/^Location$/i), {
+      target: { value: '1' },
+    });
+
+    // The form has `required` on the name input, but the SUT also has
+    // an explicit guard `if (!form.name.trim())`. Trigger the latter by
+    // bypassing the browser's required-check via submit() on the form.
+    // Use whitespace-only to defeat HTML required while still failing
+    // the trim() guard.
+    fireEvent.change(screen.getByLabelText(/Register name/i), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Create register/i }));
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Register name is required/i),
+      );
+    });
+    // NO POST should have fired.
+    const posts = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/pos/registers' && opts?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('toggles the New register button label between "New register" and "Cancel"', async () => {
+    fetchApiMock.mockImplementation(makeMock({ registers: [] }));
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /New register/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /New register/i }));
+    // After clicking, the same button now reads "Cancel".
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^Cancel$/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /New register/i })).toBeInTheDocument(),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Register edit (PUT) — pre-fills form + hits PUT /api/pos/registers/:id
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — edit register (PUT)', () => {
+  it('clicking the Edit icon pre-fills the form + submit PUTs the new payload', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+
+    // Edit "Front Desk" (id 11).
+    fireEvent.click(screen.getByLabelText(/Edit Front Desk/i));
+
+    // Form pre-fills with current name.
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Register name/i)).toHaveValue('Front Desk'),
+    );
+
+    // Change the name.
+    fireEvent.change(screen.getByLabelText(/Register name/i), {
+      target: { value: 'Front Desk — Renamed' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => url === '/api/pos/registers/11' && opts?.method === 'PUT',
+      );
+      expect(puts.length).toBe(1);
+      const body = JSON.parse(puts[0][1].body);
+      expect(body.name).toBe('Front Desk — Renamed');
+      expect(body.locationId).toBe(1);
+    });
+    expect(notify.success).toHaveBeenCalledWith(
+      expect.stringMatching(/Updated.*Front Desk — Renamed/i),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// toggleActive — Deactivate icon PUTs { isActive: false }
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — toggleActive', () => {
+  it('clicking Deactivate sends PUT { isActive: false } against the right id', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText(/Deactivate Front Desk/i));
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => url === '/api/pos/registers/11' && opts?.method === 'PUT',
+      );
+      expect(puts.length).toBe(1);
+      const body = JSON.parse(puts[0][1].body);
+      expect(body).toEqual({ isActive: false });
+    });
+    expect(notify.success).toHaveBeenCalledWith(
+      expect.stringMatching(/Deactivated.*Front Desk/i),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Shift open — opening-float validation (negative, NaN, blank)
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — shift open validation', () => {
+  it('rejects negative opening float with an inline toast (no POST)', async () => {
+    fetchApiMock.mockImplementation(
+      makeMock({ openShiftFor: { 11: OPEN_SHIFT } }), // 12 has no shift
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Pharmacy Counter')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-12'));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Opening float for new shift/i)).toBeInTheDocument(),
+    );
+    const floatInput = screen.getByLabelText(/Opening float for new shift/i);
+    fireEvent.change(floatInput, { target: { value: '-50' } });
+    // Use fireEvent.submit on the parent form — bypasses HTML5 `min`
+    // validation that would otherwise block click→submit in jsdom.
+    fireEvent.submit(floatInput.closest('form'));
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalledWith(
+        expect.stringMatching(/non-negative/i),
+      );
+    });
+    const opens = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/pos/shifts/open' && opts?.method === 'POST',
+    );
+    expect(opens.length).toBe(0);
+  });
+
+  it('rejects non-numeric opening float (NaN guard) without POST', async () => {
+    fetchApiMock.mockImplementation(
+      makeMock({ openShiftFor: { 11: OPEN_SHIFT } }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Pharmacy Counter')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-12'));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Opening float for new shift/i)).toBeInTheDocument(),
+    );
+    // Leave blank — parseFloat('') === NaN — Number.isFinite(NaN) === false.
+    fireEvent.click(screen.getByRole('button', { name: /Open shift/i }));
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalledWith(
+        expect.stringMatching(/non-negative/i),
+      );
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Shift close — closing-total validation + variance-ledger semantics
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — shift close validation', () => {
+  it('rejects negative closing total without POST', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+    );
+    const closingInput = screen.getByLabelText(/Closing total/i);
+    fireEvent.change(closingInput, { target: { value: '-100' } });
+    // Bypass HTML5 `min` constraint by submitting the form directly.
+    fireEvent.submit(closingInput.closest('form'));
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalledWith(
+        expect.stringMatching(/non-negative/i),
+      );
+    });
+    const closes = fetchApiMock.mock.calls.filter(
+      ([url, opts]) =>
+        /^\/api\/pos\/shifts\/\d+\/close$/.test(url) && opts?.method === 'POST',
+    );
+    expect(closes.length).toBe(0);
+  });
+
+  it('omits notes field from body when notes input is left blank (undefined collapse)', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(/Closing total/i), {
+      target: { value: '2500' },
+    });
+    // Notes deliberately blank.
+    fireEvent.click(screen.getByRole('button', { name: /Close shift/i }));
+
+    await waitFor(() => {
+      const closes = fetchApiMock.mock.calls.filter(
+        ([url, opts]) =>
+          /^\/api\/pos\/shifts\/\d+\/close$/.test(url) && opts?.method === 'POST',
+      );
+      expect(closes.length).toBe(1);
+      const body = JSON.parse(closes[0][1].body);
+      expect(body.closingTotal).toBe(2500);
+      // JSON.stringify drops undefined keys — so `notes` should not be present.
+      expect(body).not.toHaveProperty('notes');
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Deposit / Withdraw cancellation paths + validation
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — deposit/withdraw cancellation + validation', () => {
+  it('cancelling the amount prompt aborts the deposit (no POST, no error toast)', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Deposit cash/i })).toBeInTheDocument(),
+    );
+
+    // window.prompt returns null when the user clicks Cancel.
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValueOnce(null);
+    fireEvent.click(screen.getByRole('button', { name: /Deposit cash/i }));
+
+    // No POST and no error toast (cancellation is silent).
+    const deposits = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => /\/deposit$/.test(url) && opts?.method === 'POST',
+    );
+    expect(deposits.length).toBe(0);
+    expect(notify.error).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it('zero / negative deposit amount toasts "must be positive" and skips POST', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Deposit cash/i })).toBeInTheDocument(),
+    );
+
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValueOnce('0');
+    fireEvent.click(screen.getByRole('button', { name: /Deposit cash/i }));
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalledWith(
+        expect.stringMatching(/positive/i),
+      );
+    });
+    const deposits = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => /\/deposit$/.test(url) && opts?.method === 'POST',
+    );
+    expect(deposits.length).toBe(0);
+    promptSpy.mockRestore();
+  });
+
+  it('blank reason toasts "Reason is required" and skips POST', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Withdraw cash/i })).toBeInTheDocument(),
+    );
+
+    const promptSpy = vi.spyOn(window, 'prompt')
+      .mockReturnValueOnce('100')
+      .mockReturnValueOnce('   '); // whitespace-only reason
+    fireEvent.click(screen.getByRole('button', { name: /Withdraw cash/i }));
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Reason is required/i),
+      );
+    });
+    const withdraws = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => /\/withdraw$/.test(url) && opts?.method === 'POST',
+    );
+    expect(withdraws.length).toBe(0);
+    promptSpy.mockRestore();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Load error + empty-detail + balance edge cases
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — load error + empty/balance states', () => {
+  it('GET /api/pos/registers failure surfaces an error toast + empty grid', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/pos/registers') {
+        return Promise.reject(new Error('Server down'));
+      }
+      if (url === '/api/wellness/locations') return Promise.resolve(LOCATIONS);
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    await waitFor(() =>
+      expect(notify.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Server down/i),
+      ),
+    );
+    // Should fall back to empty-state copy.
+    expect(screen.getByText(/No cash registers yet/i)).toBeInTheDocument();
+  });
+
+  it('drawer balance equals openingFloat when shift has zero CASH+COMPLETED sales', async () => {
+    const emptyShift = {
+      ...OPEN_SHIFT,
+      id: 555,
+      openingFloat: 1234,
+      sales: [
+        // PENDING sales should NOT count toward balance.
+        {
+          id: 9001,
+          invoiceNumber: 'POS-PENDING',
+          total: 999,
+          paymentMethod: 'CASH',
+          status: 'PENDING',
+          patientId: 1,
+        },
+      ],
+    };
+    fetchApiMock.mockImplementation(
+      makeMock({
+        openShiftFor: { 11: { ...OPEN_SHIFT, id: 555 } },
+        shiftDetail: emptyShift,
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('current-balance')).toBeInTheDocument(),
+    );
+    // 1234 + 0 (the PENDING sale is filtered out by the bookings filter)
+    expect(screen.getByTestId('current-balance')).toHaveTextContent('1234');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Permission gating — non-admin user (USER role) hides admin surfaces
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — non-admin permission gating', () => {
+  it.skip(
+    'non-admin user sees neither "New register" button nor edit/deactivate icons — covered structurally by isAdminOrManager flag, requires a separate AuthContext mock setup that this file does not currently rewire per-test; see existing PointOfSale.test.jsx pattern.',
+    () => {},
+  );
+});

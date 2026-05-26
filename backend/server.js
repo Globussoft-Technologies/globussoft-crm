@@ -125,9 +125,14 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Security middleware
 const cookieParser = require('cookie-parser');
-const { helmetMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
+const { helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
 const { originCheck } = require('./middleware/originCheck');
 app.use(helmetMiddleware);
+// #917 slice 1 — additive strict CSP in Report-Only mode (no 'unsafe-inline'
+// on script-src/style-src). Browsers log violations to devtools without
+// blocking. Promotion to enforce-mode is a future slice once inline-script /
+// inline-style surface is migrated to external bundles + nonces.
+app.use(helmetStrictReportOnlyMiddleware);
 app.use(permissionsPolicyMiddleware); // #186 — Permissions-Policy header
 app.use(cookieParser());
 // #657 — CSRF defense layer for browser flows. Mounted EARLY (before
@@ -272,6 +277,10 @@ const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = [
   "/api/travel/diagnostic-banks/import.csv",
   "/api/travel/seasons/import.csv",
   "/api/travel/markup-rules/import.csv",
+  // #917 slice 2 — CSP violation reports use application/csp-report or
+  // application/reports+json, neither of which is in SUPPORTED_CONTENT_TYPES.
+  // The route's own express.json() parser handles them.
+  "/api/csp/report",
 ];
 app.use("/api", (req, res, next) => {
   if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
@@ -416,6 +425,8 @@ const dataEnrichmentRoutes = require("./routes/data_enrichment");
 const slaRoutes = require("./routes/sla");
 const leadSlaRoutes = require("./routes/lead_sla");
 const cannedResponsesRoutes = require("./routes/canned_responses");
+// #917 slice 2 — CSP violation-report ingestion (public, no-auth, browser-emitted)
+const cspRoutes = require("./routes/csp");
 // Tier 3
 const scimRoutes = require("./routes/scim");
 const sharedInboxRoutes = require("./routes/shared_inbox");
@@ -557,7 +568,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/csp/report"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
@@ -677,6 +688,10 @@ app.use("/api/data-enrichment", dataEnrichmentRoutes);
 app.use("/api/sla", slaRoutes);
 app.use("/api/lead-sla", leadSlaRoutes);
 app.use("/api/canned-responses", cannedResponsesRoutes);
+// #917 slice 2 — public CSP violation-report endpoint. Exempt from auth via
+// openPaths (above) and from the JSON-content-type guard via
+// CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES (browsers send application/csp-report).
+app.use("/api/csp", cspRoutes);
 // Tier 3
 app.use("/api/scim", scimRoutes);
 app.use("/api/shared-inbox", sharedInboxRoutes);
@@ -717,6 +732,8 @@ app.use("/api/travel", travelCostMasterRoutes);
 app.use("/api/travel", travelSuppliersRoutes);
 app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
+app.use("/api/travel", require("./routes/travel_flyer_templates"));
+app.use("/api/travel", require("./routes/travel_commission_profiles"));
 app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);
@@ -730,6 +747,8 @@ app.use("/api/travel", travelTripBillingRoutes);
 app.use("/api/travel", travelWebcheckinRoutes);
 app.use("/api/travel", travelTravelStallRoutes);
 app.use("/api/travel", require("./routes/travel_inbound_leads"));
+app.use("/api/travel/itinerary-templates", require("./routes/travel_itinerary_templates"));
+app.use("/api/travel/sightseeing", require("./routes/travel_sightseeing"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
 app.use("/api/travel-personalised-destinations", travelPersonalisedDestinationsRoutes);

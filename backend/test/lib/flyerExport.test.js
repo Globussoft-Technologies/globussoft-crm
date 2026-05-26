@@ -263,3 +263,135 @@ describe("buildOutputCacheKey", () => {
     expect(key).toMatch(/^png:portrait:[0-9a-f]{64}$/);
   });
 });
+
+// === Tick #N extension cases — gap coverage ===
+//
+// Adds 7 cases hitting under-pinned surfaces:
+//   - canonicalize purity (input not mutated even with reorderable keys)
+//   - canonicalize deep recursion into arrays-of-objects (mixed nesting)
+//   - hashTemplateShape: empty-array layout hashes distinctly from missing
+//     layout (an explicit empty layout is a real renderable shape — a
+//     branded blank flyer — and must cache-key separately from "layout
+//     field absent / falls back to default placeholder")
+//   - hashTemplateShape: stable under deeply-nested key reorder (assets
+//     sub-keys) — pins the recursive canonicalizer behaviour, not just
+//     top-level palette reorder which the existing case already covers
+//   - validateExportRequest: surfaces BOTH errors when format AND aspect
+//     are jointly invalid (route layer needs the full list to render a
+//     useful 400 INVALID_EXPORT_REQUEST.errors[] payload)
+//   - validateExportRequest: empty-string aspect rejected with
+//     "aspect is required" (distinct from "aspect must be one of …")
+//   - buildOutputCacheKey: realistic SHA-256-shaped hash composes into a
+//     key matching the cache-key regex the future renderer will use to
+//     parse cache entries back into (format, aspect, hash) triples
+
+describe("flyerExport — extension coverage", () => {
+  it("canonicalize does not mutate its input (purity contract)", () => {
+    const input = {
+      b: 1,
+      a: { z: 2, y: 1 },
+      c: [{ q: 1, p: 2 }],
+    };
+    const snapshot = JSON.parse(JSON.stringify(input));
+    canonicalize(input);
+    // Original input keys remain in their original (unsorted) order,
+    // and nested objects are not mutated either.
+    expect(Object.keys(input)).toEqual(Object.keys(snapshot));
+    expect(Object.keys(input.a)).toEqual(Object.keys(snapshot.a));
+    expect(Object.keys(input.c[0])).toEqual(Object.keys(snapshot.c[0]));
+    expect(input).toEqual(snapshot);
+  });
+
+  it("canonicalize recurses into arrays-of-objects (mixed nesting)", () => {
+    const input = [
+      { z: 1, a: 2 },
+      { b: 3, x: 4 },
+    ];
+    const result = canonicalize(input);
+    // Array order preserved …
+    expect(result).toHaveLength(2);
+    // … but each element's keys are sorted.
+    expect(Object.keys(result[0])).toEqual(["a", "z"]);
+    expect(Object.keys(result[1])).toEqual(["b", "x"]);
+  });
+
+  it("hashTemplateShape: empty-array layout hashes distinctly from missing layout", () => {
+    const emptyLayout = { palette: { primaryHex: "#122647" }, layout: [] };
+    const missingLayout = { palette: { primaryHex: "#122647" } };
+    // An explicit `[]` is a real renderable shape (branded blank flyer);
+    // it must cache-key separately from "layout field absent".
+    expect(hashTemplateShape(emptyLayout)).not.toBe(
+      hashTemplateShape(missingLayout)
+    );
+  });
+
+  it("hashTemplateShape: stable under deeply-nested key reorder (assets sub-keys)", () => {
+    const a = {
+      palette: { primaryHex: "#122647" },
+      layout: [],
+      assets: {
+        logo: "https://cdn.example/logo.png",
+        hero: "https://cdn.example/hero.jpg",
+        watermark: "https://cdn.example/wm.png",
+      },
+    };
+    const b = {
+      palette: { primaryHex: "#122647" },
+      layout: [],
+      assets: {
+        watermark: "https://cdn.example/wm.png",
+        hero: "https://cdn.example/hero.jpg",
+        logo: "https://cdn.example/logo.png",
+      },
+    };
+    expect(hashTemplateShape(a)).toBe(hashTemplateShape(b));
+  });
+
+  it("validateExportRequest: surfaces BOTH errors when format AND aspect are jointly invalid", () => {
+    const result = validateExportRequest({ format: "gif", aspect: 123 });
+    expect(result.ok).toBe(false);
+    // Format error present (gif is not in FORMATS).
+    expect(result.errors.some((e) => /format must be one of/.test(e))).toBe(
+      true
+    );
+    // Aspect error present (non-string aspect).
+    expect(result.errors.some((e) => /aspect is required/.test(e))).toBe(true);
+    // Both errors surfaced, not just the first — route layer needs the
+    // full list to render a useful 400 INVALID_EXPORT_REQUEST.errors[].
+    expect(result.errors.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("validateExportRequest: rejects empty-string aspect with 'aspect is required'", () => {
+    const result = validateExportRequest({ format: "pdf", aspect: "" });
+    expect(result.ok).toBe(false);
+    // Empty string trips the length-0 guard, not the cross-table lookup —
+    // so the message is 'aspect is required', not 'aspect must be one of'.
+    expect(result.errors.some((e) => /aspect is required/.test(e))).toBe(true);
+    expect(
+      result.errors.some((e) => /aspect must be one of/.test(e))
+    ).toBe(false);
+  });
+
+  it("buildOutputCacheKey: realistic SHA-256 hash composes into a key that round-trip-parses by `split(':')`", () => {
+    const shape = {
+      palette: { primaryHex: "#122647", secondaryHex: "#265855" },
+      layout: [{ type: "text", x: 0, y: 0, width: 100, height: 50, content: "Hi" }],
+      assets: { logo: "https://cdn.example/logo.png" },
+    };
+    const hash = hashTemplateShape(shape);
+    const key = buildOutputCacheKey({
+      format: "pdf",
+      aspect: "us_letter",
+      hash,
+    });
+    // The future renderer parses cache entries back via split(':', 3).
+    // Pin that this round-trips cleanly (format, aspect, hash are
+    // recoverable from the key string).
+    const parts = key.split(":");
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toBe("pdf");
+    expect(parts[1]).toBe("us_letter");
+    expect(parts[2]).toBe(hash);
+    expect(parts[2]).toMatch(/^[0-9a-f]{64}$/);
+  });
+});

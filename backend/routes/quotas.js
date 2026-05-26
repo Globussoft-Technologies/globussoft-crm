@@ -35,10 +35,30 @@ router.get('/', async (req, res) => {
     const where = { tenantId: req.user.tenantId };
     if (userId) where.userId = parseInt(userId, 10);
     if (period) where.period = period;
-    const quotas = await prisma.quota.findMany({
+    // #920 slice 25: ?fields=summary slim-shape opt-in. Mirrors slices 1-23.
+    // Quota is a flat model — when the caller passes ?fields=summary we
+    // drop tenantId (leaks tenant identity to clients that don't need it),
+    // achieved (not used in pickers — derived from Deal aggregates by
+    // /attainment + /leaderboard endpoints separately), createdAt +
+    // updatedAt (metadata). Returns only id + userId + period + target.
+    // userName is still attached post-query because the Quotas page table
+    // renders it alongside the row. Opt-in additive — existing callers
+    // (no ?fields, or any non-exact value) get the full row shape
+    // unchanged.
+    const isSummary = req.query.fields === 'summary';
+    const findManyArgs = {
       where,
       orderBy: [{ period: 'desc' }, { userId: 'asc' }],
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        userId: true,
+        period: true,
+        target: true,
+      };
+    }
+    const quotas = await prisma.quota.findMany(findManyArgs);
     // Attach user names
     const userIds = [...new Set(quotas.map(q => q.userId))];
     const users = userIds.length

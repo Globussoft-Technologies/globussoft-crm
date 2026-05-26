@@ -50,21 +50,73 @@
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
 
-import { executeApproved, ruleBasedProposals } from '../../cron/orchestratorEngine.js';
+import { executeApproved, ruleBasedProposals, runForTenant, cleanupExistingDupes } from '../../cron/orchestratorEngine.js';
 
 beforeAll(() => {
   prisma.task = {
     findFirst: vi.fn(),
     create: vi.fn(),
+    findMany: vi.fn(),
+    updateMany: vi.fn(),
+  };
+  prisma.contact = {
+    findMany: vi.fn(),
+    count: vi.fn(),
+    update: vi.fn(),
+  };
+  prisma.smsMessage = { create: vi.fn() };
+  prisma.activity = { create: vi.fn() };
+  prisma.tenant = { findUnique: vi.fn() };
+  prisma.visit = { findMany: vi.fn(), groupBy: vi.fn() };
+  prisma.service = { findMany: vi.fn() };
+  prisma.location = { findMany: vi.fn() };
+  prisma.user = { findMany: vi.fn() };
+  prisma.agentRecommendation = {
+    findMany: vi.fn(),
+    create: vi.fn(),
+    deleteMany: vi.fn(),
   };
 });
 
 beforeEach(() => {
   prisma.task.findFirst.mockReset();
   prisma.task.create.mockReset();
+  prisma.task.findMany?.mockReset?.();
+  prisma.task.updateMany?.mockReset?.();
+  prisma.contact.findMany?.mockReset?.();
+  prisma.contact.count?.mockReset?.();
+  prisma.contact.update?.mockReset?.();
+  prisma.smsMessage?.create?.mockReset?.();
+  prisma.activity?.create?.mockReset?.();
+  prisma.tenant?.findUnique?.mockReset?.();
+  prisma.visit?.findMany?.mockReset?.();
+  prisma.visit?.groupBy?.mockReset?.();
+  prisma.service?.findMany?.mockReset?.();
+  prisma.location?.findMany?.mockReset?.();
+  prisma.user?.findMany?.mockReset?.();
+  prisma.agentRecommendation?.findMany?.mockReset?.();
+  prisma.agentRecommendation?.create?.mockReset?.();
+  prisma.agentRecommendation?.deleteMany?.mockReset?.();
+
   // No pre-existing task → findOrCreateTask falls through to .create().
   prisma.task.findFirst.mockResolvedValue(null);
   prisma.task.create.mockResolvedValue({ id: 1 });
+  prisma.contact.findMany.mockResolvedValue([]);
+  prisma.contact.count.mockResolvedValue(0);
+  prisma.contact.update.mockResolvedValue({ id: 1 });
+  prisma.smsMessage.create.mockResolvedValue({ id: 1 });
+  prisma.activity.create.mockResolvedValue({ id: 1 });
+  prisma.task.findMany.mockResolvedValue([]);
+  prisma.task.updateMany.mockResolvedValue({ count: 0 });
+  prisma.tenant.findUnique.mockResolvedValue(null);
+  prisma.visit.findMany.mockResolvedValue([]);
+  prisma.visit.groupBy.mockResolvedValue([]);
+  prisma.service.findMany.mockResolvedValue([]);
+  prisma.location.findMany.mockResolvedValue([]);
+  prisma.user.findMany.mockResolvedValue([]);
+  prisma.agentRecommendation.findMany.mockResolvedValue([]);
+  prisma.agentRecommendation.create.mockResolvedValue({ id: 1 });
+  prisma.agentRecommendation.deleteMany.mockResolvedValue({ count: 0 });
 });
 
 // ─── canonical case pin ─────────────────────────────────────────────────────
@@ -505,5 +557,268 @@ describe('cron/orchestratorEngine — PRD §6.7 goal coverage (audit pins)', () 
     expect(goalContexts).toContain('100% occupancy this week');
     // Verdict: engine is deep — at least 4 distinct cards from this fully-loaded context
     expect(cards.length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+// ─── executeApproved — defensive branches + action dispatcher coverage ─────
+//
+// Tick #N of the test-writing cron. Pre-this-tick, the file covered the
+// canonical-case pin (3 tests for campaign_boost / occupancy_alert /
+// schedule_gap), one dedup short-circuit, and the rule-based proposal
+// generator. The action-dispatcher branches for send_sms_blast,
+// lead_followup, mark_leads_for_callback, plus the no-rec / unknown-type
+// defensive guards, were not pinned. These 10 cases close that gap and
+// also exercise runForTenant's not-wellness skip + cleanupExistingDupes.
+
+describe('cron/orchestratorEngine — executeApproved defensive branches', () => {
+  test('null rec → returns {ok: false, reason: "no-rec"} without touching prisma', async () => {
+    const result = await executeApproved(null, { actorUserId: 1 });
+    expect(result).toEqual({ ok: false, reason: 'no-rec' });
+    expect(prisma.task.create).not.toHaveBeenCalled();
+    expect(prisma.smsMessage.create).not.toHaveBeenCalled();
+  });
+
+  test('unknown rec.type → returns {ok: false, reason: "unknown-action-type"}', async () => {
+    const rec = {
+      id: 99,
+      type: 'unknown_action_we_dont_handle',
+      title: 'Mystery',
+      body: 'X',
+      payload: null,
+      tenantId: 7,
+    };
+    const result = await executeApproved(rec, { actorUserId: 1 });
+    expect(result).toEqual({ ok: false, reason: 'unknown-action-type' });
+    expect(prisma.task.create).not.toHaveBeenCalled();
+  });
+
+  test('rec.payload that is malformed JSON does not throw — payload defaults to {}', async () => {
+    // Defensive: pre-fix versions could throw if a downstream consumer ever
+    // stored an unparseable string. The dispatcher wraps the JSON.parse in
+    // try/catch and defaults payload to {} so the action still dispatches.
+    const rec = {
+      id: 21,
+      type: 'campaign_boost',
+      title: 'Boost X',
+      body: 'Lift X.',
+      payload: '{"this": is not json}',  // malformed
+      tenantId: 7,
+    };
+    const result = await executeApproved(rec, { actorUserId: 1 });
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('task_created');
+  });
+});
+
+describe('cron/orchestratorEngine — send_sms_blast action dispatcher', () => {
+  test('send_sms_blast queues one SmsMessage per contact with phone, skips contacts without phone', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 1, phone: '+919876543210' },
+      { id: 2, phone: null },  // no phone — must be skipped
+      { id: 3, phone: '+919876543211' },
+    ]);
+    const rec = {
+      id: 30,
+      type: 'send_sms_blast',
+      title: 'Same-day promo',
+      body: 'Hi! Slot open today — book now.',
+      payload: JSON.stringify({ message: 'Custom blast — book now!' }),
+      tenantId: 7,
+    };
+
+    const result = await executeApproved(rec, { actorUserId: 42 });
+
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('sms_queued');
+    expect(result.count).toBe(2);  // 2 contacts with phones
+    expect(prisma.smsMessage.create).toHaveBeenCalledTimes(2);
+    // Verify the message body comes from payload (not rec.body)
+    const firstCallData = prisma.smsMessage.create.mock.calls[0][0].data;
+    expect(firstCallData.body).toBe('Custom blast — book now!');
+    expect(firstCallData.direction).toBe('OUTBOUND');
+    expect(firstCallData.status).toBe('QUEUED');
+    expect(firstCallData.tenantId).toBe(7);
+  });
+
+  test('send_sms_blast falls back to rec.body (truncated to 140 chars) when payload.message absent', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 1, phone: '+919876543210' },
+    ]);
+    const longBody = 'X'.repeat(200);
+    const rec = {
+      id: 31,
+      type: 'send_sms_blast',
+      title: 'Promo',
+      body: longBody,
+      payload: null,
+      tenantId: 7,
+    };
+
+    const result = await executeApproved(rec, { actorUserId: 42 });
+
+    expect(result.ok).toBe(true);
+    expect(prisma.smsMessage.create).toHaveBeenCalledTimes(1);
+    const data = prisma.smsMessage.create.mock.calls[0][0].data;
+    // body sliced to 140 chars (per backend/cron/orchestratorEngine.js:170)
+    expect(data.body.length).toBe(140);
+  });
+});
+
+describe('cron/orchestratorEngine — lead_followup action dispatcher', () => {
+  test('lead_followup precise mode (payload.leadIds) flags exact leads + writes Activity per lead', async () => {
+    // When payload.leadIds is provided, the dispatcher uses that list verbatim
+    // (parsing string IDs through parseInt) — bulk ageHours mode is skipped.
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 101 },
+      { id: 102 },
+      { id: 103 },
+    ]);
+    const rec = {
+      id: 40,
+      type: 'lead_followup',
+      title: 'SLA breach',
+      body: 'Escalate now.',
+      payload: JSON.stringify({ leadIds: [101, 102, 103] }),
+      tenantId: 7,
+    };
+
+    const result = await executeApproved(rec, { actorUserId: 9 });
+
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('leads_flagged');
+    expect(result.count).toBe(3);
+    expect(result.reassigned).toBe(0);  // no reassignToUserId provided
+    expect(prisma.activity.create).toHaveBeenCalledTimes(3);
+    // Verify activity payload shape
+    const firstActivityData = prisma.activity.create.mock.calls[0][0].data;
+    expect(firstActivityData.type).toBe('Note');
+    expect(firstActivityData.description).toContain('Marked for telecaller follow-up');
+    expect(firstActivityData.tenantId).toBe(7);
+    expect(firstActivityData.userId).toBe(9);
+  });
+
+  test('lead_followup with reassignToUserId reassigns each flagged lead', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 201 },
+      { id: 202 },
+    ]);
+    const rec = {
+      id: 41,
+      type: 'lead_followup',
+      title: 'Stale leads',
+      body: 'Reassign.',
+      payload: JSON.stringify({ leadIds: [201, 202], reassignToUserId: 50 }),
+      tenantId: 7,
+    };
+
+    const result = await executeApproved(rec, { actorUserId: 9 });
+
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('leads_flagged');
+    expect(result.reassigned).toBe(2);
+    expect(prisma.contact.update).toHaveBeenCalledTimes(2);
+    expect(prisma.contact.update.mock.calls[0][0]).toEqual({
+      where: { id: 201 },
+      data: { assignedToId: 50 },
+    });
+  });
+
+  test('mark_leads_for_callback bulk mode (no leadIds) uses ageHours window from payload', async () => {
+    // Without payload.leadIds, the dispatcher falls back to ageHours mode:
+    // computes a cutoff = now - ageHours*3600000 and queries Lead contacts
+    // older than that. The route also caps at take: 50.
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 301 },
+      { id: 302 },
+    ]);
+    const rec = {
+      id: 42,
+      type: 'mark_leads_for_callback',
+      title: 'Aged leads',
+      body: 'Call back.',
+      payload: JSON.stringify({ ageHours: 48 }),
+      tenantId: 7,
+    };
+
+    const result = await executeApproved(rec, { actorUserId: 9 });
+
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('leads_flagged');
+    expect(result.count).toBe(2);
+    // Verify the where clause used status: "Lead" + createdAt cutoff
+    const findArgs = prisma.contact.findMany.mock.calls[0][0];
+    expect(findArgs.where.tenantId).toBe(7);
+    expect(findArgs.where.status).toBe('Lead');
+    expect(findArgs.where.createdAt).toHaveProperty('lte');
+    expect(findArgs.take).toBe(50);
+  });
+});
+
+describe('cron/orchestratorEngine — runForTenant tenant-vertical gate', () => {
+  test('runForTenant returns {skipped: "not-wellness"} when tenant.vertical !== "wellness"', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({
+      id: 5,
+      vertical: 'generic',  // not wellness
+      isActive: true,
+    });
+
+    const result = await runForTenant(5);
+
+    expect(result).toEqual({ skipped: 'not-wellness' });
+    // No context-read should have happened
+    expect(prisma.visit.findMany).not.toHaveBeenCalled();
+    expect(prisma.agentRecommendation.create).not.toHaveBeenCalled();
+  });
+
+  test('runForTenant returns {skipped: "not-wellness"} when tenant does not exist', async () => {
+    prisma.tenant.findUnique.mockResolvedValue(null);
+
+    const result = await runForTenant(9999);
+
+    expect(result).toEqual({ skipped: 'not-wellness' });
+    expect(prisma.agentRecommendation.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('cron/orchestratorEngine — cleanupExistingDupes (issues #261/#285)', () => {
+  test('cleanupExistingDupes removes duplicate AgentRecommendation rows, keeps oldest', async () => {
+    // Three rows that hash to the same (type+title+payload) key.
+    // The cleanup keeps the oldest (first by createdAt asc) and deletes the rest.
+    const now = new Date();
+    const tenMinAgo = new Date(now.getTime() - 10 * 60_000);
+    const twentyMinAgo = new Date(now.getTime() - 20 * 60_000);
+    prisma.agentRecommendation.findMany.mockResolvedValue([
+      { id: 101, type: 'occupancy_alert', title: 'Today only 18%', payload: null, createdAt: twentyMinAgo, status: 'pending' },
+      { id: 102, type: 'occupancy_alert', title: 'Today only 18%', payload: null, createdAt: tenMinAgo, status: 'pending' },
+      { id: 103, type: 'occupancy_alert', title: 'Today only 18%', payload: null, createdAt: now, status: 'pending' },
+    ]);
+    prisma.agentRecommendation.deleteMany.mockResolvedValue({ count: 2 });
+
+    const result = await cleanupExistingDupes(7);
+
+    expect(result.recsRemoved).toBe(2);
+    expect(prisma.agentRecommendation.deleteMany).toHaveBeenCalledTimes(1);
+    // The deleteMany call drops the two newer rows (id 102 + 103); keeps 101.
+    const deleteCall = prisma.agentRecommendation.deleteMany.mock.calls[0][0];
+    expect(deleteCall.where.id.in).toEqual([102, 103]);
+  });
+
+  test('cleanupExistingDupes does NOT touch single-occurrence rows (no false-positive purge)', async () => {
+    // Five rows, all distinct (type+title) — none should be deleted.
+    prisma.agentRecommendation.findMany.mockResolvedValue([
+      { id: 1, type: 'occupancy_alert', title: 'A', payload: null, createdAt: new Date(), status: 'pending' },
+      { id: 2, type: 'campaign_boost', title: 'B', payload: null, createdAt: new Date(), status: 'pending' },
+      { id: 3, type: 'lead_followup', title: 'C', payload: null, createdAt: new Date(), status: 'pending' },
+      { id: 4, type: 'send_sms_blast', title: 'D', payload: null, createdAt: new Date(), status: 'pending' },
+      { id: 5, type: 'schedule_gap', title: 'E', payload: null, createdAt: new Date(), status: 'pending' },
+    ]);
+    prisma.task.findMany.mockResolvedValue([]);
+
+    const result = await cleanupExistingDupes(7);
+
+    expect(result.recsRemoved).toBe(0);
+    expect(result.tasksRemoved).toBe(0);
+    // Cleanup never calls deleteMany when no group has length >= 2
+    expect(prisma.agentRecommendation.deleteMany).not.toHaveBeenCalled();
   });
 });

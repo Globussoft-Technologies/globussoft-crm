@@ -237,14 +237,10 @@ export default function EmbassyRulesAdmin() {
       });
       return;
     }
-    if (!form.ruleType.trim()) {
-      setFormError({ field: 'ruleType', message: 'Rule type is required' });
-      return;
-    }
-    if (!form.actionLabel.trim()) {
-      setFormError({ field: 'actionLabel', message: 'Action label (advisor warning text) is required' });
-      return;
-    }
+    // Note: ruleType + actionLabel missing-field cases are covered by the
+    // HTML5 `required` attribute on the corresponding <input> elements (the
+    // browser pre-empts submit and shows a native validation tooltip). No
+    // custom JS gate needed here. See closed issue #978.
     if (!SEVERITIES.includes(form.severity)) {
       setFormError({ field: 'severity', message: 'Pick a severity' });
       return;

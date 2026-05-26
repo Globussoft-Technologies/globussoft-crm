@@ -149,14 +149,25 @@ function makeInvoice(overrides = {}) {
 
 // Install a fetchApi mock that routes by URL prefix + method. The /invoices
 // GET defaults to a single Issued row; tests opt-in to other surfaces.
+// `detail` covers the slice-22 GET /:id?include=lines surface — when an
+// editor opens an Issued/Paid invoice the page fetches its lines to
+// compute TDS withholding client-side.
 function installFetchMock({
   list = { invoices: [makeInvoice()], total: 1 },
   create = { invoice: makeInvoice({ id: 102, invoiceNum: 'TINV-2026-0002', status: 'Draft' }) },
   update = { invoice: makeInvoice() },
   remove = null,
+  detail = null,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
+    // Slice 22 — match the include=lines detail GET first so it takes
+    // precedence over the list-GET prefix match (both URLs start with
+    // /api/travel/invoices but the detail GET has ?include=lines).
+    if (url.includes('?include=lines') && method === 'GET') {
+      if (detail instanceof Error) return Promise.reject(detail);
+      return Promise.resolve(detail);
+    }
     if (url.startsWith('/api/travel/invoices') && method === 'GET') {
       if (list instanceof Error) return Promise.reject(list);
       return Promise.resolve(list);
@@ -665,5 +676,162 @@ describe('<InvoicesAdmin /> — per-row PDF download (#901 slice 3)', () => {
     await screen.findByText('TINV-2026-0001');
     // Same actions-column gate as Edit/Delete — no PDF button surface for USER.
     expect(screen.queryByRole('button', { name: /Download PDF for invoice/i })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #901 slice 22 — TDS withholding tiles in the edit modal
+// ---------------------------------------------------------------------------
+//
+// Slice 21 (12b9c752) shipped TDS math: POST /:id/issue now adds
+// `totalTds` + `payableAfterTds` to the response envelope. Slice 22
+// surfaces those figures on the InvoicesAdmin edit-modal panel — when the
+// invoice being edited has status ∈ {Issued, Paid} AND the lazy-fetched
+// detail (GET /:id?include=lines) contains lineType==='tds' rows summing
+// to >0. The two tiles render:
+//   - "Total TDS Withheld" → formatMoney(totalTds, currency)
+//   - "Net Payable (After TDS)" → formatMoney(totalAmount - totalTds, currency)
+//
+// Visibility matrix:
+//   Status=Draft   → tiles never rendered (no detail fetch fires)
+//   Status=Issued  → detail fetched; tiles render only if totalTds > 0
+//   Status=Paid    → detail fetched; tiles render only if totalTds > 0
+//   Status=Partial → tiles never rendered (payable-after-TDS goes stale
+//                    once any payment is received — see comments in SUT)
+//   Status=Voided  → tiles never rendered (terminal state)
+describe('<InvoicesAdmin /> — TDS withholding tiles (#901 slice 22)', () => {
+  it('renders both tiles when editing an Issued invoice with TDS lines (totalTds > 0)', async () => {
+    installFetchMock({
+      list: {
+        invoices: [
+          makeInvoice({ id: 501, invoiceNum: 'TINV-2026-0501', status: 'Issued', totalAmount: 100000 }),
+        ],
+        total: 1,
+      },
+      detail: {
+        id: 501,
+        invoiceNum: 'TINV-2026-0501',
+        status: 'Issued',
+        totalAmount: 100000,
+        currency: 'INR',
+        lines: [
+          { id: 1, lineType: 'per_pax', amount: 100000 },
+          { id: 2, lineType: 'tds', amount: 5000 },
+        ],
+      },
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0501');
+    fireEvent.click(screen.getByRole('button', { name: /Edit invoice TINV-2026-0501/i }));
+    // Tiles surface — wait for the lazy fetch to resolve.
+    expect(await screen.findByText(/Total TDS Withheld/i)).toBeInTheDocument();
+    expect(screen.getByText(/Net Payable \(After TDS\)/i)).toBeInTheDocument();
+    // The tile region (data-testid lock to avoid coupling to glass class).
+    const tiles = screen.getByTestId('tds-tiles');
+    // Total TDS rendered through formatMoney with INR currency — assert
+    // digit grouping + ₹ rather than verbatim per ICU-portability standing
+    // rule (CLAUDE.md 2026-05-07 wave-6).
+    expect(tiles.textContent).toMatch(/₹/);
+    expect(tiles.textContent).toMatch(/5,000/);
+    // Net Payable = 100000 - 5000 = 95000.
+    expect(tiles.textContent).toMatch(/95,000/);
+    // The detail GET fired with ?include=lines.
+    const detailGet = fetchApiMock.mock.calls.find(
+      ([url]) => /\/api\/travel\/invoices\/501\?include=lines/.test(url),
+    );
+    expect(detailGet).toBeTruthy();
+  });
+
+  it('hides tiles when editing an Issued invoice with no TDS lines (totalTds === 0)', async () => {
+    installFetchMock({
+      list: {
+        invoices: [
+          makeInvoice({ id: 502, invoiceNum: 'TINV-2026-0502', status: 'Issued', totalAmount: 100000 }),
+        ],
+        total: 1,
+      },
+      detail: {
+        id: 502,
+        invoiceNum: 'TINV-2026-0502',
+        status: 'Issued',
+        totalAmount: 100000,
+        currency: 'INR',
+        lines: [
+          { id: 1, lineType: 'per_pax', amount: 100000 },
+          { id: 2, lineType: 'tax', amount: 18000 },
+        ],
+      },
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0502');
+    fireEvent.click(screen.getByRole('button', { name: /Edit invoice TINV-2026-0502/i }));
+    // Wait for the form to appear (modal opened) so we know the lazy
+    // detail fetch has had a chance to settle.
+    await screen.findByLabelText(/^Contact ID$/i);
+    // Give the microtask queue a tick to flush the detail GET resolution.
+    await waitFor(() => {
+      const detailCall = fetchApiMock.mock.calls.find(
+        ([url]) => /\?include=lines/.test(url),
+      );
+      expect(detailCall).toBeTruthy();
+    });
+    // Tiles NOT in the DOM — no TDS line means no withholding surface.
+    expect(screen.queryByTestId('tds-tiles')).toBeNull();
+    expect(screen.queryByText(/Total TDS Withheld/i)).toBeNull();
+  });
+
+  it('hides tiles AND does NOT fire the detail GET when editing a Draft invoice', async () => {
+    installFetchMock({
+      list: {
+        invoices: [
+          makeInvoice({ id: 503, invoiceNum: 'TINV-2026-0503', status: 'Draft', totalAmount: 50000 }),
+        ],
+        total: 1,
+      },
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0503');
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Edit invoice TINV-2026-0503/i }));
+    // Modal opens for the Draft row.
+    await screen.findByLabelText(/^Contact ID$/i);
+    // No detail GET fired (Draft invoices skip the slice-22 fetch entirely).
+    const detailCall = fetchApiMock.mock.calls.find(
+      ([url]) => /\?include=lines/.test(url),
+    );
+    expect(detailCall).toBeFalsy();
+    // Tiles absent.
+    expect(screen.queryByTestId('tds-tiles')).toBeNull();
+  });
+
+  it('renders tiles for a Paid invoice with TDS lines (Paid is the other visible status)', async () => {
+    installFetchMock({
+      list: {
+        invoices: [
+          makeInvoice({ id: 504, invoiceNum: 'TINV-2026-0504', status: 'Paid', totalAmount: 200000 }),
+        ],
+        total: 1,
+      },
+      detail: {
+        id: 504,
+        invoiceNum: 'TINV-2026-0504',
+        status: 'Paid',
+        totalAmount: 200000,
+        currency: 'INR',
+        lines: [
+          { id: 1, lineType: 'per_pax', amount: 200000 },
+          { id: 2, lineType: 'tds', amount: 10000 },
+        ],
+      },
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0504');
+    fireEvent.click(screen.getByRole('button', { name: /Edit invoice TINV-2026-0504/i }));
+    expect(await screen.findByText(/Total TDS Withheld/i)).toBeInTheDocument();
+    const tiles = screen.getByTestId('tds-tiles');
+    // 10,000 TDS rendered.
+    expect(tiles.textContent).toMatch(/10,000/);
+    // Net payable = 200,000 - 10,000 = 190,000.
+    expect(tiles.textContent).toMatch(/1,90,000|190,000/);
   });
 });

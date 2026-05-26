@@ -3,11 +3,21 @@
 // Endpoints:
 //   GET    /api/travel/itineraries                          — list (paginated, filterable)
 //   POST   /api/travel/itineraries                          — create itinerary (+ optional items)
+//   GET    /api/travel/itineraries/by-month                  — tenant-wide monthly rollup (#907 slice 16)
+//   GET    /api/travel/itineraries/by-quarter                — tenant-wide quarterly rollup (#907 slice 17)
+//   GET    /api/travel/itineraries/by-year                   — tenant-wide annual rollup (#907 slice 18)
+//   GET    /api/travel/itineraries/stats                     — tenant-wide aggregate envelope (#907 rollup family completion)
 //   GET    /api/travel/itineraries/:id                      — fetch one with items
 //   PATCH  /api/travel/itineraries/:id                      — amend top-level fields (not items)
 //   POST   /api/travel/itineraries/:id/items                — append a polymorphic item
+//   POST   /api/travel/itineraries/:id/items/bulk-reorder   — atomic bulk reposition (#907 slice 8)
+//   POST   /api/travel/itineraries/:id/items/bulk-delete    — atomic bulk delete (#907 slice 11)
+//   GET    /api/travel/itineraries/:id/items/search         — item notes search/filter (#907 slice 10)
+//   GET    /api/travel/itineraries/:id/totals               — itinerary aggregation rollup (#907 slice 14)
 //   PATCH  /api/travel/itineraries/:id/items/:itemId        — amend an item
 //   DELETE /api/travel/itineraries/:id/items/:itemId        — remove an item
+//   POST   /api/travel/itineraries/:id/items/:itemId/duplicate — clone one item in place (#907 slice 12)
+//   POST   /api/travel/itineraries/:id/duplicate            — clone parent + all items (#907 slice 15)
 //   POST   /api/travel/itineraries/:id/draft/regen          — regen LLM-drafted summary (PRD §4.3 + §9.1)
 //
 // Mounted at /api/travel by server.js. Shares the requireTravelTenant
@@ -224,6 +234,1031 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
   }
 });
 
+// ─── Tenant-wide monthly rollup (slice 16) ────────────────────────────
+
+// GET /api/travel/itineraries/by-month — any verified token (tenant + sub-brand scoped).
+//
+// Slice 16 of #907 (PRD_TRAVEL_ITINERARY_UPGRADES.md §3 — tenant-wide
+// itinerary analytics rolled up by calendar month). Mirrors #900 slice
+// 16 (/quotes/by-month) + #901 slice 29 (/invoices/by-month) + #908
+// slice 21 (/flyer-templates/by-month) — same UTC YYYY-MM bucketing
+// template, same defensive math (null/invalid totalAmount → 0 contrib;
+// null/invalid createdAt → "unknown" bucket, excluded when ?from/?to is
+// set), same orderBy semantics, same half-up 2dp rounding via
+// Number.EPSILON. One row per UTC-month present in the scoped itinerary
+// set, summarising count + 7-status splits + value sums for that month.
+// Read-only; consumed by the operator-facing "itineraries trend" chart
+// on the Travel dashboard and the per-month drill-down picker into the
+// underlying /itineraries list.
+//
+// 7-status envelope (PRD §4.7 Phase 2 50%-advance booking):
+//   draft / sent / revised / accepted / rejected / advance_paid / fully_paid
+// The acceptedValue rollup sums totalAmount across the THREE
+// "agreement-secured" statuses {accepted, advance_paid, fully_paid} —
+// once the customer accepts the itinerary, the booking is locked in even
+// if payment is still pending or only the 50% advance has cleared. This
+// matches Phase 2's deposit-mechanics: an itinerary with status=
+// accepted-but-zero-paid still represents committed revenue for the
+// trend chart's "closed deals" line. totalValue, by contrast, sums
+// totalAmount across ALL statuses (the pipeline view).
+//
+// Why a separate endpoint instead of extending /global-stats:
+//   - Different aggregation granularity (per-month time-series, not
+//     single-rollup).
+//   - Different natural sort (chronological, not single row).
+//   - Pre-fills a different UI surface (line/bar chart vs KPI tile).
+//
+// Bucket key shape: ISO YYYY-MM string (e.g. "2026-05") derived from
+// Itinerary.createdAt's UTC year + month. UTC chosen deliberately so
+// bucket labels stay stable across operator timezones — finance
+// reconciliation works in calendar-month UTC for cross-border volume.
+//
+// Scope rules:
+//   - Tenant-scoped on Itinerary.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access). Itinerary
+//     .subBrand is required + non-nullable, so the narrowing uses
+//     `{ in: [...allowed] }` (no NULL OR-clause — mirrors the /itineraries
+//     list endpoint, NOT the flyer-templates endpoint which allows tenant-wide
+//     NULL rows).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   status   optional Itinerary.status filter (one of VALID_STATUSES);
+//            invalid → 400 INVALID_STATUS.
+//   from     optional inclusive lower bound on bucket (YYYY-MM); rows
+//            with month < from are excluded.
+//   to       optional inclusive upper bound on bucket (YYYY-MM); rows
+//            with month > to are excluded.
+//   orderBy  default "month:asc" (chronological); also accepts
+//            "month:desc", "count:asc|desc", "acceptedCount:asc|desc",
+//            "totalValue:asc|desc". Unknown tokens degrade silently to
+//            the default (same posture as slice 16 / slice 29 / slice 21).
+//   limit    default 12 (one year of months), max 60 (5 years).
+//   offset   default 0
+//
+// Response shape:
+//   {
+//     months: [ {
+//       month: "2026-05",
+//       count, totalValue,
+//       draftCount, sentCount, revisedCount, acceptedCount, rejectedCount,
+//       advancePaidCount, fullyPaidCount,
+//       acceptedValue
+//     } ],
+//     totalMonths,
+//     grandCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-month" as a numeric :id (which would 400 INVALID_ID).
+router.get("/itineraries/by-month", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    if (statusFilter && !VALID_STATUSES.includes(statusFilter)) {
+      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+    }
+
+    // YYYY-MM validation — same regex slice 16 / 29 / 21 use. Bucket
+    // labels we emit follow this exact shape so callers passing
+    // month-tokens to from/to should already be using it.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "count:asc",
+      "count:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /itineraries list handler — empty access set → all-zeros rollup
+    // (not 403) so the dashboard tile renders cleanly for
+    // not-yet-onboarded operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        months: [],
+        totalMonths: 0,
+        grandCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-MM. Input size bound is the same as the list
+    // endpoint (low thousands at platinum scale).
+    const itineraries = await prisma.itinerary.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Statuses whose totalAmount counts toward acceptedValue — the
+    // "agreement-secured" set. Phase 2 50%-advance booking treats
+    // advance_paid + fully_paid as continuations of accepted, NOT as
+    // separate post-acceptance states (PRD §4.7).
+    const ACCEPTED_VALUE_STATUSES = new Set(["accepted", "advance_paid", "fully_paid"]);
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts/sums }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate. Null/invalid totalAmount contributes 0.
+    const byMonth = new Map();
+    for (const it of itineraries) {
+      let monthKey = "unknown";
+      if (it.createdAt) {
+        const dt = it.createdAt instanceof Date
+          ? it.createdAt
+          : new Date(it.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let row = byMonth.get(monthKey);
+      if (!row) {
+        row = {
+          month: monthKey,
+          count: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          revisedCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          advancePaidCount: 0,
+          fullyPaidCount: 0,
+          acceptedValue: 0,
+        };
+        byMonth.set(monthKey, row);
+      }
+
+      row.count += 1;
+      const amt = Number(it.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (it.status) {
+        case "draft": row.draftCount += 1; break;
+        case "sent": row.sentCount += 1; break;
+        case "revised": row.revisedCount += 1; break;
+        case "accepted": row.acceptedCount += 1; break;
+        case "rejected": row.rejectedCount += 1; break;
+        case "advance_paid": row.advancePaidCount += 1; break;
+        case "fully_paid": row.fullyPaidCount += 1; break;
+        default: break;
+      }
+      if (ACCEPTED_VALUE_STATUSES.has(it.status)) {
+        row.acceptedValue += safeAmt;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let months = [...byMonth.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable month token); when no
+    // bounds are set, "unknown" stays so the count surface remains
+    // complete. Mirrors slice 16 / 29 / 21 posture.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM which is also
+    // chronological. "unknown" sorts last in asc / first in desc by
+    // virtue of being lexicographically > "9999-12" — acceptable for a
+    // defensive fallback bucket that should rarely appear.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalMonths = months.length;
+    const grandCount = months.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as
+    // slice 16 / 29 / 21.
+    const paged = months.slice(skip, skip + take);
+
+    res.json({
+      months: paged,
+      totalMonths,
+      grandCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] by-month error:", e.message);
+    res.status(500).json({ error: "Failed to compute monthly rollup" });
+  }
+});
+
+// ─── Tenant-wide quarterly rollup (slice 17) ──────────────────────────
+
+// GET /api/travel/itineraries/by-quarter — any verified token (tenant + sub-brand scoped).
+//
+// Slice 17 of #907 (PRD_TRAVEL_ITINERARY_UPGRADES.md §3 — tenant-wide
+// itinerary analytics rolled up by calendar quarter). Mirrors slice 16
+// /by-month exactly — same 7-status envelope, same defensive math,
+// same orderBy semantics, same half-up 2dp rounding — at quarter
+// resolution instead of month. One row per UTC YYYY-Qn present in the
+// scoped itinerary set, summarising count + 7-status splits + value
+// sums for that quarter.
+//
+// 7-status envelope (PRD §4.7 Phase 2 50%-advance booking):
+//   draft / sent / revised / accepted / rejected / advance_paid / fully_paid
+// The acceptedValue rollup sums totalAmount across the THREE
+// "agreement-secured" statuses {accepted, advance_paid, fully_paid} —
+// mirrors slice 16 by-month exactly.
+//
+// Why quarter granularity in addition to month: finance review cadence
+// (board reporting, supplier reconciliation, RFU Umrah seasonal
+// planning) is quarterly. The dashboard's quarterly trend chart needs
+// a single endpoint hit instead of summing 3 month rows client-side.
+//
+// Bucket key shape: "YYYY-Qn" where n ∈ {1,2,3,4}. Calendar quarter via
+// `Math.floor(month/3) + 1` where month is the 0-indexed UTC month:
+//   Q1: Jan–Mar (months 0..2)
+//   Q2: Apr–Jun (months 3..5)
+//   Q3: Jul–Sep (months 6..8)
+//   Q4: Oct–Dec (months 9..11)
+// UTC chosen deliberately so bucket labels stay stable across operator
+// timezones (matches slice 16 by-month posture).
+//
+// Scope rules: identical to slice 16 by-month — tenant-scoped on
+// Itinerary.tenantId, sub-brand-restricted via subBrandAccess
+// (Itinerary.subBrand is non-nullable → narrowing uses { in: [...] }
+// with NO NULL OR-clause), any verified token, no RBAC narrowing.
+//
+// Query string:
+//   status   optional Itinerary.status filter; invalid → 400 INVALID_STATUS.
+//   from     optional inclusive lower bound on bucket (YYYY-Qn); rows
+//            with quarter < from are excluded.
+//   to       optional inclusive upper bound on bucket (YYYY-Qn); rows
+//            with quarter > to are excluded.
+//   orderBy  default "quarter:asc" (chronological); also accepts
+//            "quarter:desc", "count:asc|desc", "acceptedCount:asc|desc",
+//            "totalValue:asc|desc". Unknown tokens degrade silently to
+//            the default.
+//   limit    default 12 (3 years of quarters), max 40 (10 years).
+//   offset   default 0
+//
+// Response shape:
+//   {
+//     quarters: [ {
+//       quarter: "2026-Q2",
+//       count, totalValue,
+//       draftCount, sentCount, revisedCount, acceptedCount, rejectedCount,
+//       advancePaidCount, fullyPaidCount,
+//       acceptedValue
+//     } ],
+//     totalQuarters,
+//     grandCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-quarter" as a numeric :id (which would 400 INVALID_ID).
+router.get("/itineraries/by-quarter", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+    if (statusFilter && !VALID_STATUSES.includes(statusFilter)) {
+      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+    }
+
+    // YYYY-Qn validation — quarter ∈ {1,2,3,4}, year is 4 digits.
+    // Bucket labels we emit follow this exact shape so callers passing
+    // quarter-tokens to from/to should already be using it.
+    const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+    if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "quarter:asc",
+      "quarter:desc",
+      "count:asc",
+      "count:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /itineraries list handler — empty access set → all-zeros rollup
+    // (not 403) so the dashboard tile renders cleanly for
+    // not-yet-onboarded operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        quarters: [],
+        totalQuarters: 0,
+        grandCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-Qn. Input size bound is the same as the list
+    // endpoint (low thousands at platinum scale).
+    const itineraries = await prisma.itinerary.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Statuses whose totalAmount counts toward acceptedValue — the
+    // "agreement-secured" set. Mirrors slice 16 by-month exactly.
+    const ACCEPTED_VALUE_STATUSES = new Set(["accepted", "advance_paid", "fully_paid"]);
+
+    // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts/sums }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate. Null/invalid totalAmount contributes 0.
+    const byQuarter = new Map();
+    for (const it of itineraries) {
+      let quarterKey = "unknown";
+      if (it.createdAt) {
+        const dt = it.createdAt instanceof Date
+          ? it.createdAt
+          : new Date(it.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+          quarterKey = `${yyyy}-Q${q}`;
+        }
+      }
+
+      let row = byQuarter.get(quarterKey);
+      if (!row) {
+        row = {
+          quarter: quarterKey,
+          count: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          revisedCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          advancePaidCount: 0,
+          fullyPaidCount: 0,
+          acceptedValue: 0,
+        };
+        byQuarter.set(quarterKey, row);
+      }
+
+      row.count += 1;
+      const amt = Number(it.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (it.status) {
+        case "draft": row.draftCount += 1; break;
+        case "sent": row.sentCount += 1; break;
+        case "revised": row.revisedCount += 1; break;
+        case "accepted": row.acceptedCount += 1; break;
+        case "rejected": row.rejectedCount += 1; break;
+        case "advance_paid": row.advancePaidCount += 1; break;
+        case "fully_paid": row.fullyPaidCount += 1; break;
+        default: break;
+      }
+      if (ACCEPTED_VALUE_STATUSES.has(it.status)) {
+        row.acceptedValue += safeAmt;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let quarters = [...byQuarter.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable quarter token); when
+    // no bounds are set, "unknown" stays so the count surface remains
+    // complete. Mirrors slice 16 by-month posture.
+    if (fromRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+    }
+    if (toRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+    }
+
+    // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+    // chronological (Q1 < Q2 < Q3 < Q4 in ASCII, years naturally
+    // ordered). "unknown" sorts last in asc / first in desc by virtue
+    // of being lexicographically > "9999-Q4" — acceptable for a
+    // defensive fallback bucket that should rarely appear.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    quarters.sort((a, b) => {
+      if (field === "quarter") {
+        if (a.quarter < b.quarter) return -1 * mult;
+        if (a.quarter > b.quarter) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalQuarters = quarters.length;
+    const grandCount = quarters.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as
+    // slice 16 by-month.
+    const paged = quarters.slice(skip, skip + take);
+
+    res.json({
+      quarters: paged,
+      totalQuarters,
+      grandCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] by-quarter error:", e.message);
+    res.status(500).json({ error: "Failed to compute quarterly rollup" });
+  }
+});
+
+// ─── Tenant-wide annual rollup (slice 18) ─────────────────────────────
+
+// GET /api/travel/itineraries/by-year — any verified token (tenant + sub-brand scoped).
+//
+// Slice 18 of #907 (PRD_TRAVEL_ITINERARY_UPGRADES.md §3 — tenant-wide
+// itinerary analytics rolled up by calendar year). Completes the
+// by-month/by-quarter/by-year triplet (slices 16/17/18). Mirrors slice
+// 17 by-quarter exactly — same 7-status envelope, same defensive math,
+// same orderBy semantics, same half-up 2dp rounding — at year
+// resolution instead of quarter. One row per UTC YYYY present in the
+// scoped itinerary set, summarising count + 7-status splits + value
+// sums for that calendar year.
+//
+// 7-status envelope (PRD §4.7 Phase 2 50%-advance booking):
+//   draft / sent / revised / accepted / rejected / advance_paid / fully_paid
+// The acceptedValue rollup sums totalAmount across the THREE
+// "agreement-secured" statuses {accepted, advance_paid, fully_paid} —
+// mirrors slices 16/17 exactly.
+//
+// Why year granularity in addition to month + quarter: annual reviews
+// (year-end CFO close, year-over-year trend lines, fiscal-year
+// reporting, RFU Umrah season-on-season comparisons) need a single
+// endpoint hit instead of summing 12 month rows or 4 quarter rows
+// client-side. Also feeds multi-year trend charts directly.
+//
+// Bucket key shape: "YYYY" — 4-digit UTC calendar year via
+// `dt.getUTCFullYear()`. UTC chosen deliberately so bucket labels stay
+// stable across operator timezones (matches slices 16/17 posture).
+//
+// Scope rules: identical to slices 16/17 — tenant-scoped on
+// Itinerary.tenantId, sub-brand-restricted via subBrandAccess
+// (Itinerary.subBrand is non-nullable → narrowing uses { in: [...] }
+// with NO NULL OR-clause), any verified token, no RBAC narrowing.
+//
+// Query string:
+//   status   optional Itinerary.status filter; invalid → 400 INVALID_STATUS.
+//   from     optional inclusive lower bound on bucket (YYYY); rows with
+//            year < from are excluded. Invalid → 400 INVALID_YEAR_FORMAT.
+//   to       optional inclusive upper bound on bucket (YYYY); rows with
+//            year > to are excluded. Invalid → 400 INVALID_YEAR_FORMAT.
+//   orderBy  default "year:asc" (chronological); also accepts
+//            "year:desc", "count:asc|desc", "acceptedCount:asc|desc",
+//            "totalValue:asc|desc". Unknown tokens degrade silently to
+//            the default.
+//   limit    default 10 years, max 30 years.
+//   offset   default 0
+//
+// Response shape:
+//   {
+//     years: [ {
+//       year: "2026",
+//       count, totalValue,
+//       draftCount, sentCount, revisedCount, acceptedCount, rejectedCount,
+//       advancePaidCount, fullyPaidCount,
+//       acceptedValue
+//     } ],
+//     totalYears,
+//     grandCount,
+//     grandTotalValue,
+//     grandAcceptedValue,
+//     limit, offset
+//   }
+//
+// Route ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "by-year" as a numeric :id (which would 400 INVALID_ID).
+router.get("/itineraries/by-year", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+    if (statusFilter && !VALID_STATUSES.includes(statusFilter)) {
+      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+    }
+
+    // YYYY validation — exactly 4 digits. Bucket labels we emit follow
+    // this shape so callers passing year-tokens to from/to should
+    // already be using it.
+    const YEAR_RE = /^\d{4}$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+    if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "year:asc",
+      "year:desc",
+      "count:asc",
+      "count:desc",
+      "acceptedCount:asc",
+      "acceptedCount:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /itineraries list handler — empty access set → all-zeros rollup
+    // (not 403) so the dashboard tile renders cleanly for
+    // not-yet-onboarded operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        years: [],
+        totalYears: 0,
+        grandCount: 0,
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY. Input size bound is the same as the list
+    // endpoint (low thousands at platinum scale).
+    const itineraries = await prisma.itinerary.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Statuses whose totalAmount counts toward acceptedValue — the
+    // "agreement-secured" set. Mirrors slices 16/17 exactly.
+    const ACCEPTED_VALUE_STATUSES = new Set(["accepted", "advance_paid", "fully_paid"]);
+
+    // Aggregate per-UTC-year. Map "YYYY" → { ...row counts/sums }.
+    // Rows with null/invalid createdAt go into "unknown" so counts stay
+    // accurate. Null/invalid totalAmount contributes 0.
+    const byYear = new Map();
+    for (const it of itineraries) {
+      let yearKey = "unknown";
+      if (it.createdAt) {
+        const dt = it.createdAt instanceof Date
+          ? it.createdAt
+          : new Date(it.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          yearKey = String(dt.getUTCFullYear());
+        }
+      }
+
+      let row = byYear.get(yearKey);
+      if (!row) {
+        row = {
+          year: yearKey,
+          count: 0,
+          totalValue: 0,
+          draftCount: 0,
+          sentCount: 0,
+          revisedCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          advancePaidCount: 0,
+          fullyPaidCount: 0,
+          acceptedValue: 0,
+        };
+        byYear.set(yearKey, row);
+      }
+
+      row.count += 1;
+      const amt = Number(it.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (it.status) {
+        case "draft": row.draftCount += 1; break;
+        case "sent": row.sentCount += 1; break;
+        case "revised": row.revisedCount += 1; break;
+        case "accepted": row.acceptedCount += 1; break;
+        case "rejected": row.rejectedCount += 1; break;
+        case "advance_paid": row.advancePaidCount += 1; break;
+        case "fully_paid": row.fullyPaidCount += 1; break;
+        default: break;
+      }
+      if (ACCEPTED_VALUE_STATUSES.has(it.status)) {
+        row.acceptedValue += safeAmt;
+      }
+    }
+
+    // Finalise rounding on per-row sums.
+    let years = [...byYear.values()].map((r) => ({
+      ...r,
+      totalValue: round2(r.totalValue),
+      acceptedValue: round2(r.acceptedValue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable year token); when no
+    // bounds are set, "unknown" stays so the count surface remains
+    // complete. Mirrors slices 16/17 posture.
+    if (fromRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+    }
+    if (toRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+    }
+
+    // Sort. "year" sorts lexicographically on YYYY which is also
+    // chronological (4-digit zero-padded years naturally ordered).
+    // "unknown" sorts last in asc / first in desc by virtue of being
+    // lexicographically > "9999" — acceptable for a defensive fallback
+    // bucket that should rarely appear.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    years.sort((a, b) => {
+      if (field === "year") {
+        if (a.year < b.year) return -1 * mult;
+        if (a.year > b.year) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalYears = years.length;
+    const grandCount = years.reduce(
+      (acc, r) => acc + (Number(r.count) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandAcceptedValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as
+    // slices 16/17.
+    const paged = years.slice(skip, skip + take);
+
+    res.json({
+      years: paged,
+      totalYears,
+      grandCount,
+      grandTotalValue,
+      grandAcceptedValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] by-year error:", e.message);
+    res.status(500).json({ error: "Failed to compute annual rollup" });
+  }
+});
+
+// GET /api/travel/itineraries/stats — tenant-wide aggregate (#907 rollup
+// family completion). Mirrors the travel_quotes /stats envelope shape so
+// dashboard tiles share a stable contract across the rollup endpoints.
+//
+// Envelope:
+//   {
+//     total: <number>,
+//     byStatus: { draft|sent|revised|accepted|rejected|advance_paid|fully_paid:
+//                 { count, totalValue } },
+//     bySubBrand: { tmc|rfu|travelstall|visasure|_tenant: { count } },
+//     grandTotalValue: <number>,
+//     grandAcceptedValue: <number>,
+//     acceptanceRate: <0-1 or null>,
+//     lastUpdatedAt: <ISO or null>
+//   }
+//
+// Status enum is the canonical 7-value set from schema.prisma's Itinerary
+// model. accepted/advance_paid/fully_paid all roll up into
+// grandAcceptedValue (the agreement-secured set — Phase 2 50%-advance
+// booking flow treats advance_paid + fully_paid as continuations of
+// accepted, NOT separate categories). acceptanceRate uses
+// terminal-decision denominator (accepted + advance_paid + fully_paid +
+// rejected) — null when denom=0.
+//
+// Half-up 2dp on all money values. Defensive: null/non-numeric
+// totalAmount → 0. bySubBrand coalesces missing subBrand → "_tenant"
+// matching the /quotes/stats convention.
+//
+// Optional query:
+//   ?from=ISO — lower bound on createdAt (inclusive)
+//   ?to=ISO   — upper bound on createdAt (inclusive)
+//
+// Route-ordering: declared BEFORE GET /:id so Express doesn't try to
+// parse "stats" as a numeric :id (which would 400 INVALID_ID).
+router.get("/itineraries/stats", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+
+    // Optional ISO date bounds on createdAt.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Canonical zeroed envelope — returned when the caller has no
+    // sub-brand access OR when zero rows match. Single source of truth
+    // so the empty-set + empty-result paths can't drift.
+    const zeroed = {
+      total: 0,
+      byStatus: {
+        draft:        { count: 0, totalValue: 0 },
+        sent:         { count: 0, totalValue: 0 },
+        revised:      { count: 0, totalValue: 0 },
+        accepted:     { count: 0, totalValue: 0 },
+        rejected:     { count: 0, totalValue: 0 },
+        advance_paid: { count: 0, totalValue: 0 },
+        fully_paid:   { count: 0, totalValue: 0 },
+      },
+      bySubBrand: {},
+      grandTotalValue: 0,
+      grandAcceptedValue: 0,
+      acceptanceRate: null,
+      lastUpdatedAt: null,
+    };
+
+    // Sub-brand narrowing — empty access set → zeroed shape (#976 fix),
+    // NOT 403 — so not-yet-onboarded operators render an empty tile
+    // cleanly instead of a permission error.
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed);
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    const itineraries = await prisma.itinerary.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        status: true,
+        totalAmount: true,
+        updatedAt: true,
+      },
+    });
+
+    if (itineraries.length === 0) {
+      return res.json(zeroed);
+    }
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    const byStatus = {
+      draft:        { count: 0, totalValue: 0 },
+      sent:         { count: 0, totalValue: 0 },
+      revised:      { count: 0, totalValue: 0 },
+      accepted:     { count: 0, totalValue: 0 },
+      rejected:     { count: 0, totalValue: 0 },
+      advance_paid: { count: 0, totalValue: 0 },
+      fully_paid:   { count: 0, totalValue: 0 },
+    };
+    const bySubBrand = {};
+    let grandTotalValue = 0;
+    let grandAcceptedValue = 0;
+    let lastUpdatedAt = null;
+
+    // accepted | advance_paid | fully_paid all count as
+    // agreement-secured (see PRD §4.7 Phase 2 50%-advance booking).
+    const ACCEPTED_LIKE = new Set(["accepted", "advance_paid", "fully_paid"]);
+    // Terminal-decision set for acceptanceRate denominator: every status
+    // whose outcome is decided. rejected is the lone "decided no";
+    // accepted/advance_paid/fully_paid are the "decided yes" trio.
+    const TERMINAL = new Set(["accepted", "advance_paid", "fully_paid", "rejected"]);
+
+    for (const it of itineraries) {
+      const amt = Number(it.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      grandTotalValue += safeAmt;
+
+      if (byStatus[it.status]) {
+        byStatus[it.status].count += 1;
+        byStatus[it.status].totalValue += safeAmt;
+      }
+
+      if (ACCEPTED_LIKE.has(it.status)) {
+        grandAcceptedValue += safeAmt;
+      }
+
+      // bySubBrand: defensively coalesce null → "_tenant" matching
+      // /quotes/stats convention.
+      const sbKey = it.subBrand ? String(it.subBrand) : "_tenant";
+      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+      bySubBrand[sbKey].count += 1;
+
+      const ts = it.updatedAt instanceof Date ? it.updatedAt : new Date(it.updatedAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+      }
+    }
+
+    // Round per-status sums.
+    for (const s of Object.keys(byStatus)) {
+      byStatus[s].totalValue = round2(byStatus[s].totalValue);
+    }
+
+    // acceptanceRate: (accepted-like count) / (terminal count); null if
+    // denom=0. accepted+advance_paid+fully_paid all count toward the
+    // numerator (agreement-secured); rejected counts toward denominator
+    // only.
+    let acceptedLikeCount = 0;
+    let terminalCount = 0;
+    for (const it of itineraries) {
+      if (ACCEPTED_LIKE.has(it.status)) acceptedLikeCount += 1;
+      if (TERMINAL.has(it.status)) terminalCount += 1;
+    }
+    const acceptanceRate = terminalCount > 0
+      ? round2(acceptedLikeCount / terminalCount)
+      : null;
+
+    res.json({
+      total: itineraries.length,
+      byStatus,
+      bySubBrand,
+      grandTotalValue: round2(grandTotalValue),
+      grandAcceptedValue: round2(grandAcceptedValue),
+      acceptanceRate,
+      lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] stats error:", e.message);
+    res.status(500).json({
+      error: "Failed to fetch itinerary stats",
+      code: "ITINERARY_STATS_FAILED",
+    });
+  }
+});
+
 // ─── Get + amend ──────────────────────────────────────────────────────
 
 // GET /api/travel/itineraries/:id
@@ -365,6 +1400,432 @@ async function loadItineraryWithGuard(req) {
   return itin;
 }
 
+// POST /api/travel/itineraries/:id/items/bulk-reorder
+//
+// #907 slice 8 — atomic bulk reposition of multiple ItineraryItem rows
+// in a single call. Visual editor (PRD §3.3) drags items across days; a
+// single drag operation can touch up to N items (renumber positions
+// within a day, optionally move across day-offsets). Without this
+// primitive, the editor would have to issue N PATCH calls — non-atomic
+// (partial-failure leaves items in inconsistent order) and chatty.
+//
+// Body shape:
+//   { updates: [ { itemId, position, dayOffset? }, ... ] }
+//
+// Semantics:
+//   - `position`     required per update (integer ≥ 0). Final position
+//                    after the bulk write — collisions are the operator's
+//                    responsibility; route does not auto-densify.
+//   - `dayOffset`    optional per update (non-negative integer). When
+//                    present, merges into the item's detailsJson under
+//                    key `dayOffset` (slice-2 convention). All other
+//                    detailsJson keys preserved; stale `dayNumber` key
+//                    removed to avoid dual-source confusion (mirrors the
+//                    clone-day endpoint's normalisation).
+//   - Atomic via prisma.$transaction — all updates land together or none
+//     do.
+//   - Hard cap of 200 updates per call (runaway-payload guard).
+//   - All itemIds must belong to the target itinerary; cross-itinerary
+//     ids → 400 ITEM_NOT_IN_ITINERARY with the offending id list.
+//   - Duplicate itemIds in the updates list → 400 DUPLICATE_ITEM_ID.
+//
+// Response: { updatedCount, items: [...] } where items reflect post-
+// update state sorted by position asc — convenient for the editor to
+// re-render without a follow-up GET.
+//
+// Sub-paths BEFORE /:id per Express ordering convention.
+router.post(
+  "/itineraries/:id/items/bulk-reorder",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const { updates } = req.body || {};
+
+      if (!Array.isArray(updates) || updates.length === 0) {
+        return res.status(400).json({
+          error: "updates must be a non-empty array",
+          code: "EMPTY_UPDATES",
+        });
+      }
+      if (updates.length > 200) {
+        return res.status(400).json({
+          error: "updates capped at 200 per call",
+          code: "TOO_MANY_UPDATES",
+        });
+      }
+
+      // Validate each update + detect dupes.
+      const itemIds = [];
+      const seenIds = new Set();
+      for (const upd of updates) {
+        const itemId = parseInt(upd?.itemId, 10);
+        if (!Number.isFinite(itemId)) {
+          return res.status(400).json({
+            error: "each update needs a numeric itemId",
+            code: "INVALID_ITEM_ID",
+          });
+        }
+        if (seenIds.has(itemId)) {
+          return res.status(400).json({
+            error: `itemId ${itemId} appears more than once in updates`,
+            code: "DUPLICATE_ITEM_ID",
+            itemId,
+          });
+        }
+        seenIds.add(itemId);
+        const pos = Number(upd.position);
+        if (!Number.isInteger(pos) || pos < 0) {
+          return res.status(400).json({
+            error: "each update needs an integer position ≥ 0",
+            code: "INVALID_POSITION",
+            itemId,
+          });
+        }
+        if (upd.dayOffset !== undefined) {
+          const d = Number(upd.dayOffset);
+          if (!Number.isInteger(d) || d < 0) {
+            return res.status(400).json({
+              error: "dayOffset must be a non-negative integer when supplied",
+              code: "INVALID_DAY_OFFSET",
+              itemId,
+            });
+          }
+        }
+        itemIds.push(itemId);
+      }
+
+      // Fetch current rows; verify all belong to target itinerary.
+      const existing = await prisma.itineraryItem.findMany({
+        where: { id: { in: itemIds }, itineraryId: itin.id },
+        select: { id: true, detailsJson: true },
+      });
+      if (existing.length !== itemIds.length) {
+        const foundIds = new Set(existing.map((r) => r.id));
+        const missing = itemIds.filter((id) => !foundIds.has(id));
+        return res.status(400).json({
+          error: "one or more itemIds do not belong to this itinerary",
+          code: "ITEM_NOT_IN_ITINERARY",
+          missing,
+        });
+      }
+
+      // Map current detailsJson by itemId for the dayOffset merge.
+      const existingById = new Map(existing.map((r) => [r.id, r]));
+
+      // Build prisma update ops; run as a single transaction.
+      const ops = updates.map((upd) => {
+        const itemId = parseInt(upd.itemId, 10);
+        const data = { position: Number(upd.position) };
+        if (upd.dayOffset !== undefined) {
+          // Merge into detailsJson; preserve other keys; drop stale dayNumber.
+          let details = {};
+          try {
+            const raw = existingById.get(itemId)?.detailsJson;
+            details = raw ? JSON.parse(raw) : {};
+          } catch {
+            details = {};
+          }
+          details.dayOffset = Number(upd.dayOffset);
+          delete details.dayNumber;
+          data.detailsJson = JSON.stringify(details);
+        }
+        return prisma.itineraryItem.update({ where: { id: itemId }, data });
+      });
+
+      await prisma.$transaction(ops);
+
+      // Re-fetch post-update so callers get the canonical row ordering.
+      const refreshed = await prisma.itineraryItem.findMany({
+        where: { id: { in: itemIds }, itineraryId: itin.id },
+        orderBy: { position: "asc" },
+      });
+
+      res.json({ updatedCount: refreshed.length, items: refreshed });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] bulk-reorder error:", e.message);
+      res.status(500).json({ error: "Failed to bulk-reorder items" });
+    }
+  },
+);
+
+// POST /api/travel/itineraries/:id/items/bulk-delete
+//
+// #907 slice 11 — atomic bulk delete of multiple ItineraryItem rows in a
+// single call. Visual editor (PRD §3.3) operator workflow includes "delete
+// all items on day N" (collapse-day) and "remove selected items"
+// (multi-select bulk-delete) primitives; without a bulk-delete endpoint
+// the editor must issue N DELETE calls — non-atomic (partial failure
+// leaves the itinerary in a torn state where the operator can't tell
+// which items survived) and chatty.
+//
+// Body shape:
+//   { itemIds: [1, 2, 3, ...] }
+//
+// Semantics:
+//   - itemIds required (non-empty integer array, each ≥ 0).
+//   - All itemIds must belong to the target itinerary; cross-itinerary
+//     ids → 400 ITEM_NOT_IN_ITINERARY with the offending id list.
+//   - Atomic via prisma.itineraryItem.deleteMany — backed by a single
+//     SQL DELETE; all rows removed together or none.
+//   - Hard cap of 200 ids per call (runaway-payload guard — matches
+//     bulk-reorder's cap so the operator's bulk-select UX has a single
+//     consistent ceiling).
+//   - Duplicate itemIds in the input list → 400 DUPLICATE_ITEM_ID. The
+//     operator's editor should de-dupe before submitting; surfacing the
+//     dupe explicitly catches client-side bugs early rather than
+//     silently accepting a noisy payload.
+//
+// Response: { deletedCount, deletedIds } — deletedIds reflects the
+// canonical id set that was just removed (sorted asc for stable
+// caller-side assertions). No `items` echo because the rows no longer
+// exist; the caller is expected to refetch the itinerary list if it
+// needs the post-delete state.
+//
+// Sub-paths BEFORE /:id per Express ordering convention.
+router.post(
+  "/itineraries/:id/items/bulk-delete",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const { itemIds } = req.body || {};
+
+      if (!Array.isArray(itemIds) || itemIds.length === 0) {
+        return res.status(400).json({
+          error: "itemIds must be a non-empty array",
+          code: "EMPTY_ITEM_IDS",
+        });
+      }
+      if (itemIds.length > 200) {
+        return res.status(400).json({
+          error: "itemIds capped at 200 per call",
+          code: "TOO_MANY_ITEM_IDS",
+        });
+      }
+
+      // Validate each id is a non-negative integer + detect dupes.
+      const parsedIds = [];
+      const seenIds = new Set();
+      for (const raw of itemIds) {
+        const itemId = parseInt(raw, 10);
+        if (!Number.isInteger(itemId) || itemId < 0) {
+          return res.status(400).json({
+            error: "each itemId must be a non-negative integer",
+            code: "INVALID_ITEM_ID",
+          });
+        }
+        if (seenIds.has(itemId)) {
+          return res.status(400).json({
+            error: `itemId ${itemId} appears more than once in itemIds`,
+            code: "DUPLICATE_ITEM_ID",
+            itemId,
+          });
+        }
+        seenIds.add(itemId);
+        parsedIds.push(itemId);
+      }
+
+      // Verify every id belongs to the target itinerary BEFORE deleting.
+      // A blind deleteMany scoped on itineraryId would silently swallow
+      // unknown / cross-itinerary ids (returns count 0 for missing rows),
+      // hiding caller-side bugs. Explicit pre-flight makes the contract
+      // strict: partial set → 400, all-present → atomic delete.
+      const existing = await prisma.itineraryItem.findMany({
+        where: { id: { in: parsedIds }, itineraryId: itin.id },
+        select: { id: true },
+      });
+      if (existing.length !== parsedIds.length) {
+        const foundIds = new Set(existing.map((r) => r.id));
+        const missing = parsedIds.filter((id) => !foundIds.has(id));
+        return res.status(400).json({
+          error: "one or more itemIds do not belong to this itinerary",
+          code: "ITEM_NOT_IN_ITINERARY",
+          missing,
+        });
+      }
+
+      const result = await prisma.itineraryItem.deleteMany({
+        where: { id: { in: parsedIds }, itineraryId: itin.id },
+      });
+
+      // deletedIds sorted asc for stable caller-side assertion shape.
+      const deletedIds = [...parsedIds].sort((a, b) => a - b);
+      res.json({ deletedCount: result.count, deletedIds });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] bulk-delete error:", e.message);
+      res.status(500).json({ error: "Failed to bulk-delete items" });
+    }
+  },
+);
+
+// ─── Items search / filter (#907 slice 10) ───────────────────────────
+//
+// GET /api/travel/itineraries/:id/items/search?q=<term>&itemType=<t>&dayOffset=<n>
+//
+// Operator-facing search across an itinerary's items. RFU 14N Umrah and
+// TMC 12N Europe packages routinely carry 50-100 items spread across many
+// days; locating a specific note ("vegetarian only", "Madinah 3-min walk")
+// by scrolling is painful. This endpoint searches case-insensitively
+// across description + notes-friendly keys inside detailsJson (notes,
+// specialRequests, dietaryNotes, mobility) and returns matches with a
+// short snippet + the matched-field list.
+//
+// Query params:
+//   q          required, ≥2 chars after trim; substring case-insensitive.
+//   itemType   optional; must be one of VALID_ITEM_TYPES if provided.
+//   dayOffset  optional; non-negative integer; filters via
+//              detailsJson.dayOffset (preferred) or (detailsJson.dayNumber - 1)
+//              fallback (slice-2 convention).
+//
+// Response:
+//   {
+//     itineraryId, query, itemType, dayOffset,  // echoed inputs
+//     matchCount,
+//     items: [{
+//       id, itemType, position, description, dayOffset,
+//       matchedFields: ["description"|"notes"|"specialRequests"|"dietaryNotes"|"mobility", ...],
+//       snippet,   // first ~80 chars surrounding the first match
+//     }, ...]
+//   }
+//
+// Express ordering: this sub-path sits BEFORE the PATCH/DELETE
+// /:id/items/:itemId verbs (different methods + the /:itemId param could
+// otherwise match "search" — but verb mismatch makes the collision moot).
+//
+// Tenant + sub-brand guard via loadItineraryWithGuard (mirrors slices
+// 2/5/6/7/8/9). Read-only — no audit log, no eventBus emit.
+//
+// PRD: docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3 (item search/filter
+// candidate).
+router.get(
+  "/itineraries/:id/items/search",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+
+      const qRaw = typeof req.query.q === "string" ? req.query.q : "";
+      const q = qRaw.trim();
+      if (q.length < 2) {
+        return res.status(400).json({
+          error: "q is required and must be at least 2 chars after trim",
+          code: "INVALID_QUERY",
+        });
+      }
+
+      let itemTypeFilter = null;
+      if (req.query.itemType != null && req.query.itemType !== "") {
+        if (!VALID_ITEM_TYPES.includes(req.query.itemType)) {
+          return res.status(400).json({
+            error: `itemType must be one of: ${VALID_ITEM_TYPES.join(", ")}`,
+            code: "INVALID_ITEM_TYPE",
+          });
+        }
+        itemTypeFilter = req.query.itemType;
+      }
+
+      let dayOffsetFilter = null;
+      if (req.query.dayOffset != null && req.query.dayOffset !== "") {
+        const n = parseInt(req.query.dayOffset, 10);
+        if (!Number.isFinite(n) || n < 0 || String(n) !== String(req.query.dayOffset)) {
+          return res.status(400).json({
+            error: "dayOffset must be a non-negative integer",
+            code: "INVALID_DAY_OFFSET",
+          });
+        }
+        dayOffsetFilter = n;
+      }
+
+      const where = { itineraryId: itin.id };
+      if (itemTypeFilter) where.itemType = itemTypeFilter;
+      const rows = await prisma.itineraryItem.findMany({
+        where,
+        orderBy: { position: "asc" },
+      });
+
+      const NOTE_KEYS = ["notes", "specialRequests", "dietaryNotes", "mobility"];
+      const needle = q.toLowerCase();
+
+      function resolveDayOffset(details) {
+        if (!details || typeof details !== "object") return null;
+        if (typeof details.dayOffset === "number") return details.dayOffset;
+        if (typeof details.dayNumber === "number") return details.dayNumber - 1;
+        return null;
+      }
+
+      function makeSnippet(text) {
+        const lower = String(text).toLowerCase();
+        const idx = lower.indexOf(needle);
+        if (idx < 0) return String(text).slice(0, 80);
+        const start = Math.max(0, idx - 30);
+        const end = Math.min(String(text).length, idx + needle.length + 30);
+        const prefix = start > 0 ? "…" : "";
+        const suffix = end < String(text).length ? "…" : "";
+        return prefix + String(text).slice(start, end) + suffix;
+      }
+
+      const matches = [];
+      for (const row of rows) {
+        let details = null;
+        if (row.detailsJson) {
+          try { details = JSON.parse(row.detailsJson); } catch { details = null; }
+        }
+
+        const rowDayOffset = resolveDayOffset(details);
+        if (dayOffsetFilter !== null && rowDayOffset !== dayOffsetFilter) continue;
+
+        const matchedFields = [];
+        let firstHitText = null;
+
+        if (row.description && row.description.toLowerCase().includes(needle)) {
+          matchedFields.push("description");
+          firstHitText = row.description;
+        }
+        if (details && typeof details === "object") {
+          for (const key of NOTE_KEYS) {
+            const val = details[key];
+            if (typeof val === "string" && val.toLowerCase().includes(needle)) {
+              matchedFields.push(key);
+              if (firstHitText === null) firstHitText = val;
+            }
+          }
+        }
+
+        if (matchedFields.length === 0) continue;
+
+        matches.push({
+          id: row.id,
+          itemType: row.itemType,
+          position: row.position,
+          description: row.description,
+          dayOffset: rowDayOffset,
+          matchedFields,
+          snippet: firstHitText !== null ? makeSnippet(firstHitText) : null,
+        });
+      }
+
+      res.json({
+        itineraryId: itin.id,
+        query: q,
+        itemType: itemTypeFilter,
+        dayOffset: dayOffsetFilter,
+        matchCount: matches.length,
+        items: matches,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] items search error:", e.message);
+      res.status(500).json({ error: "Failed to search items" });
+    }
+  },
+);
+
 // POST /api/travel/itineraries/:id/items
 router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (req, res) => {
   try {
@@ -469,6 +1930,237 @@ router.delete("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant
     res.status(500).json({ error: "Failed to delete item" });
   }
 });
+
+// POST /api/travel/itineraries/:id/items/:itemId/duplicate
+//
+// #907 slice 12 — per-item clone-in-place. The closest existing surface,
+// /clone-day (slice 6), bulk-clones every item on a given day; the
+// SAME_DAY_CLONE branch at line 1761 explicitly directs the operator to
+// "POST /items to duplicate" a single line. That suggested DIY pattern
+// asks operators to re-supply every field from the source row — at best
+// awkward, at worst lossy (forgets supplierId / detailsJson / GST). This
+// endpoint closes that gap with a one-call dup.
+//
+// Semantics:
+//   - Source resolved via (:id, :itemId) — tenant + sub-brand scoping
+//     inherited from loadItineraryWithGuard on the parent.
+//   - Cloned row is appended to the SAME itinerary (no cross-itinerary
+//     dup — that's clone-day's job for whole-day moves, or future
+//     copy-itinerary for the full duplicate).
+//   - Position: appended at max(position)+1 of the same itinerary
+//     (mirrors POST /items + clone-day pattern).
+//   - All copyable fields preserved verbatim: itemType, description,
+//     detailsJson (raw passthrough — already-stringified JSON), supplierId,
+//     unitCost, markup, gstAmount, totalPrice. id / createdAt /
+//     updatedAt are NOT preserved (Prisma auto-fills).
+//   - Body { description?: string } optional override — operator can
+//     rename the clone in one call ("Hotel Day 5 — backup option").
+//     Empty / whitespace-only override falls back to source description
+//     (defensive: operator hitting Submit on a blank form shouldn't blow
+//     away the description).
+//
+// Response: 201 + the freshly created row (matches POST /items shape).
+//
+// Refs PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3 (FR-3.6 operator UX
+// — "Cloning a template is one click + an optional rename"; same shape
+// applies at the item level).
+router.post(
+  "/itineraries/:id/items/:itemId/duplicate",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const itemId = parseInt(req.params.itemId, 10);
+      if (!Number.isFinite(itemId)) {
+        return res.status(400).json({ error: "itemId must be a number", code: "INVALID_ITEM_ID" });
+      }
+      const source = await prisma.itineraryItem.findFirst({
+        where: { id: itemId, itineraryId: itin.id },
+      });
+      if (!source) {
+        return res.status(404).json({ error: "Item not found", code: "ITEM_NOT_FOUND" });
+      }
+
+      // Optional rename — fall back to the source description when the
+      // override is missing / empty / whitespace-only.
+      let description = source.description;
+      if (req.body && typeof req.body.description === "string") {
+        const trimmed = req.body.description.trim();
+        if (trimmed.length > 0) description = trimmed;
+      }
+
+      // Append after the current max position of THIS itinerary.
+      const maxRow = await prisma.itineraryItem.findFirst({
+        where: { itineraryId: itin.id },
+        orderBy: { position: "desc" },
+        select: { position: true },
+      });
+      const nextPos = (maxRow?.position ?? -1) + 1;
+
+      const created = await prisma.itineraryItem.create({
+        data: {
+          itineraryId: itin.id,
+          itemType: source.itemType,
+          position: nextPos,
+          description,
+          detailsJson: source.detailsJson, // raw passthrough — already JSON-stringified
+          supplierId: source.supplierId,
+          unitCost: source.unitCost != null ? Number(source.unitCost) : null,
+          markup: source.markup != null ? Number(source.markup) : null,
+          gstAmount: source.gstAmount != null ? Number(source.gstAmount) : null,
+          totalPrice: source.totalPrice != null ? Number(source.totalPrice) : null,
+        },
+      });
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] item duplicate error:", e.message);
+      res.status(500).json({ error: "Failed to duplicate item" });
+    }
+  },
+);
+
+// POST /api/travel/itineraries/:id/duplicate
+//
+// #907 slice 15 — full-itinerary clone. The slice-12 handler above dups a
+// single ItineraryItem in place; this dups the parent Itinerary row plus
+// every child ItineraryItem in one atomic call. Mirrors the #900 slice 1
+// /quotes/:id/duplicate parent-level pattern (clone parent + clone all
+// line items in a single tenant-scoped transaction).
+//
+// Schema reality (Itinerary model — see prisma/schema.prisma:4348-4400):
+// the model has NO customerName/customerEmail/acceptedAt/rejectedAt/
+// advance_paid_at/fully_paid_at fields (the dispatch spec's field-name
+// list pre-dated the latest schema sweep and was generic). The actual
+// copyable fields are: subBrand, contactId, leadId, destination,
+// startDate, endDate, pricingJson, totalAmount, currency, productTier,
+// draftSummary. The defensive-rename body override targets `destination`
+// (slice 12's `description` analog at the parent level — semantically
+// "rename the clone"). pdfUrl is NOT copied (the clone has no PDF yet),
+// shareToken is reset to null (a clone shouldn't accidentally inherit
+// the source's public-share URL), advancePaidAmount/advancePaidAt/
+// paymentReference are nulled (the clone is a fresh draft, no money
+// recorded yet), parentItineraryId is NOT set (the dup is a separate
+// document, not a version revision — version-chain is the PUT /:id
+// path's job per the §4.3 + §6.1 comment block below).
+//
+// Status always resets to 'draft' so the clone enters the operator
+// queue cleanly (same convention as #900 slice 1 quotes/duplicate).
+//
+// Atomicity: parent create + items createMany are wrapped in
+// prisma.$transaction so a partial failure (e.g. the children
+// createMany throwing) doesn't leave an orphan parent row. Empty-items
+// source clones cleanly (no createMany call when there are zero items
+// — avoids the empty-array no-op).
+//
+// Response: 201 + the freshly-created itinerary row WITH its items
+// included (mirrors POST /itineraries response shape).
+//
+// Refs PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3 (FR-3.6 operator UX
+// — "clone a template in one click + optional rename"). The slice-12
+// JSDoc at line 919 anticipated this endpoint as "future copy-itinerary
+// for the full duplicate"; this closes that forward reference.
+router.post(
+  "/itineraries/:id/duplicate",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const source = await prisma.itinerary.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!source) {
+        return res.status(404).json({
+          error: "Itinerary not found",
+          code: "ITINERARY_NOT_FOUND",
+        });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, source.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Optional rename of `destination` — slice 12's `description`
+      // analog at the parent level. Empty/whitespace falls back to the
+      // source value (defensive: operator hitting Submit on a blank form
+      // shouldn't blow away the destination string).
+      let destination = source.destination;
+      if (req.body && typeof req.body.destination === "string") {
+        const trimmed = req.body.destination.trim();
+        if (trimmed.length > 0) destination = trimmed;
+      }
+
+      const sourceItems = await prisma.itineraryItem.findMany({
+        where: { itineraryId: source.id },
+        orderBy: { position: "asc" },
+      });
+
+      // Atomic: parent create + (optional) items createMany in one tx so
+      // a partial failure rolls back the parent. Empty-items source =>
+      // skip createMany entirely (no-op + no payload-shape ambiguity).
+      const created = await prisma.$transaction(async (tx) => {
+        const newItin = await tx.itinerary.create({
+          data: {
+            tenantId: req.travelTenant.id,
+            subBrand: source.subBrand,
+            contactId: source.contactId,
+            leadId: source.leadId,
+            status: "draft",
+            productTier: source.productTier,
+            destination,
+            startDate: source.startDate,
+            endDate: source.endDate,
+            pricingJson: source.pricingJson,
+            totalAmount: source.totalAmount,
+            currency: source.currency,
+            draftSummary: source.draftSummary,
+            // Reset clone-only fields — see header comment above.
+            shareToken: null,
+            pdfUrl: null,
+            advancePaidAmount: null,
+            advancePaidAt: null,
+            paymentReference: null,
+          },
+        });
+        if (sourceItems.length > 0) {
+          await tx.itineraryItem.createMany({
+            data: sourceItems.map((it) => ({
+              itineraryId: newItin.id,
+              itemType: it.itemType,
+              position: it.position,
+              description: it.description,
+              detailsJson: it.detailsJson, // raw passthrough — already JSON-stringified
+              supplierId: it.supplierId,
+              unitCost: it.unitCost,
+              markup: it.markup,
+              gstAmount: it.gstAmount,
+              totalPrice: it.totalPrice,
+            })),
+          });
+        }
+        return newItin;
+      });
+
+      // Re-fetch with items included so the 201 envelope matches the
+      // POST /itineraries shape (createMany doesn't return rows).
+      const withItems = await prisma.itinerary.findUnique({
+        where: { id: created.id },
+        include: { items: { orderBy: { position: "asc" } } },
+      });
+      res.status(201).json(withItems);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] itinerary duplicate error:", e.message);
+      res.status(500).json({ error: "Failed to duplicate itinerary" });
+    }
+  },
+);
 
 // ─── Status transitions + version chain (PRD §4.3 / §6.1) ───────────
 //
@@ -1270,6 +2962,777 @@ router.get("/itineraries/:id/day-costs", verifyToken, requireTravelTenant, async
     }
     console.error("[travel-itin] day-costs error:", e.message);
     res.status(500).json({ error: "Failed to compute per-day costs" });
+  }
+});
+
+// ─── Bulk-clone day across itineraries (#907 slice 6) ───────────────
+//
+// POST /api/travel/itineraries/:id/clone-day
+// Body: { sourceItineraryId: Int, sourceDayOffset: Int, targetDayOffset: Int }
+//
+// Copies all ItineraryItem rows from the source itinerary's specified day
+// into the receiving (path-param) itinerary's target day. Day-source
+// resolution mirrors the day-costs endpoint convention (#907 slice 2):
+// the day-source lives in each item's detailsJson (`dayOffset` preferred,
+// `dayNumber` fallback). The cloned rows have their detailsJson rewritten
+// with `dayOffset: targetDayOffset` so the new home is unambiguous.
+//
+// Position assignment: append after the target itinerary's current max
+// position (same pattern as POST /items).
+//
+// Tenant + sub-brand guard: BOTH itineraries must belong to the requester's
+// tenant; the operator must have sub-brand access to BOTH (source via
+// SUB_BRAND_DENIED on source-load, target via loadItineraryWithGuard).
+// Sub-brands are NOT required to match — an admin authoring across TMC and
+// Travel Stall can lift a Day-3 sightseeing block from one and drop it on
+// the other.
+//
+// Returns 201 + `{ clonedCount, items: [...] }` where items are the freshly
+// created rows. clonedCount = 0 (with empty items array) when the source
+// day has no matching items — not an error.
+//
+// Refs PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3 + §6.5.
+router.post("/itineraries/:id/clone-day", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const target = await loadItineraryWithGuard(req);
+    const { sourceItineraryId, sourceDayOffset, targetDayOffset } = req.body || {};
+
+    const sourceId = parseInt(sourceItineraryId, 10);
+    if (!Number.isFinite(sourceId)) {
+      return res.status(400).json({
+        error: "sourceItineraryId is required and must be numeric",
+        code: "INVALID_SOURCE_ID",
+      });
+    }
+    const srcDay = parseInt(sourceDayOffset, 10);
+    const tgtDay = parseInt(targetDayOffset, 10);
+    if (!Number.isFinite(srcDay) || srcDay < 0) {
+      return res.status(400).json({
+        error: "sourceDayOffset must be a non-negative integer",
+        code: "INVALID_SOURCE_DAY",
+      });
+    }
+    if (!Number.isFinite(tgtDay) || tgtDay < 0) {
+      return res.status(400).json({
+        error: "targetDayOffset must be a non-negative integer",
+        code: "INVALID_TARGET_DAY",
+      });
+    }
+
+    // Same-itinerary same-day clone would silently duplicate every line.
+    // Reject explicitly to surface operator intent (vs typo).
+    if (sourceId === target.id && srcDay === tgtDay) {
+      return res.status(400).json({
+        error: "source and target day are identical; use POST /items to duplicate",
+        code: "SAME_DAY_CLONE",
+      });
+    }
+
+    // Tenant-scope the source load. SUB_BRAND_DENIED check below.
+    const source = await prisma.itinerary.findFirst({
+      where: { id: sourceId, tenantId: req.travelTenant.id },
+      select: { id: true, subBrand: true },
+    });
+    if (!source) {
+      return res.status(404).json({
+        error: "Source itinerary not found",
+        code: "SOURCE_NOT_FOUND",
+      });
+    }
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, source.subBrand)) {
+      return res.status(403).json({
+        error: "Sub-brand access denied for source itinerary",
+        code: "SOURCE_SUB_BRAND_DENIED",
+      });
+    }
+
+    // Pull all source items, filter to the requested source day via
+    // detailsJson.dayOffset / dayNumber (#907 slice 2 convention).
+    const sourceItems = await prisma.itineraryItem.findMany({
+      where: { itineraryId: source.id },
+      orderBy: { position: "asc" },
+    });
+    const matching = sourceItems.filter((row) => {
+      if (!row.detailsJson) return false;
+      let details;
+      try { details = JSON.parse(row.detailsJson); } catch { return false; }
+      if (typeof details.dayOffset === "number") return details.dayOffset === srcDay;
+      if (typeof details.dayNumber === "number") return (details.dayNumber - 1) === srcDay;
+      return false;
+    });
+
+    if (matching.length === 0) {
+      return res.status(201).json({ clonedCount: 0, items: [] });
+    }
+
+    // Append after the target itinerary's current max position.
+    const maxRow = await prisma.itineraryItem.findFirst({
+      where: { itineraryId: target.id },
+      orderBy: { position: "desc" },
+      select: { position: true },
+    });
+    let nextPos = (maxRow?.position ?? -1) + 1;
+
+    const cloned = [];
+    for (const row of matching) {
+      // Rewrite detailsJson with the new dayOffset; preserve all other keys.
+      let details = {};
+      try { details = row.detailsJson ? JSON.parse(row.detailsJson) : {}; } catch { details = {}; }
+      details.dayOffset = tgtDay;
+      delete details.dayNumber; // avoid stale dual-source conflicts.
+
+      const created = await prisma.itineraryItem.create({
+        data: {
+          itineraryId: target.id,
+          itemType: row.itemType,
+          position: nextPos++,
+          description: row.description,
+          detailsJson: JSON.stringify(details),
+          supplierId: row.supplierId,
+          unitCost: row.unitCost != null ? Number(row.unitCost) : null,
+          markup: row.markup != null ? Number(row.markup) : null,
+          gstAmount: row.gstAmount != null ? Number(row.gstAmount) : null,
+          totalPrice: row.totalPrice != null ? Number(row.totalPrice) : null,
+        },
+      });
+      cloned.push(created);
+    }
+
+    res.status(201).json({ clonedCount: cloned.length, items: cloned });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] clone-day error:", e.message);
+    res.status(500).json({ error: "Failed to clone day" });
+  }
+});
+
+// ─── Supplier-confirmation rollup (#907 slice 7) ─────────────────────
+//
+// GET /api/travel/itineraries/:id/supplier-rollup
+//
+// Operator-facing pre-PO view: "which suppliers are in this itinerary,
+// and what do I need to confirm with each?" Aggregates ItineraryItem
+// rows by supplierId. Items without supplierId fall into an `unassigned`
+// bucket — surfaces gaps before the operator issues POs.
+//
+// Per-supplier rollup shape:
+//   {
+//     supplierId,           // null for unassigned bucket
+//     supplierName,         // TravelSupplier.name; "Unassigned" for null
+//     supplierCategory,     // hotel | flight | transport | visa-consul | other
+//     contactPerson,        // free-form contact name (nullable)
+//     phone, email,         // contact channels (nullable)
+//     itemCount,            // number of ItineraryItem rows mapped to supplier
+//     itemTypes,            // unique itemType strings ["hotel","transfer",...]
+//     totalSupplierCost,    // sum(unitCost) — half-up to paise (2dp)
+//     totalGst,             // sum(gstAmount)
+//     totalSalePrice,       // sum(totalPrice)
+//     marginTotal,          // totalSalePrice - totalSupplierCost - totalGst
+//     marginPct,            // marginTotal / totalSalePrice * 100; null if sale=0
+//     items: [{ id, itemType, description, unitCost, gstAmount, totalPrice }]
+//   }
+//
+// Envelope:
+//   { itineraryId, suppliers: [...], unassigned: {...} | null,
+//     grandTotals: { supplierCost, gst, salePrice, marginTotal, marginPct },
+//     supplierCount }
+//
+// Tenant + sub-brand guard via loadItineraryWithGuard (mirrors slices 2/5/6).
+// Read-only — no audit log, no eventBus emit.
+//
+// Refs PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3 + §6 (operator
+// "Confirmation pipe" workflow before PO issue).
+router.get(
+  "/itineraries/:id/supplier-rollup",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+
+      const items = await prisma.itineraryItem.findMany({
+        where: { itineraryId: itin.id },
+        orderBy: { position: "asc" },
+      });
+
+      // Half-up to 2dp (paise precision). All money fields are Decimal(15,2)
+      // on the DB; the conversion to Number is safe for ≤15-digit values.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      // Bucket items by supplierId (null bucket kept separate).
+      /** @type {Map<number|null, Array<any>>} */
+      const buckets = new Map();
+      for (const row of items) {
+        const key = row.supplierId == null ? null : row.supplierId;
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key).push(row);
+      }
+
+      // Look up supplier metadata in a single query — only for supplierIds
+      // that actually appear in this itinerary's items.
+      const supplierIds = [...buckets.keys()].filter((k) => k !== null);
+      const supplierMap = new Map();
+      if (supplierIds.length > 0) {
+        const rows = await prisma.travelSupplier.findMany({
+          where: {
+            id: { in: supplierIds },
+            tenantId: req.travelTenant.id,
+          },
+          select: {
+            id: true,
+            name: true,
+            supplierCategory: true,
+            contactPerson: true,
+            phone: true,
+            email: true,
+          },
+        });
+        for (const s of rows) supplierMap.set(s.id, s);
+      }
+
+      function rollupFor(supplierId, rows) {
+        let totalSupplierCost = 0;
+        let totalGst = 0;
+        let totalSalePrice = 0;
+        const itemTypeSet = new Set();
+        const lineItems = [];
+        for (const r of rows) {
+          const unit = r.unitCost != null ? Number(r.unitCost) : 0;
+          const gst = r.gstAmount != null ? Number(r.gstAmount) : 0;
+          const sale = r.totalPrice != null ? Number(r.totalPrice) : 0;
+          totalSupplierCost += unit;
+          totalGst += gst;
+          totalSalePrice += sale;
+          itemTypeSet.add(r.itemType);
+          lineItems.push({
+            id: r.id,
+            itemType: r.itemType,
+            description: r.description,
+            unitCost: r.unitCost != null ? round2(unit) : null,
+            gstAmount: r.gstAmount != null ? round2(gst) : null,
+            totalPrice: r.totalPrice != null ? round2(sale) : null,
+          });
+        }
+        const supplierCost = round2(totalSupplierCost);
+        const gstTotal = round2(totalGst);
+        const sale = round2(totalSalePrice);
+        const marginTotal = round2(sale - supplierCost - gstTotal);
+        // marginPct null when sale=0 to avoid div-zero / Infinity.
+        const marginPct = sale > 0 ? round2((marginTotal / sale) * 100) : null;
+        const supplier = supplierId != null ? supplierMap.get(supplierId) : null;
+        return {
+          supplierId,
+          supplierName: supplier ? supplier.name : (supplierId == null ? "Unassigned" : "Unknown supplier"),
+          supplierCategory: supplier ? supplier.supplierCategory : null,
+          contactPerson: supplier ? supplier.contactPerson : null,
+          phone: supplier ? supplier.phone : null,
+          email: supplier ? supplier.email : null,
+          itemCount: rows.length,
+          itemTypes: [...itemTypeSet].sort(),
+          totalSupplierCost: supplierCost,
+          totalGst: gstTotal,
+          totalSalePrice: sale,
+          marginTotal,
+          marginPct,
+          items: lineItems,
+        };
+      }
+
+      const suppliers = [];
+      let unassigned = null;
+      for (const [supplierId, rows] of buckets.entries()) {
+        const rollup = rollupFor(supplierId, rows);
+        if (supplierId == null) {
+          unassigned = rollup;
+        } else {
+          suppliers.push(rollup);
+        }
+      }
+      // Stable order: assigned suppliers sorted by descending sale price
+      // (operator wants the biggest spend up top), tiebreak by supplierId asc.
+      suppliers.sort((a, b) => {
+        if (b.totalSalePrice !== a.totalSalePrice) return b.totalSalePrice - a.totalSalePrice;
+        return a.supplierId - b.supplierId;
+      });
+
+      // Grand totals span assigned + unassigned (operator's view of the
+      // whole itinerary's PO surface).
+      const allRollups = unassigned ? [...suppliers, unassigned] : suppliers;
+      const grandSupplierCost = round2(
+        allRollups.reduce((s, r) => s + r.totalSupplierCost, 0),
+      );
+      const grandGst = round2(allRollups.reduce((s, r) => s + r.totalGst, 0));
+      const grandSalePrice = round2(
+        allRollups.reduce((s, r) => s + r.totalSalePrice, 0),
+      );
+      const grandMargin = round2(grandSalePrice - grandSupplierCost - grandGst);
+      const grandMarginPct = grandSalePrice > 0
+        ? round2((grandMargin / grandSalePrice) * 100)
+        : null;
+
+      res.json({
+        itineraryId: itin.id,
+        supplierCount: suppliers.length,
+        suppliers,
+        unassigned,
+        grandTotals: {
+          supplierCost: grandSupplierCost,
+          gst: grandGst,
+          salePrice: grandSalePrice,
+          marginTotal: grandMargin,
+          marginPct: grandMarginPct,
+        },
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] supplier-rollup error:", e.message);
+      res.status(500).json({ error: "Failed to compute supplier rollup" });
+    }
+  },
+);
+
+// GET /api/travel/itineraries/:id/versions
+//
+// #907 slice 9 — read-side companion to the PUT-creates-new-version flow.
+// PUT /:id creates a new Itinerary row with parentItineraryId pointing at
+// the chain root + version bumped. Operators need a one-call read to see
+// the full revision history; without this they'd have to issue N findOne
+// calls or query Prisma directly.
+//
+// Semantics:
+//   - Resolves the chain root: original.parentItineraryId || original.id.
+//     The "root" is itself the v1 row; all subsequent versions point at it.
+//   - Returns ALL siblings (including the root) sorted by version asc.
+//   - Per-version payload is intentionally lean — id, version, status,
+//     destination, totalAmount, currency, itemCount, createdAt, updatedAt,
+//     isRoot, isLatest. The full item list lives behind GET /:id; this
+//     endpoint is the index, not the detail.
+//   - Item counts are computed in a single groupBy ($queryRaw-free) so
+//     the route stays O(1) regardless of chain length.
+//   - Tenant guard + sub-brand check are inherited from
+//     loadItineraryWithGuard — 401 / 404 NOT_FOUND / 403 SUB_BRAND_DENIED.
+//
+// Response shape:
+//   {
+//     itineraryId: <id requested>,
+//     chainRootId: <id of v1>,
+//     versionCount: N,
+//     latestVersionId: <id of most-recent>,
+//     versions: [
+//       { id, version, status, destination, totalAmount, currency,
+//         itemCount, createdAt, updatedAt, isRoot, isLatest },
+//       ...
+//     ],
+//   }
+//
+// PRD: docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §5.1 (Versioning).
+router.get("/itineraries/:id/versions", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+
+    // Resolve chain root — the row whose id equals the parent pointer of
+    // every later version. The original PUT handler uses the same logic.
+    const original = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+      select: { id: true, parentItineraryId: true },
+    });
+    if (!original) {
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    const chainRootId = original.parentItineraryId || original.id;
+
+    // Fetch the full chain in a single query — root + every sibling that
+    // points at the root via parentItineraryId.
+    const rows = await prisma.itinerary.findMany({
+      where: {
+        tenantId: req.travelTenant.id,
+        OR: [{ id: chainRootId }, { parentItineraryId: chainRootId }],
+      },
+      orderBy: { version: "asc" },
+      select: {
+        id: true,
+        version: true,
+        status: true,
+        destination: true,
+        totalAmount: true,
+        currency: true,
+        parentItineraryId: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    // Per-version item counts in a single groupBy keyed on itineraryId.
+    // Empty chain → no groupBy call (Prisma will happily run it, but
+    // skipping is cheaper and keeps the response symmetrical when the
+    // chain is single-row).
+    const ids = rows.map((r) => r.id);
+    const counts = new Map();
+    if (ids.length > 0) {
+      const grouped = await prisma.itineraryItem.groupBy({
+        by: ["itineraryId"],
+        where: { itineraryId: { in: ids } },
+        _count: { _all: true },
+      });
+      for (const g of grouped) counts.set(g.itineraryId, g._count?._all || 0);
+    }
+
+    // Latest = highest version (rows are version-asc, so last entry).
+    // Stable when versions are unique; ties are not expected (PUT bumps
+    // by 1 each time) but defaulted-by-id-asc just in case.
+    const latestVersionId = rows.length > 0 ? rows[rows.length - 1].id : null;
+
+    const versions = rows.map((r) => ({
+      id: r.id,
+      version: r.version,
+      status: r.status,
+      destination: r.destination,
+      totalAmount: r.totalAmount != null ? Number(r.totalAmount) : null,
+      currency: r.currency,
+      itemCount: counts.get(r.id) || 0,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+      isRoot: r.id === chainRootId,
+      isLatest: r.id === latestVersionId,
+    }));
+
+    res.json({
+      itineraryId: itin.id,
+      chainRootId,
+      versionCount: versions.length,
+      latestVersionId,
+      versions,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] versions error:", e.message);
+    res.status(500).json({ error: "Failed to fetch version chain" });
+  }
+});
+
+// GET /api/travel/itineraries/:id/cost-breakdown.csv
+//
+// #907 slice 13 — downloadable spreadsheet view of the per-day cost
+// breakdown. The JSON sibling `GET /:id/day-costs` (slice 2 + slice 5)
+// returns the same numbers; this endpoint streams them as CSV so
+// operators can paste into a quote sheet, email to finance, or open in
+// Excel without round-tripping through the UI export-button cycle.
+//
+// Columns (one row per day):
+//   dayOffset, itemCount, totalCost, supplierCost, markupTotal,
+//   gstTotal, marginTotal, marginPct
+// plus a trailing TOTAL row spanning the trip.
+//
+// Half-up rounding inherited from computeDayCosts. marginTotal =
+// totalCost - supplierCost - gstTotal (mirrors the supplier-rollup
+// margin identity so the two reports reconcile). marginPct is blank
+// (not "Infinity") when totalCost = 0.
+//
+// CSV escape rules per RFC 4180: numeric cells unquoted; the empty
+// marginPct cell stays empty (no double-quote pair). Header line
+// matches the column list above exactly.
+//
+// Filename: `itinerary-<id>-cost-breakdown.csv` — pinned shape so
+// frontend tests can assert Content-Disposition without parsing.
+//
+// Sub-path placement is BEFORE any `/:id` catch-all (Express ordering
+// rule). The `.csv` suffix is a literal route token — Express treats
+// `/cost-breakdown.csv` as a single static segment, no extension
+// detection needed.
+//
+// Tenant + sub-brand guard delegated to loadItineraryWithGuard — same
+// 401 / 404 NOT_FOUND / 403 SUB_BRAND_DENIED contracts as siblings.
+//
+// PRD: docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §5.3 (Analytics export)
+// + §3.6(d) (pricing transparency).
+router.get(
+  "/itineraries/:id/cost-breakdown.csv",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const full = await prisma.itinerary.findFirst({
+        where: { id: itin.id, tenantId: req.travelTenant.id },
+        select: { id: true, startDate: true },
+      });
+      if (!full) {
+        return res
+          .status(404)
+          .json({ error: "Itinerary not found", code: "ITINERARY_NOT_FOUND" });
+      }
+
+      const items = await prisma.itineraryItem.findMany({
+        where: { itineraryId: full.id },
+        orderBy: { position: "asc" },
+      });
+
+      let tripStart;
+      if (req.query.tripStart) {
+        const overrideDate = new Date(String(req.query.tripStart));
+        if (Number.isFinite(overrideDate.getTime())) {
+          tripStart = overrideDate;
+        }
+      }
+      if (!tripStart && full.startDate) tripStart = new Date(full.startDate);
+
+      // Map ItineraryItem → helper input shape (same projection as
+      // the JSON day-costs endpoint — keeps the two surfaces in lockstep).
+      const helperItems = items.map((row) => {
+        let details = {};
+        if (row.detailsJson) {
+          try {
+            details = JSON.parse(row.detailsJson);
+          } catch {
+            /* malformed → fall through */
+          }
+        }
+        const cost =
+          row.totalPrice != null
+            ? Number(row.totalPrice)
+            : row.unitCost != null
+              ? Number(row.unitCost)
+              : 0;
+        const mapped = {
+          id: row.id,
+          itemType: row.itemType,
+          description: row.description,
+          cost,
+          unitCost: row.unitCost != null ? Number(row.unitCost) : null,
+          markup: row.markup != null ? Number(row.markup) : 0,
+          gstAmount: row.gstAmount != null ? Number(row.gstAmount) : 0,
+        };
+        if (typeof details.dayOffset === "number") mapped.dayOffset = details.dayOffset;
+        else if (typeof details.dayNumber === "number") mapped.dayNumber = details.dayNumber;
+        else if (details.date) mapped.date = details.date;
+        return mapped;
+      });
+
+      const result = computeDayCosts(helperItems, tripStart ? { tripStart } : {});
+
+      // Half-up to 2dp — matches helper's internal rounding so the two
+      // surfaces stay byte-identical for the same input.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      const header = [
+        "dayOffset",
+        "itemCount",
+        "totalCost",
+        "supplierCost",
+        "markupTotal",
+        "gstTotal",
+        "marginTotal",
+        "marginPct",
+      ];
+      const lines = [header.join(",")];
+
+      for (const day of result.days) {
+        const margin = round2(day.totalCost - day.supplierCost - day.gstTotal);
+        const marginPct =
+          day.totalCost > 0 ? round2((margin / day.totalCost) * 100) : null;
+        lines.push(
+          [
+            day.dayOffset,
+            day.itemCount,
+            round2(day.totalCost),
+            round2(day.supplierCost),
+            round2(day.markupTotal),
+            round2(day.gstTotal),
+            margin,
+            marginPct == null ? "" : marginPct,
+          ].join(","),
+        );
+      }
+
+      // Grand-total trailer — operators paste this into the bottom of
+      // their quote sheet without re-summing.
+      const grandMargin = round2(
+        result.grandTotal - result.grandSupplierCost - result.grandGstTotal,
+      );
+      const grandMarginPct =
+        result.grandTotal > 0
+          ? round2((grandMargin / result.grandTotal) * 100)
+          : null;
+      const totalItemCount = result.days.reduce((s, d) => s + d.itemCount, 0);
+      lines.push(
+        [
+          "TOTAL",
+          totalItemCount,
+          round2(result.grandTotal),
+          round2(result.grandSupplierCost),
+          round2(result.grandMarkupTotal),
+          round2(result.grandGstTotal),
+          grandMargin,
+          grandMarginPct == null ? "" : grandMarginPct,
+        ].join(","),
+      );
+
+      const csv = lines.join("\n") + "\n";
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename=itinerary-${full.id}-cost-breakdown.csv`,
+      );
+      res.send(csv);
+    } catch (e) {
+      if (e.status) {
+        if (e.code === "NOT_FOUND") {
+          return res
+            .status(404)
+            .json({ error: "Itinerary not found", code: "ITINERARY_NOT_FOUND" });
+        }
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-itin] cost-breakdown-csv error:", e.message);
+      res.status(500).json({ error: "Failed to export cost breakdown CSV" });
+    }
+  },
+);
+
+// ─── Aggregation rollup (#907 slice 14) ─────────────────────────────
+//
+// GET /api/travel/itineraries/:id/totals
+//
+// Pure read-only aggregation over ItineraryItem rows for one itinerary.
+// Returns counts + money sums bucketed by itemType plus grand totals.
+// Sibling to the day-costs (#907 slice 2) + supplier-rollup (#907
+// slice 7) endpoints — those slice the same row set by day and by
+// supplier respectively; this one slices by itemType.
+//
+// Query params:
+//   - itemType (optional) — restrict aggregation to a single itemType.
+//     Unknown values return 400 INVALID_ITEM_TYPE. The byItemType
+//     envelope STILL contains all 6 keys (the non-matching ones stay
+//     zero-filled) so the consumer-side rendering shape is stable.
+//
+// Tenant + sub-brand guard via loadItineraryWithGuard (same as the
+// other item-level endpoints — inherits the 401 / 403 SUB_BRAND_DENIED
+// / 404 NOT_FOUND envelope shape).
+//
+// Money rounding: half-up to 2dp via Number.EPSILON (idiom shared
+// across the rest of the file).
+//
+// Response shape (stable):
+//   {
+//     itineraryId,
+//     totalItems,
+//     grand: { totalUnitCost, totalMarkup, totalGstAmount, totalPrice },
+//     byItemType: {
+//       flight:    { count, totalUnitCost, totalMarkup, totalGstAmount, totalPrice },
+//       hotel:     { ... },
+//       transfer:  { ... },
+//       activity:  { ... },
+//       visa:      { ... },
+//       insurance: { ... }
+//     }
+//   }
+//
+// Refs docs/PRD_TRAVEL_ITINERARY_UPGRADES.md §3.
+router.get("/itineraries/:id/totals", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+
+    // Optional itemType filter — unknown values reject up front.
+    let typeFilter = null;
+    if (req.query.itemType !== undefined) {
+      const t = String(req.query.itemType);
+      if (!VALID_ITEM_TYPES.includes(t)) {
+        return res.status(400).json({
+          error: `itemType must be one of: ${VALID_ITEM_TYPES.join(", ")}`,
+          code: "INVALID_ITEM_TYPE",
+        });
+      }
+      typeFilter = t;
+    }
+
+    const where = { itineraryId: itin.id };
+    if (typeFilter) where.itemType = typeFilter;
+
+    const items = await prisma.itineraryItem.findMany({
+      where,
+      select: {
+        itemType: true,
+        unitCost: true,
+        markup: true,
+        gstAmount: true,
+        totalPrice: true,
+      },
+    });
+
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const toNum = (v) => (v == null ? 0 : Number(v));
+
+    // Zero-fill all 6 buckets up-front so the response shape is stable
+    // even when an itinerary has zero items of a given type.
+    const byItemType = {};
+    for (const t of VALID_ITEM_TYPES) {
+      byItemType[t] = {
+        count: 0,
+        totalUnitCost: 0,
+        totalMarkup: 0,
+        totalGstAmount: 0,
+        totalPrice: 0,
+      };
+    }
+
+    let totalUnitCost = 0;
+    let totalMarkup = 0;
+    let totalGstAmount = 0;
+    let totalPrice = 0;
+
+    for (const row of items) {
+      const u = toNum(row.unitCost);
+      const m = toNum(row.markup);
+      const g = toNum(row.gstAmount);
+      const p = toNum(row.totalPrice);
+      const bucket = byItemType[row.itemType];
+      // Defensive — if a row somehow carries an itemType outside
+      // VALID_ITEM_TYPES (schema enum widened later, mock drift, etc.)
+      // skip it rather than spread money into a non-existent bucket.
+      if (!bucket) continue;
+      bucket.count += 1;
+      bucket.totalUnitCost += u;
+      bucket.totalMarkup += m;
+      bucket.totalGstAmount += g;
+      bucket.totalPrice += p;
+      totalUnitCost += u;
+      totalMarkup += m;
+      totalGstAmount += g;
+      totalPrice += p;
+    }
+
+    // Round all money fields half-up to 2dp; counts stay integer.
+    for (const t of VALID_ITEM_TYPES) {
+      const b = byItemType[t];
+      b.totalUnitCost = round2(b.totalUnitCost);
+      b.totalMarkup = round2(b.totalMarkup);
+      b.totalGstAmount = round2(b.totalGstAmount);
+      b.totalPrice = round2(b.totalPrice);
+    }
+
+    res.json({
+      itineraryId: itin.id,
+      totalItems: items.length,
+      grand: {
+        totalUnitCost: round2(totalUnitCost),
+        totalMarkup: round2(totalMarkup),
+        totalGstAmount: round2(totalGstAmount),
+        totalPrice: round2(totalPrice),
+      },
+      byItemType,
+    });
+  } catch (e) {
+    if (e.status) {
+      if (e.code === "NOT_FOUND") {
+        return res
+          .status(404)
+          .json({ error: "Itinerary not found", code: "ITINERARY_NOT_FOUND" });
+      }
+      return res.status(e.status).json({ error: e.message, code: e.code });
+    }
+    console.error("[travel-itin] totals error:", e.message);
+    res.status(500).json({ error: "Failed to compute itinerary totals" });
   }
 });
 

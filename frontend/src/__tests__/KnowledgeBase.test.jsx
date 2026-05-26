@@ -275,3 +275,434 @@ describe('KnowledgeBase — #723 empty-category submit is no longer silent', () 
     expect(notifyError).not.toHaveBeenCalled();
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Extension wave — broad surface coverage for the 1027-LOC SUT.
+ *
+ * Pins the loaded-list / categories-tree / edit-modal / create-modal /
+ * delete-confirm / search-filter / empty / loading / error contracts.
+ * Stable mock-object pattern (per the 2026-05-23 RTL standing rule) —
+ * notifyObj has ONE reference for the whole module so useCallback
+ * identity inside the SUT stays stable.
+ * ------------------------------------------------------------------ */
+
+describe('KnowledgeBase — extended surface coverage', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+  });
+
+  // -------- 1) Loaded articles list --------
+  it('renders the articles table with one row per article (title + status badge)', async () => {
+    const articles = [
+      makeArticle(101, { title: 'How to reset password', isPublished: true }),
+      makeArticle(102, { title: 'Setting up SSO', isPublished: false }),
+      makeArticle(103, { title: 'Billing FAQ', isPublished: true }),
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('How to reset password')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Setting up SSO')).toBeInTheDocument();
+    expect(screen.getByText('Billing FAQ')).toBeInTheDocument();
+    // Two distinct status badges — "Published" appears twice (2 published rows),
+    // "Draft" appears once. Use getAllByText for the duplicate per RTL rule.
+    const publishedBadges = screen.getAllByText(/^Published$/);
+    expect(publishedBadges.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/^Draft$/)).toBeInTheDocument();
+  });
+
+  // -------- 2) Category tree renders --------
+  it('renders all category rows in the left tree with their article counts', async () => {
+    const categories = [
+      { id: 11, name: 'Getting Started', articleCount: 4 },
+      { id: 12, name: 'Billing', articleCount: 2 },
+      { id: 13, name: 'Troubleshooting', articleCount: 7 },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve(categories);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Getting Started')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Billing')).toBeInTheDocument();
+    expect(screen.getByText('Troubleshooting')).toBeInTheDocument();
+    // Article counts shown next to category names — '4', '2', '7' should all appear
+    expect(screen.getByText('4')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+    // "All Articles" pseudo-category at the top — appears in BOTH the sidebar
+    // AND the right-pane heading (h3), so allow either to match per RTL rule.
+    const allArticlesHits = screen.getAllByText(/^All Articles$/);
+    expect(allArticlesHits.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // -------- 3) Click category → filters the article list --------
+  it('clicking a category filters the article table to that category', async () => {
+    const categories = [
+      { id: 21, name: 'Getting Started', articleCount: 1 },
+      { id: 22, name: 'Billing', articleCount: 1 },
+    ];
+    const articles = [
+      makeArticle(201, { title: 'Welcome guide', categoryId: 21, isPublished: true }),
+      makeArticle(202, { title: 'Invoice setup', categoryId: 22, isPublished: true }),
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve(categories);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome guide')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Invoice setup')).toBeInTheDocument();
+
+    // Click the "Billing" category in the sidebar. The label may also appear
+    // in the right-pane table's Category column for matching rows, so use
+    // getAllByText and click the first match (sidebar comes first in DOM).
+    const billingHits = screen.getAllByText('Billing');
+    fireEvent.click(billingHits[0]);
+
+    // After click, only Billing's article should remain in the table.
+    await waitFor(() => {
+      expect(screen.queryByText('Welcome guide')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Invoice setup')).toBeInTheDocument();
+    // Heading switches to "Articles in \"Billing\""
+    expect(screen.getByText(/Articles in "Billing"/i)).toBeInTheDocument();
+  });
+
+  // -------- 4) Edit-article modal opens + submits PUT --------
+  it('clicking Edit opens the edit form pre-filled and submitting fires PUT', async () => {
+    const articles = [
+      makeArticle(301, { title: 'Existing article', isPublished: false }),
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      if (url === '/api/knowledge-base/articles/301' && opts?.method === 'PUT') {
+        return Promise.resolve({ ...articles[0], title: 'Updated title' });
+      }
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Existing article')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText(/^Edit$/));
+    // Edit form header appears
+    await waitFor(() => {
+      expect(screen.getByText(/Edit Article/i)).toBeInTheDocument();
+    });
+    // Title input pre-filled
+    const titleInput = screen.getByDisplayValue('Existing article');
+    expect(titleInput).toBeInTheDocument();
+    // Change the title + submit
+    fireEvent.change(titleInput, { target: { value: 'Updated title' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Save Changes/i));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const putCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === '/api/knowledge-base/articles/301' && c[1]?.method === 'PUT'
+    );
+    expect(putCalls).toHaveLength(1);
+    const body = JSON.parse(putCalls[0][1].body);
+    expect(body.title).toBe('Updated title');
+  });
+
+  // -------- 5) Create-article modal: required validation --------
+  it('submitting the New Article form with empty title shows error toast and skips POST', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      // The top-right CTA is a <button> with role="button". Use role query so
+      // we don't collide with the form heading (h3) that also says "New Article".
+      expect(screen.getByRole('button', { name: /New Article/i })).toBeInTheDocument();
+    });
+    // Click the top-right "New Article" button to open the create form
+    fireEvent.click(screen.getByRole('button', { name: /New Article/i }));
+    // The form submit button reads "Create Article" once the editor is open
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Create Article/i })).toBeInTheDocument();
+    });
+    // Locate the form element (only one form on the page when editor is open)
+    const form = document.querySelector('form');
+    expect(form).toBeTruthy();
+    // Required HTML5 validation on the title input would prevent submit via
+    // the button, but saveArticle() also explicitly validates form.title.trim().
+    // Bypass the HTML5 layer by firing the submit event directly so we can
+    // assert the JS-level guard fires.
+    await act(async () => {
+      fireEvent.submit(form);
+      await Promise.resolve();
+    });
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.stringMatching(/title is required/i),
+    );
+    const postCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === '/api/knowledge-base/articles' && c[1]?.method === 'POST'
+    );
+    expect(postCalls).toHaveLength(0);
+  });
+
+  // -------- 5b) Create-article happy path POST --------
+  it('submitting the New Article form with a filled title fires POST', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles' && (!opts || !opts.method)) {
+        return Promise.resolve([]);
+      }
+      if (url === '/api/knowledge-base/articles' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 999, title: 'Brand new' });
+      }
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /New Article/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New Article/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Create Article/i })).toBeInTheDocument();
+    });
+    const titleInput = screen.getByPlaceholderText(/How to reset your password/i);
+    fireEvent.change(titleInput, { target: { value: 'Brand new' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Create Article/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const postCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === '/api/knowledge-base/articles' && c[1]?.method === 'POST'
+    );
+    expect(postCalls).toHaveLength(1);
+    const body = JSON.parse(postCalls[0][1].body);
+    expect(body.title).toBe('Brand new');
+  });
+
+  // -------- 6) Delete-article confirm + fire DELETE --------
+  it('clicking Delete calls notify.confirm and fires DELETE on confirmation', async () => {
+    const articles = [makeArticle(401, { title: 'Doomed article', isPublished: false })];
+    const confirmSpy = vi.fn(() => Promise.resolve(true));
+    notifyObj.confirm = confirmSpy;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles' && (!opts || !opts.method)) {
+        return Promise.resolve(articles);
+      }
+      if (url === '/api/knowledge-base/articles/401' && opts?.method === 'DELETE') {
+        return Promise.resolve({});
+      }
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Doomed article')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/^Delete$/));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(confirmSpy).toHaveBeenCalled();
+    const deleteCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === '/api/knowledge-base/articles/401' && c[1]?.method === 'DELETE'
+    );
+    expect(deleteCalls).toHaveLength(1);
+    // Restore default confirm for sibling tests
+    notifyObj.confirm = () => Promise.resolve(true);
+  });
+
+  it('clicking Delete and rejecting the confirm does NOT fire DELETE', async () => {
+    const articles = [makeArticle(402, { title: 'Survivor article', isPublished: false })];
+    notifyObj.confirm = () => Promise.resolve(false);
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Survivor article')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/^Delete$/));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const deleteCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[1]?.method === 'DELETE'
+    );
+    expect(deleteCalls).toHaveLength(0);
+    // Restore default
+    notifyObj.confirm = () => Promise.resolve(true);
+  });
+
+  // -------- 7) Status-filter (Drafts / Published) acts like a search/filter --------
+  it('clicking the Drafts pill filters the article list to drafts only', async () => {
+    const articles = [
+      makeArticle(501, { title: 'Live one', isPublished: true }),
+      makeArticle(502, { title: 'Live two', isPublished: true }),
+      makeArticle(503, { title: 'Hidden draft', isPublished: false }),
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Live one')).toBeInTheDocument();
+    });
+    // Click Drafts pill
+    fireEvent.click(screen.getByText(/1 Drafts/));
+    await waitFor(() => {
+      expect(screen.queryByText('Live one')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('Live two')).not.toBeInTheDocument();
+    expect(screen.getByText('Hidden draft')).toBeInTheDocument();
+  });
+
+  // -------- 8) Empty state --------
+  it('renders the empty state when there are zero articles', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText(/No articles yet/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Click "New Article" to create one/i)).toBeInTheDocument();
+  });
+
+  // -------- 9) Loading state — "Saving…" label on the submit button --------
+  it('shows "Saving…" on the submit button while the POST is in flight', async () => {
+    let resolvePost;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles' && (!opts || !opts.method)) {
+        return Promise.resolve([]);
+      }
+      if (url === '/api/knowledge-base/articles' && opts?.method === 'POST') {
+        return new Promise((resolve) => {
+          resolvePost = () => resolve({ id: 1, title: 'X' });
+        });
+      }
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /New Article/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New Article/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Create Article/i })).toBeInTheDocument();
+    });
+    const titleInput = screen.getByPlaceholderText(/How to reset your password/i);
+    fireEvent.change(titleInput, { target: { value: 'Pending' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Create Article/i }));
+      await Promise.resolve();
+    });
+
+    // While the POST is pending the button text flips to "Saving…"
+    await waitFor(() => {
+      expect(screen.getByText(/Saving…/)).toBeInTheDocument();
+    });
+
+    // Resolve the POST so the test cleans up without dangling promises
+    await act(async () => {
+      resolvePost();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  });
+
+  // -------- 10) Error state — POST failure toasts via notify.error --------
+  it('toasts "Failed to save article" when the create POST rejects', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles' && (!opts || !opts.method)) {
+        return Promise.resolve([]);
+      }
+      if (url === '/api/knowledge-base/articles' && opts?.method === 'POST') {
+        return Promise.reject(new Error('500: server boom'));
+      }
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /New Article/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New Article/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Create Article/i })).toBeInTheDocument();
+    });
+    const titleInput = screen.getByPlaceholderText(/How to reset your password/i);
+    fireEvent.change(titleInput, { target: { value: 'Will fail' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Create Article/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.stringMatching(/failed to save article/i),
+    );
+  });
+
+  // -------- 11) Cancel button closes the editor --------
+  it('Cancel button on the editor returns to the list view without saving', async () => {
+    const articles = [makeArticle(601, { title: 'Keep me', isPublished: true })];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/knowledge-base/categories') return Promise.resolve([]);
+      if (url === '/api/knowledge-base/articles') return Promise.resolve(articles);
+      return Promise.resolve({});
+    });
+    renderKB();
+    await waitFor(() => {
+      expect(screen.getByText('Keep me')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText(/^Edit$/));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit Article/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText(/Cancel/i));
+    // Back to the list — the article row title is visible again, and the
+    // "Edit Article" form heading is gone
+    await waitFor(() => {
+      expect(screen.queryByText(/Edit Article/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Keep me')).toBeInTheDocument();
+    // No PUT call should have fired
+    const putCalls = fetchApiMock.mock.calls.filter((c) => c[1]?.method === 'PUT');
+    expect(putCalls).toHaveLength(0);
+  });
+});

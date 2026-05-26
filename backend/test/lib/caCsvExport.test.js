@@ -39,6 +39,15 @@ describe("csvEscape", () => {
     expect(csvEscape(null)).toBe("");
     expect(csvEscape(undefined)).toBe("");
   });
+  test("multiple embedded quotes are all doubled", () => {
+    // 4 quotes in the input → 8 doubled quotes inside + 2 wrapping quotes
+    expect(csvEscape(`"a"b"c"`)).toBe(`"""a""b""c"""`);
+  });
+  test("object input coerces via String() → '[object Object]'", () => {
+    // Defensive: a downstream caller passing an accidentally non-string
+    // (e.g. a Prisma Decimal that wasn't stringified) must not crash.
+    expect(csvEscape({})).toBe("[object Object]");
+  });
 });
 
 describe("buildCaCsv", () => {
@@ -155,5 +164,107 @@ describe("buildCaCsv", () => {
     const dataRow = csv.trim().split("\n")[1];
     // Subtotal + Total columns both render 0.00 instead of "NaN" / "undefined".
     expect(dataRow).toMatch(/,0\.00,/);
+  });
+
+  test("non-array input (null / undefined / string) → just the header + trailing newline", () => {
+    // Defensive: `Array.isArray` falls through to [] so a misbehaving
+    // caller passing null can't crash the route.
+    const expected = CSV_HEADER.join(",") + "\n";
+    expect(buildCaCsv(null)).toBe(expected);
+    expect(buildCaCsv(undefined)).toBe(expected);
+    expect(buildCaCsv("not-array")).toBe(expected);
+    expect(buildCaCsv({ length: 1 })).toBe(expected); // array-like but not an Array
+  });
+
+  test("invalid Date → empty cell (column count stays stable)", () => {
+    const csv = buildCaCsv([
+      {
+        invoiceNumber: "INV-006",
+        issueDate: new Date("not-a-real-date"),
+        contactName: "Customer",
+        subtotal: 100,
+        totalAmount: 100,
+      },
+    ]);
+    const dataRow = csv.trim().split("\n")[1];
+    // Issue Date is the 2nd column → must render as empty between the commas
+    // (NOT "Invalid Date" or "NaN-NaN-NaN").
+    expect(dataRow.startsWith("INV-006,,Customer,")).toBe(true);
+    // Total column count is still 12 (header has 11 commas; data row too).
+    expect((dataRow.match(/,/g) || []).length).toBe(11);
+  });
+
+  test("Infinity amount → '0.00' (Number.isFinite gate)", () => {
+    const csv = buildCaCsv([
+      {
+        invoiceNumber: "INV-007",
+        issueDate: new Date(2026, 4, 21),
+        contactName: "C",
+        subtotal: Infinity,
+        totalAmount: -Infinity,
+      },
+    ]);
+    const dataRow = csv.trim().split("\n")[1];
+    // Both subtotal + total degrade to 0.00 — not "Infinity" / "-Infinity".
+    expect(dataRow).not.toContain("Infinity");
+    expect(dataRow).toMatch(/,0\.00,/);
+  });
+
+  test("Dec 31 boundary → month index 11 padded to '12', day padded to '31'", () => {
+    // Regression guard: getMonth() is 0-indexed; off-by-one would render
+    // "2026-11-31" or "2026-12-1" instead of "2026-12-31".
+    const csv = buildCaCsv([
+      {
+        invoiceNumber: "INV-008",
+        issueDate: new Date(2026, 11, 31),
+        contactName: "C",
+        subtotal: 100,
+        totalAmount: 100,
+      },
+    ]);
+    const dataRow = csv.trim().split("\n")[1];
+    expect(dataRow).toContain("2026-12-31");
+  });
+
+  test("both empty array and non-empty list end with exactly ONE trailing newline (no doubling)", () => {
+    const emptyCsv = buildCaCsv([]);
+    expect(emptyCsv.endsWith("\n")).toBe(true);
+    expect(emptyCsv.endsWith("\n\n")).toBe(false);
+
+    const oneRowCsv = buildCaCsv([
+      {
+        invoiceNumber: "X",
+        issueDate: new Date(2026, 4, 21),
+        contactName: "Y",
+        subtotal: 100,
+        totalAmount: 100,
+      },
+    ]);
+    expect(oneRowCsv.endsWith("\n")).toBe(true);
+    expect(oneRowCsv.endsWith("\n\n")).toBe(false);
+  });
+});
+
+describe("CSV_HEADER export shape", () => {
+  test("has exactly 12 columns in the canonical order", () => {
+    // Pinned — accountants build downstream spreadsheets keyed on this
+    // exact sequence. Changing it is a breaking-shape change.
+    expect(CSV_HEADER).toEqual([
+      "Invoice Number",
+      "Issue Date",
+      "Contact Name",
+      "Billing State",
+      "Subtotal (Taxable)",
+      "CGST",
+      "SGST",
+      "IGST",
+      "Total",
+      "Status",
+      "Sub-Brand",
+      "Notes",
+    ]);
+    expect(CSV_HEADER).toHaveLength(12);
+    expect(CSV_HEADER[0]).toBe("Invoice Number");
+    expect(CSV_HEADER[CSV_HEADER.length - 1]).toBe("Notes");
   });
 });

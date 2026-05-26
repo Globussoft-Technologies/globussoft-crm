@@ -21,7 +21,10 @@
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
 
-import { runPostTripFeedbackForTenant } from '../../cron/tripPostTripFeedback.js';
+import {
+  runPostTripFeedbackForTenant,
+  runPostTripFeedbackForAllTravelTenants,
+} from '../../cron/tripPostTripFeedback.js';
 
 beforeAll(() => {
   prisma.tmcTrip = { findMany: vi.fn() };
@@ -159,5 +162,163 @@ describe('cron/tripPostTripFeedback — runPostTripFeedbackForTenant', () => {
     // one race-failure → created=1, skipped=0.
     expect(result.created).toBe(1);
     expect(result.skipped).toBe(0);
+  });
+
+  // -- Extension cases (tick #N) ---------------------------------------
+
+  test('findMany request caps batch at take=200 to bound per-tick work', async () => {
+    await runPostTripFeedbackForTenant(1);
+    const arg = prisma.tmcTrip.findMany.mock.calls[0][0];
+    expect(arg.take).toBe(200);
+    // Status filter must EXCLUDE cancelled — never survey a cancelled trip.
+    expect(arg.where.status.in).not.toContain('cancelled');
+    expect(arg.where.status.in).not.toContain('draft');
+  });
+
+  test('findMany select narrows columns to the 4 fields the loop body reads', async () => {
+    await runPostTripFeedbackForTenant(1);
+    const arg = prisma.tmcTrip.findMany.mock.calls[0][0];
+    // Defensive narrowing — the SUT projects only what it needs so
+    // unrelated TmcTrip column drift doesn't bloat the read.
+    expect(arg.select).toEqual({
+      id: true,
+      tripCode: true,
+      destination: true,
+      schoolContactId: true,
+    });
+  });
+
+  test('tenant config lookup is performed once per pass (not per-trip)', async () => {
+    prisma.tmcTrip.findMany.mockResolvedValue([
+      { id: 1, tripCode: 'T1', destination: 'Paris', schoolContactId: 10 },
+      { id: 2, tripCode: 'T2', destination: 'Rome', schoolContactId: 20 },
+      { id: 3, tripCode: 'T3', destination: 'Berlin', schoolContactId: 30 },
+    ]);
+    prisma.survey.findFirst.mockResolvedValue(null);
+    prisma.survey.create.mockResolvedValue({ id: 1 });
+
+    await runPostTripFeedbackForTenant(77);
+
+    // One tenant read regardless of trip count — the Q9 cut-over
+    // plumbing should not stampede the tenant table per row.
+    expect(prisma.tenant.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
+      where: { id: 77 },
+      select: { subBrandConfigJson: true },
+    });
+  });
+
+  test('subBrandConfigJson with tmc.wabaId resolves into the dispatch log', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({
+      subBrandConfigJson: JSON.stringify({
+        tmc: { wabaId: 'WABA-TMC-001', phoneNumberId: 'PN-1' },
+      }),
+    });
+    prisma.tmcTrip.findMany.mockResolvedValue([
+      { id: 9, tripCode: 'GOA26', destination: 'Goa', schoolContactId: 50 },
+    ]);
+    prisma.survey.findFirst.mockResolvedValue(null);
+    prisma.survey.create.mockResolvedValue({ id: 321 });
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const result = await runPostTripFeedbackForTenant(1);
+      expect(result.created).toBe(1);
+      // The resolved wabaId is included in the per-survey dispatch log.
+      const allLogs = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(allLogs).toContain('WABA-TMC-001');
+      // The PUBLIC_BASE_URL / portal link prefix is included as well.
+      expect(allLogs).toContain('/survey/321');
+      expect(allLogs).toContain('tripId=9');
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test('malformed subBrandConfigJson falls back to "(no-config)" without crashing', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({
+      subBrandConfigJson: 'this-is-not-json',
+    });
+    prisma.tmcTrip.findMany.mockResolvedValue([
+      { id: 11, tripCode: 'T11', destination: 'Kyoto', schoolContactId: 60 },
+    ]);
+    prisma.survey.findFirst.mockResolvedValue(null);
+    prisma.survey.create.mockResolvedValue({ id: 401 });
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = await runPostTripFeedbackForTenant(1);
+      // Survey still gets created — malformed config is non-fatal.
+      expect(result.created).toBe(1);
+      const allLogs = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(allLogs).toContain('(no-config)');
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('Survey.create question embeds the destination string, not a placeholder', async () => {
+    prisma.tmcTrip.findMany.mockResolvedValue([
+      { id: 7, tripCode: 'BCN26', destination: 'Barcelona', schoolContactId: 100 },
+    ]);
+    prisma.survey.findFirst.mockResolvedValue(null);
+
+    await runPostTripFeedbackForTenant(1);
+
+    const data = prisma.survey.create.mock.calls[0][0].data;
+    // Destination is interpolated; the 0-10 NPS scale instruction is present.
+    expect(data.question).toContain('Barcelona');
+    expect(data.question).toMatch(/0-10/);
+    // No leftover template placeholders.
+    expect(data.question).not.toMatch(/\$\{/);
+    expect(data.question).not.toMatch(/undefined/);
+  });
+});
+
+describe('cron/tripPostTripFeedback — runPostTripFeedbackForAllTravelTenants', () => {
+  test('queries only active travel tenants (vertical=travel, isActive=true)', async () => {
+    prisma.tenant.findMany = vi.fn().mockResolvedValue([]);
+    await runPostTripFeedbackForAllTravelTenants();
+    expect(prisma.tenant.findMany).toHaveBeenCalledTimes(1);
+    const arg = prisma.tenant.findMany.mock.calls[0][0];
+    expect(arg.where).toEqual({ vertical: 'travel', isActive: true });
+    // Only id + slug are projected — slug is for the per-tenant log line.
+    expect(arg.select).toEqual({ id: true, slug: true });
+  });
+
+  test('per-tenant failure does not poison the rest of the sweep', async () => {
+    prisma.tenant.findMany = vi
+      .fn()
+      .mockResolvedValue([
+        { id: 1, slug: 'tenant-one' },
+        { id: 2, slug: 'tenant-two' },
+        { id: 3, slug: 'tenant-three' },
+      ]);
+
+    // Tenant 2's tmcTrip read throws; tenants 1 and 3 succeed with 1 trip each.
+    prisma.tmcTrip.findMany
+      .mockResolvedValueOnce([
+        { id: 100, tripCode: 'A', destination: 'A-dest', schoolContactId: 1 },
+      ])
+      .mockRejectedValueOnce(new Error('db blip'))
+      .mockResolvedValueOnce([
+        { id: 200, tripCode: 'B', destination: 'B-dest', schoolContactId: 2 },
+      ]);
+    prisma.survey.findFirst.mockResolvedValue(null);
+    prisma.survey.create.mockResolvedValue({ id: 1 });
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const total = await runPostTripFeedbackForAllTravelTenants();
+      // 2 successful tenants × 1 trip each → total = 2.
+      expect(total).toBe(2);
+      // The middle failure surfaced to console.error tagged with the tenant slug.
+      const allErrs = errSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(allErrs).toContain('tenant-two');
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });

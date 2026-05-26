@@ -4,15 +4,31 @@ const prisma = require("../lib/prisma");
 
 const tenantId = (req) => req.user?.tenantId || 1;
 
-// GET /api/canned-responses?category=
+// GET /api/canned-responses?category=&fields=summary
 router.get("/", async (req, res) => {
   try {
     const where = { tenantId: tenantId(req) };
     if (req.query.category) where.category = String(req.query.category);
-    const items = await prisma.cannedResponse.findMany({
+    // #920 slice 21: ?fields=summary slim-shape opt-in. Mirrors slices 1-20.
+    // CannedResponse has one heavy column (content @db.Text — full template
+    // body). When the caller passes ?fields=summary we drop content +
+    // tenantId + createdAt + updatedAt, returning only the columns needed
+    // for picker / dropdown chrome (id, name, category). Opt-in additive —
+    // existing callers (no ?fields, or any non-exact value) get the full
+    // row shape unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: [{ category: "asc" }, { name: "asc" }],
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        category: true,
+      };
+    }
+    const items = await prisma.cannedResponse.findMany(findManyArgs);
     res.json(items);
   } catch (err) {
     console.error("[CannedResponses][list]", err);

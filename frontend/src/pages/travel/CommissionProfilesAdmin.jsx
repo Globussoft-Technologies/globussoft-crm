@@ -41,11 +41,36 @@
 //   what does the agent earn?" before committing to a profile assignment
 //   (slice 6) or persisting a real invoice line item.
 //
+// Slice 10 extension — Ledger panel:
+//   Each row gains a List-icon button. Clicking opens a ledger panel above
+//   the table that GETs /commission-profiles/:id/ledger (slice 9, commit
+//   e04c0990). Renders one row per Deal whose Contact carries this profile
+//   in commissionProfileId (slice 6 bulk-assign writes that link). Columns:
+//   deal id, contact name, deal value, computed commission, stage, createdAt.
+//   A summary tile up top surfaces total entries + total commission (sum from
+//   the server, half-up rounded to 2dp). A "Won only" toggle chip re-fetches
+//   with ?stage=won. Empty / loading / 403 / error states all handled.
+//   Lets operators verify "for this profile, what has each agent actually
+//   earned so far?" without dropping into Deals/Contacts and aggregating
+//   client-side (a structural-bug class — see CLAUDE.md standing rules).
+//
+// Slice 12 extension — Download CSV (this slice):
+//   Ledger-panel header gains a "Download CSV" button that hits the slice-11
+//   endpoint GET /commission-profiles/:id/ledger.csv (commit 75ac8390).
+//   Carries the current `?stage=` filter so what the operator sees on screen
+//   matches what they download. Uses the canonical Blob → createObjectURL →
+//   anchor.click() pattern (cloned verbatim from Products.jsx CSV export so
+//   the FE has one consistent download flow). The endpoint streams text/csv
+//   server-side with a Content-Disposition filename; we override with our
+//   own `<profileName>-ledger-<date>.csv` so it's friendlier when 5+ files
+//   pile up in the operator's Downloads folder. fetch (not fetchApi) is used
+//   because fetchApi auto-parses JSON; the CSV response is a Blob.
+//
 // Template: pattern-matched against SuppliersAdmin / FlyerTemplates / QuotesAdmin.
 
 import { useEffect, useState, useContext } from "react";
-import { Percent, Plus, Pencil, Trash2, Calculator } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { Percent, Plus, Pencil, Trash2, Calculator, List, Download } from "lucide-react";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
 import { AuthContext } from "../../App";
@@ -239,6 +264,22 @@ export default function CommissionProfilesAdmin() {
   const [previewResult, setPreviewResult] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
+  // Ledger panel state (slice 10). Open when ledgerProfile is non-null.
+  // `ledgerData` holds the server's { profileId, entries, totalCommission, ...}
+  // payload after a successful GET /:id/ledger. `ledgerLoading` gates the
+  // re-fetch chip + initial fetch so the operator can't double-fire while a
+  // request is in flight. `ledgerError` surfaces a friendly message when the
+  // GET fails (network error, 403, 404 — full body text propagates via the
+  // fetchApi reject path).
+  const [ledgerProfile, setLedgerProfile] = useState(null);
+  const [ledgerData, setLedgerData] = useState(null);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+  const [ledgerError, setLedgerError] = useState(null);
+  const [ledgerWonOnly, setLedgerWonOnly] = useState(false);
+  // Slice 12 — Download CSV in-flight gate so the operator can't double-fire
+  // the export endpoint while a download is being assembled.
+  const [ledgerCsvBusy, setLedgerCsvBusy] = useState(false);
+
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
@@ -391,6 +432,102 @@ export default function CommissionProfilesAdmin() {
       setPreviewResult(null);
     } finally {
       setPreviewLoading(false);
+    }
+  };
+
+  // Open the ledger panel for a row. Resets stale data + fires the initial
+  // fetch. The fetch lives in a separate effect (below) keyed on
+  // (ledgerProfile?.id, ledgerWonOnly) so the toggle chip re-fetches without
+  // an explicit refetch call site.
+  const openLedger = (p) => {
+    setLedgerProfile(p);
+    setLedgerData(null);
+    setLedgerError(null);
+    setLedgerWonOnly(false);
+  };
+
+  const closeLedger = () => {
+    setLedgerProfile(null);
+    setLedgerData(null);
+    setLedgerError(null);
+    setLedgerWonOnly(false);
+  };
+
+  // Ledger fetch — re-runs on profile change or stage-toggle change. The
+  // GET /:id/ledger contract returns { profileId, profileName, profileType,
+  // entries[], totalEntries, totalCommission, limit, offset } per slice 9
+  // (commit e04c0990). Errors render as a friendly message inline rather
+  // than firing notify.error — the panel is the operator's focus, so the
+  // message belongs there, not in a toast.
+  useEffect(() => {
+    if (!ledgerProfile) return undefined;
+    let cancelled = false;
+    setLedgerLoading(true);
+    setLedgerError(null);
+    const qs = new URLSearchParams();
+    if (ledgerWonOnly) qs.set("stage", "won");
+    const url = `/api/travel/commission-profiles/${ledgerProfile.id}/ledger${
+      qs.toString() ? `?${qs.toString()}` : ""
+    }`;
+    fetchApi(url)
+      .then((d) => {
+        if (cancelled) return;
+        setLedgerData(d || null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLedgerData(null);
+        const msg =
+          err?.body?.error || err?.message || "Failed to load commission ledger";
+        setLedgerError(msg);
+      })
+      .finally(() => {
+        if (!cancelled) setLedgerLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ledgerProfile, ledgerWonOnly]);
+
+  // Slice 12 — Download the ledger as CSV. Hits the slice-11 export endpoint
+  // GET /:id/ledger.csv, mirroring the current `?stage=` filter so the file
+  // matches what the operator sees on screen. Uses the canonical Blob →
+  // createObjectURL → anchor.click() pattern (Products.jsx is the reference);
+  // wraps with try/finally on `ledgerCsvBusy` so repeated clicks are gated.
+  const handleLedgerDownload = async () => {
+    if (!ledgerProfile || ledgerCsvBusy) return;
+    setLedgerCsvBusy(true);
+    try {
+      const qs = new URLSearchParams();
+      if (ledgerWonOnly) qs.set("stage", "won");
+      const url = `/api/travel/commission-profiles/${ledgerProfile.id}/ledger.csv${
+        qs.toString() ? `?${qs.toString()}` : ""
+      }`;
+      const token = getAuthToken();
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      // Friendlier filename than the server-supplied Content-Disposition —
+      // pivots on profileName + today so multiple files don't collide.
+      const safeName = (ledgerProfile.name || "ledger")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      a.download = `${safeName}-ledger-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      notify.success("Ledger CSV downloaded.");
+    } catch (err) {
+      notify.error(err?.message || "Ledger CSV export failed.");
+    } finally {
+      setLedgerCsvBusy(false);
     }
   };
 
@@ -823,6 +960,245 @@ export default function CommissionProfilesAdmin() {
         </form>
       )}
 
+      {ledgerProfile && (
+        <div
+          data-testid="commission-profile-ledger-panel"
+          className="glass"
+          style={{
+            padding: 16,
+            marginBottom: 16,
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              flexWrap: "wrap",
+            }}
+          >
+            <List size={18} aria-hidden />
+            <strong>Commission ledger</strong>
+            <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+              — {ledgerProfile.name} ({ledgerProfile.profileType})
+            </span>
+            <label
+              style={{
+                marginLeft: "auto",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 13,
+                color: "var(--text-secondary)",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={ledgerWonOnly}
+                onChange={(e) => setLedgerWonOnly(e.target.checked)}
+                aria-label="Won deals only"
+                data-testid="commission-profile-ledger-won-toggle"
+              />
+              Won deals only
+            </label>
+            <button
+              type="button"
+              onClick={handleLedgerDownload}
+              disabled={ledgerCsvBusy || ledgerLoading}
+              style={secondaryBtn}
+              aria-label="Download ledger CSV"
+              data-testid="commission-profile-ledger-download-csv"
+              title="Download the ledger as CSV (mirrors the current stage filter)"
+            >
+              <Download size={14} /> {ledgerCsvBusy ? "Downloading…" : "Download CSV"}
+            </button>
+            <button
+              type="button"
+              onClick={closeLedger}
+              style={secondaryBtn}
+              aria-label="Close ledger"
+            >
+              Close
+            </button>
+          </div>
+
+          {/* Summary tile — total commission across the displayed page.
+              `totalCommission` is the SERVER-computed sum from slice 9 (half-up
+              rounded to 2dp). `totalEntries` is the full filtered count, which
+              may exceed the page (limit 50 default). */}
+          {ledgerData && !ledgerLoading && !ledgerError && (
+            <div
+              data-testid="commission-profile-ledger-summary"
+              style={{
+                padding: 12,
+                borderRadius: 6,
+                background: "var(--subtle-bg, rgba(255,255,255,0.04))",
+                border: "1px solid var(--border-color)",
+                display: "flex",
+                gap: 24,
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                  Total commission (page)
+                </div>
+                <div
+                  data-testid="commission-profile-ledger-total"
+                  style={{ fontSize: 22, fontWeight: 700, color: "var(--success-color, #22c55e)" }}
+                >
+                  {Number(ledgerData.totalCommission || 0).toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                  Deals counted
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 700 }}>
+                  {(ledgerData.entries || []).length.toLocaleString()}
+                  {Number.isFinite(ledgerData.totalEntries)
+                    && ledgerData.totalEntries > (ledgerData.entries || []).length && (
+                    <span style={{ fontSize: 13, color: "var(--text-secondary)", marginLeft: 6 }}>
+                      / {ledgerData.totalEntries.toLocaleString()} total
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {ledgerLoading && (
+            <div style={{ padding: 16, textAlign: "center", color: "var(--text-secondary)" }}>
+              Loading commission ledger&hellip;
+            </div>
+          )}
+
+          {ledgerError && !ledgerLoading && (
+            <div
+              data-testid="commission-profile-ledger-error"
+              role="alert"
+              style={{
+                padding: 12,
+                borderRadius: 6,
+                background: "rgba(244, 63, 94, 0.10)",
+                border: "1px solid var(--danger-color, #f43f5e)",
+                color: "var(--danger-color, #f43f5e)",
+                fontSize: 13,
+              }}
+            >
+              {ledgerError}
+            </div>
+          )}
+
+          {!ledgerLoading && !ledgerError && ledgerData
+            && (ledgerData.entries || []).length === 0 && (
+            <div
+              data-testid="commission-profile-ledger-empty"
+              style={{
+                padding: 24,
+                textAlign: "center",
+                color: "var(--text-secondary)",
+                fontSize: 13,
+              }}
+            >
+              <List size={20} style={{ opacity: 0.4, marginBottom: 6 }} />
+              <div>
+                {ledgerWonOnly
+                  ? "No won deals yet for this profile."
+                  : "No deals yet under this profile — assign agents via the contacts admin to populate."}
+              </div>
+            </div>
+          )}
+
+          {!ledgerLoading && !ledgerError && ledgerData
+            && (ledgerData.entries || []).length > 0 && (
+            <div style={{ overflowX: "auto" }}>
+              <table
+                data-testid="commission-profile-ledger-table"
+                style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
+              >
+                <thead>
+                  <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                    <th style={th}>Deal</th>
+                    <th style={th}>Contact</th>
+                    <th style={th}>Stage</th>
+                    <th style={{ ...th, textAlign: "right" }}>Deal value</th>
+                    <th style={{ ...th, textAlign: "right" }}>Commission</th>
+                    <th style={th}>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledgerData.entries.map((entry) => (
+                    <tr
+                      key={entry.dealId}
+                      data-testid={`commission-profile-ledger-row-${entry.dealId}`}
+                      style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+                    >
+                      <td style={td}>
+                        <strong>#{entry.dealId}</strong>
+                        {entry.dealTitle && (
+                          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
+                            {entry.dealTitle}
+                          </div>
+                        )}
+                      </td>
+                      <td style={td}>{entry.contactName || "(unknown)"}</td>
+                      <td style={td}>
+                        <span
+                          style={{
+                            ...statusBadge,
+                            background:
+                              entry.dealStage === "won"
+                                ? "rgba(34, 197, 94, 0.18)"
+                                : entry.dealStage === "lost"
+                                  ? "rgba(244, 63, 94, 0.18)"
+                                  : "rgba(255,255,255,0.08)",
+                          }}
+                        >
+                          {entry.dealStage || "—"}
+                        </span>
+                      </td>
+                      <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                        {Number(entry.dealAmount || 0).toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                        {entry.dealCurrency && (
+                          <span style={{ marginLeft: 4, color: "var(--text-secondary)", fontSize: 11 }}>
+                            {entry.dealCurrency}
+                          </span>
+                        )}
+                      </td>
+                      <td
+                        style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600 }}
+                        data-testid={`commission-profile-ledger-commission-${entry.dealId}`}
+                      >
+                        {Number(entry.commission || 0).toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </td>
+                      <td style={{ ...td, color: "var(--text-secondary)", fontSize: 12 }}>
+                        {entry.createdAt
+                          ? new Date(entry.createdAt).toLocaleDateString()
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
@@ -904,6 +1280,16 @@ export default function CommissionProfilesAdmin() {
                         data-testid={`commission-profile-preview-${p.id}`}
                       >
                         <Calculator size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openLedger(p)}
+                        title={`View commission ledger for ${p.name}`}
+                        aria-label={`View ledger ${p.name}`}
+                        style={iconBtn}
+                        data-testid={`commission-profile-ledger-${p.id}`}
+                      >
+                        <List size={16} />
                       </button>
                       <button
                         type="button"

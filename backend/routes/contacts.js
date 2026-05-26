@@ -184,11 +184,35 @@ router.get('/', async (req, res) => {
     // and exposing a perf/DoS surface.
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset) || 0);
-    const contacts = await prisma.contact.findMany({
+    // #920 slice 1 — PII reduction via opt-in slim shape. When the caller
+    // passes ?fields=summary, the response drops the heavy nested includes
+    // (activities/tasks/assignedTo) AND the sensitive flat fields
+    // (phone/walletBalance/gst/birthDate/anniversary/address) by switching
+    // to an explicit Prisma `select`. ADDITIVE — when ?fields is absent
+    // or any other value, the existing full-shape `include` is preserved
+    // so no existing consumer (Contacts page, Billing.jsx, CommandPalette,
+    // etc.) needs to change. filterReadFields() still applies on the slim
+    // shape (no-op for fields not present, full-effect for fields it
+    // recognises) so the #464 field-permission layer keeps composing.
+    const isSummary = req.query.fields === 'summary';
+    const findManyArgs = {
       where, take: limit, skip: offset,
       orderBy: { id: 'desc' },
-      include: { activities: true, tasks: true, assignedTo: { select: { id: true, name: true, email: true } } },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        email: true,
+        status: true,
+        assignedToId: true,
+        tenantId: true,
+        createdAt: true,
+      };
+    } else {
+      findManyArgs.include = { activities: true, tasks: true, assignedTo: { select: { id: true, name: true, email: true } } };
+    }
+    const contacts = await prisma.contact.findMany(findManyArgs);
     // #464: strip read-restricted fields per the caller's role.
     const filtered = await filterReadFields(contacts, req.user.role, "Contact", req.user.tenantId);
     res.json(filtered);

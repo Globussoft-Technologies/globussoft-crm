@@ -94,7 +94,7 @@
 
 import { useEffect, useState, useContext, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText } from "lucide-react";
+import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
@@ -175,6 +175,11 @@ export default function QuoteBuilder() {
   // Send-to-customer confirm modal flag (slice 6 — Q9 STUB).
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  // Slice 11: accept + decline workflow state.
+  const [acceptInFlight, setAcceptInFlight] = useState(false);
+  const [declineInFlight, setDeclineInFlight] = useState(false);
+  const [declineConfirmOpen, setDeclineConfirmOpen] = useState(false);
+  const [declineReason, setDeclineReason] = useState("");
   // Slice 8: pricing preview state. `pricingPreview` is null until the
   // operator clicks "Calculate with markups"; once populated it renders
   // the side panel until dismissed (set back to null) or until a fresh
@@ -558,6 +563,90 @@ export default function QuoteBuilder() {
 
   const dismissPricingPreview = () => setPricingPreview(null);
 
+  // Slice 11: Accept / Decline workflow endpoints (POST
+  // /api/travel/quotes/:id/{accept,decline}). Dedicated semantic
+  // transitions distinct from the catch-all PUT — server enforces a
+  // transition guard (only Draft|Sent can move to Accepted|Rejected;
+  // already-{Accepted,Rejected} is idempotent; opposite-terminal is
+  // 409 INVALID_TRANSITION). Decline opens a confirm modal with an
+  // optional reason field (captured in the audit chain since the
+  // schema has no rejectionReason column).
+  const handleAccept = async () => {
+    if (!quoteId) {
+      notify.error("Save the quote first before accepting");
+      return;
+    }
+    setAcceptInFlight(true);
+    try {
+      const resp = await fetchApi(`/api/travel/quotes/${quoteId}/accept`, {
+        method: "POST",
+      });
+      if (resp?.alreadyAccepted) {
+        notify.info(`Quote #${quoteId} was already accepted`);
+      } else {
+        notify.success(`Quote #${quoteId} accepted`);
+      }
+      if (resp?.quote?.status) setStatus(resp.quote.status);
+    } catch (err) {
+      if (err?.status === 409) {
+        notify.error(
+          err?.body?.error ||
+            "Cannot accept this quote — it is already in a terminal state",
+        );
+        return;
+      }
+      notify.error(err?.body?.error || err?.message || "Accept failed");
+    } finally {
+      setAcceptInFlight(false);
+    }
+  };
+
+  const openDeclineConfirm = () => {
+    if (!quoteId) {
+      notify.error("Save the quote first before declining");
+      return;
+    }
+    setDeclineReason("");
+    setDeclineConfirmOpen(true);
+  };
+
+  const confirmDecline = async () => {
+    if (!quoteId) {
+      setDeclineConfirmOpen(false);
+      return;
+    }
+    setDeclineInFlight(true);
+    try {
+      const body = {};
+      if (declineReason && declineReason.trim()) {
+        body.reason = declineReason.trim();
+      }
+      const resp = await fetchApi(`/api/travel/quotes/${quoteId}/decline`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      if (resp?.alreadyRejected) {
+        notify.info(`Quote #${quoteId} was already declined`);
+      } else {
+        notify.success(`Quote #${quoteId} declined`);
+      }
+      if (resp?.quote?.status) setStatus(resp.quote.status);
+      setDeclineConfirmOpen(false);
+      setDeclineReason("");
+    } catch (err) {
+      if (err?.status === 409) {
+        notify.error(
+          err?.body?.error ||
+            "Cannot decline this quote — it is already in a terminal state",
+        );
+        return;
+      }
+      notify.error(err?.body?.error || err?.message || "Decline failed");
+    } finally {
+      setDeclineInFlight(false);
+    }
+  };
+
   // Slice 10: convert this quote to a Draft TravelInvoice via
   // POST /api/travel/quotes/:id/convert-to-invoice. Server-side is
   // idempotent — a second click returns the existing invoice with
@@ -739,6 +828,53 @@ export default function QuoteBuilder() {
               aria-label="Convert to invoice"
             >
               <FileText size={14} /> Convert to invoice
+            </button>
+            <button
+              type="button"
+              onClick={handleAccept}
+              disabled={
+                !quoteId ||
+                acceptInFlight ||
+                status === "Accepted" ||
+                status === "Rejected"
+              }
+              style={primaryBtn}
+              aria-label="Accept quote"
+              title={
+                !quoteId
+                  ? "Save first"
+                  : status === "Accepted"
+                    ? "Quote already accepted"
+                    : status === "Rejected"
+                      ? "Cannot accept a rejected quote"
+                      : "Accept this quote"
+              }
+            >
+              <ThumbsUp size={14} />{" "}
+              {acceptInFlight ? "Accepting…" : "Accept"}
+            </button>
+            <button
+              type="button"
+              onClick={openDeclineConfirm}
+              disabled={
+                !quoteId ||
+                declineInFlight ||
+                status === "Accepted" ||
+                status === "Rejected"
+              }
+              style={secondaryBtn}
+              aria-label="Decline quote"
+              title={
+                !quoteId
+                  ? "Save first"
+                  : status === "Rejected"
+                    ? "Quote already declined"
+                    : status === "Accepted"
+                      ? "Cannot decline an accepted quote"
+                      : "Decline this quote"
+              }
+            >
+              <ThumbsDown size={14} /> Decline
             </button>
           </div>
         )}
@@ -1262,6 +1398,76 @@ export default function QuoteBuilder() {
                 disabled={sending}
               >
                 <Send size={14} /> {sending ? "Queuing…" : "Confirm send"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {declineConfirmOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm decline quote"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            className="glass"
+            style={{
+              padding: 24,
+              minWidth: 320,
+              maxWidth: 520,
+              borderRadius: 8,
+            }}
+          >
+            <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>
+              Decline quote #{quoteId}?
+            </h3>
+            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 12 }}>
+              The quote status will flip to <strong>Rejected</strong>. The
+              customer's reason (if provided) is captured in the audit chain.
+            </p>
+            <label style={fieldLabel}>
+              Reason (optional)
+              <textarea
+                rows={3}
+                value={declineReason}
+                onChange={(e) => setDeclineReason(e.target.value)}
+                placeholder="e.g. Budget too high — can you do 95k per student?"
+                style={{ ...inputStyle, width: "100%", resize: "vertical" }}
+                aria-label="Decline reason"
+                maxLength={1000}
+              />
+            </label>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeclineConfirmOpen(false);
+                  setDeclineReason("");
+                }}
+                style={secondaryBtn}
+                disabled={declineInFlight}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDecline}
+                style={{ ...primaryBtn, background: "var(--danger-color, #f43f5e)" }}
+                aria-label="Confirm decline quote"
+                disabled={declineInFlight}
+              >
+                <ThumbsDown size={14} />{" "}
+                {declineInFlight ? "Declining…" : "Confirm decline"}
               </button>
             </div>
           </div>

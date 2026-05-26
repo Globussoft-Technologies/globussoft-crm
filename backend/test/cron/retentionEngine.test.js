@@ -323,3 +323,169 @@ describe('seedWellnessRetentionPolicies (#576)', () => {
     });
   });
 });
+
+// ────────────────────────────────────────────────────────────────────
+// Extended coverage (tick #N of test-writing cron) — fills gaps around
+// outer-try/catch resilience, query-shape pinning (isActive filter,
+// tenant scoping, cutoff math), retainDays edge cases (0 and huge),
+// per-tenant audit isolation, and soft-delete tombstone-multiplier math.
+// ────────────────────────────────────────────────────────────────────
+describe('cron/retentionEngine — extended coverage', () => {
+  test('retentionPolicy.findMany rejection → outer try/catch swallows, returns []', async () => {
+    // Outer try at runRetentionSweep top catches the findMany throw so the
+    // daily cron tick can't crash the process. Without this guard, a single
+    // transient DB blip in the policy fetch would take down the engine.
+    prisma.retentionPolicy.findMany.mockRejectedValue(new Error('connection lost'));
+
+    const summary = await runRetentionSweep();
+    expect(summary).toEqual([]);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(prisma.emailMessage.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('findMany is called with where: { isActive: true } — inactive policies excluded', async () => {
+    prisma.retentionPolicy.findMany.mockResolvedValue([]);
+
+    await runRetentionSweep();
+
+    expect(prisma.retentionPolicy.findMany).toHaveBeenCalledTimes(1);
+    const arg = prisma.retentionPolicy.findMany.mock.calls[0][0];
+    expect(arg).toEqual({ where: { isActive: true } });
+  });
+
+  test('tenant isolation — deleteMany where-clause is scoped to policy.tenantId', async () => {
+    // Two policies on the same entity, different tenants — each sweep
+    // call must filter to its own tenantId or PHI leaks cross-tenant.
+    prisma.retentionPolicy.findMany.mockResolvedValue([
+      { id: 1, isActive: true, entity: 'EmailMessage', tenantId: 100, retainDays: 30 },
+      { id: 2, isActive: true, entity: 'EmailMessage', tenantId: 200, retainDays: 60 },
+    ]);
+    prisma.emailMessage.deleteMany.mockResolvedValue({ count: 1 });
+
+    await runRetentionSweep();
+
+    expect(prisma.emailMessage.deleteMany).toHaveBeenCalledTimes(2);
+    const calls = prisma.emailMessage.deleteMany.mock.calls.map(c => c[0]);
+    const tenantIds = calls.map(c => c.where.tenantId).sort();
+    expect(tenantIds).toEqual([100, 200]);
+    // Each call has its own createdAt cutoff (no shared where reference).
+    expect(calls[0].where.createdAt.lt).toBeInstanceOf(Date);
+    expect(calls[1].where.createdAt.lt).toBeInstanceOf(Date);
+  });
+
+  test('cutoff is computed as retainDays * 86,400,000 ms before now', async () => {
+    // Pin the cutoff math so a future "let's switch to startOfDay() / change
+    // ms-per-day constant" refactor surfaces here, not silently in production.
+    const retainDays = 30;
+    prisma.retentionPolicy.findMany.mockResolvedValue([
+      { id: 1, isActive: true, entity: 'EmailMessage', tenantId: 1, retainDays },
+    ]);
+    prisma.emailMessage.deleteMany.mockResolvedValue({ count: 0 });
+
+    const before = Date.now();
+    await runRetentionSweep();
+    const after = Date.now();
+
+    const cutoff = prisma.emailMessage.deleteMany.mock.calls[0][0].where.createdAt.lt;
+    const expectedMin = before - retainDays * 86_400_000;
+    const expectedMax = after - retainDays * 86_400_000;
+    expect(cutoff.getTime()).toBeGreaterThanOrEqual(expectedMin);
+    expect(cutoff.getTime()).toBeLessThanOrEqual(expectedMax);
+  });
+
+  test('retainDays=0 edge — cutoff ≈ now, sweep still runs (no divide-by-zero / no skip)', async () => {
+    // retainDays=0 is a valid (if aggressive) "purge everything older than
+    // now" policy. The engine must not short-circuit on it — that would
+    // make "purge everything immediately" indistinguishable from a typo.
+    prisma.retentionPolicy.findMany.mockResolvedValue([
+      { id: 1, isActive: true, entity: 'EmailMessage', tenantId: 1, retainDays: 0 },
+    ]);
+    prisma.emailMessage.deleteMany.mockResolvedValue({ count: 99 });
+
+    const summary = await runRetentionSweep();
+    expect(summary[0].deleted).toBe(99);
+    expect(prisma.emailMessage.deleteMany).toHaveBeenCalledTimes(1);
+    // Cutoff is now-ish (within a couple seconds either way is fine).
+    const cutoff = prisma.emailMessage.deleteMany.mock.calls[0][0].where.createdAt.lt;
+    expect(Math.abs(cutoff.getTime() - Date.now())).toBeLessThan(5000);
+    // Audit still written.
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details).retainDays).toBe(0);
+  });
+
+  test('Patient tombstone cutoff = retainDays * 1.5 * 86_400_000 ms ago (#628)', async () => {
+    // The SOFT_DELETE_ENTITIES two-phase purge uses TOMBSTONE_MULTIPLIER=1.5.
+    // Pin the math: phase 2 deleteMany's deletedAt.lt cutoff must be
+    // retainDays * 1.5 days back from now, NOT retainDays days back.
+    const retainDays = 100;
+    prisma.retentionPolicy.findMany.mockResolvedValue([
+      { id: 1, isActive: true, entity: 'Patient', tenantId: 1, retainDays },
+    ]);
+    prisma.patient.updateMany.mockResolvedValue({ count: 0 });
+    prisma.patient.deleteMany.mockResolvedValue({ count: 0 });
+
+    const before = Date.now();
+    await runRetentionSweep();
+    const after = Date.now();
+
+    // Phase 1 cutoff = retainDays days back (used by updateMany on createdAt).
+    const phase1Cutoff = prisma.patient.updateMany.mock.calls[0][0].where.createdAt.lt;
+    expect(phase1Cutoff.getTime()).toBeGreaterThanOrEqual(before - retainDays * 86_400_000);
+    expect(phase1Cutoff.getTime()).toBeLessThanOrEqual(after - retainDays * 86_400_000);
+
+    // Phase 2 tombstone cutoff = retainDays * 1.5 days back (deletedAt.lt).
+    const phase2Cutoff = prisma.patient.deleteMany.mock.calls[0][0].where.deletedAt.lt;
+    const tombMs = retainDays * 1.5 * 86_400_000;
+    expect(phase2Cutoff.getTime()).toBeGreaterThanOrEqual(before - tombMs);
+    expect(phase2Cutoff.getTime()).toBeLessThanOrEqual(after - tombMs);
+    // Phase 2 cutoff is STRICTLY older than phase 1 cutoff.
+    expect(phase2Cutoff.getTime()).toBeLessThan(phase1Cutoff.getTime());
+  });
+
+  test('per-tenant audit isolation — same-entity policies write tenant-tagged audit rows', async () => {
+    // Two tenants with EmailMessage policies; each audit row must carry
+    // its own tenantId so downstream consumers (gdpr.js viewer, SOC-2
+    // exports) can filter the trail per tenant cleanly.
+    prisma.retentionPolicy.findMany.mockResolvedValue([
+      { id: 1, isActive: true, entity: 'EmailMessage', tenantId: 100, retainDays: 30 },
+      { id: 2, isActive: true, entity: 'EmailMessage', tenantId: 200, retainDays: 30 },
+    ]);
+    prisma.emailMessage.deleteMany
+      .mockResolvedValueOnce({ count: 5 })
+      .mockResolvedValueOnce({ count: 7 });
+
+    await runRetentionSweep();
+
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+    const auditCalls = prisma.auditLog.create.mock.calls.map(c => c[0].data);
+    const byTenant = Object.fromEntries(auditCalls.map(d => [d.tenantId, d]));
+    expect(byTenant[100]).toBeDefined();
+    expect(byTenant[200]).toBeDefined();
+    expect(JSON.parse(byTenant[100].details).deleted).toBe(5);
+    expect(JSON.parse(byTenant[200].details).deleted).toBe(7);
+  });
+
+  test('hard-delete entities report softDeleted=0 in summary (no double-counting)', async () => {
+    // The summary shape always carries softDeleted, but for non-SOFT_DELETE
+    // entities it must be 0 — never inherit a stale value from a prior loop
+    // iteration or get set to the deleted count by accident.
+    prisma.retentionPolicy.findMany.mockResolvedValue([
+      { id: 1, isActive: true, entity: 'CallLog', tenantId: 1, retainDays: 60 },
+      { id: 2, isActive: true, entity: 'Activity', tenantId: 1, retainDays: 90 },
+    ]);
+    prisma.callLog.deleteMany.mockResolvedValue({ count: 8 });
+    prisma.activity.deleteMany.mockResolvedValue({ count: 3 });
+
+    const summary = await runRetentionSweep();
+
+    expect(summary).toHaveLength(2);
+    summary.forEach(row => {
+      expect(row.softDeleted).toBe(0);
+    });
+    // And the audit details mirror the same 0.
+    const auditDetails = prisma.auditLog.create.mock.calls.map(c => JSON.parse(c[0].data.details));
+    auditDetails.forEach(d => {
+      expect(d.softDeleted).toBe(0);
+    });
+  });
+});

@@ -38,8 +38,14 @@ afterEach(() => {
   }
 });
 
-function makeReqResNext({ headers = {}, user = null } = {}) {
-  const req = { headers, user };
+function makeReqResNext({ headers = {}, cookies = {}, user = null } = {}) {
+  // #914 slice 2: cookies are populated by the global cookie-parser
+  // middleware in server.js (line 132); under unit tests we synthesise
+  // the same shape — a plain object keyed by cookie name. Default to
+  // `{}` so every existing test path (header-only) still passes the
+  // `req.cookies && req.cookies[TOKEN_COOKIE]` falsy check and falls
+  // through to the Authorization header parse.
+  const req = { headers, cookies, user };
   let statusCode = 200;
   const res = {
     status: vi.fn(function (code) {
@@ -267,6 +273,87 @@ describe('verifyToken', () => {
     await verifyToken(req, res, next);
     expect(findUniqueMock).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledOnce();
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // #914 slice 2 — auth_token cookie read path.
+  //
+  // Slice 1 (commit f9ded16f) began sending an HttpOnly `auth_token` cookie
+  // alongside the response-body JWT on every auth-success path (login,
+  // signup, register, 2fa-verify). Slice 2 is the corresponding READ side:
+  // verifyToken now consults `req.cookies.auth_token` BEFORE falling back
+  // to the Authorization header. Header path stays valid (additive, no
+  // breaking change) so the entire migration window — frontend +
+  // localStorage, every e2e spec, every Playwright API spec, every SDK
+  // consumer — keeps working unchanged.
+  //
+  // The four cases below pin: (a) cookie alone authenticates; (b) header
+  // alone still authenticates (regression guard on existing path);
+  // (c) HEADER wins when both are present (precedence — see below for
+  // why this was inverted from the initial cookie-first design); (d)
+  // neither still 401s with the canonical "Authentication required"
+  // envelope (no new failure-mode copy).
+  //
+  // Precedence note (revised from cookie-first): Playwright's api request
+  // fixture persists cookies across specs in the same context. A spec
+  // that authenticated set a cookie (from slice 1's Set-Cookie) that then
+  // overrode the next spec's explicit `Authorization: Bearer <X>` header.
+  // For api_tests / e2e correctness, header MUST win when both are
+  // present — the explicit Authorization header is the load-bearing
+  // identity signal in every existing test and SDK consumer. Cookies
+  // remain the auth path for cookie-only browser clients (slice 3+).
+  // ───────────────────────────────────────────────────────────────────────
+  test('#914 slice 2: authenticates from auth_token cookie when no Authorization header', async () => {
+    const token = jwt.sign({ userId: 11, role: 'USER', tenantId: 3 }, SECRET);
+    const { req, res, next } = makeReqResNext({
+      cookies: { auth_token: token },
+    });
+    await verifyToken(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user).toMatchObject({ userId: 11, role: 'USER', tenantId: 3 });
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  test('#914 slice 2: header path still works when no cookie is present (no regression)', async () => {
+    const token = jwt.sign({ userId: 12, role: 'ADMIN', tenantId: 1 }, SECRET);
+    const { req, res, next } = makeReqResNext({
+      headers: { authorization: `Bearer ${token}` },
+      cookies: {},
+    });
+    await verifyToken(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user).toMatchObject({ userId: 12, role: 'ADMIN', tenantId: 1 });
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  test('#914 slice 2 (revised): HEADER wins precedence when BOTH cookie and Authorization header are present', async () => {
+    // The initial slice-2 design had cookie-first but that broke
+    // api_tests because Playwright's request fixture persists cookies
+    // across specs in the same context — a spec that authenticated set
+    // a cookie that then overrode the next spec's explicit Bearer header,
+    // picking the first spec's user for tenant-isolation assertions.
+    // Token payloads differ so we can assert which one populated req.user.
+    const cookieToken = jwt.sign({ userId: 100, role: 'ADMIN', tenantId: 5 }, SECRET);
+    const headerToken = jwt.sign({ userId: 999, role: 'USER', tenantId: 9 }, SECRET);
+    const { req, res, next } = makeReqResNext({
+      headers: { authorization: `Bearer ${headerToken}` },
+      cookies: { auth_token: cookieToken },
+    });
+    await verifyToken(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    // Header's userId=999 wins, cookie's userId=100 ignored.
+    expect(req.user.userId).toBe(999);
+    expect(req.user.tenantId).toBe(9);
+    expect(req.user.role).toBe('USER');
+  });
+
+  test('#914 slice 2: 401 with canonical envelope when NEITHER cookie nor Authorization header is present', async () => {
+    const { req, res, next } = makeReqResNext({ cookies: {}, headers: {} });
+    await verifyToken(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Authentication required' });
+    expect(res.set).toHaveBeenCalledWith('WWW-Authenticate', 'Bearer');
+    expect(next).not.toHaveBeenCalled();
   });
 });
 

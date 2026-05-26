@@ -268,3 +268,162 @@ describe('DELETE /api/tenant-settings/:key', () => {
     expect(prisma.tenantSetting.delete).not.toHaveBeenCalled();
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────
+// +8 NEW CASES (extension wave)
+//
+// What's pinned beyond the original 9
+// -----------------------------------
+//   - GET / without Authorization header → 401 (verifyToken gate is live)
+//   - GET /:key with malformed bearer    → 401 + WWW-Authenticate header
+//   - GET / when prisma throws           → 500 (error-shape envelope)
+//   - GET /:key for unknown key          → defaultValue null + general category
+//     (covers the "unknown key but no row" branch of defaultCategoryFor)
+//   - PUT /:key UPDATE path              → action='UPDATE' + audit captures oldValue
+//   - PUT /:key with explicit category   → overrides the budget/general default
+//   - PUT /:key with empty-string value  → 400 MISSING_VALUE (zero-coercion guard)
+//   - DELETE /:key as USER               → 403 RBAC_DENIED (no row lookup, no audit)
+//
+// The 401 + 500 cases lock down the failure-shape envelope so a future
+// middleware refactor (e.g. swapping the auth header reader for a cookie
+// reader, or changing the catch-all error message) cannot silently degrade
+// the operator UI's error handling.
+// ───────────────────────────────────────────────────────────────────────
+
+describe('Authentication gate (GET)', () => {
+  test('GET / without Authorization header → 401 + WWW-Authenticate', async () => {
+    const res = await request(makeApp()).get('/api/tenant-settings/');
+    expect(res.status).toBe(401);
+    // RFC 7235: missing credentials must carry the WWW-Authenticate header so
+    // SDK clients know which scheme to retry with.
+    expect(res.headers['www-authenticate']).toMatch(/^Bearer/);
+    expect(prisma.tenantSetting.findMany).not.toHaveBeenCalled();
+  });
+
+  test('GET /:key with malformed bearer → 401', async () => {
+    const res = await request(makeApp())
+      .get(`/api/tenant-settings/${KEYS.LLM_MONTHLY_CAP_USD_CENTS}`)
+      .set('Authorization', 'Bearer not-a-real-jwt');
+    expect(res.status).toBe(401);
+    expect(res.headers['www-authenticate']).toMatch(/^Bearer/);
+    expect(prisma.tenantSetting.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('Error-shape envelope', () => {
+  test('GET / when prisma throws → 500 { error }', async () => {
+    prisma.tenantSetting.findMany.mockRejectedValue(new Error('boom'));
+    const res = await request(makeApp())
+      .get('/api/tenant-settings/')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(500);
+    // Generic error string — must NOT leak the underlying "boom" detail.
+    expect(res.body).toEqual({ error: 'Failed to list tenant settings' });
+    expect(res.body.error).not.toMatch(/boom/);
+  });
+});
+
+describe('GET /:key — unknown key branch', () => {
+  test('unknown key with no row → defaultValue=null, category=general, isOverride=false', async () => {
+    // The route does not validate the key on GET (read-side is permissive
+    // so the UI can preview before save). DEFAULTS lookup misses → null.
+    // defaultCategoryFor falls through to "general" for non-budgetCap_* keys.
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get('/api/tenant-settings/some_unknown_key')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      key: 'some_unknown_key',
+      value: null,
+      defaultValue: null,
+      isOverride: false,
+      category: 'general',
+    });
+  });
+});
+
+describe('PUT /api/tenant-settings/:key — additional shapes', () => {
+  test('UPDATE path: prior row exists → audit action=UPDATE + captures oldValue', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: '5000' });
+    prisma.tenantSetting.upsert.mockResolvedValue({
+      id: 12,
+      key: KEYS.AI_CALLING_MONTHLY_CAP_USD_CENTS,
+      value: '15000',
+      category: 'budget',
+    });
+    const res = await request(makeApp())
+      .put(`/api/tenant-settings/${KEYS.AI_CALLING_MONTHLY_CAP_USD_CENTS}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ value: '15000' });
+    expect(res.status).toBe(200);
+    expect(res.body.value).toBe('15000');
+    // The audit row must record CREATE-vs-UPDATE based on prior existence,
+    // not always UPDATE. The oldValue surfaces the prior row's value verbatim
+    // so a chain reader can see the exact delta without joining tables.
+    const auditCall = prisma.auditLog.create.mock.calls[0][0];
+    expect(auditCall.data.action).toBe('UPDATE');
+    // details is JSON-stringified before being stored; assert against the parsed shape.
+    const details = JSON.parse(auditCall.data.details);
+    expect(details).toMatchObject({
+      key: KEYS.AI_CALLING_MONTHLY_CAP_USD_CENTS,
+      oldValue: '5000',
+      newValue: '15000',
+    });
+  });
+
+  test('explicit body.category overrides the default budget/general inference', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    prisma.tenantSetting.upsert.mockResolvedValue({
+      id: 21,
+      key: KEYS.LLM_MONTHLY_CAP_USD_CENTS,
+      value: '20000',
+      category: 'cost-control',
+    });
+    const res = await request(makeApp())
+      .put(`/api/tenant-settings/${KEYS.LLM_MONTHLY_CAP_USD_CENTS}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ value: '20000', category: 'cost-control' });
+    expect(res.status).toBe(200);
+    expect(res.body.category).toBe('cost-control');
+    // The create branch of upsert MUST carry the caller's override, not the
+    // budgetCap_*-derived "budget" default.
+    expect(prisma.tenantSetting.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ category: 'cost-control' }),
+        update: expect.objectContaining({ category: 'cost-control' }),
+      }),
+    );
+  });
+
+  test('empty-string value rejected with 400 MISSING_VALUE', async () => {
+    // The route's guard treats undefined / null / "" as missing — an admin
+    // sending an empty form field shouldn't accidentally overwrite a real
+    // cap with a falsy value. Pinning here so a future "trim then check"
+    // refactor doesn't silently allow whitespace-only values.
+    const res = await request(makeApp())
+      .put(`/api/tenant-settings/${KEYS.LLM_MONTHLY_CAP_USD_CENTS}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ value: '' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_VALUE' });
+    expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/tenant-settings/:key — RBAC gate', () => {
+  test('USER role cannot DELETE (403 RBAC_DENIED) and never touches DB', async () => {
+    const res = await request(makeApp())
+      .delete(`/api/tenant-settings/${KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS}`)
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'RBAC_DENIED' });
+    // The gate must short-circuit BEFORE prisma.findUnique fires — a USER
+    // shouldn't even be able to probe whether an override exists by
+    // observing 404 vs 403.
+    expect(prisma.tenantSetting.findUnique).not.toHaveBeenCalled();
+    expect(prisma.tenantSetting.delete).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+});

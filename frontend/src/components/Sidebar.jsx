@@ -38,6 +38,8 @@ import {
   PanelTop,
   Calendar,
   Shield,
+  // #917 slice 5 — CSP Violations admin nav entry icon.
+  ShieldAlert,
   ScrollText,
   GitBranch,
   TrendingUp,
@@ -107,6 +109,14 @@ import {
   BedDouble,
   // Zylu-Gap #933 — Products admin entry (precursor for #816 CSV slice).
   Package,
+  // Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster nav entry icon.
+  // Sightseeing is framed as "the 6th category in Cost Master" per #907,
+  // so the entry sits adjacent to Cost Master in renderTravelNav.
+  Camera,
+  // Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates nav entry icon.
+  // Reusable itinerary template scaffolds — placed adjacent to Sightseeing
+  // Master because both are #907 admin pages.
+  LayoutTemplate,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -1107,6 +1117,13 @@ function renderTravelNav({
       <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
       <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
       <Link to="/travel/cost-master" icon={DollarSign} label="Cost Master" />
+      {/* Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster admin entry.
+          Adjacent to Cost Master because #907 frames Sightseeing as "the
+          6th category in Cost Master". */}
+      <Link to="/travel/sightseeing" icon={Camera} label="Sightseeing Master" />
+      {/* Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates admin entry.
+          Adjacent to Sightseeing Master because both are #907 admin pages. */}
+      <Link to="/travel/itinerary-templates" icon={LayoutTemplate} label="Itinerary Templates" />
       {isAdmin && <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" />}
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />
       <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" />
@@ -1357,6 +1374,14 @@ function renderGenericNav({
             to="/field-permissions"
             icon={Shield}
             label="Field Permissions"
+            adminOnly
+          />
+          {/* #917 slice 5 — CSP Violations admin (consumes GET /api/csp/violations
+              shipped slice 3; page shipped slice 4 at /admin/csp-violations). */}
+          <Link
+            to="/admin/csp-violations"
+            icon={ShieldAlert}
+            label="CSP Violations"
             adminOnly
           />
           {/* PRD Gap §1.5 / §1.6 — Commission profiles + revenue goals admin pages. */}

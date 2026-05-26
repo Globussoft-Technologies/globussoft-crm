@@ -201,6 +201,110 @@ describe('GET /api/playbooks — list', () => {
   });
 });
 
+// ─── GET /api/playbooks?fields=summary — #920 slice 11 slim-shape opt-in ─
+
+describe('GET /api/playbooks?fields=summary — #920 slice 11 slim-shape opt-in', () => {
+  test('?fields=summary attaches a slim Prisma select dropping `steps`', async () => {
+    prisma.playbook.findMany.mockResolvedValue([
+      { id: 1, name: 'P1', stage: 'discovery', isActive: true, tenantId: 1,
+        createdAt: new Date('2026-05-01T00:00:00Z'),
+        updatedAt: new Date('2026-05-02T00:00:00Z') },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/playbooks?fields=summary');
+    expect(res.status).toBe(200);
+    expect(prisma.playbook.findMany).toHaveBeenCalledTimes(1);
+    const args = prisma.playbook.findMany.mock.calls[0][0];
+    // Slim select MUST be present and MUST NOT include the heavy `steps` column.
+    expect(args.select).toBeDefined();
+    expect(args.select).toEqual({
+      id: true,
+      name: true,
+      stage: true,
+      isActive: true,
+      tenantId: true,
+      createdAt: true,
+      updatedAt: true,
+    });
+    expect(args.select.steps).toBeUndefined();
+    // Filters + ordering still flow through unchanged.
+    expect(args.where.tenantId).toBe(1);
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('summary mode skips hydratePlaybook — response rows have NO `steps` key', async () => {
+    // Prisma `select` would omit `steps` from the row entirely; the route
+    // must NOT try to JSON.parse(undefined) and inject an empty `steps: []`.
+    prisma.playbook.findMany.mockResolvedValue([
+      { id: 1, name: 'P1', stage: 'discovery', isActive: true, tenantId: 1 },
+      { id: 2, name: 'P2', stage: 'demo', isActive: false, tenantId: 1 },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/playbooks?fields=summary');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    for (const row of res.body) {
+      expect(row).not.toHaveProperty('steps');
+      expect(row.id).toBeDefined();
+      expect(row.name).toBeDefined();
+      expect(row.stage).toBeDefined();
+    }
+  });
+
+  test('omitting ?fields preserves full row shape — `steps` hydrated to array (back-compat)', async () => {
+    // Existing callers (no ?fields) get the unchanged response shape.
+    prisma.playbook.findMany.mockResolvedValue([
+      { id: 1, name: 'P1', stage: 'discovery',
+        steps: '[{"title":"A","description":"","order":0}]',
+        isActive: true, tenantId: 1 },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/playbooks');
+    expect(res.status).toBe(200);
+    // No `select` key when summary mode is OFF — full row returned.
+    const args = prisma.playbook.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // hydratePlaybook ran → steps is an ARRAY, not the raw JSON string.
+    expect(Array.isArray(res.body[0].steps)).toBe(true);
+    expect(res.body[0].steps[0].title).toBe('A');
+  });
+
+  test('non-exact ?fields value (e.g. "summary,extra") falls through to full shape', async () => {
+    // Strict equality only — `fields=summary` triggers slim, anything else
+    // (including superset values) returns the full hydrated row.
+    prisma.playbook.findMany.mockResolvedValue([
+      { id: 1, name: 'P1', stage: 'discovery', steps: '[]', isActive: true, tenantId: 1 },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/playbooks?fields=summary,extra');
+    expect(res.status).toBe(200);
+    const args = prisma.playbook.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined(); // NOT slim
+    // Hydrate path ran → `steps` is present as an array.
+    expect(Array.isArray(res.body[0].steps)).toBe(true);
+  });
+
+  test('?fields=summary composes with ?stage filter — both flow through where', async () => {
+    prisma.playbook.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    await request(app).get('/api/playbooks?fields=summary&stage=demo');
+    const args = prisma.playbook.findMany.mock.calls[0][0];
+    expect(args.where.stage).toBe('demo');
+    expect(args.where.tenantId).toBe(1);
+    expect(args.select).toBeDefined();
+    expect(args.select.steps).toBeUndefined();
+  });
+
+  test('?fields=summary composes with ?isActive filter', async () => {
+    prisma.playbook.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    await request(app).get('/api/playbooks?fields=summary&isActive=true');
+    const args = prisma.playbook.findMany.mock.calls[0][0];
+    expect(args.where.isActive).toBe(true);
+    expect(args.select).toBeDefined();
+  });
+});
+
 // ─── GET /api/playbooks/:id — read ──────────────────────────────────
 
 describe('GET /api/playbooks/:id — read', () => {

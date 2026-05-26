@@ -31,13 +31,34 @@ const coerceMinutes = (raw, fallback) => {
 
 // ─── SLA POLICIES ──────────────────────────────────────────────────────────
 
-// GET /api/sla/policies — list SLA policies for tenant
+// GET /api/sla/policies?fields=summary — list SLA policies for tenant
 router.get("/policies", async (req, res) => {
   try {
-    const policies = await prisma.slaPolicy.findMany({
+    // #920 slice 20: ?fields=summary slim-shape opt-in. Mirrors slices 1-17.
+    // SlaPolicy is a thin model (no heavy JSON blobs / nested includes), but
+    // when the caller passes ?fields=summary we drop the tenantId (leaks
+    // tenant identity to clients that don't need it) and createdAt (metadata
+    // not needed by list-view chrome). Returns only the columns needed for
+    // dropdown / picker-style list rendering: id, name, priority,
+    // responseMinutes, resolveMinutes, isActive. Opt-in additive — existing
+    // callers (no ?fields, or any non-exact value) get the full row shape
+    // unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId: tenantId(req) },
       orderBy: [{ isActive: "desc" }, { priority: "asc" }, { createdAt: "desc" }],
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        priority: true,
+        responseMinutes: true,
+        resolveMinutes: true,
+        isActive: true,
+      };
+    }
+    const policies = await prisma.slaPolicy.findMany(findManyArgs);
     res.json(policies);
   } catch (err) {
     console.error("[SLA][policies]", err);

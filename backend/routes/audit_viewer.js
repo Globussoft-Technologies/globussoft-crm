@@ -98,16 +98,44 @@ router.get('/', async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
     const where = buildWhere(req);
 
+    // #920 slice 24 — slim-shape opt-in. Audit rows carry heavy `details`
+    // JSON (often PII diffs) + hash-chain bookkeeping (`prevHash`/`hash`)
+    // that callers paginating a list view don't need. Opt-in additive — no
+    // existing caller passes ?fields=summary (grep audit pre-flight clean),
+    // so legacy callers keep the full row shape with the nested user
+    // include unchanged. Slim shape drops:
+    //   - details      (heavy JSON, PII)
+    //   - prevHash     (hash-chain bookkeeping, not list-view-relevant)
+    //   - hash         (hash-chain bookkeeping, not list-view-relevant)
+    //   - user include (slim is list-only; detail fetch hydrates user)
+    // The createdAtFormatted + viewerTimezone decoration from #387 still
+    // applies on slim rows because decorateRow operates on the projected
+    // shape (it only depends on `createdAt`, which slim still selects).
+    const isSummary = req.query.fields === 'summary';
+    const findManyArgs = {
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        entity: true,
+        entityId: true,
+        action: true,
+        userId: true,
+        tenantId: true,
+        createdAt: true,
+      };
+    } else {
+      findManyArgs.include = {
+        user: { select: { id: true, name: true, email: true } },
+      };
+    }
+
     const [logs, total] = await Promise.all([
-      prisma.auditLog.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-        include: {
-          user: { select: { id: true, name: true, email: true } },
-        },
-      }),
+      prisma.auditLog.findMany(findManyArgs),
       prisma.auditLog.count({ where }),
     ]);
 

@@ -225,3 +225,247 @@ describe('<Staff /> — revenue goal chips in edit modal (#818)', () => {
     expect(modal.textContent).toMatch(/\+2 more/);
   });
 });
+
+// EXTENSION (2026-05-26): broader surface coverage for the 805-LOC Staff page.
+// Eight additional describes cover: list rendering, invite-modal open/submit,
+// inline role PATCH, deactivate confirm-and-fire, role-pill filter, deactivated
+// + admin row hiding, empty-state, and RBAC-gated invite button visibility.
+//
+// Vitest discipline applied here
+// ──────────────────────────────
+//   1. Stable mock object refs for useNotify (per the 2026-05-23 cron rule) —
+//      one notifyObj reused across every render so useCallback dependency
+//      arrays don't re-fire on each render and trigger infinite loops.
+//   2. getAllByText for labels that appear as filter chrome AND row badges
+//      (the role-pill filter test below — "USER" shows up as a pill + as the
+//      role for 3 rows + as a <select> option).
+//   3. Pure pin: tests target the SUT's contracts only — no SUT edits.
+//
+// Run from:   frontend/
+// Command:    npx vitest run src/__tests__/Staff.test.jsx
+
+// Stable refs for the notify hook — re-used across the extension describes.
+const notifyExtObj = {
+  error: vi.fn(),
+  success: vi.fn(),
+  info: vi.fn(),
+  confirm: vi.fn(() => Promise.resolve(true)),
+  prompt: vi.fn(() => Promise.resolve('')),
+};
+
+describe('<Staff /> — list rendering + stats bar', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    Object.values(notifyExtObj).forEach((fn) => { if (typeof fn?.mockReset === 'function') fn.mockReset(); });
+    notifyExtObj.confirm.mockImplementation(() => Promise.resolve(true));
+  });
+
+  it('renders every staff row name + email after the GET /api/staff resolves', async () => {
+    renderStaff('ADMIN');
+    // All four seeded rows surface their primary identity fields.
+    await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
+    expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument();
+    expect(screen.getByText('Priya Pro')).toBeInTheDocument();
+    expect(screen.getByText('Inactive Aman')).toBeInTheDocument();
+    expect(screen.getByText('rishu@enhancedwellness.in')).toBeInTheDocument();
+    expect(screen.getByText('aman@enhancedwellness.in')).toBeInTheDocument();
+  });
+
+  it('stats bar surfaces accurate admin / manager / user / total counts', async () => {
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
+    // STAFF_ROWS has 1 ADMIN + 0 MANAGER + 3 USER = 4 total.
+    expect(screen.getByText(/1 Admins/)).toBeInTheDocument();
+    expect(screen.getByText(/0 Managers/)).toBeInTheDocument();
+    expect(screen.getByText(/3 Users/)).toBeInTheDocument();
+    expect(screen.getByText(/4 total/)).toBeInTheDocument();
+  });
+
+  it('filtering by USER hides the lone ADMIN row', async () => {
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
+
+    // "USER" appears in MANY surfaces — filter pill, role <select> options,
+    // visible <RoleBadge> values. getAllByText is the right primitive per
+    // the 2026-05-23 standing rule. The filter pill is the first element
+    // matching with role="button"-shaped semantics.
+    const userPills = screen.getAllByText(/3 Users/);
+    expect(userPills.length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(userPills[0]);
+
+    // After filtering, the ADMIN row (Rishu) is hidden; user rows remain.
+    await waitFor(() => expect(screen.queryByText('Rishu Agarwal')).not.toBeInTheDocument());
+    expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument();
+    expect(screen.getByText('Priya Pro')).toBeInTheDocument();
+    expect(screen.getByText('Inactive Aman')).toBeInTheDocument();
+  });
+});
+
+describe('<Staff /> — Invite modal (#891)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+  });
+
+  it('Invite Staff button is gated to ADMIN viewers only', async () => {
+    renderStaff('USER');
+    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+    // Non-admins must not see the invite CTA at all.
+    expect(screen.queryByTestId('staff-invite-button')).not.toBeInTheDocument();
+  });
+
+  it('clicking Invite Staff opens the modal; X button closes it', async () => {
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
+    // Modal closed by default.
+    expect(screen.queryByTestId('staff-invite-modal')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('staff-invite-button'));
+    expect(screen.getByTestId('staff-invite-modal')).toBeInTheDocument();
+
+    // X (Close) button dismisses.
+    fireEvent.click(screen.getByLabelText('Close'));
+    expect(screen.queryByTestId('staff-invite-modal')).not.toBeInTheDocument();
+  });
+
+  it('submitting the invite form POSTs to /api/auth/register with the form fields', async () => {
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('staff-invite-button'));
+
+    // Fill all required inputs.
+    fireEvent.change(screen.getByPlaceholderText('Full Name'),         { target: { value: 'Asha Newhire' } });
+    fireEvent.change(screen.getByPlaceholderText('Email Address'),     { target: { value: 'asha@enhancedwellness.in' } });
+    fireEvent.change(screen.getByPlaceholderText('Temporary Password'), { target: { value: 'TempPw!1234' } });
+
+    // Submit the form.
+    const submit = screen.getByRole('button', { name: /Send Invitation/i });
+    fireEvent.click(submit);
+
+    // POST /api/auth/register received the form payload.
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls;
+      const invite = calls.find((c) => c[0] === '/api/auth/register');
+      expect(invite).toBeTruthy();
+      const body = JSON.parse(invite[1].body);
+      expect(body).toEqual(expect.objectContaining({
+        name: 'Asha Newhire',
+        email: 'asha@enhancedwellness.in',
+        password: 'TempPw!1234',
+        role: 'USER', // default selection
+      }));
+      expect(invite[1].method).toBe('POST');
+    });
+  });
+});
+
+describe('<Staff /> — inline role change (PUT /api/staff/:id/role)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+  });
+
+  it('changing the role <select> on a non-wellness row PUTs the new role', async () => {
+    // Need a row whose wellnessRole is null so the inline <select> renders
+    // (wellness rows show a read-only badge instead — by design, see SUT:413).
+    // Rishu (id=1) has wellnessRole: null → shows the editable role select.
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
+
+    // The select for the admin row carries the row's current role value.
+    const selects = screen.getAllByRole('combobox');
+    // Find the select whose current value is ADMIN — that's Rishu's row.
+    const rishuSelect = selects.find((s) => s.value === 'ADMIN');
+    expect(rishuSelect).toBeDefined();
+
+    fireEvent.change(rishuSelect, { target: { value: 'MANAGER' } });
+
+    // PUT /api/staff/1/role { role: 'MANAGER' } fired.
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(
+        (c) => c[0] === '/api/staff/1/role' && c[1]?.method === 'PUT'
+      );
+      expect(put).toBeTruthy();
+      expect(JSON.parse(put[1].body)).toEqual({ role: 'MANAGER' });
+    });
+  });
+});
+
+describe('<Staff /> — Deactivate flow (PATCH /api/staff/:id)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+  });
+
+  it('clicking Deactivate prompts confirm, then PATCHes active=false', async () => {
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+
+    // Click Deactivate on a non-admin row (id=2, Dr. Harsh Kumar).
+    fireEvent.click(screen.getByTestId('staff-action-deactivate-2'));
+
+    // The notify.confirm wrapper from the top-of-file mock auto-resolves true,
+    // so the PATCH should fire with active=false.
+    await waitFor(() => {
+      const patch = fetchApiMock.mock.calls.find(
+        (c) => c[0] === '/api/staff/2' && c[1]?.method === 'PATCH'
+      );
+      expect(patch).toBeTruthy();
+      expect(JSON.parse(patch[1].body)).toEqual({ active: false });
+    });
+  });
+
+  it('reactivating an already-inactive user PATCHes active=true', async () => {
+    renderStaff('ADMIN');
+    // Inactive Aman (id=4) is the seeded deactivated row.
+    await waitFor(() => expect(screen.getByText('Inactive Aman')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('staff-action-deactivate-4'));
+
+    await waitFor(() => {
+      const patch = fetchApiMock.mock.calls.find(
+        (c) => c[0] === '/api/staff/4' && c[1]?.method === 'PATCH'
+      );
+      expect(patch).toBeTruthy();
+      // Going from deactivatedAt-non-null → null means active=true.
+      expect(JSON.parse(patch[1].body)).toEqual({ active: true });
+    });
+  });
+});
+
+describe('<Staff /> — empty list state', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+  });
+
+  it('renders the "No staff members found." copy when the directory is empty', async () => {
+    // Override /api/staff with an empty array.
+    renderStaff('ADMIN', { '/api/staff': [] });
+    await waitFor(() => expect(screen.getByText(/No staff members found\./i)).toBeInTheDocument());
+    // Stats bar is NOT rendered (it's gated on staff.length > 0).
+    expect(screen.queryByText(/Admins$/)).not.toBeInTheDocument();
+  });
+});
+
+describe('<Staff /> — RBAC: USER viewer is read-only', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+  });
+
+  it('USER role sees role as a read-only badge (no <select>) and no action buttons', async () => {
+    renderStaff('USER');
+    await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
+
+    // No editable role <select> — for a wellness/non-admin viewer the role
+    // pill is a read-only <span>, never a <select> (SUT line 449-452).
+    // Rishu's role is ADMIN: should appear as a RoleBadge, not a combobox.
+    const comboboxes = screen.queryAllByRole('combobox');
+    expect(comboboxes.length).toBe(0);
+
+    // No action buttons.
+    expect(screen.queryByTestId('staff-action-edit-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('staff-action-edit-2')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('staff-action-delete-2')).not.toBeInTheDocument();
+
+    // No Invite CTA.
+    expect(screen.queryByTestId('staff-invite-button')).not.toBeInTheDocument();
+  });
+});
+

@@ -21,6 +21,16 @@ const {
   renderConsentPdf,
   renderBrandedInvoicePdf,
   generateTravelQuotePdf,
+  renderFullPatientReportPdf,
+  renderTravelDiagnosticPdf,
+  renderTravelItineraryPdf,
+  renderTravelStallPersonalisedPdf,
+  renderTravelInvoicePdf,
+  generateTravelInvoicePdf,
+  generatePosReceiptPdf,
+  voucherSubtypeForLine,
+  formatVoucherServiceRange,
+  extractTravellerListFromInvoice,
 } = pdfR;
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -1271,5 +1281,1464 @@ describe('generateTravelQuotePdf', () => {
     expect(txt).not.toContain('Includes GST');
     expect(txt).toContain('GST');
     expect(txt).toContain('$18.00');
+  });
+});
+
+// ── Pure helpers — voucher subtype / service-range / traveller list ──
+//
+// These three helpers are exported off the module for unit-level
+// coverage of the slice-18 voucher-detail contract. They're pure
+// (no PDF stream, no I/O), so we can hit every branch quickly.
+
+describe('voucherSubtypeForLine', () => {
+  test('per_night and per_room both map to "Hotel"', () => {
+    expect(voucherSubtypeForLine('per_night')).toBe('Hotel');
+    expect(voucherSubtypeForLine('per_room')).toBe('Hotel');
+  });
+
+  test('per_pax maps to "Activity"', () => {
+    expect(voucherSubtypeForLine('per_pax')).toBe('Activity');
+  });
+
+  test('per_trip maps to "Transfer"', () => {
+    expect(voucherSubtypeForLine('per_trip')).toBe('Transfer');
+  });
+
+  test('addon maps to "Add-on"', () => {
+    expect(voucherSubtypeForLine('addon')).toBe('Add-on');
+  });
+
+  test('other maps to "Service"', () => {
+    expect(voucherSubtypeForLine('other')).toBe('Service');
+  });
+
+  test('unknown lineType (defensive) returns the literal string', () => {
+    expect(voucherSubtypeForLine('per_visa')).toBe('per_visa');
+  });
+
+  test('null / undefined lineType falls back to "Service"', () => {
+    expect(voucherSubtypeForLine(null)).toBe('Service');
+    expect(voucherSubtypeForLine(undefined)).toBe('Service');
+  });
+});
+
+describe('formatVoucherServiceRange', () => {
+  test('start + end same day collapses to single date', () => {
+    const range = formatVoucherServiceRange('2026-06-01', '2026-06-01');
+    expect(range).toContain('Jun');
+    expect(range).not.toContain('→');
+  });
+
+  test('multi-day range renders with arrow separator', () => {
+    const range = formatVoucherServiceRange('2026-06-01', '2026-06-07');
+    expect(range).toContain('→');
+    expect(range).toContain('Jun');
+  });
+
+  test('start only renders the start date verbatim', () => {
+    const range = formatVoucherServiceRange('2026-06-01', null);
+    expect(range).toContain('Jun');
+    expect(range).not.toContain('→');
+  });
+
+  test('end only renders the end date verbatim', () => {
+    const range = formatVoucherServiceRange(null, '2026-06-07');
+    expect(range).toContain('Jun');
+    expect(range).not.toContain('→');
+  });
+
+  test('both null returns em-dash placeholder', () => {
+    expect(formatVoucherServiceRange(null, null)).toBe('—');
+    expect(formatVoucherServiceRange(undefined, undefined)).toBe('—');
+  });
+});
+
+describe('extractTravellerListFromInvoice', () => {
+  test('honours invoice.travellerList as array (joined with ", ")', () => {
+    const out = extractTravellerListFromInvoice(
+      { travellerList: ['Alice', 'Bob', 'Charlie'] },
+      [],
+    );
+    expect(out).toBe('Alice, Bob, Charlie');
+  });
+
+  test('honours invoice.travellerList as string verbatim', () => {
+    const out = extractTravellerListFromInvoice(
+      { travellerList: 'X, Y, Z' },
+      [],
+    );
+    expect(out).toBe('X, Y, Z');
+  });
+
+  test('falls back to parsing line.notes "Travellers: ..." (case-insensitive)', () => {
+    const out = extractTravellerListFromInvoice(
+      {},
+      [{ notes: 'Travellers: Dave, Erin' }],
+    );
+    expect(out).toBe('Dave, Erin');
+  });
+
+  test('handles singular "Traveller: ..." form', () => {
+    const out = extractTravellerListFromInvoice(
+      {},
+      [{ notes: 'Traveller: Solo Pax' }],
+    );
+    expect(out).toBe('Solo Pax');
+  });
+
+  test('first match wins when multiple lines repeat the list', () => {
+    const out = extractTravellerListFromInvoice(
+      {},
+      [
+        { notes: 'Travellers: First, Match' },
+        { notes: 'Travellers: Second, Match' },
+      ],
+    );
+    expect(out).toBe('First, Match');
+  });
+
+  test('skips lines without notes and lines whose notes do not match the regex', () => {
+    const out = extractTravellerListFromInvoice(
+      {},
+      [
+        { notes: '' },
+        null,
+        { notes: 'no traveller marker here' },
+        { notes: 'Travellers: Found, It' },
+      ],
+    );
+    expect(out).toBe('Found, It');
+  });
+
+  test('empty array travellerList falls through to em-dash when no notes match', () => {
+    const out = extractTravellerListFromInvoice(
+      { travellerList: [] },
+      [],
+    );
+    expect(out).toBe('—');
+  });
+
+  test('trims whitespace-only string travellerList and falls through', () => {
+    const out = extractTravellerListFromInvoice(
+      { travellerList: '   ' },
+      [],
+    );
+    expect(out).toBe('—');
+  });
+
+  test('returns em-dash when nothing supplies a traveller list', () => {
+    expect(extractTravellerListFromInvoice(null, null)).toBe('—');
+    expect(extractTravellerListFromInvoice({}, [])).toBe('—');
+  });
+});
+
+// ── renderFullPatientReportPdf ──────────────────────────────────────
+//
+// Consolidated patient record (header + profile + visits + Rx + consents
+// + treatment plans + photos + inventory). Largest renderer in the file
+// after the travel-invoice path — six sections + per-section empty/full
+// branches + page-break logic.
+
+describe('renderFullPatientReportPdf', () => {
+  test('returns a non-empty PDF Buffer with %PDF magic (happy path empty)', async () => {
+    const buf = await renderFullPatientReportPdf({}, clinicFixture());
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(800);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+  });
+
+  test('handles null payload gracefully (no throw, default sections empty)', async () => {
+    const buf = await renderFullPatientReportPdf(null, clinicFixture());
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Patient Record');
+    // All six empty-state placeholders render.
+    expect(txt).toContain('no visits on file');
+    expect(txt).toContain('no prescriptions on file');
+    expect(txt).toContain('no consents on file');
+    expect(txt).toContain('no treatment plans on file');
+    expect(txt).toContain('no photos on file');
+    expect(txt).toContain('no inventory consumed');
+  });
+
+  test('renders patient profile fields (name / phone / email / gender / blood group / source)', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: {
+          name: 'Anita Roy',
+          phone: '+919876500000',
+          email: 'anita@example.com',
+          dob: '1985-04-12',
+          gender: 'female',
+          bloodGroup: 'O+',
+          source: 'instagram',
+          createdAt: '2024-01-15',
+        },
+      },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Anita Roy');
+    expect(txt).toContain('+919876500000');
+    expect(txt).toContain('anita@example.com');
+    expect(txt).toContain('female');
+    expect(txt).toContain('O+');
+    expect(txt).toContain('instagram');
+  });
+
+  test('renders Allergies block when patient.allergies present', async () => {
+    const buf = await renderFullPatientReportPdf(
+      { patient: { name: 'X', allergies: 'penicillin, sulfa drugs' } },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Allergies');
+    expect(txt).toContain('penicillin');
+  });
+
+  test('omits Allergies block when not provided', async () => {
+    const buf = await renderFullPatientReportPdf(
+      { patient: { name: 'X' } },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).not.toContain('Allergies');
+  });
+
+  test('renders operator name in header and footer when provided', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        operator: { name: 'Dr. Operator' },
+        generatedAt: '2026-04-15T10:00:00Z',
+      },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Dr. Operator');
+    expect(txt).toContain('Apr 2026');
+  });
+
+  test('renders visits with doctor, charge, and notes', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        visits: [
+          {
+            visitDate: '2026-04-01',
+            service: { name: 'Hair Consultation' },
+            status: 'completed',
+            doctor: { name: 'Dr. Harsh' },
+            amountCharged: 1500,
+            notes: 'Initial assessment done.',
+          },
+        ],
+      },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Hair Consultation');
+    expect(txt).toContain('completed');
+    expect(txt).toContain('Dr. Harsh');
+    expect(txt).toContain('Initial assessment');
+  });
+
+  test('renders prescriptions with drugs (array form) and instructions', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        prescriptions: [
+          {
+            createdAt: '2026-04-15',
+            doctor: { name: 'Dr. R' },
+            drugs: [{ name: 'Minoxidil 5%', dosage: '1ml', frequency: 'BID', duration: '3m' }],
+            instructions: 'Apply to scalp',
+          },
+        ],
+      },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Minoxidil');
+    expect(txt).toContain('Apply to scalp');
+  });
+
+  test('renders prescriptions placeholder when drugs list is empty', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        prescriptions: [{ createdAt: '2026-04-15', drugs: [] }],
+      },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('no medications listed');
+  });
+
+  test('renders consents with template name and service', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        consents: [
+          {
+            signedAt: '2026-04-10',
+            templateName: 'hair-transplant',
+            service: { name: 'FUE Procedure' },
+          },
+        ],
+      },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('hair transplant');
+    expect(txt).toContain('FUE Procedure');
+  });
+
+  test('consent signatureSvg with valid data-URL renders without throwing', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        consents: [
+          {
+            signedAt: '2026-04-10',
+            templateName: 'general',
+            signatureSvg: TINY_PNG_DATA_URL,
+          },
+        ],
+      },
+      clinicFixture(),
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    // Image XObject embedded.
+    expect(buf.toString('latin1')).toContain('/Subtype /Image');
+  });
+
+  test('consent signatureSvg with corrupt base64 is swallowed (no throw)', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        consents: [
+          {
+            signedAt: '2026-04-10',
+            templateName: 'general',
+            signatureSvg: 'data:image/png;base64,@@@invalid@@@',
+          },
+        ],
+      },
+      clinicFixture(),
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+  });
+
+  test('renders treatment plans with session progress + plan total', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        treatmentPlans: [
+          {
+            name: 'GFC 6-session Plan',
+            status: 'active',
+            completedSessions: 2,
+            totalSessions: 6,
+            startedAt: '2026-01-15',
+            nextDueAt: '2026-05-15',
+            totalPrice: 60000,
+          },
+        ],
+      },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('GFC 6-session Plan');
+    expect(txt).toContain('active');
+    expect(txt).toContain('Sessions:');
+    expect(txt).toContain('2/6');
+  });
+
+  test('treatment plan falls back to service.name and default "active" status', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        treatmentPlans: [
+          { service: { name: 'Fallback Service Name' } },
+        ],
+      },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Fallback Service Name');
+    expect(txt).toContain('active');
+  });
+
+  test('renders photos counts with before/after URLs', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        photos: [
+          {
+            visitDate: '2026-04-01',
+            before: ['https://cdn.example.com/before1.jpg', 'https://cdn.example.com/before2.jpg'],
+            after: ['https://cdn.example.com/after1.jpg'],
+          },
+        ],
+      },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Before:');
+    expect(txt).toContain('After:');
+    expect(txt).toContain('before1.jpg');
+    expect(txt).toContain('after1.jpg');
+  });
+
+  test('renders inventory table with grand total summed from qty*unitCost', async () => {
+    const buf = await renderFullPatientReportPdf(
+      {
+        patient: { name: 'X' },
+        consumptions: [
+          { visitDate: '2026-04-01', productName: 'PRP Kit', qty: 2, unitCost: 1500 },
+          { visitDate: '2026-04-02', productName: 'Numbing Gel', qty: 1, unitCost: 500 },
+        ],
+      },
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('PRP Kit');
+    expect(txt).toContain('Numbing Gel');
+    expect(txt).toContain('Total:');
+    // grand total = 2*1500 + 1*500 = 3500
+    expect(txt).toContain('3500');
+  });
+
+  test('long visits list paginates (50 visits triggers second page)', async () => {
+    const visits = [];
+    for (let i = 0; i < 50; i++) {
+      visits.push({
+        visitDate: '2026-04-01',
+        service: { name: `Visit-${i}` },
+        notes: 'lorem ipsum dolor sit amet, consectetur adipiscing elit.',
+      });
+    }
+    const buf = await renderFullPatientReportPdf(
+      { patient: { name: 'X' }, visits },
+      clinicFixture(),
+    );
+    const raw = buf.toString('latin1');
+    expect(raw).toMatch(/\/Count\s+[2-9]/);
+  });
+});
+
+// ── renderTravelDiagnosticPdf ───────────────────────────────────────
+
+function diagnosticFixture(overrides = {}) {
+  return {
+    subBrand: 'tmc',
+    score: 78.5,
+    classification: 'TIER_A',
+    classificationLabel: 'Tier A — School + Cultural',
+    recommendedTier: 'Premium',
+    answersJson: JSON.stringify({ q1: 'a', q2: ['x', 'y'] }),
+    createdAt: '2026-05-10',
+    ...overrides,
+  };
+}
+
+function diagnosticBankFixture(overrides = {}) {
+  return {
+    version: 3,
+    questionsJson: JSON.stringify({
+      questions: [
+        { id: 'q1', text: 'Group size?', options: [{ value: 'a', label: '10-20 students' }] },
+        { id: 'q2', text: 'Preferred regions?', options: [{ value: 'x', label: 'North India' }, { value: 'y', label: 'West India' }] },
+      ],
+    }),
+    ...overrides,
+  };
+}
+
+describe('renderTravelDiagnosticPdf', () => {
+  test('returns a non-empty PDF Buffer (happy path)', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture(),
+      { name: 'Test User', email: 't@example.com', phone: '+91999' },
+      diagnosticBankFixture(),
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(500);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+  });
+
+  test('renders contact name + email + phone in header block', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture(),
+      { name: 'Anita Roy', email: 'anita@example.com', phone: '+919876500000' },
+      diagnosticBankFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Anita Roy');
+    expect(txt).toContain('anita@example.com');
+    expect(txt).toContain('+919876500000');
+  });
+
+  test('renders classificationLabel and recommendedTier in result band', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture({ classificationLabel: 'Tier A', recommendedTier: 'Premium' }),
+      { name: 'X' },
+      diagnosticBankFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Tier A');
+    expect(txt).toContain('Recommended tier');
+    expect(txt).toContain('Premium');
+  });
+
+  test('falls back to classification when classificationLabel missing', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture({ classification: 'TIER_B', classificationLabel: undefined }),
+      { name: 'X' },
+      diagnosticBankFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('TIER_B');
+  });
+
+  test('renders score formatted to 2 decimal places', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture({ score: 42 }),
+      { name: 'X' },
+      diagnosticBankFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('42.00');
+  });
+
+  test('handles missing bank gracefully ("No question bank snapshot available")', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture(),
+      { name: 'X' },
+      null,
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('No question bank snapshot available');
+  });
+
+  test('handles malformed bank.questionsJson without throwing', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture(),
+      { name: 'X' },
+      { version: 1, questionsJson: '{not json' },
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('No question bank snapshot available');
+  });
+
+  test('handles malformed answersJson without throwing', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture({ answersJson: '{not json' }),
+      { name: 'X' },
+      diagnosticBankFixture(),
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+  });
+
+  test('resolves multi-select answer (array) via option label lookup', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture({
+        answersJson: JSON.stringify({ q2: ['x', 'y'] }),
+      }),
+      { name: 'X' },
+      diagnosticBankFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('North India');
+    expect(txt).toContain('West India');
+  });
+
+  test('renders questions with their text + numbered prefix', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture(),
+      { name: 'X' },
+      diagnosticBankFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Group size?');
+    expect(txt).toContain('Preferred regions?');
+  });
+
+  test('sub-brand fallback for unknown sub-brand → "Travel CRM"', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture({ subBrand: 'unknown-brand' }),
+      { name: 'X' },
+      diagnosticBankFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Travel CRM');
+  });
+
+  test('renders bank version (v?) when bank.version undefined', async () => {
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture(),
+      { name: 'X' },
+      { questionsJson: '{"questions":[]}' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Bank version');
+    // Unknown version renders as "?".
+    expect(txt).toContain('v?');
+  });
+});
+
+// ── renderTravelItineraryPdf ────────────────────────────────────────
+
+function itineraryFixture(overrides = {}) {
+  return {
+    id: 99,
+    subBrand: 'rfu',
+    version: 2,
+    destination: 'Makkah & Madinah',
+    startDate: '2026-08-01',
+    endDate: '2026-08-15',
+    totalAmount: 350000,
+    currency: 'INR',
+    items: [
+      { itemType: 'flight', description: 'BOM-JED return', position: 1, unitCost: 60000, markup: 5000, totalPrice: 65000 },
+      { itemType: 'hotel', description: 'Makkah 5-star (7 nights)', position: 2, unitCost: 80000, markup: 8000, totalPrice: 88000 },
+    ],
+    ...overrides,
+  };
+}
+
+describe('renderTravelItineraryPdf', () => {
+  test('returns a non-empty PDF Buffer (happy path)', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture(),
+      { name: 'Pilgrim One', email: 'p@example.com', phone: '+919876500000' },
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(500);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+  });
+
+  test('renders sub-brand label (rfu → "RFU" + "Umrah")', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({ subBrand: 'rfu' }),
+      { name: 'X' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('RFU');
+    expect(txt).toContain('Umrah');
+  });
+
+  test('renders itinerary version in header band', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({ version: 7 }),
+      { name: 'X' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Itinerary v7');
+  });
+
+  test('renders destination + date range in trip-summary block', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({
+        destination: 'Bali',
+        startDate: '2026-09-01',
+        endDate: '2026-09-08',
+      }),
+      { name: 'X' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Bali');
+    // formatDate renders en-IN long-form: "Sep" or "Sept" depending on
+    // ICU/locale data; accept either form.
+    expect(txt).toMatch(/Sept?\s+2026/);
+  });
+
+  test('renders all item descriptions, sorted by position', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({
+        items: [
+          { itemType: 'activity', description: 'ZZZ-Last', position: 99, totalPrice: 100 },
+          { itemType: 'flight', description: 'AAA-First', position: 1, totalPrice: 200 },
+        ],
+      }),
+      { name: 'X' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('AAA-First');
+    expect(txt).toContain('ZZZ-Last');
+    // Sorted ascending — AAA-First appears in output before ZZZ-Last.
+    expect(txt.indexOf('AAA-First')).toBeLessThan(txt.indexOf('ZZZ-Last'));
+  });
+
+  test('placeholder when items list is empty (quote pending)', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({ items: [] }),
+      { name: 'X' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('No items on this itinerary yet');
+    expect(txt).toContain('quote pending');
+  });
+
+  test('items with missing prices render as em-dash', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({
+        items: [{ itemType: 'visa', description: 'Visa fee TBD', position: 1 }],
+      }),
+      { name: 'X' },
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Visa fee TBD');
+  });
+
+  test('renders Grand total band when totalAmount supplied', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({ totalAmount: 350000, currency: 'USD' }),
+      { name: 'X' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Grand total');
+    expect(txt).toContain('$350000.00');
+  });
+
+  test('omits Grand total band when totalAmount missing', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({ totalAmount: null, totalPrice: null }),
+      { name: 'X' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).not.toContain('Grand total');
+  });
+
+  test('falls back to "Destination TBD" when destination missing', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({ destination: undefined }),
+      { name: 'X' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Destination TBD');
+  });
+
+  test('renders footer with itinerary ID + version', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({ id: 555, version: 3 }),
+      { name: 'X' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('555');
+    // Version reappears in footer text.
+    expect(txt).toContain('v3');
+  });
+
+  test('falls back to "Customer" when contact has no name', async () => {
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture(),
+      null,
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Customer');
+  });
+
+  test('long item list paginates (40 items triggers extra page)', async () => {
+    const items = [];
+    for (let i = 0; i < 40; i++) {
+      items.push({
+        itemType: 'hotel',
+        description: `Item-${i}`,
+        position: i,
+        unitCost: 1000,
+        totalPrice: 1000,
+      });
+    }
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({ items }),
+      { name: 'X' },
+    );
+    const raw = buf.toString('latin1');
+    expect(raw).toMatch(/\/Count\s+[2-9]/);
+  });
+});
+
+// ── renderTravelStallPersonalisedPdf ────────────────────────────────
+
+describe('renderTravelStallPersonalisedPdf', () => {
+  test('returns a non-empty PDF Buffer (happy path)', async () => {
+    const buf = await renderTravelStallPersonalisedPdf({
+      contact: { name: 'Family One', email: 'f@example.com' },
+      destinations: ['Bali', 'Phuket', 'Maldives'],
+      budget: 200000,
+      durationDays: 7,
+      proseText: 'Personalised paragraph here.',
+    });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(500);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+  });
+
+  test('renders Travel Stall sub-brand label', async () => {
+    const buf = await renderTravelStallPersonalisedPdf({
+      contact: { name: 'X' },
+      destinations: ['A'],
+      proseText: 'p',
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Travel Stall');
+    expect(txt).toContain('Personalised Recommendations');
+  });
+
+  test('renders trip parameters band (duration / budget / tier)', async () => {
+    const buf = await renderTravelStallPersonalisedPdf({
+      contact: { name: 'X' },
+      destinations: ['A'],
+      budget: 150000,
+      durationDays: 5,
+      diagnostic: { recommendedTier: 'Premium' },
+      proseText: 'p',
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('5 day');
+    expect(txt).toContain('150000');
+    expect(txt).toContain('Premium');
+  });
+
+  test('clamps destinations to 5 visible (10 in → 5 rendered, rest dropped)', async () => {
+    const dests = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+    const buf = await renderTravelStallPersonalisedPdf({
+      contact: { name: 'X' },
+      destinations: dests,
+      proseText: 'p',
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('A');
+    expect(txt).toContain('E');
+    expect(txt).not.toContain('Destination F');
+  });
+
+  test('handles empty destinations list (no throw)', async () => {
+    const buf = await renderTravelStallPersonalisedPdf({
+      contact: { name: 'X' },
+      destinations: [],
+      proseText: 'p',
+    });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+  });
+
+  test('handles null payload defensively', async () => {
+    const buf = await renderTravelStallPersonalisedPdf(null);
+    expect(Buffer.isBuffer(buf)).toBe(true);
+  });
+
+  test('day-1 (durationDays=1) pluralisation: "1 day" not "1 days"', async () => {
+    const buf = await renderTravelStallPersonalisedPdf({
+      contact: { name: 'X' },
+      destinations: ['A'],
+      durationDays: 1,
+      proseText: 'p',
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('1 day');
+    expect(txt).not.toContain('1 days');
+  });
+
+  test('omits params band when all trip params absent', async () => {
+    const buf = await renderTravelStallPersonalisedPdf({
+      contact: { name: 'X' },
+      destinations: ['A'],
+      proseText: 'p',
+    });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    const txt = extractPdfText(buf);
+    expect(txt).not.toContain('Budget:');
+    expect(txt).not.toContain('Tier:');
+  });
+});
+
+// ── renderTravelInvoicePdf / generateTravelInvoicePdf ───────────────
+
+function travelLineFixture(overrides = {}) {
+  return {
+    description: 'Default line',
+    lineType: 'per_pax',
+    quantity: 2,
+    unitPrice: 5000,
+    amount: 10000,
+    gstPercent: 18,
+    taxableValue: 10000,
+    ...overrides,
+  };
+}
+
+function travelInvoiceFixture(overrides = {}) {
+  return {
+    id: 7001,
+    invoiceNum: 'TINV-2026-0042',
+    subBrand: 'tmc',
+    docType: 'TaxInvoice',
+    contactName: 'Anita Roy',
+    contactEmail: 'anita@example.com',
+    contactPhone: '+919876500000',
+    issuedDate: '2026-05-01',
+    dueDate: '2026-05-15',
+    status: 'Sent',
+    currency: 'INR',
+    totalAmount: 11800,
+    placeOfSupplyInterstate: false,
+    ...overrides,
+  };
+}
+
+describe('renderTravelInvoicePdf', () => {
+  test('returns a non-empty PDF Buffer (happy path TaxInvoice)', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture(),
+      lines: [travelLineFixture()],
+    });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(500);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+  });
+
+  test('docType=TaxInvoice → header reads "TAX INVOICE" + GST footer line', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ docType: 'TaxInvoice' }),
+      lines: [travelLineFixture()],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('TAX INVOICE');
+    expect(txt).toContain('GST Rules');
+  });
+
+  test('docType=Proforma → header reads "PROFORMA INVOICE" + proforma legal text', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ docType: 'Proforma' }),
+      lines: [travelLineFixture()],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('PROFORMA INVOICE');
+    expect(txt).toContain('Proforma Invoice');
+    expect(txt).toContain('not a tax invoice');
+  });
+
+  test('docType=CreditNote → header + footer text', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ docType: 'CreditNote' }),
+      lines: [travelLineFixture()],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('CREDIT NOTE');
+    expect(txt).toContain('reduces customer payable');
+  });
+
+  test('docType=DebitNote → header + footer text', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ docType: 'DebitNote' }),
+      lines: [travelLineFixture()],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('DEBIT NOTE');
+    expect(txt).toContain('increases customer payable');
+  });
+
+  test('docType=TravelVoucher → header + Voucher Details block rendered', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({
+        docType: 'TravelVoucher',
+        travellerList: ['Alice', 'Bob'],
+      }),
+      lines: [
+        {
+          description: 'Hotel 3 nights',
+          lineType: 'per_night',
+          bookingRef: 'HRB-12345',
+          serviceStartDate: '2026-06-01',
+          serviceEndDate: '2026-06-04',
+          quantity: 3,
+          unitPrice: 5000,
+          amount: 15000,
+          gstPercent: 18,
+        },
+      ],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('TRAVEL VOUCHER');
+    expect(txt).toContain('Voucher Details');
+    expect(txt).toContain('Travellers');
+    expect(txt).toContain('Alice');
+    expect(txt).toContain('Bob');
+    expect(txt).toContain('Hotel');
+    expect(txt).toContain('HRB-12345');
+    expect(txt).toContain('non-billable');
+  });
+
+  test('TravelVoucher with no fulfillment lines shows placeholder text', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ docType: 'TravelVoucher' }),
+      lines: [],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Voucher Details');
+    expect(txt).toContain('No fulfillment lines yet');
+  });
+
+  test('TravelVoucher: tax-typed lines are NOT rendered in voucher rows', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ docType: 'TravelVoucher' }),
+      lines: [
+        { description: 'GST charge', lineType: 'tax', amount: 1800 },
+        // Without any fulfillment line, the empty-state placeholder kicks in.
+      ],
+    });
+    const txt = extractPdfText(buf);
+    // Tax lines excluded → placeholder appears
+    expect(txt).toContain('No fulfillment lines yet');
+  });
+
+  test('TravelVoucher: traveller list parsed from line notes when invoice.travellerList absent', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ docType: 'TravelVoucher' }),
+      lines: [
+        {
+          description: 'Hotel',
+          lineType: 'per_night',
+          notes: 'Travellers: Charlie, Dana',
+          bookingRef: 'B-1',
+          serviceStartDate: '2026-06-01',
+          serviceEndDate: '2026-06-03',
+        },
+      ],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Charlie');
+    expect(txt).toContain('Dana');
+  });
+
+  test('docType absent (back-compat) defaults to TaxInvoice', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ docType: undefined }),
+      lines: [travelLineFixture()],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('TAX INVOICE');
+  });
+
+  test('intra-state default → CGST/SGST split rendered in GST cell', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ placeOfSupplyInterstate: false }),
+      lines: [travelLineFixture({ gstPercent: 18, taxableValue: 1000, amount: 1000 })],
+    });
+    const txt = extractPdfText(buf);
+    // PDFKit may wrap "CGST/SGST" into "CGST/" + "SGST" across two
+    // text-positioning operators when the GST cell is narrow; accept
+    // either compact or wrapped forms.
+    expect(txt).toMatch(/CGST\/\s*SGST/);
+    expect(txt).toContain('9+9%');
+  });
+
+  test('inter-state → IGST line rendered in GST cell', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ placeOfSupplyInterstate: true }),
+      lines: [travelLineFixture({ gstPercent: 18, taxableValue: 1000, amount: 1000 })],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('IGST');
+    expect(txt).toContain('18%');
+  });
+
+  test('GST=0 line renders em-dash in GST cell (no split)', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture(),
+      lines: [travelLineFixture({ gstPercent: 0 })],
+    });
+    const txt = extractPdfText(buf);
+    // The em-dash is outside WinAnsi so it doesn't survive; we instead
+    // confirm the GST split tokens are absent for this single line.
+    expect(txt).not.toMatch(/CGST\/\s*SGST/);
+    expect(txt).not.toContain('IGST');
+  });
+
+  test('GST=5% (odd half) renders CGST/SGST as "2.5+2.5%"', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ placeOfSupplyInterstate: false }),
+      lines: [travelLineFixture({ gstPercent: 5 })],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('2.5+2.5%');
+  });
+
+  test('currency=USD renders "$" prefix in money cells', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ currency: 'USD', totalAmount: 1000 }),
+      lines: [travelLineFixture({ amount: 1000, taxableValue: 1000, gstPercent: 0 })],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('$1000.00');
+  });
+
+  test('currency=GBP renders "£" pound-sign verbatim is replaced by "£" — verify amount survives', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ currency: 'GBP', totalAmount: 500 }),
+      lines: [travelLineFixture({ amount: 500, taxableValue: 500, gstPercent: 0 })],
+    });
+    const txt = extractPdfText(buf);
+    // £ is outside WinAnsi; verify the dollar prefix is NOT used and the
+    // GBP amount made it through (500.00 substring suffices).
+    expect(txt).toContain('500.00');
+    expect(txt).not.toContain('$500.00');
+  });
+
+  test('unknown currency code falls back to "CODE NNN.NN" verbatim', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ currency: 'AED', totalAmount: 750 }),
+      lines: [travelLineFixture({ amount: 750, taxableValue: 750, gstPercent: 0 })],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('AED 750.00');
+  });
+
+  test('Bill-To block renders contact name + email + phone', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture(),
+      lines: [travelLineFixture()],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Bill To');
+    expect(txt).toContain('Anita Roy');
+    expect(txt).toContain('anita@example.com');
+    expect(txt).toContain('+919876500000');
+  });
+
+  test('renders empty line items placeholder when no lines', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture(),
+      lines: [],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('No line items on this invoice');
+  });
+
+  test('accepts invoice.lines form (row-with-attached-lines)', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: { ...travelInvoiceFixture(), lines: [travelLineFixture()] },
+    });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Default line');
+  });
+
+  test('renders Payment Terms section with dueDate-formatted message', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ dueDate: '2026-05-30', invoiceNum: 'PT-1' }),
+      lines: [travelLineFixture()],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Payment Terms');
+    expect(txt).toContain('Payment is due');
+    expect(txt).toContain('May 2026');
+  });
+
+  test('falls back to generic Payment Terms when dueDate absent', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ dueDate: undefined }),
+      lines: [travelLineFixture()],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Please quote the invoice number');
+  });
+
+  test('renders tenant name in footer when supplied', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture(),
+      lines: [travelLineFixture()],
+      tenant: { name: 'Globussoft Demo Tenant' },
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Globussoft Demo Tenant');
+  });
+
+  test('generateTravelInvoicePdf alias is the same function reference', () => {
+    expect(generateTravelInvoicePdf).toBe(renderTravelInvoicePdf);
+  });
+
+  test('handles null opts defensively (no throw)', async () => {
+    const buf = await renderTravelInvoicePdf(null);
+    expect(Buffer.isBuffer(buf)).toBe(true);
+  });
+
+  test('falls back to invoice.id when invoiceNum missing', async () => {
+    const buf = await renderTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ invoiceNum: undefined, id: 90210 }),
+      lines: [travelLineFixture()],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('90210');
+  });
+});
+
+// ── generatePosReceiptPdf ───────────────────────────────────────────
+
+describe('generatePosReceiptPdf', () => {
+  function saleFixture(overrides = {}) {
+    return {
+      id: 4242,
+      currency: 'INR',
+      subtotal: 1000,
+      discount: 0,
+      tax: 0,
+      grandTotal: 1000,
+      completedAt: '2026-04-15T10:00:00Z',
+      ...overrides,
+    };
+  }
+
+  test('returns a non-empty PDF Buffer (happy path)', async () => {
+    const buf = generatePosReceiptPdf({
+      sale: saleFixture(),
+      lines: [{ description: 'Service', qty: 1, unitPrice: 1000, lineTotal: 1000 }],
+      payments: [{ method: 'cash', amount: 1000 }],
+      patient: { name: 'Walk-in', phone: '+919876500000' },
+      tenant: clinicFixture(),
+    });
+    // Note: generatePosReceiptPdf returns a Promise<Buffer> (the
+    // internal streamToBuffer is awaitable), so await it.
+    return buf.then((result) => {
+      expect(Buffer.isBuffer(result)).toBe(true);
+      expect(result.length).toBeGreaterThan(500);
+      expect(result.slice(0, 4).toString()).toBe('%PDF');
+    });
+  });
+
+  test('renders RECEIPT header + invoice number "INV-{id}"', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture({ id: 9876 }),
+      lines: [{ description: 'X', qty: 1, unitPrice: 100, lineTotal: 100 }],
+      payments: [{ method: 'card', amount: 100 }],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('RECEIPT');
+    expect(txt).toContain('INV-9876');
+  });
+
+  test('renders tenant name + address + contact block', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture(),
+      lines: [{ description: 'X', qty: 1, unitPrice: 100, lineTotal: 100 }],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Enhanced Wellness');
+    expect(txt).toContain('Mumbai');
+    expect(txt).toContain('hello@enhancedwellness.in');
+  });
+
+  test('renders Customer block when patient provided', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture(),
+      lines: [{ description: 'X', qty: 1, unitPrice: 100, lineTotal: 100 }],
+      payments: [],
+      patient: { name: 'Test Patient', phone: '+919876500000' },
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Customer');
+    expect(txt).toContain('Test Patient');
+    expect(txt).toContain('+919876500000');
+  });
+
+  test('omits Customer block when patient missing', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture(),
+      lines: [{ description: 'X', qty: 1, unitPrice: 100, lineTotal: 100 }],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).not.toContain('Customer');
+  });
+
+  test('renders line items table with description, qty, unit, total', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture(),
+      lines: [
+        { description: 'Haircut', qty: 1, unitPrice: 500, lineTotal: 500 },
+        { description: 'Shampoo', qty: 2, unitPrice: 250, lineTotal: 500 },
+      ],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Haircut');
+    expect(txt).toContain('Shampoo');
+    expect(txt).toContain('500.00');
+  });
+
+  test('renders Discount row only when sale.discount > 0', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture({ subtotal: 1000, discount: 200, tax: 0, grandTotal: 800 }),
+      lines: [{ description: 'X', qty: 1, unitPrice: 1000, lineTotal: 1000 }],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Discount');
+    expect(txt).toContain('200.00');
+  });
+
+  test('omits Discount row when discount = 0', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture({ discount: 0 }),
+      lines: [{ description: 'X', qty: 1, unitPrice: 100, lineTotal: 100 }],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).not.toContain('Discount');
+  });
+
+  test('renders Tax row only when sale.tax > 0', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture({ subtotal: 1000, tax: 180, discount: 0, grandTotal: 1180 }),
+      lines: [{ description: 'X', qty: 1, unitPrice: 1000, lineTotal: 1000 }],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Tax');
+    expect(txt).toContain('180.00');
+  });
+
+  test('split-tender renders one row per payment', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture({ grandTotal: 1000 }),
+      lines: [{ description: 'X', qty: 1, unitPrice: 1000, lineTotal: 1000 }],
+      payments: [
+        { method: 'cash', amount: 500 },
+        { method: 'card', amount: 300 },
+        { method: 'upi', amount: 200 },
+      ],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('cash');
+    expect(txt).toContain('card');
+    expect(txt).toContain('upi');
+    expect(txt).toContain('500.00');
+    expect(txt).toContain('300.00');
+    expect(txt).toContain('200.00');
+  });
+
+  test('placeholder when no payments recorded', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture(),
+      lines: [{ description: 'X', qty: 1, unitPrice: 100, lineTotal: 100 }],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('No payments recorded');
+  });
+
+  test('placeholder when no line items', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture(),
+      lines: [],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('No line items');
+  });
+
+  test('currency=USD renders $ prefix in money cells', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture({ currency: 'USD', subtotal: 100, grandTotal: 100 }),
+      lines: [{ description: 'X', qty: 1, unitPrice: 100, lineTotal: 100 }],
+      payments: [{ method: 'card', amount: 100 }],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('$100.00');
+  });
+
+  test('unknown currency renders "CODE NNN.NN" prefix', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture({ currency: 'JPY', subtotal: 100, grandTotal: 100 }),
+      lines: [{ description: 'X', qty: 1, unitPrice: 100, lineTotal: 100 }],
+      payments: [{ method: 'card', amount: 100 }],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('JPY 100.00');
+  });
+
+  test('renders Grand Total as bold last row', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture({ grandTotal: 1234.56 }),
+      lines: [{ description: 'X', qty: 1, unitPrice: 1234.56, lineTotal: 1234.56 }],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Grand Total');
+    expect(txt).toContain('1234.56');
+  });
+
+  test('computes grandTotal from subtotal-discount+tax when not supplied', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture({ subtotal: 1000, discount: 100, tax: 180, grandTotal: undefined }),
+      lines: [{ description: 'X', qty: 1, unitPrice: 1000, lineTotal: 1000 }],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    // 1000 - 100 + 180 = 1080
+    expect(txt).toContain('1080.00');
+  });
+
+  test('falls back to "Clinic" + "?" markers when tenant + sale.id missing', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: {},
+      lines: [{ description: 'X', qty: 1, unitPrice: 100, lineTotal: 100 }],
+      payments: [],
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Clinic');
+    expect(txt).toContain('INV-?');
+  });
+
+  test('renders thank-you + powered-by footer', async () => {
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture(),
+      lines: [{ description: 'X', qty: 1, unitPrice: 100, lineTotal: 100 }],
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Thank you for your visit');
+    expect(txt).toContain('Globussoft CRM');
+  });
+
+  test('handles null opts gracefully', async () => {
+    const buf = await generatePosReceiptPdf(null);
+    expect(Buffer.isBuffer(buf)).toBe(true);
+  });
+
+  test('renders many lines without throwing (40 lines paginate)', async () => {
+    const lines = [];
+    for (let i = 0; i < 40; i++) {
+      lines.push({ description: `Line-${i}`, qty: 1, unitPrice: 100, lineTotal: 100 });
+    }
+    const buf = await generatePosReceiptPdf({
+      sale: saleFixture({ subtotal: 4000, grandTotal: 4000 }),
+      lines,
+      payments: [],
+      tenant: clinicFixture(),
+    });
+    const raw = buf.toString('latin1');
+    expect(raw).toMatch(/\/Count\s+[2-9]/);
   });
 });

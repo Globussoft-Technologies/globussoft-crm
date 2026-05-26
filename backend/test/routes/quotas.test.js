@@ -533,3 +533,149 @@ describe('GET /attainment + /leaderboard', () => {
     expect(res.body[1].attainmentPct).toBe(50);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/quotas?fields=summary — #920 slice 25 slim-shape opt-in
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirrors slices 1-23. Pins the additive opt-in contract:
+//
+//   - ?fields=summary makes the route pass a slim `select` to Prisma
+//     restricting the returned columns to id + userId + period + target.
+//     tenantId, achieved, createdAt, updatedAt are dropped (the slim shape
+//     is for picker / dropdown chrome that doesn't need them).
+//
+//   - Any OTHER value of ?fields (missing, ?fields=, ?fields=foo, ?fields=
+//     SUMMARY, ?fields=summary,extra) is the legacy full-shape path —
+//     comparison is strict equality `=== "summary"`.
+//
+//   - userName attach (the canonical 3-tier display contract from the
+//     existing list tests) STILL runs on top of the slim row; the slim
+//     shape is about Prisma's column projection, not the response-envelope
+//     shape downstream of it.
+//
+//   - tenantId scoping + ?userId / ?period filters keep working identically
+//     in the slim path; the slim shape is column-only, not where-clause-
+//     mutating.
+//
+describe('GET /api/quotas?fields=summary — slim-shape opt-in (#920 slice 25)', () => {
+  test('?fields=summary passes a slim Prisma select dropping tenantId/achieved/createdAt/updatedAt', async () => {
+    prisma.quota.findMany.mockResolvedValue([
+      { id: 1, userId: 7, period: '2026-Q2', target: 50000 },
+    ]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 7, name: 'Priya Iyer', email: 'priya@example.com' },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/quotas?fields=summary')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(prisma.quota.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      orderBy: [{ period: 'desc' }, { userId: 'asc' }],
+      select: {
+        id: true,
+        userId: true,
+        period: true,
+        target: true,
+      },
+    });
+  });
+
+  test('without ?fields (legacy default) does NOT pass a select — full row shape preserved', async () => {
+    prisma.quota.findMany.mockResolvedValue([
+      { id: 1, userId: 7, period: '2026-Q2', target: 50000, tenantId: 1 },
+    ]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 7, name: 'Priya Iyer', email: 'priya@example.com' },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/quotas')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    // No `select` key in the legacy path — full row shape comes back
+    expect(prisma.quota.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      orderBy: [{ period: 'desc' }, { userId: 'asc' }],
+    });
+  });
+
+  test('?fields=foo (non-summary value) does NOT trigger slim shape — strict equality match', async () => {
+    prisma.quota.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/quotas?fields=foo')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(prisma.quota.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      orderBy: [{ period: 'desc' }, { userId: 'asc' }],
+    });
+    // No `select` key — legacy full-shape path
+    const callArg = prisma.quota.findMany.mock.calls[0][0];
+    expect(callArg.select).toBeUndefined();
+  });
+
+  test('?fields=SUMMARY (uppercase) does NOT match — strict case-sensitive equality', async () => {
+    prisma.quota.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/quotas?fields=SUMMARY')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.quota.findMany.mock.calls[0][0];
+    expect(callArg.select).toBeUndefined();
+  });
+
+  test('?fields=summary still attaches userName post-query (slim is column-only, not envelope-mutating)', async () => {
+    prisma.quota.findMany.mockResolvedValue([
+      { id: 1, userId: 7, period: '2026-Q2', target: 50000 },
+      { id: 2, userId: 8, period: '2026-Q1', target: 30000 },
+    ]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 7, name: 'Priya Iyer', email: 'priya@example.com' },
+      { id: 8, name: null, email: 'rahul@example.com' }, // email fallback
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/quotas?fields=summary')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    // Slim shape still receives the userName envelope decoration
+    expect(res.body[0].userName).toBe('Priya Iyer');
+    expect(res.body[1].userName).toBe('rahul@example.com');
+    // And the slim columns are present
+    expect(res.body[0]).toEqual(expect.objectContaining({
+      id: 1, userId: 7, period: '2026-Q2', target: 50000,
+    }));
+  });
+
+  test('?fields=summary composes with ?userId + ?period filters (where clause unchanged)', async () => {
+    prisma.quota.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/quotas?fields=summary&userId=42&period=2026-Q1')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    // Both filters AND the slim select must be honoured
+    expect(prisma.quota.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, userId: 42, period: '2026-Q1' },
+      orderBy: [{ period: 'desc' }, { userId: 'asc' }],
+      select: {
+        id: true,
+        userId: true,
+        period: true,
+        target: true,
+      },
+    });
+  });
+});

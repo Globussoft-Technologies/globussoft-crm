@@ -31,6 +31,15 @@ const { writeAudit } = require("../lib/audit");
 const pdfRenderer = require("../services/pdfRenderer");
 const { invoicePrefixFor, fiscalYearStart } = require("../lib/travelFiscalYear");
 const { computeTcs, isOverseasDestination } = require("../lib/tcsCalculation");
+// Arc 2 #901 slice 21 — TDS withholding sum from lines (lineType==='tds').
+const { computeTdsFromLines } = require("../lib/tdsCalculation");
+// Arc 2 #901 slice 24 — late-payment penalty math (pure compute, no Prisma).
+const {
+  computeLatePenalty,
+  DEFAULT_GRACE_DAYS,
+  DEFAULT_ANNUAL_RATE_PERCENT,
+  DEFAULT_FLAT_FEE_PERCENT,
+} = require("../lib/latePenaltyCalculation");
 // Arc 2 #902 slice 7 — GST tax-preview pipeline (CGST/SGST/IGST math +
 // state-code resolver + SAC codes + GSTR-1 HSN-summary grouping). The
 // invoice tax-preview endpoint mirrors backend/routes/travel_quotes.js
@@ -841,6 +850,2556 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/invoices/aged-receivable — Aged Receivable report
+// (Arc 2 #901 slice 23 — PRD_TRAVEL_BILLING FR-3.6.a).
+//
+// Returns open (Issued | Partial) invoices bucketed by days past due. The
+// bucket layout matches FR-3.6.a verbatim: 0-30 / 31-60 / 61-90 / 90+ (plus
+// a `notYetDue` bucket for invoices whose dueDate is in the future or null).
+//
+// Per-invoice outstanding balance = totalAmount - sum(schedule.receivedAmount).
+// Invoices with NO payment schedule rows treat the entire totalAmount as
+// outstanding (the slice-17 auto-schedule landed mid-arc — pre-slice-17
+// invoices stay schedule-less by design, and operator-issued single-pay
+// invoices may stay schedule-less). Balance is half-up rounded to 2 dp.
+//
+// Auth: ADMIN | MANAGER (mirrors gstr1-export — finance reports are not
+// surfaced to USER role per the same UC-2.5 month-end-close framing).
+// Sub-brand access narrows the where clause via getSubBrandAccessSet.
+//
+// Query params (all optional):
+//   ?subBrand=tmc                — narrow to one sub-brand
+//   ?asOf=2026-05-25             — bucket against this date instead of now
+//                                  (ISO-8601 YYYY-MM-DD). Useful for
+//                                  reproducible month-end snapshots.
+//   ?limit=200                   — clamped to MAX_LIMIT=500, default 100.
+//   ?offset=0                    — pagination cursor.
+//   ?contactId=999               — narrow to one customer (operator-side
+//                                  collections workflow).
+//
+// Response shape: {
+//   asOf: <ISO date>,
+//   total: <count of matched invoices>,
+//   limit, offset,
+//   invoices: [
+//     { id, invoiceNum, subBrand, contactId, status, dueDate,
+//       totalAmount, receivedAmount, outstandingAmount, daysPastDue,
+//       bucket: "0-30" | "31-60" | "61-90" | "90+" | "notYetDue",
+//       currency }
+//   ],
+//   summary: {
+//     byBucket: {
+//       "0-30":    { count, outstanding },
+//       "31-60":   { count, outstanding },
+//       "61-90":   { count, outstanding },
+//       "90+":     { count, outstanding },
+//       notYetDue: { count, outstanding },
+//     },
+//     totalOutstanding: "X.XX",
+//     currencyBreakdown: { INR: "X.XX", USD: "Y.YY", ... }
+//   }
+// }
+//
+// Error codes: INVALID_SUB_BRAND, INVALID_AS_OF, INVALID_LIMIT,
+// INVALID_OFFSET, INVALID_CONTACT_ID.
+// ============================================================================
+function parseAsOf(input) {
+  if (input == null || input === "") return new Date();
+  const s = String(input);
+  // Accept ISO-8601 date OR datetime. Reject obviously-bad input.
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) {
+    const err = new Error("asOf must be a valid ISO-8601 date");
+    err.status = 400;
+    err.code = "INVALID_AS_OF";
+    throw err;
+  }
+  return d;
+}
+
+function bucketForDaysPastDue(days) {
+  if (days == null || days < 0) return "notYetDue";
+  if (days <= 30) return "0-30";
+  if (days <= 60) return "31-60";
+  if (days <= 90) return "61-90";
+  return "90+";
+}
+
+// Half-up rounding to 2dp on a Number. Mirrors the addDecimal convention
+// (Decimal(15,2) — Number precision is fine well below 1e15). Math.round
+// uses round-half-away-from-zero in V8 which is the half-up we want for
+// non-negative currency amounts.
+function roundHalfUp2(n) {
+  const v = Number(n == null ? 0 : n);
+  return (Math.round(v * 100) / 100).toFixed(2);
+}
+
+router.get(
+  "/invoices/aged-receivable",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const asOf = parseAsOf(req.query.asOf);
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      let contactIdFilter = null;
+      if (req.query.contactId != null && String(req.query.contactId).trim() !== "") {
+        const cid = parseInt(req.query.contactId, 10);
+        if (!Number.isFinite(cid) || cid <= 0) {
+          return res.status(400).json({
+            error: "contactId must be a positive integer",
+            code: "INVALID_CONTACT_ID",
+          });
+        }
+        contactIdFilter = cid;
+      }
+
+      const limit = parseLimitForSummary(req.query.limit);
+      const offset = parseOffsetForSummary(req.query.offset);
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        // "Open" = not paid, not voided, not draft. Issued | Partial are
+        // the customer-owed states.
+        status: { in: ["Issued", "Partial"] },
+      };
+      if (subBrandFilter) where.subBrand = subBrandFilter;
+      if (contactIdFilter) where.contactId = contactIdFilter;
+
+      // Sub-brand access narrowing mirrors gstr1-export.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (where.subBrand) {
+          if (!canAccessSubBrand(allowed, where.subBrand)) {
+            where.subBrand = "__none__";
+          }
+        } else {
+          where.subBrand = allowed.size > 0 ? { in: [...allowed] } : "__none__";
+        }
+      }
+
+      const [invoices, total] = await Promise.all([
+        prisma.travelInvoice.findMany({
+          where,
+          include: {
+            schedule: {
+              select: { receivedAmount: true, status: true },
+            },
+          },
+          orderBy: [{ dueDate: "asc" }, { id: "asc" }],
+          take: limit,
+          skip: offset,
+        }),
+        prisma.travelInvoice.count({ where }),
+      ]);
+
+      const asOfMs = asOf.getTime();
+      const buckets = {
+        "0-30": { count: 0, outstanding: "0.00" },
+        "31-60": { count: 0, outstanding: "0.00" },
+        "61-90": { count: 0, outstanding: "0.00" },
+        "90+": { count: 0, outstanding: "0.00" },
+        notYetDue: { count: 0, outstanding: "0.00" },
+      };
+      const currencyBreakdown = {};
+      let totalOutstanding = "0.00";
+
+      const rows = invoices.map((inv) => {
+        const sched = Array.isArray(inv.schedule) ? inv.schedule : [];
+        let received = 0;
+        for (const s of sched) {
+          received += Number(s.receivedAmount == null ? 0 : s.receivedAmount);
+        }
+        const totalAmt = Number(inv.totalAmount == null ? 0 : inv.totalAmount);
+        const outstandingNum = totalAmt - received;
+        const outstanding = roundHalfUp2(outstandingNum);
+        const dueMs =
+          inv.dueDate instanceof Date
+            ? inv.dueDate.getTime()
+            : inv.dueDate
+              ? new Date(inv.dueDate).getTime()
+              : null;
+        const daysPastDue =
+          dueMs == null ? null : Math.floor((asOfMs - dueMs) / 86_400_000);
+        const bucket = bucketForDaysPastDue(daysPastDue);
+
+        buckets[bucket].count += 1;
+        buckets[bucket].outstanding = addDecimal(
+          buckets[bucket].outstanding,
+          outstanding,
+        );
+        totalOutstanding = addDecimal(totalOutstanding, outstanding);
+
+        const cur = inv.currency || "INR";
+        currencyBreakdown[cur] = addDecimal(
+          currencyBreakdown[cur] || "0.00",
+          outstanding,
+        );
+
+        return {
+          id: inv.id,
+          invoiceNum: inv.invoiceNum,
+          subBrand: inv.subBrand,
+          contactId: inv.contactId,
+          status: inv.status,
+          dueDate: inv.dueDate,
+          totalAmount: roundHalfUp2(totalAmt),
+          receivedAmount: roundHalfUp2(received),
+          outstandingAmount: outstanding,
+          daysPastDue,
+          bucket,
+          currency: cur,
+        };
+      });
+
+      res.json({
+        asOf: asOf.toISOString(),
+        total,
+        limit,
+        offset,
+        invoices: rows,
+        summary: {
+          byBucket: buckets,
+          totalOutstanding,
+          currencyBreakdown,
+        },
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] aged-receivable error:", e.message);
+      res.status(500).json({ error: "Failed to generate aged receivable" });
+    }
+  },
+);
+
+// GET /api/travel/invoices/by-month — any verified token (tenant + sub-brand scoped).
+//
+// Slice 29 of #901 (PRD_TRAVEL_BILLING §3 — tenant-wide invoice
+// analytics rolled up by calendar month). Mirrors #900 slice 16
+// (/quotes/by-month) — same UTC YYYY-MM bucketing template, same
+// defensive math, same orderBy semantics, swapping TravelQuote for
+// TravelInvoice. One row per UTC-month present in the scoped invoice
+// set, summarising the count + status splits across all 5 TravelInvoice
+// statuses (Draft/Issued/Partial/Paid/Voided) for that month plus
+// totalValue + paidValue + openValue sums. Read-only; consumed by the
+// operator-facing "invoices trend" chart on the billing dashboard and
+// the per-month picker for drill-downs into the underlying /invoices
+// list.
+//
+// Why a separate endpoint instead of extending /invoices/aged-receivable:
+//   - Different aggregation granularity (per-month time-series, not
+//     per-bucket-age-band).
+//   - Different lifecycle posture (covers Draft + Voided too — open
+//     receivable only spans Issued + Partial).
+//   - Pre-fills a different UI surface (line/bar trend chart vs the
+//     aged-receivable table).
+//
+// Bucket key shape: ISO YYYY-MM string (e.g. "2026-05") derived from
+// TravelInvoice.createdAt's UTC year + month. UTC chosen deliberately
+// so bucket labels stay stable across operator timezones — finance
+// reconciliation works in calendar-month UTC for cross-border volume.
+//
+// Scope rules:
+//   - Tenant-scoped on TravelInvoice.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//     (Differs from aged-receivable's ADMIN/MANAGER gate because this
+//     surface is a high-level trend chart, not a per-customer balance
+//     report that warrants role narrowing.)
+//
+// Query string:
+//   status    optional TravelInvoice.status filter
+//             (Draft/Issued/Partial/Paid/Voided)
+//   from      optional inclusive lower bound on bucket (YYYY-MM); rows
+//             with month < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY-MM); rows
+//             with month > to are excluded
+//   orderBy   default "month:asc" (chronological); also accepts
+//             "month:desc", "totalValue:asc|desc", "invoiceCount:asc|desc",
+//             "paidCount:asc|desc". Unknown tokens degrade silently
+//             to default (same graceful posture as slice 16).
+//   limit     default 12 (one year of months), max 60 (5 years).
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     months: [ {
+//       month: "2026-05",
+//       invoiceCount, totalValue,
+//       draftCount, issuedCount, partialCount, paidCount, voidedCount,
+//       paidValue, openValue
+//     } ],
+//     totalMonths,
+//     grandInvoiceCount,
+//     grandTotalValue,
+//     grandPaidValue,
+//     grandOpenValue,
+//     limit, offset
+//   }
+//
+// openValue per row = totalValue - paidValue - voidedValue (where
+// voidedValue is the sum of totalAmount on Voided rows — voided
+// invoices contribute to totalValue but neither paid nor open).
+// grandOpenValue is the sum of per-row openValue, half-up rounded.
+//
+// Defensive behaviour: null/invalid TravelInvoice.totalAmount contributes
+// 0 (no NaN poisoning); null/invalid createdAt → "unknown" bucket
+// (excluded when ?from / ?to is set, kept otherwise so the count surface
+// stays accurate). Half-up 2dp rounding via Number.EPSILON, matching
+// the canonical round2 used in slice 16.
+//
+// Route ordering: declared BEFORE GET /invoices/:id so Express doesn't
+// try to parse "by-month" as a numeric :id (which would 400 INVALID_ID).
+router.get("/invoices/by-month", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    if (statusFilter) {
+      try {
+        assertValidStatus(statusFilter);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+    }
+
+    // YYYY-MM validation — same regex slice 16 uses. Bucket labels we
+    // emit follow this exact shape so callers passing month-tokens to
+    // from/to should already be using it.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+      "invoiceCount:asc",
+      "invoiceCount:desc",
+      "paidCount:asc",
+      "paidCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /invoices list handler — empty access set → all-zeros rollup (not
+    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+    // operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        months: [],
+        totalMonths: 0,
+        grandInvoiceCount: 0,
+        grandTotalValue: 0,
+        grandPaidValue: 0,
+        grandOpenValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-MM. Input size bound is the same as
+    // /invoices/aged-receivable (low thousands at platinum scale).
+    const invoices = await prisma.travelInvoice.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) =>
+      Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts/sums }.
+    // Invoices with null/invalid createdAt go into "unknown" so counts
+    // stay accurate. Null/invalid totalAmount contributes 0. voidedValue
+    // is tracked separately so openValue can subtract it (voided rows
+    // contribute to totalValue but are neither paid nor open).
+    const byMonth = new Map();
+    for (const inv of invoices) {
+      let monthKey = "unknown";
+      if (inv.createdAt) {
+        const dt = new Date(inv.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let row = byMonth.get(monthKey);
+      if (!row) {
+        row = {
+          month: monthKey,
+          invoiceCount: 0,
+          totalValue: 0,
+          draftCount: 0,
+          issuedCount: 0,
+          partialCount: 0,
+          paidCount: 0,
+          voidedCount: 0,
+          paidValue: 0,
+          voidedValue: 0,
+        };
+        byMonth.set(monthKey, row);
+      }
+
+      row.invoiceCount += 1;
+      const amt = Number(inv.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (inv.status) {
+        case "Draft":
+          row.draftCount += 1;
+          break;
+        case "Issued":
+          row.issuedCount += 1;
+          break;
+        case "Partial":
+          row.partialCount += 1;
+          break;
+        case "Paid":
+          row.paidCount += 1;
+          row.paidValue += safeAmt;
+          break;
+        case "Voided":
+          row.voidedCount += 1;
+          row.voidedValue += safeAmt;
+          break;
+        default:
+          break;
+      }
+    }
+
+    // Finalise rounding on per-row sums + compute openValue.
+    // openValue = totalValue - paidValue - voidedValue (the
+    // customer-owed-but-not-yet-paid surface).
+    let months = [...byMonth.values()].map((r) => {
+      const openValue = r.totalValue - r.paidValue - r.voidedValue;
+      return {
+        month: r.month,
+        invoiceCount: r.invoiceCount,
+        totalValue: round2(r.totalValue),
+        draftCount: r.draftCount,
+        issuedCount: r.issuedCount,
+        partialCount: r.partialCount,
+        paidCount: r.paidCount,
+        voidedCount: r.voidedCount,
+        paidValue: round2(r.paidValue),
+        openValue: round2(openValue),
+      };
+    });
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable month token); when
+    // no bounds are set, "unknown" stays so the count surface remains
+    // complete. Mirrors slice 16's posture.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM which is also
+    // chronological. "unknown" sorts last in asc / first in desc by
+    // virtue of being lexicographically > "9999-12" — acceptable for
+    // a defensive fallback bucket that should rarely appear.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalMonths = months.length;
+    const grandInvoiceCount = months.reduce(
+      (acc, r) => acc + (Number(r.invoiceCount) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandPaidValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.paidValue) || 0), 0),
+    );
+    const grandOpenValue = round2(
+      months.reduce((acc, r) => acc + (Number(r.openValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as slice 16.
+    const paged = months.slice(skip, skip + take);
+
+    res.json({
+      months: paged,
+      totalMonths,
+      grandInvoiceCount,
+      grandTotalValue,
+      grandPaidValue,
+      grandOpenValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-invoices] by-month error:", e.message);
+    res.status(500).json({ error: "Failed to compute monthly rollup" });
+  }
+});
+
+// GET /api/travel/invoices/by-quarter — any verified token (tenant + sub-brand scoped).
+//
+// Slice 30 of #901 (PRD_TRAVEL_BILLING §3 — tenant-wide invoice
+// analytics rolled up by calendar quarter). Mirrors #900 slice 17
+// (/quotes/by-quarter) + slice 29 (/invoices/by-month) with the
+// coarser-granularity quarter bucket (Q1=Jan-Mar, Q2=Apr-Jun,
+// Q3=Jul-Sep, Q4=Oct-Dec — calendar quarters, not Indian-FY April-
+// March). Same UTC rationale as by-month — finance reconciliation
+// works in calendar quarters; FY tooling is a future overlay on top
+// of this calendar-quarter primitive. Surfaces the full 5-status
+// TravelInvoice envelope (Draft/Issued/Partial/Paid/Voided) plus
+// paidValue + openValue (totalValue - paidValue - voidedValue).
+//
+// Why a separate endpoint instead of aggregate=quarter on by-month:
+// callers expect different defaults (12 quarters = 3 years at quarter
+// granularity is a sensible UI default; 36 months ≠ 12 quarters in the
+// same fixed-width chart slot). Pre-fills the quarterly-trend tile on
+// the billing dashboard with ~12 bars.
+//
+// Bucket key shape: "YYYY-Qn" string (e.g. "2026-Q2") derived from
+// TravelInvoice.createdAt's UTC year + quarter (`Math.floor(month/3)+1`).
+//
+// Scope rules:
+//   - Tenant-scoped on TravelInvoice.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   status    optional TravelInvoice.status filter
+//             (Draft/Issued/Partial/Paid/Voided)
+//   from      optional inclusive lower bound on bucket (YYYY-Qn); rows
+//             with quarter < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY-Qn); rows
+//             with quarter > to are excluded
+//   orderBy   default "quarter:asc" (chronological); also accepts
+//             "quarter:desc", "totalValue:asc|desc", "invoiceCount:asc|desc",
+//             "paidCount:asc|desc". Unknown tokens degrade silently
+//             to default.
+//   limit     default 12 (3 years of quarters), max 40 (10 years).
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     quarters: [ {
+//       quarter: "2026-Q2",
+//       invoiceCount, totalValue,
+//       draftCount, issuedCount, partialCount, paidCount, voidedCount,
+//       paidValue, openValue
+//     } ],
+//     totalQuarters,
+//     grandInvoiceCount,
+//     grandTotalValue,
+//     grandPaidValue,
+//     grandOpenValue,
+//     limit, offset
+//   }
+//
+// openValue per row = totalValue - paidValue - voidedValue (where
+// voidedValue is the sum of totalAmount on Voided rows — voided
+// invoices contribute to totalValue but neither paid nor open).
+// grandOpenValue is the sum of per-row openValue, half-up rounded.
+//
+// Defensive behaviour: null/invalid TravelInvoice.totalAmount contributes
+// 0 (no NaN poisoning); null/invalid createdAt → "unknown" bucket
+// (excluded when ?from / ?to is set, kept otherwise so the count surface
+// stays accurate). Half-up 2dp rounding via Number.EPSILON.
+//
+// Route ordering: declared BEFORE GET /invoices/:id so Express doesn't
+// try to parse "by-quarter" as a numeric :id (which would 400 INVALID_ID).
+router.get("/invoices/by-quarter", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+    if (statusFilter) {
+      try {
+        assertValidStatus(statusFilter);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+    }
+
+    // YYYY-Qn validation — same regex slice 17 (/quotes/by-quarter) uses.
+    // Bucket labels we emit follow this exact shape so callers passing
+    // quarter-tokens to from/to should already be using it. Anything else
+    // is a 400 INVALID_QUARTER_FORMAT.
+    const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+    if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-Qn format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "quarter:asc",
+      "quarter:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+      "invoiceCount:asc",
+      "invoiceCount:desc",
+      "paidCount:asc",
+      "paidCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /invoices list handler — empty access set → all-zeros rollup (not
+    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+    // operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        quarters: [],
+        totalQuarters: 0,
+        grandInvoiceCount: 0,
+        grandTotalValue: 0,
+        grandPaidValue: 0,
+        grandOpenValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY-Qn. Input size bound is the same as
+    // /invoices/by-month + /invoices/aged-receivable (low thousands at
+    // platinum scale).
+    const invoices = await prisma.travelInvoice.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) =>
+      Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts/sums }.
+    // Invoices with null/invalid createdAt go into "unknown" so counts
+    // stay accurate. Null/invalid totalAmount contributes 0. voidedValue
+    // is tracked separately so openValue can subtract it (voided rows
+    // contribute to totalValue but are neither paid nor open).
+    const byQuarter = new Map();
+    for (const inv of invoices) {
+      let quarterKey = "unknown";
+      if (inv.createdAt) {
+        const dt = new Date(inv.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const qn = Math.floor(dt.getUTCMonth() / 3) + 1;
+          quarterKey = `${yyyy}-Q${qn}`;
+        }
+      }
+
+      let row = byQuarter.get(quarterKey);
+      if (!row) {
+        row = {
+          quarter: quarterKey,
+          invoiceCount: 0,
+          totalValue: 0,
+          draftCount: 0,
+          issuedCount: 0,
+          partialCount: 0,
+          paidCount: 0,
+          voidedCount: 0,
+          paidValue: 0,
+          voidedValue: 0,
+        };
+        byQuarter.set(quarterKey, row);
+      }
+
+      row.invoiceCount += 1;
+      const amt = Number(inv.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (inv.status) {
+        case "Draft":
+          row.draftCount += 1;
+          break;
+        case "Issued":
+          row.issuedCount += 1;
+          break;
+        case "Partial":
+          row.partialCount += 1;
+          break;
+        case "Paid":
+          row.paidCount += 1;
+          row.paidValue += safeAmt;
+          break;
+        case "Voided":
+          row.voidedCount += 1;
+          row.voidedValue += safeAmt;
+          break;
+        default:
+          break;
+      }
+    }
+
+    // Finalise rounding on per-row sums + compute openValue.
+    // openValue = totalValue - paidValue - voidedValue (the
+    // customer-owed-but-not-yet-paid surface).
+    let quarters = [...byQuarter.values()].map((r) => {
+      const openValue = r.totalValue - r.paidValue - r.voidedValue;
+      return {
+        quarter: r.quarter,
+        invoiceCount: r.invoiceCount,
+        totalValue: round2(r.totalValue),
+        draftCount: r.draftCount,
+        issuedCount: r.issuedCount,
+        partialCount: r.partialCount,
+        paidCount: r.paidCount,
+        voidedCount: r.voidedCount,
+        paidValue: round2(r.paidValue),
+        openValue: round2(openValue),
+      };
+    });
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (no comparable token); when no bounds are set,
+    // "unknown" stays so the count surface remains complete. Mirrors
+    // slice 17 / slice 29's posture.
+    if (fromRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+    }
+    if (toRaw !== null) {
+      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+    }
+
+    // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+    // chronological (Q1<Q2<Q3<Q4 sorts correctly as ASCII). "unknown"
+    // lexicographically > "9999-Q4" so it sorts last in asc / first in
+    // desc — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    quarters.sort((a, b) => {
+      if (field === "quarter") {
+        if (a.quarter < b.quarter) return -1 * mult;
+        if (a.quarter > b.quarter) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalQuarters = quarters.length;
+    const grandInvoiceCount = quarters.reduce(
+      (acc, r) => acc + (Number(r.invoiceCount) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandPaidValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.paidValue) || 0), 0),
+    );
+    const grandOpenValue = round2(
+      quarters.reduce((acc, r) => acc + (Number(r.openValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as
+    // slice 17 / slice 29.
+    const paged = quarters.slice(skip, skip + take);
+
+    res.json({
+      quarters: paged,
+      totalQuarters,
+      grandInvoiceCount,
+      grandTotalValue,
+      grandPaidValue,
+      grandOpenValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-invoices] by-quarter error:", e.message);
+    res.status(500).json({ error: "Failed to compute quarterly rollup" });
+  }
+});
+
+// GET /api/travel/invoices/by-year — any verified token (tenant + sub-brand scoped).
+//
+// Slice 31 of #901 (PRD_TRAVEL_BILLING §3 — tenant-wide invoice
+// analytics rolled up by calendar year). Completes the
+// by-month/by-quarter/by-year time-series triplet (slices 29/30/31) for
+// the billing dashboard. Mirrors slice 30's /invoices/by-quarter with
+// the coarsest-granularity year bucket; same UTC rationale as by-month
+// + by-quarter (finance reconciliation works in calendar years; FY
+// tooling is a future overlay on top of this calendar-year primitive).
+// Also mirrors #900 slice 18 (/quotes/by-year) for shape consistency
+// across the quote + invoice time-series surfaces. Surfaces the full
+// 5-status TravelInvoice envelope (Draft/Issued/Partial/Paid/Voided)
+// plus paidValue + openValue (totalValue - paidValue - voidedValue).
+//
+// Why a separate endpoint instead of aggregate=year on by-quarter:
+// callers expect different defaults (10 years is a sensible UI default
+// for an "annual trend" tile; 40 quarters ≠ 10 years in the same
+// fixed-width chart slot). Pre-fills the annual-trend tile on the
+// billing dashboard with ~10 bars.
+//
+// Bucket key shape: "YYYY" string (e.g. "2026") derived from
+// TravelInvoice.createdAt's UTC year (`getUTCFullYear()`).
+//
+// Scope rules:
+//   - Tenant-scoped on TravelInvoice.tenantId.
+//   - Sub-brand-restricted: respects the caller's subBrandAccess set
+//     (MANAGER restricted to their sub-brand; ADMIN full access).
+//   - Any verified token; no RBAC narrowing — operator-readable read.
+//
+// Query string:
+//   status    optional TravelInvoice.status filter
+//             (Draft/Issued/Partial/Paid/Voided)
+//   from      optional inclusive lower bound on bucket (YYYY); rows
+//             with year < from are excluded
+//   to        optional inclusive upper bound on bucket (YYYY); rows
+//             with year > to are excluded
+//   orderBy   default "year:asc" (chronological); also accepts
+//             "year:desc", "totalValue:asc|desc", "invoiceCount:asc|desc",
+//             "paidCount:asc|desc". Unknown tokens degrade silently
+//             to default.
+//   limit     default 10 (a decade), max 30.
+//   offset    default 0
+//
+// Response shape:
+//   {
+//     years: [ {
+//       year: "2026",
+//       invoiceCount, totalValue,
+//       draftCount, issuedCount, partialCount, paidCount, voidedCount,
+//       paidValue, openValue
+//     } ],
+//     totalYears,
+//     grandInvoiceCount,
+//     grandTotalValue,
+//     grandPaidValue,
+//     grandOpenValue,
+//     limit, offset
+//   }
+//
+// openValue per row = totalValue - paidValue - voidedValue (where
+// voidedValue is the sum of totalAmount on Voided rows — voided
+// invoices contribute to totalValue but neither paid nor open).
+// grandOpenValue is the sum of per-row openValue, half-up rounded.
+//
+// Defensive behaviour: null/invalid TravelInvoice.totalAmount contributes
+// 0 (no NaN poisoning); null/invalid createdAt → "unknown" bucket
+// (excluded when ?from / ?to is set, kept otherwise so the count surface
+// stays accurate). Half-up 2dp rounding via Number.EPSILON.
+//
+// Route ordering: declared BEFORE GET /invoices/:id so Express doesn't
+// try to parse "by-year" as a numeric :id (which would 400 INVALID_ID).
+router.get("/invoices/by-year", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const statusFilter = req.query.status ? String(req.query.status) : null;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+    if (statusFilter) {
+      try {
+        assertValidStatus(statusFilter);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+    }
+
+    // YYYY validation — bucket labels we emit follow this exact shape so
+    // callers passing year-tokens to from/to should already be using it.
+    // Anything else is a 400 INVALID_YEAR_FORMAT.
+    const YEAR_RE = /^\d{4}$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+    if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "year:asc",
+      "year:desc",
+      "totalValue:asc",
+      "totalValue:desc",
+      "invoiceCount:asc",
+      "invoiceCount:desc",
+      "paidCount:asc",
+      "paidCount:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+    // /invoices list handler — empty access set → all-zeros rollup (not
+    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+    // operators.
+    const where = { tenantId: req.travelTenant.id };
+    if (statusFilter) where.status = statusFilter;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json({
+        years: [],
+        totalYears: 0,
+        grandInvoiceCount: 0,
+        grandTotalValue: 0,
+        grandPaidValue: 0,
+        grandOpenValue: 0,
+        limit: take,
+        offset: skip,
+      });
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    // No DB-level pagination — aggregation runs in-process so we can
+    // bucket by UTC YYYY. Input size bound is the same as
+    // /invoices/by-month + /invoices/by-quarter (low thousands at
+    // platinum scale).
+    const invoices = await prisma.travelInvoice.findMany({
+      where,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+      },
+    });
+
+    const round2 = (n) =>
+      Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-year. Map "YYYY" → { ...row counts/sums }.
+    // Invoices with null/invalid createdAt go into "unknown" so counts
+    // stay accurate. Null/invalid totalAmount contributes 0. voidedValue
+    // is tracked separately so openValue can subtract it (voided rows
+    // contribute to totalValue but are neither paid nor open).
+    const byYear = new Map();
+    for (const inv of invoices) {
+      let yearKey = "unknown";
+      if (inv.createdAt) {
+        const dt = new Date(inv.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          yearKey = String(dt.getUTCFullYear());
+        }
+      }
+
+      let row = byYear.get(yearKey);
+      if (!row) {
+        row = {
+          year: yearKey,
+          invoiceCount: 0,
+          totalValue: 0,
+          draftCount: 0,
+          issuedCount: 0,
+          partialCount: 0,
+          paidCount: 0,
+          voidedCount: 0,
+          paidValue: 0,
+          voidedValue: 0,
+        };
+        byYear.set(yearKey, row);
+      }
+
+      row.invoiceCount += 1;
+      const amt = Number(inv.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      row.totalValue += safeAmt;
+
+      switch (inv.status) {
+        case "Draft":
+          row.draftCount += 1;
+          break;
+        case "Issued":
+          row.issuedCount += 1;
+          break;
+        case "Partial":
+          row.partialCount += 1;
+          break;
+        case "Paid":
+          row.paidCount += 1;
+          row.paidValue += safeAmt;
+          break;
+        case "Voided":
+          row.voidedCount += 1;
+          row.voidedValue += safeAmt;
+          break;
+        default:
+          break;
+      }
+    }
+
+    // Finalise rounding on per-row sums + compute openValue.
+    // openValue = totalValue - paidValue - voidedValue (the
+    // customer-owed-but-not-yet-paid surface).
+    let years = [...byYear.values()].map((r) => {
+      const openValue = r.totalValue - r.paidValue - r.voidedValue;
+      return {
+        year: r.year,
+        invoiceCount: r.invoiceCount,
+        totalValue: round2(r.totalValue),
+        draftCount: r.draftCount,
+        issuedCount: r.issuedCount,
+        partialCount: r.partialCount,
+        paidCount: r.paidCount,
+        voidedCount: r.voidedCount,
+        paidValue: round2(r.paidValue),
+        openValue: round2(openValue),
+      };
+    });
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (no comparable token); when no bounds are set,
+    // "unknown" stays so the count surface remains complete. Mirrors
+    // slices 29 + 30's posture.
+    if (fromRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+    }
+    if (toRaw !== null) {
+      years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+    }
+
+    // Sort. "year" sorts lexicographically on YYYY which is also
+    // chronological (4-digit zero-padded years sort correctly as ASCII).
+    // "unknown" lexicographically > "9999" so it sorts last in asc /
+    // first in desc — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    years.sort((a, b) => {
+      if (field === "year") {
+        if (a.year < b.year) return -1 * mult;
+        if (a.year > b.year) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const totalYears = years.length;
+    const grandInvoiceCount = years.reduce(
+      (acc, r) => acc + (Number(r.invoiceCount) || 0),
+      0,
+    );
+    const grandTotalValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+    );
+    const grandPaidValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.paidValue) || 0), 0),
+    );
+    const grandOpenValue = round2(
+      years.reduce((acc, r) => acc + (Number(r.openValue) || 0), 0),
+    );
+
+    // Pagination applied AFTER aggregation + sort + filter, same as
+    // slices 29 + 30.
+    const paged = years.slice(skip, skip + take);
+
+    res.json({
+      years: paged,
+      totalYears,
+      grandInvoiceCount,
+      grandTotalValue,
+      grandPaidValue,
+      grandOpenValue,
+      limit: take,
+      offset: skip,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-invoices] by-year error:", e.message);
+    res.status(500).json({ error: "Failed to compute annual rollup" });
+  }
+});
+
+// ============================================================================
+// GET /api/travel/invoices/hsn-summary — Arc 2 #902 slice 17.
+//
+// PRD_TRAVEL_GST_COMPLIANCE.md FR-3.4.3: HSN/SAC summary report for a filing
+// period. One row per (SAC code, GST rate) cohort with aggregate count,
+// taxable value, IGST, CGST, and SGST. Differs from /gstr1-export in three
+// ways:
+//   (1) JSON by default (?format=csv opts into the CSV alternate);
+//   (2) single section only (no B2B_INVOICES / DOCUMENT_TOTALS roll-ups);
+//   (3) ?docType= optional filter — operators reconciling a specific class
+//       (e.g. CreditNote-only HSN summary) get a narrow slice. Default
+//       includes the same docType set as GSTR-1 (TaxInvoice + CreditNote +
+//       DebitNote; excludes Proforma + TravelVoucher).
+//
+// === Date range ===
+//
+// `month=YYYY-MM` resolves to a half-open `[start, end)` interval on
+// createdAt — same cohort convention as /gstr1-export so the two reports
+// always reconcile to the same denominator.
+//
+// === Auth ===
+//
+// ADMIN / MANAGER only — finance-report surface, mirrors /gstr1-export.
+//
+// === Sub-brand scoping ===
+//
+// Caller's subBrandAccess narrows the result; explicit ?subBrand= filter
+// is intersected with the access set (silent empty when caller can't
+// access the requested brand — same pattern as gstr1-export).
+//
+// === Output shape (JSON) ===
+//
+//   {
+//     month: 'YYYY-MM',
+//     subBrand: 'tmc' | 'all',
+//     docTypes: ['TaxInvoice', 'CreditNote', 'DebitNote'],
+//     rows: [
+//       { sacCode, description, gstPercent, taxableValue, igst, cgst, sgst,
+//         totalTax, count }
+//     ],
+//     totals: { taxableValue, igst, cgst, sgst, totalTax, lineCount }
+//   }
+//
+// === Output shape (CSV) ===
+//
+// Single section, BOM-prefixed UTF-8 with CRLF (mirrors gstr1-export
+// conventions). Filename: `hsn-summary-<month>-<subBrand>.csv`.
+//
+// === Error codes ===
+//
+//   - INVALID_MONTH (400)
+//   - INVALID_SUB_BRAND (400)
+//   - INVALID_DOC_TYPE (400) — when ?docType= isn't in the canonical set
+//   - INVALID_FORMAT (400) — when ?format= is anything other than
+//     'json' (default) or 'csv'
+//
+// ============================================================================
+const HSN_SUMMARY_DEFAULT_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
+
+router.get(
+  "/invoices/hsn-summary",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { year, month, start, end } = parseFilingMonth(req.query.month);
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      let docTypes = HSN_SUMMARY_DEFAULT_DOC_TYPES;
+      if (req.query.docType != null && String(req.query.docType).trim() !== "") {
+        const dt = String(req.query.docType).trim();
+        if (!HSN_SUMMARY_DEFAULT_DOC_TYPES.includes(dt)) {
+          return res.status(400).json({
+            error: `docType must be one of: ${HSN_SUMMARY_DEFAULT_DOC_TYPES.join(", ")}`,
+            code: "INVALID_DOC_TYPE",
+          });
+        }
+        docTypes = [dt];
+      }
+
+      const format = req.query.format != null
+        ? String(req.query.format).trim().toLowerCase()
+        : "json";
+      if (format !== "json" && format !== "csv") {
+        return res.status(400).json({
+          error: "format must be 'json' or 'csv'",
+          code: "INVALID_FORMAT",
+        });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        createdAt: { gte: start, lt: end },
+        docType: { in: docTypes },
+      };
+      if (subBrandFilter) where.subBrand = subBrandFilter;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+
+      const invoiceIds = invoices.map((i) => i.id);
+      const allLines =
+        invoiceIds.length > 0
+          ? await prisma.travelInvoiceLine.findMany({
+              where: {
+                invoiceId: { in: invoiceIds },
+                tenantId: req.travelTenant.id,
+              },
+              orderBy: [{ invoiceId: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
+            })
+          : [];
+      const linesByInvoice = new Map();
+      for (const l of allLines) {
+        if (!linesByInvoice.has(l.invoiceId)) linesByInvoice.set(l.invoiceId, []);
+        linesByInvoice.get(l.invoiceId).push(l);
+      }
+
+      // Cache state-code resolutions per contact — multiple invoices for
+      // the same customer share the same operator/customer state pair.
+      const stateCodeCache = new Map();
+      async function getInterstateForInvoice(invoice) {
+        if (stateCodeCache.has(invoice.contactId)) {
+          return stateCodeCache.get(invoice.contactId);
+        }
+        const codes = await resolveStateCodes({
+          prisma,
+          tenantId: req.travelTenant.id,
+          contactId: invoice.contactId,
+          operatorOverride: null,
+          customerOverride: null,
+        });
+        let isInterstate;
+        try {
+          isInterstate = isInterstateSupply(
+            codes.operatorStateCode,
+            codes.customerStateCode,
+          );
+        } catch (_e) {
+          isInterstate = false;
+        }
+        const result = { ...codes, isInterstate };
+        stateCodeCache.set(invoice.contactId, result);
+        return result;
+      }
+
+      // Aggregate lines into (sacCode, gstPercent) buckets — same math as
+      // gstr1-export but emitted as a standalone payload (no other sections).
+      const buckets = new Map();
+      for (const inv of invoices) {
+        const lines = linesByInvoice.get(inv.id) || [];
+        const { isInterstate } = await getInterstateForInvoice(inv);
+        const normalized = lines.map((l) => ({
+          lineType: l.lineType,
+          taxableValue: Number(l.amount || 0),
+          gstPercent: gstRateForCategory(l.lineType),
+        }));
+        const grouped = groupLinesBySac(normalized);
+        for (const g of grouped) {
+          const key = `${g.sacCode}:${g.gstPercent}`;
+          if (!buckets.has(key)) {
+            buckets.set(key, {
+              sacCode: g.sacCode,
+              description: g.description,
+              gstPercent: g.gstPercent,
+              taxableValue: 0,
+              count: 0,
+              igst: 0,
+              cgst: 0,
+              sgst: 0,
+            });
+          }
+          const acc = buckets.get(key);
+          const totalTax =
+            Math.round(((g.taxableValue * g.gstPercent) / 100) * 100) / 100;
+          acc.taxableValue =
+            Math.round((acc.taxableValue + g.taxableValue) * 100) / 100;
+          acc.count += g.count;
+          if (isInterstate) {
+            acc.igst = Math.round((acc.igst + totalTax) * 100) / 100;
+          } else {
+            const half = Math.round((totalTax / 2) * 100) / 100;
+            acc.cgst = Math.round((acc.cgst + half) * 100) / 100;
+            acc.sgst = Math.round((acc.sgst + half) * 100) / 100;
+          }
+        }
+      }
+
+      const rows = [...buckets.values()]
+        .map((r) => ({
+          ...r,
+          totalTax: Math.round((r.igst + r.cgst + r.sgst) * 100) / 100,
+        }))
+        .sort((a, b) =>
+          a.sacCode === b.sacCode
+            ? a.gstPercent - b.gstPercent
+            : a.sacCode.localeCompare(b.sacCode),
+        );
+
+      const totals = rows.reduce(
+        (acc, r) => {
+          acc.taxableValue = Math.round((acc.taxableValue + r.taxableValue) * 100) / 100;
+          acc.igst = Math.round((acc.igst + r.igst) * 100) / 100;
+          acc.cgst = Math.round((acc.cgst + r.cgst) * 100) / 100;
+          acc.sgst = Math.round((acc.sgst + r.sgst) * 100) / 100;
+          acc.totalTax = Math.round((acc.totalTax + r.totalTax) * 100) / 100;
+          acc.lineCount += r.count;
+          return acc;
+        },
+        { taxableValue: 0, igst: 0, cgst: 0, sgst: 0, totalTax: 0, lineCount: 0 },
+      );
+
+      const monthLabel = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+
+      if (format === "csv") {
+        const CRLF = "\r\n";
+        const BOM = "﻿";
+        const parts = [];
+        parts.push(
+          `# HSN_SUMMARY month=${monthLabel} subBrand=${subBrandFilter || "ALL"} docTypes=${docTypes.join("|")}`,
+        );
+        parts.push("");
+        parts.push(
+          [
+            "SAC_Code",
+            "Description",
+            "GST_Rate",
+            "Total_Lines",
+            "Taxable_Value",
+            "IGST",
+            "CGST",
+            "SGST",
+            "Total_Tax",
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+        for (const r of rows) {
+          parts.push(
+            [
+              r.sacCode,
+              r.description,
+              formatMoney(r.gstPercent),
+              String(r.count),
+              formatMoney(r.taxableValue),
+              formatMoney(r.igst),
+              formatMoney(r.cgst),
+              formatMoney(r.sgst),
+              formatMoney(r.totalTax),
+            ]
+              .map(csvEscape)
+              .join(","),
+          );
+        }
+        const csv = BOM + parts.join(CRLF) + CRLF;
+        const filename = `hsn-summary-${monthLabel}-${subBrandFilter || "all"}.csv`;
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${filename}"`,
+        );
+        return res.status(200).send(csv);
+      }
+
+      return res.status(200).json({
+        month: monthLabel,
+        subBrand: subBrandFilter || "all",
+        docTypes,
+        rows,
+        totals,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] hsn-summary error:", e.message);
+      res.status(500).json({ error: "Failed to generate HSN summary" });
+    }
+  },
+);
+
+// ============================================================================
+// Arc 2 #902 slice 18 — GET /api/travel/invoices/gstr-3b
+// (PRD_TRAVEL_GST_COMPLIANCE.md FR-3.4.2 GSTR-3B summary).
+//
+// Monthly GSTR-3B summary export — single govt-spec aggregate (5 sections)
+// per filing month. Bucket math reuses the SAC-bearing + interstate logic
+// established by gstr1-export (slice 10) + hsn-summary (slice 17).
+//
+// === Sections emitted ===
+//
+//   3.1.a  Outward taxable supplies (excl. zero-rated / nil-rated)
+//          — non-export INR invoices, lines with gstPercent > 0
+//   3.1.b  Outward zero-rated supplies
+//          — non-INR (export of service, NFR-4.4)
+//   3.1.c  Outward nil-rated / exempt
+//          — INR lines whose lineType maps to gstRateForCategory === 0
+//   3.1.d  Inward supplies liable to RCM (operator-side purchases)
+//          — placeholder 0 at launch (no inward RCM persistence yet;
+//          will land with DD-5.3 once operator-toggled per-invoice RCM
+//          flag schema lands; doc-comment + zeroed envelope so the
+//          shape is stable today)
+//   3.2    Inter-state to unregistered (b2cl + b2cs aggregate)
+//          — invoices where isInterstate AND contact has no GSTIN
+//          (Contact.gstin not in scope yet, so currently the gate
+//          collapses to "all inter-state non-export invoices" — when
+//          Contact.gstin lands per FR-3.3.4, the gate tightens)
+//   6.1    Net tax payable
+//          — sum(3.1.a CGST/SGST/IGST) + (3.1.d RCM, currently 0)
+//          minus ITC (not tracked here — 0)
+//
+// === Query params ===
+//
+//   ?month=YYYY-MM     REQUIRED   filing month (e.g. 2026-05)
+//   ?subBrand=tmc      OPTIONAL   narrow to one sub-brand
+//   ?format=json|csv   OPTIONAL   default json
+//
+// === Response (JSON) ===
+//
+//   {
+//     month: "2026-05",
+//     subBrand: "tmc" | "all",
+//     sections: {
+//       "3.1.a": { taxableValue, igst, cgst, sgst, totalTax, invoiceCount },
+//       "3.1.b": { taxableValue, invoiceCount },
+//       "3.1.c": { taxableValue, invoiceCount },
+//       "3.1.d": { taxableValue: 0, igst: 0, cgst: 0, sgst: 0 },
+//       "3.2":   { taxableValue, igst, invoiceCount },
+//       "6.1":   { netPayable, totalIgst, totalCgst, totalSgst }
+//     }
+//   }
+//
+// CSV format: BOM + CRLF, one section block per row group, filename
+// `gstr-3b-<month>-<subBrand|all>.csv`. Mirrors gstr1-export conventions.
+//
+// === Auth ===
+//
+//   verifyToken + verifyRole(ADMIN | MANAGER) + requireTravelTenant +
+//   sub-brand access narrowing via getSubBrandAccessSet.
+//
+// === Error codes ===
+//
+//   - INVALID_MONTH (400)
+//   - INVALID_SUB_BRAND (400)
+//   - INVALID_FORMAT (400)
+//
+// ============================================================================
+const GSTR3B_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
+
+router.get(
+  "/invoices/gstr-3b",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { year, month, start, end } = parseFilingMonth(req.query.month);
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      const format = req.query.format != null
+        ? String(req.query.format).trim().toLowerCase()
+        : "json";
+      if (format !== "json" && format !== "csv") {
+        return res.status(400).json({
+          error: "format must be 'json' or 'csv'",
+          code: "INVALID_FORMAT",
+        });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        createdAt: { gte: start, lt: end },
+        docType: { in: GSTR3B_DOC_TYPES },
+      };
+      if (subBrandFilter) where.subBrand = subBrandFilter;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+
+      const invoiceIds = invoices.map((i) => i.id);
+      const allLines =
+        invoiceIds.length > 0
+          ? await prisma.travelInvoiceLine.findMany({
+              where: {
+                invoiceId: { in: invoiceIds },
+                tenantId: req.travelTenant.id,
+              },
+              orderBy: [{ invoiceId: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
+            })
+          : [];
+      const linesByInvoice = new Map();
+      for (const l of allLines) {
+        if (!linesByInvoice.has(l.invoiceId)) linesByInvoice.set(l.invoiceId, []);
+        linesByInvoice.get(l.invoiceId).push(l);
+      }
+
+      // Cache state-code resolutions per contactId.
+      const stateCodeCache = new Map();
+      async function getInterstateForInvoice(invoice) {
+        if (stateCodeCache.has(invoice.contactId)) {
+          return stateCodeCache.get(invoice.contactId);
+        }
+        const codes = await resolveStateCodes({
+          prisma,
+          tenantId: req.travelTenant.id,
+          contactId: invoice.contactId,
+          operatorOverride: null,
+          customerOverride: null,
+        });
+        let isInterstate;
+        try {
+          isInterstate = isInterstateSupply(
+            codes.operatorStateCode,
+            codes.customerStateCode,
+          );
+        } catch (_e) {
+          isInterstate = false;
+        }
+        const result = { ...codes, isInterstate };
+        stateCodeCache.set(invoice.contactId, result);
+        return result;
+      }
+
+      // === Aggregate sections ===
+      // 3.1.a — taxable INR supplies (gstPercent > 0)
+      // 3.1.b — zero-rated (non-INR / export)
+      // 3.1.c — nil-rated (gstPercent === 0 on INR lines)
+      // 3.1.d — inward RCM (placeholder 0)
+      // 3.2   — inter-state to unregistered
+      const sec_3_1_a = {
+        taxableValue: 0,
+        igst: 0,
+        cgst: 0,
+        sgst: 0,
+        totalTax: 0,
+        invoiceCount: 0,
+      };
+      const sec_3_1_b = { taxableValue: 0, invoiceCount: 0 };
+      const sec_3_1_c = { taxableValue: 0, invoiceCount: 0 };
+      const sec_3_1_d = { taxableValue: 0, igst: 0, cgst: 0, sgst: 0 };
+      const sec_3_2 = { taxableValue: 0, igst: 0, invoiceCount: 0 };
+
+      for (const inv of invoices) {
+        const lines = linesByInvoice.get(inv.id) || [];
+        const invoiceCurrency = String(inv.currency || "INR").toUpperCase();
+        const isExport = invoiceCurrency !== "INR";
+        const { isInterstate } = isExport
+          ? { isInterstate: false }
+          : await getInterstateForInvoice(inv);
+
+        let invoiceContributedToA = false;
+        let invoiceContributedToB = false;
+        let invoiceContributedToC = false;
+        let invoiceContributedTo32 = false;
+        let invoiceTaxable32 = 0;
+        let invoiceIgst32 = 0;
+
+        for (const l of lines) {
+          // Skip non-SAC-bearing line types (tax / fee / tcs / tds —
+          // double-counted in parent gstPercent or withholding-only).
+          if (sacForLineType(l.lineType) === null) continue;
+          const amt = Number(l.amount || 0);
+
+          if (isExport) {
+            // 3.1.b — zero-rated. No CGST/SGST/IGST routing.
+            sec_3_1_b.taxableValue =
+              Math.round((sec_3_1_b.taxableValue + amt) * 100) / 100;
+            invoiceContributedToB = true;
+            continue;
+          }
+
+          const rate = gstRateForCategory(l.lineType);
+          if (rate === 0) {
+            // 3.1.c — nil-rated / exempt.
+            sec_3_1_c.taxableValue =
+              Math.round((sec_3_1_c.taxableValue + amt) * 100) / 100;
+            invoiceContributedToC = true;
+            continue;
+          }
+
+          // 3.1.a — outward taxable supplies (taxable INR with gstPercent > 0).
+          const tax = Math.round(((amt * rate) / 100) * 100) / 100;
+          sec_3_1_a.taxableValue =
+            Math.round((sec_3_1_a.taxableValue + amt) * 100) / 100;
+          if (isInterstate) {
+            sec_3_1_a.igst = Math.round((sec_3_1_a.igst + tax) * 100) / 100;
+            // 3.2 — inter-state to unregistered. At launch the
+            // "unregistered" gate is implicit (Contact.gstin doesn't
+            // exist in schema yet — FR-3.3.4 lands later); all
+            // inter-state non-export rows contribute.
+            invoiceTaxable32 = Math.round((invoiceTaxable32 + amt) * 100) / 100;
+            invoiceIgst32 = Math.round((invoiceIgst32 + tax) * 100) / 100;
+            invoiceContributedTo32 = true;
+          } else {
+            const half = Math.round((tax / 2) * 100) / 100;
+            sec_3_1_a.cgst = Math.round((sec_3_1_a.cgst + half) * 100) / 100;
+            sec_3_1_a.sgst = Math.round((sec_3_1_a.sgst + half) * 100) / 100;
+          }
+          invoiceContributedToA = true;
+        }
+
+        if (invoiceContributedToA) sec_3_1_a.invoiceCount += 1;
+        if (invoiceContributedToB) sec_3_1_b.invoiceCount += 1;
+        if (invoiceContributedToC) sec_3_1_c.invoiceCount += 1;
+        if (invoiceContributedTo32) {
+          sec_3_2.taxableValue =
+            Math.round((sec_3_2.taxableValue + invoiceTaxable32) * 100) / 100;
+          sec_3_2.igst = Math.round((sec_3_2.igst + invoiceIgst32) * 100) / 100;
+          sec_3_2.invoiceCount += 1;
+        }
+      }
+
+      sec_3_1_a.totalTax =
+        Math.round((sec_3_1_a.igst + sec_3_1_a.cgst + sec_3_1_a.sgst) * 100) /
+        100;
+
+      // 6.1 — net payable. Output tax (3.1.a + 3.1.d) minus ITC (0).
+      const sec_6_1 = {
+        netPayable:
+          Math.round((sec_3_1_a.totalTax + sec_3_1_d.igst + sec_3_1_d.cgst + sec_3_1_d.sgst) * 100) /
+          100,
+        totalIgst: Math.round((sec_3_1_a.igst + sec_3_1_d.igst) * 100) / 100,
+        totalCgst: Math.round((sec_3_1_a.cgst + sec_3_1_d.cgst) * 100) / 100,
+        totalSgst: Math.round((sec_3_1_a.sgst + sec_3_1_d.sgst) * 100) / 100,
+      };
+
+      const monthLabel = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+
+      const sections = {
+        "3.1.a": sec_3_1_a,
+        "3.1.b": sec_3_1_b,
+        "3.1.c": sec_3_1_c,
+        "3.1.d": sec_3_1_d,
+        "3.2": sec_3_2,
+        "6.1": sec_6_1,
+      };
+
+      if (format === "csv") {
+        const CRLF = "\r\n";
+        const BOM = "﻿";
+        const parts = [];
+        parts.push(
+          `# GSTR3B_SUMMARY month=${monthLabel} subBrand=${subBrandFilter || "ALL"}`,
+        );
+        parts.push("");
+        parts.push("# 3.1.a OUTWARD_TAXABLE");
+        parts.push(
+          ["Section", "Taxable_Value", "IGST", "CGST", "SGST", "Total_Tax", "Invoice_Count"]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push(
+          [
+            "3.1.a",
+            formatMoney(sec_3_1_a.taxableValue),
+            formatMoney(sec_3_1_a.igst),
+            formatMoney(sec_3_1_a.cgst),
+            formatMoney(sec_3_1_a.sgst),
+            formatMoney(sec_3_1_a.totalTax),
+            String(sec_3_1_a.invoiceCount),
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push("");
+        parts.push("# 3.1.b OUTWARD_ZERO_RATED");
+        parts.push(["Section", "Taxable_Value", "Invoice_Count"].map(csvEscape).join(","));
+        parts.push(
+          ["3.1.b", formatMoney(sec_3_1_b.taxableValue), String(sec_3_1_b.invoiceCount)]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push("");
+        parts.push("# 3.1.c OUTWARD_NIL_RATED");
+        parts.push(["Section", "Taxable_Value", "Invoice_Count"].map(csvEscape).join(","));
+        parts.push(
+          ["3.1.c", formatMoney(sec_3_1_c.taxableValue), String(sec_3_1_c.invoiceCount)]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push("");
+        parts.push("# 3.1.d INWARD_RCM");
+        parts.push(["Section", "Taxable_Value", "IGST", "CGST", "SGST"].map(csvEscape).join(","));
+        parts.push(
+          [
+            "3.1.d",
+            formatMoney(sec_3_1_d.taxableValue),
+            formatMoney(sec_3_1_d.igst),
+            formatMoney(sec_3_1_d.cgst),
+            formatMoney(sec_3_1_d.sgst),
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push("");
+        parts.push("# 3.2 INTER_STATE_UNREGISTERED");
+        parts.push(["Section", "Taxable_Value", "IGST", "Invoice_Count"].map(csvEscape).join(","));
+        parts.push(
+          [
+            "3.2",
+            formatMoney(sec_3_2.taxableValue),
+            formatMoney(sec_3_2.igst),
+            String(sec_3_2.invoiceCount),
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+        parts.push("");
+        parts.push("# 6.1 NET_PAYABLE");
+        parts.push(["Section", "Net_Payable", "Total_IGST", "Total_CGST", "Total_SGST"].map(csvEscape).join(","));
+        parts.push(
+          [
+            "6.1",
+            formatMoney(sec_6_1.netPayable),
+            formatMoney(sec_6_1.totalIgst),
+            formatMoney(sec_6_1.totalCgst),
+            formatMoney(sec_6_1.totalSgst),
+          ]
+            .map(csvEscape)
+            .join(","),
+        );
+
+        const csv = BOM + parts.join(CRLF) + CRLF;
+        const filename = `gstr-3b-${monthLabel}-${subBrandFilter || "all"}.csv`;
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${filename}"`,
+        );
+        return res.status(200).send(csv);
+      }
+
+      return res.status(200).json({
+        month: monthLabel,
+        subBrand: subBrandFilter || "all",
+        sections,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] gstr-3b error:", e.message);
+      res.status(500).json({ error: "Failed to generate GSTR-3B summary" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/invoices/tax-summary — Arc 2 #902 slice 19.
+//
+// PRD_TRAVEL_GST_COMPLIANCE.md FR-3.4 (returns + reports family). An executive
+// cross-sub-brand tax rollup over a flexible date range — complements the
+// month-bucketed filing exports (gstr1-export, gstr-3b, hsn-summary) by
+// answering: "across all sub-brands, what tax did we collect between
+// these two dates?". Useful for FY closes, quarter reviews, cash-flow
+// planning, and CFO dashboards — none of which align to a single GST
+// filing month.
+//
+// === Differs from existing exports ===
+//
+//   - Flexible date range (?from + ?to) — not month-bucketed.
+//   - Per-sub-brand rollup rows + a grandTotal envelope — surfaces
+//     cross-brand contribution at a glance.
+//   - JSON only (no CSV) — dashboard-shaped, not filing-shaped. Operators
+//     who want CSV use gstr1-export / hsn-summary instead.
+//   - INR-only by default (?currency=ALL opts in to including non-INR).
+//     NFR-4.4 specifies GST is computed only on INR invoices; non-INR
+//     rows therefore have zero tax contribution and would clutter the
+//     summary without being actionable.
+//   - No state-of-supply expansion: per-sub-brand row carries the same
+//     taxableValue / IGST / CGST / SGST shape as hsn-summary (interstate
+//     vs intrastate decided per-invoice via resolveStateCodes).
+//
+// === Query params ===
+//
+//   ?from=YYYY-MM-DD   REQUIRED   inclusive start (UTC midnight)
+//   ?to=YYYY-MM-DD     REQUIRED   inclusive end (next-day UTC midnight, half-open)
+//   ?subBrand=tmc      OPTIONAL   narrow to one sub-brand
+//   ?currency=INR|ALL  OPTIONAL   default INR (NFR-4.4 — non-INR rows
+//                                 carry zero tax contribution)
+//
+// === Response (JSON) ===
+//
+//   {
+//     from: "2026-04-01",
+//     to: "2026-06-30",
+//     subBrand: "all" | "tmc",
+//     currency: "INR" | "ALL",
+//     docTypes: ["TaxInvoice", "CreditNote", "DebitNote"],
+//     perSubBrand: [
+//       { subBrand, taxableValue, igst, cgst, sgst, totalTax,
+//         invoiceCount, lineCount },
+//       ...
+//     ],
+//     grandTotal: { taxableValue, igst, cgst, sgst, totalTax,
+//                   invoiceCount, lineCount }
+//   }
+//
+// === Auth ===
+//
+//   verifyToken + verifyRole(ADMIN | MANAGER) + requireTravelTenant +
+//   sub-brand access narrowing via getSubBrandAccessSet.
+//
+// === Error codes ===
+//
+//   - INVALID_DATE_RANGE (400) — missing from/to, malformed, or to < from
+//   - INVALID_SUB_BRAND (400)
+//   - INVALID_CURRENCY (400) — when ?currency= isn't 'INR' or 'ALL'
+//
+// === Math ===
+//
+//   Reuses gstRateForCategory + groupLinesBySac (line-level SAC grouping)
+//   then folds each invoice's interstate/intrastate decision via
+//   resolveStateCodes + isInterstateSupply (same per-contact cache pattern
+//   as hsn-summary). All money values rounded half-up to 2dp.
+//
+// ============================================================================
+const TAX_SUMMARY_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
+
+function parseTaxSummaryDateRange(rawFrom, rawTo) {
+  const dateRe = /^(\d{4})-(\d{2})-(\d{2})$/;
+  if (rawFrom == null || rawTo == null) {
+    const e = new Error("from and to query params are required (YYYY-MM-DD)");
+    e.status = 400;
+    e.code = "INVALID_DATE_RANGE";
+    throw e;
+  }
+  const fromStr = String(rawFrom).trim();
+  const toStr = String(rawTo).trim();
+  const fm = fromStr.match(dateRe);
+  const tm = toStr.match(dateRe);
+  if (!fm || !tm) {
+    const e = new Error("from/to must be YYYY-MM-DD");
+    e.status = 400;
+    e.code = "INVALID_DATE_RANGE";
+    throw e;
+  }
+  const start = new Date(Date.UTC(+fm[1], +fm[2] - 1, +fm[3]));
+  const endInclusive = new Date(Date.UTC(+tm[1], +tm[2] - 1, +tm[3]));
+  if (Number.isNaN(start.getTime()) || Number.isNaN(endInclusive.getTime())) {
+    const e = new Error("from/to are not valid calendar dates");
+    e.status = 400;
+    e.code = "INVALID_DATE_RANGE";
+    throw e;
+  }
+  if (endInclusive < start) {
+    const e = new Error("to must be on or after from");
+    e.status = 400;
+    e.code = "INVALID_DATE_RANGE";
+    throw e;
+  }
+  // Half-open [start, end) — end is one day past the inclusive `to`.
+  const end = new Date(endInclusive.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end, fromStr, toStr };
+}
+
+router.get(
+  "/invoices/tax-summary",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { start, end, fromStr, toStr } = parseTaxSummaryDateRange(
+        req.query.from,
+        req.query.to,
+      );
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      const currencyParam =
+        req.query.currency != null
+          ? String(req.query.currency).trim().toUpperCase()
+          : "INR";
+      if (currencyParam !== "INR" && currencyParam !== "ALL") {
+        return res.status(400).json({
+          error: "currency must be 'INR' or 'ALL'",
+          code: "INVALID_CURRENCY",
+        });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        createdAt: { gte: start, lt: end },
+        docType: { in: TAX_SUMMARY_DOC_TYPES },
+      };
+      if (subBrandFilter) where.subBrand = subBrandFilter;
+      if (currencyParam === "INR") where.currency = "INR";
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+
+      const invoiceIds = invoices.map((i) => i.id);
+      const allLines =
+        invoiceIds.length > 0
+          ? await prisma.travelInvoiceLine.findMany({
+              where: {
+                invoiceId: { in: invoiceIds },
+                tenantId: req.travelTenant.id,
+              },
+              orderBy: [{ invoiceId: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
+            })
+          : [];
+      const linesByInvoice = new Map();
+      for (const l of allLines) {
+        if (!linesByInvoice.has(l.invoiceId)) linesByInvoice.set(l.invoiceId, []);
+        linesByInvoice.get(l.invoiceId).push(l);
+      }
+
+      // Per-contact state-code cache (same pattern as hsn-summary).
+      const stateCodeCache = new Map();
+      async function getInterstateForInvoice(invoice) {
+        if (stateCodeCache.has(invoice.contactId)) {
+          return stateCodeCache.get(invoice.contactId);
+        }
+        const codes = await resolveStateCodes({
+          prisma,
+          tenantId: req.travelTenant.id,
+          contactId: invoice.contactId,
+          operatorOverride: null,
+          customerOverride: null,
+        });
+        let isInterstate;
+        try {
+          isInterstate = isInterstateSupply(
+            codes.operatorStateCode,
+            codes.customerStateCode,
+          );
+        } catch (_e) {
+          isInterstate = false;
+        }
+        const result = { isInterstate };
+        stateCodeCache.set(invoice.contactId, result);
+        return result;
+      }
+
+      // Per-sub-brand accumulator. Initialised lazily on first hit.
+      const perSubBrand = new Map();
+      function getOrInitBucket(sb) {
+        if (!perSubBrand.has(sb)) {
+          perSubBrand.set(sb, {
+            subBrand: sb,
+            taxableValue: 0,
+            igst: 0,
+            cgst: 0,
+            sgst: 0,
+            totalTax: 0,
+            invoiceCount: 0,
+            lineCount: 0,
+          });
+        }
+        return perSubBrand.get(sb);
+      }
+
+      for (const inv of invoices) {
+        const bucket = getOrInitBucket(inv.subBrand);
+        bucket.invoiceCount += 1;
+        const lines = linesByInvoice.get(inv.id) || [];
+        const { isInterstate } = await getInterstateForInvoice(inv);
+        const normalized = lines.map((l) => ({
+          lineType: l.lineType,
+          taxableValue: Number(l.amount || 0),
+          gstPercent: gstRateForCategory(l.lineType),
+        }));
+        const grouped = groupLinesBySac(normalized);
+        for (const g of grouped) {
+          const totalTax =
+            Math.round(((g.taxableValue * g.gstPercent) / 100) * 100) / 100;
+          bucket.taxableValue =
+            Math.round((bucket.taxableValue + g.taxableValue) * 100) / 100;
+          bucket.lineCount += g.count;
+          if (isInterstate) {
+            bucket.igst = Math.round((bucket.igst + totalTax) * 100) / 100;
+          } else {
+            const half = Math.round((totalTax / 2) * 100) / 100;
+            bucket.cgst = Math.round((bucket.cgst + half) * 100) / 100;
+            bucket.sgst = Math.round((bucket.sgst + half) * 100) / 100;
+          }
+          bucket.totalTax =
+            Math.round((bucket.igst + bucket.cgst + bucket.sgst) * 100) / 100;
+        }
+      }
+
+      const perSubBrandRows = [...perSubBrand.values()].sort((a, b) =>
+        a.subBrand.localeCompare(b.subBrand),
+      );
+
+      const grandTotal = perSubBrandRows.reduce(
+        (acc, r) => {
+          acc.taxableValue =
+            Math.round((acc.taxableValue + r.taxableValue) * 100) / 100;
+          acc.igst = Math.round((acc.igst + r.igst) * 100) / 100;
+          acc.cgst = Math.round((acc.cgst + r.cgst) * 100) / 100;
+          acc.sgst = Math.round((acc.sgst + r.sgst) * 100) / 100;
+          acc.totalTax = Math.round((acc.totalTax + r.totalTax) * 100) / 100;
+          acc.invoiceCount += r.invoiceCount;
+          acc.lineCount += r.lineCount;
+          return acc;
+        },
+        {
+          taxableValue: 0,
+          igst: 0,
+          cgst: 0,
+          sgst: 0,
+          totalTax: 0,
+          invoiceCount: 0,
+          lineCount: 0,
+        },
+      );
+
+      return res.status(200).json({
+        from: fromStr,
+        to: toStr,
+        subBrand: subBrandFilter || "all",
+        currency: currencyParam,
+        docTypes: TAX_SUMMARY_DOC_TYPES,
+        perSubBrand: perSubBrandRows,
+        grandTotal,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] tax-summary error:", e.message);
+      res.status(500).json({ error: "Failed to generate tax summary" });
+    }
+  },
+);
+
+// GET /api/travel/invoices/stats
+//
+// #901 slice 32 (PRD_TRAVEL_BILLING §3) — tenant-wide rollup KPI tile for
+// the Travel billing dashboard. Mirrors #900 slice 19 (/quotes/stats) +
+// #903 slice 23 (/suppliers/stats) — same envelope shape, swapping
+// TravelQuote → TravelInvoice + 4-status → 5-status taxonomy
+// (Draft|Issued|Partial|Paid|Voided) + acceptanceRate → paidRate +
+// expiredCount → overdueCount + lastUpdatedAt → lastIssuedAt.
+//
+// Behavior:
+//   - Tenant-scoped count + breakdown of ALL TravelInvoice rows.
+//   - USER-readable (anodyne aggregate; same as /quotes/stats).
+//   - MANAGER scoped to subBrandAccess via getSubBrandAccessSet — empty
+//     access set returns the zeroed shape (not 403) so the dashboard
+//     tile renders cleanly for not-yet-onboarded operators.
+//   - Optional ?from / ?to ISO-date bounds on createdAt.
+//
+// Response shape:
+//   {
+//     total,
+//     byStatus: { Draft|Issued|Partial|Paid|Voided: {count, totalValue} },
+//     bySubBrand: { tmc|rfu|...|_tenant: {count} },
+//     grandTotalValue, grandPaidValue, grandOpenValue,
+//     paidRate,        // paid / (paid + open); null if denom = 0
+//     overdueCount,    // status IN (Issued, Partial) AND dueDate < now
+//     lastIssuedAt,    // most-recent updatedAt where status='Issued'
+//   }
+//
+// Half-up 2dp on all money values. Defensive: null/non-numeric totalAmount → 0,
+// no NaN poisoning.
+//
+// Route-ordering: declared BEFORE GET /:id so Express doesn't try to parse
+// "stats" as a numeric :id and 400.
+router.get("/invoices/stats", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+
+    // Optional ISO date bounds on createdAt.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Sub-brand narrowing — empty access set → zeroed shape (not 403).
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    const zeroed = {
+      total: 0,
+      byStatus: {
+        Draft: { count: 0, totalValue: 0 },
+        Issued: { count: 0, totalValue: 0 },
+        Partial: { count: 0, totalValue: 0 },
+        Paid: { count: 0, totalValue: 0 },
+        Voided: { count: 0, totalValue: 0 },
+      },
+      bySubBrand: {},
+      grandTotalValue: 0,
+      grandPaidValue: 0,
+      grandOpenValue: 0,
+      paidRate: null,
+      overdueCount: 0,
+      lastIssuedAt: null,
+    };
+
+    if (allowed instanceof Set && allowed.size === 0) {
+      return res.json(zeroed);
+    }
+    if (allowed instanceof Set) {
+      where.subBrand = { in: [...allowed] };
+    }
+
+    const invoices = await prisma.travelInvoice.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        status: true,
+        totalAmount: true,
+        dueDate: true,
+        updatedAt: true,
+      },
+    });
+
+    if (invoices.length === 0) {
+      return res.json(zeroed);
+    }
+
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const now = Date.now();
+
+    const byStatus = {
+      Draft: { count: 0, totalValue: 0 },
+      Issued: { count: 0, totalValue: 0 },
+      Partial: { count: 0, totalValue: 0 },
+      Paid: { count: 0, totalValue: 0 },
+      Voided: { count: 0, totalValue: 0 },
+    };
+    const bySubBrand = {};
+    let grandTotalValue = 0;
+    let grandPaidValue = 0;
+    let grandVoidedValue = 0;
+    let overdueCount = 0;
+    let lastIssuedAt = null;
+
+    for (const inv of invoices) {
+      const amt = Number(inv.totalAmount);
+      const safeAmt = Number.isFinite(amt) ? amt : 0;
+      grandTotalValue += safeAmt;
+
+      if (byStatus[inv.status]) {
+        byStatus[inv.status].count += 1;
+        byStatus[inv.status].totalValue += safeAmt;
+      }
+
+      if (inv.status === "Paid") {
+        grandPaidValue += safeAmt;
+      }
+      if (inv.status === "Voided") {
+        grandVoidedValue += safeAmt;
+      }
+
+      // overdueCount: non-terminal billing-active status AND dueDate past.
+      if (
+        (inv.status === "Issued" || inv.status === "Partial")
+        && inv.dueDate
+      ) {
+        const dd = inv.dueDate instanceof Date ? inv.dueDate : new Date(inv.dueDate);
+        if (!Number.isNaN(dd.getTime()) && dd.getTime() < now) {
+          overdueCount += 1;
+        }
+      }
+
+      // bySubBrand: defensively coalesce null → "_tenant".
+      const sbKey = inv.subBrand ? String(inv.subBrand) : "_tenant";
+      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+      bySubBrand[sbKey].count += 1;
+
+      // lastIssuedAt: most-recent updatedAt of any Issued-status row (no
+      // dedicated issuedAt column on TravelInvoice — updatedAt under
+      // status='Issued' is the closest available semantic).
+      if (inv.status === "Issued") {
+        const ts = inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastIssuedAt || ts > lastIssuedAt) lastIssuedAt = ts;
+        }
+      }
+    }
+
+    // Round per-status sums.
+    for (const s of Object.keys(byStatus)) {
+      byStatus[s].totalValue = round2(byStatus[s].totalValue);
+    }
+
+    // grandOpenValue: total revenue surface MINUS paid MINUS voided.
+    const grandOpenValue = grandTotalValue - grandPaidValue - grandVoidedValue;
+
+    // paidRate: paid / (paid + open); null if denom = 0.
+    const paidDenom = grandPaidValue + grandOpenValue;
+    const paidRate = paidDenom > 0
+      ? round2(grandPaidValue / paidDenom)
+      : null;
+
+    res.json({
+      total: invoices.length,
+      byStatus,
+      bySubBrand,
+      grandTotalValue: round2(grandTotalValue),
+      grandPaidValue: round2(grandPaidValue),
+      grandOpenValue: round2(grandOpenValue),
+      paidRate,
+      overdueCount,
+      lastIssuedAt: lastIssuedAt ? lastIssuedAt.toISOString() : null,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-invoices] stats error:", e.message);
+    res.status(500).json({ error: "Failed to summarise invoices" });
+  }
+});
+
+// GET /api/travel/invoices/expired-summary — any verified token (tenant + sub-brand-scoped).
+//
+// Arc 2 #901 (PRD_TRAVEL_BILLING §3 — overdue-collections rollup).
+// Mirrors /quotes/expired-summary (commit c6b169f2) for TravelInvoice
+// rows. Companion to /invoices/aged-receivable (full row list + dueDate
+// bucketing) + /invoices/stats (single overdueCount aggregate). This
+// endpoint returns an ACTIONABLE tenant-wide rollup of currently-overdue
+// invoices (status IN Issued|Partial AND dueDate < now) grouped by
+// sub-brand, overdue-age range, and top customers — the shape an
+// operator dashboard "collections-recovery" tile needs to prioritise
+// outreach.
+//
+// Response shape:
+//   {
+//     total,                          // count of currently-overdue invoices
+//     totalValue,                     // sum of totalAmount (half-up 2dp)
+//     totalOpenValue,                 // sum of (totalAmount - sum(schedule.receivedAmount))
+//     bySubBrand: { tmc|rfu|...|_tenant: {count, value, openValue} },
+//     byAgeRange: {
+//       "0-7d":   {count, value, openValue},   // overdue 0-7 days
+//       "8-30d":  {count, value, openValue},   // overdue 8-30 days
+//       "31-90d": {count, value, openValue},
+//       "90+d":   {count, value, openValue},
+//     },
+//     topCustomers: [                 // top-5 by overdue count
+//       { contactId, count, totalValue, openValue }, ...
+//     ],
+//     generatedAt,                    // ISO timestamp
+//   }
+//
+// Scope rules:
+//   - Tenant-scoped on TravelInvoice.tenantId.
+//   - Sub-brand restricted: MANAGER with subBrandAccess narrowed via
+//     getSubBrandAccessSet — empty set → zeroed shape (not 403) so
+//     dashboard tiles render cleanly for not-yet-onboarded operators.
+//   - USER-readable (anodyne aggregate; no invoice bodies leak — only
+//     counts + sums + contactIds, no customer names).
+//
+// openValue derivation: TravelInvoice has NO `paidAmount` column. The
+// outstanding balance is computed as totalAmount - sum(schedule.receivedAmount)
+// per the existing /invoices/aged-receivable pattern (slice 23). Invoices
+// with no TravelPaymentSchedule rows treat the entire totalAmount as
+// outstanding. This keeps the rollup actionable without depending on a
+// non-existent schema field.
+//
+// Defensive: null/non-numeric totalAmount → 0 (no NaN poisoning);
+// null subBrand coalesces to "_tenant" (matches /invoices/stats shape);
+// invoices with null dueDate are skipped (not "overdue" without a due
+// date); half-up 2dp rounding via Number.EPSILON.
+//
+// Age-range buckets are inclusive at the low bound:
+//   "0-7d"   → 0 <= overdueDays <= 7
+//   "8-30d"  → 8 <= overdueDays <= 30
+//   "31-90d" → 31 <= overdueDays <= 90
+//   "90+d"   → 91 <= overdueDays
+//
+// IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
+// doesn't match "expired-summary" as a numeric :id (which would 400
+// INVALID_ID).
+router.get(
+  "/invoices/expired-summary",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const round2 = (n) =>
+        Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+      const zeroBucket = () => ({ count: 0, value: 0, openValue: 0 });
+      const zeroed = () => ({
+        total: 0,
+        totalValue: 0,
+        totalOpenValue: 0,
+        bySubBrand: {},
+        byAgeRange: {
+          "0-7d": zeroBucket(),
+          "8-30d": zeroBucket(),
+          "31-90d": zeroBucket(),
+          "90+d": zeroBucket(),
+        },
+        topCustomers: [],
+        generatedAt: new Date().toISOString(),
+      });
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      // Empty access set → zeroed shape (not 403).
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json(zeroed());
+      }
+
+      const now = new Date();
+      const where = {
+        tenantId: req.travelTenant.id,
+        status: { in: ["Issued", "Partial"] },
+        dueDate: { lt: now },
+      };
+      if (allowed instanceof Set) {
+        where.subBrand = { in: [...allowed] };
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          contactId: true,
+          totalAmount: true,
+          dueDate: true,
+          schedule: { select: { receivedAmount: true } },
+        },
+      });
+
+      if (invoices.length === 0) {
+        return res.json(zeroed());
+      }
+
+      const bySubBrand = {};
+      const byAgeRange = {
+        "0-7d": zeroBucket(),
+        "8-30d": zeroBucket(),
+        "31-90d": zeroBucket(),
+        "90+d": zeroBucket(),
+      };
+      const perContact = new Map();
+      let total = 0;
+      let totalValue = 0;
+      let totalOpenValue = 0;
+      const nowMs = now.getTime();
+
+      for (const inv of invoices) {
+        // Defensive: skip rows whose dueDate failed Prisma's lt filter
+        // (shouldn't happen, but the test mock returns whatever it likes).
+        if (!inv.dueDate) continue;
+        const dd =
+          inv.dueDate instanceof Date ? inv.dueDate : new Date(inv.dueDate);
+        if (Number.isNaN(dd.getTime()) || dd.getTime() >= nowMs) continue;
+
+        const amt = Number(inv.totalAmount);
+        const safeAmt = Number.isFinite(amt) ? amt : 0;
+
+        // openValue = totalAmount - sum(schedule.receivedAmount). No
+        // schedule rows → entire totalAmount is outstanding (matches
+        // /invoices/aged-receivable slice 23 semantics).
+        const sched = Array.isArray(inv.schedule) ? inv.schedule : [];
+        let received = 0;
+        for (const s of sched) {
+          const r = Number(s.receivedAmount);
+          if (Number.isFinite(r)) received += r;
+        }
+        const openAmt = safeAmt - received;
+
+        total += 1;
+        totalValue += safeAmt;
+        totalOpenValue += openAmt;
+
+        // bySubBrand: null subBrand → "_tenant" (matches /invoices/stats shape).
+        const sbKey = inv.subBrand ? String(inv.subBrand) : "_tenant";
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = zeroBucket();
+        bySubBrand[sbKey].count += 1;
+        bySubBrand[sbKey].value += safeAmt;
+        bySubBrand[sbKey].openValue += openAmt;
+
+        // byAgeRange: how long ago did the invoice fall due (in days).
+        const ageDays = Math.floor((nowMs - dd.getTime()) / 86_400_000);
+        let bucket;
+        if (ageDays <= 7) bucket = "0-7d";
+        else if (ageDays <= 30) bucket = "8-30d";
+        else if (ageDays <= 90) bucket = "31-90d";
+        else bucket = "90+d";
+        byAgeRange[bucket].count += 1;
+        byAgeRange[bucket].value += safeAmt;
+        byAgeRange[bucket].openValue += openAmt;
+
+        // perContact tally for topCustomers.
+        if (inv.contactId != null) {
+          const cid = inv.contactId;
+          if (!perContact.has(cid)) {
+            perContact.set(cid, {
+              contactId: cid,
+              count: 0,
+              totalValue: 0,
+              openValue: 0,
+            });
+          }
+          const entry = perContact.get(cid);
+          entry.count += 1;
+          entry.totalValue += safeAmt;
+          entry.openValue += openAmt;
+        }
+      }
+
+      // Round per-bucket sums.
+      for (const sb of Object.keys(bySubBrand)) {
+        bySubBrand[sb].value = round2(bySubBrand[sb].value);
+        bySubBrand[sb].openValue = round2(bySubBrand[sb].openValue);
+      }
+      for (const ar of Object.keys(byAgeRange)) {
+        byAgeRange[ar].value = round2(byAgeRange[ar].value);
+        byAgeRange[ar].openValue = round2(byAgeRange[ar].openValue);
+      }
+
+      // topCustomers: sort desc by count (tie-break by openValue desc, then
+      // totalValue desc), top 5.
+      const topCustomers = [...perContact.values()]
+        .sort((a, b) => {
+          if (b.count !== a.count) return b.count - a.count;
+          if (b.openValue !== a.openValue) return b.openValue - a.openValue;
+          return b.totalValue - a.totalValue;
+        })
+        .slice(0, 5)
+        .map((c) => ({
+          contactId: c.contactId,
+          count: c.count,
+          totalValue: round2(c.totalValue),
+          openValue: round2(c.openValue),
+        }));
+
+      res.json({
+        total,
+        totalValue: round2(totalValue),
+        totalOpenValue: round2(totalOpenValue),
+        bySubBrand,
+        byAgeRange,
+        topCustomers,
+        generatedAt: now.toISOString(),
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] expired-summary error:", e.message);
+      res.status(500).json({ error: "Failed to summarise overdue invoices" });
+    }
+  },
+);
 
 // GET /api/travel/invoices/:id
 //
@@ -1420,7 +3979,60 @@ router.post(
         },
       );
 
-      res.status(200).json(updated);
+      // Arc 2 #901 slice 21 — TDS withholding envelope (PRD_TRAVEL_BILLING §3).
+      // Sum amounts on lineType==='tds' rows; compute payableAfterTds =
+      // totalAmount - totalTds. Both go on the response envelope ALONGSIDE
+      // the top-level invoice fields so existing slice-5 / slice-17 callers
+      // (which destructure body.status / body.invoiceNum at top-level) keep
+      // working. Additive-envelope pattern — see standing rule "API response
+      // shape change → prefer additive envelope with back-compat top-level
+      // fields" in CLAUDE.md.
+      //
+      // Defensive against test mocks where findMany isn't stubbed: either
+      // returning null/undefined or throwing both yield empty arrays so the
+      // envelope still ships with totalTds=0 (the back-compat case for
+      // invoices with no TDS line, which is the majority pre-slice-21).
+      let lines = [];
+      let paymentSchedule = [];
+      try {
+        const rawLines = await prisma.travelInvoiceLine.findMany({
+          where: { invoiceId: updated.id, tenantId: req.travelTenant.id },
+          orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+        });
+        lines = Array.isArray(rawLines) ? rawLines : [];
+      } catch (linesErr) {
+        console.error("[travel-invoices] /issue lines fetch failed:", linesErr.message);
+      }
+      try {
+        const rawSchedule = await prisma.travelPaymentSchedule.findMany({
+          where: { invoiceId: updated.id, tenantId: req.travelTenant.id },
+          orderBy: [{ milestoneOrder: "asc" }, { id: "asc" }],
+        });
+        paymentSchedule = Array.isArray(rawSchedule) ? rawSchedule : [];
+      } catch (scheduleListErr) {
+        console.error(
+          "[travel-invoices] /issue schedule fetch failed:",
+          scheduleListErr.message,
+        );
+      }
+
+      const { totalTds, perLineTds } = computeTdsFromLines(lines);
+      const totalAmountNum = Number(updated.totalAmount);
+      const payableAfterTds = Number.isFinite(totalAmountNum)
+        ? round2(totalAmountNum - totalTds)
+        : null;
+
+      res.status(200).json({
+        // Spread the invoice row at top-level for back-compat with existing
+        // callers (slice-5 + slice-17 tests destructure body.status etc.).
+        ...updated,
+        // Additive envelope fields (slice 21):
+        invoice: updated,
+        paymentSchedule,
+        totalTds,
+        perLineTds,
+        payableAfterTds,
+      });
     } catch (e) {
       if (e.status) {
         return res.status(e.status).json({ error: e.message, code: e.code });
@@ -3869,4 +6481,719 @@ router.post(
     }
   },
 );
+
+// ============================================================================
+// GET /api/travel/invoices/:id/late-penalty
+// Arc 2 #901 slice 24 — PRD_TRAVEL_BILLING §3 late-payment penalty preview.
+//
+// READ-ONLY. Computes the penalty that WOULD apply if the operator were to
+// surcharge an overdue customer invoice as-of `asOf` (defaults to wall clock).
+// Pure compute — does NOT persist a penalty line, does NOT mutate state,
+// does NOT write audit. Operator turns this into a real charge by adding
+// a regular invoice line (lineType='fee') once they decide to enforce.
+//
+// Auth: any verified token, tenant + sub-brand scoped via loadParentInvoice.
+//
+// Query params (all optional):
+//   ?asOf=<ISO8601>             — reference "now"; defaults to wall clock.
+//                                  Parse failure → 400 INVALID_AS_OF.
+//   ?graceDays=<int>            — grace window override (default 7).
+//   ?annualRatePercent=<num>    — simple-mode annual rate override
+//                                  (default 18 — 1.5% / month, under RBI cap).
+//   ?flatFeePercent=<num>       — flat-mode % override (default 2).
+//   ?mode=simple|flat           — penalty model (default simple).
+//
+// Response envelope: { invoiceId, status, totalAmount, dueDate, asOf,
+//   applies, daysOverdue, chargeableDays, graceDays, mode, ratePercent,
+//   penalty, newBalance, reason }.
+//
+// Error codes: INVALID_ID, INVOICE_NOT_FOUND, SUB_BRAND_DENIED,
+//   INVALID_AS_OF, INVALID_NUMERIC_QUERY, INVALID_MODE.
+// ============================================================================
+router.get(
+  "/invoices/:id/late-penalty",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      // Parse asOf — wall-clock default, body override must be a valid date.
+      let asOf = new Date();
+      if (req.query.asOf != null && req.query.asOf !== "") {
+        const parsed = new Date(req.query.asOf);
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "asOf must be a valid ISO 8601 date string",
+            code: "INVALID_AS_OF",
+          });
+        }
+        asOf = parsed;
+      }
+
+      // Parse numeric overrides — each must coerce cleanly OR be absent.
+      function parseOptionalNonNeg(name) {
+        const raw = req.query[name];
+        if (raw == null || raw === "") return undefined;
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0) {
+          const err = new Error(`${name} must be a non-negative number`);
+          err.status = 400;
+          err.code = "INVALID_NUMERIC_QUERY";
+          throw err;
+        }
+        return n;
+      }
+
+      const graceDays = parseOptionalNonNeg("graceDays");
+      const annualRatePercent = parseOptionalNonNeg("annualRatePercent");
+      const flatFeePercent = parseOptionalNonNeg("flatFeePercent");
+
+      let mode;
+      if (req.query.mode != null && req.query.mode !== "") {
+        if (req.query.mode !== "simple" && req.query.mode !== "flat") {
+          return res.status(400).json({
+            error: "mode must be 'simple' or 'flat'",
+            code: "INVALID_MODE",
+          });
+        }
+        mode = req.query.mode;
+      }
+
+      const result = computeLatePenalty({
+        invoiceAmount: invoice.totalAmount,
+        dueDate: invoice.dueDate,
+        status: invoice.status,
+        asOf,
+        graceDays,
+        annualRatePercent,
+        flatFeePercent,
+        mode,
+      });
+
+      return res.status(200).json({
+        invoiceId: invoice.id,
+        status: invoice.status,
+        totalAmount: Number(invoice.totalAmount || 0),
+        dueDate: invoice.dueDate,
+        asOf: asOf.toISOString(),
+        defaults: {
+          graceDays: DEFAULT_GRACE_DAYS,
+          annualRatePercent: DEFAULT_ANNUAL_RATE_PERCENT,
+          flatFeePercent: DEFAULT_FLAT_FEE_PERCENT,
+        },
+        ...result,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] late-penalty error:", e.message);
+      res.status(500).json({ error: "Failed to compute late-payment penalty" });
+    }
+  },
+);
+
+// ============================================================================
+// POST /api/travel/invoices/:id/apply-penalty
+// Arc 2 #901 slice 25 — PRD_TRAVEL_BILLING §3 late-payment penalty PERSIST.
+//
+// Counterpart to slice 24's read-only GET /:id/late-penalty. Materialises
+// the computed penalty as a TravelInvoiceLine (lineType='fee') against the
+// parent invoice + recomputes totalAmount via the existing pipeline + writes
+// an audit row. Idempotency surface: idempotencyKey body field, threaded
+// through to TravelInvoiceLine.notes (no schema change — the per-invoice
+// uniqueness search runs against existing lines on each request).
+//
+// Why a SEPARATE endpoint from /lines (not just "create a line manually"):
+//   - Operator decision flow: preview → review → apply. Surfacing it as a
+//     first-class verb lets the UI render "Apply penalty for ₹113.42?" with
+//     the math pinned, instead of asking the operator to retype the amount.
+//   - The math runs server-side a second time at apply-time, guaranteeing
+//     preview-vs-applied parity (same /asOf, same policy overrides → same
+//     penalty value). Operator can't typo a stale preview value into a
+//     manual /lines POST.
+//   - Audit trail carries 'TRAVEL_INVOICE_PENALTY_APPLIED' with the math
+//     details (daysOverdue, chargeableDays, ratePercent, mode, penalty) —
+//     a manual /lines POST would only log 'CREATE' on the line with no
+//     policy context.
+//
+// Idempotency model: caller-supplied idempotencyKey (string, optional).
+// When present + a prior line on this invoice has the same key (matched
+// against notes containing 'penaltyKey:<key>'), returns the EXISTING line
+// + status:'already_applied'. When absent, every call creates a fresh
+// penalty line (operator-confirmed escalation — they meant to add another).
+//
+// Auth: ADMIN/MANAGER only (writes).
+// Pre-conditions: invoice exists, tenant-scoped, sub-brand-accessible.
+// Status guard: REJECT if status not in PAYABLE_STATUSES (Issued/Partial).
+//   Returns 409 INVOICE_NOT_PAYABLE for Draft/Paid/Voided. Distinct from
+//   the preview's applies:false+reason:'INVOICE_CLOSED' shape because this
+//   is a write operation and we want to surface the precondition violation
+//   explicitly rather than silently no-op.
+//
+// Body (all optional, mirrors slice-24 query params):
+//   asOf, graceDays, annualRatePercent, flatFeePercent, mode, idempotencyKey,
+//   description (override the auto-generated penalty-line description).
+//
+// Response on apply: 201 + { invoiceId, line, penalty, daysOverdue,
+//   chargeableDays, mode, ratePercent, status:'applied' }.
+// Response on idempotent hit: 200 + { invoiceId, line, status:'already_applied' }.
+// Response when penalty does not apply (in-grace, not-yet-due, zero-principal):
+//   200 + { applies:false, reason, status:'not_applied' }. NO line created.
+//
+// Error codes: INVALID_ID, INVOICE_NOT_FOUND, SUB_BRAND_DENIED,
+//   INVALID_AS_OF, INVALID_NUMERIC_QUERY, INVALID_MODE, INVALID_IDEMPOTENCY_KEY,
+//   INVOICE_NOT_PAYABLE.
+// ============================================================================
+router.post(
+  "/invoices/:id/apply-penalty",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      // Status pre-condition. Draft can't be penalised (no obligation yet);
+      // Paid/Voided are closed states.
+      if (!["Issued", "Partial"].includes(invoice.status)) {
+        return res.status(409).json({
+          error:
+            "Late-payment penalty can only be applied to invoices in Issued or Partial status",
+          code: "INVOICE_NOT_PAYABLE",
+          currentStatus: invoice.status,
+        });
+      }
+
+      const body = req.body || {};
+
+      // Parse asOf — wall-clock default, body override must be a valid date.
+      let asOf = new Date();
+      if (body.asOf != null && body.asOf !== "") {
+        const parsed = new Date(body.asOf);
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "asOf must be a valid ISO 8601 date string",
+            code: "INVALID_AS_OF",
+          });
+        }
+        asOf = parsed;
+      }
+
+      // Parse numeric overrides — each must coerce cleanly OR be absent.
+      function parseOptionalNonNeg(name) {
+        const raw = body[name];
+        if (raw == null || raw === "") return undefined;
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0) {
+          const err = new Error(`${name} must be a non-negative number`);
+          err.status = 400;
+          err.code = "INVALID_NUMERIC_QUERY";
+          throw err;
+        }
+        return n;
+      }
+
+      const graceDays = parseOptionalNonNeg("graceDays");
+      const annualRatePercent = parseOptionalNonNeg("annualRatePercent");
+      const flatFeePercent = parseOptionalNonNeg("flatFeePercent");
+
+      let mode;
+      if (body.mode != null && body.mode !== "") {
+        if (body.mode !== "simple" && body.mode !== "flat") {
+          return res.status(400).json({
+            error: "mode must be 'simple' or 'flat'",
+            code: "INVALID_MODE",
+          });
+        }
+        mode = body.mode;
+      }
+
+      // Idempotency key — optional, free-form string capped at 64 chars.
+      let idempotencyKey = null;
+      if (body.idempotencyKey != null && body.idempotencyKey !== "") {
+        if (
+          typeof body.idempotencyKey !== "string" ||
+          body.idempotencyKey.length > 64
+        ) {
+          return res.status(400).json({
+            error: "idempotencyKey must be a string ≤64 chars",
+            code: "INVALID_IDEMPOTENCY_KEY",
+          });
+        }
+        idempotencyKey = body.idempotencyKey;
+      }
+
+      // Idempotency probe — search this invoice's existing lines for a
+      // notes-token marking the same caller-supplied key. Scoped by
+      // tenantId + invoiceId so cross-invoice keys don't collide.
+      if (idempotencyKey) {
+        const existing = await prisma.travelInvoiceLine.findFirst({
+          where: {
+            tenantId: req.travelTenant.id,
+            invoiceId: invoice.id,
+            lineType: "fee",
+            notes: { contains: `penaltyKey:${idempotencyKey}` },
+          },
+        });
+        if (existing) {
+          return res.status(200).json({
+            invoiceId: invoice.id,
+            line: existing,
+            status: "already_applied",
+            idempotencyKey,
+          });
+        }
+      }
+
+      const result = computeLatePenalty({
+        invoiceAmount: invoice.totalAmount,
+        dueDate: invoice.dueDate,
+        status: invoice.status,
+        asOf,
+        graceDays,
+        annualRatePercent,
+        flatFeePercent,
+        mode,
+      });
+
+      // Penalty did not apply → 200 envelope, NO line created, NO audit row.
+      // Mirrors apply-tcs's "applies===false" branch which also no-ops.
+      if (!result.applies) {
+        return res.status(200).json({
+          invoiceId: invoice.id,
+          status: "not_applied",
+          applies: false,
+          reason: result.reason,
+          daysOverdue: result.daysOverdue,
+          chargeableDays: result.chargeableDays,
+          graceDays: result.graceDays,
+          mode: result.mode,
+          ratePercent: result.ratePercent,
+          penalty: 0,
+        });
+      }
+
+      // Build the line. Description auto-generated unless operator overrode
+      // (audit-trail-friendly default). Notes carries the policy details +
+      // the idempotency key marker (when supplied).
+      const autoDesc =
+        result.mode === "flat"
+          ? `Late-payment penalty (${result.ratePercent}% flat, ${result.daysOverdue}d overdue)`
+          : `Late-payment penalty (${result.ratePercent}% p.a., ${result.chargeableDays}d chargeable)`;
+      const description =
+        typeof body.description === "string" && body.description.trim()
+          ? body.description.trim().slice(0, 255)
+          : autoDesc;
+
+      const notesParts = [
+        `mode:${result.mode}`,
+        `ratePercent:${result.ratePercent}`,
+        `daysOverdue:${result.daysOverdue}`,
+        `chargeableDays:${result.chargeableDays}`,
+        `asOf:${asOf.toISOString()}`,
+      ];
+      if (idempotencyKey) notesParts.push(`penaltyKey:${idempotencyKey}`);
+      const notes = notesParts.join("; ");
+
+      const line = await prisma.travelInvoiceLine.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          invoiceId: invoice.id,
+          lineType: "fee",
+          description,
+          quantity: 1,
+          unitPrice: result.penalty,
+          amount: result.penalty,
+          currency: invoice.currency,
+          sortOrder: 9999, // penalty rows render last (operator can re-sort).
+          notes,
+        },
+      });
+
+      await recomputeInvoiceTotal(invoice.id, req.travelTenant.id);
+
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_PENALTY_APPLIED",
+        invoice.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          lineId: line.id,
+          penalty: result.penalty,
+          mode: result.mode,
+          ratePercent: result.ratePercent,
+          daysOverdue: result.daysOverdue,
+          chargeableDays: result.chargeableDays,
+          asOf: asOf.toISOString(),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        },
+      );
+
+      return res.status(201).json({
+        invoiceId: invoice.id,
+        line,
+        status: "applied",
+        penalty: result.penalty,
+        daysOverdue: result.daysOverdue,
+        chargeableDays: result.chargeableDays,
+        graceDays: result.graceDays,
+        mode: result.mode,
+        ratePercent: result.ratePercent,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] apply-penalty error:", e.message);
+      res.status(500).json({ error: "Failed to apply late-payment penalty" });
+    }
+  },
+);
+
+// ============================================================================
+// POST /api/travel/invoices/:id/convert-to-tax-invoice — Arc 2 #901 slice 26.
+//
+// PRD_TRAVEL_BILLING FR-3.8 (doc-type taxonomy) + UC-2.6 (overseas TCS
+// estimation). Operator-action "Convert Proforma -> Tax Invoice": flips a
+// Draft Proforma to a Draft TaxInvoice in-place, reassigning invoiceNum
+// from the proforma-namespace to the regular sub-brand TaxInvoice serial.
+//
+// Why this exists: A Proforma is a non-binding price estimate (commonly
+// issued for visa application support, overseas package pre-quoting before
+// FX is finalized, customer-side internal approval). Once the price is
+// locked + customer commits, the operator converts to a TaxInvoice WITHOUT
+// re-entering line items + tax calculations. The conversion preserves:
+//   - lines (TravelInvoiceLine rows untouched)
+//   - totalAmount + currency + dueDate + contactId + subBrand
+//   - parentInvoiceId remains null (a Proforma is not a child of anything)
+// And mutates:
+//   - docType: Proforma -> TaxInvoice
+//   - invoiceNum: rewritten via nextSubBrandInvoiceNum() so the new
+//     TaxInvoice gets a gap-less per-sub-brand serial. The old proforma
+//     number is preserved in the audit log under prevInvoiceNum.
+// Status stays Draft — operator must explicitly call /issue to lock it
+// (matches the existing create-then-issue flow; conversion does NOT skip
+// the Draft -> Issued transition matrix).
+//
+// Auth: ADMIN/MANAGER only.
+//
+// Body: (empty — no input needed; conversion is a pure type-flip)
+//
+// Pre-conditions:
+//   1. Invoice exists, tenant-scoped, sub-brand-accessible.
+//   2. docType == 'Proforma' (NULL docType is treated as 'TaxInvoice' per
+//      the slice-11 back-compat convention; back-compat rows are NOT
+//      eligible for conversion since they're already TaxInvoice).
+//   3. status == 'Draft' (Issued/Partial/Paid/Voided are settled states
+//      — converting after issue would invalidate downstream audit trails;
+//      operator should issue a CreditNote + start fresh).
+//
+// Side effects:
+//   - In-place update of the TravelInvoice row (docType + invoiceNum).
+//   - Audit row stamped TRAVEL_INVOICE_CONVERTED_TO_TAX_INVOICE with
+//     details { prevInvoiceNum, newInvoiceNum, subBrand }.
+//
+// Returns: 200 + the updated invoice row.
+//
+// Error codes: INVALID_ID (400), INVOICE_NOT_FOUND (404),
+//   SUB_BRAND_DENIED (403), NOT_A_PROFORMA (400 — docType != 'Proforma'),
+//   INVALID_INVOICE_STATE (400 — status != 'Draft').
+// ============================================================================
+router.post(
+  "/invoices/:id/convert-to-tax-invoice",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      if (invoice.docType !== "Proforma") {
+        return res.status(400).json({
+          error: `Only Proforma invoices can be converted to TaxInvoice (current docType: ${invoice.docType || "TaxInvoice"})`,
+          code: "NOT_A_PROFORMA",
+        });
+      }
+
+      if (invoice.status !== "Draft") {
+        return res.status(400).json({
+          error: `Only Draft proformas can be converted (current status: ${invoice.status}). Settled proformas should be voided + reissued.`,
+          code: "INVALID_INVOICE_STATE",
+        });
+      }
+
+      const prevInvoiceNum = invoice.invoiceNum;
+      const newInvoiceNum = await nextSubBrandInvoiceNum(
+        req.travelTenant.id,
+        invoice.subBrand,
+      );
+
+      const updated = await prisma.travelInvoice.update({
+        where: { id: invoice.id },
+        data: {
+          docType: "TaxInvoice",
+          invoiceNum: newInvoiceNum,
+        },
+      });
+
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_CONVERTED_TO_TAX_INVOICE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          prevInvoiceNum,
+          newInvoiceNum,
+          subBrand: invoice.subBrand,
+        },
+      );
+
+      return res.status(200).json(updated);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] convert-to-tax-invoice error:", e.message);
+      res.status(500).json({ error: "Failed to convert proforma to tax invoice" });
+    }
+  },
+);
+
+// POST /api/travel/invoices/:id/void — dedicated audit-logged void action.
+// Body: { reason: string (required, 5..500 chars) }
+// Mirrors the action-endpoint pattern used by mark-paid, apply-penalty,
+// convert-to-tax-invoice. ADMIN/MANAGER only. PRD_TRAVEL_BILLING FR-3.7
+// (cancellation/refund flow — voiding is a precondition for reissuance).
+//
+// Behaviour:
+//   - Any non-Voided status flips to "Voided" (the existing PUT /:id allows
+//     this too, but doesn't require a reason and doesn't carry one in audit).
+//   - Already-Voided returns 400 ALREADY_VOIDED (idempotent guard so callers
+//     don't accidentally overwrite the original void reason).
+//   - Paid invoices CAN be voided here (mirrors the PUT-status transition map
+//     which permits Paid -> Voided) — needed for refund/cancellation flow.
+//   - Reason persisted in the audit log only (TravelInvoice has no `notes`
+//     column; the audit-row is the authoritative reason record).
+router.post(
+  "/invoices/:id/void",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (reason.length < 5 || reason.length > 500) {
+        return res.status(400).json({
+          error: "reason must be 5..500 characters",
+          code: "INVALID_VOID_REASON",
+        });
+      }
+
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      if (invoice.status === "Voided") {
+        return res.status(400).json({
+          error: "Invoice already voided",
+          code: "ALREADY_VOIDED",
+        });
+      }
+
+      const prevStatus = invoice.status;
+
+      const updated = await prisma.travelInvoice.update({
+        where: { id: invoice.id },
+        data: { status: "Voided" },
+      });
+
+      await writeAudit(
+        "TravelInvoice",
+        "TRAVEL_INVOICE_VOIDED",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          prevStatus,
+          reason,
+          invoiceNum: invoice.invoiceNum,
+          subBrand: invoice.subBrand,
+        },
+      );
+
+      return res.status(200).json(updated);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] void error:", e.message);
+      res.status(500).json({ error: "Failed to void invoice" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/invoices/:id/timeline
+// Arc 2 #901 slice 28 — PRD_TRAVEL_BILLING NFR-4.3 (audit trail consumer).
+//
+// READ-ONLY. Returns the chronological event timeline for a single invoice,
+// reconstructed from AuditLog rows where:
+//   entity='TravelInvoice' AND entityId=invoiceId               (invoice events)
+//   entity='TravelInvoiceLine' AND details.invoiceId=invoiceId  (line events)
+//
+// Powers an "Activity" tab on the InvoiceDetail UI: a single chronological
+// feed of create / update / issue / mark-paid / apply-penalty / convert /
+// void / credit-note / debit-note / clone-as-recurring + per-line CRUD.
+// All events that the existing slice-19..27 handlers already write via
+// writeAudit() are surfaced — this endpoint adds zero new audit-event types;
+// it's purely a presentation layer over the existing chain.
+//
+// Auth: any verified token; tenant + sub-brand scoped via loadParentInvoice.
+//
+// Query params (all optional):
+//   ?limit=<int 1..200>   — page size (default 100; capped at 200).
+//   ?includeLines=true    — also pull TravelInvoiceLine audit rows whose
+//                            details.invoiceId matches (default true).
+//
+// Response: { invoiceId, count, events: [ { id, action, entity, at,
+//   userId, details } ] }. Sorted createdAt DESC (newest first).
+// Error codes: INVALID_ID, INVOICE_NOT_FOUND, SUB_BRAND_DENIED,
+//   INVALID_NUMERIC_QUERY.
+// ============================================================================
+router.get(
+  "/invoices/:id/timeline",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // Parse limit (1..200, default 100) BEFORE loading the invoice so the
+      // validation guard fires without a DB round-trip on malformed input.
+      let limit = 100;
+      if (req.query.limit != null && req.query.limit !== "") {
+        const n = Number(req.query.limit);
+        if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 200) {
+          return res.status(400).json({
+            error: "limit must be an integer in [1, 200]",
+            code: "INVALID_NUMERIC_QUERY",
+          });
+        }
+        limit = n;
+      }
+
+      // includeLines defaults true; only the literal string "false" disables.
+      const includeLines = req.query.includeLines !== "false";
+
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      // Pull invoice-level events directly via the indexed lookup.
+      const invoiceRows = await prisma.auditLog.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          entity: "TravelInvoice",
+          entityId: invoice.id,
+        },
+        orderBy: { createdAt: "desc" },
+        take: limit,
+        select: {
+          id: true,
+          action: true,
+          entity: true,
+          entityId: true,
+          createdAt: true,
+          userId: true,
+          details: true,
+        },
+      });
+
+      // Pull line-level events for this invoice, if requested. We can't
+      // directly index on details (it's a TEXT JSON column), so we pull the
+      // recent line audit rows for this tenant and post-filter by parsing
+      // details.invoiceId. Keep the prisma fetch bounded by 5x limit so the
+      // post-filter doesn't unbound — operators almost never have >500
+      // line edits on a single invoice anyway.
+      let lineRows = [];
+      if (includeLines) {
+        const rawLineRows = await prisma.auditLog.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            entity: "TravelInvoiceLine",
+          },
+          orderBy: { createdAt: "desc" },
+          take: limit * 5,
+          select: {
+            id: true,
+            action: true,
+            entity: true,
+            entityId: true,
+            createdAt: true,
+            userId: true,
+            details: true,
+          },
+        });
+        lineRows = rawLineRows.filter((r) => {
+          if (!r.details) return false;
+          try {
+            const parsed = typeof r.details === "string" ? JSON.parse(r.details) : r.details;
+            return parsed && parsed.invoiceId === invoice.id;
+          } catch {
+            return false;
+          }
+        });
+      }
+
+      // Merge + sort + cap at limit. Each event normalises details JSON
+      // (string -> object) so the client doesn't have to re-parse.
+      const merged = [...invoiceRows, ...lineRows]
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit)
+        .map((r) => {
+          let details = r.details;
+          if (typeof details === "string") {
+            try {
+              details = JSON.parse(details);
+            } catch {
+              // Leave as string if it isn't JSON — legacy rows or
+              // free-form descriptions slip through here.
+            }
+          }
+          return {
+            id: r.id,
+            action: r.action,
+            entity: r.entity,
+            entityId: r.entityId,
+            at: r.createdAt,
+            userId: r.userId,
+            details,
+          };
+        });
+
+      return res.status(200).json({
+        invoiceId: invoice.id,
+        count: merged.length,
+        events: merged,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] timeline error:", e.message);
+      res.status(500).json({ error: "Failed to load invoice timeline" });
+    }
+  },
+);
+
 module.exports = router;

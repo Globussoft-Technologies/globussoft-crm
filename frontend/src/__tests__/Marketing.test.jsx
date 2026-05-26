@@ -372,4 +372,402 @@ describe('<Marketing /> — broad page surface', () => {
       screen.getByText(/No saved forms yet/i),
     ).toBeInTheDocument();
   });
+
+  // ───── NEW CASES (extension wave) ─────
+
+  it('Email-tab GET initially fires for ?channel=EMAIL and /api/sequences in parallel', async () => {
+    // Pins that the Campaigns useEffect loads both campaigns AND the
+    // sequences dropdown payload on initial mount. Sequences is non-fatal
+    // on error per the SUT (#932), but the GET still goes out.
+    wireFetch({ sequences: [{ id: 7, name: 'Welcome Drip' }] });
+    renderMarketing();
+    await waitFor(() => {
+      const emailCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/marketing/campaigns?channel=EMAIL'),
+      );
+      const seqCall = fetchApiMock.mock.calls.find(([u]) => u === '/api/sequences');
+      expect(emailCall).toBeTruthy();
+      expect(seqCall).toBeTruthy();
+    });
+  });
+
+  it('submitting the Create Campaign modal POSTs /api/marketing/campaigns with sanitised name', async () => {
+    // Pins the create-campaign POST contract: name is trimmed before send,
+    // channel='EMAIL', budget=0. After success the modal closes + the list
+    // reloads + a success toast fires.
+    wireFetch({ campaigns: [] });
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Create Campaign/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Create Campaign/i }));
+    const input = await screen.findByPlaceholderText(/Q4 Product Launch/i);
+    fireEvent.change(input, { target: { value: '  Black Friday Blast  ' } });
+
+    const submitBtn = within(screen.getByRole('dialog', { name: /Create campaign/i }))
+      .getByRole('button', { name: /Create Campaign/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(([u, opts]) =>
+        u === '/api/marketing/campaigns' && opts?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.name).toBe('Black Friday Blast'); // trimmed
+      expect(body.channel).toBe('EMAIL');
+      expect(body.budget).toBe(0);
+    });
+    expect(notifyObj.success).toHaveBeenCalledWith('Campaign created');
+  });
+
+  it('Edit-Campaign dialog exposes Subject, Preheader, Body, Audience Status filter, Schedule + Sequence-link select', async () => {
+    // Pins the editor's full field set per the SUT openEditor() shape:
+    // name + status + subject + preheader + body + audienceFilter.status
+    // + scheduledAt datetime-local + sequenceId select (#932).
+    wireFetch({
+      sequences: [{ id: 99, name: 'Onboarding Drip' }],
+    });
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Edit campaign/i })).toBeInTheDocument();
+    });
+
+    // Subject, Preheader, Body inputs.
+    expect(
+      screen.getByPlaceholderText(/The first line your recipients see in their inbox/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText(/Optional preview text shown next to the subject/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText(/Hello \{\{contact\.firstName\}\}/i),
+    ).toBeInTheDocument();
+
+    // Audience Status filter — first option is "All contacts with email".
+    expect(screen.getByDisplayValue('All contacts with email')).toBeInTheDocument();
+
+    // Schedule datetime-local input (type attribute pin).
+    const dialog = screen.getByRole('dialog', { name: /Edit campaign/i });
+    const datetimeInput = within(dialog).getAllByRole('textbox', { hidden: true }).concat(
+      Array.from(dialog.querySelectorAll('input[type="datetime-local"]'))
+    );
+    expect(dialog.querySelector('input[type="datetime-local"]')).toBeInTheDocument();
+
+    // Sequence-link select (#932). The default-empty option label is the
+    // "None — do not auto-enroll recipients" prompt.
+    expect(screen.getByLabelText(/Link to Sequence/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { name: /None — do not auto-enroll recipients/i }),
+    ).toBeInTheDocument();
+    // Sequence loaded from /api/sequences shows up as an option.
+    expect(
+      screen.getByRole('option', { name: /Onboarding Drip/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('Edit-Campaign Save click PUTs name + status + sequenceId then POSTs schedule', async () => {
+    // Pins the saveEditor multi-call contract:
+    //   PUT /api/marketing/campaigns/:id { name, status, sequenceId }
+    //   POST /api/marketing/campaigns/:id/schedule { scheduledAt, filters }
+    // Also pins the "no scheduledAt set + no original" → pause fallback path.
+    wireFetch();
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Edit campaign/i })).toBeInTheDocument();
+    });
+
+    fetchApiMock.mockClear();
+    // Re-wire after clear so subsequent reloads still resolve.
+    wireFetch();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(([u, opts]) =>
+        typeof u === 'string' &&
+        u === '/api/marketing/campaigns/100' &&
+        opts?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      const putBody = JSON.parse(putCall[1].body);
+      expect(putBody.name).toBe('Q4 Holiday Promo');
+      expect(putBody.status).toBe('Draft');
+      // sequenceId is null when '' (no linkage chosen).
+      expect(putBody.sequenceId).toBeNull();
+    });
+
+    const scheduleCall = fetchApiMock.mock.calls.find(([u, opts]) =>
+      typeof u === 'string' &&
+      u === '/api/marketing/campaigns/100/schedule' &&
+      opts?.method === 'POST',
+    );
+    expect(scheduleCall).toBeTruthy();
+    const schedBody = JSON.parse(scheduleCall[1].body);
+    expect(schedBody.scheduledAt).toBeTruthy(); // ISO string placeholder
+    expect(schedBody.filters).toBeTruthy();
+    // No scheduledAt + no originalScheduledAt → SUT issues pause POST so the
+    // placeholder +1yr date doesn't accidentally trigger dispatch.
+    const pauseCall = fetchApiMock.mock.calls.find(([u, opts]) =>
+      typeof u === 'string' &&
+      u === '/api/marketing/campaigns/100/pause' &&
+      opts?.method === 'POST',
+    );
+    expect(pauseCall).toBeTruthy();
+  });
+
+  it('Send Now in the editor dialog POSTs /:id/send with the audienceFilter payload', async () => {
+    // Pins the sendCampaignNow contract: confirm prompt → POST /send with
+    // filters body. notify.confirm is stubbed to true via our mock object
+    // so the dispatch fires without user gesture.
+    wireFetch();
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Edit campaign Spring Newsletter/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText(/Edit campaign Spring Newsletter/i));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Edit campaign/i })).toBeInTheDocument();
+    });
+
+    fetchApiMock.mockClear();
+    wireFetch();
+    fireEvent.click(screen.getByRole('button', { name: /Send Now/i }));
+
+    await waitFor(() => {
+      const sendCall = fetchApiMock.mock.calls.find(([u, opts]) =>
+        typeof u === 'string' &&
+        u === '/api/marketing/campaigns/101/send' &&
+        opts?.method === 'POST',
+      );
+      expect(sendCall).toBeTruthy();
+      const body = JSON.parse(sendCall[1].body);
+      expect(body).toHaveProperty('filters');
+    });
+    expect(notifyObj.success).toHaveBeenCalledWith('Campaign dispatched');
+  });
+
+  it('SMS tab: Send SMS Blast posts to /api/sms/send-bulk with parsed recipient array', async () => {
+    // Pins the #516 single-shot /send-bulk contract — recipient field accepts
+    // comma- or whitespace-separated phones, parsed client-side into an
+    // array before the POST.
+    wireFetch();
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /SMS Campaigns/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /SMS Campaigns/i }));
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/\+919876543210/)).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText(/\+919876543210/), {
+      target: { value: '+919876543210, +918765432109' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Hi \{\{contact\.firstName\}\}/i), {
+      target: { value: 'Test blast' },
+    });
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/sms/send-bulk') {
+        return Promise.resolve({ totalSent: 2, totalFailed: 0 });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/marketing/campaigns?channel=SMS')) {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve(null);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Send SMS/i }));
+
+    await waitFor(() => {
+      const sendCall = fetchApiMock.mock.calls.find(([u, opts]) =>
+        u === '/api/sms/send-bulk' && opts?.method === 'POST',
+      );
+      expect(sendCall).toBeTruthy();
+      const body = JSON.parse(sendCall[1].body);
+      // Recipient string split on commas/whitespace into a typed array.
+      expect(Array.isArray(body.to)).toBe(true);
+      expect(body.to).toEqual(['+919876543210', '+918765432109']);
+      expect(body.body).toBe('Test blast');
+    });
+    expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/SMS sent: 2 OK/));
+  });
+
+  it('SMS tab: empty recipient OR body short-circuits with notify.error (no POST)', async () => {
+    // Pins the local guard inside handleSendSmsBlast — both fields are
+    // required before a POST goes out.
+    wireFetch();
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /SMS Campaigns/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /SMS Campaigns/i }));
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/\+919876543210/)).toBeInTheDocument();
+    });
+
+    // The Send button is disabled until both fields have content (HTML5
+    // attribute pin — guards against accidental empty POST in the first
+    // place). Recipient+body inputs are also required.
+    const sendBtn = screen.getByRole('button', { name: /Send SMS/i });
+    expect(sendBtn).toBeDisabled();
+  });
+
+  it('SMS tab: recent campaigns history renders rows when /api/marketing/campaigns?channel=SMS has data', async () => {
+    // Pins the right-column "Recent SMS Campaigns" populated state — was
+    // empty-state in the existing test; this is the non-empty path.
+    wireFetch({
+      sms: [
+        { id: 200, name: 'Diwali Blast', status: 'Completed', sent: 500 },
+        { id: 201, name: 'New Year Promo', status: 'Active', sent: 1200 },
+      ],
+    });
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /SMS Campaigns/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /SMS Campaigns/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Diwali Blast/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/New Year Promo/i)).toBeInTheDocument();
+    // The "no rows yet" empty-state copy is gone when the list has rows.
+    expect(screen.queryByText(/No SMS campaign blasts yet/i)).toBeNull();
+  });
+
+  it('Forms tab: addField then editing the label updates only that row (independent state)', async () => {
+    // Pins updateField() and removeField() — appending + mutating a field
+    // doesn't bleed into the first row.
+    wireFetch();
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Embedded Forms/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Embedded Forms/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Form Field/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Form Field/i }));
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /^Remove field/i }).length).toBe(2);
+    });
+
+    // Remove the second field — back to 1 row.
+    const removeBtns = screen.getAllByRole('button', { name: /^Remove field/i });
+    fireEvent.click(removeBtns[1]);
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /^Remove field/i }).length).toBe(1);
+    });
+  });
+
+  it('Travel-vertical tenant: editor shows the Sub-brand audience filter dropdown', async () => {
+    // Pins the #898 travel-vertical-only Sub-brand audience filter. Generic
+    // and wellness tenants do NOT see this control (covered indirectly by
+    // the existing default GENERIC_USER tests above).
+    const TRAVEL_USER = {
+      ...GENERIC_USER,
+      tenant: { id: 2, vertical: 'travel' },
+    };
+    wireFetch();
+    renderMarketing(TRAVEL_USER);
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Edit campaign/i })).toBeInTheDocument();
+    });
+    // Sub-brand-specific label + the TMC option from TRAVEL_SUB_BRANDS map.
+    expect(screen.getByText(/Sub-brand audience/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { name: /TMC \(School trips\)/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { name: /RFU \(Umrah\)/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { name: /Visa Sure/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('Generic tenant: editor does NOT render the Sub-brand audience filter (gated on travel)', async () => {
+    // Negative-pin of the #898 isTravelTenant gate — generic vertical hides
+    // the Sub-brand dropdown.
+    wireFetch();
+    renderMarketing(); // default GENERIC_USER
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Edit campaign/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Sub-brand audience/i)).toBeNull();
+  });
+
+  it('handles a fetchApi rejection on campaign load without crashing (graceful empty)', async () => {
+    // Pins the try/catch in loadCampaigns — backend errors don't throw past
+    // the component; we still see the page chrome + empty-state.
+    fetchApiMock.mockImplementation((url) => {
+      if (typeof url === 'string' && url.startsWith('/api/marketing/campaigns?channel=EMAIL')) {
+        return Promise.reject(new Error('Network error'));
+      }
+      if (url === '/api/sequences') {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve(null);
+    });
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /^Marketing$/i })).toBeInTheDocument();
+    });
+    // Page still renders + empty-state shows (campaigns stays []).
+    await waitFor(() => {
+      expect(screen.getByText(/No campaigns found/i)).toBeInTheDocument();
+    });
+  });
+
+  it('Edit dialog status select can transition Draft → Scheduled → Active → Completed', async () => {
+    // Pins the status select option set + the controlled-value mutation
+    // round-trip (state flips through every enum value).
+    wireFetch();
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Edit campaign/i })).toBeInTheDocument();
+    });
+
+    const dialog = screen.getByRole('dialog', { name: /Edit campaign/i });
+    // Status select is the one with options ['Draft','Scheduled','Active','Completed'].
+    const statusSelect = within(dialog).getByDisplayValue('Draft');
+    expect(statusSelect.tagName).toBe('SELECT');
+    // All four lifecycle options are present.
+    expect(within(statusSelect).getByRole('option', { name: 'Draft' })).toBeInTheDocument();
+    expect(within(statusSelect).getByRole('option', { name: 'Scheduled' })).toBeInTheDocument();
+    expect(within(statusSelect).getByRole('option', { name: 'Active' })).toBeInTheDocument();
+    expect(within(statusSelect).getByRole('option', { name: 'Completed' })).toBeInTheDocument();
+
+    fireEvent.change(statusSelect, { target: { value: 'Scheduled' } });
+    await waitFor(() => {
+      expect(within(dialog).getByDisplayValue('Scheduled')).toBeInTheDocument();
+    });
+    fireEvent.change(statusSelect, { target: { value: 'Completed' } });
+    await waitFor(() => {
+      expect(within(dialog).getByDisplayValue('Completed')).toBeInTheDocument();
+    });
+  });
 });

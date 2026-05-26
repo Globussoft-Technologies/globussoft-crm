@@ -388,6 +388,150 @@ router.delete("/vendors/:id", adminGate, async (req, res) => {
   }
 });
 
+// ── Inventory tenant-wide aggregate (KPI surface for dashboard) ──
+//
+// GET /api/wellness/inventory/stats — first /stats endpoint for the
+// inventory route. Wellness/CRM polish slice. Read-only meta surface;
+// mirrors the travel-suppliers/stats posture (tenant-scoped, ISO date
+// bounds on createdAt for the receipt/adjustment windows, no audit row).
+//
+// Mirrors lowStockEngine.js's filter for lowStockCount —
+// `threshold > 0` (threshold=0 means "not tracked") combined with
+// `currentStock <= threshold`. Without the threshold>0 floor the
+// frontend dashboard reports every untracked product as "low".
+//
+// Schema notes (verified against prisma/schema.prisma):
+//   Product            — id, name, sku?, price (Float), threshold (Int,
+//                        default 0), currentStock (Int, default 0),
+//                        createdAt. NO `costPrice` / `mrp` / `vendor`
+//                        / `isActive` columns. Inventory value rolls up
+//                        currentStock * price (the single price column
+//                        on Product) for every product since there is
+//                        no per-product active flag — every product
+//                        contributes to KPIs.
+//   InventoryReceipt   — quantity (Float), totalCost (Float),
+//                        receivedAt (DateTime, primary timestamp),
+//                        createdAt.
+//   InventoryAdjustment — quantityDelta (Float), createdAt.
+//
+// Query params:
+//   ?from / ?to — optional ISO date bounds on createdAt for the
+//                 receipt/adjustment date-window aggregates. Invalid →
+//                 400 INVALID_DATE. Independent validation so a bad
+//                 ?from doesn't get masked by a missing ?to. Date
+//                 window does NOT narrow totalProducts /
+//                 totalInventoryValue / lowStockCount — those are
+//                 always tenant-wide snapshots.
+//
+// Response envelope:
+//   {
+//     totalProducts, lowStockCount, outOfStockCount,
+//     totalInventoryValue, receiptsCount, receiptsValue,
+//     adjustmentsCount, lastReceiptAt
+//   }
+//
+// USER-readable: anodyne aggregate (counts + sums + timestamps); safe.
+// NO audit row written. Read-only meta surface.
+//
+// Express route ordering: literal-path /inventory/stats declared BEFORE
+// the /inventory/receipts, /inventory/adjustments, /inventory/movements
+// family so future /:id parametrics can't intercept it.
+router.get("/inventory/stats", adminGate, async (req, res) => {
+  try {
+    // Independent validation of ?from and ?to — a bad ?from should
+    // surface even if ?to is absent (and vice versa). Mirrors the
+    // travel-suppliers/stats + billing/stats pattern.
+    const createdAtClause = {};
+    if (req.query.from !== undefined) {
+      const fromDate = new Date(req.query.from);
+      if (Number.isNaN(fromDate.getTime())) {
+        return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE" });
+      }
+      createdAtClause.gte = fromDate;
+    }
+    if (req.query.to !== undefined) {
+      const toDate = new Date(req.query.to);
+      if (Number.isNaN(toDate.getTime())) {
+        return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE" });
+      }
+      createdAtClause.lte = toDate;
+    }
+
+    const tenantClause = tenantWhere(req);
+    const windowedWhere = Object.keys(createdAtClause).length > 0
+      ? { ...tenantClause, createdAt: createdAtClause }
+      : tenantClause;
+
+    // Snapshot reads (tenant-wide, date-window-independent):
+    //  - Pull every product's currentStock + threshold + price so we can
+    //    compute the four product-derived KPIs in one pass.
+    //  - Pull receipts under the date window for count + sum + last-at.
+    //  - Pull adjustments under the date window for count only.
+    const [products, receipts, adjustmentsCount] = await Promise.all([
+      prisma.product.findMany({
+        where: tenantClause,
+        select: { currentStock: true, threshold: true, price: true },
+      }),
+      prisma.inventoryReceipt.findMany({
+        where: windowedWhere,
+        select: { totalCost: true, createdAt: true },
+      }),
+      prisma.inventoryAdjustment.count({ where: windowedWhere }),
+    ]);
+
+    const totalProducts = products.length;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+    let inventoryValueSum = 0;
+    for (const p of products) {
+      const stock = Number(p.currentStock) || 0;
+      const threshold = Number(p.threshold) || 0;
+      const price = Number(p.price) || 0;
+      // Mirror lowStockEngine.js: threshold=0 means "not tracked" — only
+      // count threshold>0 products against lowStockCount. outOfStockCount
+      // counts every product at-or-below 0 stock regardless of threshold
+      // since 0 stock is operationally low irrespective of opt-in tracking.
+      if (threshold > 0 && stock <= threshold) lowStockCount += 1;
+      if (stock <= 0) outOfStockCount += 1;
+      inventoryValueSum += stock * price;
+    }
+
+    const receiptsCount = receipts.length;
+    let receiptsValueSum = 0;
+    let lastReceiptAt = null;
+    for (const r of receipts) {
+      receiptsValueSum += Number(r.totalCost) || 0;
+      if (r.createdAt && (lastReceiptAt === null || new Date(r.createdAt) > lastReceiptAt)) {
+        lastReceiptAt = new Date(r.createdAt);
+      }
+    }
+
+    // Half-up 2dp rounding helper. EPSILON tweak collapses JS float
+    // noise (0.1+0.2 type artefacts) so 100.555 rounds to 100.56.
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+    // activeProducts: Product model has no `isActive` column today, so
+    // every product in the catalog is operationally active. Surface as a
+    // sibling field equal to totalProducts so the dashboard's "active
+    // products" tile stays stable if/when an isActive column lands —
+    // only the backend computation needs to change at that point.
+    res.json({
+      totalProducts,
+      activeProducts: totalProducts,
+      lowStockCount,
+      outOfStockCount,
+      totalInventoryValue: round2(inventoryValueSum),
+      receiptsCount,
+      receiptsValue: round2(receiptsValueSum),
+      adjustmentsCount,
+      lastReceiptAt: lastReceiptAt ? lastReceiptAt.toISOString() : null,
+    });
+  } catch (e) {
+    console.error("[inventory] stats error:", e.message);
+    res.status(500).json({ error: "Failed to compute inventory stats" });
+  }
+});
+
 // ── Inventory Receipts (incoming stock) ───────────────────────────
 //
 // SIDE EFFECT: every successful POST increments Product.currentStock by

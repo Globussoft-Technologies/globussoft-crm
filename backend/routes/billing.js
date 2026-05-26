@@ -234,6 +234,122 @@ router.get("/", verifyToken, async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────────
+// GET /api/billing/stats
+//
+// Wellness/CRM billing polish — first /stats aggregate for the Invoice
+// CRUD route. Read-only tenant-wide KPI surface backing the owner
+// dashboard's billing tile. Mirrors travel_suppliers.js /stats posture —
+// anodyne aggregate, NO audit row written.
+//
+// Auth follows the GET / list handler above: verifyToken only (USERs
+// can read aggregate totals; per-row PHI / restricted columns are
+// stripped from list/detail endpoints via fieldFilter, but counts +
+// sums of `amount` are not PHI). ADMIN-readable in practice — UI tile
+// is gated on the frontend.
+//
+// Schema notes — actual Invoice columns: amount (Float), status
+// (default UNPAID; live values UNPAID/PAID/OVERDUE/VOIDED/REFUNDED/
+// CREDIT_NOTE from the surrounding handlers above), dueDate, createdAt.
+// No separate amountPaid column — paid-ness is tracked via status flip.
+// totalPaid = sum(amount where status=PAID); totalIssued = sum(amount
+// for rows that represent real receivables, excluding VOIDED +
+// CREDIT_NOTE which would corrupt the figure with negative amounts).
+//
+// Query params:
+//   ?from / ?to — optional ISO date bounds on createdAt. Invalid → 400
+//                 INVALID_DATE. Both optional and independent.
+//
+// Response envelope:
+//   { total, byStatus, totalIssued, totalPaid, totalOutstanding,
+//     overdueCount, lastInvoiceAt }
+// ────────────────────────────────────────────────────────────────
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    // Validate optional date bounds. Independent validation so a bad
+    // ?from doesn't get masked by a missing ?to and vice-versa.
+    const createdAtClause = {};
+    if (req.query.from !== undefined) {
+      const fromDate = new Date(req.query.from);
+      if (Number.isNaN(fromDate.getTime())) {
+        return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE" });
+      }
+      createdAtClause.gte = fromDate;
+    }
+    if (req.query.to !== undefined) {
+      const toDate = new Date(req.query.to);
+      if (Number.isNaN(toDate.getTime())) {
+        return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE" });
+      }
+      createdAtClause.lte = toDate;
+    }
+
+    const where = { tenantId: req.user.tenantId };
+    if (Object.keys(createdAtClause).length > 0) {
+      where.createdAt = createdAtClause;
+    }
+
+    // Pull just the columns we need to aggregate. Avoids dragging the
+    // full row (including contact/deal joins) into memory just to sum.
+    const rows = await prisma.invoice.findMany({
+      where,
+      select: { status: true, amount: true, dueDate: true, createdAt: true },
+    });
+
+    const total = rows.length;
+    const byStatus = {};
+    let issuedSum = 0;
+    let paidSum = 0;
+    let overdueCount = 0;
+    let lastCreatedAt = null;
+    const now = new Date();
+    // Statuses that exit the "issued, awaiting payment" funnel — exclude
+    // their amounts from totalIssued. VOIDED + CREDIT_NOTE in particular
+    // carry negative amounts (credit-note) or write-offs (void).
+    const EXCLUDE_FROM_ISSUED = new Set(["VOIDED", "CREDIT_NOTE"]);
+    const NOT_OVERDUE_STATUSES = new Set(["PAID", "VOIDED", "REFUNDED", "CREDIT_NOTE"]);
+
+    for (const r of rows) {
+      const status = r.status || "UNPAID";
+      byStatus[status] = (byStatus[status] || 0) + 1;
+      const amt = Number(r.amount) || 0;
+      if (!EXCLUDE_FROM_ISSUED.has(status)) {
+        issuedSum += amt;
+      }
+      if (status === "PAID") {
+        paidSum += amt;
+      }
+      if (r.dueDate && new Date(r.dueDate) < now && !NOT_OVERDUE_STATUSES.has(status)) {
+        overdueCount += 1;
+      }
+      if (r.createdAt && (lastCreatedAt === null || new Date(r.createdAt) > lastCreatedAt)) {
+        lastCreatedAt = new Date(r.createdAt);
+      }
+    }
+
+    // Half-up 2dp rounding helper. EPSILON tweak collapses JS float noise
+    // (0.1+0.2 type artefacts) so 100.555 rounds to 100.56 not 100.55.
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const totalIssued = round2(issuedSum);
+    const totalPaid = round2(paidSum);
+    // Clamp negative outstanding (over-payment / credit-note artefacts) to 0.
+    const totalOutstanding = round2(Math.max(0, totalIssued - totalPaid));
+
+    res.json({
+      total,
+      byStatus,
+      totalIssued,
+      totalPaid,
+      totalOutstanding,
+      overdueCount,
+      lastInvoiceAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[billing/stats]", err);
+    res.status(500).json({ error: "Failed to compute billing stats" });
+  }
+});
+
 // #196: deep-link / portal / SMS-link load — fetch a single invoice by id.
 router.get("/:id", verifyToken, async (req, res) => {
   try {

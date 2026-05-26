@@ -293,4 +293,173 @@ describe('GET /api/callified/enabled', () => {
     expect(res.body).toEqual({ enabled: true });
     expect(callifiedClient.isEnabledForTenant).toHaveBeenCalledWith(1);
   });
+
+  test('coerces falsy client return via Boolean() → { enabled: false }', async () => {
+    // Per DC-7: route wraps client result with Boolean(...) — a null / undefined
+    // / 0 from the service still surfaces as a strict boolean to the UI so the
+    // CTA-render check stays `body.enabled === true` not truthy-coerced.
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, role: 'USER', tenantId: 1, isActive: true,
+    });
+    callifiedClient.isEnabledForTenant.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .get('/api/callified/enabled')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ enabled: false });
+    // Confirms strict-boolean cast — `=== false`, not `null`/`undefined`.
+    expect(res.body.enabled).toBe(false);
+  });
+});
+
+describe('POST /api/callified/calls/initiate — auth/role coverage', () => {
+  test('no Authorization header → 401 (verifyToken fires before handler)', async () => {
+    const res = await request(makeApp())
+      .post('/api/callified/calls/initiate')
+      .send({ toPhone: '+919876543210' });
+
+    expect(res.status).toBe(401);
+    // Handler MUST NOT run when token is absent.
+    expect(callifiedClient.initiateCall).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('USER role → 403 (verifyRole(ADMIN,MANAGER) fires before client)', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, role: 'USER', tenantId: 1, isActive: true,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/callified/calls/initiate')
+      .send({ toPhone: '+919876543210' })
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(403);
+    // Role gate is upstream of validation + client + audit.
+    expect(callifiedClient.initiateCall).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('MANAGER role can initiate (gate is ADMIN|MANAGER, not ADMIN-only)', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 9, role: 'MANAGER', tenantId: 1, isActive: true,
+    });
+    callifiedClient.initiateCall.mockResolvedValue({
+      stub: true, callId: 'cf-manager-1', tenantId: 1, subBrand: 'tmc',
+      toPhone: '+919999000111', status: 'pending-cred-drop',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/callified/calls/initiate')
+      .send({ subBrand: 'tmc', toPhone: '+919999000111' })
+      .set('Authorization', `Bearer ${tokenFor('MANAGER', { userId: 9 })}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ callId: 'cf-manager-1', subBrand: 'tmc' });
+    expect(callifiedClient.initiateCall).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/callified/calls/initiate — sub-brand resolution + propagation', () => {
+  test('API-key sub-brand MATCH (apiKeySubBrand=rfu, body subBrand=rfu) passes through', async () => {
+    callifiedClient.initiateCall.mockResolvedValue({
+      stub: true, callId: 'cf-match-1', tenantId: 1, subBrand: 'rfu',
+      toPhone: '+919876543210', status: 'pending-cred-drop',
+    });
+
+    const res = await request(makeApp({ apiKeySubBrand: 'rfu' }))
+      .post('/api/callified/calls/initiate')
+      .send({ subBrand: 'rfu', toPhone: '+919876543210' })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    // Effective sub-brand is the API-key-pinned 'rfu' (matching body).
+    expect(callifiedClient.initiateCall).toHaveBeenCalledWith(
+      expect.objectContaining({ subBrand: 'rfu', tenantId: 1 }),
+    );
+  });
+
+  test('upstream client throws with e.status — route propagates status + code', async () => {
+    // Lines 108-110 of the SUT: any error carrying e.status (not the two
+    // structured AI_CALLING_* codes) gets that status + code surfaced.
+    const err = new Error('Lead not found');
+    err.status = 404;
+    err.code = 'LEAD_NOT_FOUND';
+    callifiedClient.initiateCall.mockRejectedValue(err);
+
+    const res = await request(makeApp())
+      .post('/api/callified/calls/initiate')
+      .send({ toPhone: '+919876543210', leadId: 99999 })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'LEAD_NOT_FOUND', error: 'Lead not found' });
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('upstream client throws unknown error (no status, no code) → 500 generic', async () => {
+    // Final catch-all branch at line 111-112: covers truly unexpected errors
+    // (network blip, DB connection lost, etc) — UI sees a safe 500 rather
+    // than the raw stack.
+    callifiedClient.initiateCall.mockRejectedValue(new Error('boom unexpected'));
+
+    const res = await request(makeApp())
+      .post('/api/callified/calls/initiate')
+      .send({ toPhone: '+919876543210' })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({ error: 'Failed to initiate call' });
+    // The original error message is NOT leaked to the response body.
+    expect(res.body.error).not.toMatch(/boom/);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/callified/calls/:callId/result', () => {
+  test('happy path: delegates to fetchCallResult with tenant scope, returns envelope', async () => {
+    // Currently UNDER-PINNED — no existing case covers this endpoint at all.
+    const cannedResult = {
+      callId: 'cf-abc-123',
+      tenantId: 1,
+      status: 'completed',
+      durationSeconds: 67,
+      recordingUrl: null,
+      transcript: 'stub-mode: no transcript',
+      summary: null,
+    };
+    callifiedClient.fetchCallResult.mockResolvedValue(cannedResult);
+
+    const res = await request(makeApp())
+      .get('/api/callified/calls/cf-abc-123/result')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(cannedResult);
+    // Tenant scoping — callId from URL, tenantId from JWT.
+    expect(callifiedClient.fetchCallResult).toHaveBeenCalledWith({
+      tenantId: 1,
+      callId: 'cf-abc-123',
+    });
+    // Read-only — no audit row written.
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('upstream throws with e.status → route propagates status + code', async () => {
+    const err = new Error('Call record not found for this tenant');
+    err.status = 404;
+    err.code = 'CALL_NOT_FOUND';
+    callifiedClient.fetchCallResult.mockRejectedValue(err);
+
+    const res = await request(makeApp())
+      .get('/api/callified/calls/cf-missing/result')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'CALL_NOT_FOUND' });
+    expect(res.body.error).toMatch(/not found/i);
+  });
 });

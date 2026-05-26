@@ -252,4 +252,275 @@ describe('<AuditLog /> — page surface', () => {
       expect(call).toBeTruthy();
     });
   });
+
+  // ---------------- Extended cases (2026-05-26) ----------------
+  // The 8 tests above cover the basic page surface. The cases below extend
+  // coverage to drill-down detail panel, CSV export wiring, date filters,
+  // pagination guards, search-across-details + entity-id, error/loading
+  // edge states, integrity backfill banner, and non-admin omission of the
+  // integrity row. Stable mock-object pattern is preserved (2026-05-23
+  // standing rule). All assertions pin to existing code in AuditLog.jsx —
+  // no behaviour change implied.
+
+  it('clicking a row opens the drill-down panel with formatted JSON details', async () => {
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    // Click Alice's row (the CREATE/Deal row). Drawer renders the pretty-
+    // printed details JSON for entity 42.
+    fireEvent.click(screen.getByText('Alice Admin'));
+
+    await waitFor(() => {
+      // prettyDetails() JSON.stringify-with-2-indent renders the title key.
+      // Match the inner string content; the surrounding {} are split across
+      // lines so a single regex over the whole pre block is the safe match.
+      expect(screen.getByText(/"title": "Acme Renewal"/)).toBeInTheDocument();
+    });
+
+    // The "Details" uppercase label appears inside the drawer.
+    expect(screen.getByText(/^Details$/)).toBeInTheDocument();
+  });
+
+  it('drill-down renders "(no details)" when log.details is null', async () => {
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Charlie User')).toBeInTheDocument());
+
+    // Charlie's DELETE/Invoice row has details=null per sampleLogs.
+    fireEvent.click(screen.getByText('Charlie User'));
+
+    await waitFor(() => {
+      expect(screen.getByText('(no details)')).toBeInTheDocument();
+    });
+  });
+
+  it('changing date filters fires /audit-viewer with ?from=&to= params', async () => {
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    // The `from` and `to` date inputs are identified by `title` attribute.
+    const fromInput = screen.getByTitle('From');
+    const toInput = screen.getByTitle('To');
+    fireEvent.change(fromInput, { target: { value: '2026-04-01' } });
+    fireEvent.change(toInput, { target: { value: '2026-04-30' } });
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' &&
+        u.startsWith('/api/audit-viewer?') &&
+        /from=2026-04-01/.test(u) &&
+        /to=2026-04-30/.test(u)
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('Export CSV button calls /api/audit-viewer/export.csv with current filters', async () => {
+    // Stub global fetch + URL APIs that handleExport uses (it bypasses
+    // fetchApi and calls window.fetch directly to get a blob). Restore
+    // stubs at the end so other tests aren't affected.
+    const originalFetch = global.fetch;
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    const fetchSpy = vi.fn(() =>
+      Promise.resolve({ blob: () => Promise.resolve(new Blob(['csv,data'])) })
+    );
+    global.fetch = fetchSpy;
+    URL.createObjectURL = vi.fn(() => 'blob:mock');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      renderAuditLog();
+      await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+      // Apply an entity filter so the export URL carries ?entity=Deal.
+      const entitySelect = screen.getByDisplayValue('All entities');
+      fireEvent.change(entitySelect, { target: { value: 'Deal' } });
+      await waitFor(() =>
+        expect(screen.getByDisplayValue('Deal')).toBeInTheDocument()
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Export CSV/i }));
+
+      await waitFor(() => {
+        const call = fetchSpy.mock.calls.find(([u]) =>
+          typeof u === 'string' &&
+          u.startsWith('/api/audit-viewer/export.csv?') &&
+          /entity=Deal/.test(u)
+        );
+        expect(call).toBeTruthy();
+      });
+
+      // Authorization header is passed when getAuthToken returns a token.
+      const callArgs = fetchSpy.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/audit-viewer/export.csv?')
+      );
+      expect(callArgs[1].headers.Authorization).toBe('Bearer test-token');
+    } finally {
+      global.fetch = originalFetch;
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
+    }
+  });
+
+  it('clicking Verify chain re-fires /api/audit/verify', async () => {
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    // Initial mount auto-verifies once. Click the button to force another
+    // call.
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByTestId('verify-chain-btn'));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u === '/api/audit/verify'
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('shows the integrity backfill banner when unhashedRows > 0 and reason mentions null hash', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({
+          chainLength: 10,
+          totalRows: 100,
+          unhashedRows: 90,
+          brokenAt: 12,
+          reason: 'null hash — row was never chained (run backfill)',
+          integrityVerified: false,
+          lastVerifiedAt: '2026-05-08T10:30:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.resolve(sampleStats);
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.resolve({ logs: sampleLogs, pages: 1, total: 3 });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderAuditLog();
+    await waitFor(() => {
+      expect(screen.getByTestId('integrity-backfill-banner')).toBeInTheDocument();
+    });
+    // The Run backfill button is present inside the banner.
+    expect(screen.getByTestId('run-backfill-btn')).toBeInTheDocument();
+    // The warn chip (not red, not ok) is what the chip-row renders.
+    expect(screen.getByTestId('integrity-chip-needs-backfill')).toBeInTheDocument();
+  });
+
+  it('omits the integrity row entirely for non-admin users', async () => {
+    renderAuditLog(REGULAR_USER);
+
+    // Wait for the basic page to be there.
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Audit Log/i })).toBeInTheDocument();
+    });
+
+    // Non-admin: the integrity-row (and its verify button) must not render.
+    expect(screen.queryByTestId('integrity-row')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('verify-chain-btn')).not.toBeInTheDocument();
+  });
+
+  it('Previous button is disabled on page 1', async () => {
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    const prevBtn = screen.getByRole('button', { name: /^Previous$/ });
+    expect(prevBtn).toBeDisabled();
+  });
+
+  it('Next button is disabled when on the last page', async () => {
+    // Override mock so total pages = 1; Next should be disabled.
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({
+          chainLength: 3, brokenAt: null, integrityVerified: true,
+          lastVerifiedAt: '2026-05-08T10:30:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.resolve(sampleStats);
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.resolve({ logs: sampleLogs, pages: 1, total: 3 });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    const nextBtn = screen.getByRole('button', { name: /^Next$/ });
+    expect(nextBtn).toBeDisabled();
+  });
+
+  it('Clear button appears when filters set, and clears them on click', async () => {
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    // No Clear button initially.
+    expect(screen.queryByRole('button', { name: /^Clear$/ })).not.toBeInTheDocument();
+
+    // Set an entity filter.
+    const entitySelect = screen.getByDisplayValue('All entities');
+    fireEvent.change(entitySelect, { target: { value: 'Deal' } });
+
+    // Clear button now visible.
+    const clearBtn = await screen.findByRole('button', { name: /^Clear$/ });
+    expect(clearBtn).toBeInTheDocument();
+
+    // Click Clear → filter resets, Clear disappears.
+    fireEvent.click(clearBtn);
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('All entities')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /^Clear$/ })).not.toBeInTheDocument();
+  });
+
+  it('search input also matches entity name and entity id (not just user)', async () => {
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
+
+    // Search by entity id "42" — should hide Bob and Charlie's rows.
+    const searchInput = screen.getByPlaceholderText(/Search user, entity, or details/i);
+    fireEvent.change(searchInput, { target: { value: '42' } });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Bob Manager')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Alice Admin')).toBeInTheDocument();
+    expect(screen.queryByText('Charlie User')).not.toBeInTheDocument();
+  });
+
+  it('handles /audit-viewer load failure gracefully (empty rows, no crash)', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({
+          chainLength: 0, brokenAt: null, integrityVerified: true,
+          lastVerifiedAt: '2026-05-08T10:30:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.resolve({ total: 0, byAction: {} });
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.reject(new Error('boom'));
+      }
+      return Promise.resolve(null);
+    });
+
+    renderAuditLog();
+
+    // After the rejected /audit-viewer load, loading flips off and
+    // filteredLogs is empty → empty-state message renders.
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No audit events match the current filters\./i)
+      ).toBeInTheDocument();
+    });
+  });
 });

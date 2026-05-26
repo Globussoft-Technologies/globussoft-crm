@@ -5,6 +5,13 @@ const eventBus = require("../lib/eventBus");
 const { verifyRole, verifyToken } = require("../middleware/auth");
 
 // GET /api/expenses — list with optional filters
+//
+// #920 slice 6 — opt-in slim shape via `?fields=summary`. When set, returns a
+// Prisma `select` dropping nested includes (user/contact) and heavy flat
+// columns (description, notes, receiptUrl) from the wire. ADDITIVE only:
+// any non-`summary` value (or absent param) preserves the existing
+// full-shape include path. Mirrors the contacts/deals/tickets/tasks/projects
+// shape from slices 1-5.
 router.get("/", async (req, res) => {
   try {
     const { status, category } = req.query;
@@ -13,11 +20,30 @@ router.get("/", async (req, res) => {
     if (status) where.status = status;
     if (category) where.category = category;
 
-    const expenses = await prisma.expense.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
-      include: { user: true, contact: true },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        title: true,
+        amount: true,
+        category: true,
+        status: true,
+        currency: true,
+        expenseDate: true,
+        userId: true,
+        contactId: true,
+        tenantId: true,
+        createdAt: true,
+      };
+    } else {
+      findManyArgs.include = { user: true, contact: true };
+    }
+
+    const expenses = await prisma.expense.findMany(findManyArgs);
 
     res.json(expenses);
   } catch (err) {

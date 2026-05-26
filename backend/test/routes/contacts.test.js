@@ -474,6 +474,113 @@ describe('DELETE /api/contacts/:id — soft-delete (ADMIN-gated, #167)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+//
+// #920 slice 1 — opt-in slim shape via ?fields=summary
+//
+// Pins the additive PII-reduction surface: when a caller passes
+// ?fields=summary on GET /api/contacts, Prisma is called with an explicit
+// `select` (no `include`) so the wire payload drops nested activities/
+// tasks/assignedTo + sensitive flat fields (phone/walletBalance/gst/
+// birthDate/anniversary/address). When ?fields is absent or any other
+// value, the existing full-shape `include` is preserved so no existing
+// consumer is impacted.
+//
+// ─────────────────────────────────────────────────────────────────────
+describe('GET /api/contacts?fields=summary — opt-in slim shape (#920 slice 1)', () => {
+  const SLIM_ROW = {
+    id: 9001,
+    name: 'Amita Rao',
+    email: 'amita@example.com',
+    status: 'Lead',
+    assignedToId: USER_ID,
+    tenantId: TENANT_ID,
+    createdAt: new Date('2026-01-15T10:30:00Z'),
+  };
+
+  test('?fields=summary → response rows expose ONLY {id,name,email,status,assignedToId,tenantId,createdAt} (no phone/wallet/gst/birthDate/anniversary/activities/tasks/assignedTo)', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([SLIM_ROW]);
+
+    const res = await request(makeApp()).get('/api/contacts?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    const row = res.body[0];
+    // Allowed keys only.
+    const allowed = ['id', 'name', 'email', 'status', 'assignedToId', 'tenantId', 'createdAt'];
+    for (const k of allowed) expect(row).toHaveProperty(k);
+    // Forbidden keys must be ABSENT (slim Prisma select would not return them).
+    for (const k of ['phone', 'walletBalance', 'gst', 'birthDate', 'anniversary', 'address', 'activities', 'tasks', 'assignedTo']) {
+      expect(row).not.toHaveProperty(k);
+    }
+  });
+
+  test('?fields=summary → prisma.contact.findMany invoked with `select` (not `include`)', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([SLIM_ROW]);
+
+    await request(makeApp()).get('/api/contacts?fields=summary');
+
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    expect(args).toHaveProperty('select');
+    expect(args).not.toHaveProperty('include');
+    expect(args.select).toEqual({
+      id: true,
+      name: true,
+      email: true,
+      status: true,
+      assignedToId: true,
+      tenantId: true,
+      createdAt: true,
+    });
+  });
+
+  test('?fields= (empty) → existing full shape (include, not select)', async () => {
+    await request(makeApp()).get('/api/contacts?fields=');
+
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    expect(args).toHaveProperty('include');
+    expect(args).not.toHaveProperty('select');
+    expect(args.include).toMatchObject({
+      activities: true,
+      tasks: true,
+      assignedTo: { select: { id: true, name: true, email: true } },
+    });
+  });
+
+  test('?fields=anything-else → existing full shape (opt-in only on exact "summary" value)', async () => {
+    await request(makeApp()).get('/api/contacts?fields=basic');
+
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    expect(args).toHaveProperty('include');
+    expect(args).not.toHaveProperty('select');
+  });
+
+  test('?fields=summary preserves auth + tenant-isolation — where.tenantId mirrors req.user.tenantId', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([SLIM_ROW]);
+
+    await request(makeApp({ tenantId: 4242 })).get('/api/contacts?fields=summary');
+
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    expect(args.where.tenantId).toBe(4242);
+    expect(args.where.deletedAt).toBeNull();
+  });
+
+  test('?fields=summary + ?limit=10 + ?offset=5 → slim shape honours pagination (take/skip still applied)', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([SLIM_ROW]);
+
+    const res = await request(makeApp()).get('/api/contacts?fields=summary&limit=10&offset=5');
+
+    expect(res.status).toBe(200);
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    expect(args.take).toBe(10);
+    expect(args.skip).toBe(5);
+    // Slim select still in place under pagination.
+    expect(args).toHaveProperty('select');
+    expect(args).not.toHaveProperty('include');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
 describe('Auth gate — verifyToken (CLAUDE.md standing rule)', () => {
   test('no Authorization header → 401', async () => {
     authState.useReal = true; // engage the REAL verifyToken

@@ -3867,3 +3867,356 @@ test.describe("IDOR #919 slice 15 — non-Travel /:id cross-tenant probes (share
     ).not.toContain(uniqueName);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice 16 — TRAVEL-VERTICAL /:id sub-resource probes (cross-vertical).
+//
+// Prior extensions (5e56572c, slice 15) focused on NON-travel /:id
+// routes (tickets / brand-kits / wallet-rules / tasks / surveys /
+// document-templates / dashboards / knowledge-base / expenses /
+// estimates / projects). The travel namespace itself still had
+// uncovered /:id sub-routes that fire under `requireTravelTenant`
+// BEFORE the id lookup runs — slice 16 fills the gap.
+//
+// Contract pinned: every probe issues a cross-vertical request (wellness
+// or generic admin token against /api/travel/*) and expects [400, 403,
+// 404]. The 403 path is the canonical cross-vertical sentinel
+// (`requireTravelTenant` → 403 WRONG_VERTICAL); 404 is the secondary
+// path if the guard order ever reshuffles to fire findFirst first; 400
+// absorbs any pre-lookup INVALID_ID validator (FAKE_ID is numeric so we
+// shouldn't see it, but the [400, 403, 404] envelope is robust to that
+// validator shifting between numeric/string parsers).
+//
+// Routes probed (all confirmed mounted via server.js:711..749):
+//   • GET    /api/travel/itineraries/:id/pdf              (branded PDF leak)
+//   • GET    /api/travel/itineraries/:id/day-costs        (costing leak)
+//   • GET    /api/travel/itineraries/:id/totals           (pricing rollup leak)
+//   • POST   /api/travel/itineraries/:id/clone-day        (clone mutation)
+//   • GET    /api/travel/suppliers/:id/scorecard          (supplier-perf leak)
+//   • POST   /api/travel/quotes/:id/decline               (state mutation)
+//   • POST   /api/travel/quotes/:id/extend                (validity mutation)
+//   • POST   /api/travel/quotes/:id/convert-to-invoice    (invoice gen mutation)
+//   • POST   /api/travel/invoices/:id/credit-note         (financial mutation)
+//   • POST   /api/travel/invoices/:id/clone-as-recurring  (recurring-gen mutation)
+//   • PATCH  /api/travel/seasons/:id                      (pricing mutation)
+//   • DELETE /api/travel/markup-rules/:id                 (markup destruction)
+//   • PATCH  /api/travel/religious-packets/:id            (packet mutation)
+//   • DELETE /api/travel/religious-packets/:id            (packet destruction)
+//
+// Probe shape: FAKE_ID — non-existent in every tenant. The vertical
+// guard runs BEFORE the id lookup so the 403 fires regardless of
+// whether the id exists; this means we don't need to seed real victim
+// rows in the travel tenant. (If the guard order ever changes, the 404
+// path still passes — only a true 200 leak would break the assertion.)
+//
+// Slice 16 drift note (per .claude/skills/verifying-gap-card-claims/):
+// the slice-16 prompt listed `/api/travel/visa-applications/:id`,
+// `/api/travel/commission-profiles/:id`, `/api/travel/microsites/:id`,
+// `/api/travel/cost-master/:id`, `/api/travel/rfu-profiles/:id`,
+// `/api/travel/diagnostics/:id`, `/api/travel/trips/:id`,
+// `/api/travel/suppliers/:id`, `/api/travel/quotes/:id`,
+// `/api/travel/invoices/:id` and `/api/travel/itineraries/:id` (and
+// their accept/reject/share/duplicate/issue/void siblings) as
+// candidates. Reality check via grep against the spec (slices 2 + 3 +
+// 10 + 11): all of those are ALREADY covered. The actual uncovered
+// surface is the SUB-RESOURCE sweep above (pdf / day-costs / totals /
+// clone-day / scorecard / decline / extend / convert-to-invoice /
+// credit-note / clone-as-recurring) plus the pricing-config namespace
+// (seasons / markup-rules / religious-packets). Slice 16 pins those.
+//
+// If any probe finds a 200 leak: do NOT fix from this commit — file a
+// `bug,security` issue with the leak vector + tag the probe with
+// `test.skip()` referencing the issue.
+// ─────────────────────────────────────────────────────────────────────
+
+test.describe("IDOR #919 slice 16 — TRAVEL /:id sub-resource cross-vertical probes", () => {
+  // ---- Itinerary sub-resources --------------------------------------
+
+  test("wellness admin GET /api/travel/itineraries/:id/pdf → 403/404 (branded PDF leak vector)", async ({
+    request,
+  }) => {
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/itineraries/${FAKE_ID}/pdf`,
+    );
+    expect(
+      [400, 403, 404],
+      `wellness admin must not GET itinerary pdf id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin GET /api/travel/itineraries/:id/day-costs → 403/404 (costing leak vector)", async ({
+    request,
+  }) => {
+    // Day-costs surfaces the per-day pricing breakdown for an itinerary
+    // — a missed guard would leak supplier rates + margin info to
+    // cross-tenant attackers. Pin 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/itineraries/${FAKE_ID}/day-costs`,
+    );
+    expect(
+      [400, 403, 404],
+      `generic admin must not GET itinerary day-costs id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin GET /api/travel/itineraries/:id/totals → 403/404 (pricing rollup leak vector)", async ({
+    request,
+  }) => {
+    // /totals aggregates per-section/per-day pricing into a single
+    // grand-total — a missed guard would let cross-tenant attackers
+    // enumerate revenue figures by id-scan. Pin 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/itineraries/${FAKE_ID}/totals`,
+    );
+    expect(
+      [400, 403, 404],
+      `wellness admin must not GET itinerary totals id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /api/travel/itineraries/:id/clone-day → 403/404 (clone mutation)", async ({
+    request,
+  }) => {
+    // POST /clone-day is a mutation — duplicates an itinerary day's
+    // items into a new day. A missed guard would let cross-tenant
+    // attackers clone day-content (including supplier rates) into
+    // their own tenant. Pin 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/itineraries/${FAKE_ID}/clone-day`,
+      { sourceDay: 1 },
+    );
+    expect(
+      [400, 403, 404],
+      `generic admin must not POST itinerary clone-day id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // ---- Supplier sub-resources ---------------------------------------
+
+  test("wellness admin GET /api/travel/suppliers/:id/scorecard → 403/404 (perf-metric leak vector)", async ({
+    request,
+  }) => {
+    // Supplier scorecard aggregates booking-volume + cancellation +
+    // dispute metrics — competitive-intel-grade data. A missed guard
+    // would leak supplier-performance figures cross-tenant. Pin 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await get(
+      request,
+      token,
+      `/api/travel/suppliers/${FAKE_ID}/scorecard`,
+    );
+    expect(
+      [400, 403, 404],
+      `wellness admin must not GET supplier scorecard id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // ---- Quote sub-resources ------------------------------------------
+
+  test("generic admin POST /api/travel/quotes/:id/decline → 403/404 (state-transition mutation)", async ({
+    request,
+  }) => {
+    // POST /decline flips quote state to declined — a missed guard
+    // would let cross-tenant attackers force-decline another tenant's
+    // open quotes (sales-pipeline disruption). Pin 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/quotes/${FAKE_ID}/decline`,
+      {},
+    );
+    expect(
+      [400, 403, 404],
+      `generic admin must not POST quote decline id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("wellness admin POST /api/travel/quotes/:id/extend → 403/404 (validity mutation)", async ({
+    request,
+  }) => {
+    // POST /extend pushes the quote validUntil forward — a missed guard
+    // would let cross-tenant attackers extend (or shorten) the
+    // expiration window on another tenant's quotes. Pin 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/quotes/${FAKE_ID}/extend`,
+      { daysToExtend: 7 },
+    );
+    expect(
+      [400, 403, 404],
+      `wellness admin must not POST quote extend id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /api/travel/quotes/:id/convert-to-invoice → 403/404 (invoice-gen mutation)", async ({
+    request,
+  }) => {
+    // POST /convert-to-invoice spawns a new TravelInvoice row from the
+    // quote — a missed guard would let cross-tenant attackers materialise
+    // invoices off another tenant's quotes (revenue-recognition impact +
+    // audit-log pollution). Pin 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/quotes/${FAKE_ID}/convert-to-invoice`,
+      {},
+    );
+    expect(
+      [400, 403, 404],
+      `generic admin must not POST quote convert-to-invoice id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // ---- Invoice sub-resources ----------------------------------------
+
+  test("wellness admin POST /api/travel/invoices/:id/credit-note → 403/404 (financial mutation)", async ({
+    request,
+  }) => {
+    // POST /credit-note creates a credit-note (negative ledger entry)
+    // — a missed guard would let cross-tenant attackers issue credits
+    // against another tenant's invoices (ledger corruption + cash-flow
+    // impact). Pin 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/invoices/${FAKE_ID}/credit-note`,
+      { reason: "attacker-issued" },
+    );
+    expect(
+      [400, 403, 404],
+      `wellness admin must not POST invoice credit-note id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin POST /api/travel/invoices/:id/clone-as-recurring → 403/404 (recurring-gen mutation)", async ({
+    request,
+  }) => {
+    // POST /clone-as-recurring spawns a recurring-invoice rule from a
+    // one-shot invoice — a missed guard would let cross-tenant attackers
+    // schedule recurring charges against another tenant's customer.
+    // Pin 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/invoices/${FAKE_ID}/clone-as-recurring`,
+      {},
+    );
+    expect(
+      [400, 403, 404],
+      `generic admin must not POST invoice clone-as-recurring id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // ---- Pricing-config sub-resources ---------------------------------
+
+  test("wellness admin PATCH /api/travel/seasons/:id → 403/404 (season-config mutation)", async ({
+    request,
+  }) => {
+    // PATCH /seasons/:id mutates the season calendar (peak/shoulder/off
+    // date ranges) — a missed guard would let cross-tenant attackers
+    // reshape another tenant's pricing-season boundaries (cascades into
+    // every quote/invoice priced through that calendar). Pin 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await patch(
+      request,
+      token,
+      `/api/travel/seasons/${FAKE_ID}`,
+      { name: "attacker-injected" },
+    );
+    expect(
+      [400, 403, 404],
+      `wellness admin must not PATCH season id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin DELETE /api/travel/markup-rules/:id → 403/404 (markup-config destruction)", async ({
+    request,
+  }) => {
+    // DELETE /markup-rules/:id drops a markup rule — a missed guard
+    // would let cross-tenant attackers delete another tenant's pricing
+    // markup rules (silently drops margin floor; affects every
+    // downstream quote priced through pricing engine). Pin 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await del(
+      request,
+      token,
+      `/api/travel/markup-rules/${FAKE_ID}`,
+    );
+    expect(
+      [400, 403, 404],
+      `generic admin must not DELETE markup-rule id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  // ---- Religious-packets sub-resources ------------------------------
+
+  test("wellness admin PATCH /api/travel/religious-packets/:id → 403/404 (packet-config mutation)", async ({
+    request,
+  }) => {
+    // PATCH /religious-packets/:id mutates an Umrah/Hajj packet's
+    // configured itinerary template — a missed guard would let
+    // cross-tenant attackers corrupt RFU Umrah's seeded packets. Pin
+    // 403/404.
+    const token = await getWellnessAdmin(request);
+    if (!token) test.skip(true, "wellness admin token required");
+    const res = await patch(
+      request,
+      token,
+      `/api/travel/religious-packets/${FAKE_ID}`,
+      { name: "attacker-injected" },
+    );
+    expect(
+      [400, 403, 404],
+      `wellness admin must not PATCH religious-packet id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+
+  test("generic admin DELETE /api/travel/religious-packets/:id → 403/404 (packet destruction)", async ({
+    request,
+  }) => {
+    // DELETE /religious-packets/:id drops a packet template — a missed
+    // guard would let cross-tenant attackers delete another tenant's
+    // packets (worst-case mutation: row is gone). Pin 403/404.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin token required");
+    const res = await del(
+      request,
+      token,
+      `/api/travel/religious-packets/${FAKE_ID}`,
+    );
+    expect(
+      [400, 403, 404],
+      `generic admin must not DELETE religious-packet id=${FAKE_ID}: got ${res.status()} (${await res.text()})`,
+    ).toContain(res.status());
+  });
+});

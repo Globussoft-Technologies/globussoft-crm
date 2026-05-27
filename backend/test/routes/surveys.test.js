@@ -28,8 +28,6 @@ import prisma from '../../lib/prisma.js';
 // Prisma singleton patching — mounted before the router require below.
 prisma.survey = {
   findFirst: vi.fn(),
-  create: vi.fn(),
-  update: vi.fn(),
   findUnique: vi.fn(),
   findMany: vi.fn(),
   create: vi.fn(),

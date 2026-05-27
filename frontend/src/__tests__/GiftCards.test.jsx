@@ -65,6 +65,8 @@ const notify = {
   error: vi.fn(),
   info: vi.fn(),
   confirm: vi.fn(() => Promise.resolve(true)),
+
+  prompt: vi.fn(() => Promise.resolve("")),
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notify,

@@ -1116,6 +1116,22 @@ router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
       where: { id: existing.id },
       data: { deletedAt: new Date() }
     });
+    // Notify GlobusPhone (and any other subscriber) that this contact was soft-deleted.
+    // GlobusPhone's contact.updated handler checks for deletedAt and evicts the
+    // ContactsCache row so caller ID stops resolving for this number.
+    try {
+      const { deliverWebhooks } = require('../lib/webhookDelivery');
+      await deliverWebhooks("contact.updated", {
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        email: contact.email,
+        status: contact.status,
+        assignedToId: contact.assignedToId,
+        deletedAt: contact.deletedAt,
+        tenantId: req.user.tenantId,
+      }, req.user.tenantId);
+    } catch (_) { /* webhook delivery is fire-and-forget; never block the response */ }
     res.json({ ...contact, softDeleted: true });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to delete contact' });
@@ -1139,6 +1155,20 @@ router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
       where: { id: existing.id },
       data: { deletedAt: null }
     });
+    // Notify subscribers that the contact was restored (deletedAt: null signals live again).
+    try {
+      const { deliverWebhooks } = require('../lib/webhookDelivery');
+      await deliverWebhooks("contact.updated", {
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        email: contact.email,
+        status: contact.status,
+        assignedToId: contact.assignedToId,
+        deletedAt: contact.deletedAt,  // null — signals restoration
+        tenantId: req.user.tenantId,
+      }, req.user.tenantId);
+    } catch (_) { /* fire-and-forget */ }
     res.json({ ...contact, restored: true });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to restore contact' });

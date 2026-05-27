@@ -609,10 +609,12 @@ router.post("/appointments", async (req, res) => {
 
 const GP_STAGE_TO_CRM_STATUS = {
   NEW: "Lead",
+  CONTACTED: "Lead",        // still in early pipeline — maps to Lead
   QUALIFIED: "Prospect",
   WON: "Customer",
   LOST: "Churned",
   DNC: "Junk",
+  DO_NOT_CALL: "Junk",     // GP alias for DNC
 };
 const ALLOWED_CRM_STATUSES = new Set(["Lead", "Prospect", "Customer", "Churned", "Junk"]);
 
@@ -627,7 +629,7 @@ router.patch("/leads/:id/stage", async (req, res) => {
       newStatus = GP_STAGE_TO_CRM_STATUS[String(stage).toUpperCase()];
       if (!newStatus) {
         return res.status(400).json({
-          error: `Unknown stage '${stage}'. Expected: NEW, QUALIFIED, WON, LOST, DNC`,
+          error: `Unknown stage '${stage}'. Expected: NEW, CONTACTED, QUALIFIED, WON, LOST, DNC, DO_NOT_CALL`,
           code: "INVALID_STAGE",
         });
       }

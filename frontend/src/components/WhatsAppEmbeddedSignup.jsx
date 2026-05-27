@@ -23,8 +23,9 @@
 // off pending App Review), the manual-paste form below remains the working
 // onboarding path.
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { fetchApi } from '../utils/api';
+import { AuthContext } from '../App';
 
 const META_APP_ID = import.meta.env.VITE_META_APP_ID || '';
 const META_ES_CONFIG_ID = import.meta.env.VITE_META_ES_CONFIG_ID || '';
@@ -73,6 +74,11 @@ const SEVERITY_COLORS = {
  *   an inbox / threads UI where vertical real estate matters.
  */
 export default function WhatsAppEmbeddedSignup({ compact = false }) {
+  // Manage / Disconnect / Connect actions are tenant-ADMIN only — backend
+  // RBAC already gates the POST routes; this hides the UI surface so
+  // non-admins see a clean read-only status pill.
+  const { user: currentUser } = useContext(AuthContext) || {};
+  const isAdmin = currentUser?.role === 'ADMIN';
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
@@ -128,17 +134,44 @@ export default function WhatsAppEmbeddedSignup({ compact = false }) {
     // WABA + phone-number-id BEFORE the OAuth callback completes — we listen
     // for it to capture those ids since FB.login's callback only returns the
     // auth code.
+    //
+    // EVERY postMessage from facebook.com is logged to the browser console
+    // AND forwarded to /api/whatsapp/onboard/debug so it shows up in the
+    // VS Code terminal. This is how operators verify what Meta is actually
+    // sending when the connect flow fails with "no WABA / phone-number-id".
     let pickedWabaId = null;
     let pickedPhoneNumberId = null;
+    const debugForward = (tag, payload) => {
+      try {
+        // eslint-disable-next-line no-console
+        console.log(`[whatsapp-connect] ${tag}`, payload);
+      } catch (_) { /* ignore */ }
+      fetchApi('/api/whatsapp/onboard/debug', {
+        method: 'POST',
+        body: JSON.stringify({ tag, payload }),
+      }).catch(() => { /* terminal-log is best-effort */ });
+    };
     const messageListener = (event) => {
       if (event.origin !== 'https://www.facebook.com') return;
-      try {
-        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        if (data?.type === 'WA_EMBEDDED_SIGNUP') {
-          if (data?.data?.waba_id)  pickedWabaId  = data.data.waba_id;
-          if (data?.data?.phone_number_id) pickedPhoneNumberId = data.data.phone_number_id;
+      let parsed = event.data;
+      let parseError = null;
+      if (typeof event.data === 'string') {
+        try {
+          parsed = JSON.parse(event.data);
+        } catch (e) {
+          parseError = e.message;
         }
-      } catch (_) { /* ignore non-JSON postMessage payloads */ }
+      }
+      debugForward('postMessage from facebook.com', {
+        origin: event.origin,
+        rawType: typeof event.data,
+        parsed,
+        parseError,
+      });
+      if (parsed?.type === 'WA_EMBEDDED_SIGNUP') {
+        if (parsed?.data?.waba_id)         pickedWabaId        = parsed.data.waba_id;
+        if (parsed?.data?.phone_number_id) pickedPhoneNumberId = parsed.data.phone_number_id;
+      }
     };
     messageListenerRef.current = messageListener;
     window.addEventListener('message', messageListener);
@@ -153,6 +186,30 @@ export default function WhatsAppEmbeddedSignup({ compact = false }) {
         // Always detach the listener — even on cancel.
         window.removeEventListener('message', messageListener);
         messageListenerRef.current = null;
+
+        // Forward the full FB.login response (with the OAuth code
+        // redacted) so the operator can see exactly what came back from
+        // the popup. The `code` field is intentionally redacted here —
+        // the backend /exchange route logs the full request when the
+        // frontend hands it the code.
+        const redactedResponse = response
+          ? {
+              status: response.status,
+              authResponse: response.authResponse
+                ? {
+                    ...response.authResponse,
+                    code: response.authResponse.code
+                      ? `***REDACTED(${response.authResponse.code.length})***`
+                      : null,
+                  }
+                : null,
+            }
+          : null;
+        debugForward('FB.login callback', {
+          response: redactedResponse,
+          pickedWabaId,
+          pickedPhoneNumberId,
+        });
 
         if (!response || response.status !== 'connected' || !response.authResponse?.code) {
           setError('Sign-in cancelled or did not return an authorization code.');
@@ -176,7 +233,7 @@ export default function WhatsAppEmbeddedSignup({ compact = false }) {
           setProgress('Exchanging authorization code…');
           const exch = await fetchApi('/api/whatsapp/onboard/exchange', {
             method: 'POST',
-            body: { code, wabaId: pickedWabaId, phoneNumberId: pickedPhoneNumberId },
+            body: JSON.stringify({ code, wabaId: pickedWabaId, phoneNumberId: pickedPhoneNumberId }),
           });
           if (!exch?.handoffId) {
             setError(exch?.error || 'Exchange failed.');
@@ -188,7 +245,7 @@ export default function WhatsAppEmbeddedSignup({ compact = false }) {
           setProgress('Wiring webhook + registering phone number…');
           const fin = await fetchApi('/api/whatsapp/onboard/finalize', {
             method: 'POST',
-            body: { handoffId: exch.handoffId },
+            body: JSON.stringify({ handoffId: exch.handoffId }),
           });
           if (!fin?.success) {
             setError(fin?.error || 'Finalize failed.');
@@ -212,7 +269,17 @@ export default function WhatsAppEmbeddedSignup({ compact = false }) {
         config_id: META_ES_CONFIG_ID,
         response_type: 'code',
         override_default_response_type: true,
-        extras: { setup: {} },
+        // `sessionInfoVersion: '3'` is what tells Meta's SDK to post the
+        // `WA_EMBEDDED_SIGNUP` event back to opener (the postMessage that
+        // carries waba_id + phone_number_id). Without it the popup falls
+        // back to standard OAuth and you only get an authorization code
+        // with no WhatsApp picker — exactly the "Meta did not return a
+        // WABA ID or phone-number-id" symptom.
+        extras: {
+          setup: {},
+          featureType: '',
+          sessionInfoVersion: '3',
+        },
       },
     );
   }, [refreshStatus]);
@@ -223,7 +290,7 @@ export default function WhatsAppEmbeddedSignup({ compact = false }) {
     try {
       await fetchApi('/api/whatsapp/onboard/disconnect', {
         method: 'POST',
-        body: { alsoUnsubscribeFromMeta: true },
+        body: JSON.stringify({ alsoUnsubscribeFromMeta: true }),
       });
       await refreshStatus();
     } catch (err) {
@@ -266,16 +333,32 @@ export default function WhatsAppEmbeddedSignup({ compact = false }) {
             )}
           </span>
         </div>
-        <button
-          onClick={() => setExpanded(true)}
-          style={{
-            padding: '0.3rem 0.75rem', background: 'transparent',
-            color: 'var(--text-primary)', border: '1px solid rgba(0,0,0,0.15)',
-            borderRadius: 6, fontSize: '0.8rem', cursor: 'pointer',
-          }}
-        >
-          Manage
-        </button>
+        {isAdmin && (
+          <div style={{ display: 'flex', gap: '0.4rem' }}>
+            <button
+              onClick={() => setExpanded(true)}
+              style={{
+                padding: '0.3rem 0.75rem', background: 'transparent',
+                color: 'var(--text-primary)', border: '1px solid var(--border-color)',
+                borderRadius: 6, fontSize: '0.8rem', cursor: 'pointer',
+              }}
+            >
+              Manage
+            </button>
+            <button
+              onClick={handleDisconnect}
+              title="Disconnect WhatsApp Business"
+              style={{
+                padding: '0.3rem 0.75rem', background: 'transparent',
+                color: '#dc2626', border: '1px solid #fca5a5',
+                borderRadius: 6, fontSize: '0.8rem', cursor: 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              Disconnect
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -343,42 +426,48 @@ export default function WhatsAppEmbeddedSignup({ compact = false }) {
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-        {(!status?.configured || status.status === 'NOT_CONNECTED' || status.status === 'DISCONNECTED' || status.status === 'TOKEN_EXPIRED' || status.status === 'WEBHOOK_FAILED') && (
-          <button
-            onClick={handleConnect}
-            disabled={connecting || setupIncomplete}
-            style={{
-              padding: '0.65rem 1.25rem',
-              background: '#25D366',
-              color: 'white',
-              border: 'none',
-              borderRadius: 8,
-              fontWeight: 600,
-              cursor: connecting || setupIncomplete ? 'not-allowed' : 'pointer',
-              opacity: connecting || setupIncomplete ? 0.6 : 1,
-            }}
-          >
-            {connecting ? (progress || 'Connecting…') : (status?.configured ? 'Reconnect WhatsApp Business' : 'Connect WhatsApp Business')}
-          </button>
-        )}
-        {status?.configured && status.status !== 'NOT_CONNECTED' && status.status !== 'DISCONNECTED' && (
-          <button
-            onClick={handleDisconnect}
-            style={{
-              padding: '0.65rem 1.25rem',
-              background: 'transparent',
-              color: 'var(--text-primary)',
-              border: '1px solid rgba(0,0,0,0.15)',
-              borderRadius: 8,
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
-          >
-            Disconnect
-          </button>
-        )}
-      </div>
+      {isAdmin ? (
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {(!status?.configured || status.status === 'NOT_CONNECTED' || status.status === 'DISCONNECTED' || status.status === 'TOKEN_EXPIRED' || status.status === 'WEBHOOK_FAILED') && (
+            <button
+              onClick={handleConnect}
+              disabled={connecting || setupIncomplete}
+              style={{
+                padding: '0.65rem 1.25rem',
+                background: '#25D366',
+                color: 'white',
+                border: 'none',
+                borderRadius: 8,
+                fontWeight: 600,
+                cursor: connecting || setupIncomplete ? 'not-allowed' : 'pointer',
+                opacity: connecting || setupIncomplete ? 0.6 : 1,
+              }}
+            >
+              {connecting ? (progress || 'Connecting…') : (status?.configured ? 'Reconnect WhatsApp Business' : 'Connect WhatsApp Business')}
+            </button>
+          )}
+          {status?.configured && status.status !== 'NOT_CONNECTED' && status.status !== 'DISCONNECTED' && (
+            <button
+              onClick={handleDisconnect}
+              style={{
+                padding: '0.65rem 1.25rem',
+                background: 'transparent',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 8,
+                fontWeight: 500,
+                cursor: 'pointer',
+              }}
+            >
+              Disconnect
+            </button>
+          )}
+        </div>
+      ) : (
+        <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+          Only tenant admins can connect, reconnect, or disconnect WhatsApp Business.
+        </div>
+      )}
     </div>
   );
 }

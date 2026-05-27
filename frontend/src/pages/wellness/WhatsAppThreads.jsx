@@ -13,7 +13,8 @@
 // vertical-shaped (clinics on Meta Cloud API), but the routes themselves
 // are tenant-agnostic — adding a generic /whatsapp link later is one line.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { AuthContext } from '../../App';
 import {
   MessageCircle,
   Search,
@@ -26,7 +27,12 @@ import {
   Ban,
   RefreshCw,
   AlertTriangle,
+  Plus,
+  X,
+  Edit2,
+  Save,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import WhatsAppEmbeddedSignup from '../../components/WhatsAppEmbeddedSignup';
@@ -101,6 +107,12 @@ function StatusPill({ status }) {
 
 export default function WhatsAppThreads() {
   const notify = useNotify();
+  // Tenant ADMIN can: edit the assign dropdown, see Manage / Disconnect
+  // buttons in the status bar, see the "+ New" composer button, and access
+  // the Templates page. MANAGER + below see read-only state. Backend RBAC
+  // gates the destructive routes too — this is the cosmetic mirror.
+  const { user: currentUser } = useContext(AuthContext) || {};
+  const isAdmin = currentUser?.role === 'ADMIN';
   const [threads, setThreads] = useState([]);
   const [loadingList, setLoadingList] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -112,6 +124,36 @@ export default function WhatsAppThreads() {
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef(null);
+
+  // ─── "New message" composer state ──────────────────────────
+  // Modal-driven outbound-first send. Hits POST /api/whatsapp/send
+  // with { to, body }. If the recipient hasn't messaged in 24h the
+  // backend returns 422 OUTSIDE_24H_WINDOW — surfaced in `newError`
+  // with hint about templates so the user knows the path forward.
+  const [showNewModal, setShowNewModal] = useState(false);
+  const [newPhone, setNewPhone] = useState('');
+  const [newBody, setNewBody] = useState('');
+  const [newSending, setNewSending] = useState(false);
+  const [newError, setNewError] = useState(null);
+
+  // Staff list (for the assign dropdown) — fetched once on mount.
+  // Renders as a dropdown that replaces the single-purpose "Assign to me"
+  // button, so the operator can hand a thread off to any teammate.
+  const [staff, setStaff] = useState([]);
+
+  // Inline rename state — when the user clicks the pencil next to the contact
+  // name, this flips on and a small input box appears. Save → POST to the
+  // rename-contact route → re-fetch detail.
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameSaving, setRenameSaving] = useState(false);
+
+  // Approved-template picker used inside the New Message modal so the user
+  // can bypass the 24-hour window for cold outreach. Fetched once on mount.
+  const [templates, setTemplates] = useState([]);
+  const [useTemplate, setUseTemplate] = useState(false);
+  const [selectedTemplateName, setSelectedTemplateName] = useState('');
+  const [templateParams, setTemplateParams] = useState([]); // string[]
 
   // ─── Load thread list ──────────────────────────────────────
   const loadList = async () => {
@@ -136,8 +178,58 @@ export default function WhatsAppThreads() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, unreadOnly]);
 
+  // ─── Load staff list for assign dropdown (once on mount) ───
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await fetchApi('/api/staff');
+        const list = Array.isArray(data) ? data : Array.isArray(data?.users) ? data.users : [];
+        setStaff(list);
+      } catch {
+        /* non-fatal — dropdown just stays empty */
+      }
+    })();
+  }, []);
+
+  // ─── Load APPROVED templates for the picker ─────────────────
+  // Only APPROVED templates can be sent. PENDING/REJECTED are filtered out.
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await fetchApi('/api/whatsapp/templates');
+        const list = Array.isArray(data) ? data : Array.isArray(data?.templates) ? data.templates : [];
+        setTemplates(list.filter((t) => t.status === 'APPROVED'));
+      } catch {
+        /* non-fatal — picker just stays empty */
+      }
+    })();
+  }, []);
+
+  // Detect placeholder count in a template body — used to render the
+  // right number of param inputs. {{1}}, {{2}} … {{N}}.
+  const countPlaceholders = (body) => {
+    if (!body) return 0;
+    const matches = body.match(/\{\{\d+\}\}/g) || [];
+    return new Set(matches).size;
+  };
+
+  // Whenever the selected template changes, reset the param array to match.
+  useEffect(() => {
+    if (!selectedTemplateName) {
+      setTemplateParams([]);
+      return;
+    }
+    const tpl = templates.find((t) => t.name === selectedTemplateName);
+    const n = countPlaceholders(tpl?.body || '');
+    setTemplateParams(Array(n).fill(''));
+  }, [selectedTemplateName, templates]);
+
   // ─── Load detail when selection changes ────────────────────
   useEffect(() => {
+    // Reset inline rename state whenever the user picks a different
+    // thread — stale rename input shouldn't bleed into the new selection.
+    setRenaming(false);
+    setRenameValue('');
     if (!selectedId) {
       setDetail(null);
       return;
@@ -216,25 +308,90 @@ export default function WhatsAppThreads() {
     setSending(false);
   };
 
-  const assignToMe = async () => {
-    if (!detail?.thread) return;
-    try {
-      // Backend RBAC check: self-assign (targetUserId === req.user.userId)
-      // is open to all roles. Send the current user's id so the route can
-      // gate cross-assign vs self-assign.
-      //
-      // NOTE per CLAUDE.md "Standing rules" + backend route comment: the
-      // global stripDangerous middleware deletes req.body.userId on every
-      // request, so the field MUST be `targetUserId` — `userId` is silently
-      // dropped to undefined and the backend would unassign instead.
-      const me = JSON.parse(localStorage.getItem('user') || 'null');
-      if (!me?.id) {
-        notify.error('Cannot determine your user id. Re-login.');
+  // ─── Outbound-first send (modal) ───────────────────────────
+  //
+  // Two paths: free-form text (24h-window rule) OR approved template
+  // (works any time, any number). useTemplate toggle switches between them.
+  const sendNewMessage = async () => {
+    setNewError(null);
+    const phoneTrim = newPhone.trim();
+    if (!phoneTrim) {
+      setNewError('Phone is required.');
+      return;
+    }
+
+    let payload;
+    if (useTemplate) {
+      if (!selectedTemplateName) {
+        setNewError('Pick a template to send.');
         return;
       }
+      // Require all placeholders filled
+      if (templateParams.some((p) => !p.trim())) {
+        setNewError('Fill in every template variable before sending.');
+        return;
+      }
+      const tpl = templates.find((t) => t.name === selectedTemplateName);
+      payload = {
+        to: phoneTrim,
+        templateName: selectedTemplateName,
+        language: tpl?.language || 'en_US',
+        parameters: templateParams,
+      };
+    } else {
+      const bodyTrim = newBody.trim();
+      if (!bodyTrim) {
+        setNewError('Message body is required.');
+        return;
+      }
+      payload = { to: phoneTrim, body: bodyTrim };
+    }
+
+    setNewSending(true);
+    try {
+      const resp = await fetchApi('/api/whatsapp/send', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      notify.info(useTemplate ? 'Template message sent.' : 'Message sent.');
+      setShowNewModal(false);
+      setNewPhone('');
+      setNewBody('');
+      setSelectedTemplateName('');
+      setTemplateParams([]);
+      setUseTemplate(false);
+      await loadList();
+      if (resp?.thread?.id) setSelectedId(resp.thread.id);
+    } catch (err) {
+      const msg = err?.message || 'Failed to send.';
+      if (msg.includes('OUTSIDE_24H_WINDOW')) {
+        setNewError(
+          'This number has not messaged you in the last 24 hours. ' +
+          'Toggle "Use Template" above and pick an approved template instead.'
+        );
+      } else if (msg.includes('CONTACT_OPTED_OUT')) {
+        setNewError('This contact has opted out of WhatsApp messages.');
+      } else {
+        setNewError(msg);
+      }
+    }
+    setNewSending(false);
+  };
+
+  // Generic assignment — works for self-assign AND cross-assign (backend
+  // RBAC-gates cross-assign to ADMIN/MANAGER; self-assign open to all roles).
+  // Pass null to unassign.
+  //
+  // NOTE per CLAUDE.md "Standing rules" + backend route comment: the global
+  // stripDangerous middleware deletes req.body.userId on every request, so
+  // the field MUST be `targetUserId` — `userId` is silently dropped to null
+  // and the backend would unassign instead of rejecting bad input.
+  const assignToUser = async (targetUserId) => {
+    if (!detail?.thread) return;
+    try {
       await fetchApi(`/api/whatsapp/threads/${detail.thread.id}/assign`, {
         method: 'POST',
-        body: JSON.stringify({ targetUserId: me.id }),
+        body: JSON.stringify({ targetUserId: targetUserId == null ? null : Number(targetUserId) }),
       });
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
       setDetail(fresh);
@@ -242,6 +399,45 @@ export default function WhatsAppThreads() {
     } catch (err) {
       notify.error(err.message || 'Failed to assign.');
     }
+  };
+
+  // Rename contact — adds a friendly name to the phone number. Creates a new
+  // Contact row if none exists, otherwise updates the existing one.
+  const startRename = () => {
+    const currentName =
+      detail?.thread?.contact?.name ||
+      detail?.thread?.patient?.name ||
+      '';
+    setRenameValue(currentName);
+    setRenaming(true);
+  };
+  const cancelRename = () => {
+    setRenaming(false);
+    setRenameValue('');
+  };
+  const saveRename = async () => {
+    if (!detail?.thread || renameSaving) return;
+    const name = renameValue.trim();
+    if (!name) {
+      notify.error('Name cannot be empty.');
+      return;
+    }
+    setRenameSaving(true);
+    try {
+      await fetchApi(`/api/whatsapp/threads/${detail.thread.id}/rename-contact`, {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      });
+      const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
+      setDetail(fresh);
+      loadList();
+      setRenaming(false);
+      setRenameValue('');
+      notify.info('Contact name saved.');
+    } catch (err) {
+      notify.error(err.message || 'Failed to save name.');
+    }
+    setRenameSaving(false);
   };
 
   const closeThread = async () => {
@@ -319,13 +515,50 @@ export default function WhatsAppThreads() {
         display: 'flex', flexDirection: 'column', minWidth: 0,
       }}>
         <header style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
-          <h2 style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            fontSize: '1.15rem', fontWeight: 700, marginBottom: '0.75rem',
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 8, marginBottom: '0.75rem',
           }}>
-            <MessageCircle size={20} color="var(--primary-color, var(--accent-color))" />
-            WhatsApp Threads
-          </h2>
+            <h2 style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              fontSize: '1.15rem', fontWeight: 700, margin: 0,
+            }}>
+              <MessageCircle size={20} color="var(--primary-color, var(--accent-color))" />
+              WhatsApp Threads
+            </h2>
+            {isAdmin && (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <Link
+                  to="/wellness/whatsapp/templates"
+                  title="Manage WhatsApp Templates"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 4,
+                    padding: '0.4rem 0.7rem',
+                    background: 'transparent',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 6,
+                    fontSize: '0.8rem', fontWeight: 500, textDecoration: 'none',
+                  }}
+                >
+                  Templates
+                </Link>
+                <button
+                  onClick={() => { setShowNewModal(true); setNewError(null); }}
+                  title="New conversation"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 4,
+                    padding: '0.4rem 0.75rem',
+                    background: 'var(--primary-color, #25D366)',
+                    color: '#fff', border: 'none', borderRadius: 6,
+                    fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  <Plus size={14} /> New
+                </button>
+              </div>
+            )}
+          </div>
           <form onSubmit={handleSearch} style={{ display: 'flex', gap: 6, marginBottom: '0.5rem' }}>
             <div style={{ flex: 1, position: 'relative' }}>
               <Search size={14} style={{
@@ -448,43 +681,131 @@ export default function WhatsAppThreads() {
           </div>
         ) : (
           <>
-            {/* Header */}
+            {/* Header — two rows so the Status pill never overlaps the
+                contact name + the action buttons sit on their own line. */}
             <header style={{
-              padding: '1rem 1.5rem', borderBottom: '1px solid var(--border-color)',
-              display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+              padding: '0.9rem 1.5rem', borderBottom: '1px solid var(--border-color)',
+              display: 'flex', flexDirection: 'column', gap: 8,
             }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <h2 style={{
-                  fontSize: '1.05rem', fontWeight: 700, display: 'flex',
-                  alignItems: 'center', gap: 6, marginBottom: 2,
-                }}>
-                  {detail.thread.contact?.name || detail.thread.patient?.name || detail.thread.contactPhone}
-                  <StatusPill status={detail.thread.status} />
-                </h2>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
-                  {detail.thread.contactPhone}
-                  {detail.thread.assignedTo && (
-                    <> · Assigned to {detail.thread.assignedTo.name || detail.thread.assignedTo.email}</>
-                  )}
-                  {detail.thread.snoozedUntil && (
-                    <> · Snoozed until {new Date(detail.thread.snoozedUntil).toLocaleString()}</>
-                  )}
-                </p>
-                {detail.optedOut && (
-                  <p style={{
-                    background: 'rgba(239,68,68,0.12)', color: '#dc2626',
-                    padding: '4px 10px', borderRadius: 8, fontSize: '0.75rem',
-                    marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 5,
-                  }}>
-                    <Ban size={12} /> Opted out ({detail.optedOut.reason})
-                    on {new Date(detail.optedOut.capturedAt).toLocaleDateString()}
-                  </p>
+              {/* Row 1 — name (or phone) + Edit pencil + Status pill on the right */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                {renaming ? (
+                  <>
+                    <input
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveRename();
+                        if (e.key === 'Escape') cancelRename();
+                      }}
+                      placeholder="Save as…"
+                      autoFocus
+                      className="input-field"
+                      style={{ fontSize: '0.95rem', fontWeight: 600, padding: '0.35rem 0.6rem', maxWidth: 280 }}
+                      disabled={renameSaving}
+                    />
+                    <button
+                      onClick={saveRename}
+                      disabled={renameSaving || !renameValue.trim()}
+                      title="Save name"
+                      style={{
+                        background: 'var(--primary-color, #25D366)', color: '#fff',
+                        border: 'none', borderRadius: 6, padding: '0.35rem 0.6rem',
+                        display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.8rem',
+                        cursor: renameSaving ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      <Save size={14} />
+                      {renameSaving ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      onClick={cancelRename}
+                      disabled={renameSaving}
+                      className="btn-secondary"
+                      style={{ fontSize: '0.8rem', padding: '0.35rem 0.6rem' }}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <h2 style={{
+                      fontSize: '1.05rem', fontWeight: 700, margin: 0,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+                    }}>
+                      {detail.thread.contact?.name || detail.thread.patient?.name || detail.thread.contactPhone}
+                    </h2>
+                    {isAdmin && (
+                      <button
+                        onClick={startRename}
+                        title="Save contact name"
+                        style={{
+                          background: 'transparent', border: 'none', cursor: 'pointer',
+                          color: 'var(--text-secondary)', padding: 4, display: 'flex',
+                        }}
+                      >
+                        <Edit2 size={14} />
+                      </button>
+                    )}
+                  </>
                 )}
+                <div style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                  <StatusPill status={detail.thread.status} />
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <button onClick={assignToMe} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <UserCheck size={14} /> Assign to me
-                </button>
+
+              {/* Row 2 — phone + assignment + snooze info */}
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
+                {detail.thread.contactPhone}
+                {detail.thread.assignedTo && (
+                  <> · Assigned to {detail.thread.assignedTo.name || detail.thread.assignedTo.email}</>
+                )}
+                {detail.thread.snoozedUntil && (
+                  <> · Snoozed until {new Date(detail.thread.snoozedUntil).toLocaleString()}</>
+                )}
+              </p>
+
+              {detail.optedOut && (
+                <p style={{
+                  background: 'rgba(239,68,68,0.12)', color: '#dc2626',
+                  padding: '4px 10px', borderRadius: 8, fontSize: '0.75rem',
+                  margin: 0, display: 'inline-flex', alignItems: 'center', gap: 5,
+                  alignSelf: 'flex-start',
+                }}>
+                  <Ban size={12} /> Opted out ({detail.optedOut.reason})
+                  on {new Date(detail.optedOut.capturedAt).toLocaleDateString()}
+                </p>
+              )}
+
+              {/* Row 3 — action bar (assign dropdown + Snooze + Close + Opt out) */}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                {isAdmin ? (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    <UserCheck size={14} />
+                    <select
+                      value={detail.thread.assignedToId || ''}
+                      onChange={(e) => assignToUser(e.target.value || null)}
+                      className="input-field"
+                      style={{ fontSize: '0.8rem', padding: '0.35rem 0.5rem', minWidth: 160 }}
+                      title="Assign to a teammate"
+                    >
+                      <option value="">Unassigned</option>
+                      {staff.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name || u.email}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  // Read-only badge for non-admins / non-managers
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '0.35rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: 6 }}>
+                    <UserCheck size={14} />
+                    {detail.thread.assignedTo
+                      ? (detail.thread.assignedTo.name || detail.thread.assignedTo.email)
+                      : 'Unassigned'}
+                  </span>
+                )}
                 <button onClick={snoozeThread} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
                   <Clock size={14} /> Snooze
                 </button>
@@ -499,11 +820,17 @@ export default function WhatsAppThreads() {
               </div>
             </header>
 
-            {/* Messages */}
+            {/* Messages — uses the chat-specific theme vars added to
+                src/index.css (--chat-bg, --chat-bubble-in, --chat-bubble-out)
+                which are SOLID colors that adapt per theme. WhatsApp-style:
+                light mode = cream backdrop + white inbound + pale-green
+                outbound. Dark mode = near-black backdrop + dark-gray inbound
+                + muted-teal outbound. Always solid (not translucent) so
+                the bubble never blends into the backdrop. */}
             <div style={{
               flex: 1, overflowY: 'auto', padding: '1.5rem',
               display: 'flex', flexDirection: 'column', gap: 10,
-              background: 'var(--bg-color, #0a0a0a)',
+              background: 'var(--chat-bg)',
             }}>
               {(detail.messages || []).map((m) => {
                 const isOutbound = m.direction === 'OUTBOUND';
@@ -513,13 +840,12 @@ export default function WhatsAppThreads() {
                     style={{
                       maxWidth: '70%',
                       alignSelf: isOutbound ? 'flex-end' : 'flex-start',
-                      background: isOutbound
-                        ? 'var(--primary-color, var(--accent-color))'
-                        : 'var(--card-bg, #1a1a1a)',
-                      color: isOutbound ? '#fff' : 'var(--text-primary)',
+                      background: isOutbound ? 'var(--chat-bubble-out)' : 'var(--chat-bubble-in)',
+                      color: 'var(--text-primary)',
                       padding: '0.6rem 0.85rem', borderRadius: 12,
                       fontSize: '0.9rem', lineHeight: 1.4,
                       wordBreak: 'break-word',
+                      boxShadow: '0 1px 1px rgba(0,0,0,0.13)',
                     }}
                   >
                     <div>{m.body || <em style={{ opacity: 0.6 }}>(media)</em>}</div>
@@ -579,6 +905,197 @@ export default function WhatsAppThreads() {
         )}
       </main>
       </div>
+
+      {/* ─── New conversation modal ─── */}
+      {showNewModal && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) setShowNewModal(false); }}
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 9999, padding: '1rem',
+          }}
+        >
+          <div
+            className="glass-card"
+            style={{
+              width: '100%', maxWidth: 480,
+              padding: '1.5rem', borderRadius: 12,
+              background: 'var(--surface-color)',
+              backdropFilter: 'blur(20px)',
+              WebkitBackdropFilter: 'blur(20px)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <MessageCircle size={18} color="var(--primary-color, #25D366)" />
+                New WhatsApp Message
+              </h3>
+              <button
+                onClick={() => setShowNewModal(false)}
+                style={{
+                  background: 'transparent', border: 'none', cursor: 'pointer',
+                  color: 'var(--text-secondary)', padding: 4, display: 'flex',
+                }}
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem', lineHeight: 1.5 }}>
+              Send a message to a new number. Free-form text only works if the recipient
+              has messaged you in the last 24 hours — otherwise use an approved template.
+            </p>
+
+            <label style={{ display: 'block', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>
+                Phone (with country code)
+              </span>
+              <input
+                type="tel"
+                value={newPhone}
+                onChange={(e) => setNewPhone(e.target.value)}
+                placeholder="+919876543210"
+                className="input-field"
+                style={{ width: '100%', fontSize: '0.9rem' }}
+                disabled={newSending}
+              />
+            </label>
+
+            {/* Use Template toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '0.75rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={useTemplate}
+                  onChange={(e) => setUseTemplate(e.target.checked)}
+                  disabled={newSending}
+                />
+                Use Template (required to message cold numbers)
+              </label>
+              {templates.length === 0 && useTemplate && (
+                <Link to="/wellness/whatsapp/templates" style={{ fontSize: '0.75rem', color: 'var(--primary-color, #25D366)' }}>
+                  Create one →
+                </Link>
+              )}
+            </div>
+
+            {useTemplate ? (
+              <>
+                <label style={{ display: 'block', marginBottom: '0.75rem' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>
+                    Approved Template
+                  </span>
+                  <select
+                    value={selectedTemplateName}
+                    onChange={(e) => setSelectedTemplateName(e.target.value)}
+                    className="input-field"
+                    style={{ width: '100%', fontSize: '0.9rem' }}
+                    disabled={newSending}
+                  >
+                    <option value="">— Select a template —</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.name}>
+                        {t.name} ({t.category} · {t.language})
+                      </option>
+                    ))}
+                  </select>
+                  {templates.length === 0 && (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      No approved templates yet. <Link to="/wellness/whatsapp/templates" style={{ color: 'var(--primary-color, #25D366)' }}>Create one</Link> first.
+                    </span>
+                  )}
+                </label>
+
+                {selectedTemplateName && (() => {
+                  const tpl = templates.find((t) => t.name === selectedTemplateName);
+                  return (
+                    <>
+                      <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.6rem 0.8rem', marginBottom: '0.75rem', fontSize: '0.82rem', whiteSpace: 'pre-wrap' }}>
+                        {tpl.body}
+                      </div>
+                      {templateParams.map((val, idx) => (
+                        <label key={idx} style={{ display: 'block', marginBottom: '0.5rem' }}>
+                          <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
+                            Variable {`{{${idx + 1}}}`}
+                          </span>
+                          <input
+                            value={val}
+                            onChange={(e) => {
+                              const next = [...templateParams];
+                              next[idx] = e.target.value;
+                              setTemplateParams(next);
+                            }}
+                            className="input-field"
+                            style={{ width: '100%', fontSize: '0.88rem' }}
+                            disabled={newSending}
+                          />
+                        </label>
+                      ))}
+                    </>
+                  );
+                })()}
+              </>
+            ) : (
+              <label style={{ display: 'block', marginBottom: '0.75rem' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>
+                  Message
+                </span>
+                <textarea
+                  value={newBody}
+                  onChange={(e) => setNewBody(e.target.value)}
+                  rows={4}
+                  placeholder="Hi! Just checking in…"
+                  className="input-field"
+                  style={{ width: '100%', fontSize: '0.9rem', fontFamily: 'inherit', resize: 'vertical' }}
+                  disabled={newSending}
+                />
+              </label>
+            )}
+
+            {newError && (
+              <div style={{
+                background: 'rgba(220,38,38,0.1)', color: '#dc2626',
+                border: '1px solid rgba(220,38,38,0.3)',
+                padding: '0.6rem 0.8rem', borderRadius: 6,
+                fontSize: '0.8rem', marginBottom: '0.75rem', lineHeight: 1.5,
+              }}>
+                {newError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button
+                onClick={() => setShowNewModal(false)}
+                disabled={newSending}
+                className="btn-secondary"
+                style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendNewMessage}
+                disabled={newSending || !newPhone.trim() || !newBody.trim()}
+                style={{
+                  padding: '0.5rem 1rem', fontSize: '0.85rem',
+                  background: 'var(--primary-color, #25D366)', color: '#fff',
+                  border: 'none', borderRadius: 6, fontWeight: 600,
+                  cursor: newSending ? 'not-allowed' : 'pointer',
+                  opacity: newSending ? 0.6 : 1,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}
+              >
+                <Send size={14} />
+                {newSending ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

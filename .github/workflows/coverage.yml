@@ -266,6 +266,7 @@ jobs:
             tests/knowledge-base-api.spec.js \
             tests/landing-pages-api.spec.js \
             tests/portal-api.spec.js \
+            tests/portal-kyc-api.spec.js \
             tests/tenant-switch-disabled-api.spec.js \
             tests/voice-transcription-api.spec.js \
             tests/channels-credentials-api.spec.js \

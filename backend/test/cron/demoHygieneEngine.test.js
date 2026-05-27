@@ -429,7 +429,10 @@ describe('cron/demoHygieneEngine — #741 TreatmentPlan + MembershipPlan teardow
     await runDemoHygiene();
     expect(prisma.treatmentPlan.findMany).toHaveBeenCalledTimes(1);
     const arg = prisma.treatmentPlan.findMany.mock.calls[0][0];
-    expect(arg.where.AND[0]).toEqual({ createdAt: { lt: expect.any(Date) } });
+    // TreatmentPlan has no `createdAt` column; use `startedAt` as the
+    // row-birth timestamp. Pre-fix the cron passed `createdAt` and Prisma
+    // rejected every tick with "Unknown argument createdAt".
+    expect(arg.where.AND[0]).toEqual({ startedAt: { lt: expect.any(Date) } });
     const orList = arg.where.AND[1].OR;
     expect(orList).toHaveLength(TEARDOWN_NAME_PREFIXES.length);
     for (const prefix of TEARDOWN_NAME_PREFIXES) {

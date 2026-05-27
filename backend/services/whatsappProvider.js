@@ -21,6 +21,36 @@ const https = require("https");
 
 const GRAPH_API_VERSION = process.env.META_GRAPH_VERSION || "v22.0";
 
+// Verbose terminal logging for Meta Graph traffic. Default OFF — set
+// WHATSAPP_DEBUG_LOG=true in backend/.env to re-enable when debugging.
+const WA_DEBUG = String(process.env.WHATSAPP_DEBUG_LOG || "false").toLowerCase() === "true";
+
+// Redact obviously-sensitive fields before printing. Mutates a shallow
+// clone so we never touch the caller's object.
+function waRedact(obj) {
+  if (obj == null || typeof obj !== "object") return obj;
+  const clone = Array.isArray(obj) ? obj.slice() : { ...obj };
+  const SECRET_KEYS = ["access_token", "accessToken", "input_token", "fb_exchange_token", "client_secret", "appSecret", "pin", "code"];
+  for (const k of Object.keys(clone)) {
+    if (SECRET_KEYS.includes(k) && typeof clone[k] === "string" && clone[k].length > 0) {
+      clone[k] = `***REDACTED(${clone[k].length})***`;
+    } else if (clone[k] && typeof clone[k] === "object") {
+      clone[k] = waRedact(clone[k]);
+    }
+  }
+  return clone;
+}
+
+function waLog(tag, payload) {
+  if (!WA_DEBUG) return;
+  try {
+    const pretty = typeof payload === "string" ? payload : JSON.stringify(waRedact(payload), null, 2);
+    console.log(`[whatsapp] ${tag} ${pretty}`);
+  } catch (e) {
+    console.log(`[whatsapp] ${tag} <log-serialize-failed: ${e.message}>`);
+  }
+}
+
 /**
  * Send a WhatsApp template message via Meta Cloud API
  * @param {Object} opts
@@ -132,10 +162,15 @@ function postToMeta({ phoneNumberId, accessToken, payload }) {
       },
     };
 
+    waLog("→ POST graph.facebook.com" + options.path, { payload });
+
     const req = https.request(options, (res) => {
       let body = "";
       res.on("data", (chunk) => (body += chunk));
       res.on("end", () => {
+        let parsedForLog = body;
+        try { parsedForLog = JSON.parse(body); } catch { /* keep raw */ }
+        waLog(`← HTTP ${res.statusCode} graph.facebook.com${options.path}`, parsedForLog);
         try {
           const parsed = JSON.parse(body);
           if (res.statusCode < 300 && parsed.messages && parsed.messages.length > 0) {
@@ -157,6 +192,7 @@ function postToMeta({ phoneNumberId, accessToken, payload }) {
     });
 
     req.on("error", (err) => {
+      waLog(`✗ network error graph.facebook.com${options.path}`, { error: err.message });
       resolve({ success: false, error: err.message });
     });
 
@@ -284,12 +320,20 @@ function graphRequest({ method, path, accessToken, payload, query }) {
         ...(body && { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }),
       },
     };
+
+    waLog(`→ ${method} graph.facebook.com/${GRAPH_API_VERSION}${path}`, {
+      query: waRedact(query || {}),
+      payload: payload ? waRedact(payload) : null,
+      authHeader: accessToken ? "Bearer ***REDACTED***" : "none",
+    });
+
     const req = https.request(options, (res) => {
       let buf = "";
       res.on("data", (c) => (buf += c));
       res.on("end", () => {
         let parsed = null;
         try { parsed = JSON.parse(buf); } catch { parsed = null; }
+        waLog(`← HTTP ${res.statusCode} ${method} graph.facebook.com/${GRAPH_API_VERSION}${path}`, parsed != null ? parsed : buf);
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve({ ok: true, data: parsed, status: res.statusCode });
         } else {
@@ -298,7 +342,10 @@ function graphRequest({ method, path, accessToken, payload, query }) {
         }
       });
     });
-    req.on("error", (err) => resolve({ ok: false, error: err.message }));
+    req.on("error", (err) => {
+      waLog(`✗ network error ${method} graph.facebook.com/${GRAPH_API_VERSION}${path}`, { error: err.message });
+      resolve({ ok: false, error: err.message });
+    });
     if (body) req.write(body);
     req.end();
   });
@@ -409,6 +456,45 @@ function listPhoneNumbers({ wabaId, accessToken }) {
 }
 
 /**
+ * Submit a NEW template to Meta for review. The template is created in
+ * PENDING state; Meta typically approves or rejects within 1-24 hours.
+ * Status updates arrive via the `message_template_status_update` webhook
+ * field and update WhatsAppTemplate.status automatically.
+ *
+ * @param {Object} opts
+ * @param {string} opts.wabaId
+ * @param {string} opts.accessToken
+ * @param {string} opts.name          unique per-WABA, lowercase snake_case (Meta rule)
+ * @param {string} opts.language      e.g. "en_US", "en", "hi"
+ * @param {string} opts.category      "MARKETING" | "UTILITY" | "AUTHENTICATION"
+ * @param {string} opts.body          body text — placeholders {{1}}, {{2}} ok
+ * @param {string} [opts.header]      optional header text (TEXT format)
+ * @param {string} [opts.footer]      optional footer text
+ * @returns {Promise<{ ok, data?, error?, code? }>}
+ */
+function submitTemplateToMeta({ wabaId, accessToken, name, language, category, body, header, footer }) {
+  const components = [];
+  if (header) {
+    components.push({ type: "HEADER", format: "TEXT", text: header });
+  }
+  components.push({ type: "BODY", text: body });
+  if (footer) {
+    components.push({ type: "FOOTER", text: footer });
+  }
+  return graphRequest({
+    method: "POST",
+    path: `/${wabaId}/message_templates`,
+    accessToken,
+    payload: {
+      name,
+      language,
+      category,
+      components,
+    },
+  });
+}
+
+/**
  * Fetch all approved templates for a WABA — used by templateSyncEngine.
  * @param {{ wabaId: string, accessToken: string, limit?: number }} opts
  */
@@ -444,6 +530,7 @@ function sendInteractive({ to, type, body, header, footer, action, phoneNumberId
 }
 
 module.exports = {
+  submitTemplateToMeta,
   sendTemplate,
   sendText,
   sendImage,

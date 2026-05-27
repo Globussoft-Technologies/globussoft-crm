@@ -35,7 +35,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
-const { sendTemplate, sendText, verifyWebhook } = require("../services/whatsappProvider");
+const { sendTemplate, sendText, verifyWebhook, submitTemplateToMeta } = require("../services/whatsappProvider");
 const { toE164 } = require("../utils/deduplication");
 const { writeAudit } = require("../lib/audit");
 const {
@@ -525,6 +525,79 @@ router.post("/threads/:id/assign", verifyToken, async (req, res) => {
 });
 
 // POST /threads/:id/close
+// POST /threads/:id/rename-contact body { name }
+//
+// Save / update a friendly contact name for the WhatsApp thread. Three cases:
+//   1. Thread already has thread.contactId → update Contact.name
+//   2. Thread has no contact but a Contact with this phone exists for tenant
+//      → link the existing Contact + update its name
+//   3. Neither → create a new Contact with phone + name + link to thread
+//
+// Phone is the dedup key (normalised) — matches the contact-by-phone pattern
+// used elsewhere in the route. We use lib/deduplication.normalizePhone via
+// the existing utils file so the same shape is stored.
+router.post("/threads/:id/rename-contact", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    const name = String(req.body?.name || "").trim();
+    if (!name) return res.status(400).json({ error: "name is required" });
+    if (name.length > 120) return res.status(400).json({ error: "name too long (max 120)" });
+
+    const thread = await prisma.whatsAppThread.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      include: { contact: true },
+    });
+    if (!thread) return res.status(404).json({ error: "Thread not found" });
+
+    let contact = thread.contact;
+    if (contact) {
+      // Case 1 — update existing linked contact's name.
+      contact = await prisma.contact.update({
+        where: { id: contact.id },
+        data: { name },
+      });
+    } else {
+      // Case 2 — try to find an existing contact by phone for this tenant.
+      contact = await prisma.contact.findFirst({
+        where: { tenantId: req.user.tenantId, phone: thread.contactPhone },
+      });
+      if (contact) {
+        contact = await prisma.contact.update({
+          where: { id: contact.id },
+          data: { name },
+        });
+      } else {
+        // Case 3 — create a new contact for this phone.
+        contact = await prisma.contact.create({
+          data: {
+            tenantId: req.user.tenantId,
+            name,
+            phone: thread.contactPhone,
+            status: "Lead",
+            source: "whatsapp",
+          },
+        });
+      }
+      // Link the contact to the thread.
+      await prisma.whatsAppThread.update({
+        where: { id: thread.id },
+        data: { contactId: contact.id },
+      });
+    }
+
+    await writeAudit("WhatsAppThread", "RENAME_CONTACT", thread.id, req.user.userId, req.user.tenantId, {
+      contactId: contact.id,
+      newName: name,
+    }).catch(() => { /* best-effort */ });
+
+    res.json({ success: true, contact });
+  } catch (err) {
+    console.error("WhatsApp thread rename-contact error:", err);
+    res.status(500).json({ error: "Failed to rename contact", detail: err.message });
+  }
+});
+
 router.post("/threads/:id/close", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -765,6 +838,53 @@ router.post("/templates", verifyToken, async (req, res) => {
       return res.status(400).json({ error: "name and body are required" });
     }
 
+    // Meta name rules: lowercase a-z 0-9 underscore only. Save the user a
+    // round-trip by normalising client-side AND validating here.
+    if (!/^[a-z0-9_]{1,512}$/.test(name)) {
+      return res.status(400).json({
+        error: "Template name must contain only lowercase letters, digits, and underscores (no spaces).",
+        code: "INVALID_NAME",
+      });
+    }
+
+    // Submit to Meta for review before we persist a DB row. If Meta
+    // rejects (duplicate name, banned word, format issue) we surface the
+    // error to the operator immediately instead of leaving a phantom
+    // PENDING row that never resolves.
+    const cfg = await prisma.whatsAppConfig.findFirst({
+      where: { tenantId: req.user.tenantId, provider: "meta_cloud", isActive: true },
+    });
+    if (!cfg || !cfg.businessAccountId || !cfg.accessToken) {
+      return res.status(400).json({
+        error: "WhatsApp is not connected for this tenant. Connect WhatsApp Business before creating templates.",
+        code: "NOT_CONNECTED",
+      });
+    }
+    const accessToken = decryptCredential(cfg.accessToken);
+
+    const metaResp = await submitTemplateToMeta({
+      wabaId: cfg.businessAccountId,
+      accessToken,
+      name,
+      language: language || "en_US",
+      category: category || "MARKETING",
+      body,
+      header: headerType === "TEXT" ? headerContent : null,
+      footer: footer || null,
+    });
+
+    if (!metaResp.ok) {
+      return res.status(422).json({
+        error: metaResp.error || "Meta rejected the template submission.",
+        code: "META_REJECTED",
+        metaCode: metaResp.code || null,
+        metaSubcode: metaResp.subcode || null,
+      });
+    }
+
+    const metaTemplateId = metaResp.data?.id || null;
+    const metaStatus = metaResp.data?.status || "PENDING";
+
     const template = await prisma.whatsAppTemplate.create({
       data: {
         name,
@@ -775,7 +895,8 @@ router.post("/templates", verifyToken, async (req, res) => {
         headerContent: headerContent || null,
         footer: footer || null,
         buttons: buttons ? JSON.stringify(buttons) : null,
-        status: "PENDING",
+        status: metaStatus,
+        metaTemplateId,
         tenantId: req.user.tenantId,
       },
     });
@@ -783,8 +904,8 @@ router.post("/templates", verifyToken, async (req, res) => {
     res.status(201).json(template);
   } catch (err) {
     console.error("WhatsApp template create error:", err);
-    if (err.code === "P2002") return res.status(409).json({ error: "Template name already exists" });
-    res.status(500).json({ error: "Failed to create template" });
+    if (err.code === "P2002") return res.status(409).json({ error: "Template name already exists for this tenant" });
+    res.status(500).json({ error: "Failed to create template", detail: err.message });
   }
 });
 

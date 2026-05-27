@@ -33,6 +33,32 @@ const { toE164 } = require("../utils/deduplication");
 
 const META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || "";
 
+// Verbose webhook logging — default OFF. Set WHATSAPP_DEBUG_LOG=true in
+// backend/.env to surface every Meta verify-handshake / event POST.
+const WA_DEBUG = String(process.env.WHATSAPP_DEBUG_LOG || "false").toLowerCase() === "true";
+function whLog(tag, payload) {
+  if (!WA_DEBUG) return;
+  try {
+    const pretty = payload == null ? "" : (typeof payload === "string" ? payload : JSON.stringify(payload, null, 2));
+    console.log(`[whatsapp-webhook] ${tag} ${pretty}`);
+  } catch (e) {
+    console.log(`[whatsapp-webhook] ${tag} <log-serialize-failed: ${e.message}>`);
+  }
+}
+// Middleware that logs every incoming POST before signature verification
+// runs — so we can see Meta hitting even if HMAC fails downstream.
+function logIncoming(req, _res, next) {
+  whLog(`→ POST /api/whatsapp/webhook (ip=${req.ip})`, {
+    headers: {
+      "x-hub-signature-256": req.headers["x-hub-signature-256"] ? "present" : "missing",
+      "user-agent": req.headers["user-agent"],
+      "content-type": req.headers["content-type"],
+      "content-length": req.headers["content-length"],
+    },
+  });
+  next();
+}
+
 // ─── E.164 normalisation (copied from routes/whatsapp.js) ──────────────────
 // Kept inline to avoid coupling the webhook router to the rest of the
 // whatsapp surface. If this ever drifts, consolidate via lib/.
@@ -72,12 +98,22 @@ router.get("/", async (req, res) => {
     const providedToken = req.query["hub.verify_token"];
     const challenge = req.query["hub.challenge"];
 
+    whLog(`→ GET /api/whatsapp/webhook (verify handshake from ip=${req.ip})`, {
+      mode,
+      providedToken: providedToken ? `(${providedToken.length} chars)` : null,
+      challenge: challenge ? `(${challenge.length} chars)` : null,
+      envTokenSet: !!META_VERIFY_TOKEN,
+      envTokenLength: META_VERIFY_TOKEN.length,
+    });
+
     if (mode !== "subscribe" || typeof providedToken !== "string") {
+      whLog("← 403 verify (mode != 'subscribe' or no token)", { mode, hasToken: typeof providedToken === "string" });
       return res.status(403).json({ error: "Verification failed" });
     }
 
     // Resolution 1: platform-wide env token.
     if (META_VERIFY_TOKEN && providedToken === META_VERIFY_TOKEN) {
+      whLog("← 200 verify (matched META_VERIFY_TOKEN)", { echoChallenge: !!challenge });
       return res.status(200).send(challenge);
     }
 
@@ -91,6 +127,7 @@ router.get("/", async (req, res) => {
     for (const c of candidates) {
       const decrypted = decryptCredential(c.webhookVerifyToken);
       if (decrypted && decrypted === providedToken) {
+        whLog("← 200 verify (matched per-tenant webhookVerifyToken)", { tenantId: c.tenantId, configId: c.id });
         return res.status(200).send(challenge);
       }
     }
@@ -99,9 +136,16 @@ router.get("/", async (req, res) => {
     // was the pre-P1 default name. Honour it during the rollout window so
     // existing webhook configurations don't break.
     if (process.env.WHATSAPP_VERIFY_TOKEN && providedToken === process.env.WHATSAPP_VERIFY_TOKEN) {
+      whLog("← 200 verify (matched legacy WHATSAPP_VERIFY_TOKEN)", null);
       return res.status(200).send(challenge);
     }
 
+    whLog("← 403 verify (token did NOT match any source)", {
+      providedTokenLength: providedToken.length,
+      envTokenLength: META_VERIFY_TOKEN.length,
+      perTenantCandidates: candidates.length,
+      hint: "Make sure the 'Verify token' you typed in Meta dashboard exactly matches META_VERIFY_TOKEN in backend/.env (or one of the per-tenant webhookVerifyToken values).",
+    });
     return res.status(403).json({ error: "Verification failed" });
   } catch (err) {
     console.error("[whatsapp-webhook GET] error:", err);
@@ -136,6 +180,7 @@ router.get("/", async (req, res) => {
 //   - field === 'business_capability_update'      → update messagingLimitTier
 router.post(
   "/",
+  logIncoming,
   captureRawBody,
   verifySignature,
   parseBody,
@@ -145,12 +190,25 @@ router.post(
   async (req, res) => {
     // Response was already sent by respondImmediately. We process async.
     try {
+      whLog("✓ webhook accepted (signature + tenant routing passed)", {
+        signatureVerified: req.waSignatureVerified,
+        entryCount: req.waContext?.entries?.length || 0,
+        eventCount: (req.waEvents || []).length,
+        body: req.waParsedBody,
+      });
       const events = req.waEvents || [];
-      if (events.length === 0) return;
+      if (events.length === 0) {
+        whLog("⚠ no events to process (unknown tenant or no matching phoneNumberId)", {
+          entries: req.waContext?.entries || [],
+        });
+        return;
+      }
 
       for (const ev of events) {
         try {
+          whLog(`→ processing event field=${ev.change.field} tenantId=${ev.tenantId}`, { value: ev.change.value });
           await processEvent(ev, req);
+          whLog(`✓ event ${ev.webhookEventId} processed`, null);
           await prisma.webhookEvent.update({
             where: { id: ev.webhookEventId },
             data: { status: "PROCESSED", processedAt: new Date() },

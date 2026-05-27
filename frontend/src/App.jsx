@@ -44,6 +44,7 @@ const Settings = lazy(() => import("./pages/Settings"));
 const UserSettings = lazy(() => import("./pages/UserSettings"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
+const TravelCustomerPortal = lazy(() => import("./pages/travel/TravelCustomerPortal"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
 const CPQ = lazy(() => import("./pages/CPQ"));
 const CustomObjects = lazy(() => import("./pages/CustomObjects"));
@@ -196,6 +197,7 @@ const WellnessHolidays = lazy(() => import("./pages/wellness/Holidays"));
 const WellnessWorkingHours = lazy(() => import("./pages/wellness/WorkingHoursEditor"));
 // Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox).
 const WellnessWhatsAppThreads = lazy(() => import("./pages/wellness/WhatsAppThreads"));
+const WellnessWhatsAppTemplates = lazy(() => import("./pages/wellness/WhatsAppTemplates"));
 // Wave 2 Agent JJ — Staff Attendance + Leave Management. Open to all roles
 // (everyone needs to clock in/out + manage their own leave); manager+
 // surfaces appear inline based on AuthContext.role.
@@ -588,6 +590,12 @@ export default function App() {
                   <Route path="/payment-success" element={<PaymentSuccess />} />
                   <Route path="/payment-failed" element={<PaymentFailed />} />
                   <Route path="/portal" element={<Portal />} />
+                  {/* Travel customer portal — end-user (Contact) login + dashboard
+                      + DigiLocker / Aadhaar verification (PRD §4.5 extended).
+                      Distinct from /portal (Knowledge Base) + /wellness/portal
+                      (wellness patient OTP). Travel-tenant scoped on the
+                      backend via requireTravelPortalTenant. */}
+                  <Route path="/travel/portal" element={<TravelCustomerPortal />} />
                   <Route
                     path="/book/:slug"
                     element={<WellnessPublicBooking />}
@@ -1037,6 +1045,7 @@ export default function App() {
               <Route path="wellness/book-appointment" element={<WellnessOnly><WellnessBookAppointment /></WellnessOnly>} />
               {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
               <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
+              <Route path="wellness/whatsapp/templates" element={<WellnessOnly><WellnessWhatsAppTemplates /></WellnessOnly>} />
               <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
               <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
               {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}

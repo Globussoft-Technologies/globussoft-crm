@@ -626,6 +626,23 @@ model Contact {
   // resolves to a row in TravelCommissionProfile.
   commissionProfileId Int?
 
+  // Travel CRM — customer-portal DigiLocker / Aadhaar verification.
+  // PRD §4.5 extended for end-user self-service KYC. Stub-mode until
+  // APISETU_PARTNER_API_KEY is set in .env; then routes/portal.js's
+  // DigiLocker flow calls APISetu and writes verified=true here.
+  // All fields nullable so non-travel + non-customer Contacts ignore them.
+  //   kycStatus       — "unverified" | "initiated" | "verified" | "failed"
+  //   kycInitiatedAt  — when the customer opened the OAuth flow
+  //   kycVerifiedAt   — when the callback succeeded
+  //   aadhaarLast4    — last 4 digits, safe to show in UI (Aadhaar Act §29)
+  //   kycTokenId      — opaque APISetu/DigiLocker token, NEVER returned in
+  //                     responses (server-side only; audit / re-fetch use)
+  kycStatus      String?   @default("unverified")
+  kycInitiatedAt DateTime?
+  kycVerifiedAt  DateTime?
+  aadhaarLast4   String?
+  kycTokenId     String?
+
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
@@ -666,6 +683,8 @@ model Contact {
   pushSubscriptions   PushSubscription[]
   touchpoints         Touchpoint[]
   attachments         ContactAttachment[]
+  // Travel customer-portal DigiLocker sessions (PRD §4.5 extended).
+  digilockerSessions  DigilockerSession[]
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
@@ -5174,13 +5193,21 @@ model TripParticipant {
 // TripParticipant on a successful callback — the row is kept as an
 // audit trail of the verification event.
 model DigilockerSession {
-  id            Int             @id @default(autoincrement())
-  tenantId      Int             @default(1)
-  participantId Int
-  state         String          @unique // OAuth state (CSRF token); dedup/replay-protection key
-  status        String          @default("initiated") // initiated | verified | failed | expired
-  redirectUri   String          @db.Text
-  initiatedAt   DateTime        @default(now())
+  id            Int              @id @default(autoincrement())
+  tenantId      Int              @default(1)
+  // Polymorphic subject — exactly ONE of participantId / contactId is
+  // non-null. subjectType picks which. Existing TripParticipant flow
+  // sets subjectType="participant"; new customer-portal flow sets
+  // "contact" and stores the Contact.id in contactId. Keeps a single
+  // session table so the OAuth state plumbing (state @unique, status
+  // FSM, replay protection) is shared across all KYC subjects.
+  subjectType   String           @default("participant") // "participant" | "contact"
+  participantId Int?
+  contactId     Int?
+  state         String           @unique // OAuth state (CSRF token); dedup/replay-protection key
+  status        String           @default("initiated") // initiated | verified | failed | expired
+  redirectUri   String           @db.Text
+  initiatedAt   DateTime         @default(now())
   verifiedAt    DateTime?
   failedReason  String?
   // Stub-mode: holds the synthetic last-4 + token written by the stub
@@ -5188,13 +5215,15 @@ model DigilockerSession {
   // signed Aadhaar XML after callback exchange.
   resultLast4   String?
   resultTokenId String?
-  participant   TripParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
-  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  participant   TripParticipant? @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  contact       Contact?         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   @@index([tenantId, status])
   @@index([participantId])
+  @@index([contactId])
 }
 
 model RoomingAssignment {

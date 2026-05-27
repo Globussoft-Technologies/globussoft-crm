@@ -126,6 +126,16 @@ const Login = () => {
     setForgotLoading(false);
   };
 
+  // Vertical-aware default landing — used when no configured landing is set
+  // AND /api/pages/me is unavailable. Without this branch, wellness + travel
+  // users land on /home (generic fallback) and see the wrong dashboard.
+  // Mirrors the SSO-return branch's intent.
+  const verticalDefaultLanding = (vertical) => {
+    if (vertical === "wellness") return "/wellness";
+    if (vertical === "travel") return "/travel";
+    return "/dashboard";
+  };
+
   // Smart landing-page resolution. Order of preference:
   //   1. The configured landingPath on the user's primary role IF it is still
   //      in the user's /api/pages/me list (server-side intersection of catalog
@@ -135,12 +145,14 @@ const Login = () => {
   //   2. The first accessible non-/home page from /api/pages/me. Whatever the
   //      role can actually do shows up first — gives a useful landing page for
   //      any custom role without any hardcoded role-string mapping.
-  //   3. /home — always-accessible final fallback (permission-free entry in
-  //      the page catalog).
-  // No hardcoded role-string switch anywhere; permissions drive everything.
+  //   3. Vertical-aware default (/wellness | /travel | /dashboard) when
+  //      /api/pages/me is unreachable or returns nothing useful. Replaces
+  //      the previous /home generic-fallback so vertical tenants land on
+  //      their correct surface even in degraded-fetch scenarios.
   const resolveLandingPath = async (data) => {
     const configuredLanding =
       data.user?.landingPath || data.user?.primaryRole?.landingPath || null;
+    const verticalDefault = verticalDefaultLanding(data.tenant?.vertical);
     try {
       const res = await fetch("/api/pages/me", {
         headers: { Authorization: `Bearer ${data.token}` },
@@ -153,13 +165,13 @@ const Login = () => {
           return configuredLanding;
         }
         const firstUseful = pages.find((p) => p.path !== "/home");
-        return firstUseful?.path || "/home";
+        return firstUseful?.path || verticalDefault;
       }
     } catch {
       // Network failure during resolution — fall through to the safer of
-      // (configured landing) or /home below.
+      // (configured landing) or the vertical-aware default below.
     }
-    return configuredLanding || "/home";
+    return configuredLanding || verticalDefault;
   };
 
   const finalizeLogin = async (data) => {
@@ -665,6 +677,95 @@ const Login = () => {
               ]}
               onLogin={quickLogin}
             />
+
+            <QuickLoginSection
+              title="Travel Stall — Demo"
+              columns={3}
+              accounts={[
+                {
+                  label: "Owner (Yasin)",
+                  email: "yasin@travelstall.in",
+                  color: "#a855f7",
+                },
+                {
+                  label: "Demo Admin",
+                  email: "admin@travelstall.demo",
+                  color: "#a855f7",
+                },
+                {
+                  label: "TMC Operator",
+                  email: "tmc-ops@travelstall.demo",
+                  color: "#f59e0b",
+                },
+                {
+                  label: "RFU Advisor",
+                  email: "rfu-advisor@travelstall.demo",
+                  color: "#10b981",
+                },
+                {
+                  label: "Telecaller",
+                  email: "telecaller@travelstall.demo",
+                  color: "#3b82f6",
+                },
+              ]}
+              onLogin={quickLogin}
+              extraCell={
+                /* Travel Customer Portal — end-user (Contact) login lives on
+                   a separate route + uses /api/portal/login (PORTAL JWT),
+                   distinct from staff /api/auth/login. Rendered as a Link
+                   styled to match the staff quick-login buttons so it slots
+                   neatly into the otherwise-empty 6th grid cell on row 2
+                   (3-column layout, 5 staff buttons + 1 portal link). */
+                <Link
+                  to="/travel/portal"
+                  title="Open Travel Customer Portal — ahmed.pilgrim@demo.test / password123"
+                  style={{
+                    padding: "0.55rem 0.45rem",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(200, 154, 78, 0.45)",
+                    background: "rgba(200, 154, 78, 0.10)",
+                    textDecoration: "none",
+                    transition: "all 0.15s",
+                    minWidth: 0,
+                    display: "block",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "rgba(200, 154, 78, 0.22)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "rgba(200, 154, 78, 0.10)";
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "0.65rem",
+                      fontWeight: 700,
+                      color: "#C89A4E",
+                      textTransform: "uppercase",
+                      marginBottom: "0.15rem",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    Customer Portal
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "0.62rem",
+                      color: "var(--text-secondary)",
+                      fontFamily: "monospace",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    ahmed.pilgrim@demo.test
+                  </div>
+                </Link>
+              }
+            />
+
             <div
               style={{
                 marginTop: "1rem",
@@ -714,7 +815,17 @@ const Login = () => {
   );
 };
 
-function QuickLoginSection({ title, accounts, onLogin }) {
+function QuickLoginSection({ title, accounts, onLogin, columns, extraCell }) {
+  // `columns` lets a caller cap the grid width so a 5-account section
+  // doesn't squish into 5 cramped buttons in one row. When omitted,
+  // each account gets its own column (back-compat with the 3-account
+  // Generic + Wellness sections). The Travel Stall section passes
+  // columns={3} so its 5 staff buttons wrap to a 3+2 layout.
+  // `extraCell` renders one extra grid item after the accounts — used
+  // by the Travel Stall section to slot a Customer-Portal link into
+  // the otherwise-empty trailing cell on row 2, so the dashed callout
+  // doesn't need its own block below.
+  const cols = columns || accounts.length;
   return (
     <div style={{ marginTop: "1.25rem" }}>
       <div
@@ -745,7 +856,7 @@ function QuickLoginSection({ title, accounts, onLogin }) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: `repeat(${accounts.length}, 1fr)`,
+          gridTemplateColumns: `repeat(${cols}, 1fr)`,
           gap: "0.4rem",
         }}
       >
@@ -814,6 +925,7 @@ function QuickLoginSection({ title, accounts, onLogin }) {
             </button>
           );
         })}
+        {extraCell}
       </div>
     </div>
   );

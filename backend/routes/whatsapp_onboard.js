@@ -27,6 +27,31 @@ const health = require("../lib/whatsappHealth");
 const provider = require("../services/whatsappProvider");
 const { decryptCredential, maskConfigRow } = require("../lib/credentialMasking");
 
+// Verbose terminal logging for the WhatsApp connection callback. Mirrors
+// the WA_DEBUG flag in services/whatsappProvider.js so a single env var
+// controls everything (default OFF; set WHATSAPP_DEBUG_LOG=true to re-enable).
+const WA_DEBUG = String(process.env.WHATSAPP_DEBUG_LOG || "false").toLowerCase() === "true";
+function redactConnectionBody(body) {
+  if (!body || typeof body !== "object") return body;
+  const out = { ...body };
+  if (typeof out.code === "string" && out.code.length > 0) {
+    out.code = `***REDACTED(${out.code.length})***`;
+  }
+  if (typeof out.registerPin === "string" && out.registerPin.length > 0) {
+    out.registerPin = "***REDACTED***";
+  }
+  return out;
+}
+function connLog(tag, payload) {
+  if (!WA_DEBUG) return;
+  try {
+    const pretty = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+    console.log(`[whatsapp-connect] ${tag} ${pretty}`);
+  } catch (e) {
+    console.log(`[whatsapp-connect] ${tag} <log-serialize-failed: ${e.message}>`);
+  }
+}
+
 // In-memory handoff store for the two-step flow. Keyed by handoffId (random
 // 32-char hex). Entries auto-expire after 10 minutes. NOT durable — if the
 // backend restarts mid-onboard the user re-runs the embedded-signup popup.
@@ -65,13 +90,20 @@ function requireEnabled(req, res, next) {
 // ────────────────────────────────────────────────────────────────────────
 router.post("/exchange", verifyToken, verifyRole(["ADMIN"]), requireEnabled, async (req, res) => {
   try {
+    connLog(`→ POST /api/whatsapp/onboard/exchange tenantId=${req.user.tenantId} userId=${req.user.userId}`, {
+      body: redactConnectionBody(req.body || {}),
+    });
     const { code, wabaId, phoneNumberId, redirectUri } = req.body || {};
     if (!code || !wabaId || !phoneNumberId) {
-      return res.status(400).json({ error: "code, wabaId, phoneNumberId are required" });
+      const resp = { error: "code, wabaId, phoneNumberId are required" };
+      connLog("← 400 /exchange", resp);
+      return res.status(400).json(resp);
     }
     const result = await onboarding.exchangeAndDebug({ code, redirectUri });
     if (!result.ok) {
-      return res.status(422).json({ error: result.error, code: result.code });
+      const resp = { error: result.error, code: result.code };
+      connLog("← 422 /exchange", resp);
+      return res.status(422).json(resp);
     }
     const handoffId = newHandoffId();
     handoffStore.set(handoffId, {
@@ -84,14 +116,17 @@ router.post("/exchange", verifyToken, verifyRole(["ADMIN"]), requireEnabled, asy
       wabaId,
       phoneNumberId,
     });
-    res.status(202).json({
+    const resp = {
       handoffId,
       tokenExpiresAt: result.expiresAt,
       scopes: result.scopes,
       neverExpires: result.expiresAt === null,
-    });
+    };
+    connLog("← 202 /exchange", resp);
+    res.status(202).json(resp);
   } catch (err) {
     console.error("[onboard /exchange] error:", err);
+    connLog("← 500 /exchange", { error: err.message, stack: err.stack });
     res.status(500).json({ error: "exchange failed", detail: err.message });
   }
 });
@@ -102,17 +137,32 @@ router.post("/exchange", verifyToken, verifyRole(["ADMIN"]), requireEnabled, asy
 // ────────────────────────────────────────────────────────────────────────
 router.post("/finalize", verifyToken, verifyRole(["ADMIN"]), requireEnabled, async (req, res) => {
   try {
+    connLog(`→ POST /api/whatsapp/onboard/finalize tenantId=${req.user.tenantId} userId=${req.user.userId}`, {
+      body: redactConnectionBody(req.body || {}),
+    });
     const { handoffId, registerPin } = req.body || {};
-    if (!handoffId) return res.status(400).json({ error: "handoffId is required" });
+    if (!handoffId) {
+      const resp = { error: "handoffId is required" };
+      connLog("← 400 /finalize", resp);
+      return res.status(400).json(resp);
+    }
     const h = handoffStore.get(handoffId);
-    if (!h) return res.status(404).json({ error: "handoff expired or not found", code: "HANDOFF_EXPIRED" });
+    if (!h) {
+      const resp = { error: "handoff expired or not found", code: "HANDOFF_EXPIRED" };
+      connLog("← 404 /finalize", resp);
+      return res.status(404).json(resp);
+    }
     if (h.tenantId !== req.user.tenantId) {
       // Same handoffId, different tenant — never legitimate.
-      return res.status(403).json({ error: "handoff does not belong to this tenant" });
+      const resp = { error: "handoff does not belong to this tenant" };
+      connLog("← 403 /finalize (tenant mismatch)", resp);
+      return res.status(403).json(resp);
     }
     if (h.expiresAt < Date.now()) {
       handoffStore.delete(handoffId);
-      return res.status(404).json({ error: "handoff expired", code: "HANDOFF_EXPIRED" });
+      const resp = { error: "handoff expired", code: "HANDOFF_EXPIRED" };
+      connLog("← 404 /finalize (expired)", resp);
+      return res.status(404).json(resp);
     }
 
     const result = await onboarding.finalize({
@@ -130,17 +180,22 @@ router.post("/finalize", verifyToken, verifyRole(["ADMIN"]), requireEnabled, asy
     handoffStore.delete(handoffId);
 
     if (!result.ok) {
-      return res.status(422).json({ error: result.error, code: result.code });
+      const resp = { error: result.error, code: result.code };
+      connLog("← 422 /finalize", resp);
+      return res.status(422).json(resp);
     }
-    res.status(201).json({
+    const resp = {
       success: true,
       configId: result.configId,
       phoneNumberId: result.phoneNumberId,
       wabaId: result.wabaId,
       tokenExpiresAt: result.tokenExpiresAt,
-    });
+    };
+    connLog("← 201 /finalize", resp);
+    res.status(201).json(resp);
   } catch (err) {
     console.error("[onboard /finalize] error:", err);
+    connLog("← 500 /finalize", { error: err.message, stack: err.stack });
     res.status(500).json({ error: "finalize failed", detail: err.message });
   }
 });
@@ -234,6 +289,27 @@ router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: "failed to fetch config" });
   }
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// POST /debug — frontend → VS Code terminal log bridge
+// The Embedded Signup React component forwards every Meta popup
+// postMessage + the FB.login callback to this endpoint so operators can
+// see exactly what Meta returned without keeping Chrome DevTools open.
+// No body validation — the data is opaque diagnostic info, and the
+// frontend already redacts the OAuth code before sending.
+// ────────────────────────────────────────────────────────────────────────
+router.post("/debug", verifyToken, (req, res) => {
+  if (!WA_DEBUG) return res.json({ logged: false, reason: "WHATSAPP_DEBUG_LOG=false" });
+  const tag = req.body?.tag || "frontend";
+  const payload = req.body?.payload;
+  try {
+    const pretty = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+    console.log(`[whatsapp-connect:browser] ${tag} (tenantId=${req.user.tenantId} userId=${req.user.userId}) ${pretty}`);
+  } catch (e) {
+    console.log(`[whatsapp-connect:browser] ${tag} <log-serialize-failed: ${e.message}>`);
+  }
+  res.json({ logged: true });
 });
 
 module.exports = router;

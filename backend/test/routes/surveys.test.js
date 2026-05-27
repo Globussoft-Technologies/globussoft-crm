@@ -64,12 +64,14 @@ prisma.surveyAnswer = {
 prisma.auditLog = {
   findFirst: vi.fn().mockResolvedValue(null),
   create: vi.fn().mockResolvedValue({}),
+};
 prisma.tenant = {
   findUnique: vi.fn(),
 };
-prisma.patient = {
-  findFirst: vi.fn(),
-};
+// Merge note: prisma.patient was defined above (with findMany); this
+// adds findFirst on the same object instead of redeclaring (which would
+// silently lose findMany).
+prisma.patient.findFirst = vi.fn();
 
 import express from 'express';
 import request from 'supertest';

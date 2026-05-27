@@ -295,4 +295,117 @@ describe("quote", () => {
   test("input validation — throws on missing subBrand", () => {
     expect(() => quote({ cost: HOTEL_COST, tripDate: "2026-01-01" })).toThrow(/subBrand required/);
   });
+
+  // ─── Additional edge-case coverage (tick #N extension) ─────────────
+  //
+  // The block above pins the happy paths + the two named-throw guards.
+  // The cases below pin the remaining contract surface that audit-
+  // replay depends on: boundary dates (inclusive), null-multiplier
+  // fallback, priority-tie behaviour, explicit zero vs null markup,
+  // non-object input rejection, baseRate type coercion, and the
+  // empty-string category fallback. Each closes a hole that a future
+  // refactor could silently widen without tripping the existing 21
+  // cases.
+
+  test("pickSeason — startDate and endDate are INCLUSIVE boundaries", () => {
+    // Range is [start, end] inclusive on BOTH ends. A trip booked
+    // for the first day of ramadan-peak must match the 2.0 peak; a
+    // trip booked for the final day of the lean window must still
+    // apply the 0.85 discount. The off-by-one in either direction
+    // would silently misprice the trip with NO warning.
+    expect(pickSeason(SEASONS, "2026-03-01", "rfu")).toEqual({
+      multiplier: 2.0,
+      matchedSeasonName: "ramadan-peak",
+    });
+    expect(pickSeason(SEASONS, "2026-09-30", "rfu")).toEqual({
+      multiplier: 0.85,
+      matchedSeasonName: "lean",
+    });
+  });
+
+  test("pickSeason — null/missing multiplier falls back to 1.0 (not NaN)", () => {
+    // A misconfigured row with multiplier=null must NOT propagate
+    // NaN through subtotal math. The SUT's `s.multiplier != null`
+    // guard catches both null and undefined.
+    const broken = [
+      { subBrand: "rfu", seasonName: "broken-null", startDate: "2026-03-01", endDate: "2026-04-15", multiplier: null, isActive: true },
+    ];
+    expect(pickSeason(broken, "2026-03-15", "rfu")).toEqual({
+      multiplier: 1.0,
+      matchedSeasonName: "broken-null",
+    });
+    const broken2 = [
+      { subBrand: "rfu", seasonName: "broken-undef", startDate: "2026-03-01", endDate: "2026-04-15", isActive: true },
+    ];
+    expect(pickSeason(broken2, "2026-03-15", "rfu").multiplier).toBe(1.0);
+  });
+
+  test("pickMarkup — undefined priority falls back to 1000 (lowest priority sentinel)", () => {
+    // Per the SUT: `a.priority ?? 1000`. A rule without an explicit
+    // priority sorts AFTER a rule with priority 500 — i.e. the
+    // explicit-priority rule wins.
+    const rules = [
+      { id: 10, subBrand: "rfu", scope: "hotel", markupPct: 7, ownerUserId: null, isActive: true /* no priority */ },
+      { id: 11, subBrand: "rfu", scope: "hotel", markupPct: 3, ownerUserId: null, priority: 500, isActive: true },
+    ];
+    const res = pickMarkup(rules, "rfu", "hotel", 10000);
+    expect(res.rule.id).toBe(11); // priority 500 < 1000 fallback
+    expect(res.markupAmount).toBe(300); // 3% of 10000
+  });
+
+  test("pickMarkup — markupPct: 0 is treated as explicit zero (NOT skipped)", () => {
+    // Important audit-invariant: a rule explicitly set to 0% must
+    // produce markupAmount=0 with the rule attached, NOT fall through
+    // to a lower-priority non-zero rule. The SUT's `markupPct != null`
+    // guard is the load-bearing check.
+    const rules = [
+      { id: 20, subBrand: "rfu", scope: "hotel", markupPct: 0, ownerUserId: null, priority: 1, isActive: true },
+      { id: 21, subBrand: "rfu", scope: "hotel", markupPct: 15, ownerUserId: null, priority: 100, isActive: true },
+    ];
+    const res = pickMarkup(rules, "rfu", "hotel", 10000);
+    expect(res.rule.id).toBe(20);   // explicit-zero rule wins by priority
+    expect(res.markupAmount).toBe(0);
+  });
+
+  test("quote — throws TypeError on null/non-object input", () => {
+    expect(() => quote(null)).toThrow(TypeError);
+    expect(() => quote(null)).toThrow(/input must be an object/);
+    expect(() => quote(undefined)).toThrow(/input must be an object/);
+    expect(() => quote("not-an-object")).toThrow(/input must be an object/);
+    expect(() => quote(42)).toThrow(/input must be an object/);
+  });
+
+  test("quote — cost.baseRate type coercion: string-number coerces; non-numeric → 0", () => {
+    // The SUT does `Number(cost.baseRate) || 0`. A numeric string from
+    // a CSV import must coerce cleanly; a non-numeric value must
+    // degrade to 0 rather than NaN-poisoning the rest of the math.
+    const stringBase = quote({
+      cost: { ...HOTEL_COST, baseRate: "15000" },
+      seasons: [],
+      rules: [],
+      subBrand: "rfu",
+      tripDate: "2026-05-15",
+    });
+    expect(stringBase.baseRate).toBe(15000);
+    expect(stringBase.grandTotal).toBe(15000);
+
+    const garbageBase = quote({
+      cost: { ...HOTEL_COST, baseRate: "not-a-number" },
+      seasons: [],
+      rules: [],
+      subBrand: "rfu",
+      tripDate: "2026-05-15",
+    });
+    expect(garbageBase.baseRate).toBe(0);
+    expect(garbageBase.subtotal).toBe(0);
+    expect(garbageBase.grandTotal).toBe(0);
+    expect(Number.isNaN(garbageBase.grandTotal)).toBe(false);
+  });
+
+  test("mapCategoryToScope — empty string falls back to 'package'", () => {
+    // The SUT's `if (!category)` catches "" alongside null/undefined.
+    // Pinning this prevents a future "if (category == null)" refactor
+    // from silently leaking "" through as a non-matching scope.
+    expect(mapCategoryToScope("")).toBe("package");
+  });
 });

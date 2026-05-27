@@ -38,12 +38,12 @@ const pushService = requireCjs('../../services/pushService.js');
 
 import notif from '../../lib/notificationService.js';
 
-const { notify, notifyMany, notifyTenant } = notif;
+const { notify, notifyMany, notifyTenant, resolve } = notif;
 
 const NOTIF_ROW = { id: 1, title: 'Hi', message: 'world' };
 
 beforeAll(() => {
-  prisma.notification = { create: vi.fn() };
+  prisma.notification = { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() };
   prisma.user = { findUnique: vi.fn(), findMany: vi.fn() };
   // PR #710 / #702 — notify() now reads NotificationPreference before
   // routing. Default to "no custom prefs row" so the helper falls back
@@ -56,6 +56,9 @@ beforeAll(() => {
 beforeEach(() => {
   prisma.notification.create.mockReset();
   prisma.notification.create.mockResolvedValue(NOTIF_ROW);
+  prisma.notification.findFirst.mockReset();
+  prisma.notification.findFirst.mockResolvedValue(null);
+  prisma.notification.update.mockReset();
   prisma.user.findUnique.mockReset();
   prisma.user.findMany.mockReset();
   prisma.notificationPreference.findUnique.mockReset();
@@ -260,22 +263,24 @@ describe('lib/notificationService — notify', () => {
     errSpy.mockRestore();
   });
 
-  // SKIPPED: pushService is loaded via require() inside the SUT's `notify`
-  // function — that require resolves to the real module before our mock
-  // factory runs. The mock's sendToUser is never the one that actually
-  // gets called. Same root cause as the email-test skip above.
-  // For real coverage of these branches, see the e2e push-api.spec.js
-  // which exercises the route + library through real HTTP.
-  test.skip('push channel: swallows pushService errors', async () => {
+  // CJS-singleton-patch REVIVAL (2026-05-26): the SUT's runtime
+  // `require("../services/pushService")` resolves to the SAME CJS module
+  // exports object that the test patched via createRequire at the top of
+  // this file. Same singleton-patch trick the prisma mocks already use.
+  // Originally skipped because the older mock factory pattern didn't
+  // intercept the require; the `pushService.sendToUser = vi.fn()` patch
+  // directly on the exports object DOES.
+  test('push channel: swallows pushService errors', async () => {
     pushService.sendToUser.mockRejectedValue(new Error('vapid not set'));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const out = await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', channels: ['db', 'push'] });
     expect(out).toEqual(NOTIF_ROW);
+    expect(pushService.sendToUser).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
 
-  test.skip('push channel: calls pushService.sendToUser', async () => {
-    pushService.sendToUser.mockResolvedValue({ delivered: 1 });
+  test('push channel: calls pushService.sendToUser with title/body/url', async () => {
+    pushService.sendToUser.mockResolvedValue({ sent: 1, failed: 0 });
     await notify({ userId: 7, tenantId: 1, title: 'T', message: 'M', link: '/x', channels: ['db', 'push'] });
     expect(pushService.sendToUser).toHaveBeenCalled();
     const call = pushService.sendToUser.mock.calls[pushService.sendToUser.mock.calls.length - 1];
@@ -331,5 +336,278 @@ describe('lib/notificationService — notifyTenant', () => {
     const out = await notifyTenant({ tenantId: 9, title: 'T', message: 'M' });
     expect(prisma.notification.create).not.toHaveBeenCalled();
     expect(out).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EXTENDED COVERAGE (2026-05-26) — preference gates, dedup, priority, default
+// preference fallback, resolve(), notifyMany partial-failure semantics, push
+// channel revival via CJS-singleton-patch (skips above un-skipped). Pins
+// branches that previously only had implicit coverage through integration
+// specs (push-api, notifications-api). Reduces the time-to-detect for a
+// preference-routing regression from "next e2e-full" to "next per-push gate".
+// ---------------------------------------------------------------------------
+
+describe('lib/notificationService — notify: preference gates', () => {
+  test('category disabled → returns null + no DB write', async () => {
+    prisma.notificationPreference.findUnique.mockResolvedValueOnce({
+      userId: 1, tenantId: 1,
+      categoryToggles: { info: false, deal: true, task: true, ticket: true, lead: true, approval: true, leave: true, expense: true },
+      channels: { db: true, socket: true, push: true, email: true },
+      quietHoursStart: null, quietHoursEnd: null, timezone: null,
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const out = await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', type: 'info' });
+    expect(out).toBeNull();
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
+  test('category preference uses explicit category over type', async () => {
+    // Pin: when `category` is provided, gate uses category, NOT type.
+    prisma.notificationPreference.findUnique.mockResolvedValueOnce({
+      userId: 1, tenantId: 1,
+      categoryToggles: { info: true, deal: false, task: true, ticket: true, lead: true, approval: true, leave: true, expense: true },
+      channels: { db: true, socket: true, push: true, email: true },
+      quietHoursStart: null, quietHoursEnd: null, timezone: null,
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const out = await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', type: 'info', category: 'deal' });
+    expect(out).toBeNull(); // 'deal' is disabled even though 'info' (the type) is enabled
+    logSpy.mockRestore();
+  });
+
+  test('channel disabled in prefs filters that channel out', async () => {
+    // User opted out of email; even though caller requests email, fetch must NOT fire.
+    prisma.notificationPreference.findUnique.mockResolvedValueOnce({
+      userId: 1, tenantId: 1,
+      categoryToggles: { info: true, deal: true, task: true, ticket: true, lead: true, approval: true, leave: true, expense: true },
+      channels: { db: true, socket: true, push: true, email: false },
+      quietHoursStart: null, quietHoursEnd: null, timezone: null,
+    });
+    prisma.user.findUnique.mockResolvedValue({ email: 'a@b.com' });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', channels: ['db', 'email'] });
+    expect(prisma.notification.create).toHaveBeenCalled(); // DB still works
+    expect(global.fetch).not.toHaveBeenCalled(); // email filtered out
+    logSpy.mockRestore();
+  });
+
+  test('no prefs row + DEFAULT_PREFERENCES applied (email is opt-in, defaults to disabled)', async () => {
+    // SUT line 26-27: DEFAULT_PREFERENCES.channels.email = false, push = false.
+    // When prisma returns null (no row), the helper falls back to defaults and
+    // caller's `channels: ['db','email']` gets email filtered out.
+    prisma.notificationPreference.findUnique.mockResolvedValueOnce(null);
+    prisma.user.findUnique.mockResolvedValue({ email: 'a@b.com' });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', type: 'deal', channels: ['db', 'email'] });
+    expect(prisma.notification.create).toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
+  test('prefs query failure falls back to DEFAULT_PREFERENCES (no throw)', async () => {
+    // .catch(() => null) at line 144 — DB error during prefs lookup must NOT
+    // bring down the whole notification. Falls back to defaults.
+    prisma.notificationPreference.findUnique.mockRejectedValueOnce(new Error('prefs query timeout'));
+    const out = await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', type: 'deal' });
+    expect(out).toEqual(NOTIF_ROW);
+    expect(prisma.notification.create).toHaveBeenCalled();
+  });
+});
+
+describe('lib/notificationService — notify: deduplication', () => {
+  test('returns null when dup found within window (entityId + entityType)', async () => {
+    prisma.notification.findFirst.mockResolvedValueOnce({ id: 42, type: 'lead' });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const out = await notify({
+      userId: 1, tenantId: 1, title: 'T', message: 'M',
+      type: 'lead', entityType: 'lead', entityId: 99,
+    });
+    expect(out).toBeNull();
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+    expect(prisma.notification.findFirst).toHaveBeenCalled();
+    const arg = prisma.notification.findFirst.mock.calls[0][0];
+    expect(arg.where.userId).toBe(1);
+    expect(arg.where.tenantId).toBe(1);
+    expect(arg.where.entityId).toBe(99);
+    expect(arg.where.entityType).toBe('lead');
+    logSpy.mockRestore();
+  });
+
+  test('no dup found → proceeds to create', async () => {
+    prisma.notification.findFirst.mockResolvedValueOnce(null);
+    const out = await notify({
+      userId: 1, tenantId: 1, title: 'T', message: 'M',
+      type: 'lead', entityType: 'lead', entityId: 99,
+    });
+    expect(out).toEqual(NOTIF_ROW);
+    expect(prisma.notification.create).toHaveBeenCalled();
+  });
+
+  test('skips dedup query when entityId or entityType missing', async () => {
+    // entityId without entityType → no findFirst call (both required at line 178).
+    await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', entityId: 99 });
+    expect(prisma.notification.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('dedup window default is 24h (windowStart ≈ now - 24h)', async () => {
+    prisma.notification.findFirst.mockResolvedValueOnce(null);
+    const before = Date.now();
+    await notify({
+      userId: 1, tenantId: 1, title: 'T', message: 'M',
+      type: 'lead', entityType: 'lead', entityId: 99,
+    });
+    const arg = prisma.notification.findFirst.mock.calls[0][0];
+    const windowStart = arg.where.createdAt.gte;
+    const expectedMin = before - 24 * 60 * 60 * 1000 - 100;
+    const expectedMax = Date.now() - 24 * 60 * 60 * 1000 + 100;
+    expect(windowStart.getTime()).toBeGreaterThanOrEqual(expectedMin);
+    expect(windowStart.getTime()).toBeLessThanOrEqual(expectedMax);
+  });
+
+  test('custom dedupWindowHours threads through', async () => {
+    prisma.notification.findFirst.mockResolvedValueOnce(null);
+    const before = Date.now();
+    await notify({
+      userId: 1, tenantId: 1, title: 'T', message: 'M',
+      type: 'lead', entityType: 'lead', entityId: 99, dedupWindowHours: 1,
+    });
+    const arg = prisma.notification.findFirst.mock.calls[0][0];
+    const windowStart = arg.where.createdAt.gte;
+    // ~1 hour ago, not 24
+    const oneHourAgo = before - 60 * 60 * 1000;
+    expect(windowStart.getTime()).toBeGreaterThanOrEqual(oneHourAgo - 100);
+    expect(windowStart.getTime()).toBeLessThanOrEqual(Date.now() - 60 * 60 * 1000 + 100);
+  });
+});
+
+describe('lib/notificationService — notify: priority + entity fields', () => {
+  test('default priority is "normal"', async () => {
+    await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M' });
+    expect(prisma.notification.create.mock.calls[0][0].data.priority).toBe('normal');
+  });
+
+  test('explicit priority overrides default', async () => {
+    await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', priority: 'critical' });
+    expect(prisma.notification.create.mock.calls[0][0].data.priority).toBe('critical');
+  });
+
+  test('entityType + entityId persisted to row when no dup', async () => {
+    prisma.notification.findFirst.mockResolvedValueOnce(null);
+    await notify({
+      userId: 1, tenantId: 1, title: 'T', message: 'M',
+      entityType: 'ticket', entityId: 7,
+    });
+    const data = prisma.notification.create.mock.calls[0][0].data;
+    expect(data.entityType).toBe('ticket');
+    expect(data.entityId).toBe(7);
+  });
+
+  test('entityType/entityId default to null when not provided', async () => {
+    await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M' });
+    const data = prisma.notification.create.mock.calls[0][0].data;
+    expect(data.entityType).toBeNull();
+    expect(data.entityId).toBeNull();
+  });
+
+  test('isRead defaults to false on create', async () => {
+    await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M' });
+    const data = prisma.notification.create.mock.calls[0][0].data;
+    expect(data.isRead).toBe(false);
+  });
+});
+
+describe('lib/notificationService — notifyMany: extended', () => {
+  test('partial failure: middle userId rejects → Promise rejects (for-of awaits sequentially)', async () => {
+    // The SUT uses `for...of` + `await notify(...)`. A rejected notify() will
+    // propagate as a rejection of notifyMany. Pin this contract: callers must
+    // assume "all-or-nothing within the iteration"; users after the failing
+    // one are NOT notified.
+    prisma.notification.create
+      .mockResolvedValueOnce({ id: 1 })
+      .mockRejectedValueOnce(new Error('db hiccup'))
+      .mockResolvedValueOnce({ id: 3 });
+    await expect(
+      notifyMany({ userIds: [1, 2, 3], tenantId: 9, title: 'T', message: 'M' })
+    ).rejects.toThrow('db hiccup');
+    // Third user must NOT have been called (loop bailed at user 2's reject).
+    expect(prisma.notification.create).toHaveBeenCalledTimes(2);
+  });
+
+  test('return ordering matches input userIds order', async () => {
+    prisma.notification.create
+      .mockResolvedValueOnce({ id: 10 })
+      .mockResolvedValueOnce({ id: 20 })
+      .mockResolvedValueOnce({ id: 30 });
+    const out = await notifyMany({ userIds: [10, 20, 30], tenantId: 9, title: 'T', message: 'M' });
+    expect(out.map((r) => r.id)).toEqual([10, 20, 30]);
+  });
+
+  test('threads link parameter into every per-user notify', async () => {
+    await notifyMany({ userIds: [1, 2], tenantId: 9, title: 'T', message: 'M', link: '/deals/5' });
+    const calls = prisma.notification.create.mock.calls;
+    expect(calls[0][0].data.link).toBe('/deals/5');
+    expect(calls[1][0].data.link).toBe('/deals/5');
+  });
+
+  test('threads type parameter into every per-user notify', async () => {
+    await notifyMany({ userIds: [1, 2], tenantId: 9, title: 'T', message: 'M', type: 'warning' });
+    const calls = prisma.notification.create.mock.calls;
+    expect(calls[0][0].data.type).toBe('warning');
+    expect(calls[1][0].data.type).toBe('warning');
+  });
+
+  test('returns null in array for users where prefs blocked the notification', async () => {
+    // First user has category disabled, second is unblocked.
+    prisma.notificationPreference.findUnique
+      .mockResolvedValueOnce({
+        userId: 1, tenantId: 9,
+        categoryToggles: { info: false, deal: true, task: true, ticket: true, lead: true, approval: true, leave: true, expense: true },
+        channels: { db: true, socket: true, push: true, email: true },
+        quietHoursStart: null, quietHoursEnd: null, timezone: null,
+      })
+      .mockResolvedValueOnce({
+        userId: 2, tenantId: 9,
+        categoryToggles: { info: true, deal: true, task: true, ticket: true, lead: true, approval: true, leave: true, expense: true },
+        channels: { db: true, socket: true, push: true, email: true },
+        quietHoursStart: null, quietHoursEnd: null, timezone: null,
+      });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const out = await notifyMany({ userIds: [1, 2], tenantId: 9, title: 'T', message: 'M', type: 'info' });
+    expect(out).toHaveLength(2);
+    expect(out[0]).toBeNull();
+    expect(out[1]).toEqual(NOTIF_ROW);
+    logSpy.mockRestore();
+  });
+});
+
+describe('lib/notificationService — resolve', () => {
+  test('marks notification as read + sets readAt', async () => {
+    const updated = { id: 5, isRead: true, readAt: new Date() };
+    prisma.notification.update.mockResolvedValueOnce(updated);
+    const out = await resolve(5, 9);
+    expect(prisma.notification.update).toHaveBeenCalled();
+    const arg = prisma.notification.update.mock.calls[0][0];
+    expect(arg.where).toEqual({ id: 5, tenantId: 9 });
+    expect(arg.data.isRead).toBe(true);
+    expect(arg.data.readAt).toBeInstanceOf(Date);
+    expect(out).toEqual(updated);
+  });
+
+  test('returns null + swallows update errors', async () => {
+    prisma.notification.update.mockRejectedValueOnce(new Error('record not found'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const out = await resolve(999, 9);
+    expect(out).toBeNull();
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  test('scopes update by tenantId (cross-tenant guard)', async () => {
+    prisma.notification.update.mockResolvedValueOnce({ id: 5 });
+    await resolve(5, 42);
+    const arg = prisma.notification.update.mock.calls[0][0];
+    expect(arg.where.tenantId).toBe(42);
   });
 });

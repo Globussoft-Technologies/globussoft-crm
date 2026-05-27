@@ -447,3 +447,328 @@ describe('Leads — vertical-aware form schema (#600)', () => {
     expect(linkedinOpt).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Additional coverage — list-side surface (search, score badge, bulk selection,
+// per-row assign, Convert, drawer close paths). Existing tests above already
+// pin the Create-Lead form hardening and vertical schema. This block targets
+// what the table + bulk bar + drawer-dismiss flows actually do, which is the
+// majority of Leads.jsx's runtime surface (lines 275-522). All cases use
+// stable mock object references for hooks (per the RTL standing rule) and
+// the same `fetchApiMock` + `notify*` mocks the earlier suites share.
+// ---------------------------------------------------------------------------
+
+// A small canned-leads fixture covering the 3 score bands the badge uses
+// (>75 success, >40 warning, ≤40 error) plus an assignedToId for the
+// per-row assign-dropdown rendering test.
+const SAMPLE_LEADS = [
+  { id: 11, name: 'Alice Smith', email: 'alice@acme.test', company: 'Acme Corp', aiScore: 88, source: 'Organic', assignedToId: null, createdAt: '2026-05-01T10:00:00Z' },
+  { id: 12, name: 'Bob Jones',   email: 'bob@globex.test', company: 'Globex',    aiScore: 55, source: 'Referral', assignedToId: 7, createdAt: '2026-05-02T10:00:00Z' },
+  { id: 13, name: 'Carol Diaz',  email: 'carol@initech.test', company: 'Initech', aiScore: 20, source: 'Website', assignedToId: null, createdAt: '2026-05-03T10:00:00Z' },
+];
+const SAMPLE_STAFF = [
+  { id: 7,  name: 'Sales Rep One',  email: 'rep1@crm.test' },
+  { id: 8,  name: 'Sales Rep Two',  email: 'rep2@crm.test' },
+];
+
+function leadsFetchMock(url, opts) {
+  // GET /api/contacts?status=Lead → seeded list
+  if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+    return Promise.resolve(SAMPLE_LEADS);
+  }
+  if (url === '/api/staff' && !opts) {
+    return Promise.resolve(SAMPLE_STAFF);
+  }
+  // PUT /api/contacts/:id (convert), PUT /api/contacts/:id/assign, PUT bulk-assign,
+  // POST /api/contacts — all return a benign stub. The component re-fetches
+  // after each, which falls through to the GETs above.
+  if (opts?.method === 'PUT' || opts?.method === 'POST') {
+    return Promise.resolve({ ok: true });
+  }
+  return Promise.resolve([]);
+}
+
+describe('Leads — table, search, bulk operations, row actions, drawer dismiss', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(leadsFetchMock);
+    notifyError.mockReset();
+    notifyInfo.mockReset();
+    notifySuccess.mockReset();
+  });
+
+  it('renders seeded leads with name + email + company + lead-score badge', async () => {
+    renderLeads();
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    // All three names rendered
+    expect(screen.getByText('Bob Jones')).toBeInTheDocument();
+    expect(screen.getByText('Carol Diaz')).toBeInTheDocument();
+
+    // Email + company cells rendered
+    expect(screen.getByText('alice@acme.test')).toBeInTheDocument();
+    expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+
+    // Lead Score badge text — `${aiScore}/100` rendered per row
+    expect(screen.getByText('88/100')).toBeInTheDocument();
+    expect(screen.getByText('55/100')).toBeInTheDocument();
+    expect(screen.getByText('20/100')).toBeInTheDocument();
+
+    // Header counter — "3 leads in pipeline"
+    expect(screen.getByText(/3 leads in pipeline/)).toBeInTheDocument();
+  });
+
+  it('filters the row list by search term against name / email / company', async () => {
+    renderLeads();
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    const searchInput = screen.getByPlaceholderText('Search leads...');
+
+    // Filter by company substring → only Globex's Bob remains
+    fireEvent.change(searchInput, { target: { value: 'globex' } });
+    await waitFor(() => {
+      expect(screen.queryByText('Alice Smith')).toBeNull();
+      expect(screen.getByText('Bob Jones')).toBeInTheDocument();
+      expect(screen.queryByText('Carol Diaz')).toBeNull();
+    });
+
+    // Filter by email substring → only Carol
+    fireEvent.change(searchInput, { target: { value: 'initech.test' } });
+    await waitFor(() => {
+      expect(screen.queryByText('Alice Smith')).toBeNull();
+      expect(screen.queryByText('Bob Jones')).toBeNull();
+      expect(screen.getByText('Carol Diaz')).toBeInTheDocument();
+    });
+
+    // Clear → all three back
+    fireEvent.change(searchInput, { target: { value: '' } });
+    await waitFor(() => {
+      expect(screen.getByText('Alice Smith')).toBeInTheDocument();
+      expect(screen.getByText('Bob Jones')).toBeInTheDocument();
+      expect(screen.getByText('Carol Diaz')).toBeInTheDocument();
+    });
+  });
+
+  it('Convert button PUTs /api/contacts/:id with status="Prospect" (#283)', async () => {
+    renderLeads();
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    // Multiple Convert buttons (one per row). Click the first one.
+    const convertButtons = screen.getAllByRole('button', { name: /Convert/i });
+    expect(convertButtons.length).toBe(3);
+    fireEvent.click(convertButtons[0]);
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => typeof url === 'string' && url.startsWith('/api/contacts/') && opts?.method === 'PUT' && !url.includes('/assign'),
+      );
+      expect(putCall).toBeDefined();
+      const body = JSON.parse(putCall[1].body);
+      // Per #283 — Convert advances ONE step (Lead → Prospect), not jumps to Customer
+      expect(body.status).toBe('Prospect');
+    });
+  });
+
+  it('per-row assign dropdown PUTs /api/contacts/:id/assign with the selected staff id', async () => {
+    renderLeads();
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    // Three rows = three assign selects. The middle one is pre-assigned to 7;
+    // the first row (Alice) is unassigned. Pick Alice's select.
+    const allSelects = screen.getAllByRole('combobox');
+    // Filter to the per-row Assigned-To selects (they contain "Unassigned").
+    const assignSelects = allSelects.filter(el =>
+      Array.from(el.querySelectorAll('option')).some(o => o.textContent === 'Unassigned'),
+    );
+    expect(assignSelects.length).toBeGreaterThanOrEqual(3);
+
+    fireEvent.change(assignSelects[0], { target: { value: '7' } });
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => typeof url === 'string' && url.endsWith('/assign') && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.assignedToId).toBe('7');
+    });
+  });
+
+  it('row checkbox selection reveals the bulk-assign bar; Clear hides it (#334)', async () => {
+    renderLeads();
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    // Bulk bar is not yet rendered (nothing selected).
+    expect(screen.queryByText(/lead.*selected/i)).toBeNull();
+
+    // Tick the first row's checkbox (the first checkbox is the header
+    // select-all; pick a body row checkbox).
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes.length).toBe(4); // 1 header + 3 rows
+    fireEvent.click(checkboxes[1]); // Alice
+
+    await waitFor(() => {
+      expect(screen.getByText(/1 lead selected/i)).toBeInTheDocument();
+    });
+
+    // Clear button drops selection + hides the bar.
+    fireEvent.click(screen.getByRole('button', { name: /^Clear$/i }));
+    await waitFor(() => {
+      expect(screen.queryByText(/lead.*selected/i)).toBeNull();
+    });
+  });
+
+  it('bulk-assign Assign button PUTs /api/contacts/bulk-assign with selected contactIds', async () => {
+    renderLeads();
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    // Select two body rows
+    const checkboxes = screen.getAllByRole('checkbox');
+    fireEvent.click(checkboxes[1]); // Alice (id=11)
+    fireEvent.click(checkboxes[2]); // Bob (id=12)
+
+    await waitFor(() => {
+      expect(screen.getByText(/2 leads selected/i)).toBeInTheDocument();
+    });
+
+    // The bulk-assign bar has its own dropdown. Find it by its "Unassign"
+    // first option (the per-row dropdowns start with "Unassigned" — note
+    // the trailing 'ed'; the bulk dropdown reads "Unassign" without it).
+    const allSelects = screen.getAllByRole('combobox');
+    const bulkSelect = allSelects.find(el =>
+      Array.from(el.querySelectorAll('option')).some(o => o.textContent === 'Unassign'),
+    );
+    expect(bulkSelect).toBeDefined();
+    fireEvent.change(bulkSelect, { target: { value: '8' } });
+
+    // Click the bulk-bar Assign button (distinguish from per-row Convert).
+    const assignBtn = screen.getByRole('button', { name: /^Assign$/i });
+    fireEvent.click(assignBtn);
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/bulk-assign' && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.contactIds).toEqual([11, 12]);
+      expect(body.assignedToId).toBe('8');
+    });
+
+    // After bulk-assign, selection is cleared and the bar collapses.
+    await waitFor(() => {
+      expect(screen.queryByText(/leads? selected/i)).toBeNull();
+    });
+  });
+
+  it('header select-all toggles every visible row; clicking again deselects', async () => {
+    renderLeads();
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    const headerCheckbox = checkboxes[0];
+
+    // Initially nothing selected
+    expect(headerCheckbox.checked).toBe(false);
+
+    fireEvent.click(headerCheckbox);
+    await waitFor(() => {
+      // The "3 leads selected" bar should appear
+      expect(screen.getByText(/3 leads selected/i)).toBeInTheDocument();
+    });
+
+    // Click again → deselect all
+    const refreshed = screen.getAllByRole('checkbox');
+    fireEvent.click(refreshed[0]);
+    await waitFor(() => {
+      expect(screen.queryByText(/lead.*selected/i)).toBeNull();
+    });
+  });
+
+  it('Escape key closes the Create Lead drawer (#892)', async () => {
+    renderLeads();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+    expect(screen.getByPlaceholderText('Full Name')).toBeInTheDocument();
+
+    // ESC keypress fires window keydown listener → drawer unmounts.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText('Full Name')).toBeNull();
+    });
+  });
+
+  it('Cancel button inside the drawer dismisses it without POSTing', async () => {
+    renderLeads();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    fetchApiMock.mockClear();
+    openDrawer();
+
+    // Typing in a field then hitting Cancel must NOT trigger a POST.
+    fillForm({ name: 'Mistake', email: 'oops@example.com' });
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText('Full Name')).toBeNull();
+    });
+    const postCall = fetchApiMock.mock.calls.find(([, opts]) => opts?.method === 'POST');
+    expect(postCall).toBeUndefined();
+  });
+
+  it('empty list state renders "No leads found" placeholder', async () => {
+    // Override the GET to return an empty list.
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        return Promise.resolve([]);
+      }
+      if (url === '/api/staff' && !opts) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    renderLeads();
+    await waitFor(() => {
+      expect(screen.getByText(/No leads found/i)).toBeInTheDocument();
+    });
+    // Header counter reflects empty: "0 leads in pipeline"
+    expect(screen.getByText(/0 leads in pipeline/)).toBeInTheDocument();
+  });
+
+  it('wellness tenant fetches /api/wellness/services and /api/wellness/locations on mount', async () => {
+    const wellnessAuth = {
+      tenant: { id: 2, vertical: 'wellness', name: 'Enhanced Wellness' },
+      user: { id: 1, role: 'ADMIN' },
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) return Promise.resolve([]);
+      if (url === '/api/staff' && !opts) return Promise.resolve([]);
+      if (url === '/api/wellness/services' && !opts) return Promise.resolve([{ id: 1, name: 'Botox' }]);
+      if (url === '/api/wellness/locations' && !opts) return Promise.resolve([{ id: 1, name: 'Main Clinic' }]);
+      return Promise.resolve([]);
+    });
+
+    renderLeads(wellnessAuth);
+
+    await waitFor(() => {
+      const urls = fetchApiMock.mock.calls.map(c => c[0]);
+      expect(urls).toContain('/api/wellness/services');
+      expect(urls).toContain('/api/wellness/locations');
+    });
+  });
+
+  it('generic tenant does NOT fetch wellness-only endpoints on mount', async () => {
+    const genericAuth = {
+      tenant: { id: 1, vertical: 'generic', name: 'Globussoft CRM' },
+      user: { id: 1, role: 'ADMIN' },
+    };
+    renderLeads(genericAuth);
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    // Give effects a tick to settle; ensure wellness URLs were never requested.
+    const urls = fetchApiMock.mock.calls.map(c => c[0]);
+    expect(urls).not.toContain('/api/wellness/services');
+    expect(urls).not.toContain('/api/wellness/locations');
+  });
+});

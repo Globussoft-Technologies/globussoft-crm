@@ -209,4 +209,127 @@ describe('externalAuth', () => {
     });
     errSpy.mockRestore();
   });
+
+  // -------------------------------------------------------------------------
+  // Extension wave (+6 cases): whitespace handling, hex-too-short malformation,
+  // case-insensitive hex acceptance, prisma query shape, sub-brand helper
+  // wiring (null vs set), and the requireSubBrandMatchOrSend 403 surface.
+  // -------------------------------------------------------------------------
+
+  test('whitespace-only X-API-Key trims to empty and returns 401 missing', async () => {
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': '   \t  ' },
+    });
+    await externalAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Missing X-API-Key header',
+    });
+    expect(next).not.toHaveBeenCalled();
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 malformed when hex segment is shorter than 32 chars', async () => {
+    // Per regex /^glbs_[a-f0-9]{32,}$/i — 31 hex chars fails.
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': 'glbs_' + 'a'.repeat(31) },
+    });
+    await externalAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Malformed API key' });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('accepts uppercase hex characters in the key (case-insensitive regex)', async () => {
+    const upperKey = 'glbs_' + 'A'.repeat(32);
+    findUniqueMock.mockResolvedValueOnce({
+      id: 50,
+      tenantId: 3,
+      userId: 9,
+      keySecret: upperKey,
+      tenant: { id: 3, isActive: true },
+    });
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': upperKey },
+    });
+    await externalAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+    expect(findUniqueMock).toHaveBeenCalledWith({
+      where: { keySecret: upperKey },
+      include: { tenant: true },
+    });
+  });
+
+  test('trims surrounding whitespace before lookup (token passed without padding)', async () => {
+    const cleanKey = 'glbs_' + '7'.repeat(32);
+    findUniqueMock.mockResolvedValueOnce({
+      id: 71,
+      tenantId: 8,
+      userId: 12,
+      keySecret: cleanKey,
+      tenant: { id: 8, isActive: true },
+    });
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': `   ${cleanKey}  \t` },
+    });
+    await externalAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    // Confirm the trimmed token (not the padded form) was used in the DB lookup.
+    expect(findUniqueMock).toHaveBeenCalledWith({
+      where: { keySecret: cleanKey },
+      include: { tenant: true },
+    });
+  });
+
+  test('tenant-wide key (subBrand=null) installs req.apiKeySubBrand=null and requireSubBrandMatch passes any target', async () => {
+    findUniqueMock.mockResolvedValueOnce({
+      id: 200,
+      tenantId: 4,
+      userId: 1,
+      subBrand: null,
+      tenant: { id: 4, isActive: true },
+    });
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': 'glbs_' + '3'.repeat(32) },
+    });
+    await externalAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.apiKeySubBrand).toBeNull();
+    // A tenant-wide key should accept any sub-brand target.
+    expect(typeof req.requireSubBrandMatch).toBe('function');
+    expect(req.requireSubBrandMatch('rfu')).toBe(true);
+    expect(req.requireSubBrandMatch('tmc')).toBe(true);
+  });
+
+  test('scoped key (subBrand=rfu) installs helper that 403s via requireSubBrandMatchOrSend on mismatch', async () => {
+    findUniqueMock.mockResolvedValueOnce({
+      id: 201,
+      tenantId: 4,
+      userId: 1,
+      subBrand: 'rfu',
+      tenant: { id: 4, isActive: true },
+    });
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': 'glbs_' + '4'.repeat(32) },
+    });
+    await externalAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.apiKeySubBrand).toBe('rfu');
+    // Match path: returns true.
+    expect(req.requireSubBrandMatch('rfu')).toBe(true);
+    // Mismatch path through the *OrSend variant: writes 403 SUB_BRAND_MISMATCH and returns false.
+    const fakeRes = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn().mockReturnThis(),
+    };
+    const ok = req.requireSubBrandMatchOrSend('tmc', fakeRes);
+    expect(ok).toBe(false);
+    expect(fakeRes.status).toHaveBeenCalledWith(403);
+    expect(fakeRes.json).toHaveBeenCalledWith({
+      error: "API key scoped to 'rfu' cannot post for sub-brand 'tmc'",
+      code: 'SUB_BRAND_MISMATCH',
+    });
+  });
 });

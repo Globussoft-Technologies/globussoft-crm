@@ -192,6 +192,134 @@ describe('GET /api/currencies', () => {
   });
 });
 
+// ─── GET /api/currencies?fields=summary — slim-shape opt-in (#920 slice 46) ─
+
+describe('GET /api/currencies?fields=summary', () => {
+  test('passes a slim Prisma select when ?fields=summary is set', async () => {
+    prisma.currency.findMany.mockResolvedValue([
+      { id: 1, code: 'USD', symbol: '$', name: 'US Dollar', exchangeRate: 1.0, isBase: true, tenantId: 1 },
+      { id: 2, code: 'EUR', symbol: '€', name: 'Euro', exchangeRate: 0.92, isBase: false, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/currencies?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const args = prisma.currency.findMany.mock.calls[0][0];
+    // The slim select MUST drop heavier metadata (createdAt / updatedAt).
+    expect(args.select).toEqual({
+      id: true,
+      code: true,
+      symbol: true,
+      name: true,
+      exchangeRate: true,
+      isBase: true,
+      tenantId: true,
+    });
+    // Tenant scope + ordering unchanged.
+    expect(args.where).toEqual({ tenantId: 1 });
+    expect(args.orderBy).toEqual([{ isBase: 'desc' }, { code: 'asc' }]);
+    // Rows ship as-is (the route trusts Prisma's projection).
+    expect(res.body[0].code).toBe('USD');
+    expect(res.body[1].code).toBe('EUR');
+  });
+
+  test('omits select entirely on the default (full-shape) call path', async () => {
+    prisma.currency.findMany.mockResolvedValue([
+      { id: 1, code: 'USD', symbol: '$', name: 'US Dollar', exchangeRate: 1.0, isBase: true, tenantId: 1, createdAt: new Date(), updatedAt: new Date() },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/currencies')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const args = prisma.currency.findMany.mock.calls[0][0];
+    // No `select` key means Prisma returns the full row — back-compat
+    // contract for every existing caller.
+    expect(args.select).toBeUndefined();
+  });
+
+  test('non-exact ?fields values fall through to the full-shape path (strict opt-in)', async () => {
+    prisma.currency.findMany.mockResolvedValue([
+      { id: 1, code: 'USD', symbol: '$', name: 'US Dollar', exchangeRate: 1.0, isBase: true, tenantId: 1 },
+    ]);
+
+    // ?fields=SUMMARY (uppercase), ?fields=summ, ?fields=full — all NON-matches.
+    for (const variant of ['SUMMARY', 'summ', 'full', 'all']) {
+      prisma.currency.findMany.mockClear();
+      const res = await request(makeApp())
+        .get(`/api/currencies?fields=${variant}`)
+        .set('Authorization', `Bearer ${tokenFor('USER')}`);
+      expect(res.status).toBe(200);
+      const args = prisma.currency.findMany.mock.calls[0][0];
+      expect(args.select).toBeUndefined();
+    }
+  });
+
+  test('DEFAULTS fallback also honours ?fields=summary (slim keyset, no createdAt/updatedAt)', async () => {
+    prisma.currency.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/currencies?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(6);
+    // Each DEFAULT row must be projected to the slim keyset — exactly
+    // the same shape as a persisted slim row, so callers can render
+    // uniformly without branching on "is this synth?".
+    for (const row of res.body) {
+      expect(Object.keys(row).sort()).toEqual(
+        ['code', 'exchangeRate', 'id', 'isBase', 'name', 'symbol', 'tenantId'].sort(),
+      );
+      expect(row.id).toBeLessThan(0); // pseudo-id contract still held
+      expect(row.tenantId).toBe(1);
+    }
+    const codes = res.body.map((r) => r.code);
+    expect(codes).toEqual(['USD', 'INR', 'EUR', 'GBP', 'CAD', 'AUD']);
+  });
+
+  test('DEFAULTS fallback WITHOUT ?fields=summary keeps full DEFAULTS shape', async () => {
+    prisma.currency.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/currencies')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(6);
+    // Full DEFAULTS shape includes the spread of d (code, symbol, name,
+    // exchangeRate, isBase) plus id + tenantId — no createdAt/updatedAt
+    // because DEFAULTS are synthesised, but the shape contract is the
+    // SAME as the legacy pre-opt-in row.
+    const usd = res.body.find((r) => r.code === 'USD');
+    expect(usd).toMatchObject({
+      code: 'USD',
+      symbol: '$',
+      name: 'US Dollar',
+      exchangeRate: 1.0,
+      isBase: true,
+      tenantId: 1,
+    });
+    expect(usd.id).toBe(-1);
+  });
+
+  test('tenant scope applies to ?fields=summary (slim select does not leak across tenants)', async () => {
+    prisma.currency.findMany.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/currencies?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor('USER', { tenantId: 42 })}`);
+
+    const args = prisma.currency.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 42 });
+    expect(args.select).toBeTruthy(); // slim path was taken
+    expect(args.select.id).toBe(true);
+  });
+});
+
 // ─── POST /api/currencies — create + base demotion + 409 dedup ───────
 
 describe('POST /api/currencies', () => {

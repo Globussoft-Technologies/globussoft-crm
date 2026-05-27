@@ -503,4 +503,340 @@ describe('<SLA /> — page surface', () => {
       ]));
     });
   });
+
+  // ── Extension cases: policy CRUD beyond Create, canned validation,
+  // breach severity, stat-card rendering, error paths ─────────────────────
+
+  it('Edit policy: pre-fills modal with row values and PUTs /api/sla/policies/:id', async () => {
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    // Find the Edit button on row 1 (Urgent Standard). Walk to <tr> ancestor.
+    const row1Name = screen.getByText('Urgent Standard');
+    const tr = row1Name.closest('tr');
+    expect(tr).toBeTruthy();
+    const rowButtons = tr.querySelectorAll('button');
+    // Two icon buttons in the row: [0] Edit, [1] Delete.
+    expect(rowButtons.length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(rowButtons[0]);
+
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /Edit SLA Policy/i })).toBeInTheDocument()
+    );
+    // Save label changes from "Create Policy" to "Save Changes" in edit mode.
+    expect(screen.getByRole('button', { name: /Save Changes/i })).toBeInTheDocument();
+    // Name input pre-filled.
+    const nameInputs = screen.getAllByRole('textbox');
+    expect(nameInputs[0].value).toBe('Urgent Standard');
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sla/policies/1' && opts?.method === 'PUT') {
+        return Promise.resolve({ id: 1 });
+      }
+      return defaultFetchImpl(url);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/sla/policies/1' && opts?.method === 'PUT'
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.name).toBe('Urgent Standard');
+      expect(body.priority).toBe('Urgent');
+      expect(body.responseMinutes).toBe(15);
+      expect(body.resolveMinutes).toBe(240);
+    });
+  });
+
+  it('Toggle policy active: clicking checkbox PUTs /api/sla/policies/:id with {isActive: !current}', async () => {
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    // Row 2 "Medium Business" is currently inactive (isActive=false).
+    const row2Name = screen.getByText('Medium Business');
+    const tr = row2Name.closest('tr');
+    const cb = tr.querySelector('input[type="checkbox"]');
+    expect(cb).toBeTruthy();
+    expect(cb.checked).toBe(false);
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sla/policies/2' && opts?.method === 'PUT') {
+        return Promise.resolve({ id: 2 });
+      }
+      return defaultFetchImpl(url);
+    });
+
+    fireEvent.click(cb);
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/sla/policies/2' && opts?.method === 'PUT'
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.isActive).toBe(true);
+    });
+  });
+
+  it('Delete policy: notify.confirm true → DELETE /api/sla/policies/:id', async () => {
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    const row1Name = screen.getByText('Urgent Standard');
+    const tr = row1Name.closest('tr');
+    const rowButtons = tr.querySelectorAll('button');
+    const deleteBtn = rowButtons[1];
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sla/policies/1' && opts?.method === 'DELETE') {
+        return Promise.resolve({ ok: true });
+      }
+      return defaultFetchImpl(url);
+    });
+    notifyConfirm.mockImplementation(() => Promise.resolve(true));
+
+    fireEvent.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalledWith(
+        expect.stringMatching(/Delete policy "Urgent Standard"\?/)
+      );
+    });
+    await waitFor(() => {
+      const delCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/sla/policies/1' && opts?.method === 'DELETE'
+      );
+      expect(delCall).toBeTruthy();
+    });
+  });
+
+  it('Delete policy: notify.confirm false → NO DELETE request fired', async () => {
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    const row1Name = screen.getByText('Urgent Standard');
+    const tr = row1Name.closest('tr');
+    const rowButtons = tr.querySelectorAll('button');
+    const deleteBtn = rowButtons[1];
+
+    fetchApiMock.mockClear();
+    notifyConfirm.mockImplementation(() => Promise.resolve(false));
+
+    fireEvent.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalled();
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    const delCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === '/api/sla/policies/1' && opts?.method === 'DELETE'
+    );
+    expect(delCall).toBeFalsy();
+  });
+
+  it('Apply-to-Tickets failure: surfaces notify.error when /api/sla/apply-all rejects', async () => {
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sla/apply-all' && opts?.method === 'POST') {
+        return Promise.reject(new Error('Apply backend offline'));
+      }
+      return defaultFetchImpl(url);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Apply to Tickets/i }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Apply backend offline|Apply-all failed/i)
+      );
+    });
+    expect(notifySuccess).not.toHaveBeenCalled();
+  });
+
+  it('Canned tab: empty-state copy renders when /api/canned-responses returns []', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/canned-responses') return Promise.resolve([]);
+      return defaultFetchImpl(url);
+    });
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    const cannedTabs = screen.getAllByRole('button').filter((b) =>
+      /Canned Responses/.test(b.textContent)
+    );
+    fireEvent.click(cannedTabs[0]);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No canned responses yet\. Create reusable reply templates\./i)
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('Canned modal: name + content required — empty submission blocks POST + surfaces error', async () => {
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    const cannedTabs = screen.getAllByRole('button').filter((b) =>
+      /Canned Responses/.test(b.textContent)
+    );
+    fireEvent.click(cannedTabs[0]);
+    await waitFor(() => expect(screen.getByText('Apology for delay')).toBeInTheDocument());
+
+    // Open "New" canned modal (button label is exactly "New").
+    const newCannedBtn = screen
+      .getAllByRole('button')
+      .find((b) => b.textContent.trim() === 'New');
+    expect(newCannedBtn).toBeTruthy();
+    fireEvent.click(newCannedBtn);
+
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /New Canned Response/i })).toBeInTheDocument()
+    );
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Create$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Name and content are required/i)).toBeInTheDocument();
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === '/api/canned-responses' && opts?.method === 'POST'
+    );
+    expect(postCall).toBeFalsy();
+  });
+
+  it('Canned: create happy path POSTs /api/canned-responses with form body', async () => {
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    const cannedTabs = screen.getAllByRole('button').filter((b) =>
+      /Canned Responses/.test(b.textContent)
+    );
+    fireEvent.click(cannedTabs[0]);
+    await waitFor(() => expect(screen.getByText('Apology for delay')).toBeInTheDocument());
+
+    const newCannedBtn = screen
+      .getAllByRole('button')
+      .find((b) => b.textContent.trim() === 'New');
+    fireEvent.click(newCannedBtn);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /New Canned Response/i })).toBeInTheDocument()
+    );
+
+    // Modal inputs: [0]=name, [1]=category, [2]=content (textarea).
+    const textInputs = screen.getAllByRole('textbox');
+    fireEvent.change(textInputs[0], { target: { value: 'Greeting Hindi' } });
+    fireEvent.change(textInputs[2], { target: { value: 'Namaste {{contact.name}}, kaise hain aap?' } });
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/canned-responses' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 99 });
+      }
+      return defaultFetchImpl(url);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Create$/i }));
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/canned-responses' && opts?.method === 'POST'
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.name).toBe('Greeting Hindi');
+      expect(body.content).toMatch(/Namaste \{\{contact\.name\}\}/);
+      expect(body.category).toBe('General');
+    });
+  });
+
+  it('Stat cards render values from /api/sla/stats — activePolicies + breachesToday + formatted minutes', async () => {
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    // sampleStats.activePolicies = 3, breachesToday = 4.
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('4')).toBeInTheDocument();
+    // avgResponseMinutes=42 → "42m"; avgResolveMinutes=480 → "8h 0m".
+    expect(screen.getByText('42m')).toBeInTheDocument();
+    expect(screen.getByText('8h 0m')).toBeInTheDocument();
+    // 4 stat-card labels.
+    expect(screen.getAllByText(/Active Policies/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Breaches Today/i)).toBeInTheDocument();
+    expect(screen.getByText(/Avg Response/i)).toBeInTheDocument();
+    expect(screen.getByText(/Avg Resolve/i)).toBeInTheDocument();
+  });
+
+  it('Tab badge counts mirror policies/breaches/canned array lengths', async () => {
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    const policiesTab = screen
+      .getAllByRole('button')
+      .find((b) => /^Policies\s*\d+$/.test(b.textContent.replace(/\s+/g, ' ').trim()));
+    const breachesTab = screen
+      .getAllByRole('button')
+      .find((b) => /^Breaches\s*\d+$/.test(b.textContent.replace(/\s+/g, ' ').trim()));
+    const cannedTab = screen
+      .getAllByRole('button')
+      .find((b) => /^Canned Responses\s*\d+$/.test(b.textContent.replace(/\s+/g, ' ').trim()));
+
+    expect(policiesTab).toBeTruthy();
+    expect(breachesTab).toBeTruthy();
+    expect(cannedTab).toBeTruthy();
+    // policies.length=2, breaches.length=2, canned.length=1.
+    expect(policiesTab.textContent).toMatch(/2/);
+    expect(breachesTab.textContent).toMatch(/2/);
+    expect(cannedTab.textContent).toMatch(/1/);
+  });
+
+  it('Breach severity: resolveOverdueMinutes > 240 (4h) renders red severity row; <= 240 amber', async () => {
+    renderSLA();
+    await waitFor(() => expect(screen.getByText('Urgent Standard')).toBeInTheDocument());
+
+    const breachesTabs = screen.getAllByRole('button').filter((b) =>
+      /^Breaches\s*\d*$/.test(b.textContent.replace(/\s+/g, ' ').trim())
+    );
+    fireEvent.click(breachesTabs[0]);
+    await waitFor(() =>
+      expect(screen.getByText(/Email delivery delay for Acme tenant/i)).toBeInTheDocument()
+    );
+
+    // Breach #2: 360min resolve overdue (>240) → red #ef4444 / rgba(239,68,68,*).
+    const row2Subject = screen.getByText(/Outage report from Globus India ops/i);
+    let row = row2Subject.parentElement;
+    let depth = 0;
+    while (row && depth < 6) {
+      const s = row.getAttribute && row.getAttribute('style');
+      if (s && (s.includes('239, 68, 68') || s.includes('#ef4444'))) break;
+      row = row.parentElement;
+      depth++;
+    }
+    expect(row).toBeTruthy();
+    expect((row.getAttribute('style') || '').toLowerCase()).toMatch(/#ef4444|rgba?\(\s*239,\s*68,\s*68/);
+
+    // Breach #1: 75min response (<=240) → amber #f59e0b / rgba(245,158,11,*).
+    const row1Subject = screen.getByText(/Email delivery delay for Acme tenant/i);
+    let row1 = row1Subject.parentElement;
+    let d1 = 0;
+    while (row1 && d1 < 6) {
+      const s = row1.getAttribute && row1.getAttribute('style');
+      if (s && (s.includes('245, 158, 11') || s.includes('#f59e0b'))) break;
+      row1 = row1.parentElement;
+      d1++;
+    }
+    expect(row1).toBeTruthy();
+    expect((row1.getAttribute('style') || '').toLowerCase()).toMatch(/#f59e0b|rgba?\(\s*245,\s*158,\s*11/);
+    // And NOT the red color (severity discriminator).
+    expect((row1.getAttribute('style') || '').toLowerCase()).not.toMatch(/239,\s*68,\s*68/);
+  });
 });

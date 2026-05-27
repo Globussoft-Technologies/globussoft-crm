@@ -397,4 +397,421 @@ describe('<BookingExpediaSearch /> — operator-facing Booking.com / Expedia sea
     const summary = await screen.findByTestId('booking-expedia-search-summary');
     expect(summary.textContent).toMatch(/TMC \(School trips\)/);
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Extension batch — tick #N+1, +14 new cases. Targets unexplored surfaces:
+  //   - filter input wiring (provider / subBrand / guests / rooms / dates)
+  //   - hotel card render contract (name / price / star / address / hotelId)
+  //   - "no hotels returned" empty card vs "no search yet" empty card
+  //   - search summary chip wiring (guests/rooms/destination/dates fallbacks)
+  //   - loading-state surface during in-flight POST (button label + card)
+  //   - cap-status 402 → pill flips to over-cap red branch (100%)
+  //   - cap-status 403 (MANAGER) → silent swallow, no pill, no error toast
+  //   - empty checkin / checkout validation paths
+  //   - search default-values fallback (guests='' → 2, rooms='' → 1)
+  //   - capExceeded cleared on subsequent successful search
+  //   - subBrand omitted from body when "" (the all-sub-brands sentinel)
+  // ════════════════════════════════════════════════════════════════════════
+
+  it('filter inputs are wired: typing destination/guests/rooms reflects in the POST body', async () => {
+    installFetchMock({ enabled: { enabled: true, phase: 1 } });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Bangkok' },
+    });
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-guests'), {
+      target: { value: '5' },
+    });
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-rooms'), {
+      target: { value: '3' },
+    });
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/booking-expedia/search' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.destinationCity).toBe('Bangkok');
+      expect(body.guests).toBe(5);
+      expect(body.rooms).toBe(3);
+    });
+  });
+
+  it('search includes subBrand in body when filter is set (non-empty value)', async () => {
+    installFetchMock({ enabled: { enabled: true, phase: 1 } });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Mecca' },
+    });
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-subbrand'), {
+      target: { value: 'rfu' },
+    });
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/booking-expedia/search' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.subBrand).toBe('rfu');
+    });
+  });
+
+  it('empty checkin date → notify.error fires with checkin-specific message, no POST sent', async () => {
+    installFetchMock({ enabled: { enabled: true, phase: 1 } });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+    // Set destination so we get past the first guard, then blank check-in.
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Paris' },
+    });
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-checkin'), {
+      target: { value: '' },
+    });
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Check-in date is required');
+    });
+    const postCalls = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/booking-expedia/search' && opts?.method === 'POST',
+    );
+    expect(postCalls.length).toBe(0);
+  });
+
+  it('empty checkout date → notify.error fires with checkout-specific message, no POST sent', async () => {
+    installFetchMock({ enabled: { enabled: true, phase: 1 } });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Paris' },
+    });
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-checkout'), {
+      target: { value: '' },
+    });
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Check-out date is required');
+    });
+    const postCalls = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/booking-expedia/search' && opts?.method === 'POST',
+    );
+    expect(postCalls.length).toBe(0);
+  });
+
+  it('guests and rooms default to 2 / 1 when fields are non-numeric (fallback via Number(...) || N)', async () => {
+    installFetchMock({ enabled: { enabled: true, phase: 1 } });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Paris' },
+    });
+    // The number input bound to setGuests(e.target.value) can hold "" when
+    // cleared. The SUT applies `Number(guests) || 2` so blank → 2.
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-guests'), {
+      target: { value: '' },
+    });
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-rooms'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/booking-expedia/search' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.guests).toBe(2);
+      expect(body.rooms).toBe(1);
+    });
+  });
+
+  it('hotel list renders one HotelCard per result with name + price + star + address + id', async () => {
+    installFetchMock({
+      enabled: { enabled: true, phase: 1 },
+      search: makeSearchResponse({
+        stub: false,
+        destinationCity: 'Mecca',
+        hotels: [
+          {
+            hotelId: 'BK-HOT-001',
+            name: 'Makkah Royal Tower',
+            address: 'King Abdul Aziz Rd, Mecca',
+            starRating: 4.7,
+            priceFromCents: 35000,
+            currency: 'USD',
+          },
+          {
+            hotelId: 'BK-HOT-002',
+            name: 'Hilton Suites Mecca',
+            address: 'Ajyad St, Mecca',
+            starRating: 4.2,
+            priceFromCents: 22500,
+            currency: 'USD',
+          },
+        ],
+      }),
+    });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Mecca' },
+    });
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+
+    // List wrapper + cards count.
+    const list = await screen.findByTestId('booking-expedia-hotel-list');
+    expect(list).toBeInTheDocument();
+    const cards = screen.getAllByTestId('booking-expedia-hotel-card');
+    expect(cards.length).toBe(2);
+
+    // First card contents.
+    expect(cards[0].textContent).toMatch(/Makkah Royal Tower/);
+    expect(cards[0].textContent).toMatch(/King Abdul Aziz Rd, Mecca/);
+    expect(cards[0].textContent).toMatch(/4\.7★/);
+    expect(cards[0].textContent).toMatch(/BK-HOT-001/);
+    // formatMoney("USD") output — we only pin the dollar sign + integer.
+    expect(cards[0].textContent).toMatch(/\$350/);
+
+    // Second card contents.
+    expect(cards[1].textContent).toMatch(/Hilton Suites Mecca/);
+    expect(cards[1].textContent).toMatch(/4\.2★/);
+    expect(cards[1].textContent).toMatch(/\$225/);
+
+    // Hotel list shown ⇒ "no hotels" card NOT rendered.
+    expect(screen.queryByTestId('booking-expedia-no-hotels')).toBeNull();
+  });
+
+  it('zero-hotel search result shows "no hotels returned" card (NOT the pre-search empty-state card)', async () => {
+    installFetchMock({
+      enabled: { enabled: true, phase: 1 },
+      search: makeSearchResponse({ stub: false, hotels: [] }),
+    });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Mecca' },
+    });
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+
+    const noHotels = await screen.findByTestId('booking-expedia-no-hotels');
+    expect(noHotels.textContent).toMatch(/No hotels returned/i);
+    // Pre-search empty-state card replaced by the post-search "no hotels" card.
+    expect(screen.queryByTestId('booking-expedia-empty-state')).toBeNull();
+    // 0 hotels in summary count.
+    const summary = await screen.findByTestId('booking-expedia-search-summary');
+    expect(summary.textContent).toMatch(/0 hotels returned/);
+  });
+
+  it('stub-mode no-hotels card includes "expected in stub mode" annotation', async () => {
+    installFetchMock({
+      enabled: { enabled: true, phase: 1 },
+      search: makeSearchResponse({ stub: true, hotels: [] }),
+    });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Mecca' },
+    });
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+
+    const noHotels = await screen.findByTestId('booking-expedia-no-hotels');
+    expect(noHotels.textContent).toMatch(/expected in stub mode/i);
+  });
+
+  it('search summary chips render destination + dates + guests + rooms from server echo', async () => {
+    installFetchMock({
+      enabled: { enabled: true, phase: 1 },
+      search: makeSearchResponse({
+        destinationCity: 'Bangkok',
+        checkInDate: '2026-07-01',
+        checkOutDate: '2026-07-05',
+        guests: 4,
+        rooms: 2,
+      }),
+    });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Bangkok' },
+    });
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+
+    const summary = await screen.findByTestId('booking-expedia-search-summary');
+    expect(summary.textContent).toMatch(/Bangkok/);
+    expect(summary.textContent).toMatch(/2026-07-01/);
+    expect(summary.textContent).toMatch(/2026-07-05/);
+    expect(summary.textContent).toMatch(/4 guests/);
+    expect(summary.textContent).toMatch(/2 rooms/);
+  });
+
+  it('search "note" string renders below results when backend provides it', async () => {
+    installFetchMock({
+      enabled: { enabled: true, phase: 1 },
+      search: makeSearchResponse({
+        note: 'Stub mode — Booking.com partner credentials pending (Q-cluster B6/C).',
+        hotels: [],
+      }),
+    });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Mecca' },
+    });
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+
+    await screen.findByTestId('booking-expedia-search-summary');
+    // The note paragraph is plain text (no testid) — assert via text query.
+    expect(
+      screen.getByText(/Stub mode — Booking\.com partner credentials pending/i),
+    ).toBeInTheDocument();
+  });
+
+  it('search button shows "Searching…" label and is disabled while POST is in flight', async () => {
+    // Hold the search response open so the "searching" state is observable.
+    let resolveSearch;
+    const searchPromise = new Promise((res) => {
+      resolveSearch = res;
+    });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/booking-expedia/enabled') {
+        return Promise.resolve({ enabled: true, phase: 1 });
+      }
+      if (url === '/api/booking-expedia/cap-status') {
+        return Promise.resolve(CAP_STATUS_OK);
+      }
+      if (url === '/api/booking-expedia/search' && opts?.method === 'POST') {
+        return searchPromise;
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const btn = await screen.findByTestId('booking-expedia-search-btn');
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Paris' },
+    });
+    fireEvent.click(btn);
+
+    // While in flight: disabled + "Searching…" label.
+    await waitFor(() => {
+      expect(btn).toBeDisabled();
+      expect(btn.textContent).toMatch(/Searching/);
+    });
+
+    // Resolve to clean up the suspended promise.
+    resolveSearch(makeSearchResponse({ hotels: [] }));
+    await waitFor(() => {
+      expect(btn).not.toBeDisabled();
+    });
+  });
+
+  it('cap-status pill flips to red over-cap branch when GET resolves rejected with 402', async () => {
+    const overCapErr = new Error('Over cap');
+    overCapErr.status = 402;
+    overCapErr.body = {
+      error: 'cap exceeded',
+      code: 'BOOKING_EXPEDIA_BUDGET_EXCEEDED',
+      spentCents: 16500,
+      capCents: 15000,
+    };
+    installFetchMock({
+      enabled: { enabled: true, phase: 1 },
+      capStatus: overCapErr,
+    });
+    renderPage();
+    const pill = await screen.findByTestId('booking-expedia-cap-pill');
+    // Over-cap branch: percent surfaced as 100% per the SUT (percent: 1).
+    expect(pill.textContent).toMatch(/100% of \$150\/mo cap/);
+    // No notify.error — over-cap on the GET is a known terminal state.
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it('cap-status 403 (MANAGER) is silently swallowed: no pill renders, no toast fires', async () => {
+    const forbiddenErr = new Error('Forbidden');
+    forbiddenErr.status = 403;
+    forbiddenErr.body = { error: 'ADMIN_ONLY' };
+    installFetchMock({
+      enabled: { enabled: true, phase: 1 },
+      capStatus: forbiddenErr,
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderPage();
+    // Wait for the page to settle (search form rendered = mount effects done).
+    await screen.findByTestId('booking-expedia-search-btn');
+    // Pill is NEVER rendered for MANAGER (403 is the silent path).
+    expect(screen.queryByTestId('booking-expedia-cap-pill')).toBeNull();
+    // No error toast; the SUT's silent-403 branch suppresses console.warn too.
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('subsequent successful search clears prior 402 capExceeded banner', async () => {
+    // First POST returns 402; second POST returns a stub success → banner clears.
+    const capErr = new Error('Cap exceeded');
+    capErr.status = 402;
+    capErr.body = {
+      error: 'monthly cap exceeded',
+      code: 'BOOKING_EXPEDIA_BUDGET_EXCEEDED',
+      spentCents: 16000,
+      capCents: 15000,
+    };
+    let callCount = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/booking-expedia/enabled') {
+        return Promise.resolve({ enabled: true, phase: 1 });
+      }
+      if (url === '/api/booking-expedia/cap-status') {
+        return Promise.resolve(CAP_STATUS_OK);
+      }
+      if (url === '/api/booking-expedia/search' && opts?.method === 'POST') {
+        callCount += 1;
+        if (callCount === 1) return Promise.reject(capErr);
+        return Promise.resolve(makeSearchResponse({ hotels: [] }));
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByTestId('booking-expedia-search-btn');
+    fireEvent.change(screen.getByTestId('booking-expedia-filter-destination'), {
+      target: { value: 'Paris' },
+    });
+
+    // Click 1 → 402 banner.
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+    expect(
+      await screen.findByTestId('booking-expedia-cap-exceeded-banner'),
+    ).toBeInTheDocument();
+
+    // Click 2 → success; banner gone, summary present.
+    fireEvent.click(screen.getByTestId('booking-expedia-search-btn'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('booking-expedia-cap-exceeded-banner')).toBeNull();
+    });
+    expect(await screen.findByTestId('booking-expedia-search-summary')).toBeInTheDocument();
+  });
+
+  it('provider select offers both Booking (Phase 1) and Expedia (Phase 2) options', async () => {
+    installFetchMock({ enabled: { enabled: true, phase: 1 } });
+    renderPage();
+    const select = await screen.findByTestId('booking-expedia-filter-provider');
+    const options = Array.from(select.querySelectorAll('option')).map((o) => ({
+      value: o.value,
+      label: o.textContent,
+    }));
+    expect(options).toEqual([
+      { value: 'booking', label: 'Booking.com (Phase 1)' },
+      { value: 'expedia', label: 'Expedia (Phase 2 — pending)' },
+    ]);
+  });
 });

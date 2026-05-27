@@ -234,19 +234,67 @@ const STAGE_COLORS = [
 
 // ─────────────────────────────────────────────────────────────────
 // GET / — list all templates (DB + built-ins fallback)
+//
+// Opt-in slim shape: `?fields=summary` drops the heavy `config` JSON
+// (pipelines / customFields / sampleContacts / sampleStages — can be
+// 10s of KB per template once tenants customise) and returns only
+// {id, industry, name, description, createdAt}. Matches slices 1-42
+// of #920 — additive flag, default response unchanged.
 // ─────────────────────────────────────────────────────────────────
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const dbTemplates = await prisma.industryTemplate.findMany({
-      orderBy: { createdAt: "asc" },
-    });
+    const isSummary = String(req.query.fields || "").toLowerCase() === "summary";
+
+    const findManyArgs = { orderBy: { createdAt: "asc" } };
+    if (isSummary) {
+      // Slim Prisma select — drop heavy `config` JSON column.
+      findManyArgs.select = {
+        id: true,
+        industry: true,
+        name: true,
+        description: true,
+        createdAt: true,
+      };
+    }
+    const dbTemplates = await prisma.industryTemplate.findMany(findManyArgs);
 
     if (!dbTemplates || dbTemplates.length === 0) {
+      if (isSummary) {
+        return res.json(
+          BUILT_IN_TEMPLATES.map((t) => ({
+            id: t.id,
+            industry: t.industry,
+            name: t.name,
+            description: t.description,
+          })),
+        );
+      }
       return res.json(BUILT_IN_TEMPLATES);
     }
 
     // Merge DB + built-ins (DB overrides by industry key)
     const dbIndustries = new Set(dbTemplates.map((t) => t.industry));
+    if (isSummary) {
+      const merged = [
+        ...dbTemplates.map((t) => ({
+          id: t.id,
+          industry: t.industry,
+          name: t.name,
+          description: t.description,
+          createdAt: t.createdAt,
+        })),
+        ...BUILT_IN_TEMPLATES.filter((t) => !dbIndustries.has(t.industry)).map(
+          (t) => ({
+            id: t.id,
+            industry: t.industry,
+            name: t.name,
+            description: t.description,
+          }),
+        ),
+      ];
+      return res.json(merged);
+    }
+
     const merged = [
       ...dbTemplates.map((t) => ({
         id: t.id,

@@ -562,3 +562,336 @@ describe('<PricingRules /> — Markup Rules toggle-active', () => {
     });
   });
 });
+
+// ─── EXTENDED CASES (tick #C, ratio bump to ~95%) ────────────────────
+//
+// Coverage motivation: the original 12 cases pinned page chrome + filter
+// fan-out + row rendering + Seasons add-flow + a single Markup toggle.
+// These extended cases drill into the higher-risk branches the original
+// suite skipped:
+//
+//   - Markup Rules add-flow → covers the markupValue / matchKeyJson
+//     validation tree (SUT lines 412-424) + the exactly-one-of-pct/flat
+//     send-shape (SUT lines 433-434) + numeric coercion of priority
+//     (parseInt) + markupValue (Number).
+//   - Markup Rules edit-flow → covers the pct↔flat type-derivation logic
+//     (SUT line 405: `markupType: r.markupPct != null ? "pct" : "flat"`)
+//     and confirms editing a flat-rule pre-fills markupValue from
+//     markupFlat, not markupPct.
+//   - Season edit-flow → covers the startEdit branch (SUT lines 150-160)
+//     including the disabled subBrand select (locked once editing).
+//   - Delete flow with window.confirm → both confirm-accept and
+//     confirm-reject branches for Seasons + Markup Rules (SUT lines
+//     195-203 + 469-478).
+//   - Cancel-edit flow → resetting form state without firing any
+//     mutation (SUT line 161 cancelEdit).
+//   - Inactive row dimming + null-multiplier em-dash fallback — small
+//     visual invariants that have shipped twice in this admin-page family.
+
+describe('<PricingRules /> — Markup Rules add-flow + validation', () => {
+  it('add-rule with matchKeyJson + pct sends POST with markupPct set + markupFlat null', async () => {
+    renderPage();
+    await screen.findByText('{"city":"Makkah"}');
+    fireEvent.click(screen.getByRole('button', { name: /Add rule/i }));
+    // Form surfaces. Fill markup value (default markupType=pct from blankForm
+    // SUT line 380) + matchKeyJson textarea (default "{}").
+    const valueInput = screen.getByLabelText(/^Markup value$/i);
+    const matchKeyInput = screen.getByLabelText(/^Match key JSON$/i);
+    fireEvent.change(valueInput, { target: { value: '0.25' } });
+    fireEvent.change(matchKeyInput, { target: { value: '{"city":"Madinah"}' } });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/markup-rules' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      // Backend enforces exactly-one-of. SUT lines 433-434 send pct OR null.
+      expect(body.markupPct).toBe(0.25);
+      expect(body.markupFlat).toBeNull();
+      expect(body.matchKeyJson).toBe('{"city":"Madinah"}');
+      // priority parsed via parseInt (SUT line 429) — defaults to "100" string.
+      expect(body.priority).toBe(100);
+      expect(typeof body.priority).toBe('number');
+      // Default subBrand + scope from blankForm.
+      expect(body.subBrand).toBe('rfu');
+      expect(body.scope).toBe('hotel');
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Markup rule created');
+  });
+
+  it('switching markupType=flat sends POST with markupFlat set + markupPct null', async () => {
+    renderPage();
+    await screen.findByText('{"city":"Makkah"}');
+    fireEvent.click(screen.getByRole('button', { name: /Add rule/i }));
+    // Flip markupType to "flat".
+    fireEvent.change(screen.getByLabelText(/^Markup type$/i), { target: { value: 'flat' } });
+    fireEvent.change(screen.getByLabelText(/^Markup value$/i), { target: { value: '750' } });
+    fireEvent.change(screen.getByLabelText(/^Match key JSON$/i), { target: { value: '{"route":"BOM-DXB"}' } });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/markup-rules' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.markupFlat).toBe(750);
+      expect(body.markupPct).toBeNull();
+    });
+  });
+
+  it('validation: empty matchKeyJson surfaces notify.error + skips POST', async () => {
+    renderPage();
+    await screen.findByText('{"city":"Makkah"}');
+    fireEvent.click(screen.getByRole('button', { name: /Add rule/i }));
+    // Blank out the matchKeyJson textarea (default is "{}", which is
+    // valid — set to whitespace-only to trip the .trim() guard SUT line 413).
+    fireEvent.change(screen.getByLabelText(/^Match key JSON$/i), { target: { value: '   ' } });
+    fireEvent.change(screen.getByLabelText(/^Markup value$/i), { target: { value: '0.1' } });
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/matchKeyJson.*markup value required/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/markup-rules' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('validation: malformed matchKeyJson surfaces "not valid JSON" error', async () => {
+    renderPage();
+    await screen.findByText('{"city":"Makkah"}');
+    fireEvent.click(screen.getByRole('button', { name: /Add rule/i }));
+    fireEvent.change(screen.getByLabelText(/^Match key JSON$/i), { target: { value: '{not-json' } });
+    fireEvent.change(screen.getByLabelText(/^Markup value$/i), { target: { value: '0.1' } });
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/matchKeyJson is not valid JSON/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/markup-rules' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('validation: negative markup value surfaces "non-negative number" error', async () => {
+    renderPage();
+    await screen.findByText('{"city":"Makkah"}');
+    fireEvent.click(screen.getByRole('button', { name: /Add rule/i }));
+    fireEvent.change(screen.getByLabelText(/^Match key JSON$/i), { target: { value: '{"city":"Jeddah"}' } });
+    // Note: native input[type=number] with min=0 may strip the negative on
+    // user-type, but fireEvent.change bypasses that; the value reaches the
+    // handler. SUT lines 420-424 then guard with Number.isFinite + n < 0.
+    fireEvent.change(screen.getByLabelText(/^Markup value$/i), { target: { value: '-5' } });
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/markup value must be a non-negative number/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/markup-rules' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+});
+
+describe('<PricingRules /> — Markup Rules edit-flow', () => {
+  it('editing a pct rule pre-fills markupType=pct + markupValue from markupPct', async () => {
+    renderPage();
+    await screen.findByText('{"city":"Makkah"}');
+    // Row 501 is the pct rule (markupPct: 0.15).
+    fireEvent.click(screen.getByRole('button', { name: /Edit rule 501/i }));
+    // After startEdit, markupType select reads "pct" + markupValue reads "0.15".
+    const typeSelect = screen.getByLabelText(/^Markup type$/i);
+    expect(typeSelect.value).toBe('pct');
+    const valueInput = screen.getByLabelText(/^Markup value$/i);
+    expect(valueInput.value).toBe('0.15');
+    // Match key textarea pre-filled.
+    expect(screen.getByLabelText(/^Match key JSON$/i).value).toBe('{"city":"Makkah"}');
+    // Sub-brand select is disabled in edit mode (SUT line 566 — `disabled={editingId != null}`).
+    const subBrandSelect = screen.getByLabelText(/^Sub-brand$/i);
+    expect(subBrandSelect.disabled).toBe(true);
+    // Save dispatches PATCH to /api/travel/markup-rules/501.
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Save changes$/ }));
+    await waitFor(() => {
+      const patch = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/markup-rules/501' && o?.method === 'PATCH',
+      );
+      expect(patch).toBeTruthy();
+      const body = JSON.parse(patch[1].body);
+      // Edit-mode PATCH does NOT include subBrand (SUT POST adds it via
+      // spread `...body, subBrand` line 446; PATCH body line 440 doesn't).
+      expect(body.subBrand).toBeUndefined();
+      expect(body.markupPct).toBe(0.15);
+      expect(body.markupFlat).toBeNull();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Markup rule updated');
+  });
+
+  it('editing a flat rule pre-fills markupType=flat + markupValue from markupFlat', async () => {
+    renderPage();
+    await screen.findByText('{"route":"DEL-BLR"}');
+    // Row 502 is the flat rule (markupFlat: 500).
+    fireEvent.click(screen.getByRole('button', { name: /Edit rule 502/i }));
+    // SUT line 405 derives markupType from "markupPct != null ? 'pct' : 'flat'".
+    expect(screen.getByLabelText(/^Markup type$/i).value).toBe('flat');
+    expect(screen.getByLabelText(/^Markup value$/i).value).toBe('500');
+  });
+});
+
+describe('<PricingRules /> — Seasons edit-flow + cancel', () => {
+  it('editing a season pre-fills form + locks subBrand select', async () => {
+    renderPage();
+    const nameCell = await screen.findByText('ramadan-peak');
+    const tr = nameCell.closest('tr');
+    expect(tr).toBeTruthy();
+    fireEvent.click(within(tr).getByRole('button', { name: /Edit ramadan-peak/i }));
+    // Seasons form surfaces with the season name pre-populated.
+    expect(screen.getByLabelText(/^Season name$/i).value).toBe('ramadan-peak');
+    // SUT line 276: Seasons sub-brand select disabled in edit mode.
+    const allSubBrandSelects = screen.getAllByLabelText(/^Sub-brand$/i);
+    // Two forms can be open in theory; in practice only Seasons is.
+    // Find the disabled one within the Seasons form.
+    const disabledOne = allSubBrandSelects.find((s) => s.disabled);
+    expect(disabledOne).toBeTruthy();
+    expect(disabledOne.value).toBe('rfu');
+    // Multiplier pre-filled from String(s.multiplier) (SUT line 158).
+    expect(screen.getByLabelText(/^Multiplier$/i).value).toBe('1.4');
+  });
+
+  it('Cancel button closes the Seasons form without firing any mutation', async () => {
+    renderPage();
+    await screen.findByText('ramadan-peak');
+    fireEvent.click(screen.getByRole('button', { name: /Add season/i }));
+    // Form visible.
+    expect(screen.getByLabelText(/^Season name$/i)).toBeInTheDocument();
+    fetchApiMock.mockClear();
+    // Find the Cancel button INSIDE the Seasons form (the only open form).
+    fireEvent.click(screen.getAllByRole('button', { name: /^Cancel$/ })[0]);
+    // Form goes away (state reset → showForm=false → form unmounts).
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/^Season name$/i)).toBeNull();
+    });
+    // No mutation fired.
+    const mutations = fetchApiMock.mock.calls.filter(
+      ([, o]) => o?.method === 'POST' || o?.method === 'PATCH' || o?.method === 'DELETE',
+    );
+    expect(mutations.length).toBe(0);
+  });
+});
+
+describe('<PricingRules /> — delete flows (window.confirm)', () => {
+  it('Seasons: delete with confirm=true fires DELETE /api/travel/seasons/:id', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderPage();
+    const nameCell = await screen.findByText('ramadan-peak');
+    const tr = nameCell.closest('tr');
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(within(tr).getByRole('button', { name: /Delete ramadan-peak/i }));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/Delete season "ramadan-peak" \(rfu\)\?/i),
+    );
+    await waitFor(() => {
+      const del = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/seasons/401' && o?.method === 'DELETE',
+      );
+      expect(del).toBeTruthy();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Season deleted');
+    confirmSpy.mockRestore();
+  });
+
+  it('Seasons: delete with confirm=false short-circuits (no DELETE fired)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderPage();
+    const nameCell = await screen.findByText('ramadan-peak');
+    const tr = nameCell.closest('tr');
+    fetchApiMock.mockClear();
+    fireEvent.click(within(tr).getByRole('button', { name: /Delete ramadan-peak/i }));
+    expect(confirmSpy).toHaveBeenCalled();
+    // No DELETE fired (SUT line 196 — early-return guard).
+    const dels = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'DELETE');
+    expect(dels.length).toBe(0);
+    confirmSpy.mockRestore();
+  });
+
+  it('Markup Rules: delete with confirm=true fires DELETE /api/travel/markup-rules/:id', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderPage();
+    await screen.findByText('{"city":"Makkah"}');
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Delete rule 501/i }));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/Delete markup rule \(hotel \/ rfu, priority 100\)\?/i),
+    );
+    await waitFor(() => {
+      const del = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/markup-rules/501' && o?.method === 'DELETE',
+      );
+      expect(del).toBeTruthy();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Markup rule deleted');
+    confirmSpy.mockRestore();
+  });
+});
+
+describe('<PricingRules /> — visual invariants', () => {
+  it('null-multiplier season renders em-dash placeholder', async () => {
+    installFetchMock({
+      seasonsList: {
+        seasons: [makeSeason({ id: 410, seasonName: 'null-mult-season', multiplier: null })],
+      },
+    });
+    renderPage();
+    const nameCell = await screen.findByText('null-mult-season');
+    const tr = nameCell.closest('tr');
+    // SUT line 348: `s.multiplier != null ? "×..." : <span>—</span>`.
+    expect(within(tr).getByText('—')).toBeInTheDocument();
+    // Negative: should NOT show "×" prefix for this row.
+    expect(within(tr).queryByText(/^×/)).toBeNull();
+  });
+
+  it('inactive markup rule row shipping in the table is still interactable (toggle present)', async () => {
+    renderPage();
+    // Row 503 is isActive:false (per RULES_DEFAULT seed).
+    await screen.findByText('{"city":"Makkah"}');
+    const toggleBtn = screen.getByRole('button', { name: /Toggle active for rule 503/i });
+    expect(toggleBtn).toBeInTheDocument();
+    // Toggling sends isActive:true (current is false).
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(toggleBtn);
+    await waitFor(() => {
+      const patch = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/markup-rules/503' && o?.method === 'PATCH',
+      );
+      expect(patch).toBeTruthy();
+      const body = JSON.parse(patch[1].body);
+      expect(body.isActive).toBe(true);
+    });
+  });
+
+  it('priority column renders raw numeric value (no formatting)', async () => {
+    renderPage();
+    // Row 502 has priority 50 (lowest); row 501 has 100; 503 has 200.
+    await screen.findByText('{"route":"DEL-BLR"}');
+    const flatTr = screen.getByText('{"route":"DEL-BLR"}').closest('tr');
+    expect(within(flatTr).getByText('50')).toBeInTheDocument();
+  });
+});

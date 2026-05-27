@@ -8,14 +8,34 @@ const { writeAudit, diffFields } = require("../lib/audit");
 // pipeline list to file deals against it).
 const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 
-// ── GET / ─ list all pipelines for tenant (with deal counts) ─────
+// ── GET /?fields=summary ─ list all pipelines for tenant (with deal counts) ─
 router.get("/", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const pipelines = await prisma.pipeline.findMany({
+    // #920 slice 23: ?fields=summary slim-shape opt-in. Mirrors slices 1-20.
+    // Pipeline is a thin model (no nested includes today — PipelineStage is
+    // a separate tenant-shared model, NOT a relation on Pipeline). When the
+    // caller passes ?fields=summary we drop the tenantId (leaks tenant
+    // identity to clients that don't need it), description (free-form text
+    // not needed by dropdown / picker chrome), createdAt + updatedAt
+    // (metadata). Returns only id + name + isDefault. dealCount is still
+    // attached post-query because it's the headline metric the Pipelines
+    // page selector renders alongside the name. Opt-in additive — existing
+    // callers (no ?fields, or any non-exact value) get the full row shape
+    // unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId },
       orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        isDefault: true,
+      };
+    }
+    const pipelines = await prisma.pipeline.findMany(findManyArgs);
 
     // Attach deal counts per pipeline
     const counts = await prisma.deal.groupBy({
@@ -79,6 +99,108 @@ router.post("/", ...adminOnly, async (req, res) => {
   } catch (err) {
     console.error("[pipelines][POST /]", err);
     res.status(500).json({ error: "Failed to create pipeline" });
+  }
+});
+
+// ============================================================================
+// GET /api/pipelines/stats — tenant-wide pipeline rollup (CRM polish)
+// ============================================================================
+// First /stats endpoint for the Pipeline route. Read-only KPI surface for the
+// sales dashboard's pipeline strip. Aggregates:
+//
+//   - totalPipelines       count of Pipeline rows for tenant
+//   - totalStages          count of PipelineStage rows for tenant (tenant-wide;
+//                          PipelineStage has NO pipelineId column in the
+//                          current schema — stages are a tenant-shared library
+//                          per prisma/schema.prisma:1333)
+//   - avgStagesPerPipeline totalStages / totalPipelines, rounded half-up to
+//                          2dp; null when totalPipelines = 0
+//   - defaultPipelineId    id of the Pipeline where isDefault=true (null when
+//                          tenant has no default — empty tenant or pre-seed)
+//   - lastCreatedAt        max(Pipeline.createdAt) as ISO string; null when
+//                          totalPipelines = 0
+//
+// Query params:
+//   - ?from / ?to (ISO date bounds on Pipeline.createdAt). Bounds apply to
+//     pipeline aggregates (totalPipelines, defaultPipelineId, lastCreatedAt).
+//     totalStages stays unbounded — PipelineStage has no temporal relation to
+//     a specific Pipeline. Invalid date → 400 INVALID_DATE.
+//
+// Auth: mirrors GET / (verifyToken, all authenticated tenant members).
+// NO audit row written — read-only meta surface, mirrors deals/stats +
+// accounting/stats posture.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family or `:id="stats"` would NaN-parse + 400 "Invalid pipeline id"
+// before reaching this handler.
+// ============================================================================
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // Optional ISO date bounds on Pipeline.createdAt
+    const pipelineWhere = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      pipelineWhere.createdAt = Object.assign(
+        pipelineWhere.createdAt || {},
+        { gte: d },
+      );
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      pipelineWhere.createdAt = Object.assign(
+        pipelineWhere.createdAt || {},
+        { lte: d },
+      );
+    }
+
+    const [totalPipelines, totalStages, defaultPipeline, latest] = await Promise.all([
+      prisma.pipeline.count({ where: pipelineWhere }),
+      prisma.pipelineStage.count({ where: { tenantId } }),
+      prisma.pipeline.findFirst({
+        where: { ...pipelineWhere, isDefault: true },
+        select: { id: true },
+      }),
+      prisma.pipeline.findFirst({
+        where: pipelineWhere,
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      }),
+    ]);
+
+    // Half-up 2dp rounding; null when totalPipelines = 0
+    let avgStagesPerPipeline = null;
+    if (totalPipelines > 0) {
+      const raw = totalStages / totalPipelines;
+      avgStagesPerPipeline = Math.round(raw * 100) / 100;
+    }
+
+    res.json({
+      totalPipelines,
+      totalStages,
+      avgStagesPerPipeline,
+      defaultPipelineId: defaultPipeline ? defaultPipeline.id : null,
+      lastCreatedAt:
+        latest && latest.createdAt ? new Date(latest.createdAt).toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[pipelines][GET /stats]", err);
+    res.status(500).json({ error: "Failed to fetch pipeline stats" });
   }
 });
 

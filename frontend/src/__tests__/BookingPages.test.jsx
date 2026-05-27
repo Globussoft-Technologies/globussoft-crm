@@ -1,28 +1,38 @@
 /**
  * BookingPages.jsx — vitest + RTL coverage.
  *
- * #810 (Zylu-Gap MINI-002) — embeddable JavaScript booking-widget snippet.
- * The widget code itself (frontend/public/embed/widget.js) shipped earlier.
- * What was missing was a Settings-side surface so the operator can grab the
- * snippet without poking at /embed/widget.js directly. Today the Edit
- * drawer renders an "Embed Widget Code" section with:
+ * Originally pinned the #810 (Zylu-Gap MINI-002) embed-widget snippet UI.
+ * Extended to cover the broader 856-LOC BookingPages page: list/create/edit/
+ * delete CRUD, publish/active-status toggle, weekly-availability slot
+ * configuration, embed-code copy, CSV export, loading + error + empty
+ * states, and create-modal validation.
  *
- *   1. A read-only <textarea> showing the exact <div> + <script> to paste,
- *      slug-substituted into the snippet.
- *   2. A "Copy snippet" button that writes the snippet to the clipboard
- *      and fires notify.success on success.
+ * Pinned surfaces (read at module level; all routes funnel through fetchApi
+ * which is mocked per-test):
+ *   GET    /api/booking-pages                  — list
+ *   POST   /api/booking-pages                  — create
+ *   GET    /api/booking-pages/:id/bookings     — recent bookings drawer
+ *   PUT    /api/booking-pages/:id              — save edits (incl. isActive toggle)
+ *   DELETE /api/booking-pages/:id              — delete page
+ *   POST   /api/booking-pages/:id/cancel/:bid  — cancel a booking
+ *   POST   /api/booking-pages/:id/upload       — logo/hero upload (fetch raw)
+ *   GET    /api/csv/bookings/export.csv        — cross-page CSV export
  *
- * Plus a pure-function unit test of embedSnippetForSlug() so the
- * snippet shape is pinned even if the rendered UI changes.
+ * Stable mock-object pattern (per 2026-05-23 RTL standing rule): notify
+ * methods all live on one object reference that the mock factory returns
+ * every call, so the useNotify identity remains stable across renders and
+ * doesn't trip useCallback dependency re-flap.
  */
 
+import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('../utils/api', () => ({
   fetchApi: vi.fn(),
+  getAuthToken: vi.fn(() => 'fake-token'),
 }));
 
 const notify = {
@@ -51,6 +61,18 @@ const samplePage = {
   bookingCount: 4,
 };
 
+const pausedPage = {
+  id: 8,
+  slug: 'strategy-session',
+  title: 'Strategy Session',
+  description: 'Quarterly planning',
+  durationMins: 60,
+  bufferMins: 15,
+  isActive: false,
+  availability: null,
+  bookingCount: 0,
+};
+
 function renderBookingPages() {
   return render(
     <MemoryRouter>
@@ -59,18 +81,31 @@ function renderBookingPages() {
   );
 }
 
+function resetAllMocks() {
+  fetchApi.mockReset();
+  notify.success.mockReset();
+  notify.error.mockReset();
+  notify.info.mockReset();
+  notify.confirm.mockReset();
+  notify.confirm.mockImplementation(() => Promise.resolve(true));
+  notify.prompt.mockReset();
+  notify.prompt.mockImplementation(() => Promise.resolve(''));
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Pure helper: embedSnippetForSlug() — preserved from initial coverage.
+// ─────────────────────────────────────────────────────────────────────
+
 describe('embedSnippetForSlug() — #810 snippet shape', () => {
   it('returns a 3-line HTML snippet including the slug and script URL', () => {
     const snippet = embedSnippetForSlug('discovery-call', 'https://crm.globusdemos.com');
     expect(snippet).toMatch(/data-gbs-form/);
     expect(snippet).toMatch(/data-slug="discovery-call"/);
     expect(snippet).toMatch(/https:\/\/crm\.globusdemos\.com\/embed\/widget\.js/);
-    // Three lines: comment + div + script.
     expect(snippet.split('\n').length).toBe(3);
   });
 
   it('falls back to the demo origin when window.location is not provided', () => {
-    // Pass an empty origin so the helper uses its default.
     const snippet = embedSnippetForSlug('demo-slug', '');
     expect(snippet).toMatch(/crm\.globusdemos\.com\/embed\/widget\.js|http:\/\/localhost/);
   });
@@ -81,13 +116,13 @@ describe('embedSnippetForSlug() — #810 snippet shape', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// Original two cases: embed UI visibility + copy.
+// ─────────────────────────────────────────────────────────────────────
+
 describe('<BookingPages /> — #810 embed snippet UI', () => {
   beforeEach(() => {
-    fetchApi.mockReset();
-    notify.success.mockReset();
-    notify.error.mockReset();
-    notify.prompt.mockReset();
-    notify.prompt.mockImplementation(() => Promise.resolve(''));
+    resetAllMocks();
   });
 
   it('shows the Embed Widget Code section when a page is opened in the editor', async () => {
@@ -100,28 +135,19 @@ describe('<BookingPages /> — #810 embed snippet UI', () => {
     const user = userEvent.setup();
     renderBookingPages();
 
-    // Wait for the card to render.
     await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
-    // Click the card to open the editor drawer.
     await user.click(screen.getByText('Discovery Call'));
 
-    // Embed section is present.
     await waitFor(() => expect(screen.getByText(/Embed Widget Code/i)).toBeInTheDocument());
 
-    // The snippet textarea carries the slug + the script URL.
     const textarea = screen.getByTestId('embed-snippet');
     expect(textarea).toBeInTheDocument();
     expect(textarea.value).toMatch(/data-slug="discovery-call"/);
     expect(textarea.value).toMatch(/\/embed\/widget\.js/);
-    // It must be read-only — operators shouldn't be editing the snippet inline.
     expect(textarea).toHaveAttribute('readOnly');
   });
 
   it('clicking "Copy snippet" exposes the snippet via clipboard OR prompt fallback', async () => {
-    // jsdom-aware clipboard surface. Use Object.defineProperty + force the
-    // writeText spy to resolve immediately. Note: the click handler is async
-    // and reads navigator.clipboard at click-time, so the spy must be
-    // installed BEFORE the click fires.
     const writeText = vi.fn().mockResolvedValue(undefined);
     try {
       Object.defineProperty(navigator, 'clipboard', {
@@ -142,24 +168,941 @@ describe('<BookingPages /> — #810 embed snippet UI', () => {
     await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
     await user.click(screen.getByText('Discovery Call'));
 
-    // Wait for the drawer to fully open (the embed-snippet textarea exists).
     const copyBtn = await screen.findByTestId('copy-embed-snippet');
     expect(copyBtn).toBeInTheDocument();
-    // Verify the snippet textarea actually carries our slug — that pins the
-    // operator-visible surface even if clipboard wiring breaks in jsdom.
     const textarea = screen.getByTestId('embed-snippet');
     expect(textarea.value).toMatch(/data-slug="discovery-call"/);
     expect(textarea.value).toMatch(/\/embed\/widget\.js/);
 
     await user.click(copyBtn);
 
-    // Either clipboard.writeText OR notify.prompt fired with the snippet —
-    // either is a valid "snippet surfaced to operator" signal.
     await waitFor(() => {
       const clipboardFired = writeText.mock.calls.length > 0;
       const promptFired = notify.prompt.mock.calls.length > 0;
       const successFired = notify.success.mock.calls.length > 0;
       expect(clipboardFired || promptFired || successFired).toBe(true);
     }, { timeout: 3000 });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Extended coverage — list / create / edit / delete / publish-toggle /
+// slot config / CSV export / loading + error + empty / validation.
+// ─────────────────────────────────────────────────────────────────────
+
+describe('<BookingPages /> — list + empty + loading states', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('renders the loading state while the initial list request is pending', () => {
+    // Return an unresolved promise to keep loading=true.
+    fetchApi.mockImplementation(() => new Promise(() => {}));
+    renderBookingPages();
+    expect(screen.getByText(/Loading\.\.\./i)).toBeInTheDocument();
+  });
+
+  it('renders the empty state when /api/booking-pages returns []', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText(/No booking pages yet/i)).toBeInTheDocument());
+    // Two "Create Page" CTAs: header button + the empty-state CTA.
+    const createCtas = screen.getAllByText(/Create Page/i);
+    expect(createCtas.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders one card per page with title, slug, duration, booking count, status', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage, pausedPage]);
+      return Promise.resolve([]);
+    });
+    renderBookingPages();
+
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    expect(screen.getByText('Strategy Session')).toBeInTheDocument();
+    // Slugs render as /slug.
+    expect(screen.getByText('/discovery-call')).toBeInTheDocument();
+    expect(screen.getByText('/strategy-session')).toBeInTheDocument();
+    // Active vs paused badges.
+    expect(screen.getByText('ACTIVE')).toBeInTheDocument();
+    expect(screen.getByText('PAUSED')).toBeInTheDocument();
+    // Duration shows minutes.
+    expect(screen.getByText(/30m/)).toBeInTheDocument();
+    expect(screen.getByText(/60m/)).toBeInTheDocument();
+  });
+
+  it('silently sets loading=false when /api/booking-pages rejects (no notify.error gate)', async () => {
+    fetchApi.mockImplementation(() => Promise.reject(new Error('boom')));
+    renderBookingPages();
+    // The catch handler clears loading state but doesn't surface an error
+    // notify — the SUT lets the empty state render in that case.
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading\.\.\./i)).not.toBeInTheDocument();
+    });
+    // Falls into the "No booking pages yet" branch because pages stays [].
+    expect(screen.getByText(/No booking pages yet/i)).toBeInTheDocument();
+  });
+});
+
+describe('<BookingPages /> — create-page modal', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('opens the Create modal when the header "Create Page" button is clicked', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+
+    // Header CTA = "Create Page" button (there can be multiple matches if
+    // empty-state shows one; here we have a card so only the header one).
+    const createBtns = screen.getAllByText(/Create Page/i);
+    await user.click(createBtns[0]);
+
+    expect(screen.getByText(/New Booking Page/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/30-min Discovery Call/i)).toBeInTheDocument();
+  });
+
+  it('POSTs /api/booking-pages with title + description + durationMins on submit', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || opts.method !== 'POST')) {
+        return Promise.resolve([]);
+      }
+      if (url === '/api/booking-pages' && opts && opts.method === 'POST') {
+        return Promise.resolve({ id: 99 });
+      }
+      return Promise.resolve([]);
+    });
+
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText(/No booking pages yet/i)).toBeInTheDocument());
+
+    // Empty-state has its own Create Page button; click it.
+    const createBtns = screen.getAllByText(/Create Page/i);
+    await user.click(createBtns[0]);
+
+    const titleInput = screen.getByPlaceholderText(/30-min Discovery Call/i);
+    await user.type(titleInput, 'Quick Demo');
+
+    // Find the submit "Create Page" button INSIDE the modal (it's the one
+    // matching "Create Page" that lives near the cancel button).
+    // The modal renders <button type="submit">Create Page</button>.
+    const submitBtn = screen.getAllByText(/Create Page/i).find((el) => el.tagName === 'BUTTON' && el.getAttribute('type') === 'submit');
+    expect(submitBtn).toBeTruthy();
+    await user.click(submitBtn);
+
+    await waitFor(() => {
+      const postCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages' && opts && opts.method === 'POST');
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.title).toBe('Quick Demo');
+      expect(body.durationMins).toBe(30);
+      // availability default present.
+      expect(body.availability).toBeTruthy();
+    });
+  });
+
+  it('validation: submit with empty title is a no-op (no POST fires)', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText(/No booking pages yet/i)).toBeInTheDocument());
+
+    const createBtns = screen.getAllByText(/Create Page/i);
+    await user.click(createBtns[0]);
+
+    // The title input has required, AND the submit handler bails early on
+    // empty title. We assert the early-bail path: clear any default and
+    // attempt to submit via the form. Browsers (jsdom) honour `required` and
+    // will block the click-submit too — either way no POST fires.
+    const beforePostCount = fetchApi.mock.calls.filter(([url, opts]) => url === '/api/booking-pages' && opts && opts.method === 'POST').length;
+
+    const submitBtn = screen.getAllByText(/Create Page/i).find((el) => el.tagName === 'BUTTON' && el.getAttribute('type') === 'submit');
+    await user.click(submitBtn);
+
+    // No POST should have fired.
+    const afterPostCount = fetchApi.mock.calls.filter(([url, opts]) => url === '/api/booking-pages' && opts && opts.method === 'POST').length;
+    expect(afterPostCount).toBe(beforePostCount);
+  });
+
+  it('surfaces notify.error when the create POST rejects', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || opts.method !== 'POST')) {
+        return Promise.resolve([]);
+      }
+      if (url === '/api/booking-pages' && opts && opts.method === 'POST') {
+        return Promise.reject(new Error('server down'));
+      }
+      return Promise.resolve([]);
+    });
+
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText(/No booking pages yet/i)).toBeInTheDocument());
+
+    const createBtns = screen.getAllByText(/Create Page/i);
+    await user.click(createBtns[0]);
+
+    const titleInput = screen.getByPlaceholderText(/30-min Discovery Call/i);
+    await user.type(titleInput, 'Will Fail');
+
+    const submitBtn = screen.getAllByText(/Create Page/i).find((el) => el.tagName === 'BUTTON' && el.getAttribute('type') === 'submit');
+    await user.click(submitBtn);
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalled();
+      expect(notify.error.mock.calls[0][0]).toMatch(/Failed to create booking page/i);
+    });
+  });
+});
+
+describe('<BookingPages /> — edit drawer (pre-fill + save + publish toggle)', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('pre-fills the edit drawer with the selected page fields', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url.endsWith('/bookings')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    // Drawer title row carries the page title.
+    await waitFor(() => {
+      // Title appears in BOTH the card AND the drawer; assert ≥2.
+      expect(screen.getAllByText('Discovery Call').length).toBeGreaterThanOrEqual(2);
+    });
+    // Title input pre-filled.
+    const titleInput = screen.getAllByDisplayValue('Discovery Call').find((el) => el.tagName === 'INPUT');
+    expect(titleInput).toBeTruthy();
+    // Description input pre-filled.
+    expect(screen.getByDisplayValue('A 30-min intro')).toBeInTheDocument();
+    // Status dropdown defaults to "Active".
+    expect(screen.getByDisplayValue('Active')).toBeInTheDocument();
+  });
+
+  it('Save Changes PUTs /api/booking-pages/:id with the edited payload', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7' && opts && opts.method === 'PUT') {
+        return Promise.resolve({ ...samplePage, title: 'Discovery Call Updated' });
+      }
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByText(/Save Changes/i)).toBeInTheDocument());
+    await user.click(screen.getByText(/Save Changes/i));
+
+    await waitFor(() => {
+      const putCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7' && opts && opts.method === 'PUT');
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      // Pre-filled fields round-trip.
+      expect(body.title).toBe('Discovery Call');
+      expect(body.durationMins).toBe(30);
+      // Booleans + availability sent.
+      expect(typeof body.isActive).toBe('boolean');
+      expect(body.availability).toBeTruthy();
+    });
+  });
+
+  it('toggling Status dropdown from Active → Paused flows into the PUT payload', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7' && opts && opts.method === 'PUT') {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({ ...samplePage, isActive: body.isActive });
+      }
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByDisplayValue('Active')).toBeInTheDocument());
+    const statusSelect = screen.getByDisplayValue('Active');
+    // Active option has value '1'; Paused has value '0'.
+    fireEvent.change(statusSelect, { target: { value: '0' } });
+
+    await user.click(screen.getByText(/Save Changes/i));
+
+    await waitFor(() => {
+      const putCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7' && opts && opts.method === 'PUT');
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.isActive).toBe(false);
+    });
+  });
+
+  it('surfaces notify.error when the Save PUT rejects', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7' && opts && opts.method === 'PUT') {
+        return Promise.reject(new Error('500'));
+      }
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+    await waitFor(() => expect(screen.getByText(/Save Changes/i)).toBeInTheDocument());
+    await user.click(screen.getByText(/Save Changes/i));
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalled();
+      expect(notify.error.mock.calls[0][0]).toMatch(/Failed to save changes/i);
+    });
+  });
+});
+
+describe('<BookingPages /> — delete confirm flow', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('delete fires confirm() and on accept DELETEs /api/booking-pages/:id then reloads', async () => {
+    notify.confirm.mockImplementation(() => Promise.resolve(true));
+
+    let listCallCount = 0;
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) {
+        listCallCount += 1;
+        return Promise.resolve(listCallCount === 1 ? [samplePage] : []);
+      }
+      if (url === '/api/booking-pages/7' && opts && opts.method === 'DELETE') {
+        return Promise.resolve({});
+      }
+      return Promise.resolve([]);
+    });
+
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+
+    // The delete button is a red Trash2 icon button — find it via the
+    // wrapping card's last button. Simpler: query all buttons inside the
+    // card and click the last one (delete is third in the action row).
+    const cardButtons = container.querySelectorAll('.card button');
+    // 3 action buttons per card: Copy URL, Edit, Delete. Header + empty-state
+    // CTAs are not inside .card.card here because the header is a sibling.
+    // The DELETE icon button is the LAST button inside the card.
+    const deleteBtn = cardButtons[cardButtons.length - 1];
+    await user.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(notify.confirm).toHaveBeenCalled();
+      const deleteCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7' && opts && opts.method === 'DELETE');
+      expect(deleteCall).toBeTruthy();
+    });
+  });
+
+  it('delete is cancelled when confirm() resolves false (no DELETE fires)', async () => {
+    notify.confirm.mockImplementation(() => Promise.resolve(false));
+
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      return Promise.resolve([]);
+    });
+
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+
+    const cardButtons = container.querySelectorAll('.card button');
+    const deleteBtn = cardButtons[cardButtons.length - 1];
+    await user.click(deleteBtn);
+
+    await waitFor(() => expect(notify.confirm).toHaveBeenCalled());
+
+    // No DELETE call should have fired.
+    const deleteCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7' && opts && opts.method === 'DELETE');
+    expect(deleteCall).toBeFalsy();
+  });
+});
+
+describe('<BookingPages /> — weekly availability slot configuration', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('renders all 7 day rows with default Mon-Fri windows and "Unavailable" on weekend', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url.endsWith('/bookings')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByText(/Weekly Availability/i)).toBeInTheDocument());
+    expect(screen.getByText('Mon')).toBeInTheDocument();
+    expect(screen.getByText('Tue')).toBeInTheDocument();
+    expect(screen.getByText('Wed')).toBeInTheDocument();
+    expect(screen.getByText('Thu')).toBeInTheDocument();
+    expect(screen.getByText('Fri')).toBeInTheDocument();
+    expect(screen.getByText('Sat')).toBeInTheDocument();
+    expect(screen.getByText('Sun')).toBeInTheDocument();
+    // Sat + Sun default to "Unavailable" (two italic span labels).
+    const unavail = screen.getAllByText(/Unavailable/i);
+    expect(unavail.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('renders time inputs for each weekday window (5 weekdays × 2 inputs each = 10 time inputs)', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url.endsWith('/bookings')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByText(/Weekly Availability/i)).toBeInTheDocument());
+
+    // 5 weekday rows × 2 time inputs (start + end) = 10 type=time inputs.
+    const timeInputs = container.querySelectorAll('input[type="time"]');
+    expect(timeInputs.length).toBe(10);
+  });
+});
+
+describe('<BookingPages /> — CSV export', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('clicking "Export Bookings CSV" fetches /api/csv/bookings/export.csv with Bearer token', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      return Promise.resolve([]);
+    });
+
+    const blob = new Blob(['name,email\nAlice,a@b.c'], { type: 'text/csv' });
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(blob),
+    });
+    // jsdom URL.createObjectURL is stubbed minimally.
+    const createObjectURL = vi.fn(() => 'blob:fake-url');
+    const revokeObjectURL = vi.fn();
+    const origCreate = URL.createObjectURL;
+    const origRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+
+    try {
+      const user = userEvent.setup();
+      renderBookingPages();
+      await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+
+      const exportBtn = screen.getByText(/Export Bookings CSV/i);
+      await user.click(exportBtn);
+
+      await waitFor(() => {
+        const csvCall = fetchSpy.mock.calls.find(([url]) => url === '/api/csv/bookings/export.csv');
+        expect(csvCall).toBeTruthy();
+        // Bearer token header was attached.
+        const opts = csvCall[1];
+        expect(opts.headers.Authorization).toMatch(/^Bearer /);
+      });
+
+      // notify.success is called on completion.
+      await waitFor(() => expect(notify.success).toHaveBeenCalled());
+    } finally {
+      fetchSpy.mockRestore();
+      URL.createObjectURL = origCreate;
+      URL.revokeObjectURL = origRevoke;
+    }
+  });
+
+  it('surfaces notify.error when the CSV fetch returns non-OK', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      return Promise.resolve([]);
+    });
+
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 500,
+      blob: () => Promise.resolve(new Blob()),
+    });
+
+    try {
+      const user = userEvent.setup();
+      renderBookingPages();
+      await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+
+      const exportBtn = screen.getByText(/Export Bookings CSV/i);
+      await user.click(exportBtn);
+
+      await waitFor(() => {
+        expect(notify.error).toHaveBeenCalled();
+        expect(notify.error.mock.calls[0][0]).toMatch(/Export failed|CSV/i);
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Extended branch coverage — availability windows, rich-content editor,
+// bookings drawer, CSV busy state, parseAvail JSON branch.
+// ─────────────────────────────────────────────────────────────────────
+
+describe('<BookingPages /> — availability window add / remove + buffer', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('addWindow on Saturday creates a 9-17 default window (replaces Unavailable label)', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url.endsWith('/bookings')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+    await waitFor(() => expect(screen.getByText(/Weekly Availability/i)).toBeInTheDocument());
+
+    // Before: 10 time inputs (5 weekdays × 2). After clicking Sat's "+" we
+    // expect 12 (Sat now has a 09:00-17:00 default window).
+    expect(container.querySelectorAll('input[type="time"]').length).toBe(10);
+
+    // The "Add window" buttons are the trailing icon buttons on each day row.
+    // Find them by their title attribute.
+    const addBtns = container.querySelectorAll('button[title="Add window"]');
+    expect(addBtns.length).toBe(7); // one per day row
+    // Saturday is the 6th day row (index 5).
+    await user.click(addBtns[5]);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('input[type="time"]').length).toBe(12);
+    });
+  });
+
+  it('removeWindow on Monday drops the default 09:00-17:00 window (back to Unavailable)', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url.endsWith('/bookings')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+    await waitFor(() => expect(screen.getByText(/Weekly Availability/i)).toBeInTheDocument());
+
+    // Before removal: 5 weekdays × 2 inputs = 10.
+    expect(container.querySelectorAll('input[type="time"]').length).toBe(10);
+
+    // "Remove window" buttons sit next to each time pair. First weekday is Mon.
+    const removeBtns = container.querySelectorAll('button[title="Remove window"]');
+    expect(removeBtns.length).toBe(5); // one per weekday window (no weekend windows by default)
+    await user.click(removeBtns[0]);
+
+    // Removing Monday's only window leaves 8 time inputs (4 remaining weekdays × 2).
+    await waitFor(() => {
+      expect(container.querySelectorAll('input[type="time"]').length).toBe(8);
+    });
+  });
+
+  it('editing duration + buffer fields flows into the PUT payload', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7' && opts && opts.method === 'PUT') {
+        return Promise.resolve(samplePage);
+      }
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    // Duration input has min=5/max=480, type=number. Buffer has min=0/max=120.
+    // Locate via their pre-filled values: 30 and 0.
+    await waitFor(() => expect(screen.getByDisplayValue('30')).toBeInTheDocument());
+    const durationInput = screen.getByDisplayValue('30');
+    const bufferInput = screen.getByDisplayValue('0');
+
+    await user.clear(durationInput);
+    await user.type(durationInput, '45');
+    await user.clear(bufferInput);
+    await user.type(bufferInput, '10');
+
+    await user.click(screen.getByText(/Save Changes/i));
+
+    await waitFor(() => {
+      const putCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7' && opts && opts.method === 'PUT');
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.durationMins).toBe(45);
+      expect(body.bufferMins).toBe(10);
+    });
+  });
+});
+
+describe('<BookingPages /> — rich-content editor (Mini Website fields)', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('hero headline + subheadline + contact phone + email + hours flow into PUT', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7' && opts && opts.method === 'PUT') {
+        return Promise.resolve(samplePage);
+      }
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByTestId('hero-headline')).toBeInTheDocument());
+    await user.type(screen.getByTestId('hero-headline'), 'Welcome');
+    await user.type(screen.getByTestId('hero-subheadline'), 'Book now');
+    await user.type(screen.getByTestId('contact-phone'), '+91 99999 11111');
+    await user.type(screen.getByTestId('contact-email'), 'hi@clinic.test');
+    await user.type(screen.getByTestId('contact-hours'), 'Mon-Sat 9-19');
+
+    await user.click(screen.getByText(/Save Changes/i));
+
+    await waitFor(() => {
+      const putCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7' && opts && opts.method === 'PUT');
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.heroHeadline).toBe('Welcome');
+      expect(body.heroSubheadline).toBe('Book now');
+      expect(body.contactPhone).toBe('+91 99999 11111');
+      expect(body.contactEmail).toBe('hi@clinic.test');
+      expect(body.hoursJson).toBe('Mon-Sat 9-19');
+      // Empty logo/hero stay null.
+      expect(body.logoUrl).toBeNull();
+      expect(body.heroImageUrl).toBeNull();
+    });
+  });
+
+  it('PUT sends empty featuredServiceIds when none configured', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7' && opts && opts.method === 'PUT') {
+        return Promise.resolve(samplePage);
+      }
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([
+        { id: 1, name: 'Hair Treatment', isActive: true },
+        { id: 2, name: 'Skin Care', isActive: true },
+      ]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    // Featured services empty-state text renders.
+    await waitFor(() => expect(screen.getByText(/No featured services/i)).toBeInTheDocument());
+    // The add-service dropdown is present because availableServices >0.
+    expect(screen.getByTestId('featured-services-add')).toBeInTheDocument();
+
+    await user.click(screen.getByText(/Save Changes/i));
+
+    await waitFor(() => {
+      const putCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7' && opts && opts.method === 'PUT');
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.featuredServiceIds).toEqual([]);
+    });
+  });
+
+  it('adding a service to featured list shows it in the ordered list and removes it from the picker', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([
+        { id: 1, name: 'Hair Treatment', isActive: true },
+        { id: 2, name: 'Skin Care', isActive: true },
+      ]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByTestId('featured-services-add')).toBeInTheDocument());
+
+    const addSelect = screen.getByTestId('featured-services-add');
+    fireEvent.change(addSelect, { target: { value: '1' } });
+
+    // Ordered list now visible.
+    await waitFor(() => expect(screen.getByTestId('featured-services-list')).toBeInTheDocument());
+    expect(screen.getByText(/1\. Hair Treatment/)).toBeInTheDocument();
+  });
+});
+
+describe('<BookingPages /> — bookings drawer rendering + cancel', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('renders bookings list with contact name + status badge; CANCELED rows hide the cancel button', async () => {
+    const bookings = [
+      { id: 101, contactName: 'Alice', contactEmail: 'alice@x.test', scheduledAt: '2026-06-01T10:00:00Z', status: 'BOOKED' },
+      { id: 102, contactName: 'Bob', contactEmail: 'bob@x.test', scheduledAt: '2026-06-02T11:00:00Z', status: 'CANCELED' },
+      { id: 103, contactName: 'Carol', contactEmail: 'carol@x.test', scheduledAt: '2026-06-03T12:00:00Z', status: 'COMPLETED' },
+    ];
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve(bookings);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByText(/Recent Bookings \(3\)/i)).toBeInTheDocument());
+    expect(screen.getByText('Alice')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.getByText('Carol')).toBeInTheDocument();
+    expect(screen.getByText('BOOKED')).toBeInTheDocument();
+    expect(screen.getByText('CANCELED')).toBeInTheDocument();
+    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+
+    // The cancel button only renders for non-CANCELED bookings. There are
+    // 3 bookings × 2 non-canceled = 2 trailing cancel buttons. Find them via
+    // their "Cancel" title.
+    const cancelBtns = container.querySelectorAll('button[title="Cancel"]');
+    expect(cancelBtns.length).toBe(2);
+  });
+
+  it('cancel booking → confirm → POST /:id/cancel/:bid + refetch list', async () => {
+    notify.confirm.mockImplementation(() => Promise.resolve(true));
+
+    let listCalls = 0;
+    const initialBookings = [
+      { id: 101, contactName: 'Alice', contactEmail: 'a@x.test', scheduledAt: '2026-06-01T10:00:00Z', status: 'BOOKED' },
+    ];
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7/bookings') {
+        listCalls += 1;
+        return Promise.resolve(initialBookings);
+      }
+      if (url === '/api/booking-pages/7/cancel/101' && opts && opts.method === 'POST') {
+        return Promise.resolve({});
+      }
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+    const cancelBtns = container.querySelectorAll('button[title="Cancel"]');
+    await user.click(cancelBtns[0]);
+
+    await waitFor(() => {
+      expect(notify.confirm).toHaveBeenCalled();
+      const cancelCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7/cancel/101' && opts && opts.method === 'POST');
+      expect(cancelCall).toBeTruthy();
+      // /bookings was refetched after cancel.
+      expect(listCalls).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('openPage gracefully falls through to empty bookings when /bookings rejects', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7/bookings') return Promise.reject(new Error('500'));
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    // Empty-state copy renders inside the drawer.
+    await waitFor(() => expect(screen.getByText(/No bookings yet\. Share your URL/i)).toBeInTheDocument());
+    expect(screen.getByText(/Recent Bookings \(0\)/i)).toBeInTheDocument();
+  });
+});
+
+describe('<BookingPages /> — CSV export busy state', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('disables the Export Bookings CSV button while the request is in flight', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      return Promise.resolve([]);
+    });
+
+    // Long-pending fetch keeps csvBusy=true.
+    let resolveFetch;
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise((res) => { resolveFetch = res; }));
+    try {
+      const user = userEvent.setup();
+      renderBookingPages();
+      await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+
+      const exportBtn = screen.getByText(/Export Bookings CSV/i).closest('button');
+      expect(exportBtn).not.toBeDisabled();
+      await user.click(exportBtn);
+
+      await waitFor(() => expect(exportBtn).toBeDisabled());
+      // Resolve so the test cleans up.
+      resolveFetch({ ok: true, status: 200, blob: () => Promise.resolve(new Blob()) });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
+describe('<BookingPages /> — parseAvail branches via opening a page with serialised availability', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('JSON-string availability parses into the editor (Sat row carries a custom window)', async () => {
+    const customAvailJson = JSON.stringify({
+      saturday: [{ start: '10:00', end: '14:00' }],
+    });
+    const pageWithJsonAvail = { ...samplePage, availability: customAvailJson };
+
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([pageWithJsonAvail]);
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+    await waitFor(() => expect(screen.getByText(/Weekly Availability/i)).toBeInTheDocument());
+
+    // Weekdays default 5×2 = 10 inputs PLUS the Sat custom 1×2 = 12 total.
+    expect(container.querySelectorAll('input[type="time"]').length).toBe(12);
+    // Saturday's custom 10:00 start renders.
+    expect(screen.getByDisplayValue('10:00')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('14:00')).toBeInTheDocument();
+  });
+
+  it('malformed JSON availability falls back to DEFAULT_AVAIL (5 weekday windows)', async () => {
+    const pageWithBadAvail = { ...samplePage, availability: '{not valid json' };
+
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([pageWithBadAvail]);
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+    await waitFor(() => expect(screen.getByText(/Weekly Availability/i)).toBeInTheDocument());
+
+    // Falls back to default — 5 weekdays × 2 = 10 inputs.
+    expect(container.querySelectorAll('input[type="time"]').length).toBe(10);
+  });
+});
+
+describe('<BookingPages /> — Copy URL action', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('clicking "Copy URL" on a card surfaces the public URL via clipboard, prompt, OR Copied! state', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      return Promise.resolve([]);
+    });
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+
+    const copyBtn = screen.getByText(/Copy URL/i);
+    await user.click(copyBtn);
+
+    // Three valid completion signals: writeText fired, prompt fallback fired,
+    // or the SUT flipped to its "Copied!" visual state (proves copyUrl ran).
+    await waitFor(() => {
+      const clipboardFired = writeText.mock.calls.length > 0;
+      const promptFired = notify.prompt.mock.calls.length > 0;
+      const copiedStateRendered = screen.queryByText(/Copied!/i) !== null;
+      expect(clipboardFired || promptFired || copiedStateRendered).toBe(true);
+    }, { timeout: 3000 });
+
+    // URL pattern includes /api/booking-pages/public/<slug> — assert only
+    // when whichever path captured the URL did fire.
+    if (writeText.mock.calls.length > 0) {
+      expect(writeText.mock.calls[0][0]).toMatch(/\/api\/booking-pages\/public\/discovery-call/);
+    } else if (notify.prompt.mock.calls.length > 0) {
+      expect(notify.prompt.mock.calls[0][1]).toMatch(/\/api\/booking-pages\/public\/discovery-call/);
+    }
   });
 });

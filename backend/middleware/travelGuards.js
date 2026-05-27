@@ -61,8 +61,24 @@ async function requireTravelTenant(req, res, next) {
  * full access. Admins always get null (full access regardless of the
  * subBrandAccess column).
  *
- * Returns an empty Set on lookup failure (user row missing) — callers
- * should treat empty-set as "deny everything".
+ * Returns an empty Set on lookup failure (user row missing), on malformed
+ * JSON in the subBrandAccess column, or on an explicit empty array `"[]"`
+ * (the natural way to express "not-yet-onboarded — no sub-brand grants").
+ * Callers should treat an empty Set as "deny everything" (the per-route
+ * convention is to short-circuit to an all-zeros / no-op envelope so the
+ * dashboard tile renders cleanly rather than 403'ing).
+ *
+ * Distinguishing the deny-all (`new Set()`) path from the full-access
+ * (`null`) path matters because:
+ *   - `null` from a missing/unset subBrandAccess column means "no scope
+ *     restriction declared" → fall back to tenant-wide access (admin-like).
+ *   - `new Set()` from an explicit `"[]"` means "scope declared and it's
+ *     empty" → deny everything inside the tenant. (Per #976.)
+ * Non-array JSON (e.g. `'{"tmc":true}'`) preserves the null/full-access
+ * fallback because the shape is malformed-but-non-array — we can't tell
+ * whether the operator intended deny-all or just typo'd a non-array
+ * structure, so defaulting to null preserves backward-compatibility with
+ * any historical bad rows.
  */
 async function getSubBrandAccessSet(userId) {
   const user = await prisma.user.findUnique({
@@ -74,7 +90,8 @@ async function getSubBrandAccessSet(userId) {
   if (!user.subBrandAccess) return null;
   try {
     const arr = JSON.parse(user.subBrandAccess);
-    if (!Array.isArray(arr) || arr.length === 0) return null;
+    if (!Array.isArray(arr)) return null; // malformed (non-array) → full access (preserved)
+    if (arr.length === 0) return new Set(); // explicit "[]" → deny-all (#976)
     return new Set(arr.filter((s) => VALID_SUB_BRANDS.includes(s)));
   } catch (_e) {
     return new Set();

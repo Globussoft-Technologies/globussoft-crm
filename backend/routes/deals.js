@@ -62,11 +62,37 @@ router.get("/", async (req, res) => {
     // #172: pagination support (was ignored entirely pre-fix).
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset) || 0);
-    const deals = await prisma.deal.findMany({
+    // #920 slice 2 — PII reduction via opt-in slim shape. Mirrors the
+    // contacts.js pattern shipped in slice 1 (f7790241). When the caller
+    // passes ?fields=summary the response drops the heavy nested includes
+    // (contact + owner) AND the heavy/sensitive flat columns (currency,
+    // probability, expectedClose, lostReason, winLossReasonId, diagnosticId,
+    // subBrand, deletedAt) by switching to an explicit Prisma `select`.
+    // ADDITIVE — when ?fields is absent or any other value, the existing
+    // full-shape `include` is preserved so no existing consumer (Pipeline,
+    // DealModal, Dashboard, CommandPalette, etc.) needs to change.
+    // filterReadFields() still applies on the slim shape (no-op for fields
+    // not present) so the #464 field-permission layer keeps composing.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where, take: limit, skip: offset,
-      include: { contact: true, owner: true },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        title: true,
+        amount: true,
+        stage: true,
+        ownerId: true,
+        contactId: true,
+        tenantId: true,
+        createdAt: true,
+      };
+    } else {
+      findManyArgs.include = { contact: true, owner: true };
+    }
+    const deals = await prisma.deal.findMany(findManyArgs);
     // #464: strip fields the caller's role can't read (e.g. amount hidden
     // for USER if FieldPermission rule says canRead=false on Deal.amount).
     const filtered = await filterReadFields(deals, req.user.role, "Deal", req.user.tenantId);
@@ -230,7 +256,7 @@ router.post("/", async (req, res) => {
     // #464: strip write-restricted fields BEFORE destructuring so a USER
     // who has canWrite=false on Deal.amount can't push a value through.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, subBrand } = req.body;
+    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
     // #162: validate amount, probability, stage so bad inputs return 400.
     const inputErr = validateDealInput(req.body, { isUpdate: false });
@@ -248,6 +274,13 @@ router.post("/", async (req, res) => {
     if (pipelineId) data.pipelineId = parseInt(pipelineId);
     if (expectedClose) data.expectedClose = new Date(expectedClose);
     if (subBrand) data.subBrand = String(subBrand);
+    // #977: POST was previously dropping lostReason / winLossReasonId on the
+    // floor (destructure didn't include them), so a deal created directly in
+    // the 'lost' stage with a free-text reason had no reason persisted —
+    // GET /api/win-loss/analysis byReason then silently omitted the row.
+    // Mirror PUT's thread-through (line 357-358) so create + update agree.
+    if (lostReason !== undefined) data.lostReason = lostReason;
+    if (winLossReasonId !== undefined) data.winLossReasonId = parseInt(winLossReasonId);
     if (currency) {
       data.currency = currency;
     } else {

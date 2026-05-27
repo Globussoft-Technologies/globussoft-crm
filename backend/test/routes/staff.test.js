@@ -316,3 +316,137 @@ describe('POST /:id/resend-invite', () => {
     expect(res.status).toBe(404);
   });
 });
+
+// ── GET /api/staff?fields=summary — opt-in slim shape (#920 slice 15) ─────
+//
+// Mirrors slices 1-14 (contacts/deals/tickets/notifications/projects/tasks/
+// expenses/playbooks/sequences/surveys/email-templates/knowledge-base/etc.).
+// When ?fields=summary on GET /api/staff, Prisma is called with an explicit
+// slim `select` that drops commissionProfileId — the only field that
+// dropdown / picker callers don't need. Sensitive fields (password,
+// twoFactorSecret, backupCodes, ssoProvider/googleId/microsoftId,
+// emailSignature, trial dates) are NEVER returned in either branch because
+// the full shape already used an explicit select that omits them — slim is
+// purely additive PII-reduction for callers that don't need commission FK.
+// ADDITIVE: absent ?fields preserves the full select.
+
+describe('GET /api/staff?fields=summary — opt-in slim shape (#920 slice 15)', () => {
+  test('default (no ?fields) → prisma.user.findMany called with FULL select including commissionProfileId', async () => {
+    prisma.user.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/staff');
+    expect(res.status).toBe(200);
+    const args = prisma.user.findMany.mock.calls[0][0];
+    expect(args.select).toEqual(expect.objectContaining({
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      wellnessRole: true,
+      commissionProfileId: true,
+      createdAt: true,
+      deactivatedAt: true,
+    }));
+    // Never include the sensitive fields in either branch.
+    expect(args.select.password).toBeUndefined();
+    expect(args.select.twoFactorSecret).toBeUndefined();
+    expect(args.select.backupCodes).toBeUndefined();
+  });
+
+  test('?fields=summary → prisma.user.findMany called with SLIM select (commissionProfileId DROPPED)', async () => {
+    prisma.user.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/staff?fields=summary');
+    expect(res.status).toBe(200);
+    const args = prisma.user.findMany.mock.calls[0][0];
+    expect(args.select).toEqual({
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      wellnessRole: true,
+      tenantId: true,
+      createdAt: true,
+      deactivatedAt: true,
+    });
+    expect(args.select.commissionProfileId).toBeUndefined();
+    // Sanity: ensure no `include` snuck in alongside select.
+    expect(args.include).toBeUndefined();
+  });
+
+  test('?fields=summary → response rows expose ONLY the slim-shape keys (no sensitive fields, no commissionProfileId)', async () => {
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 12,
+        email: 'doctor@enhancedwellness.in',
+        name: 'Dr Harsh Mehta',
+        role: 'USER',
+        wellnessRole: 'doctor',
+        tenantId: 1,
+        createdAt: new Date('2026-01-15'),
+        deactivatedAt: null,
+      },
+    ]);
+    const res = await request(makeApp({ role: 'ADMIN' })).get('/api/staff?fields=summary');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    const row = res.body[0];
+    // Slim shape exposes these keys.
+    expect(row.id).toBe(12);
+    expect(row.name).toBe('Dr Harsh Mehta');
+    expect(row.email).toBe('doctor@enhancedwellness.in');
+    expect(row.role).toBe('USER');
+    expect(row.wellnessRole).toBe('doctor');
+    // Slim shape DROPS commissionProfileId.
+    expect(row).not.toHaveProperty('commissionProfileId');
+    // Sensitive fields were never present in either shape — pin defence.
+    expect(row).not.toHaveProperty('password');
+    expect(row).not.toHaveProperty('twoFactorSecret');
+    expect(row).not.toHaveProperty('backupCodes');
+    expect(row).not.toHaveProperty('googleId');
+    expect(row).not.toHaveProperty('microsoftId');
+    expect(row).not.toHaveProperty('ssoProvider');
+  });
+
+  test('?fields=summary preserves tenant-isolation — where.tenantId mirrors req.user.tenantId', async () => {
+    prisma.user.findMany.mockResolvedValue([]);
+    await request(makeApp({ tenantId: 4242 })).get('/api/staff?fields=summary');
+    const args = prisma.user.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 4242 });
+  });
+
+  test('?fields=summary + low-trust viewer (role=USER) → response is still PII-masked (name/email/id masked) — slim does not bypass #682', async () => {
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 12,
+        email: 'doctor@enhancedwellness.in',
+        name: 'Harsh Mehta',
+        role: 'USER',
+        wellnessRole: 'doctor',
+        tenantId: 1,
+        createdAt: new Date('2026-01-15'),
+        deactivatedAt: null,
+      },
+    ]);
+    // role=USER triggers the shouldMaskForViewer branch.
+    const res = await request(makeApp({ role: 'USER', userId: 99 })).get('/api/staff?fields=summary');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    const row = res.body[0];
+    // Email is masked to "x****@domain" — first char + ****@ + domain.
+    expect(row.email).toMatch(/^d\*+@enhancedwellness\.in$/);
+    // Name is masked to "F. Last".
+    expect(row.name).toMatch(/^H\. Mehta$/);
+    // id is hashed (not the raw 12).
+    expect(row.id).not.toBe(12);
+  });
+
+  test('?fields=other → falls back to FULL select (additive, only the literal "summary" string opts in)', async () => {
+    prisma.user.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/staff?fields=other');
+    expect(res.status).toBe(200);
+    const args = prisma.user.findMany.mock.calls[0][0];
+    expect(args.select).toEqual(expect.objectContaining({
+      commissionProfileId: true,
+    }));
+  });
+});

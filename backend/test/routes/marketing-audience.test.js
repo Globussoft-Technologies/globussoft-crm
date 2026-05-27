@@ -163,3 +163,101 @@ describe('buildContactWhere — travel-vertical sub-brand audience scoping (#898
     expect(where.subBrand).toBe('42');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Tick #N — +8 cases pinning the still-unpinned edges of buildContactWhere:
+//   - aiScore half-open windows (min-only / max-only / falsy-zero floor)
+//   - tags OR-array length + structure
+//   - NaN coercion fallthrough for numeric-id filters
+//   - patientCategory case-insensitivity + OR-merge with existing clauses
+//   - filters=undefined returns the same shape as null (defensive)
+// ─────────────────────────────────────────────────────────────────────────
+describe('buildContactWhere — aiScore window edges', () => {
+  test('aiScoreMin only yields { gte } and no lte (no Max passed)', () => {
+    const where = buildContactWhere(7, { aiScoreMin: 50 });
+    expect(where.aiScore).toEqual({ gte: 50 });
+    expect(where.aiScore.lte).toBeUndefined();
+  });
+
+  test('aiScoreMax only yields { lte } and no gte (no Min passed)', () => {
+    const where = buildContactWhere(7, { aiScoreMax: 80 });
+    expect(where.aiScore).toEqual({ lte: 80 });
+    expect(where.aiScore.gte).toBeUndefined();
+  });
+
+  test('aiScoreMin=0 (falsy-but-valid floor) still produces gte=0 — the != null guard catches this', () => {
+    // Defends against a "if (filters.aiScoreMin)" regression that would
+    // silently drop zero-floor filters because 0 is falsy in JS.
+    const where = buildContactWhere(7, { aiScoreMin: 0 });
+    expect(where.aiScore).toEqual({ gte: 0 });
+  });
+});
+
+describe('buildContactWhere — tags OR-array structure', () => {
+  test('single tag yields OR-array of length 1 with company + source sub-OR', () => {
+    const where = buildContactWhere(7, { tags: ['vip'] });
+    expect(Array.isArray(where.OR)).toBe(true);
+    expect(where.OR.length).toBe(1);
+    // Each tag entry is itself an OR over { company.contains } / { source.contains }.
+    expect(where.OR[0].OR).toBeDefined();
+    expect(where.OR[0].OR.length).toBe(2);
+    const flat = JSON.stringify(where.OR[0].OR);
+    expect(flat).toContain('vip');
+    expect(flat).toContain('company');
+    expect(flat).toContain('source');
+  });
+
+  test('multiple tags produce one OR-array entry per tag (preserves cardinality)', () => {
+    const where = buildContactWhere(7, { tags: ['vip', 'partner', 'enterprise'] });
+    expect(where.OR.length).toBe(3);
+    const flat = JSON.stringify(where.OR);
+    expect(flat).toContain('vip');
+    expect(flat).toContain('partner');
+    expect(flat).toContain('enterprise');
+  });
+});
+
+describe('buildContactWhere — numeric-id NaN coercion guard', () => {
+  test('preferredPractitionerId="abc" (NaN after Number()) is silently dropped — no clause emitted', () => {
+    const where = buildContactWhere(7, { preferredPractitionerId: 'abc' });
+    expect(where.preferredPractitionerId).toBeUndefined();
+    expect(where.tenantId).toBe(7);
+  });
+
+  test('preferredLocationId="not-a-number" (NaN) is silently dropped — no clause emitted', () => {
+    const where = buildContactWhere(7, { preferredLocationId: 'not-a-number' });
+    expect(where.preferredLocationId).toBeUndefined();
+    expect(where.tenantId).toBe(7);
+  });
+});
+
+describe('buildContactWhere — patientCategory case + OR-merge edges', () => {
+  test('patientCategory is normalized via toLowerCase — "NEW" === "new"', () => {
+    // Defends against a "if (cat === 'new')" regression that would only
+    // match the lowercase literal and silently no-op on UI-cased input.
+    const where = buildContactWhere(7, { patientCategory: 'NEW' });
+    expect(where.createdAt).toBeDefined();
+    expect(where.createdAt.gte).toBeInstanceOf(Date);
+  });
+
+  test('patientCategory=churned + tags compose: the tags-OR entries survive the churned OR-spread', () => {
+    // Implementation uses `...(where.OR || [])` so prior tag clauses
+    // must not be clobbered when churned appends its createdAt/status entries.
+    const where = buildContactWhere(7, { patientCategory: 'churned', tags: ['vip'] });
+    expect(where.OR).toBeDefined();
+    expect(where.OR.length).toBeGreaterThanOrEqual(3); // 1 tag entry + 2 churned entries
+    const flat = JSON.stringify(where.OR);
+    expect(flat).toContain('vip');       // tag survived
+    expect(flat).toContain('createdAt'); // churned-old-row clause present
+    expect(flat).toContain('Churned');   // churned-status clause present
+  });
+});
+
+describe('buildContactWhere — defensive null/undefined input', () => {
+  test('filters=undefined yields the same shape as filters=null (tenant-only where)', () => {
+    const whereU = buildContactWhere(7, undefined);
+    const whereN = buildContactWhere(7, null);
+    expect(whereU).toEqual(whereN);
+    expect(whereU).toEqual({ tenantId: 7 });
+  });
+});

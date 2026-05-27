@@ -180,6 +180,88 @@ describe('GET /posts — list', () => {
   });
 });
 
+describe('GET /posts?fields=summary — slim-shape opt-in (#920)', () => {
+  test('omits the `select` arg when ?fields is absent (back-compat full-shape)', async () => {
+    const app = makeApp({ tenantId: 1 });
+    prisma.socialPost.findMany.mockResolvedValue([
+      { id: 1, platform: 'linkedin', content: 'full content body', status: 'DRAFT', tenantId: 1 },
+    ]);
+
+    const res = await request(app).get('/api/social/posts');
+
+    expect(res.status).toBe(200);
+    const args = prisma.socialPost.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    expect(args.where.tenantId).toBe(1);
+    // Full shape is returned through verbatim — content + mediaUrl preserved.
+    expect(res.body[0].content).toBe('full content body');
+  });
+
+  test('passes a slim Prisma `select` dropping content/mediaUrl/externalId when ?fields=summary', async () => {
+    const app = makeApp({ tenantId: 1 });
+    prisma.socialPost.findMany.mockResolvedValue([
+      { id: 1, platform: 'linkedin', status: 'DRAFT', tenantId: 1 },
+    ]);
+
+    const res = await request(app).get('/api/social/posts?fields=summary');
+
+    expect(res.status).toBe(200);
+    const args = prisma.socialPost.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    // Heavy / PII fields explicitly absent from the select:
+    expect(args.select.content).toBeUndefined();
+    expect(args.select.mediaUrl).toBeUndefined();
+    expect(args.select.externalId).toBeUndefined();
+    // Lightweight admin-list fields present:
+    expect(args.select.id).toBe(true);
+    expect(args.select.platform).toBe(true);
+    expect(args.select.status).toBe(true);
+    expect(args.select.scheduledFor).toBe(true);
+    expect(args.select.publishedAt).toBe(true);
+    expect(args.select.createdAt).toBe(true);
+    expect(args.select.tenantId).toBe(true);
+  });
+
+  test('summary mode still applies tenantId + platform + status filters', async () => {
+    const app = makeApp({ tenantId: 42 });
+    prisma.socialPost.findMany.mockResolvedValue([]);
+
+    const res = await request(app)
+      .get('/api/social/posts?fields=summary&platform=Twitter&status=PUBLISHED');
+
+    expect(res.status).toBe(200);
+    const args = prisma.socialPost.findMany.mock.calls[0][0];
+    expect(args.where.tenantId).toBe(42);
+    expect(args.where.platform).toBe('twitter'); // normalized
+    expect(args.where.status).toBe('PUBLISHED');
+    expect(args.select).toBeDefined();
+    expect(args.take).toBe(200);
+  });
+
+  test('unknown ?fields value (not "summary") falls back to full shape', async () => {
+    const app = makeApp();
+    prisma.socialPost.findMany.mockResolvedValue([]);
+
+    const res = await request(app).get('/api/social/posts?fields=bogus');
+
+    expect(res.status).toBe(200);
+    const args = prisma.socialPost.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+
+  test('summary opt-in preserves orderBy + take so pagination behaviour is unchanged', async () => {
+    const app = makeApp();
+    prisma.socialPost.findMany.mockResolvedValue([]);
+
+    const res = await request(app).get('/api/social/posts?fields=summary');
+
+    expect(res.status).toBe(200);
+    const args = prisma.socialPost.findMany.mock.calls[0][0];
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.take).toBe(200);
+  });
+});
+
 describe('POST /posts — create', () => {
   test('400 when platform is missing or unsupported', async () => {
     const app = makeApp();

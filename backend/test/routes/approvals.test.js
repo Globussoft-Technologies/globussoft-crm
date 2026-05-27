@@ -390,6 +390,121 @@ describe('POST /api/approvals/:id/reject — state machine + emit', () => {
   });
 });
 
+// ─── GET / ?fields=summary — #920 slice 34 ───────────────────────────────
+
+describe('GET /api/approvals?fields=summary — slim-shape opt-in (#920 slice 34)', () => {
+  test('?fields=summary passes a slim select to prisma + skips hydrateUsers', async () => {
+    prisma.approvalRequest.findMany.mockResolvedValueOnce([
+      { id: 1, entity: 'Deal', entityId: 10, status: 'PENDING', requestedBy: 7, approvedBy: null, requestedAt: new Date('2026-05-26T10:00:00Z') },
+      { id: 2, entity: 'Quote', entityId: 22, status: 'APPROVED', requestedBy: 7, approvedBy: 9, requestedAt: new Date('2026-05-25T10:00:00Z') },
+    ]);
+
+    const app = makeApp({ tenantId: 1 });
+    const res = await request(app).get('/api/approvals?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(2);
+
+    const findArg = prisma.approvalRequest.findMany.mock.calls[0][0];
+    expect(findArg.select).toBeDefined();
+    expect(findArg.select.id).toBe(true);
+    expect(findArg.select.entity).toBe(true);
+    expect(findArg.select.entityId).toBe(true);
+    expect(findArg.select.status).toBe(true);
+    expect(findArg.select.requestedBy).toBe(true);
+    expect(findArg.select.approvedBy).toBe(true);
+    expect(findArg.select.requestedAt).toBe(true);
+
+    // Heavy/free-text columns must NOT be in the slim projection
+    expect(findArg.select.reason).toBeUndefined();
+    expect(findArg.select.comment).toBeUndefined();
+    expect(findArg.select.approvedAt).toBeUndefined();
+
+    // Slim path skips the hydrateUsers user.findMany roundtrip
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+
+    // No `requester` / `approver` graft on summary rows
+    expect(res.body[0].requester).toBeUndefined();
+    expect(res.body[0].approver).toBeUndefined();
+  });
+
+  test('default (no ?fields) keeps full row + hydrateUsers roundtrip (back-compat)', async () => {
+    prisma.approvalRequest.findMany.mockResolvedValueOnce([
+      { id: 1, entity: 'Deal', entityId: 10, status: 'PENDING', requestedBy: 7, approvedBy: null, reason: 'over 20%', comment: null, requestedAt: new Date(), approvedAt: null, tenantId: 1 },
+    ]);
+    prisma.user.findMany.mockResolvedValueOnce([
+      { id: 7, name: 'Alice', email: 'a@x.com', role: 'USER' },
+    ]);
+
+    const app = makeApp({ tenantId: 1 });
+    const res = await request(app).get('/api/approvals');
+
+    expect(res.status).toBe(200);
+    const findArg = prisma.approvalRequest.findMany.mock.calls[0][0];
+    // Full path uses NO select (return all columns)
+    expect(findArg.select).toBeUndefined();
+
+    // Hydration ran
+    expect(prisma.user.findMany).toHaveBeenCalledTimes(1);
+    expect(res.body[0].requester).toEqual({ id: 7, name: 'Alice', email: 'a@x.com', role: 'USER' });
+  });
+
+  test('?fields=summary still respects status + entity filters', async () => {
+    prisma.approvalRequest.findMany.mockResolvedValueOnce([]);
+
+    const app = makeApp({ tenantId: 1 });
+    const res = await request(app).get('/api/approvals?fields=summary&status=PENDING&entity=Quote');
+
+    expect(res.status).toBe(200);
+    const findArg = prisma.approvalRequest.findMany.mock.calls[0][0];
+    expect(findArg.where.tenantId).toBe(1);
+    expect(findArg.where.status).toBe('PENDING');
+    expect(findArg.where.entity).toBe('Quote');
+    expect(findArg.select).toBeDefined();
+  });
+
+  test('?fields=summary still tenant-scopes (no cross-tenant leak in slim path)', async () => {
+    prisma.approvalRequest.findMany.mockResolvedValueOnce([]);
+
+    const app = makeApp({ tenantId: 42 });
+    await request(app).get('/api/approvals?fields=summary');
+
+    const findArg = prisma.approvalRequest.findMany.mock.calls[0][0];
+    expect(findArg.where.tenantId).toBe(42);
+  });
+
+  test('?fields=bogus (any non-exact value) falls back to full hydrated shape', async () => {
+    prisma.approvalRequest.findMany.mockResolvedValueOnce([
+      { id: 1, entity: 'Deal', entityId: 10, status: 'PENDING', requestedBy: 7, approvedBy: null, reason: 'r', tenantId: 1 },
+    ]);
+    prisma.user.findMany.mockResolvedValueOnce([
+      { id: 7, name: 'Alice', email: 'a@x.com', role: 'USER' },
+    ]);
+
+    const app = makeApp({ tenantId: 1 });
+    const res = await request(app).get('/api/approvals?fields=full');
+
+    expect(res.status).toBe(200);
+    const findArg = prisma.approvalRequest.findMany.mock.calls[0][0];
+    // Non-exact value → NOT slim → no select projection
+    expect(findArg.select).toBeUndefined();
+    // Hydration ran (full path)
+    expect(prisma.user.findMany).toHaveBeenCalledTimes(1);
+    expect(res.body[0].requester).toBeDefined();
+  });
+
+  test('?fields=summary preserves orderBy contract (requestedAt desc)', async () => {
+    prisma.approvalRequest.findMany.mockResolvedValueOnce([]);
+
+    const app = makeApp({ tenantId: 1 });
+    await request(app).get('/api/approvals?fields=summary');
+
+    const findArg = prisma.approvalRequest.findMany.mock.calls[0][0];
+    expect(findArg.orderBy).toEqual({ requestedAt: 'desc' });
+  });
+});
+
 // ─── DELETE /:id ─────────────────────────────────────────────────────────
 
 describe('DELETE /api/approvals/:id — audit-before-delete', () => {

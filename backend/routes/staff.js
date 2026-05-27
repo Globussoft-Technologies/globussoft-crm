@@ -146,42 +146,71 @@ async function sendEmail(toEmail, subject, plainText, html) {
 // (they need to identify peers for referrals / handovers).
 router.get("/", async (req, res) => {
   try {
-    const users = await prisma.user.findMany({
-      where: { tenantId: req.user.tenantId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        // #221: include wellnessRole so the wellness UI can filter for doctors,
-        // professionals, telecallers, helpers. The Log Visit form's Doctor
-        // dropdown was empty because this field wasn't returned and the
-        // frontend filter `u.wellnessRole === 'doctor'` matched nothing.
-        wellnessRole: true,
-        // PRD Gap §1.5 — assigned commission profile (FK, nullable). Frontend
-        // dropdown reads this to show the current assignment.
-        commissionProfileId: true,
-        createdAt: true,
-        // #618 — surface deactivatedAt so the directory can flag inactive rows
-        // (UI renders an "Inactive" badge; the row stays in the list so an
-        // admin can re-activate it instead of having to soul-search the audit log).
-        deactivatedAt: true,
-        // Per-row primary RBAC role assignment so the Staff page can
-        // display + edit the new Custom roles (DOCTOR / NURSE / etc.)
-        // without a per-row roundtrip. Includes nested Role for the
-        // display badge. Single-role-per-user enforced upstream, so
-        // findFirst with desc order is deterministic.
-        userRoles: {
-          take: 1,
-          orderBy: { assignedAt: "desc" },
-          select: {
-            roleId: true,
-            role: {
-              select: { id: true, key: true, name: true, landingPath: true },
-            },
+    // #920 slice 15 — PII reduction via opt-in slim shape. When the caller
+    // passes ?fields=summary, GET /api/staff returns only the minimal set
+    // needed by dropdown / picker UIs (id, name, email, role, wellnessRole,
+    // tenantId, createdAt, deactivatedAt). Sensitive fields that the FULL
+    // shape never returned anyway (password, twoFactorSecret, backupCodes,
+    // ssoProvider/googleId/microsoftId, emailSignature, trial dates, etc.)
+    // remain absent in BOTH branches because the full shape already used an
+    // explicit `select`. The slim branch drops commissionProfileId — that's
+    // the only field a picker / dropdown caller doesn't need. ADDITIVE: when
+    // ?fields is absent or any other value, the existing full select is used
+    // so no existing consumer (Staff.jsx directory, Contacts/Leads/Quotas/
+    // CommissionProfiles/RevenueGoals/SharedInbox/LeadRouting/Territories +
+    // wellness Calendar/Holidays/PatientDetail/WorkingHoursEditor + travel
+    // WebCheckinQueue + AttendanceCalendar dropdowns) needs to change.
+    // PII masking (#682) still applies on the slim shape so low-trust
+    // viewers (USER role / wellness telecaller / helper) keep getting
+    // masked names + emails + hashed ids.
+    const isSummary = req.query.fields === "summary";
+    const fullSelect = {
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      // #221: include wellnessRole so the wellness UI can filter for doctors,
+      // professionals, telecallers, helpers. The Log Visit form's Doctor
+      // dropdown was empty because this field wasn't returned and the
+      // frontend filter `u.wellnessRole === 'doctor'` matched nothing.
+      wellnessRole: true,
+      // PRD Gap §1.5 — assigned commission profile (FK, nullable). Frontend
+      // dropdown reads this to show the current assignment.
+      commissionProfileId: true,
+      createdAt: true,
+      // #618 — surface deactivatedAt so the directory can flag inactive rows
+      // (UI renders an "Inactive" badge; the row stays in the list so an
+      // admin can re-activate it instead of having to soul-search the audit log).
+      deactivatedAt: true,
+      // Per-row primary RBAC role assignment so the Staff page can
+      // display + edit the new Custom roles (DOCTOR / NURSE / etc.)
+      // without a per-row roundtrip. Includes nested Role for the
+      // display badge. Single-role-per-user enforced upstream, so
+      // findFirst with desc order is deterministic.
+      userRoles: {
+        take: 1,
+        orderBy: { assignedAt: "desc" },
+        select: {
+          roleId: true,
+          role: {
+            select: { id: true, key: true, name: true, landingPath: true },
           },
         },
       },
+    };
+    const slimSelect = {
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      wellnessRole: true,
+      tenantId: true,
+      createdAt: true,
+      deactivatedAt: true,
+    };
+    const users = await prisma.user.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: isSummary ? slimSelect : fullSelect,
       orderBy: { createdAt: "desc" },
     });
 

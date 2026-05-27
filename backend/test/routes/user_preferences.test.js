@@ -185,4 +185,108 @@ describe('PUT /api/user/theme', () => {
     expect(res.status).toBe(401);
     expect(prisma.user.updateMany).not.toHaveBeenCalled();
   });
+
+  // ─── Extension: additional edge cases (tick #N test-writing cron) ──────
+  //
+  // The existing 10 cases pin the happy paths and the 401/404/400 envelopes.
+  // The 6 extensions below pin the SUT's defensive layer: the
+  // `typeof theme !== 'string'` guard, case-sensitivity of the enum, the
+  // 500 INTERNAL_ERROR catch in BOTH handlers, idempotency of repeated
+  // writes, and the malformed-JWT rejection path. These regress when
+  // someone "simplifies" the body parser or relaxes the verifyToken guard.
+
+  test('400 INVALID_BODY when body.theme is a non-string (number)', async () => {
+    // The guard is `typeof theme !== 'string'` so a number/array/object
+    // must not slip through to the includes() check.
+    const app = makeApp();
+    const res = await request(app)
+      .put('/api/user/theme')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ theme: 42 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_BODY');
+    expect(res.body.allowed).toEqual(['light', 'dark', 'system']);
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
+  });
+
+  test('400 INVALID_BODY when body.theme is an empty string', async () => {
+    // Guard reads `theme.length === 0` — empty string is INVALID_BODY,
+    // not INVALID_THEME, because the missing-value envelope is more
+    // useful to a misbehaving client.
+    const app = makeApp();
+    const res = await request(app)
+      .put('/api/user/theme')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ theme: '' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_BODY');
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
+  });
+
+  test('400 INVALID_THEME is case-sensitive (Dark != dark)', async () => {
+    // ALLOWED_THEMES is a closed lowercase set; uppercase variants must
+    // be rejected so the column stays in a known shape for the frontend.
+    const app = makeApp();
+    const res = await request(app)
+      .put('/api/user/theme')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ theme: 'Dark' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_THEME');
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
+  });
+
+  test('PUT returns 500 INTERNAL_ERROR when prisma throws', async () => {
+    // Pin the catch-all envelope shape so future logger/observability
+    // changes don't accidentally leak the raw error to the client.
+    prisma.user.updateMany.mockRejectedValueOnce(new Error('DB down'));
+    const app = makeApp();
+    const res = await request(app)
+      .put('/api/user/theme')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ theme: 'light' });
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
+    // No raw error details leaked.
+    expect(res.body.error).toBe('Failed to update theme preference');
+  });
+
+  test('idempotent — re-sending the same payload returns 200 each time', async () => {
+    // Pinning idempotency lets the frontend re-fire PUT on retry/network
+    // hiccups without worrying about side effects (the column is just
+    // overwritten with the same value on every call).
+    prisma.user.updateMany.mockResolvedValue({ count: 1 });
+    const app = makeApp();
+    const first = await request(app)
+      .put('/api/user/theme')
+      .set('Authorization', `Bearer ${tokenFor({ userId: 11, tenantId: 3 })}`)
+      .send({ theme: 'dark' });
+    const second = await request(app)
+      .put('/api/user/theme')
+      .set('Authorization', `Bearer ${tokenFor({ userId: 11, tenantId: 3 })}`)
+      .send({ theme: 'dark' });
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(first.body).toEqual({ theme: 'dark' });
+    expect(second.body).toEqual({ theme: 'dark' });
+    // Both calls hit the same scoped filter.
+    expect(prisma.user.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.user.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 11, tenantId: 3 },
+      data: { themePreference: 'dark' },
+    });
+  });
+
+  test('rejects PUT with a malformed JWT (not just missing header)', async () => {
+    // verifyToken should reject any token that doesn't verify under
+    // JWT_SECRET. Distinct from the missing-header case above (which
+    // exercises the early-return path before jwt.verify is even called).
+    const app = makeApp();
+    const res = await request(app)
+      .put('/api/user/theme')
+      .set('Authorization', 'Bearer not.a.real.jwt')
+      .send({ theme: 'dark' });
+    expect(res.status).toBe(401);
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
+  });
 });

@@ -139,6 +139,290 @@ router.post(
   },
 );
 
+// ============================================================================
+// GET /api/travel/cost-master/stats — tenant-wide cost-library rollup
+// (PRD_TRAVEL cost-master — first analytical surface for the admin-curated
+// supplier rate book).
+//
+// Mirrors /suppliers/stats + /commission-profiles/stats + /religious-packets
+// /stats posture. USER-readable anodyne aggregate. Extends what
+// TravelDashboard already shows (costMaster.activeRows + costMaster
+// .bySubBrand) by adding total + bySupplier + lastCreatedAt so the operator
+// dashboard can fire one request instead of four.
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' rows in the counts. Same gate as the
+//     /cost-master list endpoint (narrowWhereBySubBrand). TravelCostMaster
+//     .subBrand is NON-nullable in the schema, but the bucketing code
+//     defensively coalesces falsy → '_tenant' for forward-compat.
+//   - ?from / ?to (ISO date bounds) filter createdAt before aggregation;
+//     invalid → 400 INVALID_DATE.
+//   - Response envelope:
+//       total         — count of all matching rows
+//       active        — count where isActive=true
+//       bySubBrand    — { <sb|_tenant>: <count> }
+//       bySupplier    — { <supplierId>: <count> } (rows with null supplierId omitted)
+//       lastCreatedAt — ISO of most-recent createdAt, null when empty
+//
+// USER-readable: anodyne aggregate (counts + timestamps); safe.
+// No audit row: read-only meta surface, mirrors /suppliers/stats.
+//
+// Express route ordering: literal-path /cost-master/stats MUST be declared
+// BEFORE the /cost-master/:id family or `:id="stats"` would 400 INVALID_ID
+// before reaching this handler.
+// ============================================================================
+router.get("/cost-master/stats", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const tenantId = req.travelTenant.id;
+    const where = { tenantId };
+
+    // Optional ISO date bounds on createdAt — invalid → 400 INVALID_DATE.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Sub-brand narrowing — same gate as the list endpoint.
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    narrowWhereBySubBrand(where, allowed);
+
+    const rows = await prisma.travelCostMaster.findMany({
+      where,
+      select: {
+        id: true,
+        subBrand: true,
+        supplierId: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+
+    if (rows.length === 0) {
+      return res.json({
+        total: 0,
+        active: 0,
+        bySubBrand: {},
+        bySupplier: {},
+        lastCreatedAt: null,
+      });
+    }
+
+    let active = 0;
+    let lastCreatedAt = null;
+    const bySubBrand = {};
+    const bySupplier = {};
+
+    for (const r of rows) {
+      if (r.isActive) active += 1;
+
+      // Defensive: null/invalid createdAt rows still counted in total but
+      // skipped for the lastCreatedAt max calculation.
+      if (r.createdAt) {
+        const ts = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastCreatedAt || ts > lastCreatedAt) lastCreatedAt = ts;
+        }
+      }
+
+      // Coalesce falsy subBrand → '_tenant' bucket.
+      const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+      bySubBrand[sbKey] = (bySubBrand[sbKey] || 0) + 1;
+
+      // bySupplier — only count rows with a non-null supplierId.
+      if (r.supplierId != null) {
+        const supKey = String(r.supplierId);
+        bySupplier[supKey] = (bySupplier[supKey] || 0) + 1;
+      }
+    }
+
+    res.json({
+      total: rows.length,
+      active,
+      bySubBrand,
+      bySupplier,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-cost] stats error:", e.message);
+    res.status(500).json({ error: "Failed to summarise cost-master" });
+  }
+});
+
+// ============================================================================
+// GET /api/travel/cost-master/by-month — tenant-wide cost-library monthly rollup
+// (PRD_TRAVEL cost-master — sibling to /cost-master/stats slice).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-MM bucket for the
+// tenant-scoped (and sub-brand-narrowed) TravelCostMaster population. Each
+// row carries count + per-bucket bySubBrand breakdown so the operator dashboard
+// can render a "cost-library rows added over time" trend chart without N
+// round-trips per month.
+//
+// Mirrors /suppliers/by-month + /diagnostics/by-month family — same UTC
+// YYYY-MM bucketing template, same defensive math (null/invalid createdAt →
+// "unknown" bucket; excluded when ?from / ?to is set), same orderBy
+// semantics. Distinct from /cost-master/stats: /stats is a single
+// point-in-time KPI tile (total / active / bySubBrand / bySupplier /
+// lastCreatedAt); /by-month is the per-month time series across the same
+// population.
+//
+// Sub-brand restriction: MATCHES /cost-master/stats EXACTLY via
+// narrowWhereBySubBrand(where, allowed) — subBrand: { in: [...allowed] }.
+// TravelCostMaster.subBrand is NON-nullable in the schema, but bucketing
+// code defensively coalesces falsy → '_tenant' for forward-compat.
+//
+// Query params:
+//   - ?from / ?to       — optional inclusive YYYY-MM bounds; invalid →
+//                         400 INVALID_MONTH_FORMAT
+//   - ?orderBy          — default month:asc; accepts month:{asc|desc},
+//                         count:{asc|desc}; unknown tokens degrade
+//                         silently to the default
+//   - ?limit / ?offset  — default 12 / 0; limit caps at 60
+//
+// Behaviour:
+//   - JS-side aggregation over a light findMany projection
+//     ({ subBrand, createdAt }) — tenant-bounded population.
+//   - "unknown" bucket for rows with null/invalid createdAt; excluded
+//     when ?from / ?to is set, included otherwise.
+//   - Per-bucket bySubBrand: falsy subBrand → "_tenant".
+//   - Pagination applied AFTER aggregation + sort + bucket filter.
+//
+// No audit row written — read-only meta surface; matches /cost-master/stats.
+//
+// Express route ordering: literal-path /cost-master/by-month MUST be declared
+// BEFORE the /cost-master/:id family or `:id="by-month"` would 400 INVALID_ID
+// before reaching this handler. Same convention as /cost-master/stats.
+// ============================================================================
+router.get("/cost-master/by-month", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    // YYYY-MM validation.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "count:asc",
+      "count:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Sub-brand narrowing — mirrors /cost-master/stats exactly.
+    const where = { tenantId: req.travelTenant.id };
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    narrowWhereBySubBrand(where, allowed);
+
+    // Light projection — subBrand + createdAt is enough for bucket totals
+    // and per-bucket sub-brand breakdown.
+    const rows = await prisma.travelCostMaster.findMany({
+      where,
+      select: { subBrand: true, createdAt: true },
+    });
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → { month, count, bySubBrand }.
+    // Null/invalid createdAt rows land in "unknown".
+    const byMonth = new Map();
+    for (const r of rows) {
+      let monthKey = "unknown";
+      if (r.createdAt) {
+        const dt = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let bucket = byMonth.get(monthKey);
+      if (!bucket) {
+        bucket = { month: monthKey, count: 0, bySubBrand: {} };
+        byMonth.set(monthKey, bucket);
+      }
+      bucket.count += 1;
+
+      // Per-bucket bySubBrand — falsy coerces to "_tenant".
+      const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+      bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+    }
+
+    let months = [...byMonth.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" excluded when either
+    // bound is set (no comparable token); kept otherwise so count surface
+    // remains complete.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" lexicographic on YYYY-MM is also chronological.
+    // "unknown" sorts last in asc / first in desc (lex > "9999-12").
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const total = months.length;
+
+    // Pagination AFTER aggregation + sort + filter.
+    const paged = months.slice(skip, skip + take);
+
+    res.json({
+      total,
+      rows: paged,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-cost] by-month error:", e.message);
+    res.status(500).json({ error: "Failed to compute monthly rollup" });
+  }
+});
+
 // GET /api/travel/cost-master/:id
 router.get("/cost-master/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

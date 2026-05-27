@@ -318,4 +318,121 @@ describe('<OwnerDashboard />', () => {
     const calls = fetchApi.mock.calls.map((c) => c[0]);
     expect(calls.some((u) => /\/api\/wellness\/reports\/pnl-by-service\?.*from=/.test(u))).toBe(true);
   });
+
+  // ─────────────────────────────────────────────────────────────────
+  // Extended coverage — SUT 627L; was 51% ratio. Below: error / loading
+  // states, no-show risk tile (PRD §6.8), Callified SSO card navigation,
+  // greeting + date header, quick-link totals, revenue trend chart wiring.
+  // ─────────────────────────────────────────────────────────────────
+
+  it('shows the loading skeleton before the dashboard fetch resolves', () => {
+    // Don't resolve the dashboard fetch — we want to assert the
+    // pre-resolution paint matches the inline string in the SUT.
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('/api/wellness/locations')) return Promise.resolve([]);
+      if (url.includes('/api/wellness/dashboard')) return new Promise(() => {}); // never resolves
+      if (url.includes('/api/wellness/reports/pnl-by-service')) return new Promise(() => {});
+      return Promise.resolve({});
+    });
+    renderDashboard();
+    // Loading copy is the exact string in OwnerDashboard.jsx:227.
+    expect(screen.getByText(/Loading owner dashboard…/i)).toBeInTheDocument();
+  });
+
+  it('shows the "Could not load dashboard" error copy when the dashboard fetch rejects', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('/api/wellness/locations')) return Promise.resolve([]);
+      if (url.includes('/api/wellness/dashboard')) return Promise.reject(new Error('boom'));
+      if (url.includes('/api/wellness/reports/pnl-by-service')) return Promise.resolve({ totalRevenue: 0 });
+      return Promise.resolve({});
+    });
+    renderDashboard();
+    // The catch handler sets data=null; finally clears loading, then the
+    // !data guard renders the error message inline (SUT line 228).
+    await waitFor(() => expect(screen.getByText(/Could not load dashboard/i)).toBeInTheDocument());
+    expect(screen.getByText(/tenant has the Wellness vertical enabled/i)).toBeInTheDocument();
+  });
+
+  it('No-show risk tile: amber + count when noShowRisk.count > 0', async () => {
+    const withRisk = {
+      ...dashboardJson,
+      today: { ...dashboardJson.today, noShowRisk: { count: 3, totalUpcoming: 12 } },
+    };
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('/api/wellness/locations')) return Promise.resolve([{ id: 1, name: 'Ranchi' }]);
+      if (url.includes('/api/wellness/dashboard')) return Promise.resolve(withRisk);
+      if (url.includes('/api/wellness/reports/pnl-by-service')) return Promise.resolve({ totalRevenue: 0 });
+      return Promise.resolve({});
+    });
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText(/No-show risk/i)).toBeInTheDocument());
+    // The PRD §6.8 tile reads "<count>" as value and "of <totalUpcoming> upcoming"
+    // as sub-copy. Both must be visible together so Owner can see the ratio.
+    expect(screen.getByText(/of 12 upcoming/i)).toBeInTheDocument();
+  });
+
+  it('No-show risk tile: green + "of 0 upcoming" sub when fields are missing (nullish-default branch)', async () => {
+    // Dashboard payload omits noShowRisk entirely — SUT falls back via
+    // ?? 0 for both count and totalUpcoming. Pins the safe-default branch
+    // so a backend response without the field doesn't crash the page.
+    setupFetch([{ id: 1, name: 'Ranchi' }]); // dashboardJson has NO noShowRisk
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText(/No-show risk/i)).toBeInTheDocument());
+    expect(screen.getByText(/of 0 upcoming/i)).toBeInTheDocument();
+  });
+
+  it('renders the Callified SSO card with the "Open Callified" CTA navigating in-app (#832)', async () => {
+    setupFetch([{ id: 1, name: 'Ranchi' }]);
+    renderDashboard();
+    // "Callified" appears as both the card title <div> AND inside the CTA
+    // button label — use the unambiguous CTA aria-label as the load gate.
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: /Open Callified dashboard/i }),
+    ).toBeInTheDocument());
+    const callifiedCta = screen.getByRole('button', { name: /Open Callified dashboard/i });
+    expect(callifiedCta.textContent).toMatch(/Open Callified/i);
+    // The "Voice & WhatsApp integration" subtitle confirms we're looking
+    // at the Callified card, not an unrelated CTA.
+    expect(screen.getByText(/Voice & WhatsApp integration/i)).toBeInTheDocument();
+  });
+
+  it('renders the greeting header with the user name + the today-date copy', async () => {
+    setupFetch([{ id: 1, name: 'Ranchi' }]);
+    renderDashboard();
+    // User name in AuthContext is "Test User"; getGreeting() returns one
+    // of {Good morning, Good afternoon, Good evening, Good night} based on
+    // the wall clock. We can't pin the time-of-day word, but we CAN pin
+    // that the header includes "Test User" appended to whatever greeting.
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument());
+    const h1 = screen.getByRole('heading', { level: 1 });
+    expect(h1.textContent).toMatch(/Test User/);
+    // The "Here's the snapshot for today — <date>" subtitle (SUT:248) is
+    // the second paragraph in the header.
+    expect(screen.getByText(/Here's the snapshot for today/i)).toBeInTheDocument();
+  });
+
+  it('renders the quick-links footer with patient/service/recommendation totals + correct hrefs', async () => {
+    setupFetch([{ id: 1, name: 'Ranchi' }]);
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText(/Patients \(250\)/i)).toBeInTheDocument());
+    // dashboardJson.totals.services=105, pendingApprovals=3 — both rendered
+    // inline inside their quick-link tiles.
+    expect(screen.getByText(/Service catalog \(105\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Agent inbox \(3\)/i)).toBeInTheDocument();
+    // Patients link points at /wellness/patients (not the patient-detail
+    // route). Use queryAllByRole + filter because there are several anchors.
+    const links = screen.getAllByRole('link');
+    expect(links.some((l) => l.getAttribute('href') === '/wellness/patients')).toBe(true);
+    expect(links.some((l) => l.getAttribute('href') === '/wellness/services')).toBe(true);
+  });
+
+  it('renders the recharts Revenue-last-30-days container wired to data.revenueTrend', async () => {
+    setupFetch([{ id: 1, name: 'Ranchi' }]);
+    renderDashboard();
+    // The ResponsiveContainer mock surfaces a data-testid="rc" wrapper
+    // (set up at the top of this file). Its presence confirms the chart
+    // panel rendered after the data fetch resolved.
+    await waitFor(() => expect(screen.getByText(/Revenue — last 30 days/i)).toBeInTheDocument());
+    expect(screen.getByTestId('rc')).toBeInTheDocument();
+  });
 });

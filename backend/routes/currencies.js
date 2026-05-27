@@ -18,15 +18,53 @@ const DEFAULTS = [
 ];
 
 // GET /api/currencies — list currencies for tenant (fall back to defaults if none)
+//
+// Slim-shape opt-in (#920 slice 46): when called with ?fields=summary,
+// the handler drops the heavier metadata columns (`createdAt`/`updatedAt`)
+// from the Prisma select — useful for picker / dropdown / autocomplete
+// surfaces (deal-form currency selector, invoice-line currency dropdown,
+// settings menu) that only need id+code+symbol+name+exchangeRate+isBase
+// and don't render the audit-trail timestamps. Existing callers (no
+// ?fields, or any non-exact value) get the full row shape unchanged.
+// DEFAULTS fallback also honours the flag and projects to the same slim
+// keyset for shape parity. Same strict opt-in pattern as slices 1-45.
 router.get("/", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const rows = await prisma.currency.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId },
       orderBy: [{ isBase: "desc" }, { code: "asc" }],
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        code: true,
+        symbol: true,
+        name: true,
+        exchangeRate: true,
+        isBase: true,
+        tenantId: true,
+      };
+    }
+    const rows = await prisma.currency.findMany(findManyArgs);
     if (rows.length === 0) {
-      return res.json(DEFAULTS.map((d, i) => ({ id: -(i + 1), tenantId, ...d })));
+      const defaults = DEFAULTS.map((d, i) => ({ id: -(i + 1), tenantId, ...d }));
+      if (isSummary) {
+        // Project DEFAULTS to the same slim keyset for shape parity.
+        return res.json(
+          defaults.map((d) => ({
+            id: d.id,
+            code: d.code,
+            symbol: d.symbol,
+            name: d.name,
+            exchangeRate: d.exchangeRate,
+            isBase: d.isBase,
+            tenantId: d.tenantId,
+          })),
+        );
+      }
+      return res.json(defaults);
     }
     res.json(rows);
   } catch (err) {

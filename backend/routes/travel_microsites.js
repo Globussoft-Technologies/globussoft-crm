@@ -332,6 +332,656 @@ router.delete(
   },
 );
 
+// ============================================================================
+// GET /api/travel/microsites/stats — tenant-wide microsite rollup
+// (PRD_TRAVEL_TMC §3 microsites).
+//
+// Mirrors travel_suppliers.js /suppliers/stats pattern (#903 slice 23) —
+// anodyne aggregate that powers the Microsites library page's KPI header
+// strip ("12 microsites · 8 published · 4 unpublished · 2 expired · last
+// published 3h ago"). Without this, the frontend has to fire {list, count
+// by publishedAt, count by expiresAt} — N+1 round-trips for a single
+// visual surface.
+//
+// PRD anchors:
+//   - §3 — TMC operator dashboard surfaces "how many microsites have I
+//          published, how many are still drafts, how many have expired" —
+//          this endpoint feeds those KPI tiles
+//
+// Behaviour:
+//   - Tenant-scoped count + breakdown across TripMicrosite rows
+//   - USER-readable (anodyne aggregate; same contract as sibling /stats endpoints)
+//   - Sub-brand: TripMicrosite is TMC-only by design (microsites live on
+//     tmc.travelstall.in per Q21; the parent TmcTrip has no subBrand field).
+//     So we DO NOT expose a bySubBrand bucket — would always be { tmc: ... }
+//     and the field would mislead future readers into thinking sub-brand
+//     scoping exists where it doesn't.
+//   - Buckets returned (schema-driven):
+//       total            — count of all microsites for the tenant
+//       published        — where publishedAt is non-null
+//       unpublished      — remainder (publishedAt is null)
+//       expired          — where expiresAt is set AND in the past
+//       withFaq          — where faqJson is non-empty
+//       lastPublishedAt  — max(publishedAt) across rows (ISO string or null)
+//       lastActivityAt   — max(updatedAt) across rows (ISO string or null)
+//   - ?from / ?to (ISO date bounds) filter microsite.createdAt before aggregation.
+//
+// Safety cap: process at most 2000 microsites per call; if matching total >
+// 2000, return counts but mark aggregateExceedsCap=true.
+//
+// USER-readable: anodyne aggregate (counts + timestamps); safe.
+// No audit row: read-only meta surface, mirrors /suppliers/stats.
+//
+// Express route ordering: literal-path /microsites/stats MUST be declared
+// BEFORE the /microsites/public/:publicUuid family so the regex-checked
+// UUID parser doesn't first 400 INVALID_UUID against the literal "stats".
+// ============================================================================
+const MICROSITES_STATS_CAP = 2000;
+
+router.get(
+  "/microsites/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Optional ISO date bounds on microsite.createdAt
+      const micrositeWhere = { tenantId };
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        micrositeWhere.createdAt = Object.assign(
+          micrositeWhere.createdAt || {},
+          { gte: d },
+        );
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        micrositeWhere.createdAt = Object.assign(
+          micrositeWhere.createdAt || {},
+          { lte: d },
+        );
+      }
+
+      // Bounded fetch to keep in-process aggregation safe.
+      const microsites = await prisma.tripMicrosite.findMany({
+        where: micrositeWhere,
+        select: {
+          id: true,
+          publishedAt: true,
+          expiresAt: true,
+          faqJson: true,
+          updatedAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+        take: MICROSITES_STATS_CAP,
+      });
+
+      // Get the true total so callers know if aggregation is bounded.
+      const totalMatching = await prisma.tripMicrosite.count({
+        where: micrositeWhere,
+      });
+      const aggregateExceedsCap = totalMatching > MICROSITES_STATS_CAP;
+
+      // Empty short-circuit — return zeroed shape.
+      if (microsites.length === 0) {
+        return res.json({
+          total: 0,
+          published: 0,
+          unpublished: 0,
+          expired: 0,
+          withFaq: 0,
+          lastPublishedAt: null,
+          lastActivityAt: null,
+          aggregateExceedsCap: false,
+        });
+      }
+
+      const now = new Date();
+      let published = 0;
+      let unpublished = 0;
+      let expired = 0;
+      let withFaq = 0;
+      let lastPublishedAt = null;
+      let lastActivityAt = null;
+
+      for (const ms of microsites) {
+        if (ms.publishedAt) {
+          published += 1;
+          const ts = ms.publishedAt instanceof Date ? ms.publishedAt : new Date(ms.publishedAt);
+          if (!Number.isNaN(ts.getTime())) {
+            if (!lastPublishedAt || ts > lastPublishedAt) lastPublishedAt = ts;
+          }
+        } else {
+          unpublished += 1;
+        }
+
+        if (ms.expiresAt) {
+          const exp = ms.expiresAt instanceof Date ? ms.expiresAt : new Date(ms.expiresAt);
+          if (!Number.isNaN(exp.getTime()) && exp < now) expired += 1;
+        }
+
+        if (ms.faqJson && String(ms.faqJson).trim().length > 0) withFaq += 1;
+
+        const upd = ms.updatedAt instanceof Date ? ms.updatedAt : new Date(ms.updatedAt);
+        if (!Number.isNaN(upd.getTime())) {
+          if (!lastActivityAt || upd > lastActivityAt) lastActivityAt = upd;
+        }
+      }
+
+      res.json({
+        total: microsites.length,
+        published,
+        unpublished,
+        expired,
+        withFaq,
+        lastPublishedAt: lastPublishedAt ? lastPublishedAt.toISOString() : null,
+        lastActivityAt: lastActivityAt ? lastActivityAt.toISOString() : null,
+        aggregateExceedsCap,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-microsite] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise microsites" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/microsites/by-month — tenant-wide microsite monthly rollup
+// (PRD_TRAVEL §6.x).
+//
+// Sibling to /microsites/stats (slice above). Mirrors the rollup-triplet
+// pattern established by /suppliers/by-month (#903 slice 24), /diagnostics/
+// by-month, /religious-packets/by-month — same UTC YYYY-MM bucketing,
+// same defensive math (null/invalid createdAt → "unknown" bucket; excluded
+// when ?from / ?to is set), same orderBy semantics. Returns one row per
+// UTC month bucket with count + bySubBrand breakdown so the Microsites
+// library page can render a "microsites published over time" trend chart.
+//
+// Sub-brand note: TripMicrosite has NO subBrand column (the model is
+// TMC-locked by design per Q21 — microsites live on tmc.travelstall.in).
+// Same rationale as /microsites/stats which omits bySubBrand entirely.
+// We DO surface a bySubBrand map per bucket for envelope-shape parity
+// with the rollup-triplet family — every row will land in the "_tenant"
+// fallback bucket since `subBrand` is undefined on the projection.
+// Sub-brand WHERE narrowing mirrors /microsites/stats EXACTLY: no
+// narrowing applied (the model has no subBrand to narrow by; admins and
+// sub-brand-scoped operators see the same population).
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//                     400 INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// No audit row written — read-only meta surface; matches /microsites/stats
+// and /suppliers/by-month posture. USER-readable: anodyne (counts +
+// month-string tokens).
+//
+// Express route ordering: literal-path /microsites/by-month MUST be
+// declared BEFORE the /microsites/public/:publicUuid family so the
+// UUID-regex check on the public path doesn't first 400 INVALID_UUID
+// against the literal "by-month". Same convention as /microsites/stats.
+// ============================================================================
+router.get(
+  "/microsites/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors /suppliers/by-month slice 24.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Tenant-scoped where. Sub-brand narrowing matches /microsites/stats
+      // EXACTLY: no narrowing applied because TripMicrosite has no
+      // subBrand column (TMC-only model per Q21).
+      const where = { tenantId };
+
+      // Light projection — subBrand + createdAt. subBrand will be undefined
+      // on every row since the model has no such column; the bySubBrand
+      // aggregator coerces falsy values to "_tenant" so the envelope shape
+      // stays consistent with the rollup-triplet family.
+      const rows = await prisma.tripMicrosite.findMany({
+        where,
+        select: { subBrand: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { month, count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const r of rows) {
+        let monthKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = { month: monthKey, count: 0, bySubBrand: {} };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+        const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+        bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable month token); kept otherwise so the
+      // count surface remains complete. Mirrors /suppliers/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
+      // "unknown" sorts last in asc / first in desc (lexicographically >
+      // "9999-12") — acceptable for a defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = months.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as
+      // /suppliers/by-month.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-microsite] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/microsites/by-quarter — tenant-wide microsite quarterly rollup
+// (PRD_TRAVEL §6.x).
+//
+// Sibling to /microsites/stats + /microsites/by-month. Mirrors the
+// rollup-triplet pattern (by-month + by-quarter + by-year) established by
+// /itineraries/by-quarter — same UTC YYYY-Q[1-4] bucketing, same defensive
+// math (null/invalid createdAt → "unknown" bucket; excluded when ?from / ?to
+// is set), same orderBy semantics. Returns one row per UTC quarter bucket
+// with count + bySubBrand breakdown so the Microsites library page can
+// render a "microsites published per quarter" trend tile.
+//
+// Sub-brand note: TripMicrosite has NO subBrand column (the model is
+// TMC-locked by design per Q21 — microsites live on tmc.travelstall.in).
+// Same rationale as /microsites/stats + /microsites/by-month. We surface
+// a bySubBrand map per bucket for envelope-shape parity with the
+// rollup-triplet family; every row lands in the "_tenant" fallback bucket
+// since `subBrand` is undefined on the projection. WHERE narrowing mirrors
+// /microsites/by-month EXACTLY: tenantId only (admins and sub-brand-scoped
+// operators see the same population).
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-Q[1-4] bounds; invalid →
+//                     400 INVALID_QUARTER_FORMAT
+//   - ?orderBy      — default quarter:asc; accepts quarter:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 8 / 0; limit caps at 40
+//
+// No audit row written — read-only meta surface; matches /microsites/stats
+// + /microsites/by-month posture. USER-readable: anodyne (counts +
+// quarter-string tokens).
+//
+// Express route ordering: literal-path /microsites/by-quarter MUST be
+// declared BEFORE the /microsites/public/:publicUuid family so the
+// UUID-regex check on the public path doesn't first 400 INVALID_UUID
+// against the literal "by-quarter". Same convention as /microsites/stats
+// and /microsites/by-month.
+// ============================================================================
+router.get(
+  "/microsites/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const take = Math.min(parseInt(req.query.limit, 10) || 8, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+      // YYYY-Q[1-4] validation — mirrors /itineraries/by-quarter slice 17.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Q[1-4] format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Q[1-4] format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+      // Tenant-scoped where. Sub-brand narrowing matches /microsites/stats
+      // and /microsites/by-month EXACTLY: no narrowing applied because
+      // TripMicrosite has no subBrand column (TMC-only model per Q21).
+      const where = { tenantId };
+
+      // Light projection — subBrand + createdAt. subBrand will be undefined
+      // on every row since the model has no such column; the bySubBrand
+      // aggregator coerces falsy values to "_tenant" so the envelope shape
+      // stays consistent with the rollup-triplet family.
+      const rows = await prisma.tripMicrosite.findMany({
+        where,
+        select: { subBrand: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-quarter. Map "YYYY-Q[1-4]" → { quarter, count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byQuarter = new Map();
+      for (const r of rows) {
+        let quarterKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${q}`;
+          }
+        }
+
+        let bucket = byQuarter.get(quarterKey);
+        if (!bucket) {
+          bucket = { quarter: quarterKey, count: 0, bySubBrand: {} };
+          byQuarter.set(quarterKey, bucket);
+        }
+        bucket.count += 1;
+        const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+        bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+      }
+
+      let quarters = [...byQuarter.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable quarter token); kept otherwise so the
+      // count surface remains complete. Mirrors /microsites/by-month.
+      if (fromRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Q[1-4] which is
+      // also chronological (Q1 < Q2 < Q3 < Q4 in ASCII, years naturally
+      // ordered). "unknown" sorts last in asc / first in desc by virtue
+      // of being lexicographically > "9999-Q4" — acceptable for a
+      // defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = quarters.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as
+      // /microsites/by-month.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-microsite] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
+
+// GET /api/travel/microsites/by-year — tenant-wide microsite annual rollup
+// (PRD_TRAVEL §6.x).
+//
+// Completes the microsites rollup triplet (stats + by-month + by-quarter +
+// now by-year). Mirrors /itineraries/by-year + /suppliers/by-year shape at
+// year resolution: one row per UTC calendar year with count + bySubBrand
+// breakdown. Annual reviews (year-end CFO close, year-over-year trend
+// lines) need a single endpoint hit instead of summing 12 month rows or
+// 4 quarter rows client-side.
+//
+// Sub-brand note: TripMicrosite has NO subBrand column (the model is
+// TMC-locked by design per Q21 — microsites live on tmc.travelstall.in).
+// Same rationale as /microsites/stats + /microsites/by-month +
+// /microsites/by-quarter. We surface a bySubBrand map per bucket for
+// envelope-shape parity with the rollup-triplet family; every row lands
+// in the "_tenant" fallback bucket since `subBrand` is undefined on the
+// projection. WHERE narrowing mirrors /microsites/by-quarter EXACTLY:
+// tenantId only (admins and sub-brand-scoped operators see the same
+// population).
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY bounds; invalid →
+//                     400 INVALID_YEAR_FORMAT
+//   - ?orderBy      — default year:asc; accepts year:{asc|desc},
+//                     count:{asc|desc}; unknown tokens degrade silently
+//                     to the default
+//   - ?limit / ?offset — default 10 / 0; limit caps at 30
+//
+// No audit row written — read-only meta surface; matches /microsites/stats
+// + /microsites/by-month + /microsites/by-quarter posture. USER-readable:
+// anodyne (counts + year-string tokens).
+//
+// Express route ordering: literal-path /microsites/by-year MUST be
+// declared BEFORE the /microsites/public/:publicUuid family so the
+// UUID-regex check on the public path doesn't first 400 INVALID_UUID
+// against the literal "by-year". Same convention as /microsites/stats,
+// /microsites/by-month, and /microsites/by-quarter.
+// ============================================================================
+router.get(
+  "/microsites/by-year",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+      // YYYY validation — exactly 4 digits. Bucket labels we emit follow
+      // this shape so callers passing year-tokens to from/to should
+      // already be using it.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      // Tenant-scoped where. Sub-brand narrowing matches /microsites/stats,
+      // /microsites/by-month, and /microsites/by-quarter EXACTLY: no
+      // narrowing applied because TripMicrosite has no subBrand column
+      // (TMC-only model per Q21).
+      const where = { tenantId };
+
+      // Light projection — subBrand + createdAt. subBrand will be undefined
+      // on every row since the model has no such column; the bySubBrand
+      // aggregator coerces falsy values to "_tenant" so the envelope shape
+      // stays consistent with the rollup-triplet family.
+      const rows = await prisma.tripMicrosite.findMany({
+        where,
+        select: { subBrand: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-year. Map "YYYY" → { year, count, bySubBrand }.
+      // Null/invalid createdAt rows land in "unknown".
+      const byYear = new Map();
+      for (const r of rows) {
+        let yearKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let bucket = byYear.get(yearKey);
+        if (!bucket) {
+          bucket = { year: yearKey, count: 0, bySubBrand: {} };
+          byYear.set(yearKey, bucket);
+        }
+        bucket.count += 1;
+        const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
+        bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+      }
+
+      let years = [...byYear.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable year token); kept otherwise so the
+      // count surface remains complete. Mirrors /microsites/by-quarter.
+      if (fromRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+      }
+      if (toRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY which is also
+      // chronological (4-digit zero-padded years naturally ordered).
+      // "unknown" sorts last in asc / first in desc by virtue of being
+      // lexicographically > "9999" — acceptable for a defensive fallback
+      // bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = years.length;
+
+      // Pagination AFTER aggregation + sort + filter, same as
+      // /microsites/by-quarter.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-microsite] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute annual rollup" });
+    }
+  },
+);
+
 // ─── PUBLIC info endpoint (no auth) ──────────────────────────────────
 
 // GET /api/travel/microsites/public/:publicUuid

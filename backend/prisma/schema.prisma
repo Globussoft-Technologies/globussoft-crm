@@ -159,7 +159,13 @@ model Tenant {
   travelDiagnostics        TravelDiagnostic[]
   travelDiagQuestionBanks  TravelDiagnosticQuestionBank[]
   itineraries              Itinerary[]
+  // #907 slice 4 — Itinerary template library (Pre-loaded ~50, expand over time).
+  // Subsequent slices: CRUD route + admin library UI + "Create from template" hook.
+  itineraryTemplates       ItineraryTemplate[]
   travelCostMasters        TravelCostMaster[]
+  // #907 slice 1 — Sightseeing master (destination → POIs). Future slices
+  // wire CRUD route + admin UI page + Cost Master "6th category" surface.
+  travelSightseeing        TravelSightseeing[]
   travelSeasonCalendars    TravelSeasonCalendar[]
   travelMarkupRules        TravelMarkupRule[]
   tmcTrips                 TmcTrip[]
@@ -5109,6 +5115,65 @@ model TravelCostMaster {
 
   @@index([tenantId, subBrand, category, isActive])
   @@index([tenantId, supplierId])
+}
+
+// ── Sightseeing master (#907 slice 1) ────────────────────────────────
+// Destination → POI mapping (description, image, duration, price ref).
+// Free-form destinationName for now; future slice may FK to a dedicated
+// TravelDestination model. Subsequent slices land CRUD route + admin UI
+// page + Cost Master integration (the "6th category" requirement) +
+// day-by-day editor + LLM "Suggest itinerary" button.
+model TravelSightseeing {
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int
+  destinationName     String // free-form for now; future FK to TravelDestination
+  name                String // POI name e.g. "Eiffel Tower"
+  description         String?  @db.Text // 1-2 paragraphs
+  imageUrl            String?  @db.Text // thumbnail / hero image
+  durationMinutes     Int? // typical visit time
+  priceReferenceMinor Int? // INR minor units, indicative entry/ticket
+  currency            String?  @db.VarChar(3) // ISO 4217; nullable, defaults to tenant default at call site
+  category            String? // free-form tag: "monument" | "museum" | "nature" | "religious" | ...
+  subBrand            String? // routes inheritance to existing sub-brand filtering
+  notes               String?  @db.Text // ops/coordinator notes
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, destinationName])
+  @@index([tenantId, subBrand])
+}
+
+model ItineraryTemplate {
+  id                   Int      @id @default(autoincrement())
+  tenantId             Int // each tenant has its own template library
+  name                 String // "5-day Paris" / "Goa Beach Holiday" etc.
+  destinationName      String // primary destination tag
+  durationDays         Int // typical day count
+  description          String?  @db.Text // 1-2 paragraph blurb shown to operator
+  thumbnailUrl         String?  @db.Text // hero image for the catalog grid
+  category             String? // free-form tag: "Adventure" | "Religious" | "Family" | ...
+  subBrand             String? // sub-brand affinity; null = visible to all
+  defaultMarkupPercent Float? // suggested markup; operator can override
+  basePriceMinor       Int? // indicative price in INR minor units
+  currency             String?  @db.VarChar(3) // ISO 4217; nullable, tenant default at call site
+  templateJson         String?  @db.LongText // serialized day-by-day item template (items[] structure)
+  llmGeneratedBy       String? // "anthropic|google|openai|null=manual"
+  isActive             Boolean  @default(true)
+  usageCount           Int      @default(0) // incremented each time an Itinerary is created from this template
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, destinationName])
+  @@index([tenantId, category])
+  @@index([tenantId, subBrand])
+  @@index([tenantId, isActive])
 }
 
 model TravelSeasonCalendar {

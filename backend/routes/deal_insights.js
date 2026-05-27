@@ -41,6 +41,17 @@ router.use(verifyToken);
 // envelope change — existing top-level fields (id, dealId, type, severity,
 // insight, isResolved, generatedAt, tenantId) preserved for legacy callers
 // (specs, mobile, third-party integrations).
+//
+// Slim-shape opt-in (#920 slice 51): when called with ?fields=summary,
+// the handler ships only the slim columns (id, dealId, type, severity,
+// isResolved, generatedAt) — the heavy `insight` @db.Text body is
+// dropped AND the dealContext enrichment join is skipped. Useful for
+// the dashboard count-by-severity badge + the open-insights-by-deal
+// picker that needs ids + severities only, NOT the full insight text
+// or per-deal title/amount context. Existing callers (no ?fields, or
+// any non-exact value) keep the full enriched envelope unchanged.
+// Same strict opt-in pattern as routes/canned_responses.js +
+// routes/service_categories.js (slices 1-48).
 router.get("/", async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
@@ -49,11 +60,27 @@ router.get("/", async (req, res) => {
     if (req.query.isResolved !== undefined) {
       where.isResolved = req.query.isResolved === "true";
     }
-    const insights = await prisma.dealInsight.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: { generatedAt: "desc" },
       take: 500,
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        dealId: true,
+        type: true,
+        severity: true,
+        isResolved: true,
+        generatedAt: true,
+      };
+    }
+    const insights = await prisma.dealInsight.findMany(findManyArgs);
+    if (isSummary) {
+      // Skip the dealContext enrichment join — picker callers don't need it.
+      return res.json(insights);
+    }
     const enriched = await attachDealContext(insights, req.user.tenantId);
     res.json(enriched);
   } catch (err) {

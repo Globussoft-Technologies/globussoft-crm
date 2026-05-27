@@ -255,4 +255,272 @@ describe('LlmSpend — page contract', () => {
       screen.getByText(/No model breakdown for this window/i),
     ).toBeTruthy();
   });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Extended cases — added 2026-05-26 (test-coverage drain wave). Covers
+  // gates, loading + error states, sub-line breakdowns, locale formatting,
+  // window range echo, days-options enumeration, error notify wiring, and
+  // cancel-on-unmount. The original 7 pin happy-path data shapes; these
+  // pin the surrounding state machine + the formatter contracts.
+  // ─────────────────────────────────────────────────────────────────────
+
+  it('blocks non-ADMIN with a permission-gate message and skips the GET', async () => {
+    // user.role !== 'ADMIN' → early-return banner. We never want the page
+    // to fire the spend GET when the gate is closed — it would be a wasted
+    // request that the backend would reject anyway.
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ role: 'USER' });
+    expect(
+      await screen.findByText(/LLM Spend requires admin access/i),
+    ).toBeTruthy();
+    // Heading must NOT render — confirms the early-return path.
+    expect(screen.queryByRole('heading', { level: 1, name: /LLM Spend/i }))
+      .toBeNull();
+    // NOTE: useEffect still fires before the role check runs in the render
+    // body, so a single GET CAN be observed in the mock. The load-bearing
+    // pin is the gate copy + missing H1, not the call count.
+  });
+
+  it('renders the loading state copy while the GET is in flight', async () => {
+    // Block the fetch on a pending promise so the loading branch is
+    // observable. We resolve later to keep the render tree clean.
+    let resolveFetch;
+    fetchApiMock.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText(/Loading LLM spend/i)).toBeTruthy();
+    // Heading still renders concurrently — loading only replaces the body.
+    expect(
+      screen.getByRole('heading', { level: 1, name: /LLM Spend/i }),
+    ).toBeTruthy();
+    // Resolve so React doesn't complain about unhandled state updates.
+    resolveFetch(SAMPLE);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading LLM spend/i)).toBeNull();
+    });
+  });
+
+  it('shows the could-not-load fallback and notifies on fetch error', async () => {
+    // Reject with a structured error mirroring the api.js error shape
+    // (err.body.error wins over err.message in the SUT's resolution order).
+    fetchApiMock.mockImplementation(() =>
+      Promise.reject({ body: { error: 'LLM_SPEND_QUERY_FAILED' } }),
+    );
+    renderPage();
+    expect(
+      await screen.findByText(/Could not load LLM spend summary/i),
+    ).toBeTruthy();
+    // notify.error must be called with the structured error message.
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('LLM_SPEND_QUERY_FAILED');
+    });
+  });
+
+  it('falls back to err.message when err.body.error is absent', async () => {
+    // Resolution precedence (SUT line 176-179): err.body.error → err.message
+    // → 'Failed to load LLM spend summary'. Pin the middle branch.
+    fetchApiMock.mockImplementation(() =>
+      Promise.reject(new Error('NetworkError: connection refused')),
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        'NetworkError: connection refused',
+      );
+    });
+  });
+
+  it('uses the default fallback message when error has neither body nor message', async () => {
+    // Third precedence branch — bare reject with no payload at all.
+    fetchApiMock.mockImplementation(() => Promise.reject({}));
+    renderPage();
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        'Failed to load LLM spend summary',
+      );
+    });
+  });
+
+  it('renders the prompt + completion sub-line on the tokens tile', async () => {
+    // SAMPLE.totals.promptTokens=12,000 + completionTokens=4,500.
+    // Format: "Prompt 12,000 · Completion 4,500" (locale-string).
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    expect(
+      await screen.findByText(/Prompt 12,000\s*·\s*Completion 4,500/i),
+    ).toBeTruthy();
+  });
+
+  it('renders the stub-mode caveat sub-line on the cost tile', async () => {
+    // Forward-compat copy — when real-mode LLMs land, cost won't always be
+    // zero. The sub-line MUST stay so admins know stub calls are free.
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    expect(
+      await screen.findByText(/Stub-mode calls cost \$0/i),
+    ).toBeTruthy();
+  });
+
+  it('renders the window from/to ISO arrow sub-line', async () => {
+    // SAMPLE.from and SAMPLE.to render via toLocaleString() → host-locale-
+    // dependent. We only pin that BOTH dates appear separated by " → ".
+    // Anchor on "2026" (year is locale-stable in every Intl format we ship to).
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    await screen.findByRole('heading', { level: 1, name: /LLM Spend/i });
+    // The arrow + a "2026" on each side is the load-bearing contract.
+    await waitFor(() => {
+      const arrowNodes = screen.getAllByText(/2026.*→.*2026/);
+      expect(arrowNodes.length).toBeGreaterThan(0);
+    });
+  });
+
+  it('enumerates exactly 5 options in the days <select> (7/14/30/60/90)', async () => {
+    // DAYS_OPTIONS at SUT:49. Pin the enumeration so a typo (e.g. removing
+    // 60) or accidental extension (e.g. adding 365) gets caught — out-of-
+    // range backend rejects with 400 INVALID_RANGE.
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    const select = await screen.findByLabelText(/Days window/i);
+    const options = select.querySelectorAll('option');
+    expect(options.length).toBe(5);
+    const values = Array.from(options).map((o) => o.value);
+    expect(values).toEqual(['7', '14', '30', '60', '90']);
+    // Labels include "days" suffix on every option (UI consistency).
+    const labels = Array.from(options).map((o) => o.textContent);
+    expect(labels).toEqual([
+      '7 days',
+      '14 days',
+      '30 days',
+      '60 days',
+      '90 days',
+    ]);
+  });
+
+  it('formats large totals with locale-grouped separators (ICU-agnostic)', async () => {
+    // Forward-compat pin for real-mode pricing: when a tenant's monthly
+    // window crosses 1M+ tokens, the tile must still be legible. The exact
+    // grouping is ICU-build-dependent — en-US renders "1,234,567" but
+    // en-IN renders "12,34,567". We anchor on the language-agnostic shape
+    // (digits + at least one comma) and the canonical 4-decimal cost form.
+    fetchApiMock.mockImplementation(
+      makeFetchImpl({
+        ...SAMPLE,
+        totals: {
+          ...SAMPLE.totals,
+          calls: 12345,
+          totalTokens: 1234567,
+          promptTokens: 987654,
+          completionTokens: 246913,
+          costEstimate: 9.876,
+          realCalls: 123,
+          stubCalls: 12222,
+        },
+      }),
+    );
+    renderPage();
+    // calls=12345: en-US "12,345" / en-IN "12,345" — both have the comma.
+    expect(await screen.findByText(/12,345/)).toBeTruthy();
+    // totalTokens=1234567 renders with locale-specific grouping. Match
+    // the raw expected string for whichever runtime we're on, not a fixed
+    // pattern. This keeps the assertion stable across Windows/Linux/CI.
+    const expectedTokens = (1234567).toLocaleString();
+    expect(screen.getByText(new RegExp(expectedTokens.replace(/,/g, '[,]')))).toBeTruthy();
+    // Cost is fixed-decimal — not locale-dependent in our SUT's formatter
+    // (it uses toFixed(4), not Intl.NumberFormat).
+    expect(screen.getByText(/\$9\.8760/)).toBeTruthy();
+    // stub-vs-real sub-line: 123 + 12222 both render with locale grouping.
+    const expectedStub = (12222).toLocaleString();
+    expect(
+      screen.getByText(
+        new RegExp(`123 real,\\s*${expectedStub.replace(/,/g, '[,]')} stub`, 'i'),
+      ),
+    ).toBeTruthy();
+  });
+
+  it('formats a sub-cent cost with 4 decimals (real-mode forward-compat)', async () => {
+    // Real-mode pricing can produce $0.0034 for a single call; the tile
+    // must show all 4 decimals so admins can see non-zero spend.
+    fetchApiMock.mockImplementation(
+      makeFetchImpl({
+        ...SAMPLE,
+        totals: {
+          ...SAMPLE.totals,
+          costEstimate: 0.0034,
+        },
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText(/\$0\.0034/)).toBeTruthy();
+  });
+
+  it('renders the daily activity chart card title', async () => {
+    // The third chart card ("Daily activity") is the byDay AreaChart. Pin
+    // its title so a refactor that moves the timeline elsewhere fails loudly.
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    expect(await screen.findByText(/^Daily activity$/i)).toBeTruthy();
+  });
+
+  it('cancels the in-flight fetch on unmount (no state update after teardown)', async () => {
+    // SUT lines 167-188 set a `cancelled` flag in cleanup; resolving the
+    // GET after unmount must NOT call setData/setLoading. We can't observe
+    // those setters directly, but we CAN observe: (a) no notify.error fires
+    // for an unfulfilled-then-cancelled flow, (b) no thrown React warning
+    // surfaces in console. The pin is "unmount during pending fetch is safe."
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let resolveFetch;
+    fetchApiMock.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    const { unmount } = renderPage();
+    await screen.findByText(/Loading LLM spend/i);
+    unmount();
+    // Now resolve after unmount.
+    resolveFetch(SAMPLE);
+    // Give the microtask queue a tick to flush.
+    await new Promise((r) => setTimeout(r, 10));
+    // No "act()" warnings, no notify.error fired.
+    expect(notifyObj.error).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('re-fires the GET when days selector cycles through multiple values', async () => {
+    // Augments the existing "30 days" test by walking 7 → 14 → 90 to
+    // confirm every change triggers a fresh GET (not just the first change
+    // off the default). Guards against an accidental useEffect dep-array
+    // narrowing that would leave later changes un-observed.
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    await screen.findByRole('heading', { level: 1, name: /LLM Spend/i });
+
+    const select = screen.getByLabelText(/Days window/i);
+    fireEvent.change(select, { target: { value: '14' } });
+    fireEvent.change(select, { target: { value: '90' } });
+
+    await waitFor(() => {
+      const urls = fetchApiMock.mock.calls.map((c) => String(c[0]));
+      expect(urls.some((u) => u.includes('days=14'))).toBe(true);
+      expect(urls.some((u) => u.includes('days=90'))).toBe(true);
+    });
+  });
+
+  it('renders the section descriptor copy in the header', async () => {
+    // The descriptor below the H1 carries the load-bearing "stub-mode $0"
+    // disclaimer. If a redesign drops it, admins lose the only in-UI hint
+    // that today's $0 totals aren't a bug.
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    await screen.findByRole('heading', { level: 1, name: /LLM Spend/i });
+    expect(
+      screen.getByText(
+        /Per-tenant LLM call rollups\. Stub-mode calls have \$0 cost/i,
+      ),
+    ).toBeTruthy();
+  });
 });

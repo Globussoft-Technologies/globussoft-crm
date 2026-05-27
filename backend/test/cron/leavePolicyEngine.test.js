@@ -248,3 +248,173 @@ describe('runForTenant — encashment semantics', () => {
     consoleSpy.mockRestore();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+//  EXTENDED COVERAGE (+8 cases — closed-period zero-out, tenant isolation,
+//  multi-policy fan-out, multi-user batch, generic-vertical Dec 31, encash
+//  recipient fan-out, null-available defensive default, singular/plural
+//  notification wording). The 8 cases below pin contract behaviours that
+//  were observed in the SUT (lines 154-292) but not asserted by the
+//  initial 16 cases.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('runForTenant — closed-period zero-out (step 3 of contract)', () => {
+  test('after carry, closing-period LeaveBalance.available is set to 0 (no double-count)', async () => {
+    prisma.leavePolicy.findMany.mockResolvedValue([
+      { id: 10, name: 'Casual', annualEntitlement: 12, carryForwardCap: 5, encashable: false },
+    ]);
+    prisma.leaveBalance.findMany.mockResolvedValue([
+      { id: 100, userId: 1, periodEnd: new Date('2026-03-31T23:59:59Z'), available: 3 },
+    ]);
+    await runForTenant(1, { now: new Date('2026-03-31T05:00:00Z') });
+    // The closing-period row gets zeroed out so the CSV listing doesn't
+    // double-count the carried amount alongside the new period's balance.
+    expect(prisma.leaveBalance.update).toHaveBeenCalledTimes(1);
+    const updateArg = prisma.leaveBalance.update.mock.calls[0][0];
+    expect(updateArg.where).toEqual({ id: 100 });
+    expect(updateArg.data).toEqual({ available: 0 });
+  });
+});
+
+describe('runForTenant — tenant isolation', () => {
+  test('leavePolicy.findMany is scoped by the requested tenantId (no cross-tenant bleed)', async () => {
+    prisma.leavePolicy.findMany.mockResolvedValue([]);
+    await runForTenant(42, { now: new Date('2026-03-31T05:00:00Z') });
+    expect(prisma.leavePolicy.findMany).toHaveBeenCalledTimes(1);
+    const whereArg = prisma.leavePolicy.findMany.mock.calls[0][0].where;
+    expect(whereArg.tenantId).toBe(42);
+    expect(whereArg.isActive).toBe(true);
+    // The OR-of-{carryForwardCap > 0, encashable: true} predicate ensures
+    // policies with neither setting are excluded server-side.
+    expect(whereArg.OR).toEqual([
+      { carryForwardCap: { gt: 0 } },
+      { encashable: true },
+    ]);
+  });
+});
+
+describe('runForTenant — multi-policy fan-out', () => {
+  test('two policies on same tenant → both iterate; result.policies counts both', async () => {
+    prisma.leavePolicy.findMany.mockResolvedValue([
+      { id: 10, name: 'Casual', annualEntitlement: 12, carryForwardCap: 5, encashable: false },
+      { id: 11, name: 'Sick',   annualEntitlement: 10, carryForwardCap: 3, encashable: false },
+    ]);
+    // Each leaveBalance.findMany call returns one balance per policy.
+    prisma.leaveBalance.findMany
+      .mockResolvedValueOnce([
+        { id: 100, userId: 1, periodEnd: new Date('2026-03-31T23:59:59Z'), available: 2 },
+      ])
+      .mockResolvedValueOnce([
+        { id: 101, userId: 1, periodEnd: new Date('2026-03-31T23:59:59Z'), available: 4 },
+      ]);
+
+    const r = await runForTenant(1, { now: new Date('2026-03-31T05:00:00Z') });
+    expect(r.policies).toBe(2);
+    expect(r.carriedForward).toBe(2);
+    expect(prisma.leaveBalance.findMany).toHaveBeenCalledTimes(2);
+    expect(prisma.leaveBalance.upsert).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('runForTenant — multi-user batch under one policy', () => {
+  test('three users on the same policy → all three carry-forward upserts fire', async () => {
+    prisma.leavePolicy.findMany.mockResolvedValue([
+      { id: 10, name: 'Casual', annualEntitlement: 12, carryForwardCap: 5, encashable: false },
+    ]);
+    prisma.leaveBalance.findMany.mockResolvedValue([
+      { id: 100, userId: 1, periodEnd: new Date('2026-03-31T23:59:59Z'), available: 2 },
+      { id: 101, userId: 2, periodEnd: new Date('2026-03-31T23:59:59Z'), available: 3 },
+      { id: 102, userId: 3, periodEnd: new Date('2026-03-31T23:59:59Z'), available: 4 },
+    ]);
+    const r = await runForTenant(1, { now: new Date('2026-03-31T05:00:00Z') });
+    expect(r.carriedForward).toBe(3);
+    expect(prisma.leaveBalance.upsert).toHaveBeenCalledTimes(3);
+    // The composite-unique where clause must include each user's id distinctly.
+    const userIdsUpserted = prisma.leaveBalance.upsert.mock.calls
+      .map((c) => c[0].where.tenantId_userId_policyId_periodStart.userId)
+      .sort();
+    expect(userIdsUpserted).toEqual([1, 2, 3]);
+  });
+});
+
+describe('runForTenant — generic vertical fiscal-year-end (Dec 31)', () => {
+  test('generic tenant on Dec 31 fires carry-forward (calendar year-end)', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.leavePolicy.findMany.mockResolvedValue([
+      { id: 10, name: 'Annual', annualEntitlement: 20, carryForwardCap: 5, encashable: false },
+    ]);
+    prisma.leaveBalance.findMany.mockResolvedValue([
+      { id: 100, userId: 1, periodEnd: new Date('2026-12-31T23:59:59Z'), available: 3 },
+    ]);
+    const r = await runForTenant(1, { now: new Date('2026-12-31T05:00:00Z') });
+    expect(r.policies).toBe(1);
+    expect(r.carriedForward).toBe(1);
+    // The generic tenant must NOT fire on March 31 — that's the wellness anchor.
+    prisma.leaveBalance.upsert.mockClear();
+    prisma.leavePolicy.findMany.mockClear();
+    const r2 = await runForTenant(1, { now: new Date('2026-03-31T05:00:00Z') });
+    expect(r2.policies).toBe(0);
+    expect(prisma.leavePolicy.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('runForTenant — encashment recipient fan-out', () => {
+  test('encashment notifies the requester + every ADMIN (recipient query has OR clause)', async () => {
+    prisma.leavePolicy.findMany.mockResolvedValue([
+      { id: 10, name: 'Earned', annualEntitlement: 18, carryForwardCap: 0, encashable: true },
+    ]);
+    prisma.leaveBalance.findMany.mockResolvedValue([
+      { id: 100, userId: 7, periodEnd: new Date('2026-03-31T23:59:59Z'), available: 6 },
+    ]);
+    // 1 requester (user 7) + 2 admins (user 1, user 2) — three distinct recipients
+    prisma.user.findMany.mockResolvedValue([{ id: 7 }, { id: 1 }, { id: 2 }]);
+
+    await runForTenant(99, { now: new Date('2026-03-31T05:00:00Z') });
+    // Recipient query is scoped to the tenant under operation + has the
+    // requester-OR-ADMIN predicate.
+    expect(prisma.user.findMany).toHaveBeenCalledTimes(1);
+    const userWhere = prisma.user.findMany.mock.calls[0][0].where;
+    expect(userWhere.tenantId).toBe(99);
+    expect(userWhere.OR).toEqual([{ id: 7 }, { role: 'ADMIN' }]);
+    // Notification fan-out lands one row per recipient.
+    expect(prisma.notification.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.notification.createMany.mock.calls[0][0].data).toHaveLength(3);
+  });
+});
+
+describe('runForTenant — empty recipients defensive guard', () => {
+  test('zero recipients (deleted user + no admins) → no notification.createMany call', async () => {
+    prisma.leavePolicy.findMany.mockResolvedValue([
+      { id: 10, name: 'Earned', annualEntitlement: 18, carryForwardCap: 0, encashable: true },
+    ]);
+    prisma.leaveBalance.findMany.mockResolvedValue([
+      { id: 100, userId: 5, periodEnd: new Date('2026-03-31T23:59:59Z'), available: 3 },
+    ]);
+    prisma.user.findMany.mockResolvedValue([]); // no recipients found at all
+
+    const r = await runForTenant(1, { now: new Date('2026-03-31T05:00:00Z') });
+    // The audit row still lands (it's the source of truth for payroll).
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    // But notification.createMany is guarded — empty data would crash Prisma.
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
+    expect(r.encashed).toBe(1);
+  });
+});
+
+describe('runForTenant — null-available defensive default', () => {
+  test('available=null is treated as 0 (skipped — no upsert, no audit)', async () => {
+    prisma.leavePolicy.findMany.mockResolvedValue([
+      { id: 10, name: 'Casual', annualEntitlement: 12, carryForwardCap: 5, encashable: true },
+    ]);
+    prisma.leaveBalance.findMany.mockResolvedValue([
+      // available=null (e.g. legacy row before the column had a default)
+      { id: 100, userId: 1, periodEnd: new Date('2026-03-31T23:59:59Z'), available: null },
+    ]);
+    const r = await runForTenant(1, { now: new Date('2026-03-31T05:00:00Z') });
+    expect(r.carriedForward).toBe(0);
+    expect(r.encashed).toBe(0);
+    expect(prisma.leaveBalance.upsert).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(prisma.leaveBalance.update).not.toHaveBeenCalled();
+  });
+});

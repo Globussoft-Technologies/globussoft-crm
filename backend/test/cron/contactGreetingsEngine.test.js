@@ -25,6 +25,7 @@ import prisma from '../../lib/prisma.js';
 
 import {
   runContactGreetingsForTenant,
+  runContactGreetingsForAllTravelTenants,
   isTodayMonthDay,
 } from '../../cron/contactGreetingsEngine.js';
 
@@ -35,7 +36,7 @@ beforeAll(() => {
   // tenant.subBrandConfigJson once per pass to compute the would-route
   // wabaId logged at notification create. Mock default returns null
   // config so the resolver yields {} downstream.
-  prisma.tenant = { findUnique: vi.fn() };
+  prisma.tenant = { findUnique: vi.fn(), findMany: vi.fn() };
 });
 
 beforeEach(() => {
@@ -43,11 +44,13 @@ beforeEach(() => {
   prisma.notification.findFirst.mockReset();
   prisma.notification.create.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.tenant.findMany.mockReset();
 
   prisma.contact.findMany.mockResolvedValue([]);
   prisma.notification.findFirst.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
   prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
+  prisma.tenant.findMany.mockResolvedValue([]);
 });
 
 describe('cron/contactGreetingsEngine — isTodayMonthDay (pure)', () => {
@@ -171,5 +174,172 @@ describe('cron/contactGreetingsEngine — runContactGreetingsForTenant', () => {
       .mockResolvedValueOnce({ id: 5 });
     const result = await runContactGreetingsForTenant(1);
     expect(result.birthdays).toBe(1);
+  });
+
+  // ------------------------------------------------------------------
+  // Extension wave (+8 cases) — coverage gaps in the original 12:
+  //   - findMany query caps + select fields
+  //   - tenant.findUnique pull shape (Q9 cut-over plumbing)
+  //   - dedup query shape (entityType / entityId / title contains tag)
+  //   - notification row defaults (type, priority) + PORTAL_BASE link
+  //   - name-null fallback ("Contact #<id>")
+  //   - phone+email both null → "no contact info" fallback
+  //   - anniversary dedup is independent of birthday dedup
+  //   - runContactGreetingsForAllTravelTenants tenant query + aggregation +
+  //     per-tenant exception isolation
+  // ------------------------------------------------------------------
+
+  test('findMany request caps + select fields (take: 2000, subBrand selected)', async () => {
+    await runContactGreetingsForTenant(7);
+    const arg = prisma.contact.findMany.mock.calls[0][0];
+    expect(arg.take).toBe(2000);
+    expect(arg.select).toMatchObject({
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      birthDate: true,
+      anniversary: true,
+      subBrand: true,
+    });
+  });
+
+  test('tenant.findUnique pulls subBrandConfigJson once for the Q9 cut-over plumbing', async () => {
+    const today = new Date();
+    const birthDate = new Date(today.getFullYear() - 8, today.getMonth(), today.getDate());
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 200, name: 'Eve', email: null, phone: null,
+        birthDate, anniversary: null, subBrand: 'tmc' },
+    ]);
+    prisma.tenant.findUnique.mockResolvedValue({
+      subBrandConfigJson: JSON.stringify({ tmc: { wabaId: 'WABA_TMC' } }),
+    });
+
+    await runContactGreetingsForTenant(55);
+
+    expect(prisma.tenant.findUnique).toHaveBeenCalledTimes(1);
+    const tArg = prisma.tenant.findUnique.mock.calls[0][0];
+    expect(tArg.where.id).toBe(55);
+    expect(tArg.select.subBrandConfigJson).toBe(true);
+  });
+
+  test('dedup query shape: entityType=Contact, entityId, title contains year-tag', async () => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const birthDate = new Date(year - 4, today.getMonth(), today.getDate());
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 301, name: 'Frank', email: null, phone: null,
+        birthDate, anniversary: null },
+    ]);
+    await runContactGreetingsForTenant(9);
+
+    expect(prisma.notification.findFirst).toHaveBeenCalledTimes(1);
+    const findArg = prisma.notification.findFirst.mock.calls[0][0];
+    expect(findArg.where.tenantId).toBe(9);
+    expect(findArg.where.entityType).toBe('Contact');
+    expect(findArg.where.entityId).toBe(301);
+    expect(findArg.where.title.contains).toBe(`[birthday-${year}]`);
+  });
+
+  test('notification row defaults: type=info, priority=normal, PORTAL_BASE in message', async () => {
+    const today = new Date();
+    const birthDate = new Date(today.getFullYear() - 2, today.getMonth(), today.getDate());
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 401, name: 'Grace', email: 'g@x.test', phone: '+91 99999 12345',
+        birthDate, anniversary: null },
+    ]);
+    await runContactGreetingsForTenant(3);
+
+    const createArg = prisma.notification.create.mock.calls[0][0].data;
+    expect(createArg.type).toBe('info');
+    expect(createArg.priority).toBe('normal');
+    expect(createArg.tenantId).toBe(3);
+    // PORTAL_BASE defaults to https://crm.globusdemos.com when unset in env;
+    // either way the URL must reference the contact id.
+    expect(createArg.message).toMatch(/\/contacts\/401/);
+    expect(createArg.message).toMatch(/Grace/);
+    expect(createArg.message).toMatch(/\+91 99999 12345/);
+  });
+
+  test('name-null fallback uses "Contact #<id>" in title + message', async () => {
+    const today = new Date();
+    const birthDate = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 555, name: null, email: 'h@x.test', phone: null,
+        birthDate, anniversary: null },
+    ]);
+    await runContactGreetingsForTenant(1);
+
+    const data = prisma.notification.create.mock.calls[0][0].data;
+    expect(data.title).toContain('Contact #555');
+    expect(data.message).toContain('Contact #555');
+  });
+
+  test('phone+email both null → "no contact info" placeholder in message', async () => {
+    const today = new Date();
+    const anniversary = new Date(today.getFullYear() - 6, today.getMonth(), today.getDate());
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 666, name: 'Ivan', email: null, phone: null,
+        birthDate: null, anniversary },
+    ]);
+    await runContactGreetingsForTenant(1);
+
+    const data = prisma.notification.create.mock.calls[0][0].data;
+    expect(data.message).toContain('no contact info');
+    expect(data.title).toContain('Anniversary today: Ivan');
+  });
+
+  test('anniversary dedup is independent of birthday dedup (same contact, both hit, only birthday pre-existing)', async () => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const d = new Date(year - 2, today.getMonth(), today.getDate());
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 700, name: 'Jane', email: null, phone: null,
+        birthDate: d, anniversary: d },
+    ]);
+    // First call (birthday lookup) → pre-existing; second (anniversary) → null.
+    prisma.notification.findFirst
+      .mockResolvedValueOnce({ id: 9001 })
+      .mockResolvedValueOnce(null);
+
+    const result = await runContactGreetingsForTenant(1);
+
+    expect(result).toEqual({ birthdays: 0, anniversaries: 1 });
+    expect(prisma.notification.create).toHaveBeenCalledTimes(1);
+    expect(prisma.notification.create.mock.calls[0][0].data.title).toContain(`anniv-${year}`);
+  });
+
+  test('runContactGreetingsForAllTravelTenants: iterates travel-only tenants + aggregates + isolates per-tenant errors', async () => {
+    const today = new Date();
+    const birthDate = new Date(today.getFullYear() - 9, today.getMonth(), today.getDate());
+
+    prisma.tenant.findMany.mockResolvedValue([
+      { id: 11, slug: 'tenant-a' },
+      { id: 12, slug: 'tenant-b' },
+      { id: 13, slug: 'tenant-c' },
+    ]);
+    // Tenant 11: 1 birthday hit.
+    // Tenant 12: contact.findMany throws → per-tenant catch isolates.
+    // Tenant 13: 1 birthday hit.
+    prisma.contact.findMany
+      .mockResolvedValueOnce([
+        { id: 800, name: 'K', email: null, phone: null, birthDate, anniversary: null },
+      ])
+      .mockRejectedValueOnce(new Error('tenant 12 boom'))
+      .mockResolvedValueOnce([
+        { id: 801, name: 'L', email: null, phone: null, birthDate, anniversary: null },
+      ]);
+
+    const result = await runContactGreetingsForAllTravelTenants();
+
+    // Tenants query gates on travel + active.
+    expect(prisma.tenant.findMany).toHaveBeenCalledTimes(1);
+    const tArg = prisma.tenant.findMany.mock.calls[0][0];
+    expect(tArg.where.vertical).toBe('travel');
+    expect(tArg.where.isActive).toBe(true);
+
+    // Aggregated counts across surviving tenants (11 + 13 only).
+    expect(result).toEqual({ birthdays: 2, anniversaries: 0 });
+    expect(prisma.notification.create).toHaveBeenCalledTimes(2);
   });
 });

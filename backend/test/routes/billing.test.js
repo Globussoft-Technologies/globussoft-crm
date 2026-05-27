@@ -425,3 +425,110 @@ describe('POST /api/billing/:id/credit-note — issue credit note (#193)', () =>
     expect(res.body.code).toBe('INVOICE_VOIDED');
   });
 });
+
+// ─── GET / — ?fields=summary slim-shape opt-in (#920 slice 31) ─────
+
+describe('GET /api/billing?fields=summary — slim-shape opt-in (#920 slice 31)', () => {
+  test('?fields=summary → Prisma called with `select` (no nested includes)', async () => {
+    prisma.invoice.findMany.mockResolvedValue([
+      { id: 1, invoiceNum: 'INV-A', amount: 100, status: 'UNPAID', dueDate: new Date(), issuedDate: new Date(), contactId: 42, dealId: null },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/billing?fields=summary');
+    expect(res.status).toBe(200);
+    const args = prisma.invoice.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.include).toBeUndefined();
+    // Slim shape must NOT pull contact / deal — the entire point of the opt-in.
+    expect(args.select.id).toBe(true);
+    expect(args.select.invoiceNum).toBe(true);
+    expect(args.select.amount).toBe(true);
+    expect(args.select.status).toBe(true);
+    expect(args.select.dueDate).toBe(true);
+    expect(args.select.issuedDate).toBe(true);
+    expect(args.select.contactId).toBe(true);
+    expect(args.select.dealId).toBe(true);
+    // Heavy / unused columns must NOT be in the slim projection.
+    expect(args.select.contact).toBeUndefined();
+    expect(args.select.deal).toBeUndefined();
+    expect(args.select.tenantId).toBeUndefined();
+    expect(args.select.createdAt).toBeUndefined();
+    expect(args.select.updatedAt).toBeUndefined();
+    expect(args.select.isRecurring).toBeUndefined();
+    expect(args.select.recurFrequency).toBeUndefined();
+    expect(args.select.nextRecurDate).toBeUndefined();
+    expect(args.select.parentInvoiceId).toBeUndefined();
+    expect(args.select.legalEntityCode).toBeUndefined();
+    expect(args.select.paidAt).toBeUndefined();
+    expect(args.select.visitId).toBeUndefined();
+  });
+
+  test('no ?fields param → default include path preserved (back-compat)', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    const res = await request(app).get('/api/billing');
+    expect(res.status).toBe(200);
+    const args = prisma.invoice.findMany.mock.calls[0][0];
+    // Default callers MUST still get the full nested shape — this is the
+    // safety net on additive-opt-in. If this assertion ever flips, every
+    // existing frontend that destructures `inv.contact.name` breaks.
+    expect(args.include).toEqual({ contact: true, deal: true });
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=other (non-exact value) → default include path (strict exact-match)', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    // Anything other than literal "summary" must fall through to the
+    // default include path. Prevents typos / partial matches from
+    // accidentally tripping the slim shape.
+    const res = await request(app).get('/api/billing?fields=summari');
+    expect(res.status).toBe(200);
+    const args = prisma.invoice.findMany.mock.calls[0][0];
+    expect(args.include).toEqual({ contact: true, deal: true });
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=summary preserves tenant scoping + status/dueDate ordering', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const app = makeApp({ tenantId: 42 });
+    const res = await request(app).get('/api/billing?fields=summary');
+    expect(res.status).toBe(200);
+    const args = prisma.invoice.findMany.mock.calls[0][0];
+    // Tenant scoping must survive the slim-shape branch — otherwise the
+    // opt-in becomes a cross-tenant leak vector.
+    expect(args.where).toEqual({ tenantId: 42 });
+    // Ordering contract preserved so the Invoices/Billing page still
+    // renders status-grouped, due-date-sorted rows under the slim shape.
+    expect(args.orderBy).toEqual([{ status: 'desc' }, { dueDate: 'asc' }]);
+  });
+
+  test('?fields=summary response body shape — slim row passes through unchanged', async () => {
+    // The slim row Prisma returns under `select` has no `contact`/`deal`
+    // properties at all — the route must NOT re-fabricate them. This is
+    // a pin against a regression where someone later "helpfully" patches
+    // missing keys back in after the fieldFilter pass.
+    const slimRow = {
+      id: 1,
+      invoiceNum: 'INV-A',
+      amount: 100,
+      status: 'UNPAID',
+      dueDate: new Date('2026-12-31'),
+      issuedDate: new Date('2026-01-01'),
+      contactId: 42,
+      dealId: null,
+    };
+    prisma.invoice.findMany.mockResolvedValue([slimRow]);
+    const app = makeApp();
+    const res = await request(app).get('/api/billing?fields=summary');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBe(1);
+    expect(res.body[0].id).toBe(1);
+    expect(res.body[0].invoiceNum).toBe('INV-A');
+    expect(res.body[0].contactId).toBe(42);
+    // contact / deal should NOT have been hydrated by the route.
+    expect(res.body[0].contact).toBeUndefined();
+    expect(res.body[0].deal).toBeUndefined();
+  });
+});

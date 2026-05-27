@@ -12,7 +12,9 @@
 //     403 WRONG_VERTICAL / 200 happy path / 500 VERTICAL_GUARD_ERROR
 //   - getSubBrandAccessSet: missing-user → empty Set, ADMIN → null,
 //     null subBrandAccess → null, valid JSON → filtered Set,
-//     malformed JSON → empty Set, empty/non-array JSON → null
+//     malformed (catch branch) JSON → empty Set, empty array `"[]"` →
+//     empty Set (deny-all, per #976), non-array JSON → null,
+//     all-invalid-sub-brand array → empty Set (after VALID filter)
 //   - assertCompletedDiagnostic: count=0 throws DIAGNOSTIC_REQUIRED,
 //     count>=1 passes
 //
@@ -271,21 +273,58 @@ describe("travelGuards — getSubBrandAccessSet", () => {
     expect(result.size).toBe(0);
   });
 
-  test("empty JSON array returns null (full access — convention: empty list means unrestricted)", async () => {
+  test("empty JSON array '[]' returns empty Set (#976: deny-all, NOT full access)", async () => {
+    // Prior behavior (pre-#976): arr.length === 0 → null (full access).
+    // Cause: the not-yet-onboarded MANAGER case (operator created with no
+    // sub-brand grants yet) silently received tenant-wide access — the
+    // per-route "empty access set → all-zeros rollup" branch was
+    // unreachable from a clean state. Fixed in travelGuards.js by
+    // returning new Set() instead of null on empty arrays.
     prisma.user.findUnique.mockResolvedValue({
       role: "USER",
       subBrandAccess: JSON.stringify([]),
     });
     const result = await getSubBrandAccessSet(6);
-    expect(result).toBeNull();
+    expect(result).toBeInstanceOf(Set);
+    expect(result.size).toBe(0);
   });
 
-  test("non-array JSON returns null (defensive — falls through 'not Array' branch)", async () => {
+  test("non-array JSON returns null (defensive — falls through 'not Array' branch, preserves back-compat)", async () => {
+    // Distinct from the empty-array case above: non-array JSON (an
+    // object, a number, a string) is a malformed-but-typed shape — we
+    // can't tell whether the operator intended deny-all or just typo'd
+    // a non-array. Defaulting to null preserves backward-compat with
+    // any historical bad rows.
     prisma.user.findUnique.mockResolvedValue({
       role: "USER",
       subBrandAccess: JSON.stringify({ tmc: true }),
     });
     const result = await getSubBrandAccessSet(7);
+    expect(result).toBeNull();
+  });
+
+  test("array of all-invalid sub-brands returns empty Set (post-VALID_SUB_BRANDS filter)", async () => {
+    // Distinct from the empty-array case: an array with entries that all
+    // fail the VALID_SUB_BRANDS filter (e.g. `["bogus", "garbage"]`)
+    // survives JSON.parse + the Array check, but filters down to a
+    // Set of size 0. This path was the ONLY way to reach the empty-Set
+    // branch from a non-malformed input pre-#976 — now joined by `"[]"`.
+    prisma.user.findUnique.mockResolvedValue({
+      role: "USER",
+      subBrandAccess: JSON.stringify(["bogus", "garbage", "not-a-brand"]),
+    });
+    const result = await getSubBrandAccessSet(8);
+    expect(result).toBeInstanceOf(Set);
+    expect(result.size).toBe(0);
+  });
+
+  test("null subBrandAccess remains null (no regression — full access for unset operators)", async () => {
+    // #976 fix carefully distinguishes:
+    //   - column is NULL / missing → null (full access, unset = unrestricted)
+    //   - column is "[]" (declared empty) → new Set() (deny-all)
+    // This case pins the unset path stays null even after the fix.
+    prisma.user.findUnique.mockResolvedValue({ role: "USER", subBrandAccess: null });
+    const result = await getSubBrandAccessSet(9);
     expect(result).toBeNull();
   });
 });

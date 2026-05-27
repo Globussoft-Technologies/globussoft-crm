@@ -123,13 +123,34 @@ router.get("/", verifyToken, async (req, res) => {
     const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
     const skip = parseInt(req.query.offset, 10) || 0;
 
+    // ?fields=summary — opt-in slim shape for list-card UIs that don't need the
+    // heavy actionLabel free-text + conditionJson payload. Mirrors slices 1-39
+    // of #920. Drops actionLabel (long advisor warning text) and conditionJson
+    // (rule-logic blob); keeps the identifying + filterable + display-chrome
+    // fields the SPA's index pages render.
+    const isSummary = String(req.query.fields || "").toLowerCase() === "summary";
+    const findManyArgs = {
+      where,
+      orderBy: [{ createdAt: "desc" }],
+      take,
+      skip,
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        tenantId: true,
+        ruleType: true,
+        destinationCountry: true,
+        applicationType: true,
+        severity: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
+
     const [rules, total] = await Promise.all([
-      prisma.embassyRule.findMany({
-        where,
-        orderBy: [{ createdAt: "desc" }],
-        take,
-        skip,
-      }),
+      prisma.embassyRule.findMany(findManyArgs),
       prisma.embassyRule.count({ where }),
     ]);
     res.json({ rules, total, limit: take, offset: skip });

@@ -216,6 +216,120 @@ describe('GET /api/integrations — catalogue with per-tenant overlay', () => {
   });
 });
 
+// ─── GET /?fields=summary — slim-shape opt-in (#920 slice 35) ────────────
+
+describe('GET /api/integrations?fields=summary — slim-shape opt-in', () => {
+  test('?fields=summary projects to {id, provider, isActive} only — drops name/description/category/connectedAt', async () => {
+    const connectedAt = new Date('2026-04-15T10:00:00Z');
+    prisma.integration.findMany.mockResolvedValue([
+      { id: 101, provider: 'slack', isActive: true, updatedAt: connectedAt },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/integrations?fields=summary');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(12);
+
+    const slack = res.body.find((e) => e.provider === 'slack');
+    // Slim keys preserved.
+    expect(slack.id).toBe(101);
+    expect(slack.provider).toBe('slack');
+    expect(slack.isActive).toBe(true);
+    // Heavy keys dropped — name/description/category are catalogue metadata,
+    // connectedAt is the timestamp join from the overlay.
+    expect(slack).not.toHaveProperty('name');
+    expect(slack).not.toHaveProperty('description');
+    expect(slack).not.toHaveProperty('category');
+    expect(slack).not.toHaveProperty('connectedAt');
+    // Sensitive Prisma columns — defense-in-depth assertion; the overlay
+    // never surfaced them, but this pins it.
+    expect(slack).not.toHaveProperty('token');
+    expect(slack).not.toHaveProperty('settings');
+    expect(slack).not.toHaveProperty('accessToken');
+    expect(slack).not.toHaveProperty('refreshToken');
+    expect(slack).not.toHaveProperty('apiKey');
+  });
+
+  test('?fields=summary issues a slim Prisma select (drops token/settings at the DB layer)', async () => {
+    prisma.integration.findMany.mockResolvedValue([]);
+    const app = makeApp({ tenantId: 42 });
+    await request(app).get('/api/integrations?fields=summary');
+    expect(prisma.integration.findMany).toHaveBeenCalledTimes(1);
+    const args = prisma.integration.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 42 });
+    expect(args.select).toEqual({
+      id: true,
+      provider: true,
+      isActive: true,
+    });
+    // Slim select must NOT request token or settings.
+    expect(args.select).not.toHaveProperty('token');
+    expect(args.select).not.toHaveProperty('settings');
+  });
+
+  test('no ?fields → full catalogue-overlay shape preserved (back-compat)', async () => {
+    const connectedAt = new Date('2026-04-15T10:00:00Z');
+    prisma.integration.findMany.mockResolvedValue([
+      { id: 101, provider: 'slack', isActive: true, updatedAt: connectedAt },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/integrations');
+    expect(res.status).toBe(200);
+    const slack = res.body.find((e) => e.provider === 'slack');
+    // Heavy keys present in default shape.
+    expect(slack).toHaveProperty('name', 'Slack');
+    expect(slack).toHaveProperty('description');
+    expect(slack).toHaveProperty('category', 'communication');
+    expect(slack).toHaveProperty('connectedAt');
+    expect(slack.connectedAt).toBeTruthy();
+    // The default-shape Prisma call MUST NOT carry a slim select.
+    const args = prisma.integration.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=other (non-exact match) → full shape (only "summary" opts in)', async () => {
+    prisma.integration.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    const res = await request(app).get('/api/integrations?fields=full');
+    expect(res.status).toBe(200);
+    // Should be full shape — first entry carries catalogue metadata.
+    expect(res.body[0]).toHaveProperty('name');
+    expect(res.body[0]).toHaveProperty('description');
+    expect(res.body[0]).toHaveProperty('category');
+    expect(res.body[0]).toHaveProperty('connectedAt');
+    const args = prisma.integration.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=summary preserves catalogue order (12 entries, canonical sequence)', async () => {
+    prisma.integration.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    const res = await request(app).get('/api/integrations?fields=summary');
+    expect(res.status).toBe(200);
+    expect(res.body.map((e) => e.provider)).toEqual([
+      'slack', 'google', 'stripe', 'razorpay', 'mailchimp',
+      'quickbooks', 'xero', 'tally', 'zapier', 'whatsapp',
+      'indiamart', 'justdial',
+    ]);
+    // Inactive defaults pinned: id=null + isActive=false for every provider
+    // when no Integration rows exist.
+    for (const entry of res.body) {
+      expect(entry.id).toBeNull();
+      expect(entry.isActive).toBe(false);
+      // Keys ONLY include the slim trio — no extras leak.
+      expect(Object.keys(entry).sort()).toEqual(['id', 'isActive', 'provider']);
+    }
+  });
+
+  test('?fields=summary scopes findMany to the requesting tenantId (tenant isolation preserved)', async () => {
+    prisma.integration.findMany.mockResolvedValue([]);
+    const app = makeApp({ tenantId: 77 });
+    await request(app).get('/api/integrations?fields=summary');
+    const args = prisma.integration.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 77 });
+  });
+});
+
 // ─── POST /connect — credential persistence (ADMIN-only) ────────────────
 
 describe('POST /api/integrations/connect — ADMIN gate + upsert shape', () => {

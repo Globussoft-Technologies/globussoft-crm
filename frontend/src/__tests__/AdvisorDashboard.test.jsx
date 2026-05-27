@@ -286,4 +286,161 @@ describe('AdvisorDashboard — Visa Sure Phase 3 per-application view (FR-4)', (
       expect(back.getAttribute('href')).toBe('/travel/visa/applications');
     });
   });
+
+  // ─── Extended coverage (test-cron tick) ────────────────────────────────
+  // Below cases extend coverage to uncovered SUT branches: diagnostic id-absent,
+  // classification fallback, rejection-history string-literal-null edge, advisor
+  // flag "priority", document-checklist 0%/100% edges, null-array checklist,
+  // error fallback message, missing contact subheader, refetch on id change.
+
+  it('Diagnostic section: omits "View full diagnostic" link when diagnostic.id is missing', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      diagnostic: {
+        // No id field — the SUT gates the link on `diagnostic.id != null`.
+        classificationLabel: 'Browsing',
+        score: 3.2,
+      },
+    });
+    renderPage();
+    await screen.findByText('Browsing');
+    expect(screen.queryByRole('link', { name: /View full diagnostic/i })).toBeNull();
+  });
+
+  it('Diagnostic section: falls back to `classification` when classificationLabel is absent', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      diagnostic: {
+        id: 11,
+        // classificationLabel absent — SUT falls back to `classification`.
+        classification: 'level_2',
+        score: 5,
+      },
+    });
+    renderPage();
+    await screen.findByText('level_2');
+  });
+
+  it('Diagnostic section: renders score=0 (not the em-dash) — uses `!= null` not falsy check', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      diagnostic: {
+        id: 5,
+        classificationLabel: 'Cold',
+        score: 0,
+      },
+    });
+    renderPage();
+    await screen.findByText('Cold');
+    // The score should render as literal "0", not the "—" placeholder. The SUT
+    // gates this on `score != null` so 0 is a valid value.
+    const strong = screen.getByText(/Score:/);
+    // Walk to the sibling span containing the score value.
+    expect(strong.parentElement.textContent).toMatch(/Score:\s*0/);
+  });
+
+  it('Risk pill: rejectionHistoryJson "{}" is treated as no-history (NEUTRAL)', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      rejectionHistoryJson: '{}',
+    });
+    renderPage();
+    await screen.findByText('none');
+  });
+
+  it('Risk pill: rejectionHistoryJson literal "null" string is treated as no-history (NEUTRAL)', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      // The SUT explicitly handles the string "null" — covered helper branch.
+      rejectionHistoryJson: 'null',
+    });
+    renderPage();
+    await screen.findByText('none');
+  });
+
+  it('Risk pill: advisor flag "priority" activates the yellow pill (FR-3.3)', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      advisorRiskFlag: 'priority',
+    });
+    renderPage();
+    await screen.findByText('priority');
+  });
+
+  it('Risk pill: advisor flag with arbitrary value (e.g. "low") does NOT activate — raw value still renders', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      advisorRiskFlag: 'low',
+    });
+    renderPage();
+    // The raw value renders verbatim even when not activating the yellow pill —
+    // isAdvisorRiskActive() only fires on "high" / "priority" (case-insensitive).
+    await screen.findByText('low');
+  });
+
+  it('Document checklist: 0% progress when all required items are pending', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      documentChecklist: [
+        { id: 1, name: 'Passport', required: true, status: 'pending' },
+        { id: 2, name: 'Photo', required: true, status: 'pending' },
+      ],
+    });
+    renderPage();
+    await screen.findByRole('progressbar');
+    const bar = screen.getByRole('progressbar');
+    expect(bar.getAttribute('aria-valuemax')).toBe('2');
+    expect(bar.getAttribute('aria-valuenow')).toBe('0');
+  });
+
+  it('Document checklist: 100% progress when all required items are verified', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      documentChecklist: [
+        { id: 1, name: 'Passport', required: true, status: 'verified' },
+        { id: 2, name: 'Photo', required: true, status: 'verified' },
+      ],
+    });
+    renderPage();
+    await screen.findByRole('progressbar');
+    const bar = screen.getByRole('progressbar');
+    expect(bar.getAttribute('aria-valuemax')).toBe('2');
+    expect(bar.getAttribute('aria-valuenow')).toBe('2');
+  });
+
+  it('Document checklist: non-array documentChecklist (null) renders the empty state', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      // SUT guards via `Array.isArray(application?.documentChecklist)` and
+      // falls back to []; non-array values must NOT crash the render.
+      documentChecklist: null,
+    });
+    renderPage();
+    await screen.findByText(/No document checklist items recorded/i);
+  });
+
+  it('Generic error with no message uses the "Failed to load visa application" fallback', async () => {
+    // Rejecting with an empty object (no message, no code) — SUT must still
+    // render the fallback string instead of "undefined" or crashing.
+    fetchApiMock.mockRejectedValue({});
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to load visa application/i)).toBeTruthy();
+    });
+  });
+
+  it('Header sub-line is hidden when contact.name is missing', async () => {
+    fetchApiMock.mockResolvedValue({
+      ...BASE_APPLICATION,
+      contact: { id: 100 }, // no name field
+    });
+    renderPage();
+    // Wait for the main heading to confirm the load completed.
+    await screen.findByRole('heading', { level: 1 });
+    // The sub-header (containing applicationType / status) is gated on
+    // `application?.contact?.name`. With no name, neither value should appear
+    // in the contact sub-line (they may also appear nowhere else on the page).
+    expect(screen.queryByText('Tourist Visa')).toBeNull();
+    expect(screen.queryByText('in_review')).toBeNull();
+  });
 });

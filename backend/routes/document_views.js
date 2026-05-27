@@ -151,6 +151,9 @@ router.post("/create", async (req, res) => {
 });
 
 // GET / — list all tracking records (filterable by documentType, documentId)
+// Optional ?fields=summary returns slim rows (drops ipAddress, userAgent which
+// can be heavy text); legacy callers (no ?fields, or any non-exact value) keep
+// the full-row shape unchanged for detail/debugging flows.
 router.get("/", async (req, res) => {
   try {
     const { documentType, documentId } = req.query;
@@ -161,10 +164,25 @@ router.get("/", async (req, res) => {
       if (Number.isFinite(id)) where.documentId = id;
     }
 
-    const views = await prisma.documentView.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        documentType: true,
+        documentId: true,
+        trackingId: true,
+        viewerEmail: true,
+        viewedAt: true,
+        duration: true,
+        createdAt: true,
+      };
+    }
+
+    const views = await prisma.documentView.findMany(findManyArgs);
 
     res.json(views);
   } catch (err) {

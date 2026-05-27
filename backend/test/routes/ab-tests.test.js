@@ -513,3 +513,178 @@ describe('GET /:id/stats — computeStats envelope + edge cases', () => {
     expect(res.body).toEqual({ error: 'AB test not found' });
   });
 });
+
+// ── GET /?fields=summary — slim-shape opt-in (#920 slice 45) ──────
+//
+// #920 slice 45: mirror of the slim-shape opt-in pattern shipped across
+// slices 1-42 (canned_responses, sla, surveys, knowledge_base, …). The
+// slim branch drops the heavy `variantA`/`variantB` JSON-text columns
+// from the Prisma select AND skips the `serialize()` + `computeStats()`
+// envelope decoration — so admin index / autocomplete / picker callers
+// that only need id+name+status+counter columns pay zero stats-compute
+// cost. The contract pins:
+//   - `?fields=summary` sets a `select` key on the findMany args, with
+//     exactly the 11 slim columns and no variantA/variantB.
+//   - Slim rows ship as-is (no `stats` envelope, no parsed variant
+//     objects in the response).
+//   - The default branch (no ?fields) is byte-identical to pre-#920:
+//     full row + parsed variants + stats envelope.
+//   - Any non-exact value (`?fields=full`, `?fields=`, `?fields=SUMMARY`
+//     casing) falls back to the full branch — the opt-in is strict.
+//   - Tenant scope + orderBy are identical across both branches.
+
+describe('GET /?fields=summary — slim-shape opt-in', () => {
+  test('opt-in sets a select key on findMany with exactly the slim columns and drops variantA/variantB', async () => {
+    prisma.abTest.findMany.mockResolvedValue([
+      {
+        id: 1,
+        name: 'Slim probe',
+        campaignId: 7,
+        status: 'RUNNING',
+        winningVariant: null,
+        variantASent: 60,
+        variantBSent: 80,
+        variantAClicked: 6,
+        variantBClicked: 4,
+        createdAt: new Date('2026-05-26T10:00:00Z'),
+        updatedAt: new Date('2026-05-26T10:00:00Z'),
+      },
+    ]);
+
+    const res = await request(makeApp()).get('/api/ab-tests?fields=summary');
+    expect(res.status).toBe(200);
+
+    // Slim branch fires `select` on findMany with exactly the 11 slim keys.
+    const args = prisma.abTest.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 1 });
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.select).toBeDefined();
+    expect(args.select.id).toBe(true);
+    expect(args.select.name).toBe(true);
+    expect(args.select.campaignId).toBe(true);
+    expect(args.select.status).toBe(true);
+    expect(args.select.winningVariant).toBe(true);
+    expect(args.select.variantASent).toBe(true);
+    expect(args.select.variantBSent).toBe(true);
+    expect(args.select.variantAClicked).toBe(true);
+    expect(args.select.variantBClicked).toBe(true);
+    expect(args.select.createdAt).toBe(true);
+    expect(args.select.updatedAt).toBe(true);
+    // Critical: heavy variant JSON columns absent from slim select.
+    expect(args.select.variantA).toBeUndefined();
+    expect(args.select.variantB).toBeUndefined();
+  });
+
+  test('slim response ships rows as-is — no stats envelope, no parsed variants', async () => {
+    prisma.abTest.findMany.mockResolvedValue([
+      {
+        id: 1,
+        name: 'No-decoration probe',
+        campaignId: null,
+        status: 'DRAFT',
+        winningVariant: null,
+        variantASent: 0,
+        variantBSent: 0,
+        variantAClicked: 0,
+        variantBClicked: 0,
+      },
+    ]);
+
+    const res = await request(makeApp()).get('/api/ab-tests?fields=summary');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    // No `stats` decoration (the default branch's CTR+leader envelope).
+    expect(res.body[0].stats).toBeUndefined();
+    // No variantA/variantB parsed back to objects — they simply aren't in the row.
+    expect(res.body[0].variantA).toBeUndefined();
+    expect(res.body[0].variantB).toBeUndefined();
+    // Slim columns present.
+    expect(res.body[0].id).toBe(1);
+    expect(res.body[0].name).toBe('No-decoration probe');
+    expect(res.body[0].status).toBe('DRAFT');
+  });
+
+  test('default branch (no ?fields) is byte-identical to pre-#920 contract — full row + stats envelope', async () => {
+    prisma.abTest.findMany.mockResolvedValue([
+      {
+        id: 2,
+        tenantId: 1,
+        name: 'Full-shape probe',
+        variantA: '{"subject":"A"}',
+        variantB: '{"subject":"B"}',
+        variantASent: 50,
+        variantAClicked: 5,
+        variantBSent: 50,
+        variantBClicked: 1,
+        status: 'RUNNING',
+      },
+    ]);
+
+    const res = await request(makeApp()).get('/api/ab-tests');
+    expect(res.status).toBe(200);
+
+    // Default branch does NOT set a select key (full row returned).
+    const args = prisma.abTest.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    expect(args.where).toEqual({ tenantId: 1 });
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+
+    // Variants parsed back to objects + stats envelope present.
+    expect(res.body[0].variantA).toEqual({ subject: 'A' });
+    expect(res.body[0].variantB).toEqual({ subject: 'B' });
+    expect(res.body[0].stats).toBeDefined();
+    expect(res.body[0].stats.variantA.ctr).toBe(10);
+    expect(res.body[0].stats.variantB.ctr).toBe(2);
+    expect(res.body[0].stats.leader).toBe('A');
+  });
+
+  test('non-exact ?fields values fall back to the full branch (strict opt-in)', async () => {
+    prisma.abTest.findMany.mockResolvedValue([
+      {
+        id: 3,
+        tenantId: 1,
+        name: 'Strict opt-in probe',
+        variantA: '{}',
+        variantB: '{}',
+        variantASent: 0,
+        variantAClicked: 0,
+        variantBSent: 0,
+        variantBClicked: 0,
+        status: 'DRAFT',
+      },
+    ]);
+
+    // Casing mismatch, the canonical "any other value" probe.
+    const res = await request(makeApp()).get('/api/ab-tests?fields=SUMMARY');
+    expect(res.status).toBe(200);
+    // No select key — full branch.
+    const args = prisma.abTest.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // Full-branch decoration: stats envelope present, variant parsed to object.
+    expect(res.body[0].stats).toBeDefined();
+    expect(res.body[0].variantA).toEqual({});
+  });
+
+  test('slim branch preserves tenant scope via the tenantOf helper', async () => {
+    prisma.abTest.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 99 })).get(
+      '/api/ab-tests?fields=summary'
+    );
+    expect(res.status).toBe(200);
+    const args = prisma.abTest.findMany.mock.calls[0][0];
+    // tenantId injection is unchanged in the slim branch — critical for
+    // cross-tenant isolation: the slim shape MUST still filter by tenant.
+    expect(args.where).toEqual({ tenantId: 99 });
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.select).toBeDefined();
+  });
+
+  test('500 envelope on Prisma fault under the slim branch', async () => {
+    prisma.abTest.findMany.mockRejectedValue(new Error('db down'));
+    const res = await request(makeApp()).get('/api/ab-tests?fields=summary');
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to fetch AB tests' });
+  });
+});

@@ -392,3 +392,632 @@ describe('<Calendar /> — #807 Holiday UI', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Extension wave — 2026-05-26
+// Adds ≥8 new cases covering day-grid navigation, doctor swimlanes,
+// appointment-cell click, doctor + status filters, booking-type legend, empty
+// + loading states, and new-appointment surface. Uses the stable mock-object
+// pattern + getAllByText for duplicate labels (status legend + status badge
+// duplication), and screen.findByText for the async-fetch-driven first paint.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('<Calendar /> — day-grid navigation', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  it('renders the day-view header with today\'s date', async () => {
+    setupFetch({ visits: [] });
+    renderCalendar();
+    // Heading renders even during loading.
+    expect(screen.getByRole('heading', { name: /Calendar/i })).toBeInTheDocument();
+    // The subtitle is "Day view by practitioner — <localized date>".
+    expect(await screen.findByText(/Day view by practitioner/i)).toBeInTheDocument();
+  });
+
+  it('clicking the next-day chevron triggers a refetch with the next day window', async () => {
+    setupFetch({ visits: [] });
+    const user = userEvent.setup();
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+
+    const visitsCallsBefore = fetchApi.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && c[0].startsWith('/api/wellness/visits?')
+    );
+
+    // The next-day chevron is the only ChevronRight in the header — it is the
+    // last button in the nav cluster (after Today). The Today button has
+    // visible text "Today"; the chevrons are icon-only.
+    const buttons = screen.getAllByRole('button');
+    const todayBtn = screen.getByRole('button', { name: 'Today' });
+    const todayIdx = buttons.indexOf(todayBtn);
+    const nextBtn = buttons[todayIdx + 1];
+    expect(nextBtn).toBeTruthy();
+    await user.click(nextBtn);
+
+    await waitFor(() => {
+      const visitsCallsAfter = fetchApi.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].startsWith('/api/wellness/visits?')
+      );
+      expect(visitsCallsAfter.length).toBeGreaterThan(visitsCallsBefore.length);
+    });
+  });
+
+  it('clicking Today re-issues a fetch (re-anchors the date)', async () => {
+    setupFetch({ visits: [] });
+    const user = userEvent.setup();
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+
+    const before = fetchApi.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Today' }));
+    // setDate(new Date()) re-fires the effect → another fetch wave.
+    await waitFor(() => {
+      expect(fetchApi.mock.calls.length).toBeGreaterThan(before);
+    });
+  });
+
+  it('clicking the prev-day chevron triggers a refetch', async () => {
+    setupFetch({ visits: [] });
+    const user = userEvent.setup();
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+
+    const before = fetchApi.mock.calls.length;
+    const buttons = screen.getAllByRole('button');
+    const todayBtn = screen.getByRole('button', { name: 'Today' });
+    const todayIdx = buttons.indexOf(todayBtn);
+    const prevBtn = buttons[todayIdx - 1];
+    expect(prevBtn).toBeTruthy();
+    await user.click(prevBtn);
+    await waitFor(() => {
+      expect(fetchApi.mock.calls.length).toBeGreaterThan(before);
+    });
+  });
+});
+
+describe('<Calendar /> — doctor swimlanes + appointment cells', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  it('renders one swimlane column per practitioner with visits', async () => {
+    const v = new Date(today); v.setHours(11, 0, 0, 0);
+    setupFetch({
+      visits: [{
+        id: 1, doctorId: 5, patientId: 200,
+        patient: { id: 200, name: 'Ananya Singh' },
+        service: { id: 100, name: 'Hair Transplant' },
+        visitDate: v.toISOString(), status: 'booked',
+      }],
+    });
+    renderCalendar();
+    // Both practitioners are in showAll mode by default.
+    expect(await screen.findByText('Dr. Anjali Mukherjee')).toBeInTheDocument();
+    expect(screen.getByText('Sandeep Bose')).toBeInTheDocument();
+  });
+
+  it('appointment cell renders a Link to the patient detail page', async () => {
+    const v = new Date(today); v.setHours(11, 0, 0, 0);
+    setupFetch({
+      visits: [{
+        id: 7, doctorId: 5, patientId: 200,
+        patient: { id: 200, name: 'Ananya Singh' },
+        service: { id: 100, name: 'Hair Transplant' },
+        visitDate: v.toISOString(), status: 'booked',
+      }],
+    });
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+
+    // The chip's title includes the patient name; the link href points to
+    // /wellness/patients/<id>. We anchor on the href because the patient
+    // name "Ananya Singh" also appears in the test data fixture.
+    await waitFor(() => {
+      const link = container.querySelector('a[href="/wellness/patients/200"]');
+      expect(link).toBeTruthy();
+    });
+  });
+
+  it('renders an Unassigned column when a visit has no doctorId', async () => {
+    const v = new Date(today); v.setHours(13, 0, 0, 0);
+    setupFetch({
+      visits: [{
+        id: 8, doctorId: null, patientId: 201,
+        patient: { id: 201, name: 'Rohan Verma' },
+        visitDate: v.toISOString(), status: 'arrived',
+      }],
+    });
+    renderCalendar();
+    // The synthetic Unassigned column header shows up.
+    expect(await screen.findByText('Unassigned')).toBeInTheDocument();
+  });
+
+  it('status border colour reflects the visit status (in-treatment → amber)', async () => {
+    const v = new Date(today); v.setHours(12, 0, 0, 0);
+    setupFetch({
+      visits: [{
+        id: 11, doctorId: 5, patientId: 200,
+        patient: { id: 200, name: 'Ananya Singh' },
+        visitDate: v.toISOString(), status: 'in-treatment',
+      }],
+    });
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    await waitFor(() => {
+      const link = container.querySelector('a[href="/wellness/patients/200"]');
+      expect(link).toBeTruthy();
+      // STATUS_BORDER['in-treatment'] === '#f59e0b' (amber). jsdom returns
+      // the rgb()-form for CSS color values: rgb(245, 158, 11).
+      const borderLeft = link.style.borderLeft || link.style.borderLeftColor;
+      expect(borderLeft.toLowerCase()).toMatch(/#f59e0b|rgb\(\s*245\s*,\s*158\s*,\s*11\s*\)/);
+    });
+  });
+});
+
+describe('<Calendar /> — filters: practitioner toggle + status legend', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  it('"Show all" toggle filters practitioner columns to only those with visits today', async () => {
+    const v = new Date(today); v.setHours(11, 0, 0, 0);
+    // Only Anjali (id=5) has a visit; Sandeep (id=6) does not.
+    setupFetch({
+      visits: [{
+        id: 1, doctorId: 5, patientId: 200,
+        patient: { id: 200, name: 'Ananya Singh' },
+        visitDate: v.toISOString(), status: 'booked',
+      }],
+    });
+    const user = userEvent.setup();
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    // Default showAll=true → both columns visible.
+    expect(screen.getByText('Sandeep Bose')).toBeInTheDocument();
+    // Toggle is labelled "All practitioners (2)".
+    const toggle = screen.getByRole('button', { name: /All practitioners \(2\)/i });
+    await user.click(toggle);
+    // After toggling, only Anjali stays (she has a visit). Sandeep removed.
+    await waitFor(() => {
+      expect(screen.queryByText('Sandeep Bose')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Dr. Anjali Mukherjee')).toBeInTheDocument();
+    // Toggle label flips to "1 of 2 practitioners".
+    expect(screen.getByRole('button', { name: /1 of 2 practitioners/i })).toBeInTheDocument();
+  });
+
+  it('renders all 7 status legend entries (filter UI surface)', async () => {
+    setupFetch({ visits: [] });
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    // Each STATUS_BORDER key is rendered as a small legend chip at the bottom.
+    // "booked" appears both as a legend chip AND as a row badge when there
+    // are booked visits — use getAllByText (per the RTL standing rule about
+    // labels that appear as both filter chrome AND row badges).
+    expect(screen.getAllByText(/^booked$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^confirmed$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^arrived$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^in-treatment$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^completed$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^no-show$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^cancelled$/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders the booking-type legend chip with all 4 booking-type labels', async () => {
+    setupFetch({ visits: [] });
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    const legend = screen.getByTestId('booking-type-legend');
+    expect(legend).toBeInTheDocument();
+    // The 4 booking types should each surface their label inside the legend.
+    expect(within(legend).getByText(/Clinic visit/i)).toBeInTheDocument();
+    expect(within(legend).getByText(/At home/i)).toBeInTheDocument();
+    expect(within(legend).getByText(/Video consult/i)).toBeInTheDocument();
+    expect(within(legend).getByText(/Phone consult/i)).toBeInTheDocument();
+  });
+});
+
+describe('<Calendar /> — empty + loading states', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  it('renders the loading skeleton while the initial fetch is pending', () => {
+    // Don't resolve the visits call — leave it pending so the loading state
+    // sticks. The skeleton sits at data-testid="calendar-loading".
+    fetchApi.mockImplementation(() => new Promise(() => { /* never resolves */ }));
+    renderCalendar();
+    expect(screen.getByTestId('calendar-loading')).toBeInTheDocument();
+  });
+
+  it('renders the empty-state message when no practitioners and no visits exist', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/staff') return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/visits?')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    renderCalendar();
+    // Loading flips off, columns.length === 0 → empty-state copy renders.
+    expect(await screen.findByText(/No practitioners configured/i)).toBeInTheDocument();
+  });
+
+  it('survives an API error (no crash, calendar reaches a stable render)', async () => {
+    // First call (visits) rejects; others resolve to [].
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/wellness/visits?')) return Promise.reject(new Error('network down'));
+      if (url === '/api/staff') return Promise.resolve(staff);
+      return Promise.resolve([]);
+    });
+    renderCalendar();
+    // The catch block sets visits=[], staff=[]; with staff=[] the columns
+    // collapse → empty-state message renders. Either way, the component does
+    // not throw.
+    expect(await screen.findByText(/No practitioners configured|Day view by practitioner/i)).toBeInTheDocument();
+  });
+});
+
+describe('<Calendar /> — new-appointment surface', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  it('clicking an empty creatable slot opens the New Visit modal seeded with that practitioner + hour', async () => {
+    setupFetch({ visits: [] });
+    const user = userEvent.setup();
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+
+    // The first creatable cell carries a title beginning with "Book ".
+    const cell = container.querySelector('[title^="Book "]');
+    expect(cell).toBeTruthy();
+    // Title format: "Book HH:00 with <practitioner name>".
+    expect(cell.getAttribute('title')).toMatch(/^Book \d{2}:00 with /);
+    await user.click(cell);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /New visit/i })).toBeInTheDocument();
+  });
+
+  it('Cancel button on the New Visit modal closes the dialog', async () => {
+    setupFetch({ visits: [] });
+    const user = userEvent.setup();
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+
+    const cell = container.querySelector('[title^="Book "]');
+    await user.click(cell);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('submitting the New Visit form fires POST /api/wellness/visits with patientId + status=booked', async () => {
+    setupFetch({ visits: [] });
+    // POST resolves to a new visit row; refetch returns same empty array.
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/staff') return Promise.resolve(staff);
+      if (url.startsWith('/api/wellness/visits?')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/patients') return Promise.resolve(patientsList);
+      if (url.startsWith('/api/wellness/waitlist')) return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/holidays')) return Promise.resolve([]);
+      if (url === '/api/wellness/visits' && opts?.method === 'POST') return Promise.resolve({ id: 999 });
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+
+    const cell = container.querySelector('[title^="Book "]');
+    await user.click(cell);
+    // Two <select>s render in the new-visit flow (Patient + Service). The
+    // patient one is required and is the FIRST combobox in DOM order — pick
+    // it by index to avoid ambiguity with the optional service select.
+    const selects = screen.getAllByRole('combobox');
+    await user.selectOptions(selects[0], '200');
+    await user.click(screen.getByRole('button', { name: /Book visit/i }));
+
+    await waitFor(() => {
+      const postCall = fetchApi.mock.calls.find((c) =>
+        c[0] === '/api/wellness/visits' && c[1]?.method === 'POST'
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.patientId).toBe(200);
+      expect(body.status).toBe('booked');
+      // visitDate is the IST wall time at the clicked hour.
+      expect(body.visitDate).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:00:00\+05:30$/);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Extension wave — 2026-05-26 (second pass)
+// Adds 9 new cases covering booking-type chips (IN_HOME w/ travel-time + null
+// fallback), resource picker (presence + service-id filtering), notes/service
+// payload fields, patients/{data,patients} envelope shapes, waitlist {items}
+// envelope, doctor-specific-holiday spares other columns, holiday banner
+// absent when no holidays, and the full STATUS_BORDER colour table for every
+// visit status. SUT @ 866L; pre-extension ratio 83% — bringing into 100%+.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('<Calendar /> — booking-type chips on event cards', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  it('IN_HOME visit renders the "At home" chip + travel-time annotation when travelTimeMinutes is set', async () => {
+    const v = new Date(today); v.setHours(11, 0, 0, 0);
+    setupFetch({
+      visits: [{
+        id: 21, doctorId: 5, patientId: 200,
+        patient: { id: 200, name: 'Ananya Singh' },
+        visitDate: v.toISOString(), status: 'booked',
+        bookingType: 'IN_HOME', travelTimeMinutes: 45,
+      }],
+    });
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    // Booking-type badge surfaces with the IN_HOME testid.
+    const badge = await screen.findByTestId('booking-type-IN_HOME');
+    expect(badge).toBeInTheDocument();
+    expect(badge.textContent).toMatch(/At home/i);
+    // Travel-time annotation only appears for IN_HOME with finite minutes > 0.
+    expect(screen.getByTestId('travel-time').textContent).toMatch(/45 min/);
+  });
+
+  it('VIDEO visit renders the "Video consult" chip without travel-time', async () => {
+    const v = new Date(today); v.setHours(11, 0, 0, 0);
+    setupFetch({
+      visits: [{
+        id: 22, doctorId: 5, patientId: 200,
+        patient: { id: 200, name: 'Ananya Singh' },
+        visitDate: v.toISOString(), status: 'booked',
+        bookingType: 'VIDEO', travelTimeMinutes: 99,
+      }],
+    });
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    expect(await screen.findByTestId('booking-type-VIDEO')).toBeInTheDocument();
+    // travel-time testid is gated to IN_HOME only — non-IN_HOME rows skip it
+    // even if the value is set on the row.
+    expect(screen.queryByTestId('travel-time')).toBeNull();
+  });
+
+  it('legacy visit with null bookingType defaults to the CLINIC_VISIT chip', async () => {
+    const v = new Date(today); v.setHours(11, 0, 0, 0);
+    setupFetch({
+      visits: [{
+        id: 23, doctorId: 5, patientId: 200,
+        patient: { id: 200, name: 'Ananya Singh' },
+        visitDate: v.toISOString(), status: 'booked',
+        bookingType: null,
+      }],
+    });
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    // null falls back to CLINIC_VISIT.
+    expect(await screen.findByTestId('booking-type-CLINIC_VISIT')).toBeInTheDocument();
+  });
+});
+
+describe('<Calendar /> — resource picker in the New Visit modal', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  it('does not render the Resource select when /resources returns an empty list', async () => {
+    setupFetch({ visits: [] });
+    const user = userEvent.setup();
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    await user.click(container.querySelector('[title^="Book "]'));
+    // Resource label is absent because the resources prop is [].
+    expect(screen.queryByText(/Resource \(optional\)/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the Resource select when /resources returns entries, and filters by service compat', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/staff') return Promise.resolve(staff);
+      if (url.startsWith('/api/wellness/visits?')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/patients') return Promise.resolve(patientsList);
+      if (url.startsWith('/api/wellness/waitlist')) return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/holidays')) return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/resources')) return Promise.resolve([
+        // Room 1 only allows service 100 (Hair Transplant).
+        { id: 31, name: 'Room 1', type: 'room', serviceIds: JSON.stringify([100]) },
+        // Room 2 only allows service 101 (Botox).
+        { id: 32, name: 'Room 2', type: 'room', serviceIds: JSON.stringify([101]) },
+        // Generic device — no serviceIds → always shown.
+        { id: 33, name: 'Laser device', type: 'machine', serviceIds: null },
+      ]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    await user.click(container.querySelector('[title^="Book "]'));
+
+    // Resource label appears now.
+    expect(await screen.findByText(/Resource \(optional\)/i)).toBeInTheDocument();
+    const resourceSelect = screen.getByDisplayValue('— no resource pinned —');
+
+    // With no service picked yet, ALL resources are visible (filter no-ops).
+    expect(within(resourceSelect).getByRole('option', { name: /Room 1/i })).toBeInTheDocument();
+    expect(within(resourceSelect).getByRole('option', { name: /Room 2/i })).toBeInTheDocument();
+    expect(within(resourceSelect).getByRole('option', { name: /Laser device/i })).toBeInTheDocument();
+
+    // Pick service 100 (Hair Transplant) → Room 2 (which only allows 101) drops.
+    const selects = screen.getAllByRole('combobox');
+    // Patient = 0, Service = 1, Resource = 2.
+    await user.selectOptions(selects[1], '100');
+    await waitFor(() => {
+      expect(within(resourceSelect).queryByRole('option', { name: /Room 2/i })).toBeNull();
+    });
+    expect(within(resourceSelect).getByRole('option', { name: /Room 1/i })).toBeInTheDocument();
+    // Generic (no serviceIds) still shown.
+    expect(within(resourceSelect).getByRole('option', { name: /Laser device/i })).toBeInTheDocument();
+  });
+});
+
+describe('<Calendar /> — POST body extras: notes + serviceId + resourceId', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  it('includes notes + serviceId + resourceId in the POST body when filled', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/staff') return Promise.resolve(staff);
+      if (url.startsWith('/api/wellness/visits?')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/patients') return Promise.resolve(patientsList);
+      if (url.startsWith('/api/wellness/waitlist')) return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/holidays')) return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/resources')) return Promise.resolve([
+        { id: 50, name: 'Procedure Room A', type: 'room', serviceIds: null },
+      ]);
+      if (url === '/api/wellness/visits' && opts?.method === 'POST') return Promise.resolve({ id: 1000 });
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    await user.click(container.querySelector('[title^="Book "]'));
+
+    const selects = screen.getAllByRole('combobox');
+    await user.selectOptions(selects[0], '200'); // patient
+    await user.selectOptions(selects[1], '100'); // service
+    await user.selectOptions(selects[2], '50');  // resource
+    await user.type(screen.getByPlaceholderText(/Walk-in confirmed/i), 'Follow-up after laser session');
+    await user.click(screen.getByRole('button', { name: /Book visit/i }));
+
+    await waitFor(() => {
+      const postCall = fetchApi.mock.calls.find((c) =>
+        c[0] === '/api/wellness/visits' && c[1]?.method === 'POST'
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.patientId).toBe(200);
+      expect(body.serviceId).toBe(100);
+      expect(body.resourceId).toBe(50);
+      expect(body.doctorId).toBe(5);
+      expect(body.notes).toMatch(/Follow-up after laser session/);
+    });
+  });
+});
+
+describe('<Calendar /> — defensive envelope reads', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  it('accepts /patients returning { patients: [...] } envelope shape (#312)', async () => {
+    // Same setup pattern but /patients returns the wrapped shape.
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/staff') return Promise.resolve(staff);
+      if (url.startsWith('/api/wellness/visits?')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/patients') return Promise.resolve({ patients: patientsList, total: 2 });
+      if (url.startsWith('/api/wellness/waitlist')) return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/holidays')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    await user.click(container.querySelector('[title^="Book "]'));
+
+    // Patient dropdown should have both seeded patients despite the envelope.
+    const patientSelect = screen.getAllByRole('combobox')[0];
+    expect(within(patientSelect).getByRole('option', { name: /Ananya Singh/ })).toBeInTheDocument();
+    expect(within(patientSelect).getByRole('option', { name: /Rohan Verma/ })).toBeInTheDocument();
+  });
+
+  it('accepts /patients returning { data: [...] } envelope shape', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/staff') return Promise.resolve(staff);
+      if (url.startsWith('/api/wellness/visits?')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/patients') return Promise.resolve({ data: patientsList });
+      if (url.startsWith('/api/wellness/waitlist')) return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/holidays')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    await user.click(container.querySelector('[title^="Book "]'));
+    const patientSelect = screen.getAllByRole('combobox')[0];
+    expect(within(patientSelect).getByRole('option', { name: /Ananya Singh/ })).toBeInTheDocument();
+  });
+
+  it('accepts /waitlist returning { items: [...] } envelope shape', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/staff') return Promise.resolve(staff);
+      if (url.startsWith('/api/wellness/visits?')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/patients') return Promise.resolve(patientsList);
+      if (url.startsWith('/api/wellness/waitlist')) return Promise.resolve({
+        items: [
+          { id: 77, status: 'waiting', patientId: 200, patient: { id: 200, name: 'Ananya Singh' }, serviceId: 100 },
+        ],
+      });
+      if (url.startsWith('/api/wellness/holidays')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    await user.click(container.querySelector('[title^="Book "]'));
+    // The promote toggle should appear because the {items:} envelope produced 1 entry.
+    expect(await screen.findByRole('radio', { name: /Promote from waitlist \(1\)/i })).toBeInTheDocument();
+  });
+});
+
+describe('<Calendar /> — holiday edge cases', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  it('does NOT render the holiday banner when /holidays returns []', async () => {
+    setupFetch({ visits: [], holidays: [] });
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    expect(screen.queryByTestId('holiday-banner')).toBeNull();
+  });
+
+  it('doctor-specific holiday leaves the other practitioner\'s cells bookable', async () => {
+    setupFetch({
+      visits: [],
+      // Personal day-off for doctor 5 only.
+      holidays: [{ id: 9, name: 'Personal Day', locationId: null, doctorId: 5, date: today.toISOString() }],
+    });
+    const { container } = renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    // Sandeep (id=6) is unaffected — bookable cells exist.
+    const bookable = container.querySelector('[title^="Book "]');
+    expect(bookable).toBeTruthy();
+    // The bookable cell's title should mention Sandeep, not Anjali.
+    expect(bookable.getAttribute('title')).toMatch(/with Sandeep Bose/);
+  });
+});
+
+describe('<Calendar /> — full status-border colour table', () => {
+  beforeEach(() => { fetchApi.mockReset(); });
+
+  // Pin every STATUS_BORDER entry that's a plain hex (the 'confirmed' one is a
+  // CSS variable so it doesn't render to a deterministic rgb() in jsdom).
+  const statusCases = [
+    { status: 'booked',       expected: /#3b82f6|rgb\(\s*59\s*,\s*130\s*,\s*246\s*\)/i },
+    { status: 'arrived',      expected: /#a855f7|rgb\(\s*168\s*,\s*85\s*,\s*247\s*\)/i },
+    { status: 'completed',    expected: /#10b981|rgb\(\s*16\s*,\s*185\s*,\s*129\s*\)/i },
+    { status: 'no-show',      expected: /#ef4444|rgb\(\s*239\s*,\s*68\s*,\s*68\s*\)/i },
+    { status: 'cancelled',    expected: /#64748b|rgb\(\s*100\s*,\s*116\s*,\s*139\s*\)/i },
+  ];
+
+  for (const { status, expected } of statusCases) {
+    it(`renders the ${status} border colour on the event chip`, async () => {
+      const v = new Date(today); v.setHours(12, 0, 0, 0);
+      setupFetch({
+        visits: [{
+          id: 100 + statusCases.indexOf(statusCases.find((s) => s.status === status)),
+          doctorId: 5, patientId: 200,
+          patient: { id: 200, name: 'Ananya Singh' },
+          visitDate: v.toISOString(), status,
+        }],
+      });
+      const { container } = renderCalendar();
+      await screen.findByText('Dr. Anjali Mukherjee');
+      await waitFor(() => {
+        const link = container.querySelector('a[href="/wellness/patients/200"]');
+        expect(link).toBeTruthy();
+        const borderLeft = link.style.borderLeft || link.style.borderLeftColor;
+        expect(borderLeft.toLowerCase()).toMatch(expected);
+      });
+    });
+  }
+});

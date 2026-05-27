@@ -57,6 +57,26 @@ describe('lib/inventoryReceiptNumber — formatReceiptNumber', () => {
     const sorted = [...ids].sort();
     expect(sorted).toEqual(ids);
   });
+
+  test('accepts boundary year 2000 (inclusive lower bound)', () => {
+    expect(formatReceiptNumber(2000, 1)).toBe('RCP-2000-0001');
+  });
+
+  test('accepts boundary year 9999 (inclusive upper bound)', () => {
+    expect(formatReceiptNumber(9999, 1)).toBe('RCP-9999-0001');
+  });
+
+  test('rejects NaN / null / undefined year', () => {
+    expect(() => formatReceiptNumber(NaN, 1)).toThrow();
+    expect(() => formatReceiptNumber(null, 1)).toThrow();
+    expect(() => formatReceiptNumber(undefined, 1)).toThrow();
+  });
+
+  test('rejects Infinity sequence (not an integer)', () => {
+    expect(() => formatReceiptNumber(2026, Infinity)).toThrow();
+    expect(() => formatReceiptNumber(2026, -Infinity)).toThrow();
+    expect(() => formatReceiptNumber(2026, NaN)).toThrow();
+  });
 });
 
 describe('lib/inventoryReceiptNumber — parseReceiptNumber', () => {
@@ -85,6 +105,23 @@ describe('lib/inventoryReceiptNumber — parseReceiptNumber', () => {
         expect(parsed).toEqual({ year, seq });
       }
     }
+  });
+
+  test('rejects leading whitespace and trailing junk (regex is ^...$ anchored)', () => {
+    expect(parseReceiptNumber(' RCP-2026-0001')).toBeNull();
+    expect(parseReceiptNumber('RCP-2026-0001 ')).toBeNull();
+    expect(parseReceiptNumber('RCP-2026-0001-extra')).toBeNull();
+    expect(parseReceiptNumber('prefix-RCP-2026-0001')).toBeNull();
+  });
+
+  test('parse accepts seq=0 — asymmetric with format (which rejects seq<1)', () => {
+    // The parse regex uses `\d+` for seq with no positivity check, so 0 round-trips
+    // back as { year, seq: 0 }. format() would reject seq=0 outright. This is a
+    // deliberate asymmetry: parse tolerates pre-existing malformed rows so the
+    // sequence-incrementer can skip them rather than blowing up.
+    expect(parseReceiptNumber('RCP-2026-0000')).toEqual({ year: 2026, seq: 0 });
+    // And format rejects the same seq:
+    expect(() => formatReceiptNumber(2026, 0)).toThrow();
   });
 });
 
@@ -154,5 +191,38 @@ describe('lib/inventoryReceiptNumber — generateReceiptNumber', () => {
     const now = new Date('2026-05-09T10:00:00Z');
     const result = await generateReceiptNumber(tx, 1, now);
     expect(result).toBe('RCP-2026-10000');
+  });
+
+  test('falls back to seq=1 when latest receiptNumber has a different year prefix', async () => {
+    // Defensive branch: if findFirst somehow returns a row whose parsed.year
+    // differs from the current `year` (mismatched index scan, dirty mock,
+    // data-corruption), the SUT skips the increment and starts fresh at seq=1.
+    // The mock returns a RCP-2025 row while `now` is 2026 — exercises the
+    // `parsed.year === year` guard's negative branch.
+    const tx = makeTx('RCP-2025-0099');
+    const now = new Date('2026-05-09T10:00:00Z');
+    const result = await generateReceiptNumber(tx, 1, now);
+    expect(result).toBe('RCP-2026-0001');
+  });
+
+  test('propagates tx.findFirst rejection (async error path)', async () => {
+    const dbError = new Error('connection lost');
+    const tx = {
+      inventoryReceipt: {
+        findFirst: vi.fn().mockRejectedValue(dbError),
+      },
+    };
+    const now = new Date('2026-05-09T10:00:00Z');
+    await expect(generateReceiptNumber(tx, 1, now)).rejects.toThrow('connection lost');
+  });
+
+  test('defaults `now` to new Date() when omitted (current UTC year prefix)', async () => {
+    const tx = makeTx(null);
+    const result = await generateReceiptNumber(tx, 1); // no `now` arg
+    // Don't pin the exact year (test would rot in 2027) — just confirm the
+    // SUT computed a real 4-digit year and didn't blow up on the default param.
+    expect(result).toMatch(/^RCP-\d{4}-0001$/);
+    const currentUtcYear = new Date().getUTCFullYear();
+    expect(result).toBe(`RCP-${currentUtcYear}-0001`);
   });
 });

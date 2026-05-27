@@ -69,6 +69,14 @@ describe("csvHelpers — escapeCell", () => {
     expect(escapeCell(true)).toBe("true");
     expect(escapeCell(false)).toBe("false");
   });
+  it("does NOT wrap cells containing only a tab (tab is not in NEEDS_QUOTING_RE)", () => {
+    // Defensive pin — NEEDS_QUOTING_RE is /[",\r\n]/, no \t. Tab inside a cell
+    // is NOT a CSV delimiter trigger; only commas/quotes/CR/LF require quoting.
+    // sanitizeCellForExport handles the formula-injection vector for LEADING
+    // tab separately; mid-cell tab is preserved verbatim.
+    expect(escapeCell("a\tb")).toBe("a\tb");
+    expect(escapeCell("\t")).toBe("\t");
+  });
 });
 
 describe("csvHelpers — sanitizeCellForExport", () => {
@@ -93,6 +101,17 @@ describe("csvHelpers — sanitizeCellForExport", () => {
   });
   it("no-op on empty string", () => {
     expect(sanitizeCellForExport("")).toBe("");
+  });
+  it("is case-sensitive at start-of-string — leading space does NOT trigger prefix", () => {
+    // FORMULA_INJECTION_RE is anchored with `^`. A leading space before `=`
+    // means the first char is space (not in the set), so no prefix is added.
+    // This is intentional: Excel only interprets the cell as a formula if the
+    // FIRST character is one of =+-@\t\r, so leading whitespace neutralises
+    // the threat already.
+    expect(sanitizeCellForExport(" =A1")).toBe(" =A1");
+    expect(sanitizeCellForExport(" +1")).toBe(" +1");
+    // But the unprefixed-leading variant DOES trigger.
+    expect(sanitizeCellForExport("=A1")).toBe("'=A1");
   });
 });
 
@@ -132,6 +151,15 @@ describe("csvHelpers — serializeRows", () => {
     // The single-quote prefix is added BEFORE escaping; the cell now
     // starts with `'=` which contains no special chars, so no quoting.
     expect(csv).toContain("'=cmd|'/c calc'!A1");
+  });
+  it("emits BOM + header only (no trailing CRLF) when rows array is empty", () => {
+    // bodyLines is [], so [headerLine, ...bodyLines].join('\r\n') === headerLine.
+    // Result is exactly UTF8_BOM + 'A' — no body, no trailing newline. Excel
+    // opening this file shows a single column with one header and zero data rows.
+    const csv = serializeRows([{ key: "a", header: "A" }], []);
+    expect(csv).toBe(`${UTF8_BOM}A`);
+    expect(csv.endsWith("\r\n")).toBe(false);
+    expect(csv.endsWith("A")).toBe(true);
   });
 });
 
@@ -177,6 +205,31 @@ describe("csvHelpers — parseCsv", () => {
     expect(() => parseCsv(null)).toThrow();
     expect(() => parseCsv(42)).toThrow();
   });
+  it("returns empty headers + rows when input is BOM-only", () => {
+    // BOM stripped → input becomes empty string → while loop never runs →
+    // tail-flush check fails (field.length === 0 && row.length === 0) →
+    // records stays [] → returns the empty-headers branch at line 152.
+    const result = parseCsv(UTF8_BOM);
+    expect(result).toEqual({ headers: [], rows: [] });
+  });
+  it("tolerates mixed CRLF + LF line endings in the same document", () => {
+    // Header ends with CRLF, first row ends with LF, second row has no
+    // trailing newline. All three rows must surface; the CRLF-vs-LF mixing
+    // is exactly what Excel-on-Mac-then-Windows-edited CSVs look like.
+    const { headers, rows } = parseCsv("a,b\r\n1,2\n3,4");
+    expect(headers).toEqual(["a", "b"]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual({ a: "1", b: "2" });
+    expect(rows[1]).toEqual({ a: "3", b: "4" });
+  });
+  it("tail-flushes the final row when the input ends WITHOUT a newline", () => {
+    // The classic "file saved without trailing newline" case. The while loop
+    // exits with field='2' and row=['1'] pending; the tail-flush block
+    // (lines 147-150) pushes them as a final record.
+    const { headers, rows } = parseCsv("a,b\n1,2");
+    expect(headers).toEqual(["a", "b"]);
+    expect(rows).toEqual([{ a: "1", b: "2" }]);
+  });
 });
 
 describe("csvHelpers — buildErrorReport", () => {
@@ -188,6 +241,14 @@ describe("csvHelpers — buildErrorReport", () => {
     expect(csv).toContain("rowNumber,reason");
     expect(csv).toContain("2,missing name");
     expect(csv).toContain('5,"duplicate, second"');
+  });
+  it("emits BOM + header only when the errors array is empty", () => {
+    // No errors → caller still wants a valid CSV (the routes handing this
+    // back to the operator do so unconditionally). Output is exactly the
+    // BOM + 'rowNumber,reason' — Excel opens it as a 0-row error report.
+    const csv = buildErrorReport([]);
+    expect(csv).toBe(`${UTF8_BOM}rowNumber,reason`);
+    expect(csv.endsWith("\r\n")).toBe(false);
   });
 });
 

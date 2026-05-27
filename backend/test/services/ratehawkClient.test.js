@@ -248,3 +248,186 @@ describe('checkBudgetCap', () => {
     warnSpy.mockRestore();
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────
+// Extended coverage (tick #N — +8 cases)
+//
+// Surface area:
+//   - Required-arg validation: searchHotels / bookHotel / cancelBooking all
+//     reject when tenantId is falsy BEFORE any budget-cap query fires
+//     (cheap fail-fast guard at the top of each handler).
+//   - Optional-arg defaulting: bookHotel guestNames → [], cancelBooking
+//     reason → null, searchHotels guests/rooms → 2/1 (PRD §3.1 defaults).
+//   - Stub spend-stub: computeMonthlySpendCents returns 0 in stub mode
+//     regardless of tenantId — pins the cred-blocked behaviour so the
+//     real-mode swap target is unambiguous.
+//   - CJS self-mocking seam: checkBudgetCap MUST call
+//     computeMonthlySpendCents via module.exports indirection so the
+//     spy in the test intercepts it. Pin the seam with a spy + once()
+//     assertion — silent regression to local-closure binding would
+//     re-break this client's testability (same class as the 2026-05-24
+//     cron-learning across adsGpt/ratehawk/callified/safeEmitEvent).
+// ───────────────────────────────────────────────────────────────────────
+
+describe('searchHotels — argument validation + defaults', () => {
+  test('throws when tenantId is missing BEFORE budget-cap query fires', async () => {
+    const c = loadClient();
+    await expect(
+      c.searchHotels({
+        destinationCity: 'Mecca',
+        checkInDate: '2026-08-01',
+        checkOutDate: '2026-08-05',
+      }),
+    ).rejects.toThrow(/tenantId required/);
+    // Fail-fast guard: cap query should NOT have been made.
+    expect(prismaMock.tenantSetting.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('throws when tenantId is 0 (falsy)', async () => {
+    const c = loadClient();
+    await expect(
+      c.searchHotels({
+        tenantId: 0,
+        destinationCity: 'Madinah',
+        checkInDate: '2026-08-01',
+        checkOutDate: '2026-08-05',
+      }),
+    ).rejects.toThrow(/tenantId required/);
+    expect(prismaMock.tenantSetting.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('happy path: guests + rooms default to 2 / 1 when omitted (PRD §3.1 defaults)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const c = loadClient();
+    const out = await c.searchHotels({
+      tenantId: 5,
+      destinationCity: 'Jeddah',
+      checkInDate: '2026-09-01',
+      checkOutDate: '2026-09-03',
+      // guests + rooms intentionally omitted.
+    });
+
+    expect(out.query.guests).toBe(2);
+    expect(out.query.rooms).toBe(1);
+    expect(out.stub).toBe(true);
+    expect(out.hotels).toEqual([]);
+
+    logSpy.mockRestore();
+  });
+});
+
+describe('bookHotel — argument validation + defaults', () => {
+  test('throws when tenantId is missing BEFORE budget-cap query fires', async () => {
+    const c = loadClient();
+    await expect(
+      c.bookHotel({
+        hotelId: 'rh-hotel-12345',
+        roomType: 'deluxe-double',
+        checkInDate: '2026-08-01',
+        checkOutDate: '2026-08-05',
+      }),
+    ).rejects.toThrow(/tenantId required/);
+    expect(prismaMock.tenantSetting.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('happy path: guestNames defaults to empty array when omitted', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const c = loadClient();
+    const out = await c.bookHotel({
+      tenantId: 11,
+      hotelId: 'rh-hotel-77777',
+      roomType: 'standard-twin',
+      checkInDate: '2026-08-10',
+      checkOutDate: '2026-08-12',
+      // guestNames intentionally omitted.
+    });
+
+    expect(out.query.guestNames).toEqual([]);
+    expect(out.stub).toBe(true);
+    expect(out.status).toBe('pending-cred-drop');
+
+    logSpy.mockRestore();
+  });
+});
+
+describe('cancelBooking — argument validation + defaults', () => {
+  test('throws when tenantId is missing BEFORE budget-cap query fires', async () => {
+    const c = loadClient();
+    await expect(
+      c.cancelBooking({
+        bookingId: 'rh-booking-67890',
+        reason: 'Date change',
+      }),
+    ).rejects.toThrow(/tenantId required/);
+    expect(prismaMock.tenantSetting.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('reason defaults to null when omitted (envelope echoes null, not undefined)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const c = loadClient();
+    const out = await c.cancelBooking({
+      tenantId: 42,
+      bookingId: 'rh-booking-99999',
+      // reason intentionally omitted.
+    });
+
+    expect(out.reason).toBeNull();
+    expect(out.bookingId).toBe('rh-booking-99999');
+    expect(out.status).toBe('pending-cred-drop');
+
+    logSpy.mockRestore();
+  });
+});
+
+describe('computeMonthlySpendCents (stub mode)', () => {
+  test('returns 0 regardless of tenantId (pin stub behaviour pending Q19 cred drop)', async () => {
+    // Pin the stub returns 0 for ALL inputs. When the real RatehawkSearchLog
+    // sum lands post-cred, this assertion will flip to "returns sum" and
+    // future maintainers will see the swap point unambiguously.
+    const c = loadClient();
+    expect(await c.computeMonthlySpendCents(1)).toBe(0);
+    expect(await c.computeMonthlySpendCents(42)).toBe(0);
+    expect(await c.computeMonthlySpendCents(99999)).toBe(0);
+    // Even falsy tenantId → 0 (stub is intentionally permissive).
+    expect(await c.computeMonthlySpendCents(0)).toBe(0);
+    expect(await c.computeMonthlySpendCents(null)).toBe(0);
+  });
+});
+
+describe('checkBudgetCap — CJS self-mocking seam (regression pin)', () => {
+  test('inter-function call goes through module.exports.computeMonthlySpendCents (spy intercepts)', async () => {
+    // REGRESSION PIN for the CJS self-mocking seam pattern. The SUT MUST
+    // call computeMonthlySpendCents via `module.exports.computeMonthlySpendCents(...)`
+    // — NOT via the local closure binding — so that vi.spyOn(c, ...) can
+    // intercept it. If a future refactor reverts to the local-binding form
+    // (e.g. `const spentCents = await computeMonthlySpendCents(tenantId)`),
+    // this test will fail because the spy will never be invoked AND the
+    // mocked return value (12345) will be ignored.
+    //
+    // This is the same pattern documented in the 2026-05-24 cron-learning
+    // across safeEmitEvent / adsGptClient / ratehawkClient / callifiedClient.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Cap row: 100000 cents ($1000 — way above the spy value to ensure
+    // withinCap is true and the test isolates the seam, not the cap math).
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: '100000' });
+
+    const c = loadClient();
+    const spendSpy = vi.spyOn(c, 'computeMonthlySpendCents').mockResolvedValue(12345);
+
+    const evaluation = await c.checkBudgetCap(7);
+
+    // Seam pin: spy MUST have been called exactly once with the tenant arg.
+    expect(spendSpy).toHaveBeenCalledTimes(1);
+    expect(spendSpy).toHaveBeenCalledWith(7);
+    // And the spy's return value MUST have flowed through to evaluateCap.
+    expect(evaluation.spentCents).toBe(12345);
+    expect(evaluation.capCents).toBe(100000);
+    expect(evaluation.withinCap).toBe(true);
+
+    spendSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+});

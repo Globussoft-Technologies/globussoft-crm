@@ -54,13 +54,16 @@ const {
   checkAntiSpam,
   classifyInboundJunk,
   normalizeMetaLeadPayload,
+  normalizeIndiamartLeadPayload,
+  normalizeJustdialLeadPayload,
+  normalizeTradeindiaLeadPayload,
 } = require("../lib/inboundLeadVerification");
 
 // Slice-1 channel enum — narrower than the full PRD §3.1.2 16-value enum
-// because slice 1 only ships the four launch-critical Travel-Stall channels
+// because slice 1 only shipped the four launch-critical Travel-Stall channels
 // (web_form + WhatsApp + Meta + Voyagr) + the scaffolding-bypass surfaces
 // (ads / adsgpt / manual). Marketplace channels (indiamart / justdial /
-// tradeindia) stay on their existing route until the cron refactor in slice 3.
+// tradeindia) joined in slice 16 with their slice 13/14/15 normalizers.
 const VALID_CHANNELS = [
   "voyagr",
   "webform",
@@ -69,6 +72,9 @@ const VALID_CHANNELS = [
   "adsgpt",
   "metaads",
   "manual",
+  "indiamart",
+  "justdial",
+  "tradeindia",
 ];
 
 // Slice 10 — clamp the date-range window inputs so a misconfigured caller
@@ -131,8 +137,21 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     // channels) pass through untouched — the helper is a no-op when
     // field_data is absent. See lib/inboundLeadVerification.js
     // normalizeMetaLeadPayload for the mapping.
+    //
+    // Slice 16 — same pattern for the 3 marketplace channels: each
+    // upstream feed (IndiaMART CRM webhook, JustDial lead feed,
+    // TradeIndia leads API) ships a vendor-specific dict shape that
+    // gets mapped into the route's canonical flat body. Helpers are
+    // no-ops when the vendor-shape markers are absent, so pre-normalized
+    // callers keep working.
     if (req.params.channel === "metaads") {
       req.body = normalizeMetaLeadPayload(req.body);
+    } else if (req.params.channel === "indiamart") {
+      req.body = normalizeIndiamartLeadPayload(req.body);
+    } else if (req.params.channel === "justdial") {
+      req.body = normalizeJustdialLeadPayload(req.body);
+    } else if (req.params.channel === "tradeindia") {
+      req.body = normalizeTradeindiaLeadPayload(req.body);
     }
 
     const {
@@ -221,7 +240,24 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       // (Meta lead-ads webhook signature spec). Keeps the route's external
       // channel taxonomy stable while the helper's internal STUB set
       // collapses Meta + adsgpt + native ads together pending Q1 drop.
-      const helperChannel = channelParam === "metaads" ? "ads" : channelParam;
+      //
+      // Slice 16 — the 3 marketplace channels (indiamart / justdial /
+      // tradeindia) also collapse onto the helper's `ads` STUB-trusted
+      // branch. Marketplace POSTs are trusted today via source-URL +
+      // API-key (existing marketplace_leads.js pattern); a future slice
+      // will swap to per-vendor payload-signature verification when the
+      // vendor docs land. Keeping them mapped to `ads` (rather than a
+      // dedicated `marketplace` helper key) avoids churning the helper's
+      // enum until that future slice promotes them.
+      const MARKETPLACE_CHANNELS = new Set([
+        "indiamart",
+        "justdial",
+        "tradeindia",
+      ]);
+      const helperChannel =
+        channelParam === "metaads" || MARKETPLACE_CHANNELS.has(channelParam)
+          ? "ads"
+          : channelParam;
       const args = {
         payload: JSON.stringify(req.body || {}),
         signature: req.headers["x-voyagr-signature"] || null,
@@ -545,6 +581,1063 @@ router.get("/inbound/leads/by-channel", async (req, res) => {
     return res
       .status(500)
       .json({ error: "Failed to roll up inbound leads by channel" });
+  }
+});
+
+// ─── Slice 18 — tenant-wide inbound-leads stats rollup ─────────────────
+//
+// GET /inbound/leads/stats?tenantSlug=<slug>&from=<ISO>&to=<ISO>
+//
+// Higher-level summary surface above slice-10 /by-channel. Where /by-channel
+// returns one row per channel for a single window, /stats returns the
+// full operator KPI tile-strip in one call: total inbound count + per-channel
+// breakdown (every VALID_CHANNEL pre-seeded to 0) + per-source breakdown
+// (top-10 free-text sources + _other) + per-subBrand breakdown +
+// today/week/month counts + lastReceivedAt.
+//
+// Closes the structural-correctness gap flagged in CLAUDE.md (client-side
+// aggregation over a paginated endpoint): without this, the operator dashboard
+// has to fetch /api/contacts?limit=N and reduce() to render the inbound-leads
+// KPI strip — broken once N exceeds the page size.
+//
+// USER-readable (anodyne — counts + timestamps only; no payload contents).
+//
+// Query params:
+//   tenantSlug  REQUIRED — resolves to a travel tenant; 404 / 400 on miss.
+//   from        OPTIONAL — ISO8601 lower bound on Contact.createdAt (inclusive).
+//   to          OPTIONAL — ISO8601 upper bound on Contact.createdAt (inclusive).
+//
+// Response shape (200):
+//   {
+//     tenantId, tenantSlug,
+//     total,                          // count of all matching inbound contacts
+//     byChannel: {                    // every VALID_CHANNEL pre-seeded to 0
+//       voyagr, webform, whatsapp, ads, adsgpt, metaads, manual,
+//       indiamart, justdial, tradeindia,
+//     },
+//     bySource: { <source>: count },  // top-10 distinct free-text sources;
+//                                     // surplus collapses into _other.
+//     bySubBrand: { <subBrand|_none>: count },
+//     todayCount,                     // createdAt >= startOfDay(now)
+//     thisWeekCount,                  // createdAt >= now - 7d
+//     thisMonthCount,                 // createdAt >= now - 30d
+//     lastReceivedAt,                 // ISO string or null
+//   }
+//
+// Defensive: unknown channels (source prefix doesn't decode to a
+// VALID_CHANNEL suffix) are skipped — byChannel stays at exactly 10 keys.
+// Empty tenant → all zeros + lastReceivedAt:null.
+//
+// Errors:
+//   400 MISSING_TENANT_SLUG / INVALID_DATE / WRONG_VERTICAL
+//   404 TENANT_NOT_FOUND
+//   500 generic envelope
+const STATS_TOP_SOURCES = 10;
+
+router.get("/inbound/leads/stats", async (req, res) => {
+  try {
+    const { tenantSlug, from, to } = req.query || {};
+
+    if (!tenantSlug) {
+      return res.status(400).json({
+        error: "tenantSlug is required",
+        code: "MISSING_TENANT_SLUG",
+      });
+    }
+
+    // Optional ISO from/to bounds on Contact.createdAt. Both inclusive.
+    const createdAtWindow = {};
+    if (from) {
+      const d = new Date(String(from));
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      createdAtWindow.gte = d;
+    }
+    if (to) {
+      const d = new Date(String(to));
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      createdAtWindow.lte = d;
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true, vertical: true },
+    });
+    if (!tenant) {
+      return res.status(404).json({
+        error: "Tenant not found",
+        code: "TENANT_NOT_FOUND",
+      });
+    }
+    if (tenant.vertical !== "travel") {
+      return res.status(400).json({
+        error: "Tenant is not a travel tenant",
+        code: "WRONG_VERTICAL",
+      });
+    }
+
+    // Base predicate — tenant-scoped, soft-delete-aware, inbound-source-only.
+    // Each window-derived count re-applies the base predicate and tacks on its
+    // own createdAt floor so we don't double-filter the user-supplied window
+    // against the rolling today/week/month windows (which would always return 0
+    // if the user passed a from/to slice that excluded "now").
+    const baseWhere = {
+      tenantId: tenant.id,
+      deletedAt: null,
+      source: { startsWith: "inbound:" },
+    };
+    const windowedWhere = { ...baseWhere };
+    if (Object.keys(createdAtWindow).length > 0) {
+      windowedWhere.createdAt = createdAtWindow;
+    }
+
+    // Pull the full windowed inbound-contact roster. Selects only the columns
+    // we aggregate against to keep the payload tight even on large tenants.
+    const rows = await prisma.contact.findMany({
+      where: windowedWhere,
+      select: {
+        source: true,
+        subBrand: true,
+        createdAt: true,
+      },
+    });
+
+    // Pre-seed byChannel with every VALID_CHANNEL at 0 — stable response
+    // shape for the frontend chart code.
+    const byChannel = Object.create(null);
+    for (const c of VALID_CHANNELS) byChannel[c] = 0;
+    const bySourceRaw = Object.create(null);
+    const bySubBrand = Object.create(null);
+    let lastReceivedAt = null;
+    let total = 0;
+
+    for (const row of rows) {
+      total += 1;
+      const src = row.source || "";
+      // Bucket into byChannel when the source decodes to a known channel.
+      if (src.startsWith("inbound:")) {
+        const suffix = src.slice("inbound:".length);
+        if (Object.prototype.hasOwnProperty.call(byChannel, suffix)) {
+          byChannel[suffix] += 1;
+        }
+        // Defensive: unknown channels (source prefix present, suffix
+        // outside VALID_CHANNELS) silently drop from byChannel — keeps the
+        // key set at exactly 10 per the slice contract.
+      }
+      // Raw source breakdown — keep full literal source string; collapse
+      // to top-10 + _other after the scan.
+      bySourceRaw[src] = (bySourceRaw[src] || 0) + 1;
+
+      const sbKey = row.subBrand ? String(row.subBrand) : "_none";
+      bySubBrand[sbKey] = (bySubBrand[sbKey] || 0) + 1;
+
+      if (row.createdAt) {
+        const ts = row.createdAt instanceof Date
+          ? row.createdAt
+          : new Date(row.createdAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastReceivedAt || ts > lastReceivedAt) lastReceivedAt = ts;
+        }
+      }
+    }
+
+    // Collapse bySource to top-STATS_TOP_SOURCES + _other.
+    const sortedSources = Object.entries(bySourceRaw).sort(
+      (a, b) => b[1] - a[1],
+    );
+    const bySource = Object.create(null);
+    let otherCount = 0;
+    for (let i = 0; i < sortedSources.length; i++) {
+      if (i < STATS_TOP_SOURCES) {
+        bySource[sortedSources[i][0]] = sortedSources[i][1];
+      } else {
+        otherCount += sortedSources[i][1];
+      }
+    }
+    if (otherCount > 0) bySource._other = otherCount;
+
+    // Rolling day/week/month counts — each re-fires a tenant-scoped count
+    // with its own createdAt floor. Cheaper than scanning the full table
+    // three more times because Prisma .count uses the indexed createdAt
+    // path. Background-cron writes during the call are tolerated (they'd
+    // show up in a refetch within seconds).
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    const weekFloor = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const monthFloor = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const [todayCount, thisWeekCount, thisMonthCount] = await Promise.all([
+      prisma.contact.count({
+        where: { ...baseWhere, createdAt: { gte: startOfDay } },
+      }),
+      prisma.contact.count({
+        where: { ...baseWhere, createdAt: { gte: weekFloor } },
+      }),
+      prisma.contact.count({
+        where: { ...baseWhere, createdAt: { gte: monthFloor } },
+      }),
+    ]);
+
+    return res.status(200).json({
+      tenantId: tenant.id,
+      tenantSlug,
+      total,
+      byChannel,
+      bySource,
+      bySubBrand,
+      todayCount,
+      thisWeekCount,
+      thisMonthCount,
+      lastReceivedAt: lastReceivedAt ? lastReceivedAt.toISOString() : null,
+    });
+  } catch (e) {
+    console.error("[travel-inbound-leads] stats error:", e.message);
+    return res
+      .status(500)
+      .json({ error: "Failed to summarise inbound leads" });
+  }
+});
+
+// ─── Slice 20 — tenant-wide monthly time-series rollup ─────────────────
+//
+// GET /inbound/leads/by-month?tenantSlug=<slug>
+//
+// Tenant-wide inbound-lead time-series bucketed by UTC YYYY-MM. Pairs with
+// slice-10 /by-channel (single-window per-channel) + slice-18 /stats
+// (tenant-wide KPI tile-strip) — this is the time-series surface that
+// lets the operator dashboard render a monthly trend chart without
+// client-side-reducing over /api/contacts?limit=N (the structural-correctness
+// anti-pattern called out in CLAUDE.md).
+//
+// Each month bucket carries an embedded per-channel sub-breakdown
+// (byChannel) pre-seeded with all 10 VALID_CHANNELS at 0 per slice-18
+// convention. The byChannel sub-shape is stable across months — empty
+// months still ship the full 10-key map at 0.
+//
+// USER-readable (anodyne — counts only; no payload contents).
+//
+// Query params:
+//   tenantSlug  REQUIRED — resolves to a travel tenant; 404 / 400 on miss.
+//   channel     OPTIONAL — narrow to a single VALID_CHANNEL; otherwise
+//                          all inbound-source rows are bucketed.
+//   from        OPTIONAL — YYYY-MM lower bound (inclusive). Default: no floor.
+//   to          OPTIONAL — YYYY-MM upper bound (inclusive). Default: no ceiling.
+//   orderBy     OPTIONAL — one of: month:asc | month:desc | count:asc | count:desc.
+//                          Default: month:asc.
+//   limit       OPTIONAL — page size (default 12, max 60).
+//   offset      OPTIONAL — skip-N (default 0).
+//
+// Response shape (200):
+//   {
+//     months: [
+//       {
+//         month,                    // YYYY-MM (UTC)
+//         count,                    // total inbound contacts in that month
+//         byChannel: { voyagr, webform, whatsapp, ads, adsgpt, metaads,
+//                      manual, indiamart, justdial, tradeindia },
+//       },
+//       ...
+//     ],
+//     totalMonths,                  // distinct months matched (pre-pagination)
+//     grandCount,                   // sum of all month.count values (pre-pagination)
+//     limit, offset,
+//   }
+//
+// Bucket key uses UTC (Contact.createdAt.toISOString().slice(0,7)) so the
+// time-series is stable across operator timezones. A future slice can add
+// an explicit `?tz=` for tenant-local bucketing once the analytics UI
+// exposes it.
+//
+// Errors:
+//   400 MISSING_TENANT_SLUG / INVALID_MONTH_FORMAT / INVALID_CHANNEL
+//       / INVALID_ORDER_BY / INVALID_LIMIT / WRONG_VERTICAL
+//   404 TENANT_NOT_FOUND
+//   500 generic envelope
+const BY_MONTH_DEFAULT_LIMIT = 12;
+const BY_MONTH_MAX_LIMIT = 60;
+const VALID_ORDER_BY = new Set([
+  "month:asc",
+  "month:desc",
+  "count:asc",
+  "count:desc",
+]);
+const YYYY_MM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+router.get("/inbound/leads/by-month", async (req, res) => {
+  try {
+    const {
+      tenantSlug,
+      channel,
+      from,
+      to,
+      orderBy: orderByRaw,
+      limit: limitRaw,
+      offset: offsetRaw,
+    } = req.query || {};
+
+    if (!tenantSlug) {
+      return res.status(400).json({
+        error: "tenantSlug is required",
+        code: "MISSING_TENANT_SLUG",
+      });
+    }
+
+    // Validate ?channel (when supplied). Reuse the route's enum so a future
+    // VALID_CHANNELS expansion picks up automatically.
+    if (channel !== undefined && !VALID_CHANNELS.includes(String(channel))) {
+      return res.status(400).json({
+        error: `channel must be one of: ${VALID_CHANNELS.join(", ")}`,
+        code: "INVALID_CHANNEL",
+      });
+    }
+
+    // Validate ?from / ?to YYYY-MM bounds. Both inclusive.
+    if (from !== undefined && !YYYY_MM_RE.test(String(from))) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (to !== undefined && !YYYY_MM_RE.test(String(to))) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    // Validate ?orderBy. Default month:asc.
+    const orderBy = orderByRaw ? String(orderByRaw) : "month:asc";
+    if (!VALID_ORDER_BY.has(orderBy)) {
+      return res.status(400).json({
+        error: `orderBy must be one of: ${[...VALID_ORDER_BY].join(", ")}`,
+        code: "INVALID_ORDER_BY",
+      });
+    }
+
+    // Validate ?limit / ?offset. Default 12 / 0; cap 60.
+    let limit = BY_MONTH_DEFAULT_LIMIT;
+    if (limitRaw !== undefined) {
+      const parsed = Number.parseInt(String(limitRaw), 10);
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > BY_MONTH_MAX_LIMIT) {
+        return res.status(400).json({
+          error: `limit must be an integer between 1 and ${BY_MONTH_MAX_LIMIT}`,
+          code: "INVALID_LIMIT",
+        });
+      }
+      limit = parsed;
+    }
+    let offset = 0;
+    if (offsetRaw !== undefined) {
+      const parsed = Number.parseInt(String(offsetRaw), 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({
+          error: "offset must be a non-negative integer",
+          code: "INVALID_LIMIT",
+        });
+      }
+      offset = parsed;
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true, vertical: true },
+    });
+    if (!tenant) {
+      return res.status(404).json({
+        error: "Tenant not found",
+        code: "TENANT_NOT_FOUND",
+      });
+    }
+    if (tenant.vertical !== "travel") {
+      return res.status(400).json({
+        error: "Tenant is not a travel tenant",
+        code: "WRONG_VERTICAL",
+      });
+    }
+
+    // Build the base where-predicate. When ?channel is supplied, narrow
+    // source to that exact `inbound:<channel>` literal so the time-series
+    // reflects a single channel slice; otherwise scan all inbound rows.
+    const where = {
+      tenantId: tenant.id,
+      deletedAt: null,
+      source: channel
+        ? `inbound:${channel}`
+        : { startsWith: "inbound:" },
+    };
+
+    // Pull the windowed roster + bucket client-side. Prisma's groupBy
+    // can't bucket by month directly (no $dateToString helper), so we
+    // load (source, createdAt) tuples and bucket in JS. For tenants
+    // expected to outgrow this, a follow-up slice can swap to a raw
+    // Prisma.$queryRaw with DATE_FORMAT.
+    const rows = await prisma.contact.findMany({
+      where,
+      select: { source: true, createdAt: true },
+    });
+
+    // Bucket by UTC YYYY-MM. Each bucket also carries a byChannel
+    // sub-map pre-seeded with all VALID_CHANNELS at 0 for stable shape.
+    const monthMap = new Map();
+    function getBucket(monthKey) {
+      let bucket = monthMap.get(monthKey);
+      if (!bucket) {
+        const byChannel = Object.create(null);
+        for (const c of VALID_CHANNELS) byChannel[c] = 0;
+        bucket = { month: monthKey, count: 0, byChannel };
+        monthMap.set(monthKey, bucket);
+      }
+      return bucket;
+    }
+
+    for (const row of rows) {
+      if (!row.createdAt) continue;
+      const ts = row.createdAt instanceof Date
+        ? row.createdAt
+        : new Date(row.createdAt);
+      if (Number.isNaN(ts.getTime())) continue;
+      const monthKey = ts.toISOString().slice(0, 7); // YYYY-MM
+      // Apply YYYY-MM window post-bucket (string compare works since
+      // the format is fixed-width lex-sortable).
+      if (from && monthKey < String(from)) continue;
+      if (to && monthKey > String(to)) continue;
+      const bucket = getBucket(monthKey);
+      bucket.count += 1;
+      const src = row.source || "";
+      if (src.startsWith("inbound:")) {
+        const suffix = src.slice("inbound:".length);
+        if (Object.prototype.hasOwnProperty.call(bucket.byChannel, suffix)) {
+          bucket.byChannel[suffix] += 1;
+        }
+        // Unknown channels silently drop from byChannel (keeps the
+        // per-month key set at exactly 10).
+      }
+    }
+
+    const allMonths = [...monthMap.values()];
+    const totalMonths = allMonths.length;
+    const grandCount = allMonths.reduce((acc, m) => acc + m.count, 0);
+
+    // Sort per ?orderBy. month:asc/desc uses the lex order of the
+    // YYYY-MM key; count:asc/desc breaks ties by month:asc for a
+    // deterministic ordering even when counts tie.
+    const [orderField, orderDir] = orderBy.split(":");
+    allMonths.sort((a, b) => {
+      if (orderField === "month") {
+        return orderDir === "asc"
+          ? a.month.localeCompare(b.month)
+          : b.month.localeCompare(a.month);
+      }
+      // count
+      const delta = orderDir === "asc" ? a.count - b.count : b.count - a.count;
+      if (delta !== 0) return delta;
+      return a.month.localeCompare(b.month);
+    });
+
+    const paged = allMonths.slice(offset, offset + limit);
+
+    return res.status(200).json({
+      months: paged,
+      totalMonths,
+      grandCount,
+      limit,
+      offset,
+    });
+  } catch (e) {
+    console.error("[travel-inbound-leads] by-month error:", e.message);
+    return res
+      .status(500)
+      .json({ error: "Failed to roll up inbound leads by month" });
+  }
+});
+
+// ─── Slice 21 — tenant-wide quarterly time-series rollup ─────────────────
+//
+// GET /inbound/leads/by-quarter?tenantSlug=<slug>
+//
+// PRD_TRAVEL_MULTICHANNEL_LEADS (#904) — sibling rollup to slice-20
+// /inbound/leads/by-month and slice-18 /inbound/leads/stats. Buckets inbound
+// Contact rows by UTC YYYY-Q[1-4] so the operator dashboard can render a
+// quarterly trend chart (finance review cadence, supplier reconciliation,
+// RFU Umrah seasonal planning) in a single endpoint hit instead of
+// summing 3 month rows client-side.
+//
+// Mirrors the slice-17 /api/travel/itineraries/by-quarter pattern (same
+// YYYY-Q[1-4] bucket-key shape, same Math.floor(getUTCMonth()/3)+1
+// derivation, same VALID_ORDER_BY set, same "unknown" fallback bucket for
+// null/invalid createdAt rows, same pagination-after-aggregation posture).
+// Auth / sub-brand handling mirrors slice-20 /by-month EXACTLY (no
+// verifyToken, tenantSlug-scoped, no sub-brand restriction — these
+// rollups predate the subBrandAccess gating that landed on the itinerary
+// surface).
+//
+// USER-readable (anodyne — counts only; no payload contents).
+//
+// Quarter key derivation:
+//   const yyyy = dt.getUTCFullYear();
+//   const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+//   const quarterKey = `${yyyy}-Q${q}`;
+//
+// Query params:
+//   tenantSlug  REQUIRED — resolves to a travel tenant; 404 / 400 on miss.
+//   channel     OPTIONAL — narrow to a single VALID_CHANNEL; otherwise
+//                          all inbound-source rows are bucketed.
+//   from        OPTIONAL — YYYY-Q[1-4] lower bound (inclusive). Default: no floor.
+//   to          OPTIONAL — YYYY-Q[1-4] upper bound (inclusive). Default: no ceiling.
+//   orderBy     OPTIONAL — one of: quarter:asc | quarter:desc | count:asc | count:desc.
+//                          Unknown tokens degrade silently to quarter:asc.
+//   limit       OPTIONAL — page size (default 8, max 40).
+//   offset      OPTIONAL — skip-N (default 0).
+//
+// Response shape (200):
+//   {
+//     total,                          // distinct quarters matched (pre-pagination)
+//     rows: [
+//       {
+//         quarter,                    // YYYY-Q[1-4] (UTC), or "unknown"
+//         count,                      // total inbound contacts in that quarter
+//         bySubBrand: { <sb>: n, _tenant: n },
+//         byChannel: { voyagr, webform, whatsapp, ads, adsgpt, metaads,
+//                      manual, indiamart, justdial, tradeindia },
+//       },
+//     ],
+//   }
+//
+// Per-bucket bySubBrand: falsy subBrand (null/undefined/empty) coerces to
+// "_tenant" so the breakdown remains a flat string→int map even when
+// some rows have no sub-brand attribution. Forward-compat with the
+// sub-brand rollouts (Q25 — TMC / RFU / Travel Stall / Visa Sure).
+//
+// "unknown" bucket: rows with null or invalid createdAt fall here when no
+// ?from/?to window is set. When EITHER bound is set, the "unknown"
+// bucket is excluded (it has no comparable quarter token).
+//
+// Route ordering: declared BEFORE the POST /inbound/leads/:channel family
+// (which lives above in the file) is irrelevant for GET — Express
+// dispatch is verb-aware. No collision risk.
+//
+// Errors:
+//   400 MISSING_TENANT_SLUG / INVALID_QUARTER_FORMAT / INVALID_CHANNEL
+//       / INVALID_LIMIT / WRONG_VERTICAL
+//   404 TENANT_NOT_FOUND
+//   500 generic envelope
+const BY_QUARTER_DEFAULT_LIMIT = 8;
+const BY_QUARTER_MAX_LIMIT = 40;
+const BY_QUARTER_VALID_ORDER_BY = new Set([
+  "quarter:asc",
+  "quarter:desc",
+  "count:asc",
+  "count:desc",
+]);
+const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+
+router.get("/inbound/leads/by-quarter", async (req, res) => {
+  try {
+    const {
+      tenantSlug,
+      channel,
+      from,
+      to,
+      orderBy: orderByRaw,
+      limit: limitRaw,
+      offset: offsetRaw,
+    } = req.query || {};
+
+    if (!tenantSlug) {
+      return res.status(400).json({
+        error: "tenantSlug is required",
+        code: "MISSING_TENANT_SLUG",
+      });
+    }
+
+    // Validate ?channel (when supplied). Mirrors /by-month exactly.
+    if (channel !== undefined && !VALID_CHANNELS.includes(String(channel))) {
+      return res.status(400).json({
+        error: `channel must be one of: ${VALID_CHANNELS.join(", ")}`,
+        code: "INVALID_CHANNEL",
+      });
+    }
+
+    // Validate ?from / ?to YYYY-Q[1-4] bounds. Both inclusive.
+    if (from !== undefined && !QUARTER_RE.test(String(from))) {
+      return res.status(400).json({
+        error: "from must be in YYYY-Q[1-4] format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+    if (to !== undefined && !QUARTER_RE.test(String(to))) {
+      return res.status(400).json({
+        error: "to must be in YYYY-Q[1-4] format",
+        code: "INVALID_QUARTER_FORMAT",
+      });
+    }
+
+    // Validate ?orderBy — unknown tokens degrade silently to quarter:asc
+    // (per spec; differs from /by-month which 400s on unknown).
+    const orderByCandidate = orderByRaw ? String(orderByRaw) : "quarter:asc";
+    const orderBy = BY_QUARTER_VALID_ORDER_BY.has(orderByCandidate)
+      ? orderByCandidate
+      : "quarter:asc";
+
+    // Validate ?limit / ?offset. Default 8 / 0; cap 40.
+    let limit = BY_QUARTER_DEFAULT_LIMIT;
+    if (limitRaw !== undefined) {
+      const parsed = Number.parseInt(String(limitRaw), 10);
+      if (
+        !Number.isFinite(parsed) ||
+        parsed < 1 ||
+        parsed > BY_QUARTER_MAX_LIMIT
+      ) {
+        return res.status(400).json({
+          error: `limit must be an integer between 1 and ${BY_QUARTER_MAX_LIMIT}`,
+          code: "INVALID_LIMIT",
+        });
+      }
+      limit = parsed;
+    }
+    let offset = 0;
+    if (offsetRaw !== undefined) {
+      const parsed = Number.parseInt(String(offsetRaw), 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({
+          error: "offset must be a non-negative integer",
+          code: "INVALID_LIMIT",
+        });
+      }
+      offset = parsed;
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true, vertical: true },
+    });
+    if (!tenant) {
+      return res.status(404).json({
+        error: "Tenant not found",
+        code: "TENANT_NOT_FOUND",
+      });
+    }
+    if (tenant.vertical !== "travel") {
+      return res.status(400).json({
+        error: "Tenant is not a travel tenant",
+        code: "WRONG_VERTICAL",
+      });
+    }
+
+    // Build the base where-predicate. When ?channel is supplied, narrow
+    // source to that exact `inbound:<channel>` literal (mirrors /by-month).
+    const where = {
+      tenantId: tenant.id,
+      deletedAt: null,
+      source: channel ? `inbound:${channel}` : { startsWith: "inbound:" },
+    };
+
+    // Light projection — source for byChannel derivation, subBrand for
+    // bySubBrand bucket, createdAt for the quarter key.
+    const rows = await prisma.contact.findMany({
+      where,
+      select: { source: true, subBrand: true, createdAt: true },
+    });
+
+    // Bucket by UTC YYYY-Q[1-4]. Each bucket carries a byChannel sub-map
+    // pre-seeded with all VALID_CHANNELS at 0 for stable shape, plus a
+    // bySubBrand sub-map that grows on demand.
+    const quarterMap = new Map();
+    function getBucket(quarterKey) {
+      let bucket = quarterMap.get(quarterKey);
+      if (!bucket) {
+        const byChannel = Object.create(null);
+        for (const c of VALID_CHANNELS) byChannel[c] = 0;
+        bucket = {
+          quarter: quarterKey,
+          count: 0,
+          bySubBrand: Object.create(null),
+          byChannel,
+        };
+        quarterMap.set(quarterKey, bucket);
+      }
+      return bucket;
+    }
+
+    for (const row of rows) {
+      let quarterKey = "unknown";
+      if (row.createdAt) {
+        const dt =
+          row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+          quarterKey = `${yyyy}-Q${q}`;
+        }
+      }
+      const bucket = getBucket(quarterKey);
+      bucket.count += 1;
+
+      // Per-bucket bySubBrand — falsy subBrand coerces to "_tenant" so the
+      // breakdown is forward-compat with sub-brand rollouts (TMC / RFU /
+      // Travel Stall / Visa Sure per Q25). Stays a flat string→int map.
+      const sbKey = row.subBrand ? String(row.subBrand) : "_tenant";
+      bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+
+      const src = row.source || "";
+      if (src.startsWith("inbound:")) {
+        const suffix = src.slice("inbound:".length);
+        if (Object.prototype.hasOwnProperty.call(bucket.byChannel, suffix)) {
+          bucket.byChannel[suffix] += 1;
+        }
+        // Unknown channels silently drop from byChannel — keeps the
+        // per-quarter key set at exactly 10.
+      }
+    }
+
+    let quarters = [...quarterMap.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable quarter token); when
+    // no bounds are set, "unknown" stays.
+    if (from !== undefined) {
+      const fromStr = String(from);
+      quarters = quarters.filter(
+        (r) => r.quarter !== "unknown" && r.quarter >= fromStr,
+      );
+    }
+    if (to !== undefined) {
+      const toStr = String(to);
+      quarters = quarters.filter(
+        (r) => r.quarter !== "unknown" && r.quarter <= toStr,
+      );
+    }
+
+    // Sort per ?orderBy. quarter:asc/desc uses the lex order of the
+    // YYYY-Q[1-4] key (also chronological — Q1 < Q2 < Q3 < Q4 in ASCII).
+    // count:asc/desc breaks ties by quarter:asc for a deterministic
+    // ordering even when counts tie.
+    const [orderField, orderDir] = orderBy.split(":");
+    quarters.sort((a, b) => {
+      if (orderField === "quarter") {
+        return orderDir === "asc"
+          ? a.quarter.localeCompare(b.quarter)
+          : b.quarter.localeCompare(a.quarter);
+      }
+      const delta = orderDir === "asc" ? a.count - b.count : b.count - a.count;
+      if (delta !== 0) return delta;
+      return a.quarter.localeCompare(b.quarter);
+    });
+
+    const total = quarters.length;
+    // Pagination applied AFTER aggregation + sort + bucket filter, same as
+    // /by-month.
+    const paged = quarters.slice(offset, offset + limit);
+
+    return res.status(200).json({
+      total,
+      rows: paged,
+    });
+  } catch (e) {
+    console.error("[travel-inbound-leads] by-quarter error:", e.message);
+    return res
+      .status(500)
+      .json({ error: "Failed to roll up inbound leads by quarter" });
+  }
+});
+
+// ─── Slice 22 — tenant-wide annual time-series rollup ─────────────────────
+//
+// GET /inbound/leads/by-year?tenantSlug=<slug>
+//
+// PRD_TRAVEL_MULTICHANNEL_LEADS (#904) — completes the inbound-leads rollup
+// triplet (by-month / by-quarter / now by-year; sibling to /stats). Buckets
+// inbound Contact rows by UTC YYYY so the operator dashboard can render an
+// annual trend chart (year-over-year growth, finance annual review, RFU
+// Umrah season-vs-season planning) in a single endpoint hit instead of
+// summing 4 quarter rows client-side.
+//
+// Mirrors slice-21 /by-quarter EXACTLY — same handler shape, same auth
+// posture (no verifyToken, tenantSlug-public-surface), same JS-side
+// aggregation over a light projection, same per-bucket bySubBrand +
+// byChannel sub-maps, same "unknown" fallback bucket for null/invalid
+// createdAt, same pagination-after-aggregation posture. Only the bucket-key
+// derivation collapses to YYYY (Math.floor not needed; just getUTCFullYear).
+//
+// Auth model: NO verifyToken — tenantSlug-gated public surface, sibling to
+// /by-month and /by-quarter which sit under server.js's openPaths list.
+// Sub-brand handling mirrors /by-quarter: NO subBrandAccess narrowing on
+// the rollup family (these endpoints predate the subBrandAccess gating
+// that landed on the itinerary surface), narrowing happens JS-side via the
+// projected subBrand field in each bucket's bySubBrand sub-map.
+//
+// USER-readable (anodyne — counts only; no payload contents).
+//
+// Year key derivation:
+//   const yearKey = String(dt.getUTCFullYear());   // "2026"
+//
+// Query params:
+//   tenantSlug  REQUIRED — resolves to a travel tenant; 404 / 400 on miss.
+//   channel     OPTIONAL — narrow to a single VALID_CHANNEL; otherwise
+//                          all inbound-source rows are bucketed.
+//   from        OPTIONAL — YYYY lower bound (inclusive). Default: no floor.
+//   to          OPTIONAL — YYYY upper bound (inclusive). Default: no ceiling.
+//   orderBy     OPTIONAL — one of: year:asc | year:desc | count:asc | count:desc.
+//                          Unknown tokens degrade silently to year:asc
+//                          (mirrors /by-quarter; differs from /by-month
+//                          which 400s on unknown).
+//   limit       OPTIONAL — page size (default 10, max 30).
+//   offset      OPTIONAL — skip-N (default 0).
+//
+// Response shape (200):
+//   {
+//     total,                          // distinct years matched (pre-pagination)
+//     rows: [
+//       {
+//         year,                       // YYYY (UTC), or "unknown"
+//         count,                      // total inbound contacts in that year
+//         bySubBrand: { <sb>: n, _tenant: n },
+//         byChannel: { voyagr, webform, whatsapp, ads, adsgpt, metaads,
+//                      manual, indiamart, justdial, tradeindia },
+//       },
+//     ],
+//   }
+//
+// Per-bucket bySubBrand: falsy subBrand (null/undefined/empty) coerces to
+// "_tenant" so the breakdown remains a flat string→int map even when
+// some rows have no sub-brand attribution. Forward-compat with the
+// sub-brand rollouts (Q25 — TMC / RFU / Travel Stall / Visa Sure).
+//
+// "unknown" bucket: rows with null or invalid createdAt fall here when no
+// ?from/?to window is set. When EITHER bound is set, the "unknown"
+// bucket is excluded (it has no comparable year token).
+//
+// Errors:
+//   400 MISSING_TENANT_SLUG / INVALID_YEAR_FORMAT / INVALID_CHANNEL
+//       / INVALID_LIMIT / WRONG_VERTICAL
+//   404 TENANT_NOT_FOUND
+//   500 generic envelope
+const BY_YEAR_DEFAULT_LIMIT = 10;
+const BY_YEAR_MAX_LIMIT = 30;
+const BY_YEAR_VALID_ORDER_BY = new Set([
+  "year:asc",
+  "year:desc",
+  "count:asc",
+  "count:desc",
+]);
+const YEAR_RE = /^\d{4}$/;
+
+router.get("/inbound/leads/by-year", async (req, res) => {
+  try {
+    const {
+      tenantSlug,
+      channel,
+      from,
+      to,
+      orderBy: orderByRaw,
+      limit: limitRaw,
+      offset: offsetRaw,
+    } = req.query || {};
+
+    if (!tenantSlug) {
+      return res.status(400).json({
+        error: "tenantSlug is required",
+        code: "MISSING_TENANT_SLUG",
+      });
+    }
+
+    // Validate ?channel (when supplied). Mirrors /by-month + /by-quarter.
+    if (channel !== undefined && !VALID_CHANNELS.includes(String(channel))) {
+      return res.status(400).json({
+        error: `channel must be one of: ${VALID_CHANNELS.join(", ")}`,
+        code: "INVALID_CHANNEL",
+      });
+    }
+
+    // Validate ?from / ?to YYYY bounds. Both inclusive.
+    if (from !== undefined && !YEAR_RE.test(String(from))) {
+      return res.status(400).json({
+        error: "from must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+    if (to !== undefined && !YEAR_RE.test(String(to))) {
+      return res.status(400).json({
+        error: "to must be in YYYY format",
+        code: "INVALID_YEAR_FORMAT",
+      });
+    }
+
+    // Validate ?orderBy — unknown tokens degrade silently to year:asc
+    // (mirrors /by-quarter posture).
+    const orderByCandidate = orderByRaw ? String(orderByRaw) : "year:asc";
+    const orderBy = BY_YEAR_VALID_ORDER_BY.has(orderByCandidate)
+      ? orderByCandidate
+      : "year:asc";
+
+    // Validate ?limit / ?offset. Default 10 / 0; cap 30.
+    let limit = BY_YEAR_DEFAULT_LIMIT;
+    if (limitRaw !== undefined) {
+      const parsed = Number.parseInt(String(limitRaw), 10);
+      if (
+        !Number.isFinite(parsed) ||
+        parsed < 1 ||
+        parsed > BY_YEAR_MAX_LIMIT
+      ) {
+        return res.status(400).json({
+          error: `limit must be an integer between 1 and ${BY_YEAR_MAX_LIMIT}`,
+          code: "INVALID_LIMIT",
+        });
+      }
+      limit = parsed;
+    }
+    let offset = 0;
+    if (offsetRaw !== undefined) {
+      const parsed = Number.parseInt(String(offsetRaw), 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({
+          error: "offset must be a non-negative integer",
+          code: "INVALID_LIMIT",
+        });
+      }
+      offset = parsed;
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true, vertical: true },
+    });
+    if (!tenant) {
+      return res.status(404).json({
+        error: "Tenant not found",
+        code: "TENANT_NOT_FOUND",
+      });
+    }
+    if (tenant.vertical !== "travel") {
+      return res.status(400).json({
+        error: "Tenant is not a travel tenant",
+        code: "WRONG_VERTICAL",
+      });
+    }
+
+    // Build the base where-predicate. When ?channel is supplied, narrow
+    // source to that exact `inbound:<channel>` literal (mirrors /by-month
+    // and /by-quarter).
+    const where = {
+      tenantId: tenant.id,
+      deletedAt: null,
+      source: channel ? `inbound:${channel}` : { startsWith: "inbound:" },
+    };
+
+    // Light projection — source for byChannel derivation, subBrand for
+    // bySubBrand bucket, createdAt for the year key.
+    const rows = await prisma.contact.findMany({
+      where,
+      select: { source: true, subBrand: true, createdAt: true },
+    });
+
+    // Bucket by UTC YYYY. Each bucket carries a byChannel sub-map
+    // pre-seeded with all VALID_CHANNELS at 0 for stable shape, plus a
+    // bySubBrand sub-map that grows on demand.
+    const yearMap = new Map();
+    function getBucket(yearKey) {
+      let bucket = yearMap.get(yearKey);
+      if (!bucket) {
+        const byChannel = Object.create(null);
+        for (const c of VALID_CHANNELS) byChannel[c] = 0;
+        bucket = {
+          year: yearKey,
+          count: 0,
+          bySubBrand: Object.create(null),
+          byChannel,
+        };
+        yearMap.set(yearKey, bucket);
+      }
+      return bucket;
+    }
+
+    for (const row of rows) {
+      let yearKey = "unknown";
+      if (row.createdAt) {
+        const dt =
+          row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          yearKey = String(dt.getUTCFullYear());
+        }
+      }
+      const bucket = getBucket(yearKey);
+      bucket.count += 1;
+
+      // Per-bucket bySubBrand — falsy subBrand coerces to "_tenant" so the
+      // breakdown is forward-compat with sub-brand rollouts (TMC / RFU /
+      // Travel Stall / Visa Sure per Q25). Stays a flat string→int map.
+      const sbKey = row.subBrand ? String(row.subBrand) : "_tenant";
+      bucket.bySubBrand[sbKey] = (bucket.bySubBrand[sbKey] || 0) + 1;
+
+      const src = row.source || "";
+      if (src.startsWith("inbound:")) {
+        const suffix = src.slice("inbound:".length);
+        if (Object.prototype.hasOwnProperty.call(bucket.byChannel, suffix)) {
+          bucket.byChannel[suffix] += 1;
+        }
+        // Unknown channels silently drop from byChannel — keeps the
+        // per-year key set at exactly 10.
+      }
+    }
+
+    let years = [...yearMap.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+    // either bound is set (they have no comparable year token); when no
+    // bounds are set, "unknown" stays.
+    if (from !== undefined) {
+      const fromStr = String(from);
+      years = years.filter(
+        (r) => r.year !== "unknown" && r.year >= fromStr,
+      );
+    }
+    if (to !== undefined) {
+      const toStr = String(to);
+      years = years.filter(
+        (r) => r.year !== "unknown" && r.year <= toStr,
+      );
+    }
+
+    // Sort per ?orderBy. year:asc/desc uses the lex order of the YYYY key
+    // (4-digit zero-padded; chronological by construction). count:asc/desc
+    // breaks ties by year:asc for a deterministic ordering even when
+    // counts tie.
+    const [orderField, orderDir] = orderBy.split(":");
+    years.sort((a, b) => {
+      if (orderField === "year") {
+        return orderDir === "asc"
+          ? a.year.localeCompare(b.year)
+          : b.year.localeCompare(a.year);
+      }
+      const delta = orderDir === "asc" ? a.count - b.count : b.count - a.count;
+      if (delta !== 0) return delta;
+      return a.year.localeCompare(b.year);
+    });
+
+    const total = years.length;
+    // Pagination applied AFTER aggregation + sort + bucket filter, same as
+    // /by-month + /by-quarter.
+    const paged = years.slice(offset, offset + limit);
+
+    return res.status(200).json({
+      total,
+      rows: paged,
+    });
+  } catch (e) {
+    console.error("[travel-inbound-leads] by-year error:", e.message);
+    return res
+      .status(500)
+      .json({ error: "Failed to roll up inbound leads by year" });
   }
 });
 

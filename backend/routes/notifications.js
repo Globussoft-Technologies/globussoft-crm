@@ -24,13 +24,34 @@ router.get("/", async (req, res) => {
 
     console.log('[notifications.get] Fetching notifications for user:', { userId: req.user.userId, tenantId: req.user.tenantId, where });
 
+    // #920 slice 7: ?fields=summary slim-shape opt-in. Mirrors slice 1
+    // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+    // badc9cca), slice 4 (tasks), slice 5 (projects). When the caller
+    // passes ?fields=summary we drop the heavier columns (link,
+    // entityType, entityId, readAt, type, priority, message) and return
+    // only the columns needed for NotificationBell-style list rendering.
+    // Opt-in additive — existing callers (no ?fields, or any non-exact
+    // value) get the full row shape unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
+      where,
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: limit,
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        title: true,
+        isRead: true,
+        userId: true,
+        tenantId: true,
+        createdAt: true,
+      };
+    }
+
     const [notifications, total] = await Promise.all([
-      prisma.notification.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        skip,
-        take: limit,
-      }),
+      prisma.notification.findMany(findManyArgs),
       prisma.notification.count({ where }),
     ]);
 

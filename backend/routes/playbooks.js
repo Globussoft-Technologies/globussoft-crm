@@ -94,7 +94,7 @@ router.get("/stats", async (req, res) => {
 });
 
 // ── List / Filter ────────────────────────────────────────────────
-// GET /api/playbooks — list playbooks for tenant (filter by stage)
+// GET /api/playbooks?stage=&isActive=&fields=summary — list playbooks for tenant
 router.get("/", async (req, res) => {
   try {
     const tId = tenantId(req);
@@ -104,11 +104,37 @@ router.get("/", async (req, res) => {
     if (isActive === "true") where.isActive = true;
     if (isActive === "false") where.isActive = false;
 
-    const list = await prisma.playbook.findMany({
+    // #920 slice 11: ?fields=summary slim-shape opt-in. Mirrors slice 1
+    // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+    // badc9cca), slice 4 (tasks eec7d856), slice 5 (projects 257771a0),
+    // slice 6 (expenses e81e6cb5), slice 7 (notifications a3487518),
+    // slice 8 (surveys e71594d9), slice 9 (email-templates 0d4a63f9),
+    // slice 10 (knowledge-base 21ad3290). When the caller passes
+    // ?fields=summary we drop the heavy `steps` column (Playbook.steps
+    // is `@db.Text` storing a JSON array of {title, description, order}
+    // — potentially many KB per row for long checklists) AND skip the
+    // hydratePlaybook JSON.parse pass since there's nothing to parse.
+    // Opt-in additive — existing callers (no ?fields, or any non-exact
+    // value) get the full hydrated row shape unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: { createdAt: "desc" },
-    });
-    res.json(list.map(hydratePlaybook));
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        stage: true,
+        isActive: true,
+        tenantId: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
+
+    const list = await prisma.playbook.findMany(findManyArgs);
+    res.json(isSummary ? list : list.map(hydratePlaybook));
   } catch (err) {
     console.error("playbooks list error", err);
     res.status(500).json({ error: "Failed to fetch playbooks" });

@@ -131,6 +131,14 @@ app.use(cors({
 // Existing GET/POST /webhook stubs inside routes/whatsapp.js are tombstones
 // that log + 503 if they ever fire — that would indicate this mount-order
 // is wrong.
+// Attach `req.io` BEFORE the webhook mount so the webhook handler can
+// emit Socket.IO events to connected operators (real-time inbox push).
+// Pre-fix: the matching middleware lower down (~line 322) ran AFTER
+// the webhook router → `req.io` was undefined inside handleMessagesEvent
+// → emit silently no-op'd → frontend never received the
+// `whatsapp:received` event → users had to refresh manually.
+app.use((req, _res, next) => { req.io = io; next(); });
+
 app.use("/api/whatsapp/webhook", require("./routes/whatsapp_webhook"));
 
 app.use(express.json({ limit: "10mb" }));
@@ -318,11 +326,9 @@ const presenceColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '
 const { setIO } = require('./lib/eventBus');
 setIO(io);
 
-// Attach socket to requests so routes can emit events
-app.use((req, res, next) => {
-  req.io = io;
-  next();
-});
+// req.io is now attached at the top of the middleware chain (above the
+// webhook mount) so the WhatsApp webhook handler can use it. No need
+// to re-attach here — left as a comment marker only.
 
 io.on("connection", (socket) => {
   console.log(`[Socket] Client connected: ${socket.id}`);

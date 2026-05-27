@@ -53,6 +53,9 @@
   --chat-bubble-out: #056162;     /* outbound bubble (muted WhatsApp green for dark mode) */
 }
 
+/* (Removed: old .wa-bubble hover-delete rule. Replaced by a right-click
+   context menu — see WhatsAppThreads.jsx → ctxMenu render.) */
+
 [data-theme="light"] {
   --bg-color: #f0f2f5;
   --surface-color: rgba(255, 255, 255, 0.7);

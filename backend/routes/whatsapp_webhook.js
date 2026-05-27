@@ -276,6 +276,47 @@ async function handleMessagesEvent(value, tenantId, req) {
     const metaType = msg.type || null;
     const mimeType = msg.image?.mime_type || msg.video?.mime_type || msg.document?.mime_type || msg.audio?.mime_type || null;
 
+    // ── Reaction events — attach to the target message, don't create a
+    //    standalone row. Meta sends `{ type: "reaction", reaction:
+    //    { message_id, emoji } }` where message_id is the providerMsgId
+    //    of the original message. Empty emoji = reaction removed.
+    if (metaType === "reaction" && msg.reaction) {
+      const targetWamid = msg.reaction.message_id;
+      const emoji = msg.reaction.emoji || "";
+      const target = targetWamid
+        ? await prisma.whatsAppMessage.findFirst({
+            where: { tenantId, providerMsgId: targetWamid },
+            select: { id: true, reactionsJson: true, threadId: true },
+          })
+        : null;
+      if (target) {
+        let arr = [];
+        try { arr = JSON.parse(target.reactionsJson || "[]"); if (!Array.isArray(arr)) arr = []; } catch { arr = []; }
+        // Drop any prior reaction from the same sender — WhatsApp's
+        // reaction model is "one emoji per sender per message".
+        arr = arr.filter((r) => r.fromPhone !== from);
+        if (emoji) {
+          arr.push({ emoji, fromPhone: from, addedAt: new Date().toISOString() });
+        }
+        await prisma.whatsAppMessage.update({
+          where: { id: target.id },
+          data: { reactionsJson: JSON.stringify(arr) },
+        });
+        // Push to UI so the reaction pill appears live
+        if (req.io) {
+          req.io.to(`tenant:${tenantId}`).emit("whatsapp:reaction", {
+            tenantId,
+            threadId: target.threadId,
+            messageId: target.id,
+            emoji,
+            from,
+          });
+        }
+      }
+      // Reactions don't create their own message row — move to next event.
+      continue;
+    }
+
     // Tenant-scoped contact lookup. This is the second important multi-tenant
     // fix: pre-P1 the contact lookup was tenant-agnostic. Now we ONLY match
     // contacts in the tenant we already resolved via phone_number_id.
@@ -327,6 +368,7 @@ async function handleMessagesEvent(value, tenantId, req) {
         threadId: thread?.id || null,
       },
     });
+
 
     // If media, enqueue a download job — the cron engine pulls it down to S3.
     if (metaMediaId) {
@@ -388,14 +430,20 @@ async function handleMessagesEvent(value, tenantId, req) {
       }
     }
 
-    // Socket.io broadcast — same shape as pre-P1.
+    // Real-time push to the tenant's connected operators via Socket.IO.
+    // Scoped to room `tenant:<tenantId>` so events don't leak across
+    // tenants (frontend joins this room on connect). Payload includes
+    // enough for the inbox UI to refresh + optimistically render — full
+    // detail still arrives via the JWT-protected GET /threads/:id route.
     if (req.io) {
-      req.io.emit("whatsapp:received", {
+      req.io.to(`tenant:${tenantId}`).emit("whatsapp:received", {
         from,
         body,
         mediaType: metaType,
         contactId: contact?.id,
         threadId: thread?.id,
+        messageId: created.id,
+        contactPhone: normalizedFrom || from,
         timestamp: msg.timestamp,
         tenantId,
       });
@@ -416,7 +464,7 @@ async function handleMessagesEvent(value, tenantId, req) {
       },
     });
     if (req.io) {
-      req.io.emit("whatsapp:status", {
+      req.io.to(`tenant:${tenantId}`).emit("whatsapp:status", {
         providerMsgId: status.id,
         status: newStatus,
         recipientId: status.recipient_id,

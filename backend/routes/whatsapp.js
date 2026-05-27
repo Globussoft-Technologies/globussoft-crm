@@ -433,7 +433,9 @@ router.get("/threads/:id", verifyToken, async (req, res) => {
     if (!thread) return res.status(404).json({ error: "Thread not found" });
 
     const messages = await prisma.whatsAppMessage.findMany({
-      where: { threadId: thread.id, tenantId: req.user.tenantId },
+      // Exclude soft-deleted messages from the operator's chat view.
+      // The rows stay in the DB for audit/compliance — only hidden from UI.
+      where: { threadId: thread.id, tenantId: req.user.tenantId, deletedAt: null },
       orderBy: { createdAt: "desc" },
       take: 50,
     });
@@ -446,8 +448,11 @@ router.get("/threads/:id", verifyToken, async (req, res) => {
     res.json({
       thread,
       messages: messages.reverse(), // ascending for UI render
+      // Include opt-out `id` so the frontend can call DELETE /opt-outs/:id
+      // (the Unblock action). Without the id the frontend would have to do
+      // a second lookup just to find the row to delete.
       optedOut: optOut
-        ? { capturedAt: optOut.capturedAt, reason: optOut.reason, notes: optOut.notes || null }
+        ? { id: optOut.id, capturedAt: optOut.capturedAt, reason: optOut.reason, notes: optOut.notes || null }
         : null,
     });
   } catch (err) {
@@ -525,6 +530,344 @@ router.post("/threads/:id/assign", verifyToken, async (req, res) => {
 });
 
 // POST /threads/:id/close
+// POST /send-media — upload a file to S3 and send via Meta as
+// image/video/audio/document. Body: multipart/form-data with `file`
+// + `to` (phone) + optional `caption`. Auto-detects type from the
+// MIME type. Returns the created WhatsAppMessage row.
+const multer = require("multer");
+const _waUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } }); // 16 MB Meta limit
+const s3Service = (() => { try { return require("../services/s3Service"); } catch { return null; } })();
+
+router.post("/send-media", verifyToken, _waUpload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "file is required" });
+    const to = String(req.body?.to || "").trim();
+    const caption = String(req.body?.caption || "").trim() || null;
+    if (!to) return res.status(400).json({ error: "to is required" });
+    if (!s3Service) return res.status(500).json({ error: "S3 service unavailable" });
+
+    const cfg = await prisma.whatsAppConfig.findFirst({
+      where: { isActive: true, tenantId: req.user.tenantId },
+    });
+    if (!cfg) return res.status(400).json({ error: "No active WhatsApp provider configured" });
+    const accessToken = decryptCredential(cfg.accessToken);
+
+    // Detect media category from MIME type
+    const mime = req.file.mimetype || "application/octet-stream";
+    let waType = "document";
+    if (mime.startsWith("image/")) waType = "image";
+    else if (mime.startsWith("video/")) waType = "video";
+    else if (mime.startsWith("audio/")) waType = "audio";
+
+    // Upload to S3 under whatsapp/<tenantId>/outbound/<timestamp>-<file>
+    const s3Url = await s3Service.uploadFile(
+      req.file.buffer,
+      req.file.originalname || `wa-${Date.now()}.${mime.split("/")[1] || "bin"}`,
+      mime,
+      `whatsapp/${req.user.tenantId}/outbound`,
+    );
+
+    // POST to Meta — type-specific shape. We pass `link` since Meta can
+    // pull from a public URL (no need to upload to Meta's media bucket).
+    const mediaObj = { link: s3Url };
+    if (caption && (waType === "image" || waType === "video" || waType === "document")) {
+      mediaObj.caption = caption;
+    }
+    if (waType === "document") {
+      mediaObj.filename = req.file.originalname || "attachment";
+    }
+    const payload = {
+      messaging_product: "whatsapp",
+      to,
+      type: waType,
+      [waType]: mediaObj,
+    };
+
+    const result = await new Promise((resolve) => {
+      const https = require("https");
+      const body = JSON.stringify(payload);
+      const r = https.request({
+        hostname: "graph.facebook.com",
+        path: `/${process.env.META_GRAPH_VERSION || "v22.0"}/${cfg.phoneNumberId}/messages`,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Length": Buffer.byteLength(body),
+        },
+      }, (resp) => {
+        let buf = "";
+        resp.on("data", (c) => (buf += c));
+        resp.on("end", () => {
+          let parsed = null;
+          try { parsed = JSON.parse(buf); } catch { /* keep null */ }
+          if (resp.statusCode < 300 && parsed?.messages?.[0]?.id) {
+            resolve({ ok: true, providerMsgId: parsed.messages[0].id });
+          } else {
+            resolve({ ok: false, error: parsed?.error?.message || buf || `HTTP ${resp.statusCode}` });
+          }
+        });
+      });
+      r.on("error", (e) => resolve({ ok: false, error: e.message }));
+      r.write(body);
+      r.end();
+    });
+
+    if (!result.ok) {
+      // Best-effort: delete the orphaned S3 object since Meta rejected the send
+      try {
+        const key = s3Url.replace(`${process.env.AWS_S3_URL || ""}/`, "");
+        await s3Service.deleteFile(key);
+      } catch { /* swallow */ }
+      return res.status(502).json({ error: result.error || "Meta send-media failed", code: "META_MEDIA_FAILED" });
+    }
+
+    // Find or create thread + save the message with S3 URL
+    const normalizedTo = (require("../utils/deduplication").toE164(to)) || to;
+    const thread = await prisma.whatsAppThread.upsert({
+      where: { tenantId_contactPhone: { tenantId: req.user.tenantId, contactPhone: normalizedTo } },
+      create: { tenantId: req.user.tenantId, contactPhone: normalizedTo, status: "OPEN", lastMessageAt: new Date() },
+      update: { lastMessageAt: new Date(), status: "OPEN" },
+    });
+
+    const created = await prisma.whatsAppMessage.create({
+      data: {
+        to: normalizedTo,
+        from: cfg.phoneNumberId,
+        body: caption,
+        mediaUrl: s3Url,
+        mediaType: mime,
+        metaType: waType,
+        direction: "OUTBOUND",
+        status: "SENT",
+        providerMsgId: result.providerMsgId,
+        tenantId: req.user.tenantId,
+        threadId: thread.id,
+        userId: req.user.userId,
+      },
+    });
+
+    res.status(201).json({ success: true, message: created, thread });
+  } catch (err) {
+    console.error("WhatsApp send-media error:", err);
+    res.status(500).json({ error: "Failed to send media", detail: err.message });
+  }
+});
+
+// POST /messages/:id/react — send an emoji reaction via Meta Cloud API.
+//
+// Body: { emoji: "👍" }
+//
+// Meta's reactions are first-class on Cloud API: POST /messages with
+// `type: "reaction"` and `reaction: { message_id, emoji }`. The target
+// message MUST have a Meta providerMsgId (wamid) — i.e. it must have
+// gone through Meta. Messages without a providerMsgId (e.g. soft-deleted
+// stubs or pre-onboarding rows) can't be reacted to and return 422.
+router.post("/messages/:id/react", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    const emoji = String(req.body?.emoji || "").trim();
+    if (!emoji) return res.status(400).json({ error: "emoji is required" });
+
+    const msg = await prisma.whatsAppMessage.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      select: { id: true, providerMsgId: true, from: true, to: true, direction: true, threadId: true },
+    });
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+    if (!msg.providerMsgId) {
+      return res.status(422).json({ error: "Message has no Meta providerMsgId — cannot react", code: "NO_PROVIDER_MSG_ID" });
+    }
+
+    const cfg = await prisma.whatsAppConfig.findFirst({
+      where: { isActive: true, tenantId: req.user.tenantId },
+    });
+    if (!cfg) return res.status(400).json({ error: "No active WhatsApp provider configured" });
+    const accessToken = decryptCredential(cfg.accessToken);
+
+    // Recipient is the other side of the conversation. For INBOUND
+    // messages the contact is the `from` field; for OUTBOUND it's `to`.
+    // We use the contact's phone (from the thread) when available, which
+    // is normalised already.
+    const thread = msg.threadId
+      ? await prisma.whatsAppThread.findUnique({ where: { id: msg.threadId } })
+      : null;
+    const recipient = thread?.contactPhone
+      || (msg.direction === "INBOUND" ? msg.from : msg.to);
+    if (!recipient) {
+      return res.status(422).json({ error: "Cannot resolve recipient phone for reaction" });
+    }
+
+    // Direct call to Meta Cloud API. The provider helper doesn't have a
+    // dedicated reaction method yet — inline the request shape here.
+    const result = await new Promise((resolve) => {
+      const https = require("https");
+      const payload = JSON.stringify({
+        messaging_product: "whatsapp",
+        to: recipient.replace(/^\+/, ""),
+        type: "reaction",
+        reaction: { message_id: msg.providerMsgId, emoji },
+      });
+      const r = https.request({
+        hostname: "graph.facebook.com",
+        path: `/${process.env.META_GRAPH_VERSION || "v22.0"}/${cfg.phoneNumberId}/messages`,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Length": Buffer.byteLength(payload),
+        },
+      }, (resp) => {
+        let body = "";
+        resp.on("data", (c) => (body += c));
+        resp.on("end", () => {
+          let parsed = null;
+          try { parsed = JSON.parse(body); } catch { /* keep null */ }
+          if (resp.statusCode < 300 && parsed?.messages?.[0]?.id) {
+            resolve({ ok: true, providerReactionId: parsed.messages[0].id });
+          } else {
+            resolve({ ok: false, error: parsed?.error?.message || body || `HTTP ${resp.statusCode}` });
+          }
+        });
+      });
+      r.on("error", (err) => resolve({ ok: false, error: err.message }));
+      r.write(payload);
+      r.end();
+    });
+
+    if (!result.ok) {
+      return res.status(502).json({ error: result.error || "Meta reaction send failed", code: "META_REACTION_FAILED" });
+    }
+
+    // Mirror the reaction on the local message so the UI shows it
+    // immediately (CRM-side reactions wouldn't otherwise appear since
+    // Meta doesn't echo our own reactions back via webhook).
+    try {
+      const current = await prisma.whatsAppMessage.findUnique({
+        where: { id: msg.id },
+        select: { reactionsJson: true },
+      });
+      let arr = [];
+      try { arr = JSON.parse(current?.reactionsJson || "[]"); if (!Array.isArray(arr)) arr = []; } catch { arr = []; }
+      // Mark "self" by userId so the UI can label it
+      arr = arr.filter((r) => r.byUserId !== req.user.userId);
+      arr.push({ emoji, byUserId: req.user.userId, addedAt: new Date().toISOString() });
+      await prisma.whatsAppMessage.update({
+        where: { id: msg.id },
+        data: { reactionsJson: JSON.stringify(arr) },
+      });
+    } catch (e) {
+      console.warn("[whatsapp] failed to mirror local reaction:", e.message);
+    }
+
+    await writeAudit("WhatsAppMessage", "REACT", msg.id, req.user.userId, req.user.tenantId, {
+      emoji,
+      providerReactionId: result.providerReactionId,
+    }).catch(() => { /* best-effort */ });
+
+    res.json({ success: true, providerReactionId: result.providerReactionId });
+  } catch (err) {
+    console.error("WhatsApp reaction error:", err);
+    res.status(500).json({ error: "Failed to send reaction", detail: err.message });
+  }
+});
+
+// DELETE /messages/:id — "Delete for me" (soft-delete)
+//
+// Hides the message from the operator's WhatsApp chat view in the CRM.
+// The row remains in the DB for audit / compliance.
+//
+// IMPORTANT: This does NOT delete the message from the recipient's phone.
+// WhatsApp Cloud API does not support "delete for everyone" — that
+// feature is consumer-app only. Operators see this caveat in the
+// frontend confirm dialog before deletion.
+router.delete("/messages/:id", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const msg = await prisma.whatsAppMessage.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      select: { id: true, threadId: true, deletedAt: true, mediaUrl: true },
+    });
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+    if (msg.deletedAt) return res.json({ success: true, alreadyDeleted: true });
+
+    console.log(`[whatsapp:delete] msg ${msg.id} mediaUrl=${msg.mediaUrl || "(none)"}`);
+
+    await prisma.whatsAppMessage.update({
+      where: { id: msg.id },
+      data: { deletedAt: new Date() },
+    });
+
+    // Best-effort S3 cleanup. We match by THREE patterns so the cleanup
+    // works even if AWS_S3_URL drifts from the actual URL prefix the
+    // bucket serves on (different SDK versions / region forms / virtual-
+    // hosted vs path-style):
+    //   1. exact prefix match against process.env.AWS_S3_URL
+    //   2. virtual-hosted: https://<bucket>.s3.<region>.amazonaws.com/...
+    //   3. virtual-hosted, no region: https://<bucket>.s3.amazonaws.com/...
+    // Any URL that doesn't match all three (e.g. `meta:<id>` placeholder,
+    // foreign CDN) is left alone.
+    let s3Removed = false;
+    let s3Reason = "";
+    if (!msg.mediaUrl) {
+      s3Reason = "no_media";
+    } else if (!s3Service) {
+      s3Reason = "s3Service_unavailable";
+    } else if (msg.mediaUrl.startsWith("meta:")) {
+      s3Reason = "meta_placeholder_not_yet_downloaded";
+    } else {
+      const bucket = process.env.AWS_S3_BUCKET_NAME || "";
+      const envBase = process.env.AWS_S3_URL || "";
+      let key = null;
+      if (envBase && msg.mediaUrl.startsWith(envBase)) {
+        key = msg.mediaUrl.replace(`${envBase}/`, "");
+      } else if (bucket && msg.mediaUrl.includes(`/${bucket}.s3.`)) {
+        // virtual-hosted: extract path after the host
+        try {
+          const u = new URL(msg.mediaUrl);
+          key = u.pathname.replace(/^\//, "");
+        } catch { /* invalid url */ }
+      } else if (bucket && msg.mediaUrl.includes(`/${bucket}/`)) {
+        // path-style: https://s3.region.amazonaws.com/<bucket>/<key>
+        try {
+          const u = new URL(msg.mediaUrl);
+          const stripped = u.pathname.replace(new RegExp(`^/${bucket}/`), "");
+          if (stripped && stripped !== u.pathname) key = stripped;
+        } catch { /* invalid url */ }
+      }
+      if (!key) {
+        s3Reason = `url_doesnt_match_bucket (bucket=${bucket}, envBase=${envBase}, url=${msg.mediaUrl.slice(0, 80)}…)`;
+      } else {
+        try {
+          await s3Service.deleteFile(key);
+          s3Removed = true;
+          s3Reason = `deleted key=${key}`;
+        } catch (e) {
+          s3Reason = `s3_delete_threw: ${e.message}`;
+          console.warn("[whatsapp:delete] S3 delete failed for message", msg.id, ":", e.message);
+        }
+      }
+    }
+    console.log(`[whatsapp:delete] msg ${msg.id} s3Removed=${s3Removed} reason=${s3Reason}`);
+
+    await writeAudit(
+      "WhatsAppMessage",
+      "SOFT_DELETE",
+      msg.id,
+      req.user.userId,
+      req.user.tenantId,
+      { mode: "delete_for_me", threadId: msg.threadId, s3Removed },
+    ).catch(() => { /* best-effort */ });
+
+    res.json({ success: true, s3Removed });
+  } catch (err) {
+    console.error("WhatsApp message delete error:", err);
+    res.status(500).json({ error: "Failed to delete message", detail: err.message });
+  }
+});
+
 // POST /threads/:id/rename-contact body { name }
 //
 // Save / update a friendly contact name for the WhatsApp thread. Three cases:
@@ -568,11 +911,18 @@ router.post("/threads/:id/rename-contact", verifyToken, async (req, res) => {
           data: { name },
         });
       } else {
-        // Case 3 — create a new contact for this phone.
+        // Case 3 — create a new contact for this phone. Contact.email is
+        // NOT NULL in the schema and (email, tenantId) is @@unique, so we
+        // synthesise a deterministic placeholder per phone: this keeps the
+        // schema happy AND avoids collisions when multiple WhatsApp-only
+        // contacts get created for the same tenant. Users can edit the
+        // email later via the standard Contact page.
+        const placeholderEmail = `wa-${thread.contactPhone.replace(/[^0-9]/g, '')}@whatsapp.local`;
         contact = await prisma.contact.create({
           data: {
             tenantId: req.user.tenantId,
             name,
+            email: placeholderEmail,
             phone: thread.contactPhone,
             status: "Lead",
             source: "whatsapp",
@@ -874,11 +1224,20 @@ router.post("/templates", verifyToken, async (req, res) => {
     });
 
     if (!metaResp.ok) {
+      // The `metaResp.error` now contains the SPECIFIC reason Meta
+      // returned (error_user_msg / error_data.details) — not the generic
+      // "Invalid parameter". The operator-facing message in the modal
+      // surfaces this directly, plus the user-friendly title if Meta
+      // provided one.
+      const friendly = metaResp.userTitle
+        ? `${metaResp.userTitle}: ${metaResp.error}`
+        : metaResp.error;
       return res.status(422).json({
-        error: metaResp.error || "Meta rejected the template submission.",
+        error: friendly || "Meta rejected the template submission.",
         code: "META_REJECTED",
         metaCode: metaResp.code || null,
         metaSubcode: metaResp.subcode || null,
+        details: metaResp.details || null,
       });
     }
 

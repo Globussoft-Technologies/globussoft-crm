@@ -1618,6 +1618,18 @@ model WhatsAppMessage {
   templateName  String?
   errorMessage  String?
   read          Boolean  @default(false)
+  // Soft-delete for "Delete for me" — hides the message from the
+  // operator's CRM view but preserves the row for audit / compliance.
+  // Note: Meta WhatsApp Cloud API does NOT support deleting messages
+  // on the recipient phone, so "delete for everyone" is intentionally
+  // not modelled — operators see this caveat in the UI confirm dialog.
+  deletedAt     DateTime?
+  // Emoji reactions attached to THIS message. JSON-stringified array of
+  // shape `[{ emoji, fromPhone, byUserId?, addedAt }]`. Reactions arrive
+  // as separate Meta webhook events with `type: "reaction"`; the handler
+  // dereferences them to the target message via `providerMsgId` instead
+  // of creating standalone rows. Empty emoji = reaction-removed.
+  reactionsJson String?  @db.Text
   createdAt     DateTime @default(now())
 
   tenantId Int    @default(1)

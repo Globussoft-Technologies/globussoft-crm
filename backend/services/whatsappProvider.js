@@ -337,8 +337,24 @@ function graphRequest({ method, path, accessToken, payload, query }) {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve({ ok: true, data: parsed, status: res.statusCode });
         } else {
-          const msg = parsed?.error?.message || buf || `HTTP ${res.statusCode}`;
-          resolve({ ok: false, error: msg, code: parsed?.error?.code, subcode: parsed?.error?.error_subcode, status: res.statusCode });
+          // Surface the SPECIFIC rejection reason Meta puts in
+          // error_user_msg / error_data.details — the top-level
+          // "message" is usually just "Invalid parameter" which tells
+          // the operator nothing actionable. Always log the raw
+          // response body so debugging never depends on the helpful
+          // fields being present.
+          const err = parsed?.error || {};
+          const specific = err.error_user_msg || err.error_data?.details || err.message || buf || `HTTP ${res.statusCode}`;
+          console.error("[whatsapp-graph] Meta error response:", JSON.stringify(parsed || buf, null, 2));
+          resolve({
+            ok: false,
+            error: specific,
+            code: err.code,
+            subcode: err.error_subcode,
+            userTitle: err.error_user_title || null,
+            details: err.error_data?.details || null,
+            status: res.statusCode,
+          });
         }
       });
     });
@@ -473,12 +489,44 @@ function listPhoneNumbers({ wabaId, accessToken }) {
  * @returns {Promise<{ ok, data?, error?, code? }>}
  */
 function submitTemplateToMeta({ wabaId, accessToken, name, language, category, body, header, footer }) {
+  // Meta requires `example` blocks on any component that contains
+  // `{{N}}` placeholders. Without these, the API returns
+  // "Invalid parameter" subcode 2388299. We auto-generate plausible
+  // sample values so operators don't have to fill them manually.
+  // Format: BODY example is `{ body_text: [[sample1, sample2, ...]] }`,
+  // HEADER example is `{ header_text: [sample1] }` (only one placeholder
+  // allowed in headers).
+  const placeholderCount = (s) => {
+    if (!s) return 0;
+    const matches = s.match(/\{\{\d+\}\}/g) || [];
+    return new Set(matches).size;
+  };
+  const samplesFor = (count) => {
+    const fallbacks = ["John", "Jan 5", "10:30 AM", "Dr. Smith", "Enhanced Wellness", "Clinic Address"];
+    const out = [];
+    for (let i = 0; i < count; i += 1) {
+      out.push(fallbacks[i] || `sample${i + 1}`);
+    }
+    return out;
+  };
+
   const components = [];
   if (header) {
-    components.push({ type: "HEADER", format: "TEXT", text: header });
+    const headerComp = { type: "HEADER", format: "TEXT", text: header };
+    const headerPh = placeholderCount(header);
+    if (headerPh > 0) {
+      headerComp.example = { header_text: samplesFor(headerPh) };
+    }
+    components.push(headerComp);
   }
-  components.push({ type: "BODY", text: body });
+  const bodyComp = { type: "BODY", text: body };
+  const bodyPh = placeholderCount(body);
+  if (bodyPh > 0) {
+    bodyComp.example = { body_text: [samplesFor(bodyPh)] };
+  }
+  components.push(bodyComp);
   if (footer) {
+    // Footers don't support variables on Meta — just plain text.
     components.push({ type: "FOOTER", text: footer });
   }
   return graphRequest({

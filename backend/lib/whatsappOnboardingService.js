@@ -148,14 +148,22 @@ async function finalize({
       const upserted = await tx.whatsAppConfig.upsert({
         where: { tenantId_provider: { tenantId, provider: "meta_cloud" } },
         create: {
-          tenantId,
+          // Use the relation form (tenant.connect) instead of the
+          // direct-FK form (tenantId). Prisma 6.19.3 rejects the direct-FK
+          // shape here with "Unknown argument tenantId — did you mean
+          // tenant?" when the upsert's `where` uses the composite
+          // tenantId_provider compound key. Switching to connect-by-id
+          // sidesteps the checked/unchecked-input XOR mismatch.
+          tenant: { connect: { id: tenantId } },
           provider: "meta_cloud",
           phoneNumberId,
           businessAccountId: wabaId,
           accessToken: encryptCredential(token),
           isActive: true,
           tokenExpiresAt: expiresAt,
-          appUserId: appUserId || null,
+          // appUserId intentionally dropped — schema doesn't define this
+          // column. Meta's system-user id from /debug_token is captured in
+          // the audit-log entry below for traceability, not on the config row.
           webhookVerified: true,
           onboardedAt: new Date(),
           disconnectedAt: null,
@@ -168,9 +176,12 @@ async function finalize({
           accessToken: encryptCredential(token),
           isActive: true,
           tokenExpiresAt: expiresAt,
-          appUserId: appUserId || null,
           webhookVerified: true,
-          onboardedAt: { set: undefined }, // preserve original onboardedAt on reconnect
+          // onboardedAt intentionally omitted — Prisma leaves it unchanged
+          // when not specified in update(), preserving the original first-
+          // connect timestamp across reconnects. The previous `{ set:
+          // undefined }` form is rejected by Prisma 6.x as an invalid
+          // value for a DateTime column.
           disconnectedAt: null,
           lastRotatedAt: new Date(),
           lastHealthCheckAt: new Date(),
@@ -191,6 +202,7 @@ async function finalize({
   await writeAudit("WhatsAppConfig", "WHATSAPP_CONNECT", saved.id, userId || null, tenantId, {
     wabaId,
     phoneNumberId,
+    appUserId: appUserId || null,
     tokenExpiresAt: expiresAt ? expiresAt.toISOString() : null,
     via: "embedded_signup",
   }).catch((e) => console.warn("[onboarding] audit WHATSAPP_CONNECT failed:", e.message));

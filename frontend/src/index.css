@@ -45,7 +45,16 @@
   --tooltip-bg: rgba(11, 12, 16, 0.9);
   --hover-bg: rgba(255, 255, 255, 0.03);
   --kbd-bg: rgba(255, 255, 255, 0.1);
+
+  /* WhatsApp-style chat surface — distinct from --bg-color so bubbles
+     read as their own surface in both themes. */
+  --chat-bg: #0e1418;             /* the chat backdrop (between bubbles) */
+  --chat-bubble-in: #1f2937;      /* inbound bubble — solid, lighter than chat-bg */
+  --chat-bubble-out: #056162;     /* outbound bubble (muted WhatsApp green for dark mode) */
 }
+
+/* (Removed: old .wa-bubble hover-delete rule. Replaced by a right-click
+   context menu — see WhatsAppThreads.jsx → ctxMenu render.) */
 
 [data-theme="light"] {
   --bg-color: #f0f2f5;
@@ -87,6 +96,12 @@
   --tooltip-bg: rgba(255, 255, 255, 0.95);
   --hover-bg: rgba(0, 0, 0, 0.03);
   --kbd-bg: rgba(0, 0, 0, 0.08);
+
+  /* WhatsApp-style chat surface — light mode matches WhatsApp Web:
+     pale cream backdrop, white inbound bubbles, light-green outbound. */
+  --chat-bg: #e5ddd5;
+  --chat-bubble-in: #ffffff;
+  --chat-bubble-out: #d9fdd3;
 }
 
 [data-theme="dark"] {
@@ -130,6 +145,14 @@
   --tooltip-bg: rgba(11, 12, 16, 0.95);
   --hover-bg: rgba(255, 255, 255, 0.05);
   --kbd-bg: rgba(255, 255, 255, 0.1);
+
+  /* WhatsApp-style chat surface — dark mode: WhatsApp Dark uses near-
+     black backdrop with lighter-gray bubbles for inbound + muted-teal
+     for outbound. Solid colors (not translucent) so bubbles always
+     read as distinct surfaces over the chat backdrop. */
+  --chat-bg: #0e1418;
+  --chat-bubble-in: #1f2937;
+  --chat-bubble-out: #056162;
 }
 
 [data-theme="dark"] body {

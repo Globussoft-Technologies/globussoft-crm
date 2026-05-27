@@ -131,6 +131,14 @@ app.use(cors({
 // Existing GET/POST /webhook stubs inside routes/whatsapp.js are tombstones
 // that log + 503 if they ever fire — that would indicate this mount-order
 // is wrong.
+// Attach `req.io` BEFORE the webhook mount so the webhook handler can
+// emit Socket.IO events to connected operators (real-time inbox push).
+// Pre-fix: the matching middleware lower down (~line 322) ran AFTER
+// the webhook router → `req.io` was undefined inside handleMessagesEvent
+// → emit silently no-op'd → frontend never received the
+// `whatsapp:received` event → users had to refresh manually.
+app.use((req, _res, next) => { req.io = io; next(); });
+
 app.use("/api/whatsapp/webhook", require("./routes/whatsapp_webhook"));
 
 app.use(express.json({ limit: "10mb" }));
@@ -318,11 +326,9 @@ const presenceColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '
 const { setIO } = require('./lib/eventBus');
 setIO(io);
 
-// Attach socket to requests so routes can emit events
-app.use((req, res, next) => {
-  req.io = io;
-  next();
-});
+// req.io is now attached at the top of the middleware chain (above the
+// webhook mount) so the WhatsApp webhook handler can use it. No need
+// to re-attach here — left as a comment marker only.
 
 io.on("connection", (socket) => {
   console.log(`[Socket] Client connected: ${socket.id}`);
@@ -591,7 +597,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/set-password", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated

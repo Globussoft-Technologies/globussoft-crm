@@ -63,6 +63,27 @@ async function runDiagnosticAlertsForTenant(tenantId) {
     select: { subBrandConfigJson: true },
   });
 
+  // Notification.userId is non-nullable. Find ONE recipient per tenant to
+  // address the alert at — prefer ADMIN, fall back to MANAGER, then any
+  // user. If the tenant has zero users (shouldn't happen post-seed) we
+  // can't create the notification and skip.
+  const recipient =
+    (await prisma.user.findFirst({
+      where: { tenantId, role: "ADMIN" },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    })) ||
+    (await prisma.user.findFirst({
+      where: { tenantId, role: "MANAGER" },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    })) ||
+    (await prisma.user.findFirst({
+      where: { tenantId },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    }));
+
   let alerted = 0;
   let skipped = 0;
   for (const diag of diagnostics) {
@@ -95,14 +116,14 @@ async function runDiagnosticAlertsForTenant(tenantId) {
     } catch { /* model not present in this build — fall through */ }
     if (!outreachExists) {
       try {
+        // Schema fields available on Task: contactId only (no relatedTo*
+        // polymorphic columns in this codebase — a follow-up could add them
+        // but for now the contactId direct FK is the canonical link).
         outreachExists = !!(await prisma.task.findFirst({
           where: {
             tenantId,
+            contactId: diag.contactId,
             createdAt: { gt: diag.createdAt },
-            OR: [
-              { contactId: diag.contactId },
-              { relatedToId: diag.contactId, relatedToType: "contact" },
-            ],
           },
           select: { id: true },
         }));
@@ -120,10 +141,20 @@ async function runDiagnosticAlertsForTenant(tenantId) {
       `Diagnostic #${diag.id} (${diag.subBrand}) for contact ${diag.contactId} submitted ${elapsedMin}m ago — ` +
       `no advisor outreach logged yet. Tier: ${diag.recommendedTier || "—"}. ` +
       `Open ${PORTAL_BASE}/travel/diagnostics`;
+    if (!recipient) {
+      // No user to address this alert to — log + skip. Re-tick will retry
+      // once a user is seeded for the tenant.
+      console.warn(
+        `[TravelDiagnosticAlerts] tenant ${tenantId} has no users — cannot create escalation notification`,
+      );
+      skipped++;
+      continue;
+    }
     try {
       await prisma.notification.create({
         data: {
           tenantId,
+          userId: recipient.id,
           title,
           message,
           type: "warning",

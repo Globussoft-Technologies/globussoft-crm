@@ -85,12 +85,26 @@ const captureRawBody = express.raw({
 // Meta sends `X-Hub-Signature-256: sha256=<hex>` where <hex> is the HMAC of
 // the raw request body keyed with the App Secret. Timing-safe compare —
 // never use ==/=== on hex digests as that leaks length and prefix bits.
+// Same WA_DEBUG gate the route uses. Default OFF — set
+// WHATSAPP_DEBUG_LOG=true in backend/.env to re-enable.
+const _MW_DEBUG = String(process.env.WHATSAPP_DEBUG_LOG || "false").toLowerCase() === "true";
+function _mwLog(tag, payload) {
+  if (!_MW_DEBUG) return;
+  try {
+    const pretty = payload == null ? "" : (typeof payload === "string" ? payload : JSON.stringify(payload, null, 2));
+    console.log(`[whatsapp-webhook:middleware] ${tag} ${pretty}`);
+  } catch (e) {
+    console.log(`[whatsapp-webhook:middleware] ${tag} <log-serialize-failed: ${e.message}>`);
+  }
+}
+
 function verifySignature(req, res, next) {
   const secret = envSecret();
   const isProd = envIsProd();
 
   // Production with no secret = no webhooks accepted.
   if (isProd && !secret) {
+    _mwLog("← 503 META_APP_SECRET_MISSING (prod + no secret)", null);
     return res.status(503).json({
       error: "Webhook signature verification not configured",
       code: "META_APP_SECRET_MISSING",
@@ -99,6 +113,7 @@ function verifySignature(req, res, next) {
 
   // Dev fallback: log per-request and accept.
   if (!secret) {
+    _mwLog("⚠ signature SKIPPED (dev mode, META_APP_SECRET unset)", null);
     req.waSignatureVerified = false;
     req.waSignatureReason = "dev_no_secret";
     return next();
@@ -106,6 +121,7 @@ function verifySignature(req, res, next) {
 
   const header = req.headers["x-hub-signature-256"];
   if (typeof header !== "string" || !header.startsWith("sha256=")) {
+    _mwLog("← 403 BAD_SIGNATURE_HEADER", { headerPresent: typeof header === "string", headerPrefix: typeof header === "string" ? header.slice(0, 10) : null });
     return res.status(403).json({
       error: "Missing or malformed X-Hub-Signature-256",
       code: "BAD_SIGNATURE_HEADER",
@@ -117,6 +133,7 @@ function verifySignature(req, res, next) {
   // mangled it (e.g. another middleware accidentally JSON-parsed) we cannot
   // verify.
   if (!Buffer.isBuffer(req.body)) {
+    _mwLog("← 500 RAW_BODY_MISSING (middleware mount order broken)", { bodyType: typeof req.body });
     return res.status(500).json({
       error: "Raw body unavailable — middleware mount order is wrong",
       code: "RAW_BODY_MISSING",
@@ -138,11 +155,18 @@ function verifySignature(req, res, next) {
   }
 
   if (!ok) {
+    _mwLog("← 403 SIGNATURE_INVALID (HMAC mismatch — META_APP_SECRET in .env does NOT match the App Secret in Meta dashboard)", {
+      bodyBytes: req.body.length,
+      providedFirst8: provided.slice(0, 8),
+      expectedFirst8: expected.slice(0, 8),
+      hint: "Open developers.facebook.com → your app → App Settings → Basic → 'App Secret'. Copy it (click Show) into backend/.env as META_APP_SECRET=<that value>, then restart the backend.",
+    });
     return res.status(403).json({
       error: "X-Hub-Signature-256 mismatch",
       code: "SIGNATURE_INVALID",
     });
   }
+  _mwLog("✓ signature verified", { bodyBytes: req.body.length });
   req.waSignatureVerified = true;
   next();
 }

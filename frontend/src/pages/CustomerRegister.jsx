@@ -135,9 +135,12 @@ export default function CustomerRegister() {
       if (data?.user) setUser(data.user);
       if (data?.tenant) setTenant(data.tenant);
       invalidatePermissionCache();
-      // Route based on tenant vertical: wellness tenants → /wellness, others → /dashboard
+      // Route based on tenant vertical: wellness → /wellness, travel → /travel, generic → /dashboard
       const vertical = data?.tenant?.vertical || 'generic';
-      navigate(vertical === 'wellness' ? '/wellness' : '/dashboard');
+      const dest = vertical === 'wellness' ? '/wellness'
+                 : vertical === 'travel'   ? '/travel'
+                 : '/dashboard';
+      navigate(dest);
     } catch {
       setSubmitError('Server error. Please try again.');
     } finally {

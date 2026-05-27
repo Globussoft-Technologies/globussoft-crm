@@ -21,6 +21,7 @@ import Layout from "./components/Layout";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import RoleGuard from "./components/RoleGuard";
 import { NotifyProvider } from "./utils/notify";
+import { ActiveSubBrandProvider } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
 import {
   setAuthToken,
@@ -382,11 +383,23 @@ function wellnessLandingFor(user) {
 // over the vertical-default heuristic. Lets a new role become a config
 // change rather than a code edit in this file. Exported helper so the
 // GenericOnly / WellnessOwnerOnly guards use a single source of truth.
+//
+// EXCEPTION: a configured value of "/dashboard" is the system-wide ADMIN
+// default (and the implicit fallback for any role missing an explicit
+// landingPath). For non-generic verticals (wellness, travel) that's wrong
+// — those verticals have their own home surfaces, not the Enterprise
+// Overview. We override the generic default; any explicitly-customised
+// non-default path (e.g. /home, /wellness/calendar, /travel/leads) still
+// wins.
 function landingFor(user, tenant) {
   const configured = user?.landingPath || user?.primaryRole?.landingPath || null;
-  if (configured) return configured;
-  if (tenant?.vertical === 'wellness') return wellnessLandingFor(user);
-  return '/dashboard';
+  const isGenericDefault = !configured || configured === '/dashboard';
+  if (isGenericDefault) {
+    if (tenant?.vertical === 'wellness') return wellnessLandingFor(user);
+    if (tenant?.vertical === 'travel') return '/travel';
+    return '/dashboard';
+  }
+  return configured;
 }
 
 // Route guard: bounces wellness tenants away from generic-CRM-only pages.
@@ -426,9 +439,9 @@ function WellnessOwnerOnly({ children }) {
 // stop the URL bar from rendering a misleading wellness UI on non-wellness
 // tenants.
 function WellnessOnly({ children }) {
-  const { tenant } = useContext(AuthContext);
+  const { user, tenant } = useContext(AuthContext);
   if (tenant && tenant.vertical !== "wellness") {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={landingFor(user, tenant)} replace />;
   }
   return children;
 }
@@ -441,9 +454,9 @@ function WellnessOnly({ children }) {
 // This restores the definition so the 41 react/jsx-no-undef lint errors
 // clear.
 function TravelOnly({ children }) {
-  const { tenant } = useContext(AuthContext);
+  const { user, tenant } = useContext(AuthContext);
   if (tenant && tenant.vertical !== "travel") {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={landingFor(user, tenant)} replace />;
   }
   return children;
 }
@@ -701,6 +714,7 @@ export default function App() {
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
       <AuthContext.Provider value={authValue}>
         <NotifyProvider>
+          <ActiveSubBrandProvider>
           <BrowserRouter>
             <RouteErrorBoundary>
               <Suspense
@@ -721,11 +735,23 @@ export default function App() {
                 <Routes>
                   <Route
                     path="/login"
-                    element={!token ? <Login /> : <Navigate to="/dashboard" />}
+                    element={
+                      !token ? (
+                        <Login />
+                      ) : (
+                        <Navigate to={landingFor(user, tenant)} replace />
+                      )
+                    }
                   />
                   <Route
                     path="/signup"
-                    element={!token ? <Signup /> : <Navigate to="/dashboard" />}
+                    element={
+                      !token ? (
+                        <Signup />
+                      ) : (
+                        <Navigate to={landingFor(user, tenant)} replace />
+                      )
+                    }
                   />
                   <Route
                     path="/customer/register"
@@ -740,8 +766,11 @@ export default function App() {
                       + DigiLocker / Aadhaar verification (PRD §4.5 extended).
                       Distinct from /portal (Knowledge Base) + /wellness/portal
                       (wellness patient OTP). Travel-tenant scoped on the
-                      backend via requireTravelPortalTenant. */}
-                  <Route path="/travel/portal" element={<TravelCustomerPortal />} />
+                      backend via requireTravelPortalTenant.
+                      Wildcard so subpaths (/login, /kyc, /bookings) all render
+                      the same component; without this they fall through to the
+                      /* catch-all and bounce unauthenticated users to /login. */}
+                  <Route path="/travel/portal/*" element={<TravelCustomerPortal />} />
                   <Route
                     path="/book/:slug"
                     element={<WellnessPublicBooking />}
@@ -1583,6 +1612,7 @@ export default function App() {
               </Suspense>
             </RouteErrorBoundary>
           </BrowserRouter>
+          </ActiveSubBrandProvider>
         </NotifyProvider>
       </AuthContext.Provider>
     </ThemeContext.Provider>

@@ -50,6 +50,14 @@
  *   - Restore originals between tests so other test files don't see leakage.
  */
 import { describe, test, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+
+// Clear SENDGRID_API_KEY BEFORE importing the SUT — the engine captures
+// `const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY` at module load
+// time and the runtime check uses `process.env.SENDGRID_API_KEY || <captured>`,
+// so a leftover value from .env (auto-loaded by @prisma/client) would
+// poison the "missing key" branch by surviving `delete process.env.*`.
+vi.hoisted(() => { delete process.env.SENDGRID_API_KEY; });
+
 import prisma from '../../lib/prisma.js';
 
 import { processScheduledEmails } from '../../cron/scheduledEmailEngine.js';

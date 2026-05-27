@@ -260,26 +260,30 @@ router.get("/customer/tenants", async (req, res) => {
 // Creates a new User with userType: 'CUSTOMER' and assigns the tenant's CUSTOMER role
 router.post("/customer/register", async (req, res) => {
   try {
-    console.log('[customer/register] Full req.body:', JSON.stringify(req.body));
-    console.log('[customer/register] Stripped fields:', req.strippedFields);
-
-    // Restore tenantId from strippedFields if it was stripped
-    let { email, password, name, tenantId } = req.body || {};
-    if (!tenantId && req.strippedFields?.tenantId) {
-      tenantId = req.strippedFields.tenantId;
-      console.log('[customer/register] Restored tenantId from strippedFields:', tenantId);
-    }
+    // #646: the global stripDangerous middleware deletes `tenantId` from
+    // every request body. The customer-register frontend sends the chosen
+    // org under `registrationTenantId` (a non-stripped name) instead, so
+    // that's the primary field. Fall back to req.strippedFields.tenantId
+    // for any legacy caller that still sends the stripped name.
+    const { email, password, name, registrationTenantId } = req.body || {};
+    let tenantId =
+      registrationTenantId ??
+      req.body?.tenantId ??
+      req.strippedFields?.tenantId;
 
     // Input validation
     if (!email || typeof email !== "string" || !password || typeof password !== "string") {
       return res.status(400).json({ error: "email, password, and registrationTenantId are required" });
     }
 
-    console.log('[customer/register] Received tenantId:', tenantId, 'type:', typeof tenantId);
+    // Coerce stringified numerics (e.g. "3" from a form encoder) to Number
+    // before the typeof check — callers shouldn't have to pre-parse.
+    if (typeof tenantId === "string" && /^\d+$/.test(tenantId)) {
+      tenantId = Number(tenantId);
+    }
 
-    if (!tenantId || typeof tenantId !== "number") {
-      console.log('[customer/register] Validation FAILED - tenantId:', tenantId, 'type:', typeof tenantId);
-      return res.status(400).json({ error: "tenantId must be a valid number" });
+    if (!tenantId || typeof tenantId !== "number" || Number.isNaN(tenantId)) {
+      return res.status(400).json({ error: "registrationTenantId must be a valid number" });
     }
 
     // Password complexity check

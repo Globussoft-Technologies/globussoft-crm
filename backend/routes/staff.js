@@ -30,12 +30,14 @@ const { isCatalogedKey } = require("../lib/wellnessRoleTypes");
 const VALID_ROLES = ["ADMIN", "MANAGER", "USER"];
 // Legacy whitelist — used only when the caller's tenant is non-wellness.
 // Wellness tenants consult the WellnessRoleType catalog instead.
+// PRD_WELLNESS_RBAC DD-5.1: "cashier" added as a valid POS sales role.
 const LEGACY_WELLNESS_ROLES = [
   "doctor",
   "professional",
   "telecaller",
   "helper",
   "stylist",
+  "cashier",
 ];
 
 // Resolve the caller's tenant vertical so we know which validator to run.

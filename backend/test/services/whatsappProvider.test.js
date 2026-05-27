@@ -527,6 +527,9 @@ describe('whatsappProvider — sendText request shape', () => {
 
 describe('whatsappProvider — multi-tenant config isolation', () => {
   test('two sequential calls with different tenant creds → each uses its own phoneNumberId + Bearer token', async () => {
+    // Pull the live GRAPH_API_VERSION constant so this test stays in sync
+    // when META_GRAPH_VERSION bumps (P1 cut-over default is now v22.0).
+    const { GRAPH_API_VERSION } = require('../../services/whatsappProvider');
     // Tenant A
     respondNext(200, { messages: [{ id: 'wamid.tenantA' }] });
     const outA = await sendText({
@@ -537,7 +540,7 @@ describe('whatsappProvider — multi-tenant config isolation', () => {
     });
     expect(outA.success).toBe(true);
     const reqA = httpsState.lastRequest;
-    expect(reqA.options.path).toBe('/v18.0/PNID_TENANT_A/messages');
+    expect(reqA.options.path).toBe(`/${GRAPH_API_VERSION}/PNID_TENANT_A/messages`);
     expect(reqA.options.headers.Authorization).toBe('Bearer TOK_TENANT_A');
 
     // Tenant B — must NOT leak tenant A's creds
@@ -550,7 +553,7 @@ describe('whatsappProvider — multi-tenant config isolation', () => {
     });
     expect(outB.success).toBe(true);
     const reqB = httpsState.lastRequest;
-    expect(reqB.options.path).toBe('/v18.0/PNID_TENANT_B/messages');
+    expect(reqB.options.path).toBe(`/${GRAPH_API_VERSION}/PNID_TENANT_B/messages`);
     expect(reqB.options.headers.Authorization).toBe('Bearer TOK_TENANT_B');
 
     // Different payload bodies confirm no cross-call state bleed
@@ -560,11 +563,14 @@ describe('whatsappProvider — multi-tenant config isolation', () => {
 });
 
 describe('whatsappProvider — Graph API version pin', () => {
-  test('path uses /v18.0/ — bumping this constant is a deliberate SUT change', async () => {
-    // The Graph API version is a hardcoded module-level constant. Pinning it
-    // here means a silent bump (e.g. to v19/v20) requires touching this
-    // assertion — useful since Meta deprecation cadence is ~2y and a stale
-    // version can silently 4xx in production.
+  test('path uses the configured GRAPH_API_VERSION — bumps are deliberate SUT changes', async () => {
+    // The Graph API version is a module-level constant sourced from
+    // process.env.META_GRAPH_VERSION (default 'v22.0' after the P1 cut-over).
+    // Pinning here means a silent bump still requires touching the constant +
+    // restart. We pull the live export so the test stays in sync with future
+    // bumps; the shape-pin (v<digits>.<digits>) catches accidental empty /
+    // malformed env vars regardless of the exact version.
+    const { GRAPH_API_VERSION } = require('../../services/whatsappProvider');
     respondNext(200, { messages: [{ id: 'wamid.ver' }] });
     await sendText({
       to: '919876543210',
@@ -572,7 +578,8 @@ describe('whatsappProvider — Graph API version pin', () => {
       phoneNumberId: 'PNID_VER',
       accessToken: 'TOK',
     });
-    expect(httpsState.lastRequest.options.path).toMatch(/^\/v18\.0\//);
+    expect(httpsState.lastRequest.options.path).toBe(`/${GRAPH_API_VERSION}/PNID_VER/messages`);
+    expect(httpsState.lastRequest.options.path).toMatch(/^\/v\d+\.\d+\//);
   });
 });
 

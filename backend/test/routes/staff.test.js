@@ -51,9 +51,18 @@ prisma.user = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.userRole = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+  create: vi.fn().mockResolvedValue({}),
+};
 prisma.auditLog = {
   create: vi.fn().mockResolvedValue({}),
 };
+// PUT /:id wraps the User.update + UserRole swap in prisma.$transaction.
+// Passthrough so the callback receives `prisma` itself as `tx`, and the
+// mocked tx.user.update / tx.userRole.* hits the same mocks above.
+prisma.$transaction = vi.fn(async (cb) => cb(prisma));
 
 import express from 'express';
 import request from 'supertest';

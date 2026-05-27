@@ -88,7 +88,11 @@ const Login = () => {
             window.location.pathname,
           );
           const destination =
-            parsedTenant?.vertical === "wellness" ? "/wellness" : "/dashboard";
+            parsedTenant?.vertical === "wellness"
+              ? "/wellness"
+              : parsedTenant?.vertical === "travel"
+              ? "/travel"
+              : "/dashboard";
           navigate(destination);
         });
     }
@@ -153,6 +157,26 @@ const Login = () => {
     const configuredLanding =
       data.user?.landingPath || data.user?.primaryRole?.landingPath || null;
     const verticalDefault = verticalDefaultLanding(data.tenant?.vertical);
+    const vertical = data.tenant?.vertical || "generic";
+    // "/dashboard" is the system-wide ADMIN default and the implicit
+    // fallback for any role without an explicit landingPath. For non-
+    // generic tenants (wellness, travel) it's the wrong surface — those
+    // verticals have their own home page. Treat the generic default as
+    // "not really configured" so the vertical-default wins; any
+    // explicitly-customised non-default path (e.g. /wellness/calendar,
+    // /travel/leads) still beats the vertical fallback below.
+    const isGenericDefault =
+      !configuredLanding || configuredLanding === "/dashboard";
+    const effectiveConfigured = isGenericDefault ? null : configuredLanding;
+    // Short-circuit: on non-generic verticals with the generic default,
+    // route to the vertical landing unconditionally. /api/pages/me is a
+    // page-catalog read; vertical landings (/wellness, /travel) aren't
+    // catalogued there (they're hardcoded SPA routes), so gating the
+    // redirect on accessiblePaths.has(verticalDefault) would always
+    // miss and fall through to /dashboard via firstUseful.
+    if (isGenericDefault && vertical !== "generic") {
+      return verticalDefault;
+    }
     try {
       const res = await fetch("/api/pages/me", {
         headers: { Authorization: `Bearer ${data.token}` },
@@ -161,8 +185,8 @@ const Login = () => {
         const body = await res.json();
         const pages = Array.isArray(body?.pages) ? body.pages : [];
         const accessiblePaths = new Set(pages.map((p) => p.path));
-        if (configuredLanding && accessiblePaths.has(configuredLanding)) {
-          return configuredLanding;
+        if (effectiveConfigured && accessiblePaths.has(effectiveConfigured)) {
+          return effectiveConfigured;
         }
         const firstUseful = pages.find((p) => p.path !== "/home");
         return firstUseful?.path || verticalDefault;
@@ -171,7 +195,7 @@ const Login = () => {
       // Network failure during resolution — fall through to the safer of
       // (configured landing) or the vertical-aware default below.
     }
-    return configuredLanding || verticalDefault;
+    return effectiveConfigured || verticalDefault;
   };
 
   const finalizeLogin = async (data) => {

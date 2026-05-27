@@ -69,6 +69,14 @@
  */
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 
+// Clear SENDGRID_API_KEY BEFORE the router is required — routes/email.js
+// captures `const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY` at module
+// load time, and `sendSendGrid()` falls back to the captured constant via
+// `process.env.SENDGRID_API_KEY || SENDGRID_API_KEY`. A leftover value
+// from .env (auto-loaded by @prisma/client) would survive `delete process.env.*`
+// in beforeEach and poison the "no SENDGRID_API_KEY → reason 'no_api_key'" branch.
+vi.hoisted(() => { delete process.env.SENDGRID_API_KEY; });
+
 import prisma from '../../lib/prisma.js';
 import { createRequire } from 'node:module';
 

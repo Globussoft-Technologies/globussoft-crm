@@ -126,6 +126,7 @@ import { fetchApi } from "../utils/api";
 import { launchAdsGptAs, ADSGPT_DASHBOARD } from "../utils/adsgpt";
 import { launchCallifiedSSO } from "../utils/callified";
 import { useNotify } from "../utils/notify";
+import { useActiveSubBrand } from "../utils/subBrand";
 import { usePermissions } from "../hooks/usePermissions";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
@@ -142,10 +143,21 @@ const Sidebar = ({
 }) => {
   const { user, tenant } = useContext(AuthContext);
   const notify = useNotify();
+  const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand();
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "MANAGER";
   const wellnessRole = user?.wellnessRole || null;
+  const subBrandAccess = (() => {
+    if (isAdmin) return null;
+    const raw = user?.subBrandAccess;
+    if (!raw) return null;
+    try {
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr) || arr.length === 0) return null;
+      return arr;
+    } catch { return null; }
+  })();
   // RBAC: fine-grained permission gate for new sidebar entries. Legacy
   // adminOnly / managerOnly / wellnessRoles continue to work as before;
   // requiredPermission stacks on top — only hides an entry once permissions
@@ -157,6 +169,7 @@ const Sidebar = ({
     permissions,
   } = usePermissions();
   const isWellness = tenant?.vertical === "wellness";
+  const isTravel = tenant?.vertical === "travel";
   const location = useLocation();
 
   // T2.1: ref to the <aside> so the focus-trap effect below can locate
@@ -758,6 +771,17 @@ const Sidebar = ({
                 sectionLabelStyle,
                 counts,
                 accessiblePages,
+              })
+            : isTravel
+            ? renderTravelNav({
+                Link,
+                isAdmin,
+                isManager,
+                sectionLabelStyle,
+                counts,
+                subBrandAccess,
+                activeSubBrand,
+                setActiveSubBrand,
               })
             : renderGenericNav({
                 Link,

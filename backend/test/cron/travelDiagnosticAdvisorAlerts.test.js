@@ -29,6 +29,10 @@ beforeAll(() => {
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
   prisma.activity = { findFirst: vi.fn() };
   prisma.task = { findFirst: vi.fn() };
+  // Notification.userId is non-nullable, so the cron resolves an
+  // ADMIN/MANAGER/any-user recipient via prisma.user.findFirst before
+  // creating the alert. Mock here so the resolver doesn't hit the real DB.
+  prisma.user = { findFirst: vi.fn() };
   // subBrandConfig resolver pull — Q9 cut-over plumbing reads tenant
   // .subBrandConfigJson once per pass to compute the would-route wabaId
   // logged at escalation time.
@@ -41,6 +45,7 @@ beforeEach(() => {
   prisma.notification.create.mockReset();
   prisma.activity.findFirst.mockReset();
   prisma.task.findFirst.mockReset();
+  prisma.user.findFirst.mockReset();
   prisma.tenant.findUnique.mockReset();
 
   prisma.travelDiagnostic.findMany.mockResolvedValue([]);
@@ -48,6 +53,11 @@ beforeEach(() => {
   prisma.notification.create.mockResolvedValue({ id: 1 });
   prisma.activity.findFirst.mockResolvedValue(null);
   prisma.task.findFirst.mockResolvedValue(null);
+  // Default recipient lookup — first ADMIN match found. The cron
+  // short-circuits on the first non-null result so a single default is
+  // enough for all the happy-path tests; tests that need to vary by
+  // role (e.g. "no users seeded") can override below.
+  prisma.user.findFirst.mockResolvedValue({ id: 1 });
   prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
 });
 
@@ -243,7 +253,11 @@ describe('cron/travelDiagnosticAdvisorAlerts — runDiagnosticAlertsForTenant', 
     expect(arg.select).toEqual({ subBrandConfigJson: true });
   });
 
-  test('Task outreach query uses OR clause covering contactId + relatedToType="contact"', async () => {
+  test('Task outreach query scopes to tenantId + contactId + createdAt > diagnostic.createdAt', async () => {
+    // The Task model in this codebase exposes only a direct contactId FK
+    // (no relatedToId / relatedToType polymorphic columns) — see the
+    // comment in cron/travelDiagnosticAdvisorAlerts.js. The query is a
+    // plain { tenantId, contactId, createdAt: { gt } } shape.
     const halfHourAgo = new Date(Date.now() - 35 * 60 * 1000);
     prisma.travelDiagnostic.findMany.mockResolvedValue([
       { id: 100, subBrand: 'rfu', contactId: 250, classificationLabel: 'X', recommendedTier: 'entry', createdAt: halfHourAgo },
@@ -254,14 +268,7 @@ describe('cron/travelDiagnosticAdvisorAlerts — runDiagnosticAlertsForTenant', 
     expect(prisma.task.findFirst).toHaveBeenCalledTimes(1);
     const where = prisma.task.findFirst.mock.calls[0][0].where;
     expect(where.tenantId).toBe(1);
-    expect(Array.isArray(where.OR)).toBe(true);
-    // OR must include both the contactId direct match AND the polymorphic relatedToId/relatedToType
-    const orShapes = where.OR.map((c) => Object.keys(c).sort().join(','));
-    expect(orShapes).toContain('contactId');
-    const polymorphic = where.OR.find((c) => 'relatedToId' in c);
-    expect(polymorphic).toBeDefined();
-    expect(polymorphic.relatedToId).toBe(250);
-    expect(polymorphic.relatedToType).toBe('contact');
+    expect(where.contactId).toBe(250);
     // Window guard: createdAt strictly AFTER the diagnostic timestamp
     expect(where.createdAt).toHaveProperty('gt');
   });

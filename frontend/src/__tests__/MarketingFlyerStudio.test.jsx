@@ -144,6 +144,12 @@ beforeEach(() => {
   notifyObj.info.mockReset();
   notifyObj.success.mockReset();
   fetchApiMock.mockReset();
+  // Default fetchApi resolves to null so untargeted GETs (e.g.
+  // /api/auth/me/permissions called by usePermissions inside RoleGuard)
+  // don't trip "Cannot read properties of undefined (reading 'then')".
+  // Per-test `mockResolvedValueOnce` calls take precedence over this
+  // default for the targeted GET/POST under test.
+  fetchApiMock.mockResolvedValue(null);
   setSearchParamsMock.mockReset();
   mockSearchParamsString = '';
 });
@@ -198,24 +204,33 @@ describe('MarketingFlyerStudio — SHELL surface', () => {
     }
   });
 
-  it('RoleGuard gate — USER role renders the lock panel; ADMIN/MANAGER render the studio', () => {
-    // USER role: lock panel renders, studio chrome absent.
+  it('RoleGuard gate — USER role blocks the studio; ADMIN/MANAGER render the studio', async () => {
+    // RoleGuard at this mount-point is strict-mode (no lockedInPlace) —
+    // production App.jsx wraps this route as
+    //   <RoleGuard allow={["ADMIN","MANAGER"]} feature="…">
+    // so USER renders a <Navigate to="/dashboard"/> (effectively null in
+    // a MemoryRouter without that target route mounted). Assert the
+    // studio chrome is absent for USER and present for ADMIN/MANAGER.
     const { unmount } = renderStudio({ role: 'USER', wrapInRoleGuard: true });
-    expect(screen.getByTestId('role-guard-locked-panel')).toBeTruthy();
+    // Studio chrome absent — guard short-circuited the render.
+    await waitFor(() => {
+      expect(screen.queryByTestId('marketing-flyer-studio')).toBeNull();
+    });
     expect(screen.queryByRole('heading', { level: 1, name: /marketing flyer studio/i })).toBeNull();
-    expect(screen.queryByTestId('marketing-flyer-studio')).toBeNull();
     unmount();
 
-    // MANAGER role: studio mounts, lock panel absent.
+    // MANAGER role: studio mounts.
     const managerRender = renderStudio({ role: 'MANAGER', wrapInRoleGuard: true });
-    expect(screen.getByTestId('marketing-flyer-studio')).toBeTruthy();
-    expect(screen.queryByTestId('role-guard-locked-panel')).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId('marketing-flyer-studio')).toBeTruthy();
+    });
     managerRender.unmount();
 
-    // ADMIN role: studio mounts, lock panel absent.
+    // ADMIN role: studio mounts.
     renderStudio({ role: 'ADMIN', wrapInRoleGuard: true });
-    expect(screen.getByTestId('marketing-flyer-studio')).toBeTruthy();
-    expect(screen.queryByTestId('role-guard-locked-panel')).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId('marketing-flyer-studio')).toBeTruthy();
+    });
   });
 
   it('renders without throwing when activeSubBrand is null (no card highlighted)', () => {

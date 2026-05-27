@@ -491,11 +491,12 @@ export default function CalendarGrid() {
         </div>
       </header>
 
-      {loading && <div>Loading…</div>}
+      {loading && <div data-testid="calendar-loading">Loading…</div>}
 
       {/* Wave 11 Agent GG: red banner when the selected day has any holidays. */}
       {!loading && holidays.length > 0 && (
         <div
+          data-testid="holiday-banner"
           className="glass"
           style={{
             padding: '0.85rem 1rem',

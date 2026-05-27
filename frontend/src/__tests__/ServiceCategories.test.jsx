@@ -105,11 +105,14 @@ vi.mock('../utils/api', () => ({
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
+// confirm() is spied per-test (mutable resolved value) so the delete flow
+// can test both branches without rebuilding the module-level notify object.
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyObj = {
   error: notifyError,
   info: notifyInfo,
   success: notifySuccess,
-  confirm: () => Promise.resolve(true),
+  confirm: notifyConfirm,
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -168,16 +171,15 @@ function renderPage() {
   );
 }
 
-let confirmSpy;
 beforeEach(() => {
   fetchApiMock.mockReset();
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
-  confirmSpy = undefined;
-});
-afterEach(() => {
-  if (confirmSpy) confirmSpy.mockRestore();
+  notifyConfirm.mockReset();
+  // Default branch: confirm() resolves true so most tests don't have to
+  // re-stub on the happy path.
+  notifyConfirm.mockImplementation(() => Promise.resolve(true));
 });
 
 describe('<ServiceCategories /> — page chrome', () => {
@@ -419,14 +421,12 @@ describe('<ServiceCategories /> — edit prefill + PUT', () => {
   });
 });
 
-describe('<ServiceCategories /> — delete (native window.confirm)', () => {
-  it('confirm()=true → DELETE /api/wellness/service-categories/:id + notify.success', async () => {
+describe('<ServiceCategories /> — delete (notify.confirm gate)', () => {
+  it('notify.confirm()=true → DELETE /api/wellness/service-categories/:id + notify.success', async () => {
     installFetchMock();
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    notifyConfirm.mockImplementation(() => Promise.resolve(true));
     renderPage();
     await waitFor(() => {
-      // PRP Therapy is unique (root row name only; no other category has PRP
-      // as parent so the string doesn't echo into a Parent cell).
       expect(screen.getByText('PRP Therapy')).toBeInTheDocument();
     });
     // Delete buttons use title="Delete"; pick the first (Hair Restoration).
@@ -434,9 +434,14 @@ describe('<ServiceCategories /> — delete (native window.confirm)', () => {
     expect(deleteButtons.length).toBeGreaterThanOrEqual(3);
     fireEvent.click(deleteButtons[0]);
 
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/Delete "Hair Restoration"/),
-    );
+    // SUT calls notify.confirm({ title, message, ... }) — pin the message
+    // text without binding to native window.confirm.
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalled();
+    });
+    const arg = notifyConfirm.mock.calls[0][0];
+    expect(arg.message || '').toMatch(/Delete "Hair Restoration"/);
+
     await waitFor(() => {
       const delCall = fetchApiMock.mock.calls.find(
         ([u, opts]) =>
@@ -450,18 +455,18 @@ describe('<ServiceCategories /> — delete (native window.confirm)', () => {
     );
   });
 
-  it('confirm()=false → no DELETE fired + no notify.success', async () => {
+  it('notify.confirm()=false → no DELETE fired + no notify.success', async () => {
     installFetchMock();
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    notifyConfirm.mockImplementation(() => Promise.resolve(false));
     renderPage();
     await waitFor(() => {
-      // PRP Therapy is unique (root row name only; no other category has PRP
-      // as parent so the string doesn't echo into a Parent cell).
       expect(screen.getByText('PRP Therapy')).toBeInTheDocument();
     });
     const deleteButtons = screen.getAllByTitle('Delete');
     fireEvent.click(deleteButtons[0]);
-    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalled();
+    });
     // Microtask wait — make sure no async DELETE sneaks through.
     await Promise.resolve();
     const delCall = fetchApiMock.mock.calls.find(

@@ -295,6 +295,7 @@ jobs:
             tests/pos-sale-finalize-api.spec.js \
             tests/travel-quote-lines-api.spec.js \
             tests/travel-idor-cross-tenant-api.spec.js \
+            tests/wellness-role-types-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

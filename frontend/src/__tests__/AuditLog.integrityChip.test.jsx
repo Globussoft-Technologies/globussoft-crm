@@ -32,7 +32,11 @@ vi.mock('../utils/api', () => ({
 // each render invalidates the callback identity → useEffect re-fires →
 // setVerifying loops). One object, vi.fn() handles, for the whole run.
 const notifyError = vi.fn();
-const notifyObj = { error: notifyError, info: vi.fn(), success: vi.fn(), confirm: vi.fn() };
+// confirm default-resolves true so destructive-action paths (Run backfill)
+// auto-accept; the old test stubbed window.confirm — the page now uses
+// notify.confirm via useNotify, so we mock at the hook level instead.
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
+const notifyObj = { error: notifyError, info: vi.fn(), success: vi.fn(), confirm: notifyConfirm };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
@@ -190,8 +194,8 @@ describe('<AuditLog /> — hash-chain integrity chip (#558)', () => {
       return Promise.resolve({ logs: [], pages: 1, total: 0 });
     });
 
-    // Stub window.confirm so the "Continue?" prompt auto-accepts.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    // notifyConfirm default-resolves true (see top-of-file mock), so the
+    // "Continue?" prompt auto-accepts.
 
     renderAuditLog();
     await waitFor(() => {
@@ -207,8 +211,6 @@ describe('<AuditLog /> — hash-chain integrity chip (#558)', () => {
       expect(screen.getByTestId('integrity-chip-ok')).toBeInTheDocument();
     });
     expect(screen.getByTestId('integrity-chip-ok').textContent).toMatch(/193 rows/);
-
-    confirmSpy.mockRestore();
   });
 
   it('non-admin (USER role): integrity row + Verify button are NOT rendered', async () => {

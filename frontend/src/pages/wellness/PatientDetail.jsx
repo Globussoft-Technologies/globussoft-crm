@@ -2692,7 +2692,13 @@ function MembershipsTab({ patient, services }) {
   };
 
   const cancel = async (m) => {
-    if (!confirm(`Cancel "${m.plan?.name || 'membership'}"? Remaining entitlements will be void.`)) return;
+    const ok = await notify.confirm({
+      title: 'Cancel membership',
+      message: `Cancel "${m.plan?.name || 'membership'}"? Remaining entitlements will be void.`,
+      confirmText: 'Cancel membership',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/memberships/${m.id}/cancel`, {
         method: 'POST',

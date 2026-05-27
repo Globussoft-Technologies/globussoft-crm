@@ -111,8 +111,13 @@ export default function ProductCategories() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm("Delete this category? Products will become uncategorized."))
-      return;
+    const ok = await notify.confirm({
+      title: 'Delete category',
+      message: 'Delete this category? Products will become uncategorized.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
 
     try {
       await fetchApi(`/api/wellness/product-categories/${id}`, {

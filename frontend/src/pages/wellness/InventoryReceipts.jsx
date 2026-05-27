@@ -126,16 +126,24 @@ export default function InventoryReceipts() {
   };
 
   const remove = async (r) => {
-    if (!window.confirm(`Delete receipt ${r.receiptNumber}?\n\nThis will subtract ${r.quantity} ${r.product?.name || 'units'} from stock and remove the row permanently.`)) return;
+    const ok = await notify.confirm({
+      title: 'Delete receipt',
+      message: `Delete receipt ${r.receiptNumber}?\n\nThis will subtract ${r.quantity} ${r.product?.name || 'units'} from stock and remove the row permanently.`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/inventory/receipts/${r.id}`, { method: 'DELETE', silent: true });
       notify.success(`Deleted ${r.receiptNumber}.`);
       load();
     } catch (err) {
       if (err?.status === 409 && (err.code === 'RECEIPT_CONSUMED' || err.code === 'WOULD_OVERDRAW')) {
-        const fallback = window.confirm(
-          `${err.message}\n\nReverse this receipt instead? That creates a stock-correcting Adjustment of -${r.quantity} ${r.product?.name || ''} and keeps the receipt for audit.`,
-        );
+        const fallback = await notify.confirm({
+          title: 'Reverse receipt instead?',
+          message: `${err.message}\n\nReverse this receipt instead? That creates a stock-correcting Adjustment of -${r.quantity} ${r.product?.name || ''} and keeps the receipt for audit.`,
+          confirmText: 'Reverse',
+        });
         if (fallback) {
           try {
             await fetchApi(`/api/wellness/inventory/receipts/${r.id}/reverse`, { method: 'POST', body: JSON.stringify({}) });

@@ -582,7 +582,7 @@ const Sidebar = ({
         const message = err.message?.includes("not yet available")
           ? "Callified integration will be available soon. Please check back later."
           : "Unable to open Callified. Please try again.";
-        alert(message);
+        notify.error(message);
       } finally {
         setCallifiedLoading(false);
       }
@@ -897,377 +897,86 @@ function renderWellnessNav({
   counts = {},
   accessiblePages = [],
 }) {
+  // Sidebar is rendered ENTIRELY from `accessiblePages` — the per-user
+  // intersection of the server's page catalog and their effective RBAC
+  // permissions returned by /api/pages/me. Editing a role's permissions in
+  // RolesAdmin invalidates the cache + dispatches `sidebar:pages-changed`,
+  // so the sidebar updates without a page reload and with zero JSX edits.
+  //
+  // No hardcoded adminOnly / managerOnly / wellnessRoles gating here — the
+  // backend has already filtered the list by permission. The only role-
+  // sensitive UI bits left are:
+  //   • hideForAdminTier — catalog-level UX flag to hide clinical-day-to-
+  //     day surfaces from users who already see the Admin category.
+  //   • AdsGPT / Callified — external integrations, kept visible only for
+  //     admin/manager so doctors / nurses / telecallers don't see them in
+  //     their nav.
+  void hasPermission;
+  void permissionsReady;
   const labelStyle = sectionLabelStyle || sectionLabel;
+
+  // Group accessible pages by category for ordered rendering.
+  const byCategory = {};
+  for (const page of accessiblePages) {
+    if (!page || !page.category || !page.path) continue;
+    if (page.hideForAdminTier && isAdmin) continue;
+    if (!byCategory[page.category]) byCategory[page.category] = [];
+    byCategory[page.category].push(page);
+  }
+
+  const renderPage = (page) => {
+    const Icon = PAGE_ICON_BY_PATH[page.path] || LayoutDashboard;
+    const countKey = PATH_COUNT_KEY[page.path];
+    const matchPaths = PATH_MATCH_ALIASES[page.path] || [];
+    return (
+      <Link
+        key={page.path}
+        to={page.path}
+        icon={Icon}
+        label={page.label}
+        count={countKey ? counts[countKey] : undefined}
+        matchPaths={matchPaths}
+      />
+    );
+  };
+
+  const renderCategory = (category, { showHeader } = { showHeader: true }) => {
+    const items = byCategory[category];
+    if (!items || items.length === 0) return null;
+    return (
+      <Fragment key={category}>
+        {showHeader && <div style={labelStyle}>{category}</div>}
+        {items.map(renderPage)}
+      </Fragment>
+    );
+  };
+
   return (
     <>
-      {/* Daily essentials — Owner Dashboard + Recommendations are management
-          views over org-wide P&L / pending recommendation cards (#207/#216).
-          Clinical staff (doctor/professional/telecaller/helper) should not see
-          them in the nav. AdsGPT and Callified are external tools the whole
-          team uses, so they stay visible for everyone. */}
-      <Link
-        to="/wellness"
-        icon={LayoutDashboard}
-        label="Owner Dashboard"
-        managerOnly
-      />
-      <Link
-        to="/wellness/recommendations"
-        icon={Sparkles}
-        label="Recommendations"
-        managerOnly
-      />
-      <AdsGptLink icon={Sparkles} label="AdsGPT" />
-      <CallifiedLink icon={PhoneCall} label="Callified" />
+      {/* Core + Manager render at the top with no section header — they're
+          the landing-area items. Manager-tier dashboards (Owner Dashboard,
+          Recommendations) only appear when the user has reports.read, so
+          regular users (doctors, nurses, telecallers) won't see them even
+          though they're grouped near the top. */}
+      {renderCategory("Core", { showHeader: false })}
+      {renderCategory("Manager", { showHeader: false })}
 
-      {/* Clinical — Patients, Calendar, Waitlist visible to clinical staff only
-          (doctors, professionals, helpers). Regular users (with no wellnessRole)
-          cannot access these features, so we hide them from the sidebar.
-          Service Catalog is a pricing/duration config — clinical staff read it
-          but only managers edit it, so we hide the nav link for non-management. */}
-      <div style={labelStyle}>Clinical</div>
-      <Link
-        to="/wellness/patients"
-        icon={HeartPulse}
-        label="Patients"
-        wellnessRoles={["doctor", "professional", "helper"]}
-      />
-      <Link
-        to="/wellness/calendar"
-        icon={Calendar}
-        label="Calendar"
-        wellnessRoles={["doctor", "professional", "helper"]}
-      />
-      <Link
-        to="/wellness/waitlist"
-        icon={Clock}
-        label="Waitlist"
-        wellnessRoles={["doctor", "professional", "helper"]}
-      />
-      <Link
-        to="/wellness/services"
-        icon={Stethoscope}
-        label="Service Catalog"
-        managerOnly
-      />
-      {/* Wave 7 Agent A — ServiceCategory hierarchical taxonomy (PRD Gap §10 #1) */}
-      <Link
-        to="/wellness/service-categories"
-        icon={Stethoscope}
-        label="Service Categories"
-        managerOnly
-      />
-      {/* Wave 7 Agent A — Drug catalogue for prescription writing (PRD Gap §10 #2) */}
-      <Link
-        to="/wellness/drugs"
-        icon={Stethoscope}
-        label="Drug Catalogue"
-        managerOnly
-      />
-      {/* Wave 11 Agent EE: Memberships catalog — manager+ only (mirrors Service Catalog) */}
-      <Link
-        to="/wellness/memberships"
-        icon={Crown}
-        label="Memberships"
-        managerOnly
-      />
-      <Link
-        to="/wellness/visits"
-        icon={HeartPulse}
-        label="Visits"
-        managerOnly
-      />
-      {/* Wave 11 Agent GG — Resource availability (rooms / holidays /
-          working hours). Manager+ only. */}
-      <Link
-        to="/wellness/resources"
-        icon={Building2}
-        label="Resources"
-        managerOnly
-      />
-      <Link
-        to="/wellness/holidays"
-        icon={Calendar}
-        label="Holidays"
-        managerOnly
-      />
-      <Link
-        to="/wellness/working-hours"
-        icon={Clock}
-        label="Working Hours"
-        managerOnly
-      />
+      {/* External integrations: admin/manager only. Doctors, nurses,
+          telecallers, etc. don't need AdsGPT (marketing tool) or Callified
+          (call-centre console) in their day-to-day nav — they land on the
+          role-aware /home dashboard instead. */}
+      {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
+      {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
 
-      {/* Wave 2 Agent JJ — Staff Attendance + Leave Management. */}
-      <div style={labelStyle}>Staff</div>
-      <Link to="/wellness/attendance" icon={Clock} label="Attendance" />
-      <Link to="/wellness/leave" icon={Calendar} label="Leave" />
-
-      {/* Lead-to-revenue */}
-      <div style={labelStyle}>Leads & Revenue</div>
-      <Link
-        to="/inbox"
-        icon={InboxIcon}
-        label="Unified Inbox"
-        count={counts.inbox}
-      />
-      {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
-      <Link
-        to="/wellness/whatsapp"
-        icon={MessageSquare}
-        label="WhatsApp Threads"
-      />
-      {/* Telecaller Queue: visible to wellnessRole=telecaller and to
-          managers/admins for oversight. Plain users (and clinical staff
-          without the telecaller wellnessRole) saw a 403 toast on every
-          load, so the link is hidden for them — matches the server's
-          verifyWellnessRole(["telecaller","admin","manager"]) gate on
-          /api/wellness/telecaller/queue + /telecaller/dispose. */}
-      <Link
-        to="/wellness/telecaller"
-        icon={PhoneCall}
-        label="Telecaller Queue"
-        wellnessRoles={["telecaller"]}
-      />
-      <Link
-        to="/leads"
-        icon={UserPlus}
-        label="All Leads"
-        managerOnly
-        count={counts.leads}
-      />
-      <Link
-        to="/converted-leads"
-        icon={UserPlus}
-        label="Converted Leads"
-        managerOnly
-      />
-      <Link
-        to="/callified-data"
-        icon={PhoneCall}
-        label="Callified Data"
-        managerOnly
-      />
-      <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} />
-      <Link
-        to="/marketplace-leads"
-        icon={ShoppingBag}
-        label="Marketplace Leads"
-        managerOnly
-        matchPaths={["/marketplace"]}
-      />
-      <Link to="/lead-routing" icon={Send} label="Routing Rules" managerOnly />
-
-      {/* Money — clinic-side, in INR for Indian wellness tenants */}
-      <div style={labelStyle}>Finance</div>
-      {/* Wave 2 Agent II: POS / "New Sale" — open shifts, ring up cash-and-
-          carry sales, close shifts. All staff can use it (backend gates
-          to wellnessRole admin/manager/doctor/professional/telecaller/helper). */}
-      <Link to="/wellness/pos" icon={Calculator} label="Point of Sale" />
-      <Link to="/invoices" icon={Receipt} label="Invoices" />
-      <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
-      <Link to="/expenses" icon={DollarSign} label="Expenses" />
-      <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
-      {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback (manager+) */}
-      <Link
-        to="/wellness/wallet"
-        icon={WalletIcon}
-        label="Patient Wallets"
-        managerOnly
-      />
-      <Link
-        to="/wellness/giftcards"
-        icon={Gift}
-        label="Gift Cards"
-        managerOnly
-      />
-      <Link
-        to="/wellness/coupons"
-        icon={TicketPercent}
-        label="Coupons"
-        managerOnly
-      />
-      <Link
-        to="/wellness/cashback-rules"
-        icon={Coins}
-        label="Cashback Rules"
-        managerOnly
-      />
-
-      {/* Marketing — clinic-side comms (ad campaigns live in AdsGPT). All items are
-          managerOnly, so the whole section is hidden for plain users — otherwise the
-          header rendered as an orphan with no children (#107). */}
-      {isManager && (
-        <>
-          <div style={labelStyle}>Marketing</div>
-          <Link
-            to="/marketing"
-            icon={Send}
-            label="SMS / Email Blasts"
-            managerOnly
-          />
-          <Link
-            to="/sequences"
-            icon={Network}
-            label="Drip Sequences"
-            managerOnly
-          />
-          <Link
-            to="/landing-pages"
-            icon={PanelTop}
-            label="Landing Pages"
-            managerOnly
-          />
-        </>
-      )}
-
-      {/* Reports — wellness-tuned, generic CRM reports removed. Same orphan-header
-          fix as Marketing above. */}
-      {isManager && (
-        <>
-          <div style={labelStyle}>Reports</div>
-          <Link
-            to="/wellness/reports"
-            icon={BarChart3}
-            label="P&L + Attribution"
-            managerOnly
-          />
-          <Link
-            to="/wellness/per-location"
-            icon={Building2}
-            label="Per-Location"
-            managerOnly
-          />
-          <Link
-            to="/wellness/loyalty"
-            icon={Award}
-            label="Loyalty + Referrals"
-            managerOnly
-          />
-          <Link
-            to="/surveys"
-            icon={ClipboardList}
-            label="Patient Surveys"
-            managerOnly
-          />
-          <Link
-            to="/knowledge-base"
-            icon={BookOpen}
-            label="Knowledge Base"
-            managerOnly
-          />
-        </>
-      )}
-
-      {/* Admin */}
-      {isAdmin && (
-        <>
-          <div style={labelStyle}>Admin</div>
-          <Link
-            to="/wellness/locations"
-            icon={Building2}
-            label="Locations"
-            adminOnly
-          />
-          {/* Wave 11 Agent HH — Inventory backbone admin entries.
-              Categories + Vendors are config; Receipts/Adjustments are the
-              operational ledger surfaces; Auto-consumption is the rules engine. */}
-          <div style={labelStyle}>Inventory</div>
-          <Link
-            to="/wellness/product-categories"
-            icon={Layers}
-            label="Product Categories"
-            managerOnly
-          />
-          <Link
-            to="/wellness/products"
-            icon={Package}
-            label="Products"
-            managerOnly
-          />
-          <Link
-            to="/wellness/vendors"
-            icon={Truck}
-            label="Vendors"
-            managerOnly
-          />
-          <Link
-            to="/wellness/inventory-receipts"
-            icon={ArrowDownToLine}
-            label="Receipts"
-            managerOnly
-          />
-          <Link
-            to="/wellness/inventory-adjustments"
-            icon={Receipt}
-            label="Adjustments"
-            managerOnly
-          />
-          <Link
-            to="/wellness/auto-consumption-rules"
-            icon={Recycle}
-            label="Auto-consumption"
-            managerOnly
-          />
-          <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
-          {/* RBAC role + permission admin. Shown to anyone with `roles.read`
-              granted via RBAC (typically ADMIN). The page itself rechecks. */}
-          <Link
-            to="/settings/roles"
-            icon={ShieldCheck}
-            label="Roles"
-            requiredPermission={{ module: "roles", action: "read" }}
-          />
-          {/* PRD Gap §1.5 / §1.6 — wellness admins also manage payroll. */}
-          <Link
-            to="/commission-profiles"
-            icon={Award}
-            label="Commission Profiles"
-            adminOnly
-          />
-          <Link
-            to="/revenue-goals"
-            icon={Target}
-            label="Revenue Goals"
-            adminOnly
-          />
-          <Link to="/channels" icon={Radio} label="Channels" adminOnly />
-          <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
-          <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
-          <Link to="/settings" icon={Settings} label="Settings" adminOnly />
-        </>
-      )}
-
-      {!isAdmin && isManager && (
-        <>
-          <div style={labelStyle}>Settings</div>
-          <Link to="/settings" icon={Settings} label="Settings" />
-        </>
-      )}
-
-      {/* User Appointments — only for regular users, not admin/manager */}
-      {!isAdmin && !isManager && (
-        <>
-          <div style={labelStyle}>Appointments</div>
-          <Link
-            to="/wellness/book-appointment"
-            icon={Calendar}
-            label="Book Appointment"
-          />
-        </>
-      )}
-
-      {/* User Settings — only for regular users, not admin/manager */}
-      {!isAdmin && !isManager && (
-        <>
-          <div style={labelStyle}>User</div>
-          <Link
-            to="/notification-settings"
-            icon={Settings}
-            label="Notification Settings"
-          />
-        </>
-      )}
+      {/* Remaining categories — order driven by WELLNESS_CATEGORY_ORDER so
+          a new catalog entry slots into the right section automatically.
+          WELLNESS_HEADERLESS_CATEGORIES is the set already rendered above
+          (Core / Manager); everything else gets its category name as the
+          section header. Empty categories (user has no accessible pages
+          in them) collapse silently. */}
+      {WELLNESS_CATEGORY_ORDER
+        .filter((cat) => !WELLNESS_HEADERLESS_CATEGORIES.has(cat))
+        .map((cat) => renderCategory(cat, { showHeader: true }))}
     </>
   );
 }

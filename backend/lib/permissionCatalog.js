@@ -90,6 +90,16 @@ const PERMISSION_CATALOG = {
 
   patients: ['read', 'write', 'update', 'delete', 'export', 'manage'],
   appointments: ['read', 'write', 'update', 'delete', 'export'],
+  // `calendar` is intentionally separate from `appointments` so admins
+  // can grant view-only access to the Calendar day-grid surface
+  // (`calendar.read`) without also unlocking the Appointments list,
+  // Book Appointment form, and My Appointments page — all gated on
+  // `appointments.read` / `appointments.write`. Calendar mutations
+  // (drag-to-reschedule, slot-click-to-book, right-click-cancel) gate
+  // on `calendar.write`. The backend's PHI gates accept either
+  // permission set for the underlying /api/wellness/visits endpoint so
+  // either grant flow works end-to-end.
+  calendar: ['read', 'write'],
   services: ['read', 'write', 'update', 'delete'],
   prescriptions: ['read', 'write', 'update', 'delete', 'export'],
   consents: ['read', 'write', 'update', 'delete'],
@@ -157,7 +167,7 @@ const PERMISSION_DOMAINS = [
   },
   {
     domain: 'Wellness Clinical',
-    modules: ['patients', 'appointments', 'services', 'prescriptions', 'consents', 'visits'],
+    modules: ['patients', 'appointments', 'calendar', 'services', 'prescriptions', 'consents', 'visits'],
   },
   {
     domain: 'Wellness Inventory',

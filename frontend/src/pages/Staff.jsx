@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X, UserPlus } from 'lucide-react';
+import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X, UserPlus, Search, Filter as FilterIcon } from 'lucide-react';
 import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { formatDate } from '../utils/date';
@@ -77,8 +77,9 @@ export default function Staff() {
   // so the click would 403, but the UI shouldn't dangle the button at
   // all. Hide both the Delete control and the inline RBAC role select
   // unless the viewer is an actual ADMIN.
-  const { user } = useContext(AuthContext) || {};
+  const { user, tenant } = useContext(AuthContext) || {};
   const canManageStaff = user?.role === 'ADMIN';
+  const isWellness = tenant?.vertical === 'wellness';
   // #618 + RBAC: the Permissions button is gated on the granular roles.read
   // permission (not the legacy ADMIN role), so a custom non-ADMIN role with
   // roles.read granted can still view permission sheets. Falls through to
@@ -89,6 +90,17 @@ export default function Staff() {
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState(null);
+  // Free-text search across name + email. Trimmed + lower-cased at match time.
+  const [searchQuery, setSearchQuery] = useState('');
+  // 'all' | 'active' | 'inactive'. Deactivated staff are visible by default in
+  // the table (with the Inactive badge), so the default here stays 'all'.
+  const [statusFilter, setStatusFilter] = useState('all');
+  // Wellness vertical only. '' = no filter; otherwise filters by wellnessRole key.
+  const [wellnessRoleFilter, setWellnessRoleFilter] = useState('');
+  // Filter dropdown open state + click-outside ref so the panel closes when
+  // the user clicks elsewhere on the page.
+  const [filterOpen, setFilterOpen] = useState(false);
+  const filterPanelRef = useRef(null);
   // #618 — edit-modal state. null when closed; { id, name, email, role,
   // wellnessRole } when an admin clicked Edit on a row.
   const [editing, setEditing] = useState(null);
@@ -106,13 +118,25 @@ export default function Staff() {
   // any custom role (Doctor / Nurse / Receptionist / Telecaller / …)
   // without going through a separate Roles & Permissions step.
   const [availableRoles, setAvailableRoles] = useState([]);
+  // Per-tenant wellness role catalog (doctor / professional / nurse / …
+  // plus any custom rows the admin added via Settings → Wellness Role
+  // Types). Populates the "Wellness role" dropdown in both modals so
+  // POST /api/staff doesn't reject a hardcoded value that isn't in the
+  // tenant's catalog (the cause of the "Unknown wellness role for this
+  // tenant" toast on freshly-signed-up wellness tenants).
+  const [wellnessRoleTypes, setWellnessRoleTypes] = useState([]);
   // Staff availability tracking
   const [availDate, setAvailDate] = useState(new Date());
   const [availability, setAvailability] = useState([]);
   const [availLoading, setAvailLoading] = useState(false);
   const [showAvailability, setShowAvailability] = useState(false);
 
-  useEffect(() => { loadStaff(); loadCommissionProfiles(); loadAvailableRoles(); }, []);
+  useEffect(() => {
+    loadStaff();
+    loadCommissionProfiles();
+    loadAvailableRoles();
+    if (isWellness) loadWellnessRoleTypes();
+  }, [isWellness]);
 
   // Load availability when date changes or showAvailability is toggled
   useEffect(() => {
@@ -120,6 +144,18 @@ export default function Staff() {
       loadAvailability();
     }
   }, [availDate, showAvailability]);
+
+  // Close the filter dropdown when the user clicks anywhere outside it.
+  useEffect(() => {
+    if (!filterOpen) return undefined;
+    const onDocClick = (e) => {
+      if (filterPanelRef.current && !filterPanelRef.current.contains(e.target)) {
+        setFilterOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [filterOpen]);
 
   const loadCommissionProfiles = async () => {
     if (!canManageStaff) return;
@@ -156,6 +192,23 @@ export default function Staff() {
     } catch {
       // Non-fatal — the dropdown just hides if the catalog can't be loaded.
       setAvailableRoles([]);
+    }
+  };
+
+  // Wellness-vertical only. The backend GET endpoint auto-seeds the
+  // default catalog (doctor / professional / nurse / stylist / telecaller
+  // / helper) the first time a wellness tenant hits it with an empty
+  // table, so a freshly-signed-up tenant gets sensible defaults without
+  // any admin setup.
+  const loadWellnessRoleTypes = async () => {
+    try {
+      const data = await fetchApi('/api/wellness/role-types?activeOnly=1');
+      setWellnessRoleTypes(Array.isArray(data) ? data : []);
+    } catch {
+      // Non-fatal — the dropdown collapses to "— None —" if the catalog
+      // can't be loaded, and the admin can still pick a non-wellness
+      // role for the user.
+      setWellnessRoleTypes([]);
     }
   };
 
@@ -384,7 +437,34 @@ export default function Staff() {
   const managerCount = staff.filter(s => s.role === 'MANAGER').length;
   const userCount = staff.filter(s => s.role === 'USER').length;
 
-  const filteredStaff = filter ? staff.filter(s => s.role === filter) : staff;
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredStaff = staff.filter((s) => {
+    if (filter && s.role !== filter) return false;
+    if (statusFilter === 'active' && s.deactivatedAt) return false;
+    if (statusFilter === 'inactive' && !s.deactivatedAt) return false;
+    if (wellnessRoleFilter && s.wellnessRole !== wellnessRoleFilter) return false;
+    if (normalizedQuery) {
+      const name = (s.name || '').toLowerCase();
+      const email = (s.email || '').toLowerCase();
+      if (!name.includes(normalizedQuery) && !email.includes(normalizedQuery)) return false;
+    }
+    return true;
+  });
+  // Counts ONLY the filters that live inside the dropdown panel — drives the
+  // numeric badge on the Filter button. Search lives outside the dropdown and
+  // role-pill filter lives in the stats bar above, so they're surfaced visibly
+  // elsewhere already.
+  const activeFilterCount = (
+    (statusFilter !== 'all' ? 1 : 0)
+    + (wellnessRoleFilter ? 1 : 0)
+  );
+  const hasActiveFilters = Boolean(filter) || activeFilterCount > 0 || Boolean(normalizedQuery);
+  const clearFilters = () => {
+    setSearchQuery('');
+    setFilter(null);
+    setStatusFilter('all');
+    setWellnessRoleFilter('');
+  };
 
   return (
     <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
@@ -594,9 +674,165 @@ export default function Staff() {
 
       {/* Staff Table */}
       <div className="card" style={{ padding: '2rem', overflow: 'auto' }}>
-        <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <UsersRound size={20} color="var(--accent-color)" /> Team Members
-        </h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <UsersRound size={20} color="var(--accent-color)" /> Team Members
+          </h3>
+          {staff.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              {/* Inline search — name + email, case-insensitive substring match. */}
+              <div style={{ position: 'relative', width: 260 }}>
+                <Search
+                  size={14}
+                  style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }}
+                />
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search by name or email…"
+                  aria-label="Search staff by name or email"
+                  data-testid="staff-search-input"
+                  className="input-field"
+                  style={{ width: '100%', padding: '0.45rem 0.6rem 0.45rem 2rem', fontSize: '0.85rem' }}
+                />
+              </div>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Showing {filteredStaff.length} of {staff.length}
+              </span>
+              {/* Filter button + popover. Click toggles; click-outside closes.
+                  Badge surfaces the count of active in-panel filters so the
+                  user can see at a glance that the dropdown is narrowing the
+                  table beyond the inline search. */}
+              <div ref={filterPanelRef} style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  onClick={() => setFilterOpen((v) => !v)}
+                  aria-haspopup="true"
+                  aria-expanded={filterOpen}
+                  data-testid="staff-filter-button"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                    padding: '0.45rem 0.85rem', borderRadius: '6px',
+                    background: filterOpen || activeFilterCount > 0
+                      ? 'rgba(38,88,85,0.12)'
+                      : 'var(--subtle-bg-3)',
+                    color: activeFilterCount > 0
+                      ? 'var(--primary-color, var(--accent-color))'
+                      : 'var(--text-primary)',
+                    border: `1px solid ${activeFilterCount > 0
+                      ? 'var(--primary-color, var(--accent-color))'
+                      : 'var(--border-color)'}`,
+                    cursor: 'pointer', fontSize: '0.85rem', fontWeight: 500,
+                  }}
+                >
+                  <FilterIcon size={14} /> Filter
+                  {activeFilterCount > 0 && (
+                    <span
+                      data-testid="staff-filter-badge"
+                      style={{
+                        background: 'var(--primary-color, var(--accent-color))',
+                        color: '#fff', borderRadius: '999px',
+                        padding: '0 0.4rem', fontSize: '0.7rem',
+                        fontWeight: 700, lineHeight: '1.25rem',
+                        minWidth: '1.25rem', textAlign: 'center',
+                      }}
+                    >
+                      {activeFilterCount}
+                    </span>
+                  )}
+                </button>
+                {filterOpen && (
+                  <div
+                    data-testid="staff-filter-panel"
+                    style={{
+                      position: 'absolute', top: 'calc(100% + 0.4rem)', right: 0,
+                      width: 300, zIndex: 50,
+                      // Solid page background + subtle blur so the panel doesn't
+                      // bleed table content through. --bg-color is the only
+                      // fully-opaque token in the theme; --subtle-bg-* are all
+                      // semi-transparent and were causing the readability bug.
+                      background: 'var(--bg-color)',
+                      backdropFilter: 'blur(8px)',
+                      WebkitBackdropFilter: 'blur(8px)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '8px',
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                      padding: '1rem',
+                      display: 'flex', flexDirection: 'column', gap: '0.85rem',
+                    }}
+                  >
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                      Status
+                      <select
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        aria-label="Filter by status"
+                        data-testid="staff-status-filter"
+                        className="input-field"
+                        style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', marginTop: '0.3rem' }}
+                      >
+                        <option value="all">All statuses</option>
+                        <option value="active">Active only</option>
+                        <option value="inactive">Inactive only</option>
+                      </select>
+                    </label>
+                    {isWellness && wellnessRoleTypes.length > 0 && (
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                        Wellness role
+                        <select
+                          value={wellnessRoleFilter}
+                          onChange={(e) => setWellnessRoleFilter(e.target.value)}
+                          aria-label="Filter by wellness role"
+                          data-testid="staff-wellness-role-filter"
+                          className="input-field"
+                          style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', marginTop: '0.3rem' }}
+                        >
+                          <option value="">All wellness roles</option>
+                          {wellnessRoleTypes.map((r) => (
+                            <option key={r.id} value={r.key}>{r.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem' }}>
+                      <button
+                        type="button"
+                        onClick={clearFilters}
+                        disabled={!hasActiveFilters}
+                        data-testid="staff-clear-filters"
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                          padding: '0.35rem 0.7rem', borderRadius: '6px',
+                          background: 'transparent', color: 'var(--text-secondary)',
+                          border: '1px solid var(--border-color)',
+                          cursor: hasActiveFilters ? 'pointer' : 'not-allowed',
+                          opacity: hasActiveFilters ? 1 : 0.5,
+                          fontSize: '0.8rem',
+                        }}
+                      >
+                        <X size={12} /> Clear all
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFilterOpen(false)}
+                        style={{
+                          padding: '0.35rem 0.8rem', borderRadius: '6px',
+                          background: 'var(--primary-color, var(--accent-color))',
+                          color: '#fff',
+                          border: '1px solid var(--primary-color, var(--accent-color))',
+                          cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+                        }}
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
 
         {loading ? (
           <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>Loading...</p>
@@ -606,7 +842,7 @@ export default function Staff() {
           </p>
         ) : filteredStaff.length === 0 ? (
           <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
-            No staff members with that role.
+            No staff members match the current search or filters.
           </p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -883,11 +1119,9 @@ export default function Staff() {
                   style={{ width: '100%', marginTop: '0.25rem' }}
                 >
                   <option value="">— None —</option>
-                  <option value="doctor">Doctor</option>
-                  <option value="professional">Professional</option>
-                  <option value="telecaller">Telecaller</option>
-                  <option value="helper">Helper</option>
-                  <option value="stylist">Stylist</option>
+                  {wellnessRoleTypes.map((r) => (
+                    <option key={r.id} value={r.key}>{r.label}</option>
+                  ))}
                 </select>
               </label>
             </div>
@@ -1006,11 +1240,21 @@ export default function Staff() {
                   style={{ width: '100%', marginTop: '0.25rem' }}
                 >
                   <option value="">— None —</option>
-                  <option value="doctor">Doctor</option>
-                  <option value="professional">Professional</option>
-                  <option value="telecaller">Telecaller</option>
-                  <option value="helper">Helper</option>
-                  <option value="stylist">Stylist</option>
+                  {/* If the staff member currently holds a wellnessRole
+                      that's NOT in the active catalog (deactivated /
+                      deleted by an admin after assignment), surface it
+                      as a disabled placeholder option so the dropdown
+                      still reflects the saved value instead of silently
+                      showing "— None —". */}
+                  {editing.wellnessRole &&
+                   !wellnessRoleTypes.some((r) => r.key === editing.wellnessRole) && (
+                    <option value={editing.wellnessRole} disabled>
+                      {editing.wellnessRole} (no longer in catalog)
+                    </option>
+                  )}
+                  {wellnessRoleTypes.map((r) => (
+                    <option key={r.id} value={r.key}>{r.label}</option>
+                  ))}
                 </select>
               </label>
               {/* PRD Gap §1.5 — assign a commission profile. Empty = no profile. */}

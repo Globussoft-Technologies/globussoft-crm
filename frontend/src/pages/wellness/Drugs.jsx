@@ -79,7 +79,13 @@ export default function Drugs() {
   };
 
   const remove = async (drug) => {
-    if (!confirm(`Delete "${drug.name}" from the catalogue?`)) return;
+    const ok = await notify.confirm({
+      title: 'Delete drug',
+      message: `Delete "${drug.name}" from the catalogue?`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/drugs/${drug.id}`, { method: 'DELETE' });
       notify.success(`Deleted "${drug.name}"`);

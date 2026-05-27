@@ -203,7 +203,11 @@ export default function Expenses() {
   };
 
   const rejectExpense = async (id) => {
-    const reason = prompt('Enter rejection reason (optional):');
+    const reason = await notify.prompt({
+      title: 'Reject expense',
+      message: 'Enter rejection reason (optional):',
+      confirmText: 'Reject',
+    });
     if (reason === null) return; // User cancelled
     try {
       const result = await fetchApi(`/api/expenses/${id}/reject`, {

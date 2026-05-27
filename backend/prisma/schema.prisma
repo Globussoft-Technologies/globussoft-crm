@@ -390,6 +390,10 @@ model Tenant {
   // (currently stub-mode pending Q3 cred drop from Travel Stall). Per-
   // tenant scoped + cascade-deletes with the tenant.
   digilockerSessions DigilockerSession[]
+
+  // Per-tenant wellness role catalog (replaces the hard-coded
+  // VALID_WELLNESS_ROLES whitelist; admins can add custom roles).
+  wellnessRoleTypes WellnessRoleType[]
 }
 
 model User {
@@ -2423,24 +2427,24 @@ model CannedResponse {
 // ── NPS / CSAT Surveys ───────────────────────────────────────────
 
 model Survey {
-  id        Int      @id @default(autoincrement())
+  id              Int      @id @default(autoincrement())
   // `name` is the legacy short-id key used by the NPS cron
   // (wellnessOpsEngine.js); keep it so existing surveys + the
   // auto-NPS flow keep working unchanged.
-  name      String
+  name            String
   // `title` is the human-readable form name used by the multi-question
   // builder. Nullable so legacy NPS rows aren't forced to backfill.
-  title     String?
+  title           String?
   // String-as-enum (matches the codebase convention — see Tenant.vertical,
   // SignatureRequest.documentType, etc.). Allowed values:
   //   Legacy single-question: NPS | CSAT | CUSTOM
   //   New multi-question:     PRODUCT | SERVICE | DOCTOR
   // The wellnessOpsEngine cron continues to write NPS rows; the new
   // builder writes PRODUCT / SERVICE / DOCTOR / CUSTOM rows.
-  type      String   @default("NPS")
+  type            String   @default("NPS")
   // Legacy single-question text — nullable because new multi-question
   // surveys carry their questions in SurveyQuestion rows instead.
-  question  String?
+  question        String?
   // Polymorphic FK; the route validates by `type`:
   //   PRODUCT → relatedEntityId references Product.id
   //   SERVICE → references Service.id
@@ -2451,11 +2455,11 @@ model Survey {
   // Admin who created the survey. Nullable so cron-created NPS rows
   // (which have no user actor) don't need a synthetic user.
   createdById     Int?
-  isActive  Boolean  @default(true)
-  tenantId  Int      @default(1)
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isActive        Boolean  @default(true)
+  tenantId        Int      @default(1)
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   questions SurveyQuestion[]
   answers   SurveyAnswer[]
@@ -2502,7 +2506,7 @@ model SurveyQuestion {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  answers    SurveyAnswer[]
+  answers SurveyAnswer[]
 
   @@index([tenantId, surveyId, order])
 }
@@ -2513,16 +2517,16 @@ model SurveyQuestion {
 // the same Survey if needed (e.g. an NPS-tagged survey that later grows
 // custom questions), and reports consume each independently.
 model SurveyAnswer {
-  id         Int      @id @default(autoincrement())
-  surveyId   Int
-  survey     Survey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
-  questionId Int
-  question   SurveyQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  userId     Int?
+  id           Int            @id @default(autoincrement())
+  surveyId     Int
+  survey       Survey         @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  questionId   Int
+  question     SurveyQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  userId       Int?
   // Free-form text storage — RATE answers stringify the number,
   // YES_NO stringify "True"/"False", SELECT/RADIO stringify the chosen
   // option label. Keeps the schema uniform regardless of fieldType.
-  answer     String?  @db.Text
+  answer       String?        @db.Text
   // Submission grouping key. All SurveyAnswer rows produced by one
   // POST /respond/:token/submit (or POST /:id/submit) share the same
   // submissionId — generated server-side per submit call via crypto
@@ -2538,11 +2542,11 @@ model SurveyAnswer {
   // column existed leave both null. Not declared as Prisma relations
   // because Contact and Patient already cascade on tenant delete and
   // this row's lifetime tracks Survey, not its recipient.
-  contactId  Int?
-  patientId  Int?
-  tenantId   Int      @default(1)
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
+  contactId    Int?
+  patientId    Int?
+  tenantId     Int            @default(1)
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt    DateTime       @default(now())
 
   @@index([tenantId, surveyId])
   @@index([tenantId, questionId])
@@ -3497,6 +3501,34 @@ model Location {
 
   @@index([tenantId, isActive])
   @@index([tenantId, city])
+}
+
+// Per-tenant wellness role catalog. Replaces the hard-coded
+// VALID_WELLNESS_ROLES whitelist in routes/staff.js so admins can add
+// custom roles (e.g. "nurse", "physio") from Settings without a code
+// change. `key` is the slug stored on User.wellnessRole; `label` is
+// the display name shown in dropdowns. `canTakeVisits` flags roles
+// that should appear as columns on the Calendar grid (doctor /
+// professional / nurse — but not telecaller / helper, who don't take
+// patient visits).
+model WellnessRoleType {
+  id            Int     @id @default(autoincrement())
+  key           String // slug: "doctor", "nurse", "physio"
+  label         String // display: "Doctor", "Nurse", "Physiotherapist"
+  icon          String? // optional lucide icon name; null = default Stethoscope
+  color         String? // optional hex/css color for chip; null = theme default
+  canTakeVisits Boolean @default(true)
+  isActive      Boolean @default(true)
+  sortOrder     Int     @default(0)
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([key, tenantId])
+  @@index([tenantId, isActive])
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -33,7 +33,13 @@ export default function CouponsPage() {
   useEffect(() => { load(); }, []);
 
   const remove = async (id) => {
-    if (!confirm('Delete this coupon? This cannot be undone.')) return;
+    const ok = await notify.confirm({
+      title: 'Delete coupon',
+      message: 'Delete this coupon? This cannot be undone.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/coupons/${id}`, { method: 'DELETE' });
       notify.success('Coupon deleted');

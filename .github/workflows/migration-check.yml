@@ -342,15 +342,40 @@ jobs:
           (cd backend && npm ci --no-audit --no-fund)
           (cd e2e     && npm ci --no-audit --no-fund)
 
+      # Cache the chromium browser binary at ~/.cache/ms-playwright so
+      # subsequent runs skip the ~167 MB Chrome-for-Testing download.
+      # Cache key includes the e2e package-lock.json hash so a Playwright
+      # version bump auto-invalidates and refetches. Cold run: ~30s for
+      # the binary download. Warm run: <5s cache restore.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+
       - name: Install Playwright chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         working-directory: e2e
+        # `--with-deps` adds ~50 apt packages (fonts + codecs + libs) and
+        # takes 5-7 min. migration-safety.spec.js is pure JS — it uses
+        # @playwright/test as an assertion library but never opens a
+        # browser page (grep `page\.|browser|chromium` → zero matches).
+        # Drop `--with-deps` — only the chromium binary itself is needed
+        # in case Playwright's test runner pre-validates project deps.
         run: |
           set -euo pipefail
-          npx playwright install chromium --with-deps
-          # The chromium project loads storageState from
-          # playwright/.auth/user.json; pre-create an empty stub the
-          # same way deploy.yml does so the project's fixture init
-          # doesn't ENOENT.
+          npx playwright install chromium
+
+      - name: Prepare auth state stub
+        working-directory: e2e
+        # The chromium project loads storageState from
+        # playwright/.auth/user.json; pre-create an empty stub the
+        # same way deploy.yml does so the project's fixture init
+        # doesn't ENOENT. Runs regardless of cache-hit since the stub
+        # is workspace-scoped, not browser-cache-scoped.
+        run: |
+          set -euo pipefail
           mkdir -p playwright/.auth
           echo '{"cookies":[],"origins":[]}' > playwright/.auth/user.json
 

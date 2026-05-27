@@ -73,6 +73,11 @@ const SERVER_JS = path.join(REPO_BACKEND, 'server.js');
 const ALLOWED_UNMOUNTED = new Set([
   // Example:
   // 'foo_deprecated', // #1234 — slated for removal in v3.9, kept for back-compat
+  'file-uploads', // S3 upload router scaffolded but not yet mounted — would
+                  // conflict with the existing static `app.use("/api/uploads",
+                  // express.static(...))` mount from PR #753. Real mount path
+                  // (e.g. /api/file-uploads) requires a product decision —
+                  // currently no consumer code calls these endpoints.
 ]);
 
 function listRouteBasenames() {

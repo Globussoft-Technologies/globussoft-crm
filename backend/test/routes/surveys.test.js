@@ -54,10 +54,16 @@ prisma.surveyQuestion = {
   create: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
+  // routes/surveys.js:562 calls groupBy({ by: ['surveyId'], ... }) to roll up
+  // question counts per survey. Default mock returns [] so the rollup is empty.
+  groupBy: vi.fn().mockResolvedValue([]),
 };
 prisma.surveyAnswer = {
   create: vi.fn(),
   findMany: vi.fn(),
+  // routes/surveys.js:570 calls groupBy({ by: ['surveyId'], ... }) for answer
+  // counts in the same rollup pass.
+  groupBy: vi.fn().mockResolvedValue([]),
 };
 prisma.auditLog = {
   findFirst: vi.fn().mockResolvedValue(null),

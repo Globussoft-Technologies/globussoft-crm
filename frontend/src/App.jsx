@@ -433,6 +433,21 @@ function WellnessOnly({ children }) {
   return children;
 }
 
+// Sibling of WellnessOnly for the travel vertical. Inline-defined here to
+// match the WellnessOnly pattern (no separate component file). Main added
+// the <TravelOnly>...</TravelOnly> wrapper at every travel route (41 call
+// sites at App.jsx:1174-1289) but the inline component definition was
+// dropped by the main→staging_crm Python union pass on commit bd25d6f2.
+// This restores the definition so the 41 react/jsx-no-undef lint errors
+// clear.
+function TravelOnly({ children }) {
+  const { tenant } = useContext(AuthContext);
+  if (tenant && tenant.vertical !== "travel") {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return children;
+}
+
 // #303: bare /calendar used to render a blank <main> because the route table
 // had no entry for it. Wellness tenants are bounced to their themed calendar
 // (/wellness/calendar); generic tenants land on /calendar-sync which is the

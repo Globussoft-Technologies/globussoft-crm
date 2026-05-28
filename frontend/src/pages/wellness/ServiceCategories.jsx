@@ -6,7 +6,24 @@
  * inline form + list + edit-in-place + soft-toggle isActive.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Stethoscope, Plus, Pencil, Upload, X } from 'lucide-react';
+import { Stethoscope, Plus, Pencil, Trash2, Upload, X } from 'lucide-react';
+
+const ICON_BTN_STYLE = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 30,
+  height: 30,
+  background: 'transparent',
+  border: '1px solid var(--border-soft, rgba(255,255,255,0.15))',
+  borderRadius: 6,
+  color: 'var(--text-primary)',
+  cursor: 'pointer',
+  transition: 'background 0.15s, border-color 0.15s',
+};
+const DANGER_ICON_BTN_STYLE = { ...ICON_BTN_STYLE, color: 'var(--danger-color, #ef4444)' };
+const TH_STYLE = { padding: '0.6rem 0.75rem', fontWeight: 600, color: 'var(--text-secondary)', fontSize: '0.85rem' };
+const TD_STYLE = { padding: '0.6rem 0.75rem', verticalAlign: 'middle' };
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 
@@ -190,14 +207,14 @@ export default function ServiceCategories() {
       ) : (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
-            <tr style={{ textAlign: 'left' }}>
-              <th>Image</th>
-              <th>Name</th>
-              <th>Parent</th>
-              <th>Order</th>
-              <th>Services</th>
-              <th>Status</th>
-              <th />
+            <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-soft)' }}>
+              <th style={TH_STYLE}>Image</th>
+              <th style={TH_STYLE}>Name</th>
+              <th style={TH_STYLE}>Parent</th>
+              <th style={TH_STYLE}>Order</th>
+              <th style={TH_STYLE}>Services</th>
+              <th style={TH_STYLE}>Status</th>
+              <th style={{ ...TH_STYLE, textAlign: 'right' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -205,19 +222,37 @@ export default function ServiceCategories() {
               const parent = categories.find((p) => p.id === c.parentId);
               return (
                 <tr key={c.id} style={{ borderTop: '1px solid var(--border-soft)' }}>
-                  <td style={{ padding: '0.5rem 0' }}>
+                  <td style={TD_STYLE}>
                     {c.imageUrl
                       ? <img src={c.imageUrl} alt="" style={{ width: 40, height: 40, borderRadius: 4, objectFit: 'cover' }} />
                       : <div style={{ width: 40, height: 40, borderRadius: 4, background: 'rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: '0.7rem' }}>—</div>}
                   </td>
-                  <td>{c.name}</td>
-                  <td>{parent ? parent.name : '—'}</td>
-                  <td>{c.displayOrder}</td>
-                  <td>{c._count ? c._count.services : 0}</td>
-                  <td>{c.isActive ? 'Active' : 'Inactive'}</td>
-                  <td style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button onClick={() => startEdit(c)} title="Edit"><Pencil size={14} /></button>
-                    <button onClick={() => remove(c)} title="Delete">×</button>
+                  <td style={TD_STYLE}>{c.name}</td>
+                  <td style={TD_STYLE}>{parent ? parent.name : '—'}</td>
+                  <td style={TD_STYLE}>{c.displayOrder}</td>
+                  <td style={TD_STYLE}>{c._count ? c._count.services : 0}</td>
+                  <td style={TD_STYLE}>
+                    <span style={{
+                      display: 'inline-block',
+                      padding: '0.2rem 0.6rem',
+                      borderRadius: 999,
+                      fontSize: '0.78rem',
+                      fontWeight: 500,
+                      background: c.isActive ? 'rgba(34, 197, 94, 0.12)' : 'rgba(148, 163, 184, 0.15)',
+                      color: c.isActive ? '#22c55e' : 'var(--text-secondary)',
+                    }}>
+                      {c.isActive ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                  <td style={{ ...TD_STYLE, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'inline-flex', gap: '0.4rem' }}>
+                      <button onClick={() => startEdit(c)} title="Edit" aria-label={`Edit ${c.name}`} style={ICON_BTN_STYLE}>
+                        <Pencil size={14} />
+                      </button>
+                      <button onClick={() => remove(c)} title="Delete" aria-label={`Delete ${c.name}`} style={DANGER_ICON_BTN_STYLE}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );

@@ -89,16 +89,39 @@ const PERMISSION_CATALOG = {
   // ─────────────────────────────────────────────────────────────────────
 
   patients: ['read', 'write', 'update', 'delete', 'export', 'manage'],
+  // Tenant-wide Appointments LIST page (/wellness/appointments) — read/
+  // write the every-appointment-in-the-clinic view. Owners / managers /
+  // receptionists who triage the global queue need this; doctors who
+  // only work their own slots do NOT (they use `my_appointments`).
   appointments: ['read', 'write', 'update', 'delete', 'export'],
+  // `my_appointments` gates /wellness/my-appointments — the per-practitioner
+  // view that's intentionally distinct from the tenant-wide list. Split out
+  // so a doctor / nurse can be granted "see my own appointments" without
+  // unlocking the whole-clinic list, and conversely so an admin can be
+  // granted the tenant-wide list without polluting their nav with a
+  // "My Appointments" page they'd never use (admins aren't assigned slots).
+  my_appointments: ['read'],
+  // `book_appointment` gates /wellness/book-appointment — the staff/
+  // patient booking form. Telecallers / receptionists need this to
+  // create new appointments on behalf of patients; doctors don't (slots
+  // already exist for them); admins typically don't book themselves
+  // either. Split out so the booking surface is independently grantable.
+  book_appointment: ['write'],
+  // `waitlist` gates /wellness/waitlist — the open-slot queue. Read
+  // grants viewing the queue; write grants promote / disposition. Split
+  // out so a telecaller can be granted waitlist management without also
+  // getting the tenant-wide Appointments list.
+  waitlist: ['read', 'write'],
   // `calendar` is intentionally separate from `appointments` so admins
   // can grant view-only access to the Calendar day-grid surface
-  // (`calendar.read`) without also unlocking the Appointments list,
-  // Book Appointment form, and My Appointments page — all gated on
-  // `appointments.read` / `appointments.write`. Calendar mutations
-  // (drag-to-reschedule, slot-click-to-book, right-click-cancel) gate
-  // on `calendar.write`. The backend's PHI gates accept either
-  // permission set for the underlying /api/wellness/visits endpoint so
-  // either grant flow works end-to-end.
+  // (`calendar.read`) without also unlocking the Appointments list
+  // (`appointments.read`), the Book Appointment form
+  // (`book_appointment.write`), and the My Appointments page
+  // (`my_appointments.read`). Calendar mutations (drag-to-reschedule,
+  // slot-click-to-book, right-click-cancel) gate on `calendar.write`.
+  // The backend's PHI gates accept any of these permission sets for the
+  // underlying /api/wellness/visits endpoint so every grant flow works
+  // end-to-end.
   calendar: ['read', 'write'],
   services: ['read', 'write', 'update', 'delete'],
   prescriptions: ['read', 'write', 'update', 'delete', 'export'],
@@ -114,6 +137,25 @@ const PERMISSION_CATALOG = {
   products: ['read', 'write', 'update', 'delete', 'manage'],
   inventory: ['read', 'write', 'update', 'delete', 'manage'],
   pos: ['read', 'write', 'manage'],
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Staff Self-Service (2 modules)
+  // ─────────────────────────────────────────────────────────────────────
+
+  // `attendance` gates /wellness/attendance — the clock-in / clock-out
+  // + personal timesheet page. `.read` = view your own timesheet, `.write`
+  // = clock in / out, `.manage` = view + edit other staff's attendance
+  // and manage biometric devices (admin/manager only). Split out so a
+  // CUSTOMER (patient) role can be denied this surface entirely — the
+  // sidebar entry hides when the role lacks `attendance.read`.
+  attendance: ['read', 'write', 'manage'],
+  // `leave` gates /wellness/leave — the leave-request + balance page.
+  // `.read` = view your own balance + requests, `.write` = submit /
+  // cancel your own requests, `.manage` = approve / reject and manage
+  // leave policies + carry-forward runs (admin/manager only). Split out
+  // so non-staff roles (CUSTOMER) can be denied; the API enforces
+  // approval-tier gating via verifyRole independently of `.manage`.
+  leave: ['read', 'write', 'manage'],
 
   // ─────────────────────────────────────────────────────────────────────
   // Admin & Platform (6 modules)
@@ -167,11 +209,26 @@ const PERMISSION_DOMAINS = [
   },
   {
     domain: 'Wellness Clinical',
-    modules: ['patients', 'appointments', 'calendar', 'services', 'prescriptions', 'consents', 'visits'],
+    modules: [
+      'patients',
+      'appointments',
+      'my_appointments',
+      'book_appointment',
+      'waitlist',
+      'calendar',
+      'services',
+      'prescriptions',
+      'consents',
+      'visits',
+    ],
   },
   {
     domain: 'Wellness Inventory',
     modules: ['products', 'inventory', 'pos'],
+  },
+  {
+    domain: 'Staff Self-Service',
+    modules: ['attendance', 'leave'],
   },
   {
     domain: 'Admin & Platform',

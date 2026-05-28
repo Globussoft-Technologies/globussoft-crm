@@ -91,6 +91,7 @@ const RUN_TAG = `E2E_FLOW_POS_${Date.now()}`;
 
 const FIXTURES = {
   admin:      { email: 'admin@wellness.demo',           password: 'password123' },
+  rishu:      { email: 'rishu@enhancedwellness.in',     password: 'password123' },
   drharsh:    { email: 'drharsh@enhancedwellness.in',   password: 'password123' },
   manager:    { email: 'manager@enhancedwellness.in',   password: 'password123' },
   generic:    { email: 'admin@globussoft.com',          password: 'password123' },
@@ -127,11 +128,13 @@ async function login(request, who) {
 // also opens shifts as admin@wellness.demo, so when both files run on
 // different workers their shifts collide on /shifts/current and the
 // "returns the caller-owned open shift" assertion flakes. We default this
-// file to `manager` (manager@enhancedwellness.in) — full POS perms via
-// cashierGate, and NOT used for shifts by any other gated spec — so every
-// shift this file opens is isolated to its own user. Deterministic, no
+// file to `rishu` (rishu@enhancedwellness.in) — a wellness ADMIN distinct
+// from pos-sale-finalize's admin@wellness.demo, so every shift this file
+// opens is isolated to its own user. It MUST be an ADMIN (not manager)
+// because the refund route is strictAdminGate'd (admin-only) — a manager
+// would 403 before the missing-reason 400 validation. Deterministic, no
 // test weakened. (Explicit-`who` callers below are unaffected.)
-const DEFAULT_WHO = 'manager';
+const DEFAULT_WHO = 'rishu';
 const authHdr = async (request, who = DEFAULT_WHO) => ({
   Authorization: `Bearer ${(await login(request, who)).token}`,
 });

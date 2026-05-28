@@ -203,12 +203,14 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
     const finalBody = await finalRead.json();
     expect(finalBody.landingPath).toBeNull();
 
-    // 8. Granting appointments.write back makes /wellness/calendar
-    //    accessible again — pin it as the landingPath.
+    // 8. Granting calendar.read back makes /wellness/calendar accessible
+    //    again — pin it as the landingPath. (/wellness/calendar is gated on
+    //    the dedicated `calendar` module, separated from appointments.)
     await put(request, token, `/api/roles/${role.id}/permissions`, {
       permissions: [
         { module: 'appointments', action: 'read' },
         { module: 'appointments', action: 'write' },
+        { module: 'calendar', action: 'read' },
       ],
     });
     const pinToCalendar = await put(request, token, `/api/roles/${role.id}`, {

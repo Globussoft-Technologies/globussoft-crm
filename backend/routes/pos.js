@@ -1202,49 +1202,66 @@ router.post("/sales", cashierGate, async (req, res) => {
 
     // Transactional create — invoiceNumber + Sale + SaleLineItem rows +
     // Product.currentStock decrements (PRODUCT lines only).
-    const sale = await prisma.$transaction(async (tx) => {
-      const invoiceNumber = await generateInvoiceNumber(tx, req.user.tenantId);
-      const created = await tx.sale.create({
-        data: {
-          tenantId: req.user.tenantId,
-          registerId: shift.registerId,
-          shiftId: shift.id,
-          cashierId: req.user.userId,
-          patientId: resolvedPatientId,
-          invoiceNumber,
-          subtotal,
-          taxTotal: tax,
-          discountTotal: totalDiscount,
-          total,
-          paidAmount: paid,
-          status: "COMPLETED",
-          paymentMethod: pm,
-          paymentBreakdownJson:
-            pm === "COMBINED" && typeof paymentBreakdownJson === "string"
-              ? paymentBreakdownJson.slice(0, 4000)
-              : null,
-          lineItems: {
-            create: normalisedLines.map((l) => ({
+    // invoiceNumber is sequential (generateInvoiceNumber reads the current
+    // max + 1), so two concurrent sales in the SAME tenant can compute the
+    // same value → P2002 unique-violation on the invoiceNumber column → 500.
+    // Retry the whole transaction (which recomputes the number against the
+    // now-committed sibling sale) up to 5 attempts. Prod-relevant: concurrent
+    // POS lanes in one tenant otherwise intermittently 500 on a colliding
+    // invoice number (surfaced as flaky CI under 2 parallel test workers).
+    let sale = null;
+    for (let _attempt = 0; sale === null; _attempt++) {
+      try {
+        sale = await prisma.$transaction(async (tx) => {
+          const invoiceNumber = await generateInvoiceNumber(tx, req.user.tenantId);
+          const created = await tx.sale.create({
+            data: {
               tenantId: req.user.tenantId,
-              ...l,
-            })),
-          },
-        },
-        include: { lineItems: true },
-      });
-      // Decrement Product.currentStock for each PRODUCT line. Tenant-scoped
-      // updateMany so a wrong tenantId can't decrement a sibling tenant's
-      // stock (Prisma update by-id alone wouldn't tenant-gate). Negative
-      // stock is permitted by design — backorder flow needs visibility into
-      // oversells; the LowStock alert engine surfaces sub-threshold counts.
-      for (const line of productLines) {
-        await tx.product.updateMany({
-          where: { id: line.refId, tenantId: req.user.tenantId },
-          data: { currentStock: { decrement: line.quantity } },
+              registerId: shift.registerId,
+              shiftId: shift.id,
+              cashierId: req.user.userId,
+              patientId: resolvedPatientId,
+              invoiceNumber,
+              subtotal,
+              taxTotal: tax,
+              discountTotal: totalDiscount,
+              total,
+              paidAmount: paid,
+              status: "COMPLETED",
+              paymentMethod: pm,
+              paymentBreakdownJson:
+                pm === "COMBINED" && typeof paymentBreakdownJson === "string"
+                  ? paymentBreakdownJson.slice(0, 4000)
+                  : null,
+              lineItems: {
+                create: normalisedLines.map((l) => ({
+                  tenantId: req.user.tenantId,
+                  ...l,
+                })),
+              },
+            },
+            include: { lineItems: true },
+          });
+          // Decrement Product.currentStock for each PRODUCT line. Tenant-scoped
+          // updateMany so a wrong tenantId can't decrement a sibling tenant's
+          // stock (Prisma update by-id alone wouldn't tenant-gate). Negative
+          // stock is permitted by design — backorder flow needs visibility into
+          // oversells; the LowStock alert engine surfaces sub-threshold counts.
+          for (const line of productLines) {
+            await tx.product.updateMany({
+              where: { id: line.refId, tenantId: req.user.tenantId },
+              data: { currentStock: { decrement: line.quantity } },
+            });
+          }
+          return created;
         });
+      } catch (_txErr) {
+        // P2002 = unique-constraint violation — the invoiceNumber race.
+        // Recompute + retry; rethrow anything else (or after 5 attempts).
+        if (_txErr && _txErr.code === "P2002" && _attempt < 4) continue;
+        throw _txErr;
       }
-      return created;
-    });
+    }
 
     await writeAudit(
       "Sale",

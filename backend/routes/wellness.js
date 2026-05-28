@@ -3652,6 +3652,31 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
         .status(400)
         .json({ error: "name, totalSessions, patientId required" });
     }
+    // #745 — duplicate-prevention: reject an exact-match plan created in the
+    // last 5 minutes with 409 IDEMPOTENT_DUPLICATE (kills rapid double-click /
+    // retried-seed dup explosions while still allowing legitimate same-name
+    // plans created months apart). TreatmentPlan has no `createdAt` column —
+    // `startedAt` (@default now) serves the dedupe window. Ported from main
+    // (partial-port gap).
+    {
+      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+      const dupe = await prisma.treatmentPlan.findFirst({
+        where: tenantWhere(req, {
+          patientId: parseInt(patientId),
+          name: name,
+          totalSessions: parseInt(totalSessions),
+          startedAt: { gte: fiveMinAgo },
+        }),
+        select: { id: true },
+      });
+      if (dupe) {
+        return res.status(409).json({
+          error: "An identical treatment plan was created in the last 5 minutes",
+          code: "IDEMPOTENT_DUPLICATE",
+          existingId: dupe.id,
+        });
+      }
+    }
     const plan = await prisma.treatmentPlan.create({
       data: {
         name,

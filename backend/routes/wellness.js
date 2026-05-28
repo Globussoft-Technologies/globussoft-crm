@@ -6504,7 +6504,12 @@ async function computePerLocation(req) {
 
 router.get(
   "/reports/pnl-by-service",
-  adminOrPerm("reports", "read"),
+  // #207/#216 financial-leak fix: financial reports are admin/manager ONLY.
+  // Hard wellnessRole gate (NOT adminOrPerm) — the generic `reports.read`
+  // permission is held by the base "User" role (seed.js), which every
+  // wellness clinical staffer (doctor/professional/helper/telecaller) has,
+  // so a permission fallback would leak P&L/revenue data to them.
+  verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
       const result = await computePnlByService(req);
@@ -6520,7 +6525,8 @@ router.get(
 
 router.get(
   "/reports/per-professional",
-  adminOrPerm("reports", "read"),
+  // #207/#216 financial-leak fix — admin/manager only (see pnl-by-service).
+  verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
       const result = await computePerProfessional(req);
@@ -6538,7 +6544,8 @@ router.get(
 
 router.get(
   "/reports/attribution",
-  adminOrPerm("reports", "read"),
+  // #207/#216 financial-leak fix — admin/manager only (see pnl-by-service).
+  verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
       const result = await computeAttribution(req);
@@ -6554,7 +6561,8 @@ router.get(
 
 router.get(
   "/reports/per-location",
-  adminOrPerm("reports", "read"),
+  // #207/#216 financial-leak fix — admin/manager only (see pnl-by-service).
+  verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
       const result = await computePerLocation(req);

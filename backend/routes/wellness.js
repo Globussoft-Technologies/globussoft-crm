@@ -70,6 +70,7 @@ const {
   uploadImage,
   deleteFile,
   extractKeyFromUrl,
+  BUCKET_NAME: S3_BUCKET_NAME,
 } = require("../services/s3Service");
 // Plan #PAT-EXPORT — XLSX writer for patients export + import template.
 // Lazy-loaded at handler time so the require can't crash boot if the
@@ -114,7 +115,9 @@ function verifyPatientToken(req, res, next) {
 
 const router = express.Router();
 
-// Multer storage for visit photos: uses memory storage, uploads to S3
+// Visit photos: memory storage so the buffer can go to EITHER S3 (when
+// AWS creds are configured) OR the local filesystem fallback (CI / any env
+// without S3). The POST handler below branches on S3_BUCKET_NAME.
 const photoUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per photo
@@ -2645,6 +2648,57 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
 });
 
 // ── Visit photos (before/after) ────────────────────────────────────
+//
+// #743 — photos are stored on the local filesystem and served under
+// /api/wellness/visits/:id/photos/:filename (proxied to the backend by
+// Nginx). The legacy /uploads/* path fell through to the SPA catch-all and
+// returned text/html. Serving here stamps an explicit image Content-Type,
+// guards against path traversal, tenant-scopes the read, and validates the
+// upload mime. No S3 dependency — works in CI / any env without AWS creds.
+const PHOTO_MIME_BY_EXT = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+function photoContentType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  return PHOTO_MIME_BY_EXT[ext] || null;
+}
+
+router.get("/visits/:id/photos/:filename", phiReadGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const filename = req.params.filename || "";
+    // Defense-in-depth path-traversal guard (diskStorage sanitises on write,
+    // but a hand-crafted GET could try `..%2F../etc/passwd`).
+    if (!/^[a-zA-Z0-9._-]+$/.test(filename) || filename.includes("..")) {
+      return res.status(400).json({ error: "invalid filename", code: "INVALID_FILENAME" });
+    }
+    const mime = photoContentType(filename);
+    if (!mime) {
+      return res.status(415).json({ error: "unsupported image type", code: "UNSUPPORTED_MEDIA" });
+    }
+    // Tenant-scope: the visit must belong to the caller's tenant.
+    const visit = await prisma.visit.findFirst({
+      where: tenantWhere(req, { id }),
+      select: { id: true },
+    });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+
+    const filePath = path.join(__dirname, "..", "uploads", "wellness", "visits", String(id), filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Photo not found" });
+    }
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.sendFile(filePath);
+  } catch (e) {
+    console.error("[wellness] photo serve error:", e.message);
+    res.status(500).json({ error: "Photo serve failed" });
+  }
+});
 
 router.post(
   "/visits/:id/photos",
@@ -2658,20 +2712,41 @@ router.post(
       });
       if (!visit) return res.status(404).json({ error: "Visit not found" });
 
+      // #743 — reject non-image uploads at the API layer.
+      const files = req.files || [];
+      for (const f of files) {
+        const mime = photoContentType(f.originalname || "");
+        if (!mime) {
+          return res.status(415).json({
+            error: "photos must be image/jpeg, image/png, image/webp or image/gif",
+            code: "UNSUPPORTED_MEDIA",
+          });
+        }
+      }
+
+      // S3-primary, local-FS fallback. When AWS creds are configured
+      // (S3_BUCKET_NAME set) photos go to S3 and we store the S3 URL —
+      // unchanged prod behaviour. When S3 isn't configured (CI / any env
+      // without creds) we persist to the local filesystem and store the
+      // Nginx-proxied /api/wellness/visits/:id/photos/:filename path (served
+      // by the GET route above), so the feature never hard-depends on S3.
+      const useS3 = !!S3_BUCKET_NAME;
+      const added = [];
+      for (const f of files) {
+        if (useS3) {
+          const url = await uploadImage(f.buffer, f.originalname, f.mimetype, `visits/${id}`);
+          added.push(url);
+        } else {
+          const dir = path.join(__dirname, "..", "uploads", "wellness", "visits", String(id));
+          fs.mkdirSync(dir, { recursive: true });
+          const safe = `${Date.now()}-${(f.originalname || "photo").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+          fs.writeFileSync(path.join(dir, safe), f.buffer);
+          added.push(`/api/wellness/visits/${id}/photos/${safe}`);
+        }
+      }
+
       const which = req.body.kind === "after" ? "photosAfter" : "photosBefore";
       const existing = visit[which] ? JSON.parse(visit[which]) : [];
-
-      // Upload files to S3 in parallel
-      const uploadPromises = (req.files || []).map((file) =>
-        uploadImage(
-          file.buffer,
-          file.originalname,
-          file.mimetype,
-          `visits/${id}`,
-        ),
-      );
-
-      const added = await Promise.all(uploadPromises);
       const merged = [...existing, ...added];
 
       const _updated = await prisma.visit.update({

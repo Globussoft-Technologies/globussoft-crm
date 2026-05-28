@@ -122,25 +122,35 @@ async function login(request, who) {
   return { token: null, userId: null };
 }
 
-const authHdr = async (request, who = 'admin') => ({
+// Worker-isolation (fullyParallel + 2 CI workers): GET /shifts/current
+// resolves the CALLER's latest OPEN shift by userId. pos-sale-finalize-api
+// also opens shifts as admin@wellness.demo, so when both files run on
+// different workers their shifts collide on /shifts/current and the
+// "returns the caller-owned open shift" assertion flakes. We default this
+// file to `manager` (manager@enhancedwellness.in) — full POS perms via
+// cashierGate, and NOT used for shifts by any other gated spec — so every
+// shift this file opens is isolated to its own user. Deterministic, no
+// test weakened. (Explicit-`who` callers below are unaffected.)
+const DEFAULT_WHO = 'manager';
+const authHdr = async (request, who = DEFAULT_WHO) => ({
   Authorization: `Bearer ${(await login(request, who)).token}`,
 });
 
-async function authGet(request, path, who = 'admin') {
+async function authGet(request, path, who = DEFAULT_WHO) {
   return request.get(`${BASE_URL}${path}`, {
     headers: await authHdr(request, who),
     timeout: REQUEST_TIMEOUT,
   });
 }
-async function authPost(request, path, body, who = 'admin') {
+async function authPost(request, path, body, who = DEFAULT_WHO) {
   const headers = { ...(await authHdr(request, who)), 'Content-Type': 'application/json' };
   return request.post(`${BASE_URL}${path}`, { headers, data: body ?? {}, timeout: REQUEST_TIMEOUT });
 }
-async function authPut(request, path, body, who = 'admin') {
+async function authPut(request, path, body, who = DEFAULT_WHO) {
   const headers = { ...(await authHdr(request, who)), 'Content-Type': 'application/json' };
   return request.put(`${BASE_URL}${path}`, { headers, data: body ?? {}, timeout: REQUEST_TIMEOUT });
 }
-async function authDelete(request, path, who = 'admin') {
+async function authDelete(request, path, who = DEFAULT_WHO) {
   return request.delete(`${BASE_URL}${path}`, { headers: await authHdr(request, who), timeout: REQUEST_TIMEOUT });
 }
 
@@ -173,8 +183,8 @@ let seededServiceId = null;
 let seededPatientId = null;
 
 test.beforeAll(async ({ request }) => {
-  const tok = await login(request, 'admin');
-  test.skip(!tok.token, 'Wellness admin login failed — seed missing? Skipping POS spec.');
+  const tok = await login(request, DEFAULT_WHO);
+  test.skip(!tok.token, 'Wellness POS user login failed — seed missing? Skipping POS spec.');
 
   const r = await authGet(request, '/api/wellness/locations');
   if (r.ok()) {

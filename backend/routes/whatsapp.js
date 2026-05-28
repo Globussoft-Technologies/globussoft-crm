@@ -1323,52 +1323,53 @@ router.post("/templates", verifyToken, async (req, res) => {
       });
     }
 
-    // Submit to Meta for review before we persist a DB row. If Meta
-    // rejects (duplicate name, banned word, format issue) we surface the
-    // error to the operator immediately instead of leaving a phantom
-    // PENDING row that never resolves.
+    // When WhatsApp IS connected (Meta creds present) we submit to Meta for
+    // review BEFORE persisting, so a rejection (duplicate name, banned word,
+    // format issue) surfaces to the operator immediately. When NOT connected
+    // (tenant hasn't linked WhatsApp yet, or any env without a Meta sandbox)
+    // we persist a local PENDING draft instead — it is pushed to Meta later
+    // via POST /templates/:id/sync once the connection lands. This keeps
+    // template authoring usable before connection and removes the hard Meta
+    // dependency from the create path (no live Meta call required to draft).
     const cfg = await prisma.whatsAppConfig.findFirst({
       where: { tenantId: req.user.tenantId, provider: "meta_cloud", isActive: true },
     });
-    if (!cfg || !cfg.businessAccountId || !cfg.accessToken) {
-      return res.status(400).json({
-        error: "WhatsApp is not connected for this tenant. Connect WhatsApp Business before creating templates.",
-        code: "NOT_CONNECTED",
+    const connected = !!(cfg && cfg.businessAccountId && cfg.accessToken);
+
+    let metaTemplateId = null;
+    let metaStatus = "PENDING";
+
+    if (connected) {
+      const accessToken = decryptCredential(cfg.accessToken);
+      const metaResp = await submitTemplateToMeta({
+        wabaId: cfg.businessAccountId,
+        accessToken,
+        name,
+        language: language || "en_US",
+        category: category || "MARKETING",
+        body,
+        header: headerType === "TEXT" ? headerContent : null,
+        footer: footer || null,
       });
+
+      if (!metaResp.ok) {
+        // `metaResp.error` carries the SPECIFIC Meta reason (error_user_msg /
+        // error_data.details), surfaced directly to the operator modal.
+        const friendly = metaResp.userTitle
+          ? `${metaResp.userTitle}: ${metaResp.error}`
+          : metaResp.error;
+        return res.status(422).json({
+          error: friendly || "Meta rejected the template submission.",
+          code: "META_REJECTED",
+          metaCode: metaResp.code || null,
+          metaSubcode: metaResp.subcode || null,
+          details: metaResp.details || null,
+        });
+      }
+
+      metaTemplateId = metaResp.data?.id || null;
+      metaStatus = metaResp.data?.status || "PENDING";
     }
-    const accessToken = decryptCredential(cfg.accessToken);
-
-    const metaResp = await submitTemplateToMeta({
-      wabaId: cfg.businessAccountId,
-      accessToken,
-      name,
-      language: language || "en_US",
-      category: category || "MARKETING",
-      body,
-      header: headerType === "TEXT" ? headerContent : null,
-      footer: footer || null,
-    });
-
-    if (!metaResp.ok) {
-      // The `metaResp.error` now contains the SPECIFIC reason Meta
-      // returned (error_user_msg / error_data.details) — not the generic
-      // "Invalid parameter". The operator-facing message in the modal
-      // surfaces this directly, plus the user-friendly title if Meta
-      // provided one.
-      const friendly = metaResp.userTitle
-        ? `${metaResp.userTitle}: ${metaResp.error}`
-        : metaResp.error;
-      return res.status(422).json({
-        error: friendly || "Meta rejected the template submission.",
-        code: "META_REJECTED",
-        metaCode: metaResp.code || null,
-        metaSubcode: metaResp.subcode || null,
-        details: metaResp.details || null,
-      });
-    }
-
-    const metaTemplateId = metaResp.data?.id || null;
-    const metaStatus = metaResp.data?.status || "PENDING";
 
     const template = await prisma.whatsAppTemplate.create({
       data: {

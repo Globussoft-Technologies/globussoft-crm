@@ -1369,6 +1369,218 @@ function resolveAnswerLabel(question, rawAnswer) {
   return String(rawAnswer);
 }
 
+// ── Travel CRM — branded itinerary PDF (PRD §6.1) ────────────────────
+// Ported from the canonical implementation; the routes
+// (travel_itineraries.js / travel_travelstall.js) reference these two
+// renderers but they were missing from this worktree's pdfRenderer.js,
+// so every /itineraries/:id/pdf + personalised-pdf call 500'd.
+function renderTravelItineraryPdf(itinerary, contact) {
+  const sub = itinerary.subBrand;
+  const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
+  const accent = SUB_BRAND_ACCENT[sub] || "#111111";
+  const currency = itinerary.currency || "INR";
+  const items = Array.isArray(itinerary.items) ? itinerary.items : [];
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+
+  // Brand header band
+  doc.rect(0, 0, doc.page.width, 60).fill(accent);
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
+    .text(brandLabel, 50, 22, { align: "left" });
+  doc.fillColor("#fff").fontSize(10).text(
+    `Itinerary v${itinerary.version || 1}`,
+    50, 42, { align: "left" },
+  );
+  doc.fillColor("#111").moveDown(2);
+
+  // Customer block
+  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text(contact?.name || "Customer", 50, 90);
+  const metaLine = [contact?.email, contact?.phone].filter(Boolean).join("  •  ");
+  if (metaLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(metaLine);
+  doc.moveDown(0.5);
+
+  // Trip-summary block
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111").text(itinerary.destination || "Destination TBD");
+  const dateLine = [
+    itinerary.startDate && `From ${formatDate(itinerary.startDate)}`,
+    itinerary.endDate && `to ${formatDate(itinerary.endDate)}`,
+  ].filter(Boolean).join(" ");
+  if (dateLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(dateLine);
+  doc.fillColor("#111").moveDown(0.8);
+
+  // Items table
+  if (items.length === 0) {
+    doc.font("Helvetica").fontSize(10).fillColor("#777").text("(No items on this itinerary yet — quote pending.)");
+  } else {
+    // Table header
+    const colX = { type: 50, desc: 115, qty: 360, unit: 410, total: 480 };
+    const tableTop = doc.y;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
+    doc.text("Type", colX.type, tableTop);
+    doc.text("Description", colX.desc, tableTop);
+    doc.text("Markup", colX.qty, tableTop);
+    doc.text("Unit cost", colX.unit, tableTop);
+    doc.text("Total", colX.total, tableTop);
+    doc.moveTo(50, tableTop + 14)
+      .lineTo(doc.page.width - 50, tableTop + 14)
+      .lineWidth(0.5).strokeColor(accent).stroke();
+    doc.font("Helvetica").fontSize(10).fillColor("#111");
+
+    let y = tableTop + 22;
+    const sorted = [...items].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    for (const it of sorted) {
+      // Page-break headroom
+      if (y > doc.page.height - 120) {
+        doc.addPage();
+        y = 50;
+      }
+      doc.text(String(it.itemType || "—"), colX.type, y, { width: 60 });
+      doc.text(String(it.description || ""), colX.desc, y, { width: 240 });
+      const markupStr = it.markup != null ? formatMoney(Number(it.markup), currency) : "—";
+      const unitStr = it.unitCost != null ? formatMoney(Number(it.unitCost), currency) : "—";
+      const totalStr = it.totalPrice != null ? formatMoney(Number(it.totalPrice), currency) : "—";
+      doc.text(markupStr, colX.qty, y, { width: 50, align: "right" });
+      doc.text(unitStr, colX.unit, y, { width: 65, align: "right" });
+      doc.text(totalStr, colX.total, y, { width: 60, align: "right" });
+      y += 24;
+    }
+    doc.y = y + 6;
+  }
+
+  // Grand total band
+  if (itinerary.totalAmount != null) {
+    doc.moveDown(0.8);
+    const totalY = doc.y;
+    doc.rect(50, totalY, doc.page.width - 100, 40).fillAndStroke("#f4f6f8", accent);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#555")
+      .text("Grand total", 60, totalY + 10);
+    doc.font("Helvetica-Bold").fontSize(16).fillColor(accent)
+      .text(formatMoney(Number(itinerary.totalAmount), currency), 60, totalY + 8, {
+        width: doc.page.width - 120, align: "right",
+      });
+    doc.fillColor("#111").y = totalY + 50;
+  }
+
+  // Footer
+  const footerY = doc.page.height - doc.page.margins.bottom - 32;
+  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
+  doc.font("Helvetica").fontSize(8).fillColor("#777")
+    .text(
+      `${brandLabel} — Itinerary #${itinerary.id || "?"} v${itinerary.version || 1}. ` +
+        `Pricing subject to availability at the time of booking.`,
+      50, footerY + 8, { width: doc.page.width - 100, align: "center" },
+    );
+
+  doc.end();
+  return bufPromise;
+}
+
+// ── Travel CRM — Travel Stall personalised 3-5 destination PDF (PRD §4.5)
+// Downstream artefact of the llmRouter bulk-text consumer. STUB branding
+// (SUB_BRAND_ACCENT.travelstall + Helvetica) pending Q22 brand assets.
+function renderTravelStallPersonalisedPdf(payload) {
+  const sub = "travelstall";
+  const brandLabel = SUB_BRAND_LABEL[sub] || "Travel Stall";
+  const accent = SUB_BRAND_ACCENT[sub] || "#122647";
+  const contact = payload?.contact || {};
+  const destinations = Array.isArray(payload?.destinations) ? payload.destinations.slice(0, 5) : [];
+  const budget = payload?.budget != null ? Number(payload.budget) : null;
+  const durationDays = payload?.durationDays != null ? Number(payload.durationDays) : null;
+  const diagnostic = payload?.diagnostic || null;
+  const proseText = String(payload?.proseText || "");
+  const generatedAt = payload?.generatedAt || new Date().toISOString();
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+
+  // Brand header band — STUB: placeholder until Q22 brand assets land.
+  doc.rect(0, 0, doc.page.width, 60).fill(accent);
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
+    .text(brandLabel, 50, 22, { align: "left" });
+  doc.fillColor("#fff").fontSize(10).text("Personalised Recommendations", 50, 42, { align: "left" });
+  doc.fillColor("#111").moveDown(2);
+
+  // Customer block
+  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text(contact?.name || "Customer", 50, 90);
+  const metaLine = [contact?.email, contact?.phone].filter(Boolean).join("  •  ");
+  if (metaLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(metaLine);
+  doc.moveDown(0.4);
+
+  // Trip parameters band
+  const params = [];
+  if (durationDays) params.push(`${durationDays} day${durationDays === 1 ? "" : "s"}`);
+  if (budget != null) params.push(`Budget: ${formatMoney(budget, "INR")}`);
+  if (diagnostic?.recommendedTier) params.push(`Tier: ${diagnostic.recommendedTier}`);
+  if (params.length > 0) {
+    doc.font("Helvetica").fontSize(10).fillColor("#555").text(params.join("  •  "));
+  }
+  doc.moveDown(0.6);
+
+  // Personalised prose (LLM output)
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111").text("Why these destinations");
+  doc.moveDown(0.2);
+  doc.font("Helvetica").fontSize(10).fillColor("#222").text(
+    proseText || "(personalised summary unavailable)",
+    { width: doc.page.width - 100, align: "justify" },
+  );
+  doc.moveDown(0.8);
+
+  // Destination cards
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111").text("Suggested destinations");
+  doc.moveDown(0.4);
+
+  if (destinations.length === 0) {
+    doc.font("Helvetica-Oblique").fontSize(10).fillColor("#777")
+      .text("(Advisor will populate destinations from your preferences during the next call.)");
+  } else {
+    const cardWidth = (doc.page.width - 100 - 20) / 2; // 2 cards per row, 20px gutter
+    const cardHeight = 110;
+    let col = 0;
+    let cardY = doc.y;
+    for (let i = 0; i < destinations.length; i++) {
+      const dest = destinations[i];
+      const cardX = 50 + col * (cardWidth + 20);
+      // Card border
+      doc.rect(cardX, cardY, cardWidth, cardHeight)
+        .lineWidth(0.7).strokeColor(accent).stroke();
+      // STUB: placeholder image slot — Q22 brand pack supplies real photos
+      doc.rect(cardX + 8, cardY + 8, 60, 60).fillAndStroke("#eef1f5", "#cdd3da");
+      doc.font("Helvetica").fontSize(7).fillColor("#888")
+        .text("photo", cardX + 8, cardY + 32, { width: 60, align: "center" });
+      doc.fillColor("#111");
+      // Destination name + short prose
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
+        .text(dest, cardX + 78, cardY + 12, { width: cardWidth - 86 });
+      doc.font("Helvetica").fontSize(9).fillColor("#444")
+        .text(
+          `Suggested for your ${diagnostic?.classificationLabel || diagnostic?.classification || "family"} profile.`,
+          cardX + 78, cardY + 30, { width: cardWidth - 86 },
+        );
+      // Advance column
+      col++;
+      if (col >= 2) {
+        col = 0;
+        cardY += cardHeight + 14;
+      }
+    }
+    doc.y = (col === 0 ? cardY : cardY + cardHeight + 14);
+  }
+
+  // Footer — brand strip + generated-at timestamp + STUB marker.
+  const footerY = doc.page.height - doc.page.margins.bottom - 32;
+  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
+  doc.font("Helvetica").fontSize(8).fillColor("#777")
+    .text(
+      `${brandLabel} — Personalised Recommendations. Generated ${formatDate(generatedAt)}. ` +
+        `Branding placeholder — final assets pending.`,
+      50, footerY + 8, { width: doc.page.width - 100, align: "center" },
+    );
+
+  doc.end();
+  return bufPromise;
+}
+
 function renderTravelDiagnosticPdf(diagnostic, contact, bank) {
   const sub = diagnostic.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
@@ -2093,6 +2305,8 @@ module.exports = {
   // travel_invoices / travel_quotes route handlers and the
   // slice-2/8/13/18 gate specs (#900/#901/#902).
   renderTravelDiagnosticPdf,
+  renderTravelItineraryPdf,
+  renderTravelStallPersonalisedPdf,
   renderTravelQuotePdf,
   generateTravelQuotePdf,
   renderTravelInvoicePdf,

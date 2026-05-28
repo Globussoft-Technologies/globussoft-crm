@@ -154,15 +154,18 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
     const tooEarlyBody = await tooEarly.json();
     expect(tooEarlyBody.code).toBe('LANDING_PATH_NOT_ACCESSIBLE');
 
-    // 3. Grant patients.read + appointments.read + appointments.write.
-    //    The .write is required because Calendar (the practitioner day-
-    //    grid) is gated on appointments.write — distinguishes Doctor-
-    //    shape perms from Nurse-shape (read+update only).
+    // 3. Grant patients.read + appointments.read/write + calendar.read.
+    //    Calendar (/wellness/calendar) is gated on a DEDICATED `calendar`
+    //    module (pageCatalog.js) — deliberately separated from appointments
+    //    so admins can grant view-only Calendar access without exposing the
+    //    Appointments list. So calendar.read is required for /wellness/calendar
+    //    to appear in accessible-pages below.
     const grant = await put(request, token, `/api/roles/${role.id}/permissions`, {
       permissions: [
         { module: 'patients', action: 'read' },
         { module: 'appointments', action: 'read' },
         { module: 'appointments', action: 'write' },
+        { module: 'calendar', action: 'read' },
       ],
     });
     expect(grant.status()).toBe(200);

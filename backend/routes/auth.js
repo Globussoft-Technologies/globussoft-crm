@@ -264,11 +264,10 @@ router.post("/customer/register", async (req, res) => {
     // every request body. The customer-register frontend sends the chosen
     // org under `registrationTenantId` (a non-stripped name) instead, so
     // that's the primary field. Fall back to req.strippedFields.tenantId
-    // for any legacy caller that still sends the stripped name.
+    // for any legacy caller that sent `tenantId` and had it stripped.
     const { email, password, name, registrationTenantId } = req.body || {};
     let tenantId =
       registrationTenantId ??
-      req.body?.tenantId ??
       req.strippedFields?.tenantId;
 
     // Input validation

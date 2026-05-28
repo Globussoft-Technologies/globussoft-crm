@@ -122,7 +122,7 @@ jobs:
   api_tests:
     if: ${{ inputs.skip_tests != true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       mysql:
         image: mysql:8.0
@@ -230,6 +230,19 @@ jobs:
           tail -50 /tmp/backend.log
           exit 1
 
+      # Cache the Playwright browser binary (~167 MB Chrome). actions/setup-node
+      # caches npm packages but NOT ~/.cache/ms-playwright, so without this the
+      # chromium download re-runs every job and chews most of the time budget
+      # (root cause of the 15-min-timeout cancellations). Keyed on the e2e
+      # lockfile hash → invalidates only when the pinned playwright version
+      # changes.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('e2e/package-lock.json') }}
+
       - name: E2E install + playwright browsers
         working-directory: e2e
         run: |
@@ -237,8 +250,14 @@ jobs:
           npm ci --no-audit --no-fund
           # Even request-fixture specs need the chromium binary present
           # because playwright.config.js declares the chromium project.
-          # Don't swallow install failures here — fail loud so we know.
-          npx playwright install chromium --with-deps
+          # On a browser-cache hit `install` is a fast no-op verify; on a
+          # miss it downloads. Install the OS deps regardless (apt is quick
+          # and not covered by the browser cache).
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install chromium --with-deps
+          fi
           # The chromium project sets storageState: 'playwright/.auth/
           # user.json'. That file is created by the auth.setup project
           # (which we skip via --no-deps). Pre-create an empty state so

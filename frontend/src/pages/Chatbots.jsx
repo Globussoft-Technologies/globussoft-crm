@@ -486,7 +486,7 @@ function Modal({ title, children, onClose, maxWidth = 520 }) {
 const btnSm = { display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.7rem', fontSize: '0.78rem' };
 const btnIcon = { padding: '0.35rem 0.5rem', display: 'flex', alignItems: 'center' };
 const inputStyle = {
-  background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+  background: 'var(--input-bg, rgba(255,255,255,0.08))', border: '1px solid var(--border-color, rgba(255,255,255,0.15))',
   borderRadius: 8, padding: '0.55rem 0.75rem', color: 'var(--text-primary)', fontSize: '0.875rem', width: '100%',
   fontFamily: 'inherit',
 };

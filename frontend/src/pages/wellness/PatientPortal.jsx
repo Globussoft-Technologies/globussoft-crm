@@ -303,7 +303,12 @@ function Dashboard({ token, onLogout }) {
 
   const downloadRx = async (rxId) => {
     try {
-      const r = await fetch(`/api/wellness/prescriptions/${rxId}/pdf`, {
+      // Patient-portal tokens carry { patientId } not { userId }, so the
+      // staff endpoint /api/wellness/prescriptions/:id/pdf rejects them.
+      // The portal-specific endpoint at /api/wellness/portal/prescriptions/
+      // :id/pdf uses verifyPatientToken and scopes to req.patient.id (so
+      // patients can only fetch THEIR OWN prescriptions).
+      const r = await fetch(`/api/wellness/portal/prescriptions/${rxId}/pdf`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) throw new Error('PDF download failed');

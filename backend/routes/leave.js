@@ -730,4 +730,97 @@ router.post("/policy-carry-forward/run", verifyToken, verifyRole(["ADMIN"]), asy
   }
 });
 
+// Get staff availability based on approved leaves
+// ADMIN/MANAGER can see all staff availability; others see their own
+router.get('/availability', verifyToken, async (req, res) => {
+  try {
+    const isAdminOrManager = ['ADMIN', 'MANAGER'].includes(req.user.role);
+
+    // Parse date parameter or default to today
+    const dateParam = req.query.date || new Date().toISOString().split('T')[0];
+    const targetDate = new Date(dateParam + 'T00:00:00Z');
+
+    if (isNaN(targetDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD.' });
+    }
+
+    // Build day range for query
+    const startOfDay = new Date(targetDate);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setUTCHours(23, 59, 59, 999);
+
+    // Fetch approved leave requests overlapping this date
+    const approvedLeaves = await prisma.leaveRequest.findMany({
+      where: {
+        tenantId: req.user.tenantId,
+        status: 'APPROVED',
+        startDate: { lte: endOfDay },
+        endDate: { gte: startOfDay }
+      },
+      select: {
+        id: true,
+        userId: true,
+        startDate: true,
+        endDate: true,
+        days: true,
+        policy: { select: { leaveType: true } }
+      }
+    });
+
+    // Fetch active staff based on user role
+    // ADMIN/MANAGER sees all staff; others see only their own record
+    const staffWhere = {
+      tenantId: req.user.tenantId,
+      deactivatedAt: null
+    };
+
+    if (!isAdminOrManager) {
+      staffWhere.id = req.user.userId;
+    }
+
+    const allStaff = await prisma.user.findMany({
+      where: staffWhere,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        wellnessRole: true
+      },
+      orderBy: { name: 'asc' }
+    });
+
+    // Build leave lookup map by userId
+    const leaveMap = {};
+    approvedLeaves.forEach(leave => {
+      leaveMap[leave.userId] = {
+        leaveType: leave.policy.leaveType,
+        startDate: leave.startDate,
+        endDate: leave.endDate,
+        days: leave.days
+      };
+    });
+
+    // Merge staff data with availability status
+    const availability = allStaff.map(staff => ({
+      id: staff.id,
+      name: staff.name,
+      email: staff.email,
+      role: staff.role,
+      wellnessRole: staff.wellnessRole,
+      available: !leaveMap[staff.id],
+      leave: leaveMap[staff.id] || null
+    }));
+
+    res.json(availability);
+  } catch (err) {
+    console.error('[leave] availability query failed:', err);
+    res.status(500).json({
+      error: 'Failed to fetch availability',
+      code: 'AVAILABILITY_FETCH_FAILED'
+    });
+  }
+});
+
 module.exports = router;

@@ -19,6 +19,10 @@ import prisma from '../../lib/prisma.js';
 import { bus } from '../../lib/eventBus.js';
 import { applyAutoConsumptionForVisit, start } from '../../lib/autoConsumptionApplier.js';
 
+// The applier now tracks partial-mL consumption against a bottle's `volume`.
+// Each rule consumes `quantityPerVisit` mL; the rolling `partialMlUsed`
+// accumulator on Product only decrements `currentStock` when it crosses a
+// full unit (one bottle).
 const RULES = [
   {
     id: 1,
@@ -26,15 +30,15 @@ const RULES = [
     productId: 200,
     quantityPerVisit: 1,
     isActive: true,
-    product: { id: 200, name: 'Saline 0.9%', currentStock: 50, threshold: 5 },
+    product: { id: 200, name: 'Saline 0.9%', currentStock: 50, threshold: 5, volume: 1, partialMlUsed: 0 },
   },
   {
     id: 2,
     serviceId: 100,
     productId: 201,
-    quantityPerVisit: 0.5, // tests the round-up to 1 unit Int
+    quantityPerVisit: 0.5, // 0.5 mL into a 10 mL bottle → accumulator only
     isActive: true,
-    product: { id: 201, name: 'Cotton', currentStock: 3, threshold: 5 },
+    product: { id: 201, name: 'Cotton', currentStock: 3, threshold: 5, volume: 10, partialMlUsed: 0 },
   },
 ];
 
@@ -111,15 +115,33 @@ describe('lib/autoConsumptionApplier — applyAutoConsumptionForVisit', () => {
     expect(prisma.product.update).toHaveBeenCalledTimes(2);
   });
 
-  test('rounds fractional quantityPerVisit UP to a whole unit', async () => {
-    prisma.autoConsumptionRule.findMany.mockResolvedValue([RULES[1]]); // 0.5 mL rule
+  test('accumulates fractional mL into partialMlUsed without decrementing stock', async () => {
+    // 0.5 mL consumed from a 10 mL bottle (with 0 mL already partial)
+    // → partialMlUsed becomes 0.5, currentStock untouched (still has full bottle in use).
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([RULES[1]]);
+    await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    const stockUpdate = prisma.product.update.mock.calls[0][0];
+    expect(stockUpdate.data.partialMlUsed).toBe(0.5);
+    expect(stockUpdate.data.currentStock).toBeUndefined();
+    const consumption = prisma.serviceConsumption.create.mock.calls[0][0];
+    expect(consumption.data.qty).toBe(0.5);
+  });
+
+  test('decrements a whole unit once partialMlUsed crosses the bottle volume', async () => {
+    // Bottle is 10 mL, already 9.5 mL consumed; next 0.5 mL rule tips it over.
+    const tippingRule = {
+      ...RULES[1],
+      product: { ...RULES[1].product, partialMlUsed: 9.5 },
+    };
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([tippingRule]);
     await applyAutoConsumptionForVisit({
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
     const stockUpdate = prisma.product.update.mock.calls[0][0];
     expect(stockUpdate.data.currentStock.decrement).toBe(1);
-    const consumption = prisma.serviceConsumption.create.mock.calls[0][0];
-    expect(consumption.data.qty).toBe(1);
+    expect(stockUpdate.data.partialMlUsed).toBe(0);
   });
 
   test('serviceConsumption row carries the product name + visitId', async () => {
@@ -149,24 +171,17 @@ describe('lib/autoConsumptionApplier — applyAutoConsumptionForVisit', () => {
     expect(result.skipped[0].reason).toContain('boom');
   });
 
-  test('skips audit log when skipAuditLog opt is true', async () => {
-    prisma.autoConsumptionRule.findMany.mockResolvedValue([RULES[0]]);
-    await applyAutoConsumptionForVisit(
-      { id: 7, serviceId: 100, tenantId: 1, status: 'completed' },
-      { skipAuditLog: true }
-    );
-    expect(prisma.auditLog.create).not.toHaveBeenCalled();
-  });
-
-  test('writes audit log when applied > 0 (default)', async () => {
+  test('does NOT write an audit row — auto-consumption is system-triggered and the ServiceConsumption ledger is the source of truth', async () => {
+    // The applier intentionally skips writeAudit: there is no real user actor
+    // (cron / event-bus trigger), and the per-visit ServiceConsumption rows
+    // created above already form an auditable ledger powering the P&L-by-
+    // Service report. Adding an AUTO_CONSUMPTION_APPLIED audit row would
+    // duplicate that ledger without adding new tamper-evidence value.
     prisma.autoConsumptionRule.findMany.mockResolvedValue([RULES[0]]);
     await applyAutoConsumptionForVisit({
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
-    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
-    const auditCall = prisma.auditLog.create.mock.calls[0][0];
-    expect(auditCall.data.entity).toBe('Visit');
-    expect(auditCall.data.action).toBe('AUTO_CONSUMPTION_APPLIED');
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });
 
@@ -187,11 +202,12 @@ describe('lib/autoConsumptionApplier — start (eventBus listener)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('lib/autoConsumptionApplier — extended coverage', () => {
   test('emits low-stock warning when consumed units take stock to <= 0', async () => {
-    // Cotton has currentStock=3, threshold=5; consume 5 units → newStock = -2, must warn.
+    // Cotton has currentStock=3, threshold=5; consume 5 units (volume=1 → 5 units deducted)
+    // → newStock = -2, must warn.
     const drainRule = {
       ...RULES[1],
       quantityPerVisit: 5,
-      product: { ...RULES[1].product, currentStock: 3 },
+      product: { ...RULES[1].product, currentStock: 3, volume: 1 },
     };
     prisma.autoConsumptionRule.findMany.mockResolvedValue([drainRule]);
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -224,8 +240,9 @@ describe('lib/autoConsumptionApplier — extended coverage', () => {
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
     expect(result.applied).toHaveLength(2);
+    // qty is the raw consumedMl (rule.quantityPerVisit) — not unit count.
     expect(result.applied[0]).toEqual({ ruleId: 1, productId: 200, qty: 1 });
-    expect(result.applied[1]).toEqual({ ruleId: 2, productId: 201, qty: 1 });
+    expect(result.applied[1]).toEqual({ ruleId: 2, productId: 201, qty: 0.5 });
   });
 
   test('does NOT write audit log when applied.length === 0 (all rules failed)', async () => {
@@ -240,18 +257,15 @@ describe('lib/autoConsumptionApplier — extended coverage', () => {
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
-  test('audit log payload includes serviceId + rulesApplied + productsConsumed list', async () => {
+  test('does NOT write an audit log on multi-rule apply (system-triggered, no userId; ServiceConsumption is the ledger)', async () => {
+    // The applier intentionally skips writeAudit — the audit schema requires a
+    // valid userId FK, and auto-consumption fires from the eventBus / cron with
+    // no real user actor. The ServiceConsumption rows form the auditable ledger.
     prisma.autoConsumptionRule.findMany.mockResolvedValue(RULES);
     await applyAutoConsumptionForVisit({
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
-    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
-    const auditCall = prisma.auditLog.create.mock.calls[0][0];
-    // `details` is stringified JSON in writeAudit; parse + assert shape.
-    const details = JSON.parse(auditCall.data.details);
-    expect(details.serviceId).toBe(100);
-    expect(details.rulesApplied).toBe(2);
-    expect(details.productsConsumed).toEqual([200, 201]);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   test('swallows audit-write failures without throwing or marking applied as skipped', async () => {

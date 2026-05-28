@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
+const digilockerClient = require("../services/digilockerClient");
 
 const { JWT_SECRET } = require("../config/secrets");
 const PORTAL_TOKEN_TTL = "7d";
@@ -292,6 +293,219 @@ router.get("/contracts", verifyPortalToken, async (req, res) => {
   } catch (err) {
     console.error("[Portal][contracts]", err);
     res.status(500).json({ error: "Failed to fetch contracts" });
+  }
+});
+
+// ─── Travel customer-portal — itineraries + trips ─────────────────────
+//
+// End-users (travel customers) logged into the portal need to see their
+// own trips. The shape is "give me everything booked under my Contact"
+// so the customer dashboard can render trips + itineraries + payment
+// status in one fetch. Travel-tenants only: a non-travel-tenant Contact
+// gets an empty array (the wellness-tenant portal still works for
+// tickets/invoices via the routes above).
+
+async function requireTravelPortalTenant(req, res, next) {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.portal.tenantId },
+      select: { vertical: true },
+    });
+    if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+    if (tenant.vertical !== "travel") {
+      return res.status(403).json({
+        error: "Travel-tenant feature",
+        code: "NOT_TRAVEL_TENANT",
+      });
+    }
+    next();
+  } catch (err) {
+    console.error("[Portal][travel-tenant-guard]", err);
+    res.status(500).json({ error: "Tenant lookup failed" });
+  }
+}
+
+// GET /api/portal/travel/itineraries — accepted itineraries for this contact
+router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const itineraries = await prisma.itinerary.findMany({
+      where: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+      orderBy: { startDate: "desc" },
+      include: {
+        items: { orderBy: { position: "asc" } },
+      },
+    });
+    res.json(itineraries);
+  } catch (err) {
+    console.error("[Portal][travel/itineraries]", err);
+    res.status(500).json({ error: "Failed to fetch itineraries" });
+  }
+});
+
+// ─── DigiLocker / Aadhaar verification for the logged-in customer ────
+//
+// PRD §4.5 extended for end-user self-service KYC. Three endpoints:
+//   POST /api/portal/kyc/initiate { redirectUri } → { state, oauthUrl, sessionId }
+//   POST /api/portal/kyc/callback { state, code } → { verified, aadhaarLast4 }
+//   GET  /api/portal/kyc/status                    → { kycStatus, aadhaarLast4, ... }
+//
+// Travel-tenant guard applied — non-travel tenants 403. Stub-mode when
+// APISETU_PARTNER_API_KEY unset (deterministic synthetic values).
+// Real-mode (set in .env) hits APISetu's DigiLocker partner endpoint;
+// see services/digilockerClient.js for the exact contract.
+//
+// Aadhaar Act §29: only aadhaarLast4 + opaque kycTokenId are persisted /
+// surfaced. Full 12-digit Aadhaar never crosses the network or hits
+// our DB.
+
+// POST /api/portal/kyc/initiate
+router.post("/kyc/initiate", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const { redirectUri } = req.body || {};
+    if (!redirectUri || typeof redirectUri !== "string") {
+      return res.status(400).json({ error: "redirectUri required", code: "MISSING_FIELDS" });
+    }
+    const contact = await prisma.contact.findUnique({
+      where: { id: req.portal.contactId },
+      select: { id: true, tenantId: true, kycStatus: true },
+    });
+    if (!contact) return res.status(404).json({ error: "Contact not found" });
+    if (contact.kycStatus === "verified") {
+      return res.status(409).json({
+        error: "Already verified",
+        code: "ALREADY_VERIFIED",
+      });
+    }
+    const { state, oauthUrl } = await digilockerClient.initiateSession({
+      subjectId: contact.id,
+      subjectType: "contact",
+      redirectUri,
+    });
+    const session = await prisma.digilockerSession.create({
+      data: {
+        tenantId: contact.tenantId,
+        subjectType: "contact",
+        contactId: contact.id,
+        state,
+        status: "initiated",
+        redirectUri,
+      },
+      select: { id: true, state: true },
+    });
+    await prisma.contact.update({
+      where: { id: contact.id },
+      data: { kycStatus: "initiated", kycInitiatedAt: new Date() },
+    });
+    res.json({ state: session.state, oauthUrl, sessionId: session.id });
+  } catch (err) {
+    console.error("[Portal][kyc/initiate]", err);
+    res.status(500).json({ error: "Failed to initiate DigiLocker session" });
+  }
+});
+
+// POST /api/portal/kyc/callback
+router.post("/kyc/callback", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const { state, code } = req.body || {};
+    if (!state || typeof state !== "string") {
+      return res.status(400).json({ error: "state required", code: "MISSING_FIELDS" });
+    }
+    const session = await prisma.digilockerSession.findFirst({
+      where: {
+        state,
+        tenantId: req.portal.tenantId,
+        contactId: req.portal.contactId,
+        subjectType: "contact",
+      },
+    });
+    if (!session) {
+      return res.status(404).json({
+        error: "DigiLocker session not found",
+        code: "SESSION_NOT_FOUND",
+      });
+    }
+    if (session.status === "verified") {
+      return res.status(409).json({
+        error: "DigiLocker session already verified",
+        code: "INVALID_STATE",
+      });
+    }
+    if (session.status === "expired" || session.status === "failed") {
+      return res.status(410).json({
+        error: `DigiLocker session ${session.status}`,
+        code: "SESSION_GONE",
+      });
+    }
+    let aadhaarLast4, aadhaarTokenId;
+    try {
+      ({ aadhaarLast4, aadhaarTokenId } = await digilockerClient.exchangeCallback({ state, code }));
+    } catch (e) {
+      await prisma.$transaction([
+        prisma.digilockerSession.update({
+          where: { id: session.id },
+          data: { status: "failed", failedReason: String(e.message).slice(0, 200) },
+        }),
+        prisma.contact.update({
+          where: { id: req.portal.contactId },
+          data: { kycStatus: "failed" },
+        }),
+      ]);
+      return res.status(502).json({
+        error: "DigiLocker exchange failed",
+        code: "EXCHANGE_FAILED",
+      });
+    }
+    await prisma.$transaction([
+      prisma.digilockerSession.update({
+        where: { id: session.id },
+        data: {
+          status: "verified",
+          verifiedAt: new Date(),
+          resultLast4: aadhaarLast4,
+          resultTokenId: aadhaarTokenId,
+        },
+      }),
+      prisma.contact.update({
+        where: { id: req.portal.contactId },
+        data: {
+          kycStatus: "verified",
+          kycVerifiedAt: new Date(),
+          aadhaarLast4,
+          kycTokenId: aadhaarTokenId,
+        },
+      }),
+    ]);
+    // NEVER return aadhaarTokenId — server-side only (Aadhaar Act §29).
+    res.json({ verified: true, aadhaarLast4 });
+  } catch (err) {
+    console.error("[Portal][kyc/callback]", err);
+    res.status(500).json({ error: "Failed to complete DigiLocker verification" });
+  }
+});
+
+// GET /api/portal/kyc/status
+router.get("/kyc/status", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const contact = await prisma.contact.findUnique({
+      where: { id: req.portal.contactId },
+      select: {
+        kycStatus: true,
+        kycInitiatedAt: true,
+        kycVerifiedAt: true,
+        aadhaarLast4: true,
+      },
+    });
+    if (!contact) return res.status(404).json({ error: "Contact not found" });
+    res.json({
+      kycStatus: contact.kycStatus || "unverified",
+      kycInitiatedAt: contact.kycInitiatedAt,
+      kycVerifiedAt: contact.kycVerifiedAt,
+      aadhaarLast4: contact.aadhaarLast4,
+      mode: digilockerClient.authMode(),
+    });
+  } catch (err) {
+    console.error("[Portal][kyc/status]", err);
+    res.status(500).json({ error: "Failed to fetch KYC status" });
   }
 });
 

@@ -471,14 +471,20 @@ describe('<Channels /> — WhatsApp / Telephony cards', () => {
     await user.click(whatsappTab);
 
     await waitFor(() => {
-      expect(screen.getByText('Meta Cloud API')).toBeInTheDocument();
+      // The Meta Cloud card label is the full provider.label string
+      // ("Meta Cloud API (manual paste — advanced)"). Match on the
+      // leading substring so the assertion stays stable across copy
+      // tweaks of the trailing parenthetical.
+      expect(screen.getByText(/Meta Cloud API/i)).toBeInTheDocument();
     });
     // Plain inputs — phoneNumberId + businessAccountId render as <input>.
     expect(screen.getByPlaceholderText('Phone Number ID')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Business Account ID')).toBeInTheDocument();
-    // Secret-field labels exist (rendered next to the <Lock> icon).
-    expect(screen.getByText('Access Token')).toBeInTheDocument();
-    expect(screen.getByText('Webhook Verify Token')).toBeInTheDocument();
+    // Secret-field labels exist (SecretFieldRow renders "<label>:" next
+    // to the <Lock> icon — match the leading substring so the trailing
+    // colon doesn't trip exact-string matching).
+    expect(screen.getByText(/Access Token/)).toBeInTheDocument();
+    expect(screen.getByText(/Webhook Verify Token/)).toBeInTheDocument();
   });
 
   // 6: Save on WhatsApp's Meta Cloud card fires PUT to the correct provider
@@ -491,7 +497,7 @@ describe('<Channels /> — WhatsApp / Telephony cards', () => {
 
     const whatsappTab = screen.getByRole('button', { name: /WhatsApp/i });
     await user.click(whatsappTab);
-    await waitFor(() => expect(screen.getByText('Meta Cloud API')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Meta Cloud API/i)).toBeInTheDocument());
 
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation(defaultFetch);
@@ -897,10 +903,17 @@ describe('<Channels /> — template CRUD', () => {
     await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith('Template updated'));
   });
 
-  // 3: SMS template delete — window.confirm gates the DELETE.
-  it('deleting an SMS template prompts window.confirm and DELETEs on accept', async () => {
+  // 3: SMS template delete — notify.confirm({title, message}) gates the
+  // DELETE. The SUT calls the in-app notify.confirm helper (not the
+  // browser-native window.confirm), so we assert against notifyConfirm
+  // with the structured {title, message, ...} arg.
+  it('deleting an SMS template prompts notify.confirm and DELETEs on accept', async () => {
     const user = userEvent.setup();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    // The outer #586 describe resets notifyConfirm in beforeEach but this
+    // template-CRUD describe does not — re-arm the resolve(true) impl
+    // explicitly so the destructive prompt fires-through.
+    notifyConfirm.mockReset();
+    notifyConfirm.mockImplementation(() => Promise.resolve(true));
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/sms/templates' && (!opts || opts.method === 'GET' || opts.method === undefined)) {
         return Promise.resolve([{ id: 7, name: 'Discount Blast', body: 'Limited time!' }]);
@@ -918,14 +931,19 @@ describe('<Channels /> — template CRUD', () => {
     const deleteBtn = screen.getByTitle('Delete');
     await user.click(deleteBtn);
 
-    expect(confirmSpy).toHaveBeenCalledWith('Delete template "Discount Blast"?');
+    // notify.confirm called with the structured destructive-prompt arg.
+    expect(notifyConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Delete template',
+        message: 'Delete template "Discount Blast"?',
+      }),
+    );
     await waitFor(() => {
       const delCall = fetchApiMock.mock.calls.find(
         ([url, opts]) => url === '/api/sms/templates/7' && opts?.method === 'DELETE',
       );
       expect(delCall).toBeTruthy();
     });
-    confirmSpy.mockRestore();
   });
 
   // 4: Duplicate template — opens editor in 'create' mode with name suffixed

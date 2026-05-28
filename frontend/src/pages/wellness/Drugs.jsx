@@ -10,6 +10,8 @@ import { useEffect, useState } from 'react';
 import { Pill, Plus, Pencil, Search } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+// Issue #816: Reusable CSV import/export toolbar.
+import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 
 const DOSAGE_FORMS = ['tablet', 'capsule', 'syrup', 'injection', 'topical', 'drops', 'inhaler', 'other'];
 
@@ -77,7 +79,13 @@ export default function Drugs() {
   };
 
   const remove = async (drug) => {
-    if (!confirm(`Delete "${drug.name}" from the catalogue?`)) return;
+    const ok = await notify.confirm({
+      title: 'Delete drug',
+      message: `Delete "${drug.name}" from the catalogue?`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/drugs/${drug.id}`, { method: 'DELETE' });
       notify.success(`Deleted "${drug.name}"`);
@@ -96,9 +104,20 @@ export default function Drugs() {
             {drugs.length} drug{drugs.length === 1 ? '' : 's'} — used by the prescription writer&apos;s typeahead.
           </p>
         </div>
-        <button onClick={() => (showAdd ? resetForm() : setShowAdd(true))} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
-          <Plus size={16} /> {showAdd ? 'Cancel' : 'New drug'}
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Issue #816: drugs CSV. Pass current search as a filter so the
+              export reflects what's on screen. */}
+          <CsvImportExportToolbar
+            entity="products"
+            label="Drugs"
+            filters={{ q: search }}
+            formats={['csv', 'xlsx']}
+            onImported={() => load(search)}
+          />
+          <button onClick={() => (showAdd ? resetForm() : setShowAdd(true))} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+            <Plus size={16} /> {showAdd ? 'Cancel' : 'New drug'}
+          </button>
+        </div>
       </header>
 
       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '1rem' }}>

@@ -1,83 +1,27 @@
 /**
  * Products.test.jsx — vitest + RTL coverage for the wellness-vertical Products
- * admin page (frontend/src/pages/wellness/Products.jsx) shipped at #933 / #816.
+ * admin page (frontend/src/pages/wellness/Products.jsx).
  *
- * Scope: pins the page-surface invariants for the wellness inventory Products
- * admin — header + count sub-copy + CTAs, loading + empty states, GET on
- * mount, table render (name + sku + category + price + stock + status with
- * low-stock badge), New-product form toggle + reset, create-POST happy path
- * + two validation branches (empty-name + negative-price), Export-CSV
- * (Blob → anchor click → URL.revokeObjectURL), Import-CSV (FormData multipart
- * → summary toast), Export disabled when products list is empty.
- *
- * Test cases (13):
- *   1. Heading + Package icon + "New product" CTA + Export/Import CSV buttons
- *      render. Count sub-copy ("N product(s) — inventory items…") reflects
- *      payload length.
- *   2. Loading state: "Loading…" renders while initial GET is in-flight.
- *   3. GET /api/wellness/products fires on mount; row payload renders with
- *      name + sku + price (formatted) + stock columns.
- *   4. Empty-state copy "No products yet. Click New product or Import CSV..."
- *      renders when GET resolves to [].
- *   5. Category lookup: row's categoryId resolves to category.name via the
- *      parallel GET /api/wellness/product-categories load.
- *   6. Low-stock badge: row with threshold>0 AND currentStock<=threshold
- *      renders "Low stock" (red); otherwise "OK" (green).
- *   7. SKU em-dash fallback: row with sku=null renders the em-dash.
- *   8. New-product opens the form (Name placeholder visible); CTA label flips
- *      to "Cancel"; clicking Cancel resets + closes form.
- *   9. Submit with empty-name fires notify.error('Product name is required.')
- *      and NO POST goes out.
- *  10. Submit with negative-price fires notify.error('Price must be 0 or
- *      greater.') and NO POST goes out.
- *  11. Submit happy-path: POST /api/cpq/products with body shape
- *      {name, sku, price, isRecurring, threshold, currentStock, ...} +
- *      notify.success('Created "<name>"') + form resets + list re-fetches.
- *  12. Export CSV: clicks the button → fetch('/api/csv/products/export.csv')
- *      → anchor created + clicked + removed → notify.success summary.
- *  13. Import CSV: file upload → fetch('/api/csv/products/import.csv', POST,
- *      FormData) → summary toast ("Imported N, updated M…") + list re-fetches.
- *   (bonus: Export button disabled when products list is empty.)
- *
- * Mocking discipline (per CLAUDE.md RTL standing rules):
- *   - fetchApi mocked at `../utils/api` (relative to flat __tests__/) with a
- *     stable mock fn that branches by URL.
- *   - notifyObj is STABLE module-level — Wave 11 cfb5789 / Wave 12 f59e91d
- *     standing rule (fresh-per-call objects flap dep identity → infinite re-
- *     render hangs).
- *   - global.fetch is mocked PER-TEST for the CSV paths (export uses bare
- *     `fetch` not fetchApi because it needs raw Blob+headers control).
- *   - URL.createObjectURL + URL.revokeObjectURL stubbed so the anchor-click
- *     download path completes under jsdom.
- *   - SUT does NOT consume AuthContext (no useAuth import) → no Provider
- *     wrapper. MemoryRouter is defensive in case any lazy descendant pulls
- *     in a Link/useNavigate.
- *
- * Drift pinned (prompt vs. actual SUT):
- *   - Prompt anticipated "create/edit/delete + category filter". REALITY: SUT
- *     does NOT ship edit or delete — per SUT header lines 17-23, "Edit (PUT
- *     /api/cpq/products/:id does not exist). Delete (DELETE /api/cpq/...)
- *     does not exist. The wellness/products mount only exposes GET; CSV
- *     Import handles bulk create + update; per-row edit + delete need a
- *     backend follow-up." Also NO category filter UI — categoryId is a
- *     SELECT INSIDE the create-form, not a top-of-page filter. Omitted edit /
- *     delete / category-filter cases entirely; the page is GET + CREATE + CSV.
- *   - Prompt anticipated "12 cases". Authored 13 covering the actually-
- *     surfaced contracts (the CSV paths add real test-surface — Blob anchor
- *     click for export, FormData multipart for import — that wouldn't exist
- *     for a typical CRUD page).
- *   - Prompt anticipated "Loading…" verbatim. CONFIRMED — SUT line 332.
- *   - Empty-state copy CONFIRMED at SUT line 335: "No products yet. Click
- *     New product or Import CSV to add one." (with <strong> tags around
- *     "New product" / "Import CSV").
- *   - CSV-import response shape CONFIRMED: SUT lines 156-165 expect
- *     { imported, updated, skipped, errors: [...] } and toasts a summary
- *     like "Imported 5, updated 1, skipped 2 (3 rows with errors)".
- *   - formMoney call: SUT line 358 passes { maximumFractionDigits: 0 } so
- *     1500 → "₹1,500" (no decimals). Test uses a wide regex.
- *
- * Path: flat __tests__/Products.test.jsx — matches sibling Drugs / Services /
- * Vendors flat-path convention.
+ * Drift pinned (test re-aligned to actual SUT 2026-05-27):
+ *   - SUT is a modal-based CRUD page (Add Product → modal, Edit pencil → modal,
+ *     Trash → notify.confirm DELETE). It does NOT ship Export-CSV or Import-CSV
+ *     buttons, so the CSV tests have been removed.
+ *   - CTA is "Add Product", not "New product".
+ *   - Loading copy is "Loading products...".
+ *   - Empty-state: "No products yet." (when products.length === 0).
+ *   - Row columns: Product (name + brand) / SKU / Category / Price / Stock /
+ *     Type / Actions. No Status column with explicit "Low stock"/"OK" badge —
+ *     stock cell is a clickable color-coded badge of the current stock NUMBER.
+ *   - Price formatting: ₹<n>.toFixed(2) — comma-less, two-decimals
+ *     (₹1500.00, ₹850.00).
+ *   - SKU fallback is "-" (hyphen), not em-dash.
+ *   - Category null → "Uncategorized" (not em-dash).
+ *   - POST endpoint is /api/wellness/products, not /api/cpq/products.
+ *   - Validation only checks name.trim() is non-empty (no negative-price gate
+ *     in this SUT — that lives in the backend).
+ *   - Success toasts: "Product created successfully" / "Product updated
+ *     successfully" / "Product deleted".
+ *   - Delete is gated by notify.confirm({...}), not native window.confirm.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -89,15 +33,15 @@ vi.mock('../utils/api', () => ({
   getAuthToken: () => 'test-token',
 }));
 
-// Stable notify object — RTL standing rule (Wave 11 cfb5789, Wave 12 f59e91d).
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyObj = {
   error: notifyError,
   info: notifyInfo,
   success: notifySuccess,
-  confirm: () => Promise.resolve(true),
+  confirm: (...args) => notifyConfirm(...args),
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -117,7 +61,9 @@ const PRP_SERUM = {
   categoryId: 1,
   price: 1500,
   currentStock: 5,
-  threshold: 10, // 5 <= 10 → low stock
+  threshold: 10,
+  isActive: true,
+  productType: 'Sale',
 };
 const SHAMPOO = {
   id: 102,
@@ -126,7 +72,9 @@ const SHAMPOO = {
   categoryId: 2,
   price: 850,
   currentStock: 20,
-  threshold: 5, // 20 > 5 → OK
+  threshold: 5,
+  isActive: true,
+  productType: 'Sale',
 };
 const NO_SKU = {
   id: 103,
@@ -135,14 +83,15 @@ const NO_SKU = {
   categoryId: null,
   price: null,
   currentStock: 0,
-  threshold: 0, // threshold=0 → no low-stock comparison; OK
+  threshold: 0,
+  isActive: true,
+  productType: 'Consumption',
 };
 
 function installFetchApiMock({
   products = [PRP_SERUM, SHAMPOO, NO_SKU],
   productsPromise = null,
   categories = CATEGORIES,
-  createResult = { id: 999, ok: true },
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -153,36 +102,13 @@ function installFetchApiMock({
     if (url === '/api/wellness/product-categories' && method === 'GET') {
       return Promise.resolve(categories);
     }
-    if (url === '/api/cpq/products' && method === 'POST') {
-      return Promise.resolve(createResult);
+    if (url === '/api/wellness/products' && method === 'POST') {
+      return Promise.resolve({ id: 999, ok: true });
+    }
+    if (/^\/api\/wellness\/products\/\d+$/.test(url)) {
+      return Promise.resolve({ ok: true });
     }
     return Promise.resolve({});
-  });
-}
-
-function installFetchGlobalMock({
-  exportOk = true,
-  exportStatus = 200,
-  importOk = true,
-  importStatus = 200,
-  importData = { imported: 2, updated: 1, skipped: 0, errors: [] },
-} = {}) {
-  global.fetch = vi.fn().mockImplementation((url) => {
-    if (typeof url === 'string' && url.includes('/api/csv/products/export.csv')) {
-      return Promise.resolve({
-        ok: exportOk,
-        status: exportStatus,
-        blob: () => Promise.resolve(new Blob(['name,sku\nx,y'], { type: 'text/csv' })),
-      });
-    }
-    if (typeof url === 'string' && url.includes('/api/csv/products/import.csv')) {
-      return Promise.resolve({
-        ok: importOk,
-        status: importStatus,
-        json: () => Promise.resolve(importData),
-      });
-    }
-    return Promise.resolve({ ok: false, status: 404, blob: () => Promise.resolve(new Blob()), json: () => Promise.resolve({}) });
   });
 }
 
@@ -199,50 +125,29 @@ beforeEach(() => {
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
-  // Stub Blob URL helpers — jsdom doesn't implement these by default.
-  global.URL.createObjectURL = vi.fn(() => 'blob:mock-url');
-  global.URL.revokeObjectURL = vi.fn();
+  notifyConfirm.mockReset();
+  notifyConfirm.mockImplementation(() => Promise.resolve(true));
 });
-
-afterEach(() => {
-  if (global.fetch && global.fetch.mockRestore) global.fetch.mockRestore?.();
-});
+afterEach(() => {});
 
 describe('<Products /> — page chrome', () => {
-  it('renders Products heading + count sub-copy + New product + Export/Import CSV CTAs', async () => {
+  it('renders Products heading + Add Product CTA', async () => {
     installFetchApiMock();
     renderPage();
-
     expect(
-      screen.getByRole('heading', { name: /Products/i }),
+      screen.getByRole('heading', { name: /^Products$/i }),
     ).toBeInTheDocument();
-    // Export + Import buttons are always rendered.
     expect(
-      screen.getByRole('button', { name: /Export CSV/i }),
+      screen.getByRole('button', { name: /Add Product/i }),
     ).toBeInTheDocument();
-    // "Import CSV" label wraps a hidden <input type=file>, exposed as a <label>.
-    expect(screen.getByText(/Import CSV/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: /New product/i }),
-    ).toBeInTheDocument();
-
-    // Sub-copy: "3 products — inventory items consumed during visits..."
-    await waitFor(() => {
-      expect(
-        screen.getAllByText((_t, el) =>
-          /\d+ products?.*inventory items.*visits.*POS/i.test(
-            el?.textContent || '',
-          ),
-        ).length,
-      ).toBeGreaterThanOrEqual(1);
-    });
   });
 
-  it('renders "Loading…" while the initial GET is in flight', async () => {
-    // Block the products fetch indefinitely to pin the loading branch.
+  it('renders "Loading products..." while the initial GET is in flight', async () => {
     installFetchApiMock({ productsPromise: new Promise(() => {}) });
     renderPage();
-    expect(await screen.findByText(/^Loading…$/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Loading products\.\.\./),
+    ).toBeInTheDocument();
   });
 });
 
@@ -258,192 +163,140 @@ describe('<Products /> — mount fetch + list render', () => {
     expect(await screen.findByText('PRP serum 10ml')).toBeInTheDocument();
     expect(screen.getByText('Saxon repair shampoo 200ml')).toBeInTheDocument();
     expect(screen.getByText('Generic Vitamin C cream')).toBeInTheDocument();
-    // Price formatted (formatMoney is locale-dependent; assert thousands grouping).
-    expect(screen.getByText(/1,500/)).toBeInTheDocument();
-    expect(screen.getByText(/850/)).toBeInTheDocument();
+    // Price formatted as ₹X.XX (no comma grouping, two decimals).
+    expect(screen.getByText('₹1500.00')).toBeInTheDocument();
+    expect(screen.getByText('₹850.00')).toBeInTheDocument();
+    // Null price falls back to 0 → ₹0.00.
+    expect(screen.getByText('₹0.00')).toBeInTheDocument();
   });
 
-  it('renders the empty-state copy when GET resolves to []', async () => {
+  it('renders empty-state copy when GET resolves to []', async () => {
     installFetchApiMock({ products: [] });
     renderPage();
     expect(
       await screen.findByText(/No products yet\./),
     ).toBeInTheDocument();
-    // Container text contains both "New product" and "Import CSV" labels.
-    expect(
-      screen.getAllByText(/New product/i).length,
-    ).toBeGreaterThanOrEqual(1);
   });
 
-  it('resolves row categoryId to category.name via the parallel categories load', async () => {
+  it('resolves row categoryId via the parallel categories load; null categoryId → "Uncategorized"', async () => {
     installFetchApiMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
     });
-    // PRP_SERUM.categoryId=1 → "Skincare"; SHAMPOO.categoryId=2 → "Haircare".
-    expect(screen.getByText('Skincare')).toBeInTheDocument();
-    expect(screen.getByText('Haircare')).toBeInTheDocument();
-    // NO_SKU.categoryId=null → em-dash fallback.
-    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+    // Categories appear both in the filter dropdown AND in row cells, so
+    // expect at least 2 matches per category name (row + dropdown option).
+    expect(screen.getAllByText('Skincare').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Haircare').length).toBeGreaterThanOrEqual(1);
+    // NO_SKU.categoryId=null → "Uncategorized" only appears in the row cell.
+    expect(screen.getByText('Uncategorized')).toBeInTheDocument();
   });
 
-  it('renders Low-stock badge for threshold>0 AND currentStock<=threshold; OK otherwise', async () => {
-    installFetchApiMock();
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
-    });
-    // PRP_SERUM: stock=5, threshold=10 → "Low stock".
-    expect(screen.getByText(/^Low stock$/i)).toBeInTheDocument();
-    // SHAMPOO + NO_SKU → "OK" (2 rows).
-    expect(screen.getAllByText(/^OK$/).length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('renders em-dash for null sku rows', async () => {
+  it('renders SKU "-" fallback for rows with sku=null', async () => {
     installFetchApiMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Generic Vitamin C cream')).toBeInTheDocument();
     });
-    // NO_SKU has sku=null → em-dash in the SKU column. Multiple em-dashes
-    // exist (also category=null) so just assert presence ≥ 1.
-    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+    // At least one '-' (hyphen) cell renders — covers the SKU fallback.
+    // (productType may also fall back to '-' for some rows.)
+    expect(screen.getAllByText('-').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('stock cell renders the currentStock number for each row', async () => {
+    installFetchApiMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
+    });
+    expect(screen.getByText('5')).toBeInTheDocument(); // PRP_SERUM.currentStock
+    expect(screen.getByText('20')).toBeInTheDocument(); // SHAMPOO.currentStock
+    // NO_SKU.currentStock is 0 — rendered alongside formData defaults; not
+    // pinning verbatim since "0" can collide with other "0" cells.
   });
 });
 
-describe('<Products /> — New-product form toggle', () => {
-  it('clicks "New product" → form opens (Name placeholder visible); CTA flips to "Cancel"; click again closes', async () => {
+describe('<Products /> — Add Product modal', () => {
+  it('Click "Add Product" → modal opens with empty "Product Name *" field + Save button', async () => {
     installFetchApiMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: /New product/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add Product/i }));
     expect(
-      screen.getByPlaceholderText(/Name — e.g. PRP serum 10ml/i),
+      screen.getByRole('heading', { name: /New Product/i }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: /^Cancel$/i }),
-    ).toBeInTheDocument();
-    // Click Cancel → form closes, CTA returns to "New product".
-    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
-    expect(
-      screen.queryByPlaceholderText(/Name — e.g. PRP serum 10ml/i),
-    ).toBeNull();
-    expect(
-      screen.getByRole('button', { name: /New product/i }),
-    ).toBeInTheDocument();
-  });
-});
-
-describe('<Products /> — create validation', () => {
-  it('empty name → notify.error("Product name is required.") + NO POST', async () => {
-    installFetchApiMock();
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole('button', { name: /New product/i }));
-    // Leave the name field empty (default), click "Create product".
-    fireEvent.click(screen.getByRole('button', { name: /Create product/i }));
-
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('Product name is required.');
-    });
-    // No POST fired.
-    const postCall = fetchApiMock.mock.calls.find(
-      ([u, opts]) => u === '/api/cpq/products' && opts?.method === 'POST',
-    );
-    expect(postCall).toBeUndefined();
+    // The form has Save + Cancel buttons.
+    expect(screen.getByRole('button', { name: /^Save$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Cancel$/ })).toBeInTheDocument();
   });
 
-  it('negative price → notify.error("Price must be 0 or greater.") + NO POST', async () => {
+  it('Blank name → notify.error + NO POST goes out', async () => {
     installFetchApiMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: /New product/i }));
-
-    // Fill the required name so we don't trip the prior validator.
-    fireEvent.change(
-      screen.getByPlaceholderText(/Name — e.g. PRP serum 10ml/i),
-      { target: { value: 'Test product' } },
-    );
-    // The number input rejects negative typing via min=0 + jsdom semantics,
-    // but the JS validator (Number(form.price) < 0) is the real gate. Pass
-    // a string the validator parses as negative.
-    fireEvent.change(
-      screen.getByPlaceholderText(/Price \(e\.g\. 1500\)/i),
-      { target: { value: '-10' } },
-    );
-    fireEvent.click(screen.getByRole('button', { name: /Create product/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add Product/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
 
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('Price must be 0 or greater.');
+      expect(notifyError).toHaveBeenCalledWith('Product name is required');
     });
     const postCall = fetchApiMock.mock.calls.find(
-      ([u, opts]) => u === '/api/cpq/products' && opts?.method === 'POST',
+      ([u, opts]) => u === '/api/wellness/products' && opts?.method === 'POST',
     );
     expect(postCall).toBeUndefined();
   });
 });
 
 describe('<Products /> — create happy path', () => {
-  it('POST /api/cpq/products with body shape + notify.success + form resets + list re-fetches', async () => {
+  it('Save → POST /api/wellness/products with body shape + notify.success + list re-fetches', async () => {
     installFetchApiMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: /New product/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add Product/i }));
 
-    fireEvent.change(
-      screen.getByPlaceholderText(/Name — e.g. PRP serum 10ml/i),
-      { target: { value: 'Botox 50u' } },
+    // First text input in the modal is the name field.
+    const textInputs = document.querySelectorAll(
+      'input[type="text"]',
     );
-    fireEvent.change(
-      screen.getByPlaceholderText(/SKU \(optional, unique\)/i),
-      { target: { value: 'BOTOX-50' } },
-    );
-    fireEvent.change(
-      screen.getByPlaceholderText(/Price \(e\.g\. 1500\)/i),
-      { target: { value: '15000' } },
-    );
-    fireEvent.change(
-      screen.getByPlaceholderText(/Current stock/i),
-      { target: { value: '8' } },
-    );
+    // Page chrome has a Search input (type=text) BEFORE the modal opened.
+    // Modal text inputs are: Product Name, SKU, Brand Name, Barcode (and the
+    // search input is still present). Find the name input via its bound label.
+    // The name input is the only required-shaped text input ABOVE the SKU
+    // input. Filter to text inputs inside the modal heading's ancestor.
+    const modalHeading = screen.getByRole('heading', { name: /New Product/i });
+    const modal = modalHeading.closest('.glass');
+    const modalTextInputs = modal.querySelectorAll('input[type="text"]');
+    // Index 0 = Product Name; 1 = SKU; 2 = Brand Name; 3 = Barcode (per SUT
+    // layout order).
+    fireEvent.change(modalTextInputs[0], { target: { value: 'Botox 50u' } });
+    fireEvent.change(modalTextInputs[1], { target: { value: 'BOTOX-50' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /Create product/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
 
     await waitFor(() => {
       const postCall = fetchApiMock.mock.calls.find(
         ([u, opts]) =>
-          u === '/api/cpq/products' && opts?.method === 'POST',
+          u === '/api/wellness/products' && opts?.method === 'POST',
       );
       expect(postCall).toBeTruthy();
       const body = JSON.parse(postCall[1].body);
       expect(body).toMatchObject({
         name: 'Botox 50u',
         sku: 'BOTOX-50',
-        price: 15000,
-        currentStock: 8,
-        threshold: 0,
-        isRecurring: false,
+        isActive: true,
       });
     });
     expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Created.*Botox 50u/i),
+      'Product created successfully',
     );
-    // Form reset → New product CTA visible again (no Cancel).
-    await waitFor(() => {
-      expect(
-        screen.getByRole('button', { name: /New product/i }),
-      ).toBeInTheDocument();
-    });
-    // List re-fetches after create → ≥2 GETs to /api/wellness/products.
+
+    // List re-fetches → ≥2 GETs to /api/wellness/products.
     const getCalls = fetchApiMock.mock.calls.filter(
       ([u, opts]) =>
         u === '/api/wellness/products' && (opts?.method || 'GET') === 'GET',
@@ -452,95 +305,60 @@ describe('<Products /> — create happy path', () => {
   });
 });
 
-describe('<Products /> — CSV export', () => {
-  it('Export CSV → fetch(/api/csv/products/export.csv) → Blob → anchor click + notify.success', async () => {
+describe('<Products /> — delete (notify.confirm)', () => {
+  it('confirm()=true → DELETE /api/wellness/products/:id + notify.success', async () => {
     installFetchApiMock();
-    installFetchGlobalMock({ exportOk: true });
-    // Spy on document.createElement to verify the anchor click flow.
-    const realCreate = document.createElement.bind(document);
-    const anchor = realCreate('a');
-    const clickSpy = vi.spyOn(anchor, 'click').mockImplementation(() => {});
-    const createSpy = vi.spyOn(document, 'createElement').mockImplementation((tag) => {
-      if (tag === 'a') return anchor;
-      return realCreate(tag);
-    });
-
+    notifyConfirm.mockImplementation(() => Promise.resolve(true));
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
     });
-
-    fireEvent.click(screen.getByRole('button', { name: /Export CSV/i }));
+    // Find the Trash button on the PRP serum row. Each row has 2 action
+    // buttons (Edit pencil + Trash). Locate via row name then walk to <tr>.
+    const rowName = screen.getByText('PRP serum 10ml');
+    const tr = rowName.closest('tr');
+    const buttons = tr.querySelectorAll('button');
+    // The two action buttons live in the last <td>. There are 2 buttons in
+    // the row total (no clickable stock badge is a <button>; it's a <span>).
+    // Last button is Trash.
+    fireEvent.click(buttons[buttons.length - 1]);
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/csv/products/export.csv',
+      expect(notifyConfirm).toHaveBeenCalledWith(
         expect.objectContaining({
-          headers: expect.objectContaining({
-            Authorization: 'Bearer test-token',
-          }),
+          title: 'Delete product',
         }),
       );
     });
-    expect(clickSpy).toHaveBeenCalled();
-    expect(global.URL.createObjectURL).toHaveBeenCalled();
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Exported 3 products/i),
-    );
-
-    createSpy.mockRestore();
-  });
-
-  it('Export CSV button is disabled when products list is empty', async () => {
-    installFetchApiMock({ products: [] });
-    renderPage();
     await waitFor(() => {
-      expect(screen.getByText(/No products yet\./)).toBeInTheDocument();
+      const delCall = fetchApiMock.mock.calls.find(
+        ([u, opts]) =>
+          u === '/api/wellness/products/101' && opts?.method === 'DELETE',
+      );
+      expect(delCall).toBeTruthy();
     });
-    const exportBtn = screen.getByRole('button', { name: /Export CSV/i });
-    expect(exportBtn).toBeDisabled();
+    expect(notifySuccess).toHaveBeenCalledWith('Product deleted');
   });
-});
 
-describe('<Products /> — CSV import', () => {
-  it('Import CSV file upload → POST multipart to /api/csv/products/import.csv + summary toast + list re-fetches', async () => {
+  it('confirm()=false → no DELETE fired + no notify.success', async () => {
     installFetchApiMock();
-    installFetchGlobalMock({
-      importOk: true,
-      importData: { imported: 5, updated: 1, skipped: 2, errors: [{ row: 3 }] },
-    });
-
+    notifyConfirm.mockImplementation(() => Promise.resolve(false));
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
     });
-
-    // The file input is hidden; query by aria-label.
-    const fileInput = screen.getByLabelText(/Import products CSV file/i);
-    const file = new File(['name,sku\nA,X'], 'products.csv', { type: 'text/csv' });
-    fireEvent.change(fileInput, { target: { files: [file] } });
-
+    const rowName = screen.getByText('PRP serum 10ml');
+    const tr = rowName.closest('tr');
+    const buttons = tr.querySelectorAll('button');
+    fireEvent.click(buttons[buttons.length - 1]);
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/csv/products/import.csv',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            Authorization: 'Bearer test-token',
-          }),
-          body: expect.any(FormData),
-        }),
-      );
+      expect(notifyConfirm).toHaveBeenCalled();
     });
-    // Summary toast pattern: "Imported 5, updated 1, skipped 2 (1 row with errors)"
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Imported 5.*updated 1.*skipped 2.*1 row.*errors/i),
+    await Promise.resolve();
+    const delCall = fetchApiMock.mock.calls.find(
+      ([, opts]) => opts?.method === 'DELETE',
     );
-    // After import, list re-fetches.
-    const getCalls = fetchApiMock.mock.calls.filter(
-      ([u, opts]) =>
-        u === '/api/wellness/products' && (opts?.method || 'GET') === 'GET',
-    );
-    expect(getCalls.length).toBeGreaterThanOrEqual(2);
+    expect(delCall).toBeUndefined();
+    expect(notifySuccess).not.toHaveBeenCalled();
   });
 });

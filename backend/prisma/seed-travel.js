@@ -533,11 +533,25 @@ async function main() {
     { subBrand: "tmc", category: "flight", routeOrSku: "BLR-DPS-Economy", baseRate: 22000 },
     { subBrand: "tmc", category: "transport", routeOrSku: "DPS-Bali-AC-Coach", baseRate: 4500 },
   ];
+  // Idempotent guard: TravelCostMaster has no @unique constraint, so key
+  // on the natural business tuple (tenantId, subBrand, category, routeOrSku).
+  // Earlier versions used `upsert({ where: { id: -1 } })` which never matched
+  // and duplicated on every re-run — confirmed live by row-counts after a
+  // double-run (9 → 18). Fixed 2026-05-26.
+  let cmCreated = 0;
   for (const r of costRows) {
-    await prisma.travelCostMaster.upsert({
-      where: { id: -1 }, // never matches; forces create
-      update: {},
-      create: {
+    const existing = await prisma.travelCostMaster.findFirst({
+      where: {
+        tenantId: tenant.id,
+        subBrand: r.subBrand,
+        category: r.category,
+        routeOrSku: r.routeOrSku,
+      },
+      select: { id: true },
+    });
+    if (existing) continue;
+    await prisma.travelCostMaster.create({
+      data: {
         tenantId: tenant.id,
         subBrand: r.subBrand,
         category: r.category,
@@ -546,9 +560,10 @@ async function main() {
         currency: "INR",
         isActive: true,
       },
-    }).catch(() => null); // tolerate re-seed
+    });
+    cmCreated++;
   }
-  console.log(`[seed-travel] cost-master rows: ${costRows.length}`);
+  console.log(`[seed-travel] cost-master rows: ${cmCreated} created, ${costRows.length - cmCreated} already existed`);
 
   // ── 6. Season calendar ──────────────────────────────────────────────
   const seasons = [
@@ -558,7 +573,20 @@ async function main() {
     { subBrand: "tmc", seasonName: "school-summer", startDate: "2026-05-15", endDate: "2026-07-15", multiplier: 1.4 },
     { subBrand: "tmc", seasonName: "school-winter", startDate: "2026-12-15", endDate: "2027-01-15", multiplier: 1.2 },
   ];
+  // Idempotent guard: TravelSeasonCalendar has no @unique constraint —
+  // key on (tenantId, subBrand, seasonName) which is the natural business
+  // identifier. Previously `create()`-without-guard duplicated on re-run.
+  let scCreated = 0;
   for (const s of seasons) {
+    const existing = await prisma.travelSeasonCalendar.findFirst({
+      where: {
+        tenantId: tenant.id,
+        subBrand: s.subBrand,
+        seasonName: s.seasonName,
+      },
+      select: { id: true },
+    });
+    if (existing) continue;
     await prisma.travelSeasonCalendar.create({
       data: {
         tenantId: tenant.id,
@@ -568,9 +596,10 @@ async function main() {
         endDate: new Date(s.endDate),
         multiplier: s.multiplier,
       },
-    }).catch(() => null);
+    });
+    scCreated++;
   }
-  console.log(`[seed-travel] season calendar rows: ${seasons.length}`);
+  console.log(`[seed-travel] season calendar rows: ${scCreated} created, ${seasons.length - scCreated} already existed`);
 
   // ── 7. Markup rules ─────────────────────────────────────────────────
   const markupRules = [
@@ -580,7 +609,22 @@ async function main() {
     { subBrand: "tmc", scope: "hotel", markupPct: 12, priority: 100 },
     { subBrand: "tmc", scope: "flight", markupPct: 7, priority: 100 },
   ];
+  // Idempotent guard: TravelMarkupRule has no @unique constraint — key on
+  // (tenantId, subBrand, scope, priority) which uniquely identifies the
+  // placeholder default rule for the seed. Real admin-created rules carry
+  // distinct matchKeyJson/markupPct and won't collide with this guard.
+  let mrCreated = 0;
   for (const m of markupRules) {
+    const existing = await prisma.travelMarkupRule.findFirst({
+      where: {
+        tenantId: tenant.id,
+        subBrand: m.subBrand,
+        scope: m.scope,
+        priority: m.priority,
+      },
+      select: { id: true },
+    });
+    if (existing) continue;
     await prisma.travelMarkupRule.create({
       data: {
         tenantId: tenant.id,
@@ -591,9 +635,10 @@ async function main() {
         priority: m.priority,
         isActive: true,
       },
-    }).catch(() => null);
+    });
+    mrCreated++;
   }
-  console.log(`[seed-travel] markup rules: ${markupRules.length}`);
+  console.log(`[seed-travel] markup rules: ${mrCreated} created, ${markupRules.length - mrCreated} already existed`);
 
   // ── 8. Sample TMC trips + RFU itinerary + microsite ─────────────────
   // Without entity data the Dashboard tiles all read 0 — fine for a unit
@@ -774,6 +819,13 @@ async function seedSampleTrips(tenantId) {
   });
   // RFU pilgrim contact for the Umrah itinerary.
   const pilgrimEmail = "ahmed.pilgrim@demo.test";
+  // Seed a portal password so the travel customer can log into the
+  // Customer Portal (/api/portal/login). Same convention as the rest
+  // of the demo: "password123". Idempotent — upsert with both
+  // create-time AND update-time portalPasswordHash so re-runs don't
+  // null-out a manually-changed password but DO populate it on first
+  // seed.
+  const pilgrimPortalHash = await bcrypt.hash("password123", 10);
   const pilgrim = await prisma.contact.upsert({
     where: { email_tenantId: { email: pilgrimEmail, tenantId } },
     update: {},
@@ -784,8 +836,18 @@ async function seedSampleTrips(tenantId) {
       subBrand: "rfu",
       status: "Lead",
       tenantId,
+      portalPasswordHash: pilgrimPortalHash,
     },
   });
+  // Idempotent backfill for existing pilgrim rows that pre-date the
+  // portalPasswordHash addition (the upsert update={} above intentionally
+  // doesn't overwrite, so we set it explicitly only when null).
+  if (!pilgrim.portalPasswordHash) {
+    await prisma.contact.update({
+      where: { id: pilgrim.id },
+      data: { portalPasswordHash: pilgrimPortalHash },
+    });
+  }
 
   // Three TMC trips — confirmed (upcoming), in-trip (mid-flight), completed (past).
   const now = new Date();

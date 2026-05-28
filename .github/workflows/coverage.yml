@@ -236,6 +236,7 @@ jobs:
             tests/deals_documents.spec.js \
             tests/wellness-patient-soft-delete-api.spec.js \
             tests/wallet-giftcard-coupon-api.spec.js \
+            tests/giftcards-apply-api.spec.js \
             tests/memberships-api.spec.js \
             tests/memberships-dashboard-api.spec.js \
             tests/inventory-extension-api.spec.js \
@@ -258,9 +259,14 @@ jobs:
             tests/pii-masking-api.spec.js \
             tests/developer-api.spec.js \
             tests/security-validation-2026-05-12-api.spec.js \
+            tests/wellness-csv-io-api.spec.js \
+            tests/role-landing-path-api.spec.js \
+            tests/widgets-api.spec.js \
+            tests/page-catalog-api.spec.js \
             tests/knowledge-base-api.spec.js \
             tests/landing-pages-api.spec.js \
             tests/portal-api.spec.js \
+            tests/portal-kyc-api.spec.js \
             tests/tenant-switch-disabled-api.spec.js \
             tests/voice-transcription-api.spec.js \
             tests/channels-credentials-api.spec.js \
@@ -290,6 +296,7 @@ jobs:
             tests/pos-sale-finalize-api.spec.js \
             tests/travel-quote-lines-api.spec.js \
             tests/travel-idor-cross-tenant-api.spec.js \
+            tests/wellness-role-types-api.spec.js \
             tests/subscriptions-api.spec.js \
             tests/funnel-api.spec.js \
             tests/win-loss-api.spec.js \

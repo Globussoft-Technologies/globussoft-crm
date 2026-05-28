@@ -12,8 +12,11 @@ import {
   stripTenantOverride,
 } from '../../middleware/security.js';
 
-function makeReqRes({ body } = {}) {
-  const req = { body };
+function makeReqRes({ body, path = '/api/contacts' } = {}) {
+  // stripTenantOverride introspects req.path to skip stripping for the
+  // public /customer/register endpoint. Default to a non-public path so
+  // the strip-tenant assertions exercise the normal (stripping) branch.
+  const req = { body, path };
   const headers = {};
   let statusCode = 200;
   const res = {

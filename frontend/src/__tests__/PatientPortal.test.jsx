@@ -716,11 +716,13 @@ describe('<PatientPortal /> — PDF download', () => {
     delete globalThis.URL.revokeObjectURL;
   });
 
-  it('clicking PDF button → GET /prescriptions/<id>/pdf with Bearer token + blob URL', async () => {
+  // Drift: SUT now calls `/api/wellness/portal/prescriptions/<id>/pdf`
+  // (portal-token-scoped endpoint), not the staff `/api/wellness/prescriptions/<id>/pdf`.
+  it('clicking PDF button → GET /portal/prescriptions/<id>/pdf with Bearer token + blob URL', async () => {
     const baseFetch = installFetchMock();
     // Patch the existing stub to handle the PDF endpoint.
     globalThis.fetch = vi.fn((url, opts = {}) => {
-      if (typeof url === 'string' && url.startsWith('/api/wellness/prescriptions/') && url.endsWith('/pdf')) {
+      if (typeof url === 'string' && url.startsWith('/api/wellness/portal/prescriptions/') && url.endsWith('/pdf')) {
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -740,11 +742,11 @@ describe('<PatientPortal /> — PDF download', () => {
       const pdfCall = fetchStub.mock.calls.find(
         ([u]) =>
           typeof u === 'string' &&
-          u.startsWith('/api/wellness/prescriptions/') &&
+          u.startsWith('/api/wellness/portal/prescriptions/') &&
           u.endsWith('/pdf'),
       );
       expect(pdfCall).toBeTruthy();
-      expect(pdfCall[0]).toBe('/api/wellness/prescriptions/7001/pdf');
+      expect(pdfCall[0]).toBe('/api/wellness/portal/prescriptions/7001/pdf');
       expect(pdfCall[1].headers.Authorization).toBe('Bearer seeded-token');
     });
     // Blob URL was created.
@@ -756,7 +758,7 @@ describe('<PatientPortal /> — PDF download', () => {
   it('PDF download failure (500) → notify.error called with "Could not download"', async () => {
     const baseFetch = installFetchMock();
     globalThis.fetch = vi.fn((url, opts = {}) => {
-      if (typeof url === 'string' && url.startsWith('/api/wellness/prescriptions/') && url.endsWith('/pdf')) {
+      if (typeof url === 'string' && url.startsWith('/api/wellness/portal/prescriptions/') && url.endsWith('/pdf')) {
         return Promise.resolve({
           ok: false,
           status: 500,

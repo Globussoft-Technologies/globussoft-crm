@@ -99,6 +99,12 @@ backend/.c8tmp/
 e2e/.scratch/
 .release-draft-v3.4.14.md
 
+# One-shot local data-migration kit (Zylu → Enhanced Wellness tenantId=2).
+# TSVs contain real PII (employee emails, salaries, customer phone numbers,
+# invoices); the importer is local-DB only and not used in prod. Kept on
+# disk for re-runs, never committed.
+data-imports/
+
 # Travel CRM client docs — source-of-truth PDFs/DOCX from Yasin's team. Stay
 # local for review; the synthesized PRD lives at docs/TRAVEL_CRM_PRD.md.
 travel-crm/

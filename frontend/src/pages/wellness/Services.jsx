@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import {
   Sparkles,
@@ -14,18 +15,66 @@ import {
   X,
   Save,
   Activity,
-  Download,
+  ChevronDown,
   Upload,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+
+// Parse Service.imageUrls (Prisma stores a JSON-stringified array of URLs).
+// `allImagesOf` returns the full array; `firstImageOf` is a convenience
+// wrapper used by the card thumbnail + the inline edit-form preview.
+// Tolerates both array and string-encoded shapes — older rows may carry
+// either form, and a few legacy rows hold a plain non-JSON URL.
+function allImagesOf(service) {
+  const raw = service?.imageUrls;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.filter(Boolean);
+  } catch {
+    if (typeof raw === 'string' && /^https?:\/\//i.test(raw)) return [raw];
+  }
+  return [];
+}
+function firstImageOf(service) {
+  return allImagesOf(service)[0] || null;
+}
+
+// POST a file to /api/wellness/upload/service-image and return the URL.
+// Mirrors the multipart pattern used by Products.jsx — same `file` field
+// name, same response shape, same backend uploadImage() helper.
+async function uploadImageFile(file) {
+  const token = getAuthToken();
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch('/api/wellness/upload/service-image', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: fd,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Upload failed (${res.status})`);
+  }
+  const data = await res.json();
+  return data.url;
+}
 import { formatMoney, currencySymbol } from '../../utils/money';
 import { formatDate } from '../../utils/date';
 // #316: NumberInput strips the `<oldValue><newTyped>` concatenation artifact
 // users hit when doing Ctrl+A → Delete → retype on number fields.
 import { NumberInput } from '../../utils/numberInput';
+// Issue #816: Reusable CSV import/export toolbar for the Catalog + Packages tabs.
+import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 
 const tierColor = { high: '#ef4444', medium: '#f59e0b', low: '#64748b' };
+const TICKET_TIER_OPTIONS = [
+  { value: 'low', label: 'Low tier' },
+  { value: 'medium', label: 'Medium tier' },
+  { value: 'high', label: 'High tier' },
+];
 const statusColor = { active: '#10b981', completed: '#6366f1', paused: '#f59e0b', cancelled: '#ef4444' };
 
 export default function Services() {
@@ -34,23 +83,34 @@ export default function Services() {
   const initialTab = searchParams.get('tab') || 'catalog';
   const [tab, setTab] = useState(initialTab); // catalog | packages | activetreatments
   const [services, setServices] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [treatments, setTreatments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [treatmentsLoading, setTreatmentsLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTreatment, setSelectedTreatment] = useState(null);
-  // #816 — Catalog CSV import/export. Backend at /api/csv/services/{export.csv,
-  // import.csv} (mounted in server.js:679). Export downloads the current
-  // tenant's services; import accepts a multipart file with row-level error
-  // reporting. The file input is hidden + triggered by the Import button.
-  const [csvBusy, setCsvBusy] = useState(false);
+  const [selectedService, setSelectedService] = useState(null);
+  // When the modal's "Edit" button fires, we close the modal AND tell the
+  // matching ServiceCard to flip into edit mode. The card watches this id
+  // via a useEffect + clears it on consumption, so the next modal-edit
+  // click works repeatedly.
+  const [editRequestId, setEditRequestId] = useState(null);
   // #115: basePrice starts blank (not 0) so the placeholder shows and the
   // validity gate rejects submit until the user enters ≥ ₹1.
-  const [form, setForm] = useState({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
+  const [form, setForm] = useState({ name: '', categoryIds: [], ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '', imageUrl: '' });
 
   const load = () => {
     setLoading(true);
     fetchApi('/api/wellness/services').then(setServices).catch(() => setServices([])).finally(() => setLoading(false));
+  };
+
+  const loadCategories = () => {
+    setCategoriesLoading(true);
+    fetchApi('/api/wellness/service-categories?limit=1000')
+      .then(res => setCategories(res.sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => setCategories([]))
+      .finally(() => setCategoriesLoading(false));
   };
 
   const loadTreatments = () => {
@@ -58,80 +118,32 @@ export default function Services() {
     fetchApi('/api/wellness/activetreatment').then(res => setTreatments(res.data || [])).catch(() => setTreatments([])).finally(() => setTreatmentsLoading(false));
   };
 
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    loadCategories();
+  }, []);
   useEffect(() => {
     if (tab === 'activetreatments') {
       loadTreatments();
     }
   }, [tab]);
 
-  // #816 — Export the current tenant's services as CSV. Uses fetch + blob
-  // (not a plain <a href>) because the API requires the Authorization
-  // header; <a> downloads can't set headers.
-  const exportCsv = async () => {
-    setCsvBusy(true);
-    try {
-      const token = getAuthToken();
-      const res = await fetch('/api/csv/services/export.csv', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`Export failed (${res.status})`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `services-${new Date().toISOString().slice(0, 10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      notify.success(`Exported ${services.length} service${services.length === 1 ? '' : 's'}.`);
-    } catch (e) {
-      notify.error(e.message || 'CSV export failed.');
-    } finally {
-      setCsvBusy(false);
-    }
-  };
-
-  // #816 — Import services from CSV. Multipart upload to the same csv_io
-  // route. Backend returns { imported, skipped, errors: [{row, msg}] } —
-  // we toast a summary and re-load on success.
-  const importCsv = async (file) => {
-    if (!file) return;
-    setCsvBusy(true);
-    try {
-      const token = getAuthToken();
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/csv/services/import.csv', {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: fd,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `Import failed (${res.status})`);
-      const imported = data.imported || 0;
-      const skipped = data.skipped || 0;
-      const errCount = (data.errors || []).length;
-      let msg = `Imported ${imported} service${imported === 1 ? '' : 's'}`;
-      if (skipped) msg += `; skipped ${skipped}`;
-      if (errCount) msg += `; ${errCount} row${errCount === 1 ? '' : 's'} with errors (see network response)`;
-      notify.success(msg);
-      load();
-    } catch (e) {
-      notify.error(e.message || 'CSV import failed.');
-    } finally {
-      setCsvBusy(false);
-    }
-  };
-
   const submit = async (e) => {
     e.preventDefault();
     try {
-      await fetchApi('/api/wellness/services', { method: 'POST', body: JSON.stringify(form) });
+      // Use first category as primary categoryId for backend compatibility.
+      // imageUrls is a JSON array column — backend stringifies for us when
+      // we pass an array.
+      const submitData = {
+        ...form,
+        categoryId: form.categoryIds?.[0] || null,
+        imageUrls: form.imageUrl ? [form.imageUrl] : null,
+      };
+      delete submitData.imageUrl;
+      await fetchApi('/api/wellness/services', { method: 'POST', body: JSON.stringify(submitData) });
       notify.success(`Service "${form.name}" created`);
       setShowAdd(false);
-      setForm({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
+      setForm({ name: '', categoryIds: [], ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '', imageUrl: '' });
       load();
     } catch (_err) { /* fetchApi already toasted */ }
   };
@@ -146,35 +158,12 @@ export default function Services() {
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Each service has a price, duration, and target marketing radius.</p>
         </div>
         {tab === 'catalog' && (
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            {/* #816 — Export/Import CSV. Mirrors Zylu's catalog flow. */}
-            <button
-              type="button"
-              onClick={exportCsv}
-              disabled={csvBusy || services.length === 0}
-              title="Download all services as CSV"
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy || services.length === 0 ? 'not-allowed' : 'pointer', opacity: csvBusy || services.length === 0 ? 0.6 : 1 }}
-            >
-              <Download size={16} /> Export CSV
-            </button>
-            <label
-              title="Upload services from CSV (same columns as Export)"
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy ? 'not-allowed' : 'pointer', opacity: csvBusy ? 0.6 : 1 }}
-            >
-              <Upload size={16} /> Import CSV
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                disabled={csvBusy}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) importCsv(file);
-                  e.target.value = ''; // allow re-import of same filename
-                }}
-                style={{ display: 'none' }}
-              />
-            </label>
-            <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Issue #816: services CSV. No active filter, so we pass an empty
+                filters object — the export reflects the same all-active view
+                as the catalog tab. */}
+            <CsvImportExportToolbar entity="services" label="Services" formats={['csv', 'xlsx']} onImported={load} />
+            <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
               <Plus size={16} /> {showAdd ? 'Cancel' : 'New service'}
             </button>
           </div>
@@ -183,15 +172,19 @@ export default function Services() {
             already rendered inline below, so this just scrolls to the form
             anchor — no modal needed. */}
         {tab === 'packages' && (
-          <button
-            onClick={() => {
-              const el = document.getElementById('package-builder-anchor');
-              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
-          >
-            <Plus size={16} /> Create Package
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Issue #816: packages CSV. */}
+            <CsvImportExportToolbar entity="packages" label="Packages" formats={['csv', 'xlsx']} />
+            <button
+              onClick={() => {
+                const el = document.getElementById('package-builder-anchor');
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+            >
+              <Plus size={16} /> Create Package
+            </button>
+          </div>
         )}
       </header>
 
@@ -213,11 +206,16 @@ export default function Services() {
         <CatalogTab
           services={services}
           loading={loading}
+          categories={categories}
+          categoriesLoading={categoriesLoading}
           showAdd={showAdd}
           form={form}
           setForm={setForm}
           submit={submit}
           onChanged={load}
+          onOpenService={setSelectedService}
+          editRequestId={editRequestId}
+          clearEditRequest={() => setEditRequestId(null)}
         />
       )}
 
@@ -237,6 +235,19 @@ export default function Services() {
           treatment={selectedTreatment}
           onClose={() => setSelectedTreatment(null)}
           onChanged={() => { loadTreatments(); setSelectedTreatment(null); }}
+        />
+      )}
+
+      {selectedService && (
+        <ServiceDetailModal
+          service={selectedService}
+          categories={categories}
+          onClose={() => setSelectedService(null)}
+          onEdit={(svc) => {
+            setSelectedService(null);
+            setEditRequestId(svc.id);
+          }}
+          onChanged={load}
         />
       )}
     </div>
@@ -266,7 +277,7 @@ function TabBtn({ active, onClick, icon: Icon, label }) {
   );
 }
 
-function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChanged }) {
+function CatalogTab({ services, loading, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
   const notify = useNotify();
   return (
     <>
@@ -298,17 +309,20 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
             </div>
             <div>
               <label style={fieldLabel}>Category</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={inputStyle}>
-                {['hair', 'skin', 'aesthetics', 'slimming', 'ayurveda', 'salon'].map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <MultiSelectDropdown
+                categories={categories}
+                categoriesLoading={categoriesLoading}
+                selectedIds={form.categoryIds}
+                onChange={(ids) => setForm({ ...form, categoryIds: ids })}
+              />
             </div>
             <div>
               <label style={fieldLabel}>Ticket tier</label>
-              <select value={form.ticketTier} onChange={(e) => setForm({ ...form, ticketTier: e.target.value })} style={inputStyle}>
-                <option value="low">Low tier</option>
-                <option value="medium">Medium tier</option>
-                <option value="high">High tier</option>
-              </select>
+              <SingleSelectDropdown
+                value={form.ticketTier}
+                onChange={(v) => setForm({ ...form, ticketTier: v })}
+                options={TICKET_TIER_OPTIONS}
+              />
               {/* #364: explain tier semantics inline so the dropdown isn't a guessing game. */}
               <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.3rem', lineHeight: 1.4 }}>
                 LOW = quick consult / under {currencySymbol()}2K · MED = standard treatment / {currencySymbol()}2K-{currencySymbol()}10K · HIGH = procedure / {currencySymbol()}10K+
@@ -328,6 +342,13 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
             <div>
               <label style={fieldLabel}>Marketing radius (km)</label>
               <input type="number" min="0" placeholder="blank = unlimited" value={form.targetRadiusKm || ''} onChange={(e) => setForm({ ...form, targetRadiusKm: e.target.value ? parseInt(e.target.value) : null })} style={inputStyle} />
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label style={fieldLabel}>Service image</label>
+              <ImageUploadField
+                imageUrl={form.imageUrl}
+                onChange={(url) => setForm({ ...form, imageUrl: url })}
+              />
             </div>
             <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'flex-end' }}>
               <button
@@ -354,18 +375,40 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
         {services.map((s) => (
-          <ServiceCard key={s.id} service={s} onChanged={onChanged} />
+          <ServiceCard
+            key={s.id}
+            service={s}
+            onChanged={onChanged}
+            onOpen={onOpenService}
+            editRequested={editRequestId === s.id}
+            onEditConsumed={clearEditRequest}
+          />
         ))}
       </div>
     </>
   );
 }
 
-function ServiceCard({ service, onChanged }) {
+function ServiceCard({ service, onChanged, onOpen, editRequested, onEditConsumed }) {
   const notify = useNotify();
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(service);
+  // Hydrate the draft with a flat `imageUrl` (first of the JSON array) so
+  // the inline ImageUploadField stays controlled.
+  const [draft, setDraft] = useState(() => ({ ...service, imageUrl: firstImageOf(service) || '' }));
   const [saving, setSaving] = useState(false);
+  const imageSrc = firstImageOf(service);
+
+  // External edit trigger — the detail modal sets editRequestId on the
+  // parent; we flip into edit mode then clear the request so a subsequent
+  // modal-edit on the same card works again.
+  useEffect(() => {
+    if (editRequested) {
+      setEditing(true);
+      setDraft({ ...service, imageUrl: firstImageOf(service) || '' });
+      if (onEditConsumed) onEditConsumed();
+    }
+
+  }, [editRequested]);
 
   const save = async () => {
     // #149: validate before submit. Backend rejects basePrice<=0 (batch 1 #115)
@@ -402,6 +445,7 @@ function ServiceCard({ service, onChanged }) {
           targetRadiusKm: radius,
           description: draft.description || null,
           isActive: draft.isActive !== false,
+          imageUrls: draft.imageUrl ? [draft.imageUrl] : null,
         }),
       });
       notify.success(`Saved "${draft.name}"`);
@@ -441,11 +485,15 @@ function ServiceCard({ service, onChanged }) {
           <input type="number" min="0" step="1" value={draft.targetRadiusKm || ''} onChange={(e) => setDraft({ ...draft, targetRadiusKm: e.target.value })} style={inputStyle} placeholder="km radius" />
         </div>
         <textarea value={draft.description || ''} onChange={(e) => setDraft({ ...draft, description: e.target.value })} rows={2} style={{ ...inputStyle, resize: 'vertical' }} placeholder="Description" />
+        <div>
+          <label style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Image</label>
+          <ImageUploadField imageUrl={draft.imageUrl || ''} onChange={(url) => setDraft({ ...draft, imageUrl: url })} />
+        </div>
         <div style={{ display: 'flex', gap: '0.4rem' }}>
           <button onClick={save} disabled={saving} style={{ flex: 1, padding: '0.5rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
             <Save size={14} /> {saving ? 'Saving…' : 'Save'}
           </button>
-          <button onClick={() => { setEditing(false); setDraft(service); }} style={{ padding: '0.5rem 0.75rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, cursor: 'pointer' }}>
+          <button onClick={() => { setEditing(false); setDraft({ ...service, imageUrl: firstImageOf(service) || '' }); }} style={{ padding: '0.5rem 0.75rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, cursor: 'pointer' }}>
             <X size={14} />
           </button>
         </div>
@@ -454,11 +502,27 @@ function ServiceCard({ service, onChanged }) {
   }
 
   return (
-    <div className="glass" style={{ padding: '1.25rem', position: 'relative' }}>
-      <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem' }}>
-        <button onClick={() => setEditing(true)} aria-label={`Edit service ${service.name}`} title="Edit" style={iconBtn}><Pencil size={12} /></button>
-        <button onClick={remove} aria-label={`Deactivate service ${service.name}`} title="Deactivate" style={{ ...iconBtn, color: 'var(--danger-color)' }}><Trash2 size={12} /></button>
+    <div
+      className="glass"
+      style={{ padding: '1.25rem', position: 'relative', cursor: onOpen ? 'pointer' : 'default' }}
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={() => onOpen && onOpen(service)}
+      onKeyDown={(ev) => { if (onOpen && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); onOpen(service); } }}
+      title="Click to view details"
+    >
+      <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem', zIndex: 2 }} onClick={(e) => e.stopPropagation()}>
+        <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} aria-label={`Edit service ${service.name}`} title="Edit" style={iconBtn}><Pencil size={12} /></button>
+        <button onClick={(e) => { e.stopPropagation(); remove(); }} aria-label={`Deactivate service ${service.name}`} title="Deactivate" style={{ ...iconBtn, color: 'var(--danger-color)' }}><Trash2 size={12} /></button>
       </div>
+      {imageSrc && (
+        <img
+          src={imageSrc}
+          alt=""
+          style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, marginBottom: '0.75rem', background: 'rgba(255,255,255,0.04)' }}
+          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+        />
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', paddingRight: '3rem' }}>
         <div>
           <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{service.category}</div>
@@ -474,6 +538,165 @@ function ServiceCard({ service, onChanged }) {
         <span><MapPin size={12} style={{ verticalAlign: 'middle' }} /> {service.targetRadiusKm ? `${service.targetRadiusKm} km` : 'Unlimited'}</span>
       </div>
       {service.description && <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem', lineHeight: 1.4 }}>{service.description}</p>}
+    </div>
+  );
+}
+
+function ServiceDetailModal({ service, categories, onClose, onChanged, onEdit }) {
+  const notify = useNotify();
+  const images = allImagesOf(service);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [deleting, setDeleting] = useState(false);
+  const activeImage = images[Math.min(activeIdx, images.length - 1)];
+  const categoryName = (() => {
+    const cat = (categories || []).find((c) => c.id === service.categoryId);
+    return cat?.name || service.category || '—';
+  })();
+
+  const handleDelete = async () => {
+    if (deleting) return;
+    if (!await notify.confirm({ message: `Deactivate "${service.name}"? It won't show in the catalog or booking page.`, destructive: true, confirmText: 'Deactivate' })) return;
+    setDeleting(true);
+    try {
+      await fetchApi(`/api/wellness/services/${service.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ isActive: false }),
+      });
+      notify.success(`Deactivated "${service.name}"`);
+      onChanged && onChanged();
+      onClose && onClose();
+    } catch (_err) { /* fetchApi already surfaced the message */ }
+    setDeleting(false);
+  };
+
+  // Close on Escape + lock page scroll so the modal is the focus point.
+  // A previous version rendered the backdrop inline and a Layout-level
+  // transform/animation ancestor was making `position: fixed` resolve
+  // relative to the page content instead of the viewport — i.e. the modal
+  // would float somewhere near the top of the document and look invisible
+  // when the user had scrolled down. Rendering through a portal into
+  // document.body bypasses every ancestor containing-block, so `fixed`
+  // means "the viewport" and the centered modal lands where the user
+  // expects it.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
+
+  return createPortal((
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
+      onClick={onClose}
+    >
+      <div className="glass" style={{ maxWidth: 720, width: '100%', maxHeight: '90vh', overflow: 'auto', padding: '1.75rem', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} aria-label="Close" style={{ position: 'absolute', top: '0.75rem', right: '0.75rem', background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--text-secondary)', lineHeight: 1 }}>×</button>
+
+        {/* Image gallery — main image + thumbnail strip. If no images are
+            attached we render a neutral placeholder rather than empty space. */}
+        {images.length > 0 ? (
+          <div style={{ marginBottom: '1.25rem' }}>
+            <img
+              src={activeImage}
+              alt={service.name}
+              style={{ width: '100%', maxHeight: 320, objectFit: 'cover', borderRadius: 10, background: 'rgba(255,255,255,0.04)' }}
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            />
+            {images.length > 1 && (
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
+                {images.map((url, i) => (
+                  <button
+                    key={`${url}-${i}`}
+                    type="button"
+                    onClick={() => setActiveIdx(i)}
+                    aria-label={`Show image ${i + 1}`}
+                    style={{
+                      padding: 0,
+                      width: 60, height: 60,
+                      borderRadius: 6,
+                      overflow: 'hidden',
+                      border: i === activeIdx ? '2px solid var(--accent-color)' : '2px solid transparent',
+                      background: 'transparent',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ marginBottom: '1.25rem', padding: '2rem', textAlign: 'center', background: 'rgba(255,255,255,0.04)', borderRadius: 10, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            No images attached to this service.
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '1rem', marginBottom: '0.75rem' }}>
+          <div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {categoryName}
+            </div>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginTop: '0.2rem' }}>{service.name}</h2>
+          </div>
+          <span style={{ background: tierColor[service.ticketTier] || tierColor.medium, color: '#fff', padding: '0.25rem 0.65rem', borderRadius: 6, fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {service.ticketTier}
+          </span>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+          <DetailStat icon={<IndianRupee size={14} />} label="Base price" value={service.basePrice != null ? formatMoney(service.basePrice, { maximumFractionDigits: 0 }) : '—'} />
+          <DetailStat icon={<Clock size={14} />} label="Duration" value={service.durationMin ? `${service.durationMin} min` : '—'} />
+          <DetailStat icon={<MapPin size={14} />} label="Marketing radius" value={service.targetRadiusKm ? `${service.targetRadiusKm} km` : 'Unlimited'} />
+          <DetailStat icon={<Activity size={14} />} label="Status" value={service.isActive !== false ? 'Active' : 'Inactive'} />
+        </div>
+
+        {service.description && (
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.3rem' }}>Description</div>
+            <p style={{ fontSize: '0.9rem', lineHeight: 1.5, color: 'var(--text-primary)', margin: 0 }}>{service.description}</p>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+          <button
+            type="button"
+            onClick={() => onEdit && onEdit(service)}
+            disabled={!onEdit}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.55rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: onEdit ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: '0.85rem' }}
+          >
+            <Pencil size={14} /> Edit
+          </button>
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={deleting}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.55rem 1rem', background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 8, cursor: deleting ? 'wait' : 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+          >
+            <Trash2 size={14} /> {deleting ? 'Deactivating…' : 'Deactivate'}
+          </button>
+        </div>
+
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+          Service ID: {service.id} {service.createdAt && <> · Added {formatDate(service.createdAt)}</>}
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
+function DetailStat({ icon, label, value }) {
+  return (
+    <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.65rem 0.8rem', borderRadius: 8 }}>
+      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.2rem' }}>
+        {icon} {label}
+      </div>
+      <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-primary)' }}>{value}</div>
     </div>
   );
 }
@@ -597,7 +820,55 @@ function DetailRow({ label, value }) {
   );
 }
 
-const iconBtn = { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text-secondary)', padding: '0.25rem', borderRadius: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' };
+// Solid dark backdrop so the Edit / Delete icons stay legible when they
+// sit on top of a service image (transparent background made them
+// disappear against bright photos).
+const iconBtn = { background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.18)', color: '#fff', padding: '0.3rem', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' };
+
+// Shared upload control — preview + replace + remove. Used by the Create
+// form AND the inline edit form on each service card.
+function ImageUploadField({ imageUrl, onChange }) {
+  const notify = useNotify();
+  const [uploading, setUploading] = useState(false);
+  const inputRef = useRef(null);
+
+  const pick = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploading(true);
+    try {
+      const url = await uploadImageFile(file);
+      onChange(url);
+      notify.success('Image uploaded');
+    } catch (err) {
+      notify.error(err.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+      <input ref={inputRef} type="file" accept="image/*" onChange={pick} style={{ display: 'none' }} />
+      {imageUrl ? (
+        <>
+          <img src={imageUrl} alt="" style={{ width: 56, height: 56, borderRadius: 6, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.1)' }} />
+          <button type="button" onClick={() => inputRef.current?.click()} disabled={uploading} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.7rem', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem' }}>
+            <Upload size={13} /> {uploading ? 'Uploading…' : 'Replace'}
+          </button>
+          <button type="button" onClick={() => onChange('')} title="Remove image" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.7rem', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: 'var(--danger-color, #ef4444)', cursor: 'pointer', fontSize: '0.8rem' }}>
+            <X size={13} /> Remove
+          </button>
+        </>
+      ) : (
+        <button type="button" onClick={() => inputRef.current?.click()} disabled={uploading} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.8rem', background: 'transparent', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.85rem' }}>
+          <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload image'}
+        </button>
+      )}
+    </div>
+  );
+}
 
 function PackageBuilder({ services }) {
   const notify = useNotify();
@@ -888,6 +1159,349 @@ const labelStyle = {
   textTransform: 'uppercase',
   letterSpacing: '0.05em',
 };
+
+function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onChange }) {
+  const [isOpen, setIsOpen] = useState(false);
+  // Portal-rendered menu uses fixed positioning anchored to the button's
+  // viewport rect — sidesteps the .glass parent's backdrop-filter, which
+  // creates a stacking context that trapped the previous absolute-positioned
+  // menu behind the sibling service cards.
+  const [menuRect, setMenuRect] = useState({ top: 0, left: 0, width: 0 });
+  const buttonRef = useRef(null);
+
+  const selectedNames = categories
+    .filter(cat => selectedIds.includes(cat.id))
+    .map(cat => cat.name)
+    .join(', ');
+
+  const handleToggle = (catId) => {
+    if (selectedIds.includes(catId)) {
+      onChange(selectedIds.filter(id => id !== catId));
+    } else {
+      onChange([...selectedIds, catId]);
+    }
+  };
+
+  const updateRect = () => {
+    if (!buttonRef.current) return;
+    const r = buttonRef.current.getBoundingClientRect();
+    setMenuRect({ top: r.bottom + 8, left: r.left, width: r.width });
+  };
+
+  const handleOpen = () => {
+    updateRect();
+    setIsOpen(true);
+  };
+
+  // Re-anchor menu on scroll / resize while open.
+  useEffect(() => {
+    if (!isOpen) return;
+    updateRect();
+    window.addEventListener('scroll', updateRect, true);
+    window.addEventListener('resize', updateRect);
+    return () => {
+      window.removeEventListener('scroll', updateRect, true);
+      window.removeEventListener('resize', updateRect);
+    };
+  }, [isOpen]);
+
+  // Close on escape key
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && isOpen) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [isOpen]);
+
+  return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={handleOpen}
+        style={{
+          width: '100%',
+          padding: '0.6rem 0.75rem',
+          // --surface-color matches the adjacent <input> background under each
+          // theme (wellness.css force-overrides input bg to white in light mode;
+          // buttons need the same treatment to avoid a faint teal-grey tint).
+          background: 'var(--surface-color, rgba(255,255,255,0.04))',
+          border: isOpen
+            ? '1px solid var(--primary-color, var(--accent-color))'
+            : '1px solid var(--border-color, rgba(255,255,255,0.1))',
+          borderRadius: '6px',
+          color: 'var(--text-primary)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          cursor: 'pointer',
+          fontSize: '0.9rem',
+          transition: 'border-color 0.2s, background 0.2s',
+        }}
+      >
+        <span style={{ textAlign: 'left', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {categoriesLoading ? 'Loading...' : selectedNames || 'Select categories...'}
+        </span>
+        <ChevronDown size={16} style={{ marginLeft: '0.5rem', flexShrink: 0, transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+      </button>
+
+      {isOpen && createPortal(
+        <>
+          {/* Backdrop overlay - closes dropdown on click */}
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 9998,
+            }}
+            onClick={() => setIsOpen(false)}
+          />
+
+          {/* Dropdown menu — themed via CSS vars so light + dark mode both render legibly */}
+          <div
+            style={{
+              position: 'fixed',
+              top: menuRect.top,
+              left: menuRect.left,
+              width: menuRect.width,
+              maxHeight: '340px',
+              background: 'var(--bg-color)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              boxShadow: 'var(--shadow-lg, 0 20px 25px -5px rgba(0,0,0,0.25), 0 10px 10px -5px rgba(0,0,0,0.15))',
+              zIndex: 10000,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            {/* Scrollable content area */}
+            <div
+              style={{
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                flex: 1,
+              }}
+            >
+              {categoriesLoading ? (
+                <div style={{ padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>
+                  Loading categories...
+                </div>
+              ) : categories.length === 0 ? (
+                <div style={{ padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>
+                  No categories available
+                </div>
+              ) : (
+                categories.map((cat, idx) => {
+                  const isSelected = selectedIds.includes(cat.id);
+                  return (
+                    <label
+                      key={cat.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        padding: '0.65rem 1rem',
+                        cursor: 'pointer',
+                        borderBottom: idx < categories.length - 1 ? '1px solid var(--border-light, var(--border-color))' : 'none',
+                        transition: 'background 0.15s ease',
+                        backgroundColor: isSelected ? 'var(--subtle-bg-3, var(--accent-bg))' : 'transparent',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.backgroundColor = 'var(--hover-bg, var(--subtle-bg))';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = isSelected ? 'var(--subtle-bg-3, var(--accent-bg))' : 'transparent';
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleToggle(cat.id)}
+                        style={{
+                          cursor: 'pointer',
+                          accentColor: 'var(--primary-color, var(--accent-color))',
+                          width: '16px',
+                          height: '16px',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span style={{ fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: isSelected ? 500 : 400 }}>{cat.name}</span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Footer with count */}
+            {selectedIds.length > 0 && (
+              <div
+                style={{
+                  padding: '0.65rem 1rem',
+                  borderTop: '1px solid var(--border-light, var(--border-color))',
+                  fontSize: '0.8rem',
+                  color: 'var(--text-secondary)',
+                  backgroundColor: 'var(--subtle-bg, var(--hover-bg))',
+                  textAlign: 'center',
+                }}
+              >
+                {selectedIds.length} selected
+              </div>
+            )}
+          </div>
+        </>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+// Single-select variant of MultiSelectDropdown — same portal anchoring + theme
+// vars so light/dark and wellness/generic all render consistently. Replaces the
+// native <select> which leaks browser-default chrome on the ticket-tier field.
+function SingleSelectDropdown({ value, onChange, options }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [menuRect, setMenuRect] = useState({ top: 0, left: 0, width: 0 });
+  const buttonRef = useRef(null);
+
+  const selected = options.find((o) => o.value === value);
+  const selectedLabel = selected ? selected.label : '';
+
+  const updateRect = () => {
+    if (!buttonRef.current) return;
+    const r = buttonRef.current.getBoundingClientRect();
+    setMenuRect({ top: r.bottom + 8, left: r.left, width: r.width });
+  };
+
+  const handleOpen = () => {
+    updateRect();
+    setIsOpen((v) => !v);
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    updateRect();
+    window.addEventListener('scroll', updateRect, true);
+    window.addEventListener('resize', updateRect);
+    return () => {
+      window.removeEventListener('scroll', updateRect, true);
+      window.removeEventListener('resize', updateRect);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && isOpen) setIsOpen(false);
+    };
+    if (isOpen) {
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [isOpen]);
+
+  return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={handleOpen}
+        style={{
+          width: '100%',
+          padding: '0.6rem 0.75rem',
+          background: 'var(--surface-color, rgba(255,255,255,0.04))',
+          border: isOpen
+            ? '1px solid var(--primary-color, var(--accent-color))'
+            : '1px solid var(--border-color, rgba(255,255,255,0.1))',
+          borderRadius: '6px',
+          color: 'var(--text-primary)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          cursor: 'pointer',
+          fontSize: '0.9rem',
+          transition: 'border-color 0.2s, background 0.2s',
+        }}
+      >
+        <span style={{ textAlign: 'left', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {selectedLabel}
+        </span>
+        <ChevronDown size={16} style={{ marginLeft: '0.5rem', flexShrink: 0, transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+      </button>
+
+      {isOpen && createPortal(
+        <>
+          <div
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9998 }}
+            onClick={() => setIsOpen(false)}
+          />
+          <div
+            role="listbox"
+            style={{
+              position: 'fixed',
+              top: menuRect.top,
+              left: menuRect.left,
+              width: menuRect.width,
+              maxHeight: '340px',
+              background: 'var(--bg-color)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              boxShadow: 'var(--shadow-lg, 0 20px 25px -5px rgba(0,0,0,0.25), 0 10px 10px -5px rgba(0,0,0,0.15))',
+              zIndex: 10000,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div style={{ overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
+              {options.map((opt, idx) => {
+                const isSelected = opt.value === value;
+                return (
+                  <div
+                    key={opt.value}
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => { onChange(opt.value); setIsOpen(false); }}
+                    style={{
+                      padding: '0.65rem 1rem',
+                      cursor: 'pointer',
+                      borderBottom: idx < options.length - 1 ? '1px solid var(--border-light, var(--border-color))' : 'none',
+                      transition: 'background 0.15s ease',
+                      backgroundColor: isSelected ? 'var(--subtle-bg-3, var(--accent-bg))' : 'transparent',
+                      fontSize: '0.9rem',
+                      color: 'var(--text-primary)',
+                      fontWeight: isSelected ? 500 : 400,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isSelected) {
+                        e.currentTarget.style.backgroundColor = 'var(--hover-bg, var(--subtle-bg))';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = isSelected ? 'var(--subtle-bg-3, var(--accent-bg))' : 'transparent';
+                    }}
+                  >
+                    {opt.label}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>,
+        document.body
+      )}
+    </div>
+  );
+}
 
 // Visually-hidden style for screen-reader-only headings (a11y heading hierarchy).
 const srOnly = {

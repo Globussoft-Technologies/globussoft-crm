@@ -1,15 +1,18 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown, CheckCircle, Clock, Pill, Activity } from 'lucide-react';
+import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown, ZoomIn, ZoomOut, Maximize, Minimize } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
 import { formatDate } from '../../utils/date';
 import { currencySymbol, formatMoney } from '../../utils/money';
-import DateRangePicker, { effectiveRangeFor } from '../../components/DateRangePicker';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
 
 const tabStyle = (active) => ({
-  padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--accent-color)' : 'transparent',
+  // Primary CTA uses --primary-color (teal #265855 in wellness) with a fallback to
+  // --accent-color (blush) so generic theme — which has no --primary-color — still
+  // gets its blue accent. See CLAUDE.md "Primary CTAs use var(--primary-color,...)".
+  padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--primary-color, var(--accent-color))' : 'transparent',
   color: active ? '#fff' : 'var(--text-primary)', cursor: 'pointer', borderRadius: 8, fontSize: '0.85rem',
   display: 'flex', alignItems: 'center', gap: '0.35rem',
 });
@@ -22,16 +25,84 @@ function genderLabel(g) {
   return g;
 }
 
+// Strip every customer-facing reference to the Zylu POS — patient.source
+// values like "zylu-import", inline "[ZYLU-#nnn]" markers, and visit-note
+// strings like "Zylu booking #15029981". The data stays untouched at
+// rest; we just don't render those tokens to the end user.
+function isZyluSource(v) {
+  return typeof v === 'string' && /^zylu/i.test(v.trim());
+}
+function displaySource(v) {
+  if (!v || isZyluSource(v)) return '—';
+  return v;
+}
+function scrubZylu(text) {
+  if (!text || typeof text !== 'string') return text || '';
+  // "Zylu booking #1234" / "ZYLU booking 1234" (with optional #)
+  let t = text.replace(/\bzylu\s+booking\s*#?\s*\d+\.?/gi, '').trim();
+  // "[ZYLU-#1234]" tag form used by imported prescriptions.
+  t = t.replace(/\[\s*zylu-?#?\d+\s*\]/gi, '').trim();
+  // Collapse the double-blank line + stray punctuation left behind.
+  t = t.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return t;
+}
+
+function PatientSummaryDownloadButton({ patientId, patientName }) {
+  const [downloading, setDownloading] = useState(false);
+  const notify = useNotify();
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const token = getAuthToken();
+      const res = await fetch(`/api/wellness/patients/${patientId}/summary.pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Download failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safe = String(patientName || `patient-${patientId}`).replace(/[^a-z0-9_-]+/gi, '_');
+      a.download = `${safe}-summary.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      notify.error(e.message || 'Failed to download patient summary.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleDownload}
+      disabled={downloading}
+      title="Download full patient record (case history, visits, prescriptions, wallet, memberships) as PDF"
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+        padding: '0.5rem 0.9rem', borderRadius: 6, border: '1px solid var(--border-color)',
+        background: 'var(--primary-color, var(--accent-color))', color: '#fff',
+        cursor: downloading ? 'wait' : 'pointer', fontSize: '0.85rem', fontWeight: 500,
+      }}
+    >
+      <Download size={14} />
+      {downloading ? 'Preparing PDF…' : 'Download PDF'}
+    </button>
+  );
+}
+
 export default function PatientDetail() {
   const { id } = useParams();
   const [patient, setPatient] = useState(null);
   const [services, setServices] = useState([]);
   const [doctors, setDoctors] = useState([]);
-  // #793 — surface wallet balance as a header chip on Patient 360 so
-  // front-desk operators see prepaid balance without drilling into the
-  // Wallet tab. Loaded independently from the patient core so a wallet
-  // 404 / non-wellness-tenant fetch failure does not red the whole page.
-  const [walletInfo, setWalletInfo] = useState(null);
   // #344 [SECURITY]: sessionStorage was being polluted with attacker-controlled
   // URL segments (e.g. `gbs.tab.patient.1' OR '1'='1`) because we interpolated
   // useParams().id directly into the storage key. Patient ids in this app are
@@ -69,13 +140,6 @@ export default function PatientDetail() {
 
   const load = () => {
     setLoading(true);
-    // #793 — fetch wallet alongside patient core. Defaulted to null on any
-    // error (lazy-create endpoint returns 404 only on cross-tenant access;
-    // a fresh patient with no transactions still gets a zero-balance wallet
-    // from getOrCreateWallet on the backend).
-    fetchApi(`/api/wellness/patients/${id}/wallet`)
-      .then((w) => setWalletInfo(w && w.wallet ? w.wallet : null))
-      .catch(() => setWalletInfo(null));
     Promise.all([
       fetchApi(`/api/wellness/patients/${id}`),
       fetchApi('/api/wellness/services'),
@@ -83,20 +147,7 @@ export default function PatientDetail() {
     ]).then(([p, s, staff]) => {
       setPatient(p);
       setServices(s);
-      // #752 — "Doctor" dropdown was filtering wellnessRole === 'doctor' only,
-      // so professionals (stylists, aestheticians, slimming therapists,
-      // Ayurveda practitioners — 12 of them on demo) couldn't be assigned to
-      // a visit. The Calendar grid (#262) and the WorkingHoursEditor already
-      // include both roles for the same reason; align the Log Visit dropdown
-      // with that convention. Filters out deactivated rows so the list stays
-      // current (the Staff directory keeps inactive rows but flags them).
-      setDoctors(
-        (Array.isArray(staff) ? staff : []).filter(
-          (u) =>
-            (u.wellnessRole === 'doctor' || u.wellnessRole === 'professional') &&
-            !u.deactivatedAt
-        )
-      );
+      setDoctors((Array.isArray(staff) ? staff : []).filter((u) => u.wellnessRole === 'doctor'));
     }).catch(() => setPatient(null)).finally(() => setLoading(false));
   };
 
@@ -107,9 +158,12 @@ export default function PatientDetail() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <Link to="/wellness/patients" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', textDecoration: 'none', marginBottom: '1rem', fontSize: '0.85rem' }}>
-        <ArrowLeft size={14} /> Back to patients
-      </Link>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', gap: '1rem' }}>
+        <Link to="/wellness/patients" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', textDecoration: 'none', fontSize: '0.85rem' }}>
+          <ArrowLeft size={14} /> Back to patients
+        </Link>
+        <PatientSummaryDownloadButton patientId={patient.id} patientName={patient.name} />
+      </div>
 
       {/* Patient header — #638: surface DOB + computed age + gender + phone
           inline so clinically-relevant identifiers are visible without
@@ -136,55 +190,13 @@ export default function PatientDetail() {
               if (patient.phone) parts.push(patient.phone);
               if (patient.email) parts.push(patient.email);
               if (patient.bloodGroup) parts.push(`Blood ${patient.bloodGroup}`);
-              // #792 — surface anniversary alongside DOB for the
-              // anniversary-marketing operator workflow.
-              if (patient.anniversary) {
-                const aDate = new Date(patient.anniversary);
-                if (!Number.isNaN(aDate.getTime())) {
-                  parts.push(`Anniv ${formatDate(patient.anniversary)}`);
-                }
-              }
-              // #792 — GSTIN visible for B2B / corporate patients so the
-              // doctor doesn't have to dig into Profile to confirm the
-              // invoice will carry it.
-              if (patient.gst) parts.push(`GST ${patient.gst}`);
               return parts.length ? parts.join(' · ') : '—';
             })()}
           </div>
         </div>
-        {/* #793 — wallet balance chip. Appears between the subline and the
-            counts column so it sits at eye-level next to the patient's name.
-            Skipped silently when the wallet endpoint is unavailable (e.g.
-            generic-tenant Patient row that predates the wallet model). */}
-        {walletInfo && (
-          <div
-            data-testid="patient-header-wallet-chip"
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
-              padding: '0.4rem 0.75rem', borderRadius: 999,
-              background: 'rgba(38,88,85,0.08)',
-              border: '1px solid rgba(38,88,85,0.2)',
-              color: 'var(--primary-color, var(--accent-color))',
-              fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap',
-            }}
-            title={`Wallet balance — ${formatMoney(walletInfo.balance, { currency: walletInfo.currency })}`}
-          >
-            <WalletIcon size={14} />
-            <span data-testid="patient-header-wallet-amount">
-              {formatMoney(walletInfo.balance, { currency: walletInfo.currency })}
-            </span>
-            <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', fontWeight: 500 }}>wallet</span>
-          </div>
-        )}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-          <span>Source: <strong style={{ color: 'var(--text-primary)' }}>{patient.source || '—'}</strong></span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+          <span>Source: <strong style={{ color: 'var(--text-primary)' }}>{displaySource(patient.source)}</strong></span>
           <span>{patient.visits.length} visits • {patient.prescriptions.length} Rx • {patient.treatmentPlans.length} treatment plans</span>
-          {/* #840 — consolidated patient-record export. Forces a save (not a
-              tab-open) because operators handing off records to referring
-              providers / archives want a file on disk, not a preview. The
-              endpoint requires Bearer auth so we stream via fetch + blob
-              rather than navigating via window.location. */}
-          <DownloadFullReportButton patientId={patient.id} patientName={patient.name} />
         </div>
       </div>
 
@@ -196,21 +208,7 @@ export default function PatientDetail() {
           attribute selector). Mobile rule allows the strip to scroll
           horizontally when too many tabs survive the wrap. */}
       <div className="wellness-tab-strip" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-        {/* Tick #200 — unified Timeline tab consumes the server-merged
-            /timeline endpoint (1 fetch instead of the 4 stitched fetches the
-            Case-history tab does client-side). Listed FIRST because it's the
-            "what happened with this patient in chronological order" summary
-            view operators most often want as the landing surface. The
-            existing 4 per-resource tabs stay — they serve detail editing /
-            new-capture surfaces, while Timeline is the unified read view. */}
-        <button data-testid="timeline-tab" style={tabStyle(tab === 'timeline')} onClick={() => setTab('timeline')}><Activity size={14} /> Timeline</button>
         <button style={tabStyle(tab === 'history')} onClick={() => setTab('history')}><Calendar size={14} /> Case history</button>
-        {/* #838 — dedicated Prescriptions list tab with Active/Past status
-            indicators + filter chips. Distinct from "New prescription"
-            (which is the capture surface). Clinicians need a one-click
-            way to see "what is this patient currently taking?" without
-            scrolling the merged case-history timeline. */}
-        <button data-testid="rx-list-tab" style={tabStyle(tab === 'rxlist')} onClick={() => setTab('rxlist')}><Pill size={14} /> Prescriptions</button>
         <button style={tabStyle(tab === 'prescribe')} onClick={() => setTab('prescribe')}><FileText size={14} /> New prescription</button>
         <button style={tabStyle(tab === 'consent')} onClick={() => setTab('consent')}><FileSignature size={14} /> Consent form</button>
         <button style={tabStyle(tab === 'plans')} onClick={() => setTab('plans')}><ClipboardList size={14} /> Treatment plans</button>
@@ -219,16 +217,13 @@ export default function PatientDetail() {
         <button style={tabStyle(tab === 'inventory')} onClick={() => setTab('inventory')}><Package size={14} /> Inventory used</button>
         {/* Agent B: telehealth tab */}
         <button style={tabStyle(tab === 'telehealth')} onClick={() => setTab('telehealth')}><Video size={14} /> Telehealth</button>
-        {/* Wave 11 Agent FF: wallet tab. D16 Arc 1 slice 7 (this tick):
-            top-up modal + new endpoint integration. */}
-        <button data-testid="wallet-tab" style={tabStyle(tab === 'wallet')} onClick={() => setTab('wallet')}><WalletIcon size={14} /> Wallet</button>
+        {/* Wave 11 Agent FF: wallet tab */}
+        <button style={tabStyle(tab === 'wallet')} onClick={() => setTab('wallet')}><WalletIcon size={14} /> Wallet</button>
         {/* Wave 11 Agent EE: Memberships tab — patient's purchased plans + balances */}
         <button style={tabStyle(tab === 'memberships')} onClick={() => setTab('memberships')}><Crown size={14} /> Memberships</button>
       </div>
 
-      {tab === 'timeline' && <TimelineTab patientId={patient.id} />}
       {tab === 'history' && <CaseHistoryTab patient={patient} />}
-      {tab === 'rxlist' && <PrescriptionsListTab patient={patient} />}
       {tab === 'prescribe' && <PrescribeTab patient={patient} onSaved={load} />}
       {tab === 'consent' && <ConsentTab patient={patient} services={services} onSaved={load} />}
       {tab === 'plans' && <PlansTab patient={patient} services={services} onSaved={load} />}
@@ -242,136 +237,25 @@ export default function PatientDetail() {
   );
 }
 
-// ── Download full patient record (#840) ───────────────────────────
-//
-// Streams /api/wellness/patients/:id/full-report.pdf via fetch (the endpoint
-// is Bearer-auth-gated, so a plain anchor href won't work) and pushes the
-// resulting blob through a synthetic <a download> click. Save dialog opens
-// directly — no new tab, no preview. We do NOT use window.location.href
-// because that would drop the Authorization header.
-function DownloadFullReportButton({ patientId, patientName }) {
-  const notify = useNotify();
-  const [downloading, setDownloading] = useState(false);
-
-  const onClick = async () => {
-    if (downloading) return;
-    setDownloading(true);
-    try {
-      const token = getAuthToken();
-      const res = await fetch(`/api/wellness/patients/${patientId}/full-report.pdf`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `Download failed (${res.status})`);
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `patient-${patientId}-full-report.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      notify.success(`Downloaded ${patientName || 'patient'} record`);
-    } catch (err) {
-      notify.error(err.message || 'Failed to download patient report.');
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  return (
-    <button
-      type="button"
-      data-testid="download-full-report-btn"
-      onClick={onClick}
-      disabled={downloading}
-      title="Download visits, prescriptions, consents, treatment plans, photos, and inventory as one PDF"
-      style={{
-        marginTop: '0.25rem',
-        padding: '0.45rem 0.85rem',
-        background: 'var(--primary-color, var(--accent-color))',
-        color: '#fff',
-        border: 'none',
-        borderRadius: 6,
-        cursor: downloading ? 'wait' : 'pointer',
-        fontSize: '0.8rem',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '0.35rem',
-        opacity: downloading ? 0.7 : 1,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      <Download size={13} />
-      {downloading ? 'Preparing…' : 'Download full record (PDF)'}
-    </button>
-  );
-}
-
-// ── Wallet tab — balance + recent transactions + top-up + redeem-giftcard ──
-//
-// Wave 11 Agent FF (gift-card redeem) + D16 Arc 1 slice 7 (this tick —
-// top-up modal + new-endpoint integration).
-//
-// Backend wiring (slice 7):
-//   - GET /api/wallet/:patientId/balance       → { balanceCents, currency, lastUpdated }
-//   - GET /api/wallet/:patientId/transactions  → { transactions, total }
-//   - POST /api/wallet/:patientId/topup        → { success, balanceCents, bonusBatchId?, bonusPercent }
-//
-// The legacy gift-card redeem flow (POST /api/wellness/giftcards/redeem)
-// stays in place — it's an orthogonal credit channel (customer hands a
-// gift code at the counter; not a top-up).
-//
-// 404 on /topup is handled gracefully — useful during a deploy gap where
-// the backend slice hasn't landed yet on the target environment.
-//
-// Validation: amount is constrained client-side to ₹100–₹100,000 (the
-// backend cap is ₹100K = 10_000_000 cents per single top-up per PRD
-// FR-3.2 MAX_TOPUP_CENTS; the floor of ₹100 prevents accidental ₹1 typos
-// that would otherwise create batch noise).
-const MIN_TOPUP_INR = 100;
-const MAX_TOPUP_INR = 100_000;
-const PAYMENT_METHODS = ['cash', 'card', 'upi', 'online'];
-
-function formatRelativeTime(iso) {
-  if (!iso) return '—';
-  const then = new Date(iso).getTime();
-  if (!Number.isFinite(then)) return '—';
-  const diffMs = Date.now() - then;
-  const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  const years = Math.floor(months / 12);
-  return `${years}y ago`;
-}
-
+// ── Wallet tab — balance + recent transactions + redeem-giftcard ──
+// Wave 11 Agent FF. Read-only history; redeem flow lets staff paste a gift
+// code that the patient handed in (the credit lands in this patient's
+// wallet). For larger flows (admin manual credit/debit, full ledger view)
+// see /wellness/wallet at the admin sidebar entry.
 function WalletTab({ patient }) {
-  const [balance, setBalance] = useState(null); // {balanceCents, currency, lastUpdated}
-  const [transactions, setTransactions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(null);
   const [code, setCode] = useState('');
-  const [redeeming, setRedeeming] = useState(false);
-  const [topupOpen, setTopupOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
   const notify = useNotify();
 
   const load = async () => {
     setLoading(true);
     try {
-      const [bal, txns] = await Promise.all([
-        fetchApi(`/api/wallet/${patient.id}/balance`).catch(() => null),
-        fetchApi(`/api/wallet/${patient.id}/transactions?limit=10`).catch(() => null),
-      ]);
-      setBalance(bal || { balanceCents: 0, currency: 'INR', lastUpdated: null });
-      setTransactions(Array.isArray(txns?.transactions) ? txns.transactions : []);
+      const j = await fetchApi(`/api/wellness/patients/${patient.id}/wallet`);
+      setData(j);
+    } catch (e) {
+      notify.error(e.message || 'Failed to load wallet');
     } finally {
       setLoading(false);
     }
@@ -381,7 +265,7 @@ function WalletTab({ patient }) {
 
   const redeem = async () => {
     if (!code.trim()) return notify.error('Enter a gift card code.');
-    setRedeeming(true);
+    setSubmitting(true);
     try {
       await fetchApi('/api/wellness/giftcards/redeem', {
         method: 'POST',
@@ -393,682 +277,65 @@ function WalletTab({ patient }) {
     } catch (e) {
       notify.error(e.message || 'Failed to redeem gift card');
     } finally {
-      setRedeeming(false);
+      setSubmitting(false);
     }
   };
 
-  if (loading) return <div>Loading wallet…</div>;
-
-  const balanceRupees = balance ? (balance.balanceCents / 100) : 0;
-  const currency = balance?.currency || 'INR';
+  if (loading || !data) return <div>Loading wallet…</div>;
+  const { wallet, transactions } = data;
 
   return (
-    <div className="glass" style={{ padding: '1.25rem' }} data-testid="wallet-tab-panel">
-      {/* ── Balance card ─────────────────────────────────────── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
+    <div className="glass" style={{ padding: '1.25rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <div>
           <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Wallet balance</div>
-          <div data-testid="wallet-balance" style={{ fontSize: '1.75rem', fontWeight: 600 }}>
-            {formatMoney(balanceRupees, { currency })}
-          </div>
-          <div data-testid="wallet-last-updated" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            {balance?.lastUpdated ? `Last updated ${formatRelativeTime(balance.lastUpdated)}` : 'No top-ups yet'}
+          <div style={{ fontSize: '1.75rem', fontWeight: 600 }}>
+            {formatMoney(wallet.balance, { currency: wallet.currency })}
           </div>
         </div>
-        <button
-          type="button"
-          data-testid="wallet-topup-btn"
-          onClick={() => setTopupOpen(true)}
-          style={{ padding: '0.55rem 1.1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600 }}
-        >
-          <Plus size={14} /> Top up
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
+          <input
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="Gift card code"
+            style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', textTransform: 'uppercase' }}
+          />
+          <button
+            onClick={redeem}
+            disabled={submitting}
+            style={{ padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+          >
+            {submitting ? 'Redeeming…' : 'Redeem'}
+          </button>
+        </div>
       </div>
 
-      {/* ── Recent transactions list ─────────────────────────── */}
-      <h4 style={{ marginTop: '0.5rem', marginBottom: '0.5rem' }}>Recent transactions</h4>
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Recent transactions</h4>
       {transactions.length === 0 ? (
-        <div data-testid="wallet-txn-empty" style={{ color: 'var(--text-secondary)', padding: '0.5rem 0' }}>No transactions yet.</div>
+        <div style={{ color: 'var(--text-secondary)' }}>No transactions yet.</div>
       ) : (
-        <table data-testid="wallet-txn-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
               <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Date</th>
               <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Type</th>
               <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Amount</th>
-              <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Method / reason</th>
+              <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Reason</th>
             </tr>
           </thead>
           <tbody>
-            {transactions.map((tx) => {
-              const isCredit = (tx.type === 'TOP_UP') || (tx.amount > 0 && tx.type !== 'REDEEM');
-              const signedRupees = isCredit ? Math.abs(tx.amount) : -Math.abs(tx.amount);
-              return (
-                <tr key={tx.id} data-testid={`wallet-txn-${tx.id}`} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                  <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{formatDate(tx.createdAt)}</td>
-                  <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{(tx.type || '').replace(/_/g, ' ')}</td>
-                  <td style={{ padding: '0.5rem', fontSize: '0.85rem', color: signedRupees >= 0 ? 'var(--success-color, #10b981)' : 'var(--danger-color, #ef4444)' }}>
-                    {signedRupees >= 0 ? '+' : '-'}{formatMoney(Math.abs(signedRupees), { currency })}
-                  </td>
-                  <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.reason || '—'}</td>
-                </tr>
-              );
-            })}
+            {transactions.map((tx) => (
+              <tr key={tx.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{formatDate(tx.createdAt)}</td>
+                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.type.replace('_', ' ')}</td>
+                <td style={{ padding: '0.5rem', fontSize: '0.85rem', color: tx.amount >= 0 ? 'var(--success-color, #10b981)' : 'var(--danger-color, #ef4444)' }}>
+                  {tx.amount >= 0 ? '+' : ''}{formatMoney(tx.amount, { currency: wallet.currency })}
+                </td>
+                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.reason || '—'}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
-      )}
-
-      {/* ── Gift-card redeem strip (kept from Wave 11) ───────── */}
-      <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.5rem', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '0.85rem' }}>
-        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Redeem gift card:</span>
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          placeholder="Gift card code"
-          style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', textTransform: 'uppercase' }}
-        />
-        <button
-          type="button"
-          onClick={redeem}
-          disabled={redeeming}
-          style={{ padding: '0.5rem 1rem', background: 'transparent', color: 'var(--primary-color, var(--accent-color))', border: '1px solid var(--primary-color, var(--accent-color))', borderRadius: 6, cursor: redeeming ? 'wait' : 'pointer' }}
-        >
-          {redeeming ? 'Redeeming…' : 'Redeem'}
-        </button>
-      </div>
-
-      {topupOpen && (
-        <WalletTopupModal
-          patientId={patient.id}
-          currency={currency}
-          onClose={() => setTopupOpen(false)}
-          onSuccess={() => { setTopupOpen(false); load(); }}
-        />
-      )}
-    </div>
-  );
-}
-
-// ── Top-up modal (D16 Arc 1 slice 7) ──────────────────────────────
-//
-// Captures (amountRupees, paymentMethod) and POSTs to
-// /api/wallet/:patientId/topup with `{amountCents, paymentMethod}`. On
-// success, shows the bonus credited (if any) and refreshes the parent
-// balance + transactions. Validation is client-side (₹100–₹100,000) plus
-// the backend's mirror validation; 400 / 403 / 404 are surfaced via
-// notify.error with friendly copy.
-function WalletTopupModal({ patientId, currency, onClose, onSuccess }) {
-  const [amount, setAmount] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('cash');
-  const [submitting, setSubmitting] = useState(false);
-  const notify = useNotify();
-
-  const amountNum = parseInt(amount, 10);
-  const amountValid = Number.isFinite(amountNum) && amountNum >= MIN_TOPUP_INR && amountNum <= MAX_TOPUP_INR;
-
-  const submit = async (e) => {
-    e?.preventDefault?.();
-    if (!amountValid) {
-      notify.error(`Amount must be between ₹${MIN_TOPUP_INR.toLocaleString()} and ₹${MAX_TOPUP_INR.toLocaleString()}.`);
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await fetchApi(`/api/wallet/${patientId}/topup`, {
-        method: 'POST',
-        body: JSON.stringify({ amountCents: amountNum * 100, paymentMethod }),
-        silent: true, // We surface the toast ourselves so 404 gets the friendly "Backend not ready" copy.
-      });
-      const bonusPct = res?.bonusPercent || 0;
-      const msg = bonusPct > 0
-        ? `Top-up succeeded — ₹${amountNum.toLocaleString()} principal + ${bonusPct}% bonus credited.`
-        : `Top-up succeeded — ₹${amountNum.toLocaleString()} credited.`;
-      notify.success(msg);
-      onSuccess?.();
-    } catch (err) {
-      const status = err?.status;
-      if (status === 404) {
-        notify.error('Backend not ready — wallet top-up endpoint is being deployed. Try again in a few minutes.');
-      } else if (status === 403) {
-        notify.error(err.message || 'You don’t have permission to top up this wallet.');
-      } else if (status === 400) {
-        notify.error(err.message || 'Top-up rejected — check the amount and payment method.');
-      } else {
-        notify.error(err.message || 'Top-up failed.');
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div
-      data-testid="wallet-topup-modal"
-      role="dialog"
-      aria-label="Wallet top-up"
-      onClick={onClose}
-      style={{
-        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-        background: 'rgba(0,0,0,0.45)', zIndex: 1000,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '1rem',
-      }}
-    >
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="glass"
-        style={{
-          padding: '1.5rem', borderRadius: 12, maxWidth: 420, width: '100%',
-          background: 'var(--bg-color, #fff)',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Top up wallet</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            data-testid="wallet-topup-close"
-            aria-label="Close"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <label style={{ display: 'block', marginBottom: '0.85rem' }}>
-          <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
-            Amount ({currency === 'INR' ? '₹' : currency})
-          </span>
-          <input
-            type="number"
-            inputMode="numeric"
-            min={MIN_TOPUP_INR}
-            max={MAX_TOPUP_INR}
-            step={1}
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            placeholder={`${MIN_TOPUP_INR}–${MAX_TOPUP_INR.toLocaleString()}`}
-            data-testid="wallet-topup-amount"
-            style={{ width: '100%', padding: '0.6rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: '1rem' }}
-            autoFocus
-          />
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-            Min ₹{MIN_TOPUP_INR.toLocaleString()} · Max ₹{MAX_TOPUP_INR.toLocaleString()} per top-up.
-          </span>
-        </label>
-
-        <label style={{ display: 'block', marginBottom: '1rem' }}>
-          <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
-            Payment method
-          </span>
-          <select
-            value={paymentMethod}
-            onChange={(e) => setPaymentMethod(e.target.value)}
-            data-testid="wallet-topup-method"
-            style={{ width: '100%', padding: '0.6rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: '1rem' }}
-          >
-            {PAYMENT_METHODS.map((m) => (
-              <option key={m} value={m}>{m === 'upi' ? 'UPI' : m[0].toUpperCase() + m.slice(1)}</option>
-            ))}
-          </select>
-        </label>
-
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={submitting}
-            style={{ padding: '0.55rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: 6, cursor: 'pointer' }}
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            data-testid="wallet-topup-submit"
-            disabled={submitting || !amountValid}
-            style={{
-              padding: '0.55rem 1.1rem',
-              background: amountValid ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)',
-              color: '#fff', border: 'none', borderRadius: 6,
-              cursor: submitting ? 'wait' : (amountValid ? 'pointer' : 'not-allowed'),
-              fontWeight: 600,
-            }}
-          >
-            {submitting ? 'Submitting…' : 'Top up'}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-// ── Prescriptions list tab (#838) ─────────────────────────────────
-//
-// Dedicated list view for ALL prescriptions on the patient with a status
-// indicator (Active / Past) per row and Active/Past/All filter chips.
-// Derived client-side because the Prescription model lacks an explicit
-// status field — instead we parse the max `duration` token across the
-// drugs JSON array and compare (createdAt + maxDays) to today.
-//
-// Status derivation contract:
-//   - Active: createdAt + maxDurationDays >= today
-//   - Past:   createdAt + maxDurationDays <  today
-//   - Fallback when no parseable duration: treat as Active for the
-//     first 30 days, Past after — clinically safest default (better to
-//     show "current" than silently hide an Rx the doctor wants to see).
-//
-// Duration token format: free-text on each drug (e.g. "7 days", "2 weeks",
-// "1 month", "30d"). Parsed by parseDurationDays() below; unparseable
-// values are skipped and the fallback applies.
-//
-// TODO: when Prescription gets an explicit status enum + endDate (#838
-// follow-up), replace derivation with the schema field. Migration is
-// out-of-scope for this commit (needs bless-marker + backfill plan).
-
-const RX_FALLBACK_ACTIVE_DAYS = 30;
-
-// Parse a free-text duration like "7 days", "2 weeks", "1 month", "10d"
-// to an integer day count. Returns null if unparseable.
-function parseDurationDays(text) {
-  if (!text || typeof text !== 'string') return null;
-  const s = text.trim().toLowerCase();
-  // "7d", "10 d"
-  const dMatch = s.match(/^(\d+)\s*d(ays?)?$/);
-  if (dMatch) return parseInt(dMatch[1], 10);
-  // "2 weeks", "3 wk", "1w"
-  const wMatch = s.match(/^(\d+)\s*w(eeks?|k)?$/);
-  if (wMatch) return parseInt(wMatch[1], 10) * 7;
-  // "1 month", "3 months", "2 mo", "1m"
-  const moMatch = s.match(/^(\d+)\s*m(o(nths?)?)?$/);
-  if (moMatch) return parseInt(moMatch[1], 10) * 30;
-  // Plain integer — assume days (operator convention seen in seed data).
-  const intMatch = s.match(/^(\d+)$/);
-  if (intMatch) return parseInt(intMatch[1], 10);
-  return null;
-}
-
-// Given a Prescription row, return { active: boolean, expiresAt: Date|null,
-// maxDays: number|null }. expiresAt is the latest known end date across all
-// drugs in the Rx; null when no drug has a parseable duration (fallback path).
-export function derivePrescriptionStatus(rx, now = new Date()) {
-  let drugs = [];
-  try { drugs = typeof rx.drugs === 'string' ? JSON.parse(rx.drugs) : rx.drugs; } catch { drugs = []; }
-  if (!Array.isArray(drugs)) drugs = [];
-
-  const dayCounts = drugs
-    .map((d) => parseDurationDays(d?.duration))
-    .filter((n) => n != null && n > 0);
-
-  const createdAt = new Date(rx.createdAt);
-  const createdTs = createdAt.getTime();
-
-  if (dayCounts.length === 0) {
-    // Fallback: active for first 30 days post-creation.
-    const expiresAt = new Date(createdTs + RX_FALLBACK_ACTIVE_DAYS * 86400000);
-    return { active: now.getTime() <= expiresAt.getTime(), expiresAt, maxDays: null, fallback: true };
-  }
-
-  const maxDays = Math.max(...dayCounts);
-  const expiresAt = new Date(createdTs + maxDays * 86400000);
-  return { active: now.getTime() <= expiresAt.getTime(), expiresAt, maxDays, fallback: false };
-}
-
-function RxStatusBadge({ active, fallback }) {
-  // Active = teal (clinical positive), Past = neutral grey.
-  const cfg = active
-    ? { color: '#10b981', bg: 'rgba(16,185,129,0.15)', label: 'Active', Icon: CheckCircle }
-    : { color: '#6b7280', bg: 'rgba(107,114,128,0.15)', label: 'Past',   Icon: Clock };
-  const Icon = cfg.Icon;
-  return (
-    <span
-      data-testid={active ? 'rx-status-active' : 'rx-status-past'}
-      title={fallback ? 'Status derived from createdAt (no parseable duration on drugs)' : undefined}
-      style={{
-        padding: '0.2rem 0.55rem', borderRadius: 999, fontSize: '0.7rem', fontWeight: 600,
-        backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.color}33`,
-        display: 'inline-flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap',
-      }}
-    >
-      <Icon size={11} />
-      {cfg.label}
-    </span>
-  );
-}
-
-function PrescriptionsListTab({ patient }) {
-  const [filter, setFilter] = useState('active'); // 'active' | 'past' | 'all'
-  const [openRx, setOpenRx] = useState(null);
-
-  // Decorate each Rx with its derived status, sort newest-first, then filter.
-  const rxWithStatus = useMemo(() => {
-    const now = new Date();
-    return (patient.prescriptions || [])
-      .map((p) => ({ ...p, _status: derivePrescriptionStatus(p, now) }))
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  }, [patient.prescriptions]);
-
-  const counts = useMemo(() => ({
-    all: rxWithStatus.length,
-    active: rxWithStatus.filter((r) => r._status.active).length,
-    past: rxWithStatus.filter((r) => !r._status.active).length,
-  }), [rxWithStatus]);
-
-  const filtered = useMemo(() => {
-    if (filter === 'all') return rxWithStatus;
-    if (filter === 'active') return rxWithStatus.filter((r) => r._status.active);
-    return rxWithStatus.filter((r) => !r._status.active);
-  }, [rxWithStatus, filter]);
-
-  const chipStyle = (active) => ({
-    padding: '0.4rem 0.85rem', borderRadius: 999, border: '1px solid var(--border-color)',
-    background: active ? 'var(--primary-color, var(--accent-color))' : 'transparent',
-    color: active ? '#fff' : 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem',
-    fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
-  });
-
-  if (rxWithStatus.length === 0) {
-    return (
-      <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-        No prescriptions yet. Use the <strong>New prescription</strong> tab to capture one.
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      <div data-testid="rx-filter-chips" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <button type="button" data-testid="rx-chip-active" style={chipStyle(filter === 'active')} onClick={() => setFilter('active')}>
-          Active <span style={{ opacity: 0.75, fontWeight: 500 }}>({counts.active})</span>
-        </button>
-        <button type="button" data-testid="rx-chip-past" style={chipStyle(filter === 'past')} onClick={() => setFilter('past')}>
-          Past <span style={{ opacity: 0.75, fontWeight: 500 }}>({counts.past})</span>
-        </button>
-        <button type="button" data-testid="rx-chip-all" style={chipStyle(filter === 'all')} onClick={() => setFilter('all')}>
-          All <span style={{ opacity: 0.75, fontWeight: 500 }}>({counts.all})</span>
-        </button>
-      </div>
-
-      {filtered.length === 0 ? (
-        <div className="glass" style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          {filter === 'active' && 'No active prescriptions. The patient is not currently on any medication course.'}
-          {filter === 'past' && 'No past prescriptions in this list.'}
-        </div>
-      ) : (
-        filtered.map((rx) => (
-          <div
-            key={rx.id}
-            className="glass"
-            data-testid={`rx-row-${rx.id}`}
-            onClick={() => setOpenRx(rx)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setOpenRx(rx); } }}
-            style={{ padding: '1rem', display: 'flex', gap: '0.75rem', cursor: 'pointer' }}
-            title="Click to view full prescription details"
-          >
-            <div style={{ width: 8, background: '#a855f7', borderRadius: 4, flexShrink: 0 }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.3rem', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                  <FileText size={14} />
-                  <strong>Prescription</strong>
-                  <RxStatusBadge active={rx._status.active} fallback={rx._status.fallback} />
-                  {rx._status.expiresAt && (
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                      {rx._status.active ? 'Ends ' : 'Ended '}
-                      {rx._status.expiresAt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}
-                    </span>
-                  )}
-                </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  {new Date(rx.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
-                </div>
-              </div>
-              <RxSummary drugs={rx.drugs} instructions={rx.instructions} />
-            </div>
-          </div>
-        ))
-      )}
-
-      {openRx && (
-        <RxDetailModal rx={openRx} patient={patient} onClose={() => setOpenRx(null)} />
-      )}
-    </div>
-  );
-}
-
-// ── Timeline tab (tick #200) ──────────────────────────────────────
-//
-// Consumes the server-merged GET /api/wellness/patients/:id/timeline
-// endpoint shipped in tick #198 (`c5eec0e7`). Replaces 4 client-side
-// fetches + manual stitching with 1 round-trip + uniform event shape:
-//   { eventType, eventId, eventAt, summary, refType, refId }
-// where eventType ∈ {VISIT, PRESCRIPTION, CONSENT, TREATMENT_PLAN}.
-//
-// The endpoint sorts DESC server-side (with deterministic tie-breaker
-// on eventType ASC + eventId ASC) so this tab just iterates and renders.
-// Per-event detail navigation: each row links to the canonical sub-
-// resource view via Link to `/wellness/<sub-path>/<refId>` so an
-// operator scanning the timeline can drill in with one click.
-//
-// Filter dropdown supports the endpoint's ?types= comma-list filter
-// ("ALL" passes nothing, otherwise sends the single selected type).
-// Pagination is fixed at the endpoint's max (200) — sufficient for a
-// per-patient view; demand for "Load more" can come later if needed.
-
-const TIMELINE_TYPES = [
-  { value: 'ALL', label: 'All' },
-  { value: 'VISIT', label: 'Visits' },
-  { value: 'PRESCRIPTION', label: 'Prescriptions' },
-  { value: 'CONSENT', label: 'Consents' },
-  { value: 'TREATMENT_PLAN', label: 'Treatment plans' },
-];
-
-function timelineIcon(eventType) {
-  const size = 14;
-  if (eventType === 'VISIT') return <Stethoscope size={size} />;
-  if (eventType === 'PRESCRIPTION') return <Pill size={size} />;
-  if (eventType === 'CONSENT') return <FileSignature size={size} />;
-  if (eventType === 'TREATMENT_PLAN') return <ClipboardList size={size} />;
-  return <Activity size={size} />;
-}
-
-function timelineLabel(eventType) {
-  if (eventType === 'VISIT') return 'Visit';
-  if (eventType === 'PRESCRIPTION') return 'Prescription';
-  if (eventType === 'CONSENT') return 'Consent';
-  if (eventType === 'TREATMENT_PLAN') return 'Treatment plan';
-  return eventType;
-}
-
-// Build a deep-link path back into the sub-resource detail surface for
-// the event. The backend's refType uses Prisma model names; map them to
-// the SPA's routes. We deliberately fall through to the patient page
-// itself (current location) when no canonical detail route exists — the
-// link still works and the operator stays in context rather than
-// landing on a 404.
-function timelineHref(event, patientId) {
-  if (event.refType === 'Visit') return `/wellness/visits/${event.refId}`;
-  if (event.refType === 'Prescription') return `/wellness/prescriptions/${event.refId}`;
-  if (event.refType === 'ConsentForm') return `/wellness/consents/${event.refId}`;
-  if (event.refType === 'TreatmentPlan') return `/wellness/treatment-plans/${event.refId}`;
-  return `/wellness/patients/${patientId}`;
-}
-
-function TimelineTab({ patientId }) {
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [filterType, setFilterType] = useState('ALL');
-  // Tick #201 — Export CSV in-flight guard. Disables the button while a
-  // download is mid-fetch so a double-click doesn't fire two requests.
-  const [timelineCsvBusy, setTimelineCsvBusy] = useState(false);
-  const notify = useNotify();
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    const params = new URLSearchParams();
-    params.set('limit', '200');
-    if (filterType !== 'ALL') params.set('types', filterType);
-    fetchApi(`/api/wellness/patients/${patientId}/timeline?${params.toString()}`)
-      .then((res) => {
-        if (cancelled) return;
-        // Endpoint returns { patientId, count, events: [...] }; tolerate
-        // a bare array too in case a future revision drops the envelope.
-        const list = Array.isArray(res) ? res : Array.isArray(res?.events) ? res.events : [];
-        setEvents(list);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(err?.message || 'Failed to load timeline');
-        setEvents([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [patientId, filterType]);
-
-  // Tick #201 — Export the on-screen Timeline view as CSV. Mirrors the
-  // Patients.jsx XLSX/CSV button pattern from tick #188 (fetch with Auth
-  // header → .blob() → createObjectURL → anchor-click → revoke) because
-  // the Authorization header forbids a plain <a href> approach. Forwards
-  // the active type filter (and the same limit=200 cap) so the exported
-  // file matches the visible row set. Filename comes from the response
-  // Content-Disposition when the backend supplies one, else falls back
-  // to a per-patient default.
-  const exportCsv = async () => {
-    setTimelineCsvBusy(true);
-    try {
-      const token = getAuthToken();
-      const params = new URLSearchParams();
-      params.set('limit', '200');
-      if (filterType !== 'ALL') params.set('types', filterType);
-      const res = await fetch(
-        `/api/wellness/patients/${patientId}/timeline.csv?${params.toString()}`,
-        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-      );
-      if (!res.ok) throw new Error(`Export failed (${res.status})`);
-      // Parse filename out of the Content-Disposition header when present;
-      // accept both `filename="x.csv"` and bare `filename=x.csv` forms.
-      let filename = `patient-${patientId}-timeline.csv`;
-      const cd = res.headers.get('Content-Disposition') || res.headers.get('content-disposition') || '';
-      const m = /filename\*?=(?:UTF-8''|")?([^";]+)"?/i.exec(cd);
-      if (m && m[1]) filename = decodeURIComponent(m[1]).replace(/"/g, '');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      notify.success(`Exported ${events.length} event${events.length === 1 ? '' : 's'}.`);
-    } catch (e) {
-      notify.error(e.message || 'CSV export failed.');
-    } finally {
-      setTimelineCsvBusy(false);
-    }
-  };
-
-  const exportDisabled = timelineCsvBusy || events.length === 0 || loading;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <label htmlFor="timeline-type-filter" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Filter:</label>
-        <select
-          id="timeline-type-filter"
-          data-testid="timeline-type-filter"
-          value={filterType}
-          onChange={(e) => setFilterType(e.target.value)}
-          style={{ padding: '0.35rem 0.6rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: '0.85rem' }}
-        >
-          {TIMELINE_TYPES.map((t) => (
-            <option key={t.value} value={t.value}>{t.label}</option>
-          ))}
-        </select>
-        <button
-          type="button"
-          data-testid="timeline-export-csv"
-          onClick={exportCsv}
-          disabled={exportDisabled}
-          title={events.length === 0 ? 'No events to export' : 'Export the on-screen timeline as CSV'}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.3rem',
-            padding: '0.35rem 0.7rem',
-            background: 'transparent',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)',
-            borderRadius: 8,
-            cursor: exportDisabled ? 'not-allowed' : 'pointer',
-            opacity: exportDisabled ? 0.6 : 1,
-            fontSize: '0.85rem',
-            marginLeft: 'auto',
-          }}
-        >
-          <Download size={14} /> {timelineCsvBusy ? 'Exporting…' : 'Export CSV'}
-        </button>
-      </div>
-
-      {loading && (
-        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          Loading timeline…
-        </div>
-      )}
-
-      {!loading && error && (
-        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--error-color)' }}>
-          {error}
-        </div>
-      )}
-
-      {!loading && !error && events.length === 0 && (
-        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          No events yet for this patient.
-        </div>
-      )}
-
-      {!loading && !error && events.length > 0 && (
-        <div data-testid="timeline-events" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          {events.map((e) => (
-            <Link
-              key={`${e.eventType}-${e.eventId}`}
-              to={timelineHref(e, patientId)}
-              data-testid={`timeline-event-${e.eventType}-${e.eventId}`}
-              className="glass"
-              style={{
-                padding: '0.9rem 1rem',
-                display: 'flex',
-                gap: '0.75rem',
-                alignItems: 'flex-start',
-                textDecoration: 'none',
-                color: 'inherit',
-              }}
-            >
-              <div style={{ flexShrink: 0, paddingTop: 2, color: 'var(--text-secondary)' }}>
-                {timelineIcon(e.eventType)}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <strong style={{ fontSize: '0.9rem' }}>{timelineLabel(e.eventType)}</strong>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    {e.eventAt ? formatDate(e.eventAt) : ''}
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem', lineHeight: 1.4 }}>
-                  {e.summary || '—'}
-                </div>
-              </div>
-            </Link>
-          ))}
-        </div>
       )}
     </div>
   );
@@ -1079,68 +346,60 @@ function TimelineTab({ patientId }) {
 function CaseHistoryTab({ patient }) {
   // #278: clicking an Rx card pops a detail modal with all fields + PDF download.
   const [openRx, setOpenRx] = useState(null);
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
 
-  // #837 (cron tick #27 / Agent 1) — date-range filter for the case-history
-  // timeline. Filters the merged visits + prescriptions + consents stream by
-  // each event's date. Defaults to 'all' because case history is naturally
-  // retrospective: a clinician opening the tab wants the full record, not
-  // just today (unlike Payments/InventoryReceipts where 'today' is the more
-  // useful landing window). Operator can narrow via the dropdown.
-  const [dateState, setDateState] = useState({ preset: 'all', customFrom: '', customTo: '' });
-  const range = effectiveRangeFor(dateState);
-
-  const allEvents = useMemo(() => [
+  const allEvents = [
     ...patient.visits.map((v) => ({ kind: 'visit', date: v.visitDate, data: v })),
     ...patient.prescriptions.map((p) => ({ kind: 'rx', date: p.createdAt, data: p })),
     ...patient.consents.map((c) => ({ kind: 'consent', date: c.signedAt, data: c })),
-  ].sort((a, b) => new Date(b.date) - new Date(a.date)),
-  [patient.visits, patient.prescriptions, patient.consents]);
+  ].sort((a, b) => new Date(b.date) - new Date(a.date));
 
-  // #837 — apply the date filter client-side. range.from/to are ISO date-only
-  // strings (YYYY-MM-DD) in the browser's local TZ; widen `to` to end-of-day
-  // so an event timestamped at 18:00 on the selected `to` date is still in
-  // window. Empty range (preset='all' or custom-mode with blank inputs)
-  // passes everything through.
-  const events = useMemo(() => {
-    const fromTs = range.from ? new Date(`${range.from}T00:00:00`).getTime() : -Infinity;
-    const toTs = range.to ? new Date(`${range.to}T23:59:59.999`).getTime() : Infinity;
-    if (!range.from && !range.to) return allEvents;
-    return allEvents.filter((e) => {
-      const ts = new Date(e.date).getTime();
-      return ts >= fromTs && ts <= toTs;
-    });
-  }, [allEvents, range.from, range.to]);
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
+  const events = (rangeStart && rangeEnd)
+    ? allEvents.filter((e) => {
+        const ts = new Date(e.date).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : allEvents;
 
-  // #837 — date-filter pill always renders (even when the patient has no
-  // events) so the affordance is discoverable; the empty-state message
-  // distinguishes between "no history at all" vs "no history in this window."
-  const dateFilter = (
-    <DateRangePicker
-      id="rx-history-date-preset"
-      label="Filter by date:"
-      value={dateState}
-      onChange={setDateState}
-      presets={['today', 'yesterday', 'week7', 'last30', 'month', 'all', 'custom']}
-    />
+  const filterBar = (
+    <div
+      className="glass"
+      style={{
+        padding: '0.6rem 0.85rem', display: 'flex', flexWrap: 'wrap',
+        alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem',
+      }}
+    >
+      <DateRangeFilter value={filter} onChange={setFilter} />
+      <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+        {events.length === allEvents.length
+          ? `${allEvents.length} event${allEvents.length === 1 ? '' : 's'}`
+          : `${events.length} of ${allEvents.length} events`}
+      </span>
+    </div>
   );
 
   if (allEvents.length === 0) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {dateFilter}
+      <>
+        {filterBar}
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No case history yet.</div>
-      </div>
+      </>
+    );
+  }
+
+  if (events.length === 0) {
+    return (
+      <>
+        {filterBar}
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No case history in the selected range.</div>
+      </>
     );
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      {dateFilter}
-      {events.length === 0 && (
-        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          No prescriptions, visits, or consents in this window. Broaden the range to see more.
-        </div>
-      )}
+      {filterBar}
       {events.map((e, i) => {
         const clickable = e.kind === 'rx';
         return (
@@ -1172,7 +431,7 @@ function CaseHistoryTab({ patient }) {
               </div>
               {e.kind === 'visit' && (
                 <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                  {e.data.notes || 'No notes'}
+                  {scrubZylu(e.data.notes) || 'No notes'}
                   {e.data.amountCharged && <> • <strong style={{ color: 'var(--success-color)' }}>₹{Math.round(e.data.amountCharged).toLocaleString('en-IN')}</strong></>}
                 </div>
               )}
@@ -1251,11 +510,70 @@ function RxSummary({ drugs, instructions }) {
   );
 }
 
-// #278 sub-issue 2 + 3: full Rx detail modal. Lists every field (drug, dosage,
-// frequency, duration, instructions, prescribed-by, date, patient) and offers
-// a "Download PDF" button wired to the existing /api/wellness/prescriptions/:id/pdf
-// endpoint (route already exists in backend/routes/wellness.js, which calls
-// renderPrescriptionPdf in services/pdfRenderer.js).
+// Parse the prescription's free-text `instructions` field into the structured
+// clinical sections shown in the detail modal (and the PDF). Zylu-imported
+// prescriptions store the text as labeled lines:
+//   [ZYLU-#260]
+//   Chief complaint: Dark circle
+//   Advice: Under eye peel
+//   Under eye Filler
+//   Status: Issued
+// Anything not matched by a known label falls through as `notes` so legacy
+// free-text Rx still displays everything.
+function parseRxInstructions(raw) {
+  const out = { zyluId: '', chiefComplaint: '', diagnosis: '', investigations: '', advice: '', status: '', notes: '' };
+  if (!raw || typeof raw !== 'string') return out;
+  const lines = raw.split(/\r?\n/);
+  const leftover = [];
+  let bucket = null; // currently-collecting multi-line section
+  for (const line of lines) {
+    const z = line.match(/^\s*\[ZYLU-#?(\d+)\]\s*$/i);
+    if (z) { out.zyluId = z[1]; bucket = null; continue; }
+    const m = line.match(/^\s*(chief complaint|diagnosis|investigations?|advice|advice\/referrals?|status|notes?)\s*:\s*(.*)$/i);
+    if (m) {
+      const key = m[1].toLowerCase();
+      const val = m[2].trim();
+      if (key.startsWith('chief')) { out.chiefComplaint = val; bucket = 'chiefComplaint'; }
+      else if (key.startsWith('diagnosis')) { out.diagnosis = val; bucket = 'diagnosis'; }
+      else if (key.startsWith('invest')) { out.investigations = val; bucket = 'investigations'; }
+      else if (key.startsWith('advice')) { out.advice = val; bucket = 'advice'; }
+      else if (key.startsWith('status')) { out.status = val; bucket = null; }
+      else if (key.startsWith('note')) { out.notes = val; bucket = 'notes'; }
+      continue;
+    }
+    // Continuation line for the currently-collecting section.
+    if (bucket && line.trim()) {
+      out[bucket] = (out[bucket] ? out[bucket] + '\n' : '') + line.trim();
+    } else if (line.trim()) {
+      leftover.push(line.trim());
+    }
+  }
+  if (!out.notes && leftover.length) out.notes = leftover.join('\n');
+  return out;
+}
+
+function computeAgeFromDob(dob) {
+  if (!dob) return '';
+  const d = new Date(dob);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
+  return age >= 0 ? String(age) : '';
+}
+
+function sexLabel(g) {
+  if (!g) return '';
+  if (g === 'M') return 'Male';
+  if (g === 'F') return 'Female';
+  return g;
+}
+
+// Clinical-format Rx detail modal. Matches the Zylu-style prescription layout
+// (Patient demographics → Chief complaint / Diagnosis / Investigations / Advice
+// → Prescriptions table → Notes). Free-text Rx without zylu-style labels still
+// display fine — every unmatched section just shows "—".
 function RxDetailModal({ rx, patient, onClose }) {
   const notify = useNotify();
   const [downloading, setDownloading] = useState(false);
@@ -1263,11 +581,13 @@ function RxDetailModal({ rx, patient, onClose }) {
   try { drugs = typeof rx.drugs === 'string' ? JSON.parse(rx.drugs) : rx.drugs; } catch { drugs = []; }
   if (!Array.isArray(drugs)) drugs = [];
 
+  const parsed = parseRxInstructions(rx.instructions);
+  const status = parsed.status || 'Issued';
+  const age = computeAgeFromDob(patient?.dob);
+
   const downloadPdf = async () => {
     setDownloading(true);
     try {
-      // Use fetch directly so we can stream the binary into a blob URL.
-      // fetchApi assumes JSON responses; PDFs are binary.
       const token = getAuthToken();
       const res = await fetch(`/api/wellness/prescriptions/${rx.id}/pdf`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -1278,8 +598,6 @@ function RxDetailModal({ rx, patient, onClose }) {
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      // Open in a new tab; user can save from there. We also revoke the URL
-      // shortly after so we don't leak the blob in memory forever.
       window.open(url, '_blank', 'noopener');
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
@@ -1289,11 +607,19 @@ function RxDetailModal({ rx, patient, onClose }) {
     }
   };
 
+  const headerRowStyle = {
+    background: 'rgba(255,255,255,0.03)',
+    padding: '0.6rem 0.85rem',
+    borderRadius: 6,
+    marginBottom: '0.5rem',
+    fontSize: '0.85rem',
+  };
+
   return (
     <div
       onClick={onClose}
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
       }}
     >
@@ -1301,74 +627,91 @@ function RxDetailModal({ rx, patient, onClose }) {
         onClick={(e) => e.stopPropagation()}
         className="glass"
         style={{
-          width: '90%', maxWidth: 640, maxHeight: '85vh', overflow: 'auto',
-          padding: '1.5rem', background: 'var(--surface-color, #fff)',
+          width: '95%', maxWidth: 1080, maxHeight: '90vh', overflow: 'auto',
+          padding: '1.5rem',
         }}
       >
+        {/* Title strip with close button */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h2 style={{ fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <FileText size={18} /> Prescription details
+          <h2 style={{ fontSize: '1.05rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <FileText size={18} /> Prescription #{rx.id}
+            {/* Internal ZYLU id intentionally hidden from the UI. */}
           </h2>
           <button onClick={onClose} aria-label="Close" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
             <X size={18} />
           </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem', fontSize: '0.85rem' }}>
-          <div>
-            <div style={{ color: 'var(--text-secondary)' }}>Patient</div>
-            <div style={{ fontWeight: 600 }}>{patient?.name || '—'}</div>
+        {/* Patient + prescriber two-column header */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: '0.4rem', marginBottom: '1rem', padding: '0.85rem', background: 'rgba(255,255,255,0.03)', borderRadius: 8 }}>
+          <div style={{ fontSize: '0.85rem', lineHeight: 1.6 }}>
+            <div><strong>Patient Name:</strong> {patient?.name || '—'}</div>
+            <div><strong>Age:</strong> {age || '—'}</div>
+            <div><strong>Sex:</strong> {sexLabel(patient?.gender) || '—'}</div>
+            <div><strong>Status:</strong> <span style={{ color: 'var(--success-color, #10b981)' }}>{status}</span></div>
           </div>
-          <div>
-            <div style={{ color: 'var(--text-secondary)' }}>Date</div>
-            <div style={{ fontWeight: 600 }}>{new Date(rx.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</div>
-          </div>
-          <div>
-            <div style={{ color: 'var(--text-secondary)' }}>Prescribed by</div>
-            <div style={{ fontWeight: 600 }}>{rx.doctor?.name || '—'}</div>
-          </div>
-          <div>
-            <div style={{ color: 'var(--text-secondary)' }}>Visit ID</div>
-            <div style={{ fontWeight: 600 }}>#{rx.visitId}</div>
+          <div style={{ fontSize: '0.85rem', lineHeight: 1.6 }}>
+            <div><strong>Patient ID:</strong> {patient?.id || '—'}</div>
+            <div><strong>Prescriber:</strong> {rx.doctor?.name || '—'}</div>
+            {rx.doctor?.registrationNumber && (
+              <div><strong>Registration Number:</strong> {rx.doctor.registrationNumber}</div>
+            )}
+            <div><strong>Date:</strong> {new Date(rx.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}</div>
           </div>
         </div>
 
-        <h3 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>Medications</h3>
-        {drugs.length === 0 ? (
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '0.5rem 0' }}>(no medications listed)</div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', marginBottom: '1rem' }}>
+        {/* Clinical sections */}
+        <div style={headerRowStyle}><strong>Chief Complaint:</strong> {parsed.chiefComplaint || '—'}</div>
+        <div style={headerRowStyle}><strong>Diagnosis:</strong> {parsed.diagnosis || '—'}</div>
+        <div style={headerRowStyle}><strong>Investigations:</strong> {parsed.investigations || '—'}</div>
+        <div style={{ ...headerRowStyle, whiteSpace: 'pre-wrap' }}><strong>Advice/Referrals:</strong> {parsed.advice || '—'}</div>
+
+        {/* Medications table */}
+        <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '1rem 0 0.4rem' }}>Prescriptions</h3>
+        <div style={{ overflowX: 'auto', marginBottom: '1rem' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 720 }}>
             <thead>
-              <tr>
-                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Drug</th>
-                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Dosage</th>
-                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Frequency</th>
-                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Duration</th>
+              <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <th style={th}>No.</th>
+                <th style={th}>Drug Name</th>
+                <th style={th}>Strength</th>
+                <th style={th}>Preparation</th>
+                <th style={th}>Route</th>
+                <th style={th}>Dosage</th>
+                <th style={th}>Direction</th>
+                <th style={th}>Frequency</th>
+                <th style={th}>Instructions</th>
+                <th style={th}>Start Date</th>
               </tr>
             </thead>
             <tbody>
-              {drugs.map((d, i) => (
-                <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
-                  <td style={{ padding: '0.4rem', fontWeight: 600 }}>{d.name || d.drug || '—'}</td>
-                  <td style={{ padding: '0.4rem' }}>{d.dosage || '—'}</td>
-                  <td style={{ padding: '0.4rem' }}>{d.frequency || '—'}</td>
-                  <td style={{ padding: '0.4rem' }}>{d.duration || '—'}</td>
-                </tr>
-              ))}
+              {drugs.length === 0 ? (
+                <tr><td colSpan={10} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>(no medications listed)</td></tr>
+              ) : drugs.map((d, i) => {
+                const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join('') || d.strength || '—';
+                const startDate = d.startDate ? new Date(d.startDate).toLocaleDateString('en-IN') : '—';
+                return (
+                  <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
+                    <td style={td}>{i + 1}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{d.name || d.drug || '—'}</td>
+                    <td style={td}>{strength}</td>
+                    <td style={td}>{d.preparation || d.dosageForm || '—'}</td>
+                    <td style={td}>{d.route || '—'}</td>
+                    <td style={td}>{d.dosage || '—'}</td>
+                    <td style={td}>{d.direction || '—'}</td>
+                    <td style={td}>{d.frequency || '—'}</td>
+                    <td style={td}>{d.instructions || '—'}</td>
+                    <td style={td}>{startDate}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-        )}
-
-        <h3 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>Instructions</h3>
-        <div style={{
-          fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5,
-          whiteSpace: 'pre-wrap', padding: '0.6rem', borderRadius: 8,
-          border: '1px solid var(--border-color)', marginBottom: '1rem',
-        }}>
-          {rx.instructions || '—'}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+        <div style={headerRowStyle}><strong>Notes:</strong> {parsed.notes || '—'}</div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
           <button
             type="button"
             onClick={onClose}
@@ -1395,6 +738,9 @@ function RxDetailModal({ rx, patient, onClose }) {
   );
 }
 
+const th = { textAlign: 'left', padding: '0.5rem 0.6rem', color: 'var(--text-secondary)', fontWeight: 500, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.03em' };
+const td = { padding: '0.5rem 0.6rem', verticalAlign: 'top' };
+
 // ── Prescribe tab ─────────────────────────────────────────────────
 
 const INITIAL_RX = {
@@ -1402,6 +748,128 @@ const INITIAL_RX = {
   drugs: [{ name: '', dosage: '', frequency: '', duration: '' }],
   instructions: '',
 };
+
+// Typeahead over the tenant's Drug catalogue (GET /api/wellness/drugs?q=…).
+// Free-text entry still works — selecting a row just auto-fills the sibling
+// dosage/frequency/duration inputs from the drug's stored defaults.
+function DrugAutocomplete({ value, onChange, onPick }) {
+  const [results, setResults] = useState([]);
+  const [open, setOpen] = useState(false);
+  const debounceRef = useRef(null);
+  const abortRef = useRef(null);
+  const blurTimerRef = useRef(null);
+
+  const search = (q) => {
+    if (abortRef.current) abortRef.current.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    // Empty q → backend returns first 20 drugs alphabetically (no filter applied).
+    const trimmed = (q || '').trim();
+    const url = trimmed
+      ? `/api/wellness/drugs?q=${encodeURIComponent(trimmed)}&isActive=true&limit=20`
+      : `/api/wellness/drugs?isActive=true&limit=20`;
+    fetchApi(url, { signal: ac.signal, silent: true })
+      .then((data) => {
+        if (ac.signal.aborted) return;
+        setResults(Array.isArray(data) ? data : []);
+      })
+      .catch(() => { /* typeahead is best-effort; ignore failures */ });
+  };
+
+  const handleChange = (e) => {
+    const next = e.target.value;
+    onChange(next);
+    setOpen(true);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => search(next), 200);
+  };
+
+  const handleFocus = () => {
+    if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null; }
+    setOpen(true);
+    // Show the top of the catalogue on focus even before the user types,
+    // so they see "this is a dropdown, not just a text box."
+    search(value || '');
+  };
+
+  // Delay close so an onMouseDown on a suggestion still fires.
+  const handleBlur = () => {
+    blurTimerRef.current = setTimeout(() => setOpen(false), 150);
+  };
+
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (abortRef.current) abortRef.current.abort();
+    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+  }, []);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        placeholder="Drug name — start typing to search the catalogue"
+        value={value}
+        onChange={handleChange}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        autoComplete="off"
+        style={inputStyle}
+      />
+      {open && results.length > 0 && (
+        <ul
+          role="listbox"
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            marginTop: 4,
+            maxHeight: 240,
+            overflowY: 'auto',
+            background: 'var(--surface-color, #1f2937)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 8,
+            listStyle: 'none',
+            padding: 4,
+            margin: 0,
+            zIndex: 20,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+          }}
+        >
+          {results.map((d) => (
+            <li
+              key={d.id}
+              role="option"
+              onMouseDown={(e) => { e.preventDefault(); onPick(d); setOpen(false); }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              style={{
+                padding: '0.45rem 0.6rem',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+                color: 'var(--text-primary)',
+              }}
+            >
+              <div style={{ fontWeight: 500 }}>
+                {d.name}
+                {d.strengthValue && d.strengthUnit && (
+                  <span style={{ color: 'var(--text-secondary)', fontWeight: 400, marginLeft: 6 }}>
+                    {d.strengthValue}{d.strengthUnit}
+                  </span>
+                )}
+              </div>
+              {(d.genericName || d.dosageForm) && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                  {[d.genericName, d.dosageForm].filter(Boolean).join(' • ')}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function PrescribeTab({ patient, onSaved }) {
   const notify = useNotify();
@@ -1411,6 +879,18 @@ function PrescribeTab({ patient, onSaved }) {
   const [draft, setDraft, isDirty, clearDraft] = useFormAutosave(`rx-${patient.id}`, initial);
   const { visitId, drugs, instructions } = draft;
   const [saving, setSaving] = useState(false);
+  const [openRx, setOpenRx] = useState(null);
+  const [showAllPastRx, setShowAllPastRx] = useState(false);
+
+  // Past prescriptions for this patient — already loaded with the patient
+  // payload (GET /api/wellness/patients/:id includes `prescriptions`). Newest
+  // first. The dedicated GET /api/wellness/patients/:id/prescriptions endpoint
+  // returns the same data; we use the pre-loaded copy to avoid an extra round
+  // trip.
+  const pastRx = [...(patient.prescriptions || [])].sort(
+    (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+  );
+  const visiblePastRx = showAllPastRx ? pastRx : pastRx.slice(0, 5);
 
   const setVisitId = (v) => setDraft((s) => ({ ...s, visitId: v }));
   const setInstructions = (v) => setDraft((s) => ({ ...s, instructions: v }));
@@ -1455,6 +935,78 @@ function PrescribeTab({ patient, onSaved }) {
   };
 
   return (
+    <>
+      {pastRx.length > 0 && (
+        <div className="glass" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <FileText size={16} /> Past prescriptions ({pastRx.length})
+            </h3>
+            {pastRx.length > 5 && (
+              <button
+                type="button"
+                onClick={() => setShowAllPastRx((v) => !v)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                {showAllPastRx ? 'Show recent only' : `Show all ${pastRx.length}`}
+              </button>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {visiblePastRx.map((rx) => {
+              let drugList = [];
+              try {
+                const parsed = typeof rx.drugs === 'string' ? JSON.parse(rx.drugs) : rx.drugs;
+                if (Array.isArray(parsed)) drugList = parsed;
+              } catch { /* fall through to empty */ }
+              const summary = drugList.length === 0
+                ? '(no medications)'
+                : drugList.slice(0, 3).map((d) => d.name).filter(Boolean).join(', ')
+                  + (drugList.length > 3 ? ` + ${drugList.length - 3} more` : '');
+              return (
+                <button
+                  key={rx.id}
+                  type="button"
+                  onClick={() => setOpenRx(rx)}
+                  style={{
+                    textAlign: 'left',
+                    padding: '0.6rem 0.75rem',
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    color: 'var(--text-primary)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {summary}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                      {new Date(rx.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                      {rx.doctor?.name && <> • {rx.doctor.name}</>}
+                    </div>
+                  </div>
+                  <FileText size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {openRx && (
+        <RxDetailModal
+          rx={openRx}
+          patient={patient}
+          onClose={() => setOpenRx(null)}
+        />
+      )}
+
     <form onSubmit={submit} className="glass" style={{ padding: '1.5rem' }}>
       <h3 style={{ marginBottom: '1rem' }}>New prescription</h3>
 
@@ -1475,7 +1027,22 @@ function PrescribeTab({ patient, onSaved }) {
       <div style={{ marginBottom: '0.5rem' }}><label style={labelStyle}>Drugs</label></div>
       {drugs.map((d, i) => (
         <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
-          <input placeholder="Drug name" value={d.name} onChange={(e) => setDrug(i, 'name', e.target.value)} style={inputStyle} />
+          <DrugAutocomplete
+            value={d.name}
+            onChange={(v) => setDrug(i, 'name', v)}
+            onPick={(drug) => setDraft((s) => {
+              const next = [...s.drugs];
+              // Don't clobber dosage/frequency/duration the clinician already typed.
+              next[i] = {
+                ...next[i],
+                name: drug.name,
+                dosage: next[i].dosage || drug.defaultDosage || '',
+                frequency: next[i].frequency || drug.defaultFrequency || '',
+                duration: next[i].duration || drug.defaultDuration || '',
+              };
+              return { ...s, drugs: next };
+            })}
+          />
           <input placeholder="Dosage" value={d.dosage} onChange={(e) => setDrug(i, 'dosage', e.target.value)} style={inputStyle} />
           <input placeholder="Frequency" value={d.frequency} onChange={(e) => setDrug(i, 'frequency', e.target.value)} style={inputStyle} />
           <input placeholder="Duration" value={d.duration} onChange={(e) => setDrug(i, 'duration', e.target.value)} style={inputStyle} />
@@ -1505,6 +1072,7 @@ function PrescribeTab({ patient, onSaved }) {
         {saving ? 'Saving…' : 'Save prescription'}
       </button>
     </form>
+    </>
   );
 }
 
@@ -1642,7 +1210,15 @@ function ConsentTab({ patient, services, onSaved }) {
   // has already been captured for this patient/template/service before
   // recapturing. patient.consents already arrives ordered desc by signedAt
   // from the parent fetch (see routes/wellness.js GET /patients/:id include).
-  const priorConsents = Array.isArray(patient?.consents) ? patient.consents : [];
+  const allPriorConsents = Array.isArray(patient?.consents) ? patient.consents : [];
+  const [consentFilter, setConsentFilter] = useState(EMPTY_DATE_FILTER);
+  const [consentRangeStart, consentRangeEnd] = resolveDateRange(consentFilter);
+  const priorConsents = (consentRangeStart && consentRangeEnd)
+    ? allPriorConsents.filter((c) => {
+        const ts = new Date(c.signedAt).getTime();
+        return ts >= consentRangeStart.getTime() && ts <= consentRangeEnd.getTime();
+      })
+    : allPriorConsents;
   const formatPriorDate = (iso) => {
     if (!iso) return '';
     try {
@@ -1670,10 +1246,26 @@ function ConsentTab({ patient, services, onSaved }) {
           borderRadius: 8,
         }}
       >
-        <h3 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1rem' }}>Recent consents</h3>
-        {priorConsents.length === 0 ? (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+          <h3 style={{ margin: 0, fontSize: '1rem' }}>Recent consents</h3>
+          {allPriorConsents.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <DateRangeFilter value={consentFilter} onChange={setConsentFilter} label={null} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {priorConsents.length === allPriorConsents.length
+                  ? `${allPriorConsents.length}`
+                  : `${priorConsents.length} of ${allPriorConsents.length}`}
+              </span>
+            </div>
+          )}
+        </div>
+        {allPriorConsents.length === 0 ? (
           <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
             No prior consents on file.
+          </p>
+        ) : priorConsents.length === 0 ? (
+          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            No consents in the selected range.
           </p>
         ) : (
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
@@ -1847,6 +1439,15 @@ function PlansTab({ patient, services, onSaved }) {
   const setTotalSessions = (v) => setDraft((s) => ({ ...s, totalSessions: v }));
   const setTotalPrice = (v) => setDraft((s) => ({ ...s, totalPrice: v }));
   const setServiceId = (v) => setDraft((s) => ({ ...s, serviceId: v }));
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
+  const allPlans = patient.treatmentPlans || [];
+  const plans = (rangeStart && rangeEnd)
+    ? allPlans.filter((tp) => {
+        const ts = new Date(tp.createdAt).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : allPlans;
   // #225: rapid double-clicks on Add were creating duplicate treatment plans.
   // Guard the submit with a `submitting` flag and disable the button while
   // the POST is in flight.
@@ -1876,11 +1477,30 @@ function PlansTab({ patient, services, onSaved }) {
 
   return (
     <div>
+      {allPlans.length > 0 && (
+        <div
+          className="glass"
+          style={{
+            padding: '0.6rem 0.85rem', display: 'flex', flexWrap: 'wrap',
+            alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem',
+          }}
+        >
+          <DateRangeFilter value={filter} onChange={setFilter} label="Filter by created date" />
+          <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            {plans.length === allPlans.length
+              ? `${allPlans.length} plan${allPlans.length === 1 ? '' : 's'}`
+              : `${plans.length} of ${allPlans.length} plans`}
+          </span>
+        </div>
+      )}
       <div style={{ marginBottom: '1rem', display: 'grid', gap: '0.5rem' }}>
-        {patient.treatmentPlans.length === 0 && (
+        {allPlans.length === 0 && (
           <div className="glass" style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No treatment plans yet.</div>
         )}
-        {patient.treatmentPlans.map((tp) => (
+        {allPlans.length > 0 && plans.length === 0 && (
+          <div className="glass" style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No plans in the selected range.</div>
+        )}
+        {plans.map((tp) => (
           <div key={tp.id} className="glass" style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontWeight: 500 }}>{tp.name}</div>
@@ -1888,6 +1508,7 @@ function PlansTab({ patient, services, onSaved }) {
                 {tp.service?.name && <>{tp.service.name} • </>}
                 Session {tp.completedSessions}/{tp.totalSessions}
                 {tp.totalPrice > 0 && <> • ₹{Math.round(tp.totalPrice).toLocaleString('en-IN')}</>}
+                {tp.createdAt && <> • Started {formatDate(tp.createdAt)}</>}
               </div>
             </div>
             <div style={{ width: 100, background: 'rgba(255,255,255,0.05)', borderRadius: 20, height: 6, overflow: 'hidden' }}>
@@ -1928,114 +1549,219 @@ function PlansTab({ patient, services, onSaved }) {
 }
 
 // ── Log visit tab ──────────────────────────────────────────────────
-
-const INITIAL_VISIT = {
-  serviceId: '',
-  doctorId: '',
-  notes: '',
-  amount: 0,
-};
+// Shows booked appointments; clicking one lets you mark it as visited (completed)
+// and optionally add notes/amount. Marking as visited triggers auto-consumption.
 
 function LogVisitTab({ patient, services, doctors, onSaved }) {
   const notify = useNotify();
-  // #226: persist log-visit draft to sessionStorage so refresh doesn't wipe input.
-  const [draft, setDraft, isDirty, clearDraft] = useFormAutosave(`visit-${patient.id}`, INITIAL_VISIT);
-  const { serviceId, doctorId, notes, amount } = draft;
-  const setServiceId = (v) => setDraft((s) => ({ ...s, serviceId: v }));
-  const setDoctorId = (v) => setDraft((s) => ({ ...s, doctorId: v }));
-  const setNotes = (v) => setDraft((s) => ({ ...s, notes: v }));
-  const setAmount = (v) => setDraft((s) => ({ ...s, amount: v }));
-  // #225: same debounce guard as PlansTab — rapid clicks were creating duplicate visits.
+  const [selectedVisitId, setSelectedVisitId] = useState(null);
+  const [notes, setNotes] = useState('');
+  const [consumptionRules, setConsumptionRules] = useState([]);
   const [submitting, setSubmitting] = useState(false);
 
-  // #109: Service + Doctor required; amount must be >= 0. Save disabled until valid.
-  const valid = !!serviceId && !!doctorId && Number(amount) >= 0;
+  // Filter booked/pending appointments and completed visits
+  const bookedAppointments = patient.visits.filter((v) =>
+    v.status && ['booked', 'confirmed', 'arrived', 'in-treatment'].includes(v.status)
+  );
+  const completedVisits = patient.visits.filter((v) => v.status === 'completed');
 
-  const submit = async (e) => {
+  const selectedVisit = selectedVisitId ? patient.visits.find((v) => v.id === parseInt(selectedVisitId)) : null;
+  const selectedService = selectedVisit ? services.find((s) => s.id === selectedVisit.serviceId) : null;
+
+  // Fetch auto-consumption rules when visit is selected
+  const handleSelectVisit = async (apt) => {
+    setSelectedVisitId(apt.id);
+    setNotes(apt.notes || '');
+    // Fetch consumption rules for this service
+    try {
+      const rules = await fetchApi('/api/wellness/auto-consumption-rules');
+      const serviceRules = Array.isArray(rules) ? rules.filter((r) => r.serviceId === apt.serviceId) : [];
+      setConsumptionRules(serviceRules);
+    } catch (e) {
+      setConsumptionRules([]);
+    }
+  };
+
+  const markAsVisited = async (e) => {
     e.preventDefault();
-    if (!valid) {
-      notify.error('Please select a Service and Doctor, and enter an amount of 0 or more.');
+    if (!selectedVisit || !selectedService) {
+      notify.error('Please select an appointment to mark as visited.');
       return;
     }
     if (submitting) return;
     setSubmitting(true);
     try {
-      await fetchApi('/api/wellness/visits', {
-        method: 'POST',
+      await fetchApi(`/api/wellness/visits/${selectedVisit.id}`, {
+        method: 'PUT',
         body: JSON.stringify({
-          patientId: patient.id,
-          serviceId,
-          doctorId,
-          notes, amountCharged: amount, status: 'completed',
+          status: 'completed',
+          notes,
+          amountCharged: selectedService.basePrice || 0,
         }),
       });
-      clearDraft();
+      setSelectedVisitId(null);
+      setNotes('');
+      setConsumptionRules([]);
       onSaved();
-      notify.success('Visit logged.');
+      notify.success('Appointment marked as visited & auto-consumption triggered.');
     } catch (_err) { /* fetchApi already toasted */ } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <form onSubmit={submit} className="glass" style={{ padding: '1.5rem' }}>
-      <h3 style={{ marginBottom: '1rem' }}>Log a visit</h3>
-      {isDirty && <RestoredBanner onDiscard={clearDraft} />}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
-        <div>
-          <label style={labelStyle}>Service <span style={{ color: '#ef4444' }}>*</span></label>
-          <select required value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
-            <option value="">— select —</option>
-            {services.map((s) => <option key={s.id} value={s.id}>{s.name} — ₹{s.basePrice}</option>)}
-          </select>
+    <div style={{ display: 'flex', gap: '1.5rem' }}>
+      {/* Left: List of booked appointments & visit history */}
+      <div className="glass" style={{ flex: 1, padding: '1.5rem', overflow: 'auto', maxHeight: '600px' }}>
+        {/* Booked Appointments */}
+        <div style={{ marginBottom: '1.5rem' }}>
+          <h3 style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            📅 Pending Appointments
+            {bookedAppointments.length > 0 && <span style={{ fontSize: '0.85rem', color: 'var(--accent-color)', fontWeight: 400 }}>({bookedAppointments.length})</span>}
+          </h3>
+          {bookedAppointments.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No pending appointments.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {bookedAppointments.map((apt) => (
+                <div
+                  key={apt.id}
+                  onClick={() => handleSelectVisit(apt)}
+                  style={{
+                    padding: '0.75rem',
+                    border: selectedVisitId === apt.id ? '2px solid var(--accent-color)' : '1px solid var(--border-color)',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    background: selectedVisitId === apt.id ? 'rgba(205, 148, 129, 0.1)' : 'rgba(255,255,255,0.02)',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>
+                    {formatDate(apt.visitDate)} · {apt.service?.name || 'Consultation'}
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    Doctor: {apt.doctor?.name || '—'} · Status: <span style={{ textTransform: 'capitalize', color: 'var(--accent-color)' }}>{apt.status}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-        <div>
-          {/* #752 — label kept as "Doctor" for clinical familiarity but the
-              dropdown now includes professionals (stylists, aestheticians,
-              etc.) so any wellness practitioner can be assigned to a visit.
-              Role is appended in parens so the staff member can disambiguate
-              when names collide. */}
-          <label style={labelStyle}>Doctor <span style={{ color: '#ef4444' }}>*</span></label>
-          <select required value={doctorId} onChange={(e) => setDoctorId(e.target.value)} style={inputStyle}>
-            <option value="">— select —</option>
-            {doctors.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}{d.wellnessRole && d.wellnessRole !== 'doctor' ? ` (${d.wellnessRole})` : ''}
-              </option>
-            ))}
-          </select>
-        </div>
+
+        {/* Completed Visits History */}
+        {completedVisits.length > 0 && (
+          <div style={{ paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+            <h3 style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              ✓ Completed Visits
+              <span style={{ fontSize: '0.85rem', color: 'var(--success-color)', fontWeight: 400 }}>({completedVisits.length})</span>
+            </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {completedVisits.map((visit) => (
+                <div
+                  key={visit.id}
+                  style={{
+                    padding: '0.75rem',
+                    border: '1px solid rgba(16, 185, 129, 0.2)',
+                    borderRadius: 8,
+                    background: 'rgba(16, 185, 129, 0.05)',
+                  }}
+                >
+                  <div style={{ fontWeight: 500, marginBottom: '0.25rem', color: 'var(--text-primary)' }}>
+                    {formatDate(visit.visitDate)} · {visit.service?.name || 'Consultation'}
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    Doctor: {visit.doctor?.name || '—'}
+                    {visit.amountCharged > 0 && <> · Amount: ₹{visit.amountCharged.toLocaleString('en-IN')}</>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
-      <div style={{ marginBottom: '0.75rem' }}>
-        <label style={labelStyle}>Visit notes</label>
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} style={{ ...inputStyle, resize: 'vertical' }} />
-      </div>
-      <div style={{ marginBottom: '1rem', width: 200 }}>
-        <label style={labelStyle}>Amount charged (₹)</label>
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          value={amount}
-          onChange={(e) => setAmount(parseFloat(e.target.value) || 0)}
-          style={inputStyle}
-        />
-      </div>
-      <button
-        type="submit"
-        disabled={!valid || submitting}
-        title={!valid ? 'Select Service and Doctor; amount must be 0 or more' : ''}
-        style={{
-          padding: '0.55rem 1.25rem',
-          background: valid && !submitting ? 'var(--success-color)' : 'rgba(107,114,128,0.3)',
-          color: '#fff', border: 'none', borderRadius: 8,
-          cursor: valid && !submitting ? 'pointer' : 'not-allowed',
-          opacity: valid && !submitting ? 1 : 0.6,
-        }}
-      >
-        {submitting ? 'Saving…' : 'Save visit'}
-      </button>
-    </form>
+
+      {/* Right: Mark as visited form */}
+      {selectedVisit && (
+        <form onSubmit={markAsVisited} className="glass" style={{ flex: 1, padding: '1.5rem', overflow: 'auto', maxHeight: '600px' }}>
+          <h3 style={{ marginBottom: '1rem' }}>Mark as visited</h3>
+
+          {/* Service Details */}
+          <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', borderRadius: 8 }}>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Service:</div>
+            <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>{selectedService?.name}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem' }}>
+              <div>
+                <span style={{ color: 'var(--text-secondary)' }}>Amount: </span>
+                <strong>₹{selectedService?.basePrice || 0}</strong>
+              </div>
+              <div>
+                <span style={{ color: 'var(--text-secondary)' }}>Duration: </span>
+                <strong>{selectedService?.durationMin || 30} min</strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Auto-Consumption Preview */}
+          {consumptionRules.length > 0 && (
+            <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: 8, border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>
+                ✓ Auto-Consumption Preview
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                {consumptionRules.map((rule) => (
+                  <div key={rule.id} style={{ fontSize: '0.85rem', padding: '0.4rem 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{rule.product?.name}</div>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                      Will deduct: {rule.quantityPerVisit} {rule.product?.unit || 'units'}
+                      {rule.product?.volume && ` (÷ ${rule.product.volume}ml = ${(rule.quantityPerVisit / rule.product.volume).toFixed(2)} units)`}
+                    </div>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                      Current stock: {rule.product?.currentStock || 0} units
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {consumptionRules.length === 0 && (
+            <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(107,114,128,0.1)', borderRadius: 8, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              No auto-consumption rules configured for this service.
+            </div>
+          )}
+
+          {/* Notes */}
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={labelStyle}>Clinical notes (optional)</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Add any clinical observations..."
+              style={{ ...inputStyle, resize: 'vertical' }}
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={submitting}
+            style={{
+              width: '100%',
+              padding: '0.55rem 1.25rem',
+              background: submitting ? 'rgba(107,114,128,0.3)' : 'var(--success-color)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              opacity: submitting ? 0.6 : 1,
+              fontWeight: 500,
+            }}
+          >
+            {submitting ? 'Marking as visited…' : '✓ Mark as visited & consume products'}
+          </button>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -2046,6 +1772,15 @@ function PhotosTab({ patient, onSaved }) {
   const [visitId, setVisitId] = useState(patient.visits[0]?.id || '');
   const [kind, setKind] = useState('before');
   const [uploading, setUploading] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState(null);
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
+  const visibleVisits = (rangeStart && rangeEnd)
+    ? patient.visits.filter((v) => {
+        const ts = new Date(v.visitDate).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : patient.visits;
 
   const visit = patient.visits.find((v) => v.id === parseInt(visitId));
   const before = visit?.photosBefore ? JSON.parse(visit.photosBefore) : [];
@@ -2081,13 +1816,20 @@ function PhotosTab({ patient, onSaved }) {
 
   return (
     <div className="glass" style={{ padding: '1.5rem' }}>
-      <h3 style={{ marginBottom: '1rem' }}>Visit photos</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
+        <h3 style={{ margin: 0 }}>Visit photos</h3>
+        {patient.visits.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <DateRangeFilter value={filter} onChange={setFilter} label={null} />
+          </div>
+        )}
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr auto', gap: '0.5rem', marginBottom: '1rem', alignItems: 'end' }}>
         <div>
           <label style={labelStyle}>Visit</label>
           <select value={visitId} onChange={(e) => setVisitId(e.target.value)} style={inputStyle}>
             <option value="">— select visit —</option>
-            {patient.visits.map((v) => (
+            {visibleVisits.map((v) => (
               <option key={v.id} value={v.id}>
                 {formatDate(v.visitDate)} — {v.service?.name || 'Consultation'}
               </option>
@@ -2109,79 +1851,286 @@ function PhotosTab({ patient, onSaved }) {
 
       {visit && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-          <PhotoColumn title="Before" urls={before} onRemove={(u) => remove(u, 'before')} />
-          <PhotoColumn title="After"  urls={after}  onRemove={(u) => remove(u, 'after')} />
+          <PhotoColumn title="Before" urls={before} onRemove={(u) => remove(u, 'before')} onView={setLightboxUrl} />
+          <PhotoColumn title="After"  urls={after}  onRemove={(u) => remove(u, 'after')}  onView={setLightboxUrl} />
         </div>
+      )}
+
+      {lightboxUrl && (
+        <Lightbox url={displayPhotoSrc(lightboxUrl)} onClose={() => setLightboxUrl(null)} />
       )}
     </div>
   );
 }
 
-// #750 — render a "failed to load" placeholder when the image source returns
-// a non-image (the historic backend bug was Content-Type text/html via the
-// SPA fallback — fixed in #743 — but a future regression, an expired signed
-// URL, or a deleted blob would silently render a black tile that the clinician
-// can't distinguish from a successful upload). We track per-URL error state
-// + expose a Retry action that forces a re-fetch by appending a cache-busting
-// query string. Counters above still claim BEFORE (n) / AFTER (n) but the
-// failed-to-load tiles are unambiguous now.
-function PhotoThumb({ url, onRemove }) {
-  const [errored, setErrored] = useState(false);
-  const [bust, setBust] = useState(0);
-  const src = bust ? `${url}${url.includes('?') ? '&' : '?'}_r=${bust}` : url;
-  const retry = () => {
-    setErrored(false);
-    setBust(Date.now());
+// Image preview overlay — no chrome around the image, close button on the
+// image itself, zoom controls in a bottom pill, and a fullscreen toggle
+// that uses the browser Fullscreen API on the wrapper. Backdrop click +
+// ESC dismiss; clicks on the image / controls / close stay open
+// (stopPropagation).
+function Lightbox({ url, onClose }) {
+  const ZOOM_MIN = 1;
+  const ZOOM_MAX = 5;
+  const ZOOM_STEP = 0.25;
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const draggingRef = useRef(null);
+  const wrapperRef = useRef(null);
+
+  // Reset zoom + pan whenever a new image is shown.
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [url]);
+
+  // Keep isFullscreen in sync with the browser — covers the case where the
+  // user presses F11 / ESCapes fullscreen via the native UI.
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      // While the wrapper is fullscreen, ESC exits fullscreen (browser
+      // default); only close the lightbox when not fullscreen.
+      if (e.key === 'Escape' && !document.fullscreenElement) onClose();
+      else if (e.key === '+' || e.key === '=') setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2)));
+      else if (e.key === '-' || e.key === '_') setZoom((z) => {
+        const next = Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2));
+        if (next === 1) setPan({ x: 0, y: 0 });
+        return next;
+      });
+      else if (e.key === '0') { setZoom(1); setPan({ x: 0, y: 0 }); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if (wrapperRef.current?.requestFullscreen) {
+        await wrapperRef.current.requestFullscreen();
+      }
+    } catch (_e) {
+      // Fullscreen API can reject for permissions / unsupported browsers;
+      // swallow silently — the rest of the lightbox still works.
+    }
   };
+
+  const onWheel = (e) => {
+    e.preventDefault();
+    setZoom((z) => {
+      const dir = e.deltaY < 0 ? 1 : -1;
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(z + dir * ZOOM_STEP).toFixed(2)));
+      if (next === 1) setPan({ x: 0, y: 0 });
+      return next;
+    });
+  };
+
+  const onMouseDown = (e) => {
+    if (zoom <= 1) return;
+    e.preventDefault();
+    draggingRef.current = { startX: e.clientX, startY: e.clientY, panX: pan.x, panY: pan.y };
+  };
+  const onMouseMove = (e) => {
+    if (!draggingRef.current) return;
+    const { startX, startY, panX, panY } = draggingRef.current;
+    setPan({ x: panX + (e.clientX - startX), y: panY + (e.clientY - startY) });
+  };
+  const onMouseUp = () => { draggingRef.current = null; };
+
   return (
-    <div style={{ position: 'relative' }}>
-      {errored ? (
-        <div
-          data-testid="photo-failed-placeholder"
+    <div
+      onClick={onClose}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseUp}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Photo preview"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 9999, padding: '1rem', cursor: 'zoom-out',
+      }}
+    >
+      <div
+        ref={wrapperRef}
+        onClick={(e) => e.stopPropagation()}
+        onWheel={onWheel}
+        onMouseDown={onMouseDown}
+        style={{
+          // Wrapper auto-sizes to the image's rendered dimensions (no
+          // letterbox strips around the picture) so the close button +
+          // controls anchored to wrapper corners sit on the IMAGE'S
+          // corners, not in empty space beside the image.
+          //
+          // overflow: hidden + transform-based zoom on the inner <img>
+          // means the image scales WITHIN the wrapper — the wrapper
+          // (and its anchored chrome) stays put while pixels overflow
+          // get clipped. Pan moves the inner image around inside the
+          // unchanged wrapper.
+          //
+          // In fullscreen we expand the wrapper to 100vw × 100vh so the
+          // image has room to grow to screen size; close + controls
+          // anchor to screen corners which is the conventional fullscreen
+          // viewer feel.
+          position: 'relative',
+          display: isFullscreen ? 'flex' : 'inline-block',
+          alignItems: isFullscreen ? 'center' : undefined,
+          justifyContent: isFullscreen ? 'center' : undefined,
+          background: isFullscreen ? '#000' : 'transparent',
+          width: isFullscreen ? '100vw' : 'auto',
+          height: isFullscreen ? '100vh' : 'auto',
+          overflow: 'hidden',
+          cursor: zoom > 1 ? 'grab' : 'default',
+          userSelect: 'none',
+          lineHeight: 0, // kill the inline-block baseline gap below the img
+        }}
+      >
+        <img
+          src={url}
+          alt=""
+          draggable={false}
           style={{
-            width: '100%', height: 100, borderRadius: 6,
-            background: 'rgba(239,68,68,0.08)', border: '1px dashed rgba(239,68,68,0.4)',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            gap: '0.25rem', padding: '0.25rem', color: 'var(--text-secondary)', fontSize: '0.7rem',
-            textAlign: 'center',
+            display: 'block',
+            // Natural-size sizing: the <img>'s rendered dimensions are
+            // bounded by these caps and the image's intrinsic aspect
+            // ratio. The wrapper inherits exactly those dimensions
+            // (inline-block + content-sized), so wrapper corners ==
+            // image corners == where the close button and controls
+            // pill should anchor.
+            maxWidth: isFullscreen ? '100vw' : 'min(85vw, 1000px)',
+            maxHeight: isFullscreen ? '100vh' : '80vh',
+            width: isFullscreen ? '100%' : 'auto',
+            height: isFullscreen ? '100%' : 'auto',
+            objectFit: 'contain',
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transformOrigin: 'center center',
+            transition: draggingRef.current ? 'none' : 'transform 120ms ease-out',
+            pointerEvents: 'none',
+          }}
+        />
+
+        <button
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+          aria-label="Close preview"
+          style={lightboxIconBtn({ top: 12, right: 12 })}
+        >
+          <X size={18} />
+        </button>
+
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+            display: 'flex', gap: '0.4rem', alignItems: 'center',
+            background: 'rgba(0,0,0,0.65)', borderRadius: 999, padding: '0.35rem 0.6rem',
+            border: '1px solid rgba(255,255,255,0.15)',
+            backdropFilter: 'blur(4px)',
           }}
         >
-          <span style={{ color: '#ef4444', fontWeight: 600 }}>Failed to load</span>
           <button
-            type="button"
-            onClick={retry}
-            style={{
-              background: 'transparent', border: '1px solid rgba(239,68,68,0.5)',
-              color: '#ef4444', borderRadius: 4, padding: '1px 6px', fontSize: '0.7rem',
-              cursor: 'pointer',
-            }}
+            onClick={() => setZoom((z) => {
+              const next = Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2));
+              if (next === 1) setPan({ x: 0, y: 0 });
+              return next;
+            })}
+            aria-label="Zoom out"
+            disabled={zoom <= ZOOM_MIN}
+            style={lightboxControlBtn(zoom <= ZOOM_MIN)}
           >
-            Try again
+            <ZoomOut size={16} />
+          </button>
+          <button
+            onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+            aria-label="Reset zoom"
+            title="Reset zoom (0)"
+            style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '0.78rem', minWidth: 44, textAlign: 'center', fontVariantNumeric: 'tabular-nums', cursor: 'pointer', padding: 0 }}
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            onClick={() => setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2)))}
+            aria-label="Zoom in"
+            disabled={zoom >= ZOOM_MAX}
+            style={lightboxControlBtn(zoom >= ZOOM_MAX)}
+          >
+            <ZoomIn size={16} />
+          </button>
+          <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.2)', margin: '0 0.2rem' }} />
+          <button
+            onClick={toggleFullscreen}
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            style={lightboxControlBtn(false)}
+          >
+            {isFullscreen ? <Minimize size={15} /> : <Maximize size={15} />}
           </button>
         </div>
-      ) : (
-        <img
-          src={src}
-          alt=""
-          onError={() => setErrored(true)}
-          style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }}
-        />
-      )}
-      <button onClick={() => onRemove(url)} style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.7)', border: 'none', color: '#fff', borderRadius: 4, padding: '2px 4px', cursor: 'pointer' }}>
-        <Trash2 size={10} />
-      </button>
+      </div>
     </div>
   );
 }
 
-function PhotoColumn({ title, urls, onRemove }) {
+function lightboxIconBtn(pos) {
+  return {
+    position: 'absolute', ...pos, background: 'rgba(0,0,0,0.65)',
+    border: '1px solid rgba(255,255,255,0.2)', color: '#fff', borderRadius: 999,
+    width: 36, height: 36, display: 'flex', alignItems: 'center',
+    justifyContent: 'center', cursor: 'pointer',
+    backdropFilter: 'blur(4px)',
+  };
+}
+function lightboxControlBtn(disabled) {
+  return {
+    background: 'transparent', border: 'none', color: '#fff',
+    width: 28, height: 28, borderRadius: 6, display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
+    cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.4 : 1,
+  };
+}
+
+// Photos uploaded before the /api/uploads mount landed are stored as bare
+// `/uploads/...` URLs. Nginx + Vite only proxy `/api/*` to the backend, so
+// the bare path falls through the SPA catch-all and the <img> renders as
+// broken. Rewrite for display only — the original URL is what the DELETE
+// endpoint matches against in the stored JSON array, so onRemove still
+// receives the raw value.
+function displayPhotoSrc(u) {
+  if (typeof u !== 'string') return u;
+  if (u.startsWith('/uploads/')) return `/api${u}`;
+  return u;
+}
+
+function PhotoColumn({ title, urls, onRemove, onView }) {
   return (
     <div>
       <h4 style={{ marginBottom: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{title} ({urls.length})</h4>
       {urls.length === 0 && <div style={{ padding: '1rem', textAlign: 'center', background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: 8, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No photos yet.</div>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '0.5rem' }}>
         {urls.map((u) => (
-          <PhotoThumb key={u} url={u} onRemove={onRemove} />
+          <div key={u} style={{ position: 'relative' }}>
+            <img
+              src={displayPhotoSrc(u)}
+              alt=""
+              onClick={() => onView && onView(u)}
+              title="Click to view"
+              style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)', cursor: onView ? 'zoom-in' : 'default' }}
+            />
+            <button
+              onClick={(e) => { e.stopPropagation(); onRemove(u); }}
+              aria-label="Delete photo"
+              style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.7)', border: 'none', color: '#fff', borderRadius: 4, padding: '2px 4px', cursor: 'pointer' }}
+            >
+              <Trash2 size={10} />
+            </button>
+          </div>
         ))}
       </div>
     </div>
@@ -2198,6 +2147,14 @@ function InventoryTab({ patient, onSaved }) {
   const [loading, setLoading] = useState(false);
   // #225: debounce guard so rapid clicks don't create duplicate consumption rows.
   const [submitting, setSubmitting] = useState(false);
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
+  const visibleVisits = (rangeStart && rangeEnd)
+    ? patient.visits.filter((v) => {
+        const ts = new Date(v.visitDate).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : patient.visits;
 
   useEffect(() => {
     if (!visitId) { setItems([]); return; }
@@ -2237,12 +2194,19 @@ function InventoryTab({ patient, onSaved }) {
 
   return (
     <div className="glass" style={{ padding: '1.5rem' }}>
-      <h3 style={{ marginBottom: '1rem' }}>Inventory used</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
+        <h3 style={{ margin: 0 }}>Inventory used</h3>
+        {patient.visits.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <DateRangeFilter value={filter} onChange={setFilter} label={null} />
+          </div>
+        )}
+      </div>
       <div style={{ marginBottom: '1rem' }}>
         <label style={labelStyle}>Visit</label>
         <select value={visitId} onChange={(e) => setVisitId(e.target.value)} style={inputStyle}>
           <option value="">— select visit —</option>
-          {patient.visits.map((v) => (
+          {visibleVisits.map((v) => (
             <option key={v.id} value={v.id}>
               {formatDate(v.visitDate)} — {v.service?.name || 'Consultation'}
             </option>
@@ -2515,10 +2479,18 @@ function TelehealthTab({ patient, onSaved }) {
   const [activeRoom, setActiveRoom] = useState(null); // string room name
   const [busyVisitId, setBusyVisitId] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
 
-  const visits = (patient.visits || []).slice().sort(
+  const allVisits = (patient.visits || []).slice().sort(
     (a, b) => new Date(b.visitDate) - new Date(a.visitDate),
   );
+  const visits = (rangeStart && rangeEnd)
+    ? allVisits.filter((v) => {
+        const ts = new Date(v.visitDate).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : allVisits;
 
   const startOrJoin = async (visit) => {
     let room = visit.videoRoom;
@@ -2560,7 +2532,7 @@ function TelehealthTab({ patient, onSaved }) {
     }
   };
 
-  if (visits.length === 0) {
+  if (allVisits.length === 0) {
     return (
       <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
         No visits yet — log a visit first to start a video consult.
@@ -2570,10 +2542,29 @@ function TelehealthTab({ patient, onSaved }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div
+        className="glass"
+        style={{
+          padding: '0.6rem 0.85rem', display: 'flex', flexWrap: 'wrap',
+          alignItems: 'center', gap: '0.6rem',
+        }}
+      >
+        <DateRangeFilter value={filter} onChange={setFilter} label="Filter by visit date" />
+        <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+          {visits.length === allVisits.length
+            ? `${allVisits.length} visit${allVisits.length === 1 ? '' : 's'}`
+            : `${visits.length} of ${allVisits.length} visits`}
+        </span>
+      </div>
       <div className="glass" style={{ padding: '1rem' }}>
         <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
           Each visit can host one video room. Patients join the same link from the patient portal.
         </div>
+        {visits.length === 0 && (
+          <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            No visits in the selected range.
+          </div>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {visits.map((v) => {
             const has = !!v.videoRoom;
@@ -2701,7 +2692,13 @@ function MembershipsTab({ patient, services }) {
   };
 
   const cancel = async (m) => {
-    if (!confirm(`Cancel "${m.plan?.name || 'membership'}"? Remaining entitlements will be void.`)) return;
+    const ok = await notify.confirm({
+      title: 'Cancel membership',
+      message: `Cancel "${m.plan?.name || 'membership'}"? Remaining entitlements will be void.`,
+      confirmText: 'Cancel membership',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/memberships/${m.id}/cancel`, {
         method: 'POST',

@@ -19,8 +19,14 @@ test.describe('Forgot Password — Password reset flow', () => {
   // Run without auth since this is a public/unauthenticated flow
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test('login page shows forgot password link', async ({ page }) => {
-    test.skip(IS_LOCAL_STACK, 'UI test requires SPA — runs only in e2e-full against demo');
+  // Collection-time skip (NOT a body-level test.skip): when IS_LOCAL_STACK,
+  // register the test as skipped so Playwright never resolves the `page`
+  // fixture — which would launch a browser. The api_tests deploy gate no
+  // longer installs the Chromium binary (all gated specs are request-only),
+  // so a body-level skip would still trigger a browser launch during fixture
+  // setup and fail with "Executable doesn't exist". This form skips before
+  // any fixture resolves. The UI assertion still runs in e2e-full vs demo.
+  (IS_LOCAL_STACK ? test.skip : test)('login page shows forgot password link', async ({ page }) => {
     await page.goto('/login');
     await page.waitForLoadState('domcontentloaded');
 

@@ -85,7 +85,53 @@ router.get("/me", async (req, res) => {
   });
 });
 
-// ── Contacts: lookup + fetch ───────────────────────────────────────
+// ── Contacts: list + lookup + fetch ────────────────────────────────
+
+router.get("/contacts", async (req, res) => {
+  try {
+    const limit = parseLimit(req.query.limit);
+    const offset = parseOffset(req.query.offset);
+    const { status, source, createdSince, q } = req.query;
+
+    const where = tenantWhere(req, { deletedAt: null });
+    if (status) where.status = status;
+    if (source) where.source = source;
+    if (createdSince) {
+      const since = new Date(createdSince);
+      if (Number.isNaN(since.getTime())) {
+        return res.status(400).json({ error: "createdSince must be a valid ISO date", code: "INVALID_QUERY" });
+      }
+      where.createdAt = { gte: since };
+    }
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { email: { contains: q } },
+        { phone: { contains: q } },
+        { company: { contains: q } },
+      ];
+    }
+
+    const [data, total] = await Promise.all([
+      prisma.contact.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: limit,
+        skip: offset,
+        select: {
+          id: true, name: true, email: true, phone: true, status: true, source: true,
+          company: true, aiScore: true, assignedToId: true, createdAt: true,
+        },
+      }),
+      prisma.contact.count({ where }),
+    ]);
+
+    res.json({ data, total, limit, offset });
+  } catch (e) {
+    console.error("[external] contacts list:", e.message);
+    res.status(500).json({ error: "List failed" });
+  }
+});
 
 router.get("/contacts/lookup", async (req, res) => {
   try {
@@ -393,6 +439,96 @@ router.patch("/calls/:id", async (req, res) => {
   } catch (e) {
     console.error("[external] patch call:", e.message);
     res.status(500).json({ error: "Failed to update call" });
+  }
+});
+
+// ── Voice transcripts: retrieve by call or date range ─────────────
+
+router.get("/transcripts", async (req, res) => {
+  try {
+    const { callId, from, to, limit, offset } = req.query;
+    const where = tenantWhere(req);
+
+    // Filter by specific call if provided
+    if (callId) {
+      where.id = parseInt(callId);
+    } else if (from || to) {
+      // Filter by date range
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) where.createdAt.lte = new Date(to);
+    }
+
+    const calls = await prisma.callLog.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: parseLimit(limit, 50),
+      skip: parseOffset(offset),
+      select: {
+        id: true,
+        duration: true,
+        notes: true,
+        direction: true,
+        recordingUrl: true,
+        provider: true,
+        providerCallId: true,
+        status: true,
+        callerNumber: true,
+        calleeNumber: true,
+        createdAt: true,
+        contact: { select: { id: true, name: true, phone: true } },
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    // Extract transcript from notes if it contains [transcript: ...]
+    const withTranscripts = calls.map(call => {
+      let transcript = null;
+      if (call.notes) {
+        const match = call.notes.match(/\[transcript:\s*(.+?)\]/);
+        if (match) transcript = match[1].trim();
+      }
+      return { ...call, transcript };
+    });
+
+    res.json({ data: withTranscripts, total: withTranscripts.length });
+  } catch (e) {
+    console.error("[external] transcripts:", e.message);
+    res.status(500).json({ error: "Failed to fetch transcripts" });
+  }
+});
+
+// ── Update transcript for a call ──────────────────────────────────
+
+router.post("/transcripts", async (req, res) => {
+  try {
+    const { callId, transcript, transcriptUrl } = req.body;
+    if (!callId) return res.status(400).json({ error: "callId required" });
+    if (!transcript && !transcriptUrl) {
+      return res.status(400).json({ error: "transcript or transcriptUrl required" });
+    }
+
+    const id = parseInt(callId);
+    const existing = await prisma.callLog.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Call not found" });
+
+    const data = {};
+    if (transcriptUrl) {
+      // Append transcript URL to notes
+      const transcriptNote = `[transcript: ${transcriptUrl}]`;
+      data.notes = `${existing.notes || ""}${existing.notes ? "\n" : ""}${transcriptNote}`;
+    }
+    if (transcript) {
+      // Store transcript in notes with a marker
+      const transcriptNote = `[transcript-text]\n${transcript}\n[/transcript-text]`;
+      data.notes = `${existing.notes || ""}${existing.notes ? "\n" : ""}${transcriptNote}`;
+    }
+
+    const updated = await prisma.callLog.update({ where: { id }, data });
+    res.json(updated);
+  } catch (e) {
+    console.error("[external] create transcript:", e.message);
+    res.status(500).json({ error: "Failed to save transcript" });
   }
 });
 

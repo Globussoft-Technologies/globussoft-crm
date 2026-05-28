@@ -202,7 +202,10 @@ describe('<Login /> — page surface', () => {
     expect(setUserMock).toHaveBeenCalledWith(
       expect.objectContaining({ email: 'admin@globussoft.com', role: 'ADMIN' })
     );
-    expect(setTokenMock).toHaveBeenCalledWith('jwt-abc');
+    // `setToken` carries a second arg (`{ remember }`) since the
+    // "keep me signed in" feature landed. Match the token + tolerate
+    // the options bag with any shape.
+    expect(setTokenMock).toHaveBeenCalledWith('jwt-abc', expect.anything());
     expect(setTenantMock).toHaveBeenCalledWith(
       expect.objectContaining({ vertical: 'generic' })
     );
@@ -349,7 +352,9 @@ describe('<Login /> — page surface', () => {
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith('/dashboard');
     });
-    expect(setTokenMock).toHaveBeenCalledWith('jwt-2fa');
+    // Same shape note as the generic-tenant test above — second `remember`
+    // arg added with the "keep me signed in" feature.
+    expect(setTokenMock).toHaveBeenCalledWith('jwt-2fa', expect.anything());
     const verifyCall = global.fetch.mock.calls.find(([u]) => u === '/api/auth/2fa/verify');
     expect(verifyCall).toBeTruthy();
     expect(JSON.parse(verifyCall[1].body)).toEqual({

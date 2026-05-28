@@ -50,30 +50,55 @@ export default function Invoices() {
   const [paymentGateway, setPaymentGateway] = useState('razorpay');
   const [processingPayment, setProcessingPayment] = useState(false);
   const [statusFilter, setStatusFilter] = useState('ALL');
-  // #894 — Create Invoice surface is a header CTA + drawer (not the inline
-  // always-visible left-column form). `creating` drives whether the drawer
-  // is rendered. Mirrors the c031ba0 / 50ac575 pattern from /leads.
-  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     loadData();
     loadPaymentConfig();
   }, []);
 
-  // #894 — close the Create drawer on Escape. Attached only while the
-  // drawer is open so we don't trap key events for users not actively
-  // creating an invoice.
+  // Stripe Checkout return handler. Stripe redirects back to
+  // /invoices?stripe=success&session_id=… on payment success (or ?stripe=cancel
+  // if the user backed out). We finalize the Payment row server-side and
+  // refresh the invoice list, then strip the query string so a page refresh
+  // doesn't re-fire the confirmation.
   useEffect(() => {
-    if (!creating) return undefined;
-    const onKey = (e) => {
-      if (e.key === 'Escape') setCreating(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [creating]);
+    const params = new URLSearchParams(window.location.search);
+    const stripeOutcome = params.get('stripe');
+    const sessionId = params.get('session_id');
+    if (!stripeOutcome) return;
 
-  const openCreate = () => setCreating(true);
-  const closeCreate = () => setCreating(false);
+    const cleanUrl = () => {
+      window.history.replaceState({}, '', window.location.pathname);
+    };
+
+    if (stripeOutcome === 'cancel') {
+      notify.info('Stripe payment was canceled.');
+      cleanUrl();
+      return;
+    }
+
+    if (stripeOutcome === 'success' && sessionId) {
+      (async () => {
+        try {
+          const result = await fetchApi('/api/payments/confirm-stripe-session', {
+            method: 'POST',
+            body: JSON.stringify({ sessionId }),
+          });
+          if (result?.paid) {
+            notify.success('Payment received via Stripe.');
+            loadData();
+          } else {
+            notify.info('Payment is processing. The invoice will update once Stripe confirms.');
+          }
+        } catch (err) {
+          console.error('[Payment] Stripe confirm error:', err);
+        } finally {
+          cleanUrl();
+        }
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const loadPaymentConfig = async () => {
     try {
@@ -159,9 +184,6 @@ export default function Invoices() {
         }),
       });
       setNewInvoice({ invoiceNum: '', contactId: '', dealId: '', amount: '', dueDate: '', status: 'UNPAID' });
-      // #894 — close the drawer on successful create; the list refresh
-      // below puts the new row at the top so the user sees the result.
-      setCreating(false);
       loadData();
     } catch (err) {
       notify.error('Failed to create invoice');
@@ -354,53 +376,42 @@ export default function Invoices() {
           return;
         }
 
-        const response = await fetchApi('/api/payments/create-stripe-intent', {
+        const response = await fetchApi('/api/payments/create-stripe-checkout-session', {
           method: 'POST',
           body: JSON.stringify({
             invoiceId: paymentModal.id,
             amount: paymentModal.amount,
-            currency: 'USD',
           }),
         });
 
-        if (response?.clientSecret) {
-          // TODO: Implement Stripe Elements checkout in modal
-          notify.error('Stripe checkout coming soon');
+        if (response?.url) {
+          // Hosted-Checkout flow: redirect to Stripe. On success Stripe sends
+          // the user back to /invoices?stripe=success&session_id=… which the
+          // mount-effect below detects and finalizes via /confirm-stripe-session.
+          window.location.href = response.url;
+        } else {
+          notify.error('Failed to start Stripe checkout');
           setProcessingPayment(false);
         }
       }
     } catch (err) {
+      // fetchApi has already surfaced the server's message in a toast; a
+      // second "Payment failed: …" toast on top is noise. Just log + clear
+      // the spinner so the modal can be retried.
       console.error('[Payment] Error:', err);
-      notify.error(`Payment failed: ${err.message}`);
       setProcessingPayment(false);
     }
   };
 
   return (
     <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <Receipt size={26} color="var(--accent-color)" /> Invoices
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Create, track, and manage all invoices across your accounts.
-          </p>
-        </div>
-        {/* #894 — Create Invoice is now a header CTA + drawer (was an inline
-            always-visible left-column form). Right-aligned so it sits alongside
-            future header controls; primary styling per the c031ba0/50ac575
-            Leads pattern. */}
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={openCreate}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', fontSize: '0.875rem', whiteSpace: 'nowrap' }}
-          aria-label="Create a new invoice"
-        >
-          <Plus size={16} />
-          Create Invoice
-        </button>
+      <header style={{ marginBottom: '2rem' }}>
+        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <Receipt size={26} color="var(--accent-color)" /> Invoices
+        </h1>
+        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+          Create, track, and manage all invoices across your accounts.
+        </p>
       </header>
 
       {/* Summary Stats */}
@@ -468,9 +479,122 @@ export default function Invoices() {
         </div>
       </div>
 
-      {/* #894 — Invoice Ledger (full-width; Create Invoice form now lives in
-          the drawer below, triggered by the header CTA). */}
-      <div>
+      {/* #481: two-column grid (Create | Ledger) collapses to a single column
+          below 768px so the form labels + helper text don't wrap word-by-word
+          and the ledger isn't squeezed to invisible-bar width. */}
+      <div className="invoices-grid">
+
+        {/* Create Invoice Panel */}
+        <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
+          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Plus size={20} color="var(--accent-color)" /> Create Invoice
+          </h3>
+          <form onSubmit={createInvoice} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+
+            {/* #314: Invoice # is server-generated and was being silently
+                overwritten on save, leaving the user confused about why their
+                custom number didn't stick. Make the field read-only and surface
+                the next number that will be assigned, so what the user sees
+                up-front matches what the backend writes. Custom numbering is an
+                admin-only feature and isn't part of this form. */}
+            <div>
+              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Invoice #</label>
+              <input
+                type="text"
+                className="input-field"
+                placeholder="Auto-generated on save"
+                value={nextInvoiceNum}
+                readOnly
+                aria-label="Invoice number (auto-generated on save)"
+                style={{ opacity: 0.75, cursor: 'not-allowed' }}
+              />
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.25rem', display: 'block' }}>
+                Auto-generated on save
+              </span>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Contact</label>
+              <select
+                className="input-field"
+                required
+                value={newInvoice.contactId}
+                onChange={e => handleFieldChange('contactId', e.target.value)}
+                style={{ background: 'var(--input-bg)' }}
+                aria-label="Contact"
+              >
+                <option value="">-- Select Contact --</option>
+                {contacts.map(c => (
+                  <option key={c.id} value={c.id}>{c.name} ({c.email})</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Deal (Optional)</label>
+              <select
+                className="input-field"
+                value={newInvoice.dealId}
+                onChange={e => handleFieldChange('dealId', e.target.value)}
+                style={{ background: 'var(--input-bg)' }}
+                aria-label="Associated deal"
+              >
+                <option value="">-- No Deal --</option>
+                {deals.map(d => (
+                  <option key={d.id} value={d.id}>{d.title} - {formatCurrency(d.amount)}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Amount ({currencySymbol()})</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  required
+                  className="input-field"
+                  placeholder="0.00"
+                  value={newInvoice.amount}
+                  onChange={e => handleFieldChange('amount', e.target.value)}
+                  aria-label="Invoice amount"
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Due Date</label>
+                <input
+                  type="date"
+                  required
+                  className="input-field"
+                  value={newInvoice.dueDate}
+                  onChange={e => handleFieldChange('dueDate', e.target.value)}
+                  aria-label="Due date"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Status</label>
+              <select
+                className="input-field"
+                value={newInvoice.status}
+                onChange={e => handleFieldChange('status', e.target.value)}
+                style={{ background: 'var(--input-bg)' }}
+                aria-label="Invoice status"
+              >
+                <option value="UNPAID">Unpaid</option>
+                <option value="PAID">Paid</option>
+                <option value="OVERDUE">Overdue</option>
+              </select>
+            </div>
+
+            <button type="submit" className="btn-primary" style={{ padding: '1rem', marginTop: '0.5rem' }}>
+              Issue Invoice
+            </button>
+          </form>
+        </div>
+
         {/* Invoice Table */}
         <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -589,11 +713,7 @@ export default function Invoices() {
                                 className="btn-secondary"
                                 style={{
                                   display: 'flex', alignItems: 'center', gap: '0.3rem',
-                                  // #880 — was hardcoded '#3b82f6' (blue); off-token on
-                                  // travel-vertical (warm gold + navy palette) AND in
-                                  // dark mode globally. var(--accent-color) resolves to
-                                  // the active theme's accent in both themes + verticals.
-                                  background: 'var(--accent-color)', color: 'var(--accent-text, #fff)', border: 'none',
+                                  background: '#3b82f6', color: '#fff', border: 'none',
                                   padding: '0.4rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px',
                                   cursor: 'pointer',
                                 }}
@@ -664,170 +784,6 @@ export default function Invoices() {
           )}
         </div>
       </div>
-
-      {/* #894 — Create Invoice drawer. Mounted only when `creating` is true.
-          Close triggers: X button, ESC keypress (handled by the useEffect
-          above), Cancel button, clicking on the dark overlay outside the
-          drawer body, and successful submit. Form fields + submit handler
-          are unchanged from the previous inline form — only the trigger
-          surface moved. */}
-      {creating && (
-        <div
-          onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'flex-end',
-            zIndex: 1000,
-          }}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Create Invoice"
-        >
-          <div
-            style={{
-              background: 'var(--surface-color)',
-              color: 'var(--text-primary)',
-              width: '100%',
-              maxWidth: 460,
-              height: '100vh',
-              overflowY: 'auto',
-              padding: '1.5rem',
-              boxShadow: '-8px 0 24px rgba(0,0,0,0.2)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Plus size={20} color="var(--accent-color)" /> Create Invoice
-              </h3>
-              <button
-                type="button"
-                onClick={closeCreate}
-                aria-label="Close"
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 4 }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={createInvoice} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-
-              {/* #314: Invoice # is server-generated and was being silently
-                  overwritten on save, leaving the user confused about why their
-                  custom number didn't stick. Make the field read-only and surface
-                  the next number that will be assigned, so what the user sees
-                  up-front matches what the backend writes. Custom numbering is an
-                  admin-only feature and isn't part of this form. */}
-              <div>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Invoice #</label>
-                <input
-                  type="text"
-                  className="input-field"
-                  placeholder="Auto-generated on save"
-                  value={nextInvoiceNum}
-                  readOnly
-                  aria-label="Invoice number (auto-generated on save)"
-                  style={{ opacity: 0.75, cursor: 'not-allowed' }}
-                />
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.25rem', display: 'block' }}>
-                  Auto-generated on save
-                </span>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Contact</label>
-                <select
-                  className="input-field"
-                  required
-                  value={newInvoice.contactId}
-                  onChange={e => handleFieldChange('contactId', e.target.value)}
-                  style={{ background: 'var(--input-bg)' }}
-                  aria-label="Contact"
-                >
-                  <option value="">-- Select Contact --</option>
-                  {contacts.map(c => (
-                    <option key={c.id} value={c.id}>{c.name} ({c.email})</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Deal (Optional)</label>
-                <select
-                  className="input-field"
-                  value={newInvoice.dealId}
-                  onChange={e => handleFieldChange('dealId', e.target.value)}
-                  style={{ background: 'var(--input-bg)' }}
-                  aria-label="Associated deal"
-                >
-                  <option value="">-- No Deal --</option>
-                  {deals.map(d => (
-                    <option key={d.id} value={d.id}>{d.title} - {formatCurrency(d.amount)}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Amount ({currencySymbol()})</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    required
-                    className="input-field"
-                    placeholder="0.00"
-                    value={newInvoice.amount}
-                    onChange={e => handleFieldChange('amount', e.target.value)}
-                    aria-label="Invoice amount"
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Due Date</label>
-                  <input
-                    type="date"
-                    required
-                    className="input-field"
-                    value={newInvoice.dueDate}
-                    onChange={e => handleFieldChange('dueDate', e.target.value)}
-                    aria-label="Due date"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Status</label>
-                <select
-                  className="input-field"
-                  value={newInvoice.status}
-                  onChange={e => handleFieldChange('status', e.target.value)}
-                  style={{ background: 'var(--input-bg)' }}
-                  aria-label="Invoice status"
-                >
-                  <option value="UNPAID">Unpaid</option>
-                  <option value="PAID">Paid</option>
-                  <option value="OVERDUE">Overdue</option>
-                </select>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
-                <button
-                  type="button"
-                  onClick={closeCreate}
-                  style={{ padding: '0.65rem 1.25rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.875rem' }}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn-primary" style={{ padding: '0.65rem 1.25rem', fontSize: '0.875rem' }}>
-                  Issue Invoice
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* #124: Recur modal — replaces the old prompt(). */}
       {recurInvoice && (
@@ -1011,7 +967,7 @@ export default function Invoices() {
                 onClick={processPayment}
                 disabled={processingPayment}
                 style={{
-                  padding: '0.65rem 1.5rem', background: 'var(--accent-color)', color: '#fff', border: 'none',
+                  padding: '0.65rem 1.5rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none',
                   borderRadius: '6px', cursor: processingPayment ? 'not-allowed' : 'pointer', fontWeight: 600,
                   opacity: processingPayment ? 0.7 : 1, display: 'flex', alignItems: 'center', gap: '0.5rem',
                 }}
@@ -1025,6 +981,10 @@ export default function Invoices() {
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .invoices-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 2rem; }
+        @media (max-width: 768px) {
+          .invoices-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+        }
       `}</style>
     </div>
   );

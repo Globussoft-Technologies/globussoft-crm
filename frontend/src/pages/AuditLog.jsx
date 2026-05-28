@@ -4,27 +4,16 @@ import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 import { ScrollText, Filter, Download, ChevronDown, User, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react';
 
-// StatCard left-border tint + the four stat values still use this hex map
-// (the cards are surface-color glass cards whose left border + value text
-// reads the per-action accent — fine on both themes since 4px borders +
-// large display text both clear AA against both bgs). #878 dark-mode
-// refactor: ActionBadge no longer reads this map for its inline bg/border —
-// it picks a `.audit-action-pill--<variant>` class instead so travel dark
-// mode can override the tinted-pill bg+fg pair without JS.
 const ACTION_COLOR = {
   CREATE: '#10b981',
   UPDATE: '#3b82f6',
   DELETE: '#ef4444',
 };
-// Pre-refactor used an inline `${color}1f` bg + `${color}55` border map; #878
-// refactored to a `.audit-action-pill .audit-action-pill--<variant>` class
-// pair so travel dark-mode can override the tinted-pill foreground +
-// background tokens via CSS-only. Unknown actions fall through to `other`.
-const ACTION_VARIANT = {
-  CREATE: 'create',
-  UPDATE: 'update',
-  DELETE: 'delete',
-};
+const OTHER_COLOR = '#6b7280';
+
+function actionColor(action) {
+  return ACTION_COLOR[action] || OTHER_COLOR;
+}
 
 const ENTITY_OPTIONS = [
   'Contact', 'Deal', 'Invoice', 'Estimate', 'Expense', 'Contract',
@@ -53,9 +42,18 @@ function StatCard({ label, value, color }) {
 }
 
 function ActionBadge({ action }) {
-  const variant = ACTION_VARIANT[action] || 'other';
+  const color = actionColor(action);
   return (
-    <span className={`audit-action-pill audit-action-pill--${variant}`}>
+    <span style={{
+      padding: '0.2rem 0.65rem',
+      borderRadius: 999,
+      fontSize: '0.72rem',
+      fontWeight: 700,
+      letterSpacing: '0.03em',
+      background: `${color}1f`,
+      color,
+      border: `1px solid ${color}55`,
+    }}>
       {action}
     </span>
   );
@@ -69,6 +67,417 @@ function prettyDetails(raw) {
   } catch {
     return raw;
   }
+}
+
+// Human-readable labels for the most common audit-details keys. Anything
+// not listed falls back to a title-cased version of the key (handled in
+// the renderer). Keep this list in sync with what writeAudit callers
+// actually emit so reviewers see plain English, not snake_case.
+const DETAIL_LABELS = {
+  scope: 'Scope',
+  viewerRole: 'Viewer role',
+  viewerWellnessRole: 'Viewer wellness role',
+  recordCount: 'Records viewed',
+  recordIds: 'Record IDs',
+  disclosedFields: 'Disclosed fields',
+  changedFields: 'Changed fields',
+  changed: 'Changed fields',
+  targetUserId: 'Target user ID',
+  targetEmail: 'Target email',
+  name: 'Name',
+  parentId: 'Parent ID',
+  imageUrl: 'Image URL',
+  via: 'Trigger',
+  reason: 'Reason',
+  fieldsChanged: 'Fields changed',
+  applied: 'Applied rules',
+  skipped: 'Skipped rules',
+  _actorType: 'Actor type',
+  _patientActorId: 'Patient actor ID',
+  _raw: 'Raw note',
+};
+
+// Some keys carry enums we can render more nicely.
+const SCOPE_LABELS = {
+  location_list: 'Location list view',
+  patient_list: 'Patient list view',
+  staff_list: 'Staff directory view',
+  contact_list: 'Contact list view',
+  user_list: 'User list view',
+  audit_viewer: 'Audit viewer',
+};
+
+function labelFor(key) {
+  if (DETAIL_LABELS[key]) return DETAIL_LABELS[key];
+  return key
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
+function isPlainObject(v) {
+  return v && typeof v === 'object' && !Array.isArray(v);
+}
+
+// ── Entity-name resolver for `recordIds` chips ─────────────────────
+//
+// Audit details payloads often carry `recordIds: [24, 23, 22, …]` —
+// useful for ops triage but illegible to a non-engineer. Look up the
+// actual rows via the appropriate list endpoint and surface the row's
+// display name (with the numeric id kept as a subtitle so a Ctrl-F still
+// finds it). Lookups are cached at module level — opening another audit
+// row that references the same entity reuses the previous fetch.
+//
+// Only the entities below are resolvable. Anything else falls back to
+// bare ID chips. Each row of this table maps the audit `entity` field
+// (the canonical writeAudit argument — "User", "Patient", …) to:
+//   endpoint    a tenant-scoped GET that returns a list of rows
+//   nameField   which row field carries the human-readable label
+//   emailField  optional — surfaced underneath the name if present
+const ENTITY_LOOKUP = {
+  User:     { endpoint: '/api/staff',              nameField: 'name', emailField: 'email' },
+  Patient:  { endpoint: '/api/wellness/patients',  nameField: 'name', emailField: 'phone' },
+  Location: { endpoint: '/api/wellness/locations', nameField: 'name' },
+  Contact:  { endpoint: '/api/contacts',           nameField: 'name', emailField: 'email' },
+};
+
+// Module-level cache: entity → Promise<Map<id, { name, email? }>>.
+// Storing the in-flight Promise (not the resolved Map) lets concurrent
+// callers de-dupe to a single network fetch.
+const _entityNameCache = new Map();
+
+export function __clearEntityCacheForTests() {
+  _entityNameCache.clear();
+}
+
+async function loadEntityNames(entity) {
+  if (!entity || !ENTITY_LOOKUP[entity]) return null;
+  if (_entityNameCache.has(entity)) return _entityNameCache.get(entity);
+  const { endpoint, nameField, emailField } = ENTITY_LOOKUP[entity];
+  const promise = (async () => {
+    try {
+      const rows = await fetchApi(endpoint);
+      // Some endpoints return a bare array; others wrap as { items, total }
+      // or { logs, … }. Accept any field that's a plain array of rows.
+      const list = Array.isArray(rows)
+        ? rows
+        : Array.isArray(rows?.items) ? rows.items
+        : Array.isArray(rows?.rows) ? rows.rows
+        : [];
+      const map = new Map();
+      for (const r of list) {
+        if (r && r.id != null) {
+          map.set(r.id, {
+            name: r[nameField] || `#${r.id}`,
+            email: emailField ? r[emailField] : undefined,
+          });
+        }
+      }
+      return map;
+    } catch {
+      // Lookup failed — clear the cache so a subsequent open can retry,
+      // then return null so the caller falls back to bare ID chips.
+      _entityNameCache.delete(entity);
+      return null;
+    }
+  })();
+  _entityNameCache.set(entity, promise);
+  return promise;
+}
+
+// React context — DetailsView wraps its tree in <EntityContext.Provider>
+// so the recordIds renderer downstream can read the audit row's `entity`
+// without each layer threading the prop through manually.
+const EntityContext = React.createContext(null);
+
+function RecordIdChips({ ids }) {
+  const entity = useContext(EntityContext);
+  const resolvable = entity && ENTITY_LOOKUP[entity];
+  const [nameMap, setNameMap] = useState(null);
+  const [loading, setLoading] = useState(Boolean(resolvable));
+
+  useEffect(() => {
+    if (!resolvable) {
+      setLoading(false);
+      setNameMap(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setLoading(true);
+    loadEntityNames(entity).then((result) => {
+      if (!cancelled) {
+        setNameMap(result);
+        setLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [entity, resolvable]);
+
+  return (
+    <div
+      data-testid="record-id-chips"
+      style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}
+    >
+      {ids.map((id, i) => {
+        const meta = nameMap?.get(id);
+        const showName = Boolean(meta?.name);
+        return (
+          <span
+            key={i}
+            data-testid="record-id-chip"
+            title={showName ? `ID #${id}` : undefined}
+            style={{
+              padding: '0.2rem 0.6rem',
+              borderRadius: 999,
+              background: 'var(--input-bg)',
+              border: '1px solid var(--border-color)',
+              fontSize: showName ? '0.78rem' : '0.75rem',
+              fontFamily: showName ? 'inherit' : 'monospace',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              lineHeight: 1.3,
+            }}
+          >
+            {loading ? (
+              <span style={{ color: 'var(--text-secondary)' }}>#{id}…</span>
+            ) : showName ? (
+              <>
+                <span>{meta.name}</span>
+                <span style={{
+                  fontFamily: 'monospace',
+                  fontSize: '0.7rem',
+                  color: 'var(--text-secondary)',
+                }}>
+                  #{id}
+                </span>
+              </>
+            ) : (
+              <span>#{id}</span>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// Render a single value cell. Arrays become inline chips; objects with a
+// {from, to} shape (Prisma-diff style) become "old → new"; nested
+// objects fall back to a compact inline JSON serialization at one level
+// deep.
+function renderValue(key, value) {
+  if (value === null || value === undefined) {
+    return <span style={{ color: 'var(--text-muted, #6b7280)' }}>—</span>;
+  }
+  // {from, to} diff payload (changedFields / changed entries).
+  if (isPlainObject(value) && ('from' in value || 'to' in value)) {
+    return (
+      <span style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>
+        <span style={{ color: '#ef4444' }}>{formatScalar(value.from)}</span>
+        <span style={{ margin: '0 0.4rem', color: 'var(--text-secondary)' }}>→</span>
+        <span style={{ color: '#10b981' }}>{formatScalar(value.to)}</span>
+      </span>
+    );
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span style={{ color: 'var(--text-muted, #6b7280)' }}>(none)</span>;
+    }
+    // recordIds gets the enriched lookup — pulls name/email from the
+    // matching list endpoint (see ENTITY_LOOKUP above) and renders the
+    // chips with the human label + numeric id subtitle.
+    if (key === 'recordIds' && value.every((v) => typeof v === 'number')) {
+      return <RecordIdChips ids={value} />;
+    }
+    // Primitive arrays → chips.
+    if (value.every((v) => v === null || typeof v !== 'object')) {
+      return (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+          {value.map((v, i) => (
+            <span
+              key={i}
+              style={{
+                padding: '0.15rem 0.55rem',
+                borderRadius: 999,
+                background: 'var(--input-bg)',
+                border: '1px solid var(--border-color)',
+                fontSize: '0.75rem',
+                fontFamily: 'monospace',
+              }}
+            >
+              {formatScalar(v)}
+            </span>
+          ))}
+        </div>
+      );
+    }
+    // Array of objects — render each as a small block.
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+        {value.map((v, i) => (
+          <div key={i} style={{ paddingLeft: '0.75rem', borderLeft: '2px solid var(--border-color)' }}>
+            {renderObjectAsRows(v, { compact: true })}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (isPlainObject(value)) {
+    return (
+      <div style={{ paddingLeft: '0.5rem' }}>
+        {renderObjectAsRows(value, { compact: true })}
+      </div>
+    );
+  }
+  // Special-case scope enum.
+  if (key === 'scope' && typeof value === 'string' && SCOPE_LABELS[value]) {
+    return (
+      <span>
+        {SCOPE_LABELS[value]}
+        <span style={{
+          marginLeft: '0.5rem',
+          color: 'var(--text-secondary)',
+          fontSize: '0.72rem',
+          fontFamily: 'monospace',
+        }}>
+          ({value})
+        </span>
+      </span>
+    );
+  }
+  return formatScalar(value);
+}
+
+function formatScalar(v) {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  if (typeof v === 'number') return String(v);
+  // ISO date detection (very loose — only matches the actual timestamps
+  // we tend to stamp into details).
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) {
+    try {
+      return new Date(v).toLocaleString();
+    } catch {
+      /* fall through */
+    }
+  }
+  return String(v);
+}
+
+// Render an object as a 2-column key/value layout. `compact` shrinks the
+// row spacing so nested object children read as a sub-block.
+function renderObjectAsRows(obj, { compact = false } = {}) {
+  const keys = Object.keys(obj);
+  if (keys.length === 0) {
+    return <span style={{ color: 'var(--text-muted, #6b7280)' }}>(empty)</span>;
+  }
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'minmax(140px, max-content) 1fr',
+      columnGap: '1rem',
+      rowGap: compact ? '0.25rem' : '0.5rem',
+    }}>
+      {keys.map((k) => (
+        <React.Fragment key={k}>
+          <div style={{
+            color: 'var(--text-secondary)',
+            fontSize: '0.78rem',
+            fontWeight: 500,
+            paddingTop: '0.05rem',
+          }}>
+            {labelFor(k)}
+          </div>
+          <div style={{ fontSize: '0.82rem', color: 'var(--text-primary)' }}>
+            {renderValue(k, obj[k])}
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+// Top-level details renderer used inside the expanded audit row. Returns
+// JSX (NOT a string) so the caller renders it as a real layout instead of
+// dumping the JSON. Falls back to the raw blob when the details payload
+// can't be parsed (e.g. legacy unstructured "plain string" details).
+//
+// `entity` is the audit row's entity field (e.g. "User", "Patient"). It's
+// passed down via EntityContext so the recordIds chip renderer can join
+// the numeric IDs against the matching list endpoint and surface names
+// instead of bare numbers. Optional — if absent or unresolvable, IDs
+// render as `#N`.
+function DetailsView({ raw, entity }) {
+  const [showJson, setShowJson] = useState(false);
+  if (!raw) {
+    return <span style={{ color: 'var(--text-muted, #6b7280)' }}>(no details)</span>;
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Not JSON — surface the raw note inline.
+    return (
+      <pre style={{
+        margin: 0,
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        color: 'var(--text-secondary)',
+        fontSize: '0.82rem',
+      }}>
+        {raw}
+      </pre>
+    );
+  }
+  // Primitive / array-at-top JSON — render generically.
+  if (!isPlainObject(parsed)) {
+    return (
+      <EntityContext.Provider value={entity || null}>
+        <div style={{ fontSize: '0.82rem' }}>{renderValue('details', parsed)}</div>
+      </EntityContext.Provider>
+    );
+  }
+  return (
+    <EntityContext.Provider value={entity || null}>
+    <div>
+      {renderObjectAsRows(parsed)}
+      <button
+        type="button"
+        onClick={() => setShowJson((s) => !s)}
+        style={{
+          marginTop: '0.85rem',
+          background: 'transparent',
+          border: '1px solid var(--border-color)',
+          borderRadius: 6,
+          padding: '0.3rem 0.65rem',
+          fontSize: '0.7rem',
+          letterSpacing: '0.03em',
+          color: 'var(--text-secondary)',
+          cursor: 'pointer',
+        }}
+      >
+        {showJson ? 'Hide raw JSON' : 'Show raw JSON'}
+      </button>
+      {showJson && (
+        <pre style={{
+          marginTop: '0.5rem',
+          background: 'var(--input-bg)',
+          border: '1px solid var(--border-color)',
+          borderRadius: 8,
+          padding: '0.85rem',
+          fontSize: '0.74rem',
+          color: 'var(--text-secondary)',
+          overflowX: 'auto',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}>
+          {JSON.stringify(parsed, null, 2)}
+        </pre>
+      )}
+    </div>
+    </EntityContext.Provider>
+  );
 }
 
 export default function AuditLog() {
@@ -125,11 +534,22 @@ export default function AuditLog() {
   // suspected tampering, surface the row id so ops can investigate.
   const runBackfill = useCallback(async () => {
     if (!isAdmin) return;
-    if (!window.confirm('Backfill writes hashes to every unchained audit row for this tenant. Continue?')) return;
+    const ok = await notify.confirm({
+      title: 'Repair audit chain',
+      message:
+        'Re-stamp the link/hash on any row that has the wrong anchor. ' +
+        'Row content is never modified. If a row was actually tampered with, the repair will ' +
+        'abort and show the affected row ID. Continue?',
+      confirmText: 'Repair',
+    });
+    if (!ok) return;
     setBackfilling(true);
     try {
       const data = await fetchApi('/api/audit/backfill', { method: 'POST' });
-      notify.success(`Backfill complete — updated ${data.updatedRows} rows, ${data.skippedRows} already chained.`);
+      notify.success(
+        `Chain repair complete — re-linked ${data.updatedRows} ${data.updatedRows === 1 ? 'row' : 'rows'}` +
+        (data.skippedRows ? `, ${data.skippedRows} already valid.` : '.')
+      );
       await verifyChain();
     } catch (err) {
       console.error('[AuditLog] backfill failed', err);
@@ -139,7 +559,10 @@ export default function AuditLog() {
       // already raised one for the user.
       const body = err?.data;
       if (body?.conflictRowId != null) {
-        notify.error(`Backfill aborted: conflict at row #${body.conflictRowId}. Suspected tampering — contact security.`);
+        notify.error(
+          `Repair aborted: row #${body.conflictRowId} appears to have been tampered with ` +
+          `(its content doesn't match its stored hash). Please investigate this row before retrying.`
+        );
       }
     } finally {
       setBackfilling(false);
@@ -231,12 +654,8 @@ export default function AuditLog() {
     });
   }, [logs, search]);
 
-  // #878 — was `background: 'rgba(15,23,42,0.6)'` hardcoded slate (light-mode
-  // looked acceptable, dark-mode crushed contrast vs travel navy body).
-  // Switch to `var(--input-bg)` which both index.css (light/dark generic) and
-  // travel.css (light/dark travel) define correctly.
   const inputStyle = {
-    background: 'var(--input-bg)',
+    background: 'rgba(15,23,42,0.6)',
     color: 'var(--text-primary)',
     border: '1px solid var(--border-color)',
     borderRadius: 8,
@@ -352,7 +771,17 @@ export default function AuditLog() {
             {integrity?.integrityVerified ? (
               <span
                 data-testid="integrity-chip-ok"
-                className="audit-integrity-chip audit-integrity-chip--ok"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.3rem 0.7rem',
+                  borderRadius: 999,
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  color: '#10b981',
+                  border: '1px solid rgba(16, 185, 129, 0.4)',
+                  fontWeight: 600,
+                }}
               >
                 <ShieldCheck size={14} />
                 {`Integrity verified at ${new Date(integrity.lastVerifiedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}`}
@@ -366,7 +795,17 @@ export default function AuditLog() {
               // below take care of the call to action.
               <span
                 data-testid="integrity-chip-needs-backfill"
-                className="audit-integrity-chip audit-integrity-chip--warn"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.3rem 0.7rem',
+                  borderRadius: 999,
+                  background: 'rgba(234, 179, 8, 0.12)',
+                  color: '#eab308',
+                  border: '1px solid rgba(234, 179, 8, 0.4)',
+                  fontWeight: 600,
+                }}
               >
                 <ShieldQuestion size={14} />
                 Backfill required
@@ -377,13 +816,23 @@ export default function AuditLog() {
             ) : integrity ? (
               <span
                 data-testid="integrity-chip-broken"
-                className="audit-integrity-chip audit-integrity-chip--danger"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.3rem 0.7rem',
+                  borderRadius: 999,
+                  background: 'rgba(239, 68, 68, 0.12)',
+                  color: '#ef4444',
+                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  fontWeight: 600,
+                }}
               >
                 <ShieldAlert size={14} />
-                Chain broken — please contact support
+                Chain anomaly detected
                 {integrity.brokenAt != null && (
                   <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem' }}>
-                    (row #{integrity.brokenAt}{integrity.reason ? ` — ${integrity.reason}` : ''})
+                    (row #{integrity.brokenAt})
                   </span>
                 )}
               </span>
@@ -403,49 +852,77 @@ export default function AuditLog() {
         )}
       </div>
 
-      {/* Backfill banner — only when an admin sees a null-hash break.
-          Surfaces the count of unchained rows + a Run Backfill action
-          that POSTs to /api/audit/backfill (per-tenant, idempotent).
-          Distinct from the red-chip "contact support" path: that's for
-          a row whose recomputed hash disagrees with the stored one,
-          which a backfill MUST NOT silently overwrite. */}
-      {isAdmin && integrity && integrity.unhashedRows > 0 && integrity.reason && /null hash/i.test(integrity.reason) && (
+      {/* Repair banner — shown for any broken chain an admin can see.
+          Two flavours of break:
+            1. Unhashed rows (legacy / pre-tamper-evidence rows that
+               were never chained). Backfill writes their hash + link.
+            2. prevHash mismatch where the row's CONTENT recomputes
+               correctly under its STORED prevHash — a "forked anchor"
+               race (writeAudit raced against a still-unbacklfilled tail
+               or two writers wrote in the same millisecond). Backfill
+               re-stamps the anchor + hash for these rows so the chain
+               re-validates.
+          Backfill is idempotent and safe in both cases: if a row's
+          content has been tampered with, the endpoint 409s with the
+          conflict row id rather than silently overwriting. That 409 is
+          the ONLY signal that warrants escalation. The toast in
+          runBackfill surfaces the row id when this happens. */}
+      {isAdmin && integrity && !integrity.integrityVerified && integrity.reason && (
         <div
           data-testid="integrity-backfill-banner"
-          className="card audit-backfill-banner"
+          className="card"
           style={{
             padding: '0.85rem 1.25rem',
             marginBottom: '1.25rem',
+            background: 'rgba(234, 179, 8, 0.06)',
+            border: '1px solid rgba(234, 179, 8, 0.4)',
             display: 'flex',
             alignItems: 'center',
             gap: '0.85rem',
             flexWrap: 'wrap',
           }}
         >
-          <ShieldQuestion size={18} className="audit-backfill-icon" />
+          <ShieldQuestion size={18} color="#eab308" />
           <div style={{ flex: 1, minWidth: 240 }}>
-            <div className="audit-backfill-title" style={{ fontWeight: 600 }}>
-              Backfill required — {integrity.unhashedRows} {integrity.unhashedRows === 1 ? 'row is' : 'rows are'} unchained
+            <div style={{ fontWeight: 600, color: '#eab308' }}>
+              {integrity.unhashedRows > 0
+                ? `Repair needed — ${integrity.unhashedRows} ${integrity.unhashedRows === 1 ? 'row is' : 'rows are'} unchained`
+                : `Repair needed — chain link broken at row #${integrity.brokenAt}`}
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-              Audit rows added before tamper-evidence hashing was enabled lack
-              a {`prevHash`}/{`hash`} pair. Run the backfill to chain them — the
-              operation is idempotent and writes nothing if every row already
-              has a valid hash.
+              {integrity.unhashedRows > 0 ? (
+                <>
+                  Some audit rows lack a hash/prev-hash pair — usually rows
+                  written before tamper-evidence was turned on. Run the repair
+                  to chain them. The operation is idempotent and writes nothing
+                  if every row already has a valid hash.
+                </>
+              ) : (
+                <>
+                  An audit row's link to its predecessor doesn't match — almost
+                  always a write-race where two audit writers stamped against a
+                  stale tail. The repair tool re-stamps the anchor for any row
+                  whose content recomputes correctly; if a row was actually
+                  tampered with, the repair aborts and surfaces the row ID so
+                  you can investigate (your data stays untouched).
+                </>
+              )}
             </div>
           </div>
           <button
             data-testid="run-backfill-btn"
             onClick={runBackfill}
             disabled={backfilling}
-            className="btn-primary audit-backfill-button"
+            className="btn-primary"
             style={{
               fontSize: '0.8rem',
               padding: '0.5rem 1rem',
+              background: '#eab308',
+              borderColor: '#eab308',
               opacity: backfilling ? 0.5 : 1,
             }}
           >
-            {backfilling ? 'Running backfill...' : 'Run backfill'}
+            {backfilling ? 'Repairing…' : 'Repair chain'}
           </button>
         </div>
       )}
@@ -455,7 +932,7 @@ export default function AuditLog() {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <thead>
-              <tr className="audit-table-header-row">
+              <tr style={{ background: 'rgba(255,255,255,0.03)' }}>
                 <th style={thStyle}></th>
                 <th style={thStyle}>Timestamp</th>
                 <th style={thStyle}>User</th>
@@ -477,10 +954,10 @@ export default function AuditLog() {
                   <React.Fragment key={log.id}>
                     <tr
                       onClick={() => setExpanded(isOpen ? null : log.id)}
-                      className={isOpen ? 'audit-row audit-row--expanded' : 'audit-row'}
                       style={{
                         cursor: 'pointer',
                         borderTop: '1px solid var(--border-color)',
+                        background: isOpen ? 'rgba(59,130,246,0.06)' : 'transparent',
                       }}
                     >
                       <td style={tdStyle}>
@@ -521,7 +998,7 @@ export default function AuditLog() {
                       </td>
                     </tr>
                     {isOpen && (
-                      <tr className="audit-row-drawer">
+                      <tr style={{ background: 'rgba(15,23,42,0.4)' }}>
                         <td></td>
                         <td colSpan={5} style={{ padding: '1rem 1.25rem 1.5rem' }}>
                           {/* #558 — Display truncated hash + prevHash so an
@@ -558,20 +1035,17 @@ export default function AuditLog() {
                           <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.5rem', letterSpacing: '0.04em' }}>
                             Details
                           </div>
-                          <pre style={{
+                          <div style={{
                             background: 'var(--input-bg)',
                             border: '1px solid var(--border-color)',
                             borderRadius: 8,
                             padding: '1rem',
-                            margin: 0,
-                            fontSize: '0.78rem',
-                            color: 'var(--text-secondary)',
-                            overflowX: 'auto',
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word',
                           }}>
-                            {prettyDetails(log.details)}
-                          </pre>
+                            {/* v3.7.17 — pass log.entity so RecordIdChips can
+                                resolve numeric IDs to display names via the
+                                matching list endpoint (ENTITY_LOOKUP). */}
+                            <DetailsView raw={log.details} entity={log.entity} />
+                          </div>
                         </td>
                       </tr>
                     )}

@@ -21,7 +21,7 @@ import Layout from "./components/Layout";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import RoleGuard from "./components/RoleGuard";
 import { NotifyProvider } from "./utils/notify";
-import { ActiveSubBrandProvider, useActiveSubBrand } from "./utils/subBrand";
+import { ActiveSubBrandProvider } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
 import {
   setAuthToken,
@@ -30,9 +30,9 @@ import {
   markAuthReady,
 } from "./utils/api";
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
-import "./theme/travel.css"; // travel vertical theme overrides (scoped, Day 1 placeholder palette)
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Home = lazy(() => import("./pages/Home"));
 const Contacts = lazy(() => import("./pages/Contacts"));
 const ContactDetail = lazy(() => import("./pages/ContactDetail"));
 const Pipeline = lazy(() => import("./pages/Pipeline"));
@@ -43,11 +43,9 @@ const Reports = lazy(() => import("./pages/Reports"));
 const AgentReports = lazy(() => import("./pages/AgentReports"));
 const Settings = lazy(() => import("./pages/Settings"));
 const UserSettings = lazy(() => import("./pages/UserSettings"));
-// #853 — full notifications inbox / history feed (paginated + filterable).
-// Bell dropdown deep-links here via the "View all notifications →" footer.
-const NotificationsCenter = lazy(() => import("./pages/NotificationsCenter"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
+const TravelCustomerPortal = lazy(() => import("./pages/travel/TravelCustomerPortal"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
 const CPQ = lazy(() => import("./pages/CPQ"));
 const CustomObjects = lazy(() => import("./pages/CustomObjects"));
@@ -55,6 +53,7 @@ const CustomObjectView = lazy(() => import("./pages/CustomObjectView"));
 const Sequences = lazy(() => import("./pages/Sequences"));
 const SequenceBuilder = lazy(() => import("./pages/SequenceBuilder"));
 const Tasks = lazy(() => import("./pages/Tasks"));
+const CallifiedData = lazy(() => import("./pages/CallifiedData"));
 const Tickets = lazy(() => import("./pages/Tickets"));
 const Support = lazy(() => import("./pages/Support"));
 const Staff = lazy(() => import("./pages/Staff"));
@@ -66,20 +65,15 @@ const Clients = lazy(() => import("./pages/Clients"));
 const Expenses = lazy(() => import("./pages/Expenses"));
 const Contracts = lazy(() => import("./pages/Contracts"));
 const Estimates = lazy(() => import("./pages/Estimates"));
-const QuotesComingSoon = lazy(() => import("./pages/QuotesComingSoon"));
 const Projects = lazy(() => import("./pages/Projects"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Pricing = lazy(() => import("./pages/Pricing"));
+const ManagePlans = lazy(() => import("./pages/ManagePlans"));
 const MarketplaceLeads = lazy(() => import("./pages/MarketplaceLeads"));
 const Channels = lazy(() => import("./pages/Channels"));
 const LandingPages = lazy(() => import("./pages/LandingPages"));
 const LandingPageBuilder = lazy(() => import("./pages/LandingPageBuilder"));
 const AuditLog = lazy(() => import("./pages/AuditLog"));
-// Cron PRD Priority A #1 — ADMIN-only LLM spend dashboard. Surfaces
-// /api/admin/llm-spend (commit f5c9518) which aggregates LlmCallLog rows
-// produced by the 4 router consumers (talking-points / form-vs-call /
-// itinerary-draft / religious-guidance).
-const LlmSpend = lazy(() => import("./pages/LlmSpend"));
 const Privacy = lazy(() => import("./pages/Privacy"));
 const CalendarSync = lazy(() => import("./pages/CalendarSync"));
 const Profile2FA = lazy(() => import("./pages/Profile2FA"));
@@ -131,6 +125,7 @@ const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
+const CommissionData = lazy(() => import("./pages/CommissionData"));
 const RevenueGoals = lazy(() => import("./pages/RevenueGoals"));
 const LeadRouting = lazy(() => import("./pages/LeadRouting"));
 const Territories = lazy(() => import("./pages/Territories"));
@@ -154,10 +149,23 @@ const Social = lazy(() => import("./pages/Social"));
 const Sandbox = lazy(() => import("./pages/Sandbox"));
 const Funnel = lazy(() => import("./pages/Funnel"));
 const Zapier = lazy(() => import("./pages/Zapier"));
+// RBAC: admin role/permission management + per-user effective-permission view.
+// Both are protected behind auth (Layout wrapper) but use page-internal
+// permission checks (usePermissions) rather than RoleGuard wrap so non-ADMIN
+// users granted `roles.read` through RBAC can also reach the page.
+const RolesAdmin = lazy(() => import("./pages/RolesAdmin"));
+const MyPermissions = lazy(() => import("./pages/MyPermissions"));
+// Per-target user permission view at /staff/:userId/permissions. Reuses the
+// MyPermissions visual layout but is driven by a URL param and the
+// /api/users/:userId/permissions endpoint. Page-level gated on roles.read.
+const StaffPermissions = lazy(() => import("./pages/StaffPermissions"));
 // Public pages
 const SsoReturn = lazy(() => import("./pages/SsoReturn"));
 const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
 const PaymentFailed = lazy(() => import("./pages/PaymentFailed"));
+// Self-service customer registration. Creates a User with userType='CUSTOMER'
+// — distinct from the wellness patient portal (OTP-based, /wellness/portal).
+const CustomerRegister = lazy(() => import("./pages/CustomerRegister"));
 // Travel vertical (Day 1 scaffolding — Phase 1 pages land per docs/TRAVEL_CRM_PRD.md §7)
 const TravelDashboard = lazy(() => import("./pages/travel/Dashboard"));
 const TravelDiagnostics = lazy(() => import("./pages/travel/Diagnostics"));
@@ -267,6 +275,9 @@ const WellnessPatientDetail = lazy(
 const WellnessServices = lazy(() => import("./pages/wellness/Services"));
 const WellnessLocations = lazy(() => import("./pages/wellness/Locations"));
 const WellnessMemberships = lazy(() => import("./pages/wellness/Memberships"));
+// Unified CSV import / export hub — single dropdown picks the entity then
+// delegates to the existing CsvImportExportToolbar component.
+const DataImportExport = lazy(() => import("./pages/DataImportExport"));
 // Wave 7 Agent A — ServiceCategory + Drug catalogue (PRD Gap §10 #1 + #2)
 const WellnessServiceCategories = lazy(() => import("./pages/wellness/ServiceCategories"));
 const WellnessDrugs = lazy(() => import("./pages/wellness/Drugs"));
@@ -277,21 +288,16 @@ const WellnessGiftCards = lazy(() => import("./pages/wellness/GiftCards"));
 const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
-// #832 — embedded Callified panel (iframe inside CRM shell) replaces the
-// previous new-tab launch from Sidebar + OwnerDashboard. SSO contract with
-// Callified is unchanged; only the surface that renders the auth URL is
-// different (iframe in-shell vs window.open new tab).
-const WellnessCallifiedEmbed = lazy(() => import("./pages/wellness/CallifiedEmbed"));
+const WellnessBookAppointment = lazy(() => import("./pages/wellness/BookAppointment"));
+const WellnessAppointments = lazy(() => import("./pages/wellness/Appointments"));
+const WellnessMyAppointments = lazy(() => import("./pages/wellness/MyAppointments"));
 const WellnessReports = lazy(() => import("./pages/wellness/Reports"));
 const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
+const WellnessPrescriptions = lazy(
+  () => import("./pages/wellness/Prescriptions"),
+);
 const WellnessPublicBooking = lazy(
   () => import("./pages/wellness/PublicBooking"),
-);
-const TravelStallQuiz = lazy(
-  () => import("./pages/public/TravelStallQuiz"),
-);
-const TripBooking = lazy(
-  () => import("./pages/public/TripBooking"),
 );
 const WellnessTelecallerQueue = lazy(
   () => import("./pages/wellness/TelecallerQueue"),
@@ -308,13 +314,9 @@ const WellnessWaitlist = lazy(() => import("./pages/wellness/Waitlist"));
 // Inventory is implemented as a tab inside PatientDetail; this stub explains
 // that and links to the patient list.
 const WellnessInventory = lazy(() => import("./pages/wellness/Inventory"));
-// Wave 11 Agent HH — Inventory backbone admin pages (categories, vendors,
+// Wave 11 Agent HH — Inventory backbone admin pages (categories, products, vendors,
 // receipts, adjustments, auto-consumption rules). All ADMIN/MANAGER-only.
 const WellnessProductCategories = lazy(() => import("./pages/wellness/ProductCategories"));
-// Zylu-Gap #933 — Products admin list page. Precursor for #816 CSV Products
-// slice; backend GET /api/wellness/products exists in inventory.js but POST/
-// PUT/DELETE are not yet exposed at that mount, so create goes through
-// /api/cpq/products and bulk via /api/csv/products/{export,import}.csv.
 const WellnessProducts = lazy(() => import("./pages/wellness/Products"));
 const WellnessVendors = lazy(() => import("./pages/wellness/Vendors"));
 const WellnessInventoryReceipts = lazy(() => import("./pages/wellness/InventoryReceipts"));
@@ -327,10 +329,7 @@ const WellnessHolidays = lazy(() => import("./pages/wellness/Holidays"));
 const WellnessWorkingHours = lazy(() => import("./pages/wellness/WorkingHoursEditor"));
 // Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox).
 const WellnessWhatsAppThreads = lazy(() => import("./pages/wellness/WhatsAppThreads"));
-// Zylu-Gap #800 (WA-005) — Blocked Numbers admin page. Manages
-// /api/whatsapp/opt-outs rows with Add + Unblock affordances. Paired
-// with the All/Unread/Blocked tab strip on WhatsAppThreads (#796).
-const WellnessBlockedNumbers = lazy(() => import("./pages/wellness/BlockedNumbers"));
+const WellnessWhatsAppTemplates = lazy(() => import("./pages/wellness/WhatsAppTemplates"));
 // Wave 2 Agent JJ — Staff Attendance + Leave Management. Open to all roles
 // (everyone needs to clock in/out + manage their own leave); manager+
 // surfaces appear inline based on AuthContext.role.
@@ -338,13 +337,12 @@ const WellnessAttendance = lazy(() => import("./pages/wellness/Attendance"));
 const WellnessLeave = lazy(() => import("./pages/wellness/Leave"));
 // Wave 2 Agent II — POS / Cash Register / Shift / Sale MVP UI.
 const WellnessPointOfSale = lazy(() => import("./pages/wellness/PointOfSale"));
-// Zylu-Gap Cash Register admin page — closes #770/#779/#780/#781.
-// Lists registers (admin+ create/edit), drills into per-register shift +
-// transactions panel. Without this surface POS is permanently gated since
-// the backend requires an OPEN shift on a Register before /pos/sales accepts.
-const WellnessCashRegisters = lazy(() => import("./pages/wellness/CashRegisters"));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
+// v3.7.17 — token-based respondent landing page (the email link target).
+// Renders the survey form (legacy NPS/CSAT or new multi-question types)
+// and posts answers back to the matching /respond endpoint.
+const SurveyRespond = lazy(() => import("./pages/SurveyRespond"));
 // Public customer-facing knowledge-base article view (no auth, no admin chrome).
 // Replaces the raw-JSON backend response that the KB "View" button used to open.
 const KbArticleView = lazy(() => import("./pages/KbArticleView"));
@@ -356,104 +354,6 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
 
-// #876 — per-sub-brand theme resolver. Owns the `document.documentElement
-// .setAttribute("data-theme", ...)` write so the decision can consume the
-// active sub-brand from <ActiveSubBrandProvider> + the tenant's per-sub-brand
-// theme defaults from /api/tenant/sub-brand-themes. Resolution chain (DD-5.2):
-//   1. user.themePreference (explicit 'light'|'dark') — user wins.
-//   2. tenant.subBrandThemes[activeSubBrand] when user pref is 'system'
-//      AND there's an active sub-brand AND the tenant set a per-brand default.
-//   3. OS prefers-color-scheme as the final fallback.
-// Re-resolves on activeSubBrand switch (effect dep) so flipping the
-// "I'm working on TMC today" switcher repaints the chrome immediately.
-//
-// Defensive: the /api/tenant/sub-brand-themes fetch tolerates 404/401/network
-// errors as "no per-sub-brand override available" (empty {}). The backend
-// route lands as of tick #183 commit 9f6f561f; on older deploys the fetch
-// 404s and we silently degrade to the user-pref → OS-pref chain.
-function SubBrandThemeResolver() {
-  const { theme } = useContext(ThemeContext);
-  const { token } = useContext(AuthContext);
-  const { activeSubBrand } = useActiveSubBrand();
-  const [tenantSubBrandThemes, setTenantSubBrandThemes] = useState({});
-
-  // Fetch tenant's per-sub-brand defaults once per token. Re-fires on
-  // login/logout so a switched session doesn't carry over the prior tenant's
-  // overrides. Errors are swallowed — empty {} means "fall through to OS pref".
-  useEffect(() => {
-    if (!token) {
-      setTenantSubBrandThemes({});
-      return undefined;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/tenant/sub-brand-themes", {
-          headers: { "Authorization": `Bearer ${token}` },
-        });
-        if (!res.ok) return; // 404 (pre-deploy) / 401 / 5xx — no override.
-        const data = await res.json();
-        if (cancelled) return;
-        const themes = data && typeof data.themes === "object" && data.themes !== null
-          ? data.themes
-          : {};
-        setTenantSubBrandThemes(themes);
-      } catch (err) {
-        // Network / parse error — silently degrade. The user-pref + OS-pref
-        // chain still works without per-sub-brand defaults.
-        console.warn("[Theme] sub-brand-themes fetch failed; no per-brand override:", err);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [token]);
-
-  // Apply the effective theme to <html data-theme="..."> on every input change.
-  // Dependency array includes activeSubBrand so toggling the switcher repaints.
-  useEffect(() => {
-    let effectiveTheme = null;
-    // Step 1 — user pref wins when explicit (DD-5.2).
-    if (theme === "light" || theme === "dark") {
-      effectiveTheme = theme;
-    }
-    // Step 2 — user pref is 'system' (or unset): try the tenant's
-    // per-sub-brand default for the currently-active brand.
-    if (!effectiveTheme && activeSubBrand && tenantSubBrandThemes) {
-      const brandTheme = tenantSubBrandThemes[activeSubBrand];
-      if (brandTheme === "light" || brandTheme === "dark") {
-        effectiveTheme = brandTheme;
-      }
-      // brandTheme === "system" is treated as "no opinion" — fall through.
-    }
-    // Step 3 — OS prefers-color-scheme as the final fallback.
-    if (!effectiveTheme) {
-      effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light";
-    }
-    document.documentElement.setAttribute("data-theme", effectiveTheme);
-  }, [theme, token, activeSubBrand, tenantSubBrandThemes]);
-
-  // Live-react to the OS prefers-color-scheme flip only when we're actually
-  // bottoming out at Step 3 (no user pref, no sub-brand override). When
-  // effective is already "light" or "dark" via Step 1 or 2, the listener
-  // should NOT override.
-  useEffect(() => {
-    if (theme === "light" || theme === "dark") return undefined;
-    if (activeSubBrand && tenantSubBrandThemes) {
-      const brandTheme = tenantSubBrandThemes[activeSubBrand];
-      if (brandTheme === "light" || brandTheme === "dark") return undefined;
-    }
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (e) => {
-      document.documentElement.setAttribute("data-theme", e.matches ? "dark" : "light");
-    };
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, [theme, activeSubBrand, tenantSubBrandThemes]);
-
-  return null;
-}
-
 // Issue #207/#214/#216: wellness staff carry RBAC role=USER + an orthogonal
 // `wellnessRole` (doctor/professional/telecaller/helper/stylist). The Owner
 // Dashboard at /wellness exposes org-wide P&L (₹12L) and is for ADMIN/MANAGER
@@ -462,26 +362,44 @@ function SubBrandThemeResolver() {
 // fresh login; this helper covers refresh / `/` / GenericOnly bounces where
 // the URL would otherwise resolve to /wellness Owner Dashboard for everyone.
 function wellnessLandingFor(user) {
-  if (!user) return '/wellness';
+  if (!user) return '/home';
   if (user.role === 'ADMIN' || user.role === 'MANAGER') return '/wellness';
   switch (user.wellnessRole) {
     case 'owner':
     case 'manager':
     case 'admin':
       return '/wellness';
-    case 'doctor':
-    case 'professional':
-      return '/wellness/calendar';
-    case 'telecaller':
-      return '/wellness/telecaller';
-    case 'helper':
-    case 'stylist':
-      return '/wellness/calendar';
     default:
-      // No wellnessRole + not ADMIN/MANAGER — read-only fallback to calendar
-      // so we never silently drop them on the org-wide dashboard.
-      return '/wellness/calendar';
+      // Everyone else (doctor / professional / telecaller / helper /
+      // plain users) lands on the role-aware /home widget dashboard.
+      // /home renders only the widgets and quick-actions the user has
+      // permission for, so it's always the right starting surface even
+      // when the user has zero wellness clinical permissions.
+      return '/home';
   }
+}
+
+// Per-role landingPath (configured by admin via Roles & Permissions) wins
+// over the vertical-default heuristic. Lets a new role become a config
+// change rather than a code edit in this file. Exported helper so the
+// GenericOnly / WellnessOwnerOnly guards use a single source of truth.
+//
+// EXCEPTION: a configured value of "/dashboard" is the system-wide ADMIN
+// default (and the implicit fallback for any role missing an explicit
+// landingPath). For non-generic verticals (wellness, travel) that's wrong
+// — those verticals have their own home surfaces, not the Enterprise
+// Overview. We override the generic default; any explicitly-customised
+// non-default path (e.g. /home, /wellness/calendar, /travel/leads) still
+// wins.
+function landingFor(user, tenant) {
+  const configured = user?.landingPath || user?.primaryRole?.landingPath || null;
+  const isGenericDefault = !configured || configured === '/dashboard';
+  if (isGenericDefault) {
+    if (tenant?.vertical === 'wellness') return wellnessLandingFor(user);
+    if (tenant?.vertical === 'travel') return '/travel';
+    return '/dashboard';
+  }
+  return configured;
 }
 
 // Route guard: bounces wellness tenants away from generic-CRM-only pages.
@@ -494,12 +412,7 @@ function wellnessLandingFor(user) {
 function GenericOnly({ children }) {
   const { tenant, user } = useContext(AuthContext);
   if (tenant?.vertical === 'wellness') {
-    return <Navigate to={wellnessLandingFor(user)} replace />;
-  }
-  if (tenant?.vertical === 'travel') {
-    // Travel vertical's landing route is /travel (no role-aware landing yet —
-    // Phase 1 will add per-sub-brand landings: TMC ops vs RFU advisor vs ...).
-    return <Navigate to="/travel" replace />;
+    return <Navigate to={landingFor(user, tenant)} replace />;
   }
   return children;
 }
@@ -510,8 +423,8 @@ function GenericOnly({ children }) {
 // (or `wellnessRole === owner|manager|admin`) and redirect everyone else to
 // their role-appropriate landing.
 function WellnessOwnerOnly({ children }) {
-  const { user } = useContext(AuthContext);
-  const target = wellnessLandingFor(user);
+  const { user, tenant } = useContext(AuthContext);
+  const target = landingFor(user, tenant);
   if (target !== '/wellness') {
     return <Navigate to={target} replace />;
   }
@@ -526,21 +439,24 @@ function WellnessOwnerOnly({ children }) {
 // stop the URL bar from rendering a misleading wellness UI on non-wellness
 // tenants.
 function WellnessOnly({ children }) {
-  const { tenant } = useContext(AuthContext);
+  const { user, tenant } = useContext(AuthContext);
   if (tenant && tenant.vertical !== "wellness") {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={landingFor(user, tenant)} replace />;
   }
   return children;
 }
 
-// Mirror of WellnessOnly for the travel vertical (Day 1 scaffolding). Non-
-// travel tenants get bounced to /dashboard rather than rendering empty
-// travel UI. API-level guard requireTravelTenant in backend/routes/travel.js
-// is the load-bearing check; this is just URL-bar hygiene.
+// Sibling of WellnessOnly for the travel vertical. Inline-defined here to
+// match the WellnessOnly pattern (no separate component file). Main added
+// the <TravelOnly>...</TravelOnly> wrapper at every travel route (41 call
+// sites at App.jsx:1174-1289) but the inline component definition was
+// dropped by the main→staging_crm Python union pass on commit bd25d6f2.
+// This restores the definition so the 41 react/jsx-no-undef lint errors
+// clear.
 function TravelOnly({ children }) {
-  const { tenant } = useContext(AuthContext);
+  const { user, tenant } = useContext(AuthContext);
   if (tenant && tenant.vertical !== "travel") {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={landingFor(user, tenant)} replace />;
   }
   return children;
 }
@@ -598,8 +514,13 @@ export default function App() {
     }
     return initial || null;
   });
-  const setToken = (next) => {
-    setAuthToken(next);
+  // setToken accepts an optional `opts` object — currently only `remember`,
+  // which the Login form passes from its "Keep me signed in" checkbox. When
+  // set, the token is mirrored to localStorage so deep links opened in new
+  // tabs can rehydrate without forcing a re-login. See utils/api.js for the
+  // security trade-off.
+  const setToken = (next, opts) => {
+    setAuthToken(next, opts);
     setTokenState(next || null);
   };
   // #347: gate initial mount until we've finished rehydrating the token
@@ -668,62 +589,28 @@ export default function App() {
     }
   }, [token]);
 
-  // #870 — server-side theme hydration so the preference roams across
-  // browsers/devices. localStorage stays as a synchronous fast-path cache;
-  // the server value (when set) wins on login. Per DD-5.2: user pref wins
-  // over tenant default, so if the server returns 'system' that's the
-  // explicit "no choice yet" sentinel and we fall through to the existing
-  // OS-preference detection.
   useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/user/theme", {
-          headers: { "Authorization": `Bearer ${token}` },
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        if (data && typeof data.theme === "string" &&
-            ["light", "dark", "system"].includes(data.theme)) {
-          setTheme(data.theme);
-        }
-      } catch (err) {
-        // Server unavailable — keep whatever localStorage seeded us with.
-        console.warn("[Theme] Hydrate failed; falling back to localStorage cache:", err);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [token]);
-
-  // #876 — DOM `data-theme` application moved into <SubBrandThemeResolver>
-  // (below) so the effective-theme decision can consume `activeSubBrand` from
-  // <ActiveSubBrandProvider> and the tenant's per-sub-brand defaults. The
-  // user-pref localStorage cache + server-PUT roam stay here because they
-  // depend only on the explicit user choice (DD-5.2: user pref wins), NOT on
-  // the active sub-brand. PRE-#876 this effect also set the data-theme
-  // attribute; SubBrandThemeResolver now owns that write.
-  useEffect(() => {
-    // localStorage stays as a synchronous boot cache so the next page-load
-    // doesn't flash the wrong theme before /api/user/theme resolves.
-    localStorage.setItem("theme", theme);
-    // #870 — also persist server-side so the choice roams. Fire-and-forget;
-    // localStorage already covered the local UX in the line above. Skip when
-    // we have no token (pre-login: theme picker only writes localStorage).
-    if (token) {
-      fetch("/api/user/theme", {
-        method: "PUT",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ theme }),
-      }).catch((err) => {
-        console.warn("[Theme] Server persist failed (localStorage retained):", err);
-      });
+    let effectiveTheme = theme;
+    if (theme === "system") {
+      effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
     }
-  }, [theme, token]);
+    console.log('[Theme] Applying theme:', { selectedTheme: theme, effectiveTheme });
+    document.documentElement.setAttribute("data-theme", effectiveTheme);
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (theme !== "system") return;
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (e) => {
+      const effectiveTheme = e.matches ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", effectiveTheme);
+    };
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, [theme]);
 
   // Apply vertical-specific theme overrides (e.g. wellness gets Dr. Haror palette)
   useEffect(() => {
@@ -758,6 +645,14 @@ export default function App() {
     if (tenantArg) {
       setTenant(tenantArg);
       localStorage.setItem("tenant", JSON.stringify(tenantArg));
+      // Set data-vertical synchronously here (not just in the useEffect that
+      // fires after re-render) so navigation immediately following login sees
+      // the correct attribute — the React state update + useEffect cycle is
+      // async and tests / route guards landing on /wellness can otherwise read
+      // body[data-vertical="generic"] for one frame.
+      const v = tenantArg.vertical || "generic";
+      document.documentElement.setAttribute("data-vertical", v);
+      document.body.setAttribute("data-vertical", v);
     }
     const res = await fetch("/api/auth/me", {
       headers: { Authorization: `Bearer ${tokenArg}` },
@@ -820,7 +715,6 @@ export default function App() {
       <AuthContext.Provider value={authValue}>
         <NotifyProvider>
           <ActiveSubBrandProvider>
-          <SubBrandThemeResolver />
           <BrowserRouter>
             <RouteErrorBoundary>
               <Suspense
@@ -841,37 +735,45 @@ export default function App() {
                 <Routes>
                   <Route
                     path="/login"
-                    element={!token ? <Login /> : <Navigate to="/dashboard" />}
+                    element={
+                      !token ? (
+                        <Login />
+                      ) : (
+                        <Navigate to={landingFor(user, tenant)} replace />
+                      )
+                    }
                   />
                   <Route
                     path="/signup"
-                    element={!token ? <Signup /> : <Navigate to="/dashboard" />}
+                    element={
+                      !token ? (
+                        <Signup />
+                      ) : (
+                        <Navigate to={landingFor(user, tenant)} replace />
+                      )
+                    }
+                  />
+                  <Route
+                    path="/customer/register"
+                    element={!token ? <CustomerRegister /> : <Navigate to="/portal" />}
                   />
                   <Route path="/sso/return" element={<SsoReturn />} />
                   <Route path="/pricing" element={<Pricing />} />
                   <Route path="/payment-success" element={<PaymentSuccess />} />
                   <Route path="/payment-failed" element={<PaymentFailed />} />
                   <Route path="/portal" element={<Portal />} />
+                  {/* Travel customer portal — end-user (Contact) login + dashboard
+                      + DigiLocker / Aadhaar verification (PRD §4.5 extended).
+                      Distinct from /portal (Knowledge Base) + /wellness/portal
+                      (wellness patient OTP). Travel-tenant scoped on the
+                      backend via requireTravelPortalTenant.
+                      Wildcard so subpaths (/login, /kyc, /bookings) all render
+                      the same component; without this they fall through to the
+                      /* catch-all and bounce unauthenticated users to /login. */}
+                  <Route path="/travel/portal/*" element={<TravelCustomerPortal />} />
                   <Route
                     path="/book/:slug"
                     element={<WellnessPublicBooking />}
-                  />
-                  {/* PRD §4.7 — Travel Stall public Family Travel Quiz wizard.
-                      Unauthenticated; calls /api/travel/diagnostics/public/*.
-                      Tenant slug optional via ?tenant=<slug>; defaults to
-                      "travel-stall" inside the page. */}
-                  <Route
-                    path="/travel-stall/quiz"
-                    element={<TravelStallQuiz />}
-                  />
-                  {/* PRD §4.7 — Travel Stall trip booking page. Customer
-                      receives the shareToken URL from advisor (WhatsApp /
-                      email), reviews the itinerary, pays the 50% advance.
-                      Backed by /api/travel/itineraries/public/* (commit
-                      8abf6f3). */}
-                  <Route
-                    path="/trip/:shareToken"
-                    element={<TripBooking />}
                   />
                   {/* #208: wellness patient portal lives under /wellness/portal so it
                 inherits the wellness theme + namespace. The generic /portal route
@@ -891,6 +793,9 @@ export default function App() {
                   />
                   {/* #184: customer-facing survey landing page from SMS — no auth, no admin chrome */}
                   <Route path="/survey/:id" element={<SurveyPublic />} />
+                  {/* v3.7.17 — token-based respondent landing page. The
+                      Send-Survey email link points here. */}
+                  <Route path="/surveys/respond/:token" element={<SurveyRespond />} />
                   {/* Public knowledge-base article view (no auth). Replaces the raw
                       backend JSON URL that the KB "View" button used to open. */}
                   <Route
@@ -899,14 +804,18 @@ export default function App() {
                   />
                   {/* #240: unauthenticated visitors to `/` should land on /login, not the
                 marketing Landing page. The Landing component is still importable
-                for any explicit /landing CTA but is no longer the implicit root. */}
+                for any explicit /landing CTA but is no longer the implicit root.
+                For logged-in users, route to the per-role landingPath when
+                configured (Roles & Permissions admin), falling back to the
+                vertical default — so a new role lands on its configured page
+                even when the user types `/` in the URL bar. */}
                   <Route
                     path="/"
                     element={
                       !token ? (
                         <Navigate to="/login" replace />
                       ) : (
-                        <Navigate to="/dashboard" replace />
+                        <Navigate to={landingFor(user, tenant)} replace />
                       )
                     }
                   />
@@ -922,27 +831,18 @@ export default function App() {
                         </GenericOnly>
                       }
                     />
+                    {/* /home — role-aware widget dashboard. Open to any
+                        logged-in user; the widgets themselves filter by
+                        permission server-side via /api/widgets/me. */}
+                    <Route path="home" element={<Home />} />
                     <Route path="contacts" element={<Contacts />} />
                     <Route path="contacts/:id" element={<ContactDetail />} />
                     <Route
                       path="pipeline"
                       element={
-                        /* #887/#897: Pipeline.jsx is a fully-built Kanban (~386
-                           lines, shipped April 2026, hardened across 8
-                           commits) that only depends on cross-vertical APIs
-                           (/api/deals, /api/contacts, /api/pipeline_stages) —
-                           none of which are vertical-gated. The original
-                           <GenericOnly> wrapper bounced travel-vertical
-                           tenants (and wellness) to their respective landing
-                           routes, which made the Pipeline sidebar link a dead
-                           link for Travel Stall + the other 3 travel sub-
-                           brands. Travel sidebar (Sidebar.jsx:1102) already
-                           exposes the Pipeline affordance; the guard removal
-                           lets it actually work. Wellness has its own clinic-
-                           focused landing and doesn't expose this link in its
-                           slim nav, so the guard removal is travel-only in
-                           practice. */
-                        <Pipeline />
+                        <GenericOnly>
+                          <Pipeline />
+                        </GenericOnly>
                       }
                     />
                     <Route path="inbox" element={<Inbox />} />
@@ -953,24 +853,13 @@ export default function App() {
                           allow={["ADMIN", "MANAGER"]}
                           feature="Marketing"
                           roles="manager (or admin)"
+                          lockedInPlace
                         >
                           <Marketing />
                         </RoleGuard>
                       }
                     />
-                    {/* #898: /campaigns deep-link alias. The Email / SMS / Push
-                        Campaign list lives at /marketing as the default tab
-                        (Marketing.jsx:82 — useState('campaigns')). Surfaces the
-                        Campaign entity in the sidebar without duplicating the
-                        UI. Mirrors the #822 /reports/pnl redirect pattern. */}
-                    <Route path="campaigns" element={<Navigate to="/marketing" replace />} />
                     <Route path="reports" element={<Reports />} />
-                    {/* #822: /reports/pnl deep-link alias. The P&L + Attribution
-                        report lives at /wellness/reports as the default tab
-                        (Reports.jsx:37 — useState('pnl')). External bookmarks /
-                        CS-team shared URLs that omit the /wellness prefix used
-                        to 404. Mirrors the #183/#406 redirect-alias pattern. */}
-                    <Route path="reports/pnl" element={<Navigate to="/wellness/reports" replace />} />
                     <Route path="agent-reports" element={<AgentReports />} />
                     <Route path="workflows" element={<Workflows />} />
                     <Route path="developer" element={<Developer />} />
@@ -1016,17 +905,23 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
+                    {/* Manage Subscription Plans — Owner-only catalog editor.
+                        The page itself gates render on usePermissions().isOwner,
+                        so no RoleGuard wrap (RoleGuard reads user.role which is
+                        ADMIN/MANAGER/USER; OWNER lives on the isOwner flag). */}
+                    <Route path="manage-plans" element={<ManagePlans />} />
+                    <Route
+                      path="data-import-export"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Import / Export requires admin or manager access.">
+                          <DataImportExport />
+                        </RoleGuard>
+                      }
+                    />
                     <Route path="expenses" element={<Expenses />} />
                     <Route path="contracts" element={<Contracts />} />
                     <Route path="estimates" element={<Estimates />} />
                     <Route path="invoices" element={<Invoices />} />
-                    {/* #886 / BUG-T24: /quotes used to 404 because no Route
-                        was registered. Full Quotes module is multi-day work
-                        (cluster B2 in docs/MANUAL_CODING_BACKLOG.md). Until
-                        then, render a coming-soon stub that points users at
-                        Estimates (the existing Draft→Accepted→Converted
-                        analog) and the Pipeline. */}
-                    <Route path="quotes" element={<QuotesComingSoon />} />
                     <Route path="tickets" element={<Tickets />} />
                     <Route path="tasks" element={<Tasks />} />
                     <Route path="lead-scoring" element={<LeadScoring />} />
@@ -1038,6 +933,10 @@ export default function App() {
                       element={<ConvertedLeads />}
                     />
                     <Route
+                      path="callified-data"
+                      element={<CallifiedData />}
+                    />
+                    <Route
                       path="staff"
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Staff requires admin access.">
@@ -1045,12 +944,26 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
+                    {/* Per-target user permission view. Route is auth-only;
+                        the page rechecks roles.read so non-admin admins
+                        with the RBAC grant can also reach it, and so a
+                        cross-tenant userId hits the backend's tenant guard
+                        rather than a frontend allow-list. */}
+                    <Route
+                      path="staff/:userId/permissions"
+                      element={<StaffPermissions />}
+                    />
                     <Route path="profile" element={<Profile />} />
                     <Route path="profile/2fa" element={<Profile2FA />} />
+                    {/* RBAC: every authed user can view their own effective
+                        permissions. Page is read-only and not gated. */}
+                    <Route path="profile/permissions" element={<MyPermissions />} />
+                    {/* RBAC: role + permission admin. Route is auth-only; the
+                        page renders <AccessDenied /> for users without
+                        roles.read so non-ADMIN admins with the RBAC grant can
+                        still reach it. */}
+                    <Route path="settings/roles" element={<RolesAdmin />} />
                     <Route path="notification-settings" element={<UserSettings />} />
-                    {/* #853 — full notifications inbox. Bell dropdown's
-                        "View all notifications →" footer deep-links here. */}
-                    <Route path="notifications" element={<NotificationsCenter />} />
                     {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
                         adminOnly visibility + the "System Admin Required"
                         toast text). Pre-fix, USER + MANAGER navigation to
@@ -1066,18 +979,6 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Audit Log requires admin access.">
                           <AuditLog />
-                        </RoleGuard>
-                      }
-                    />
-                    {/* Cron PRD Priority A #1 — LLM observability surface
-                        for the /api/admin/llm-spend endpoint (commit
-                        f5c9518). ADMIN-only mirrors the backend gate
-                        (verifyRole(['ADMIN']) on the route). */}
-                    <Route
-                      path="llm-spend"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} message="LLM Spend requires admin access.">
-                          <LlmSpend />
                         </RoleGuard>
                       }
                     />
@@ -1224,6 +1125,14 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Commission Profiles requires admin access.">
                           <CommissionProfiles />
+                        </RoleGuard>
+                      }
+                    />
+                    <Route
+                      path="commission-data"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Commission Data requires admin access.">
+                          <CommissionData />
                         </RoleGuard>
                       }
                     />
@@ -1430,37 +1339,69 @@ export default function App() {
               <Route path="wellness/patients/:id" element={<WellnessOnly><WellnessPatientDetail /></WellnessOnly>} />
               <Route path="wellness/services" element={<WellnessOnly><WellnessServices /></WellnessOnly>} />
               {/* Wave 7 Agent A — ServiceCategory + Drug admin pages (admin/manager) */}
+              {/* Wave 7 Agent A — ServiceCategory + Drug admin pages. Gated
+                  by permissions that mirror the page catalog's entries — any
+                  role granted `services.write` / `prescriptions.write` passes
+                  (no hardcoded ADMIN/MANAGER allowlist). */}
               <Route path="wellness/service-categories" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Service Categories requires manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'services', action: 'read' }}
+                    feature="Service Categories"
+                    lockedInPlace
+                  >
                     <WellnessServiceCategories />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/drugs" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Drug catalogue requires manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'prescriptions', action: 'read' }}
+                    feature="Drug catalogue"
+                    lockedInPlace
+                  >
                     <WellnessDrugs />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/visits" element={<WellnessOnly><WellnessVisits /></WellnessOnly>} />
+              {/* Prescriptions list — tenant-wide, with patient filter +
+                  per-row PDF download. Gated on prescriptions.read via
+                  the page catalog (Sidebar) AND the page-level RoleGuard
+                  here (route protection). Backend PDF endpoint inherits
+                  the same RBAC + tenant scope. */}
+              <Route path="wellness/prescriptions" element={
+                <WellnessOnly>
+                  <RoleGuard
+                    requiredPermission={{ module: 'prescriptions', action: 'read' }}
+                    feature="Prescriptions"
+                    lockedInPlace
+                  >
+                    <WellnessPrescriptions />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
               <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
-              {/* Wave 11 Agent EE: Memberships catalog — admin/manager only */}
+              {/* Wave 11 Agent EE: Memberships catalog */}
               <Route path="wellness/memberships" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Memberships requires manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'services', action: 'read' }}
+                    feature="Memberships"
+                    lockedInPlace
+                  >
                     <WellnessMemberships />
                   </RoleGuard>
                 </WellnessOnly>
               } />
-              {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback (admin/manager) */}
+              {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback */}
               <Route path="wellness/wallet" element={
                 <WellnessOnly>
                   <RoleGuard
-                    allow={["ADMIN", "MANAGER"]}
+                    requiredPermission={{ module: 'billing', action: 'read' }}
                     feature="Wallet ledger"
-                    roles="manager (or admin)"
+                    lockedInPlace
                   >
                     <WellnessWallet />
                   </RoleGuard>
@@ -1469,9 +1410,9 @@ export default function App() {
               <Route path="wellness/giftcards" element={
                 <WellnessOnly>
                   <RoleGuard
-                    allow={["ADMIN", "MANAGER"]}
+                    requiredPermission={{ module: 'billing', action: 'read' }}
                     feature="Gift Cards"
-                    roles="manager (or admin)"
+                    lockedInPlace
                   >
                     <WellnessGiftCards />
                   </RoleGuard>
@@ -1480,9 +1421,9 @@ export default function App() {
               <Route path="wellness/coupons" element={
                 <WellnessOnly>
                   <RoleGuard
-                    allow={["ADMIN", "MANAGER"]}
+                    requiredPermission={{ module: 'marketing', action: 'read' }}
                     feature="Coupons"
-                    roles="manager (or admin)"
+                    lockedInPlace
                   >
                     <WellnessCoupons />
                   </RoleGuard>
@@ -1491,35 +1432,21 @@ export default function App() {
               <Route path="wellness/cashback-rules" element={
                 <WellnessOnly>
                   <RoleGuard
-                    allow={["ADMIN", "MANAGER"]}
+                    requiredPermission={{ module: 'marketing', action: 'read' }}
                     feature="Cashback rules"
-                    roles="manager (or admin)"
+                    lockedInPlace
                   >
                     <WellnessCashbackRules />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
-              {/* #832 — embedded Callified panel. Replaces the old window.open
-                  external-tab launch from the sidebar + Owner Dashboard card.
-                  Same SSO contract (signed JWT via /api/integrations/callified/
-                  auth-url); the page just renders that URL in an iframe so
-                  Callified lives inside the CRM shell like Unified Inbox /
-                  WhatsApp Threads do. */}
-              <Route path="wellness/callified" element={<WellnessOnly><WellnessCallifiedEmbed /></WellnessOnly>} />
+              <Route path="wellness/appointments" element={<WellnessOnly><WellnessAppointments /></WellnessOnly>} />
+              <Route path="wellness/my-appointments" element={<WellnessOnly><WellnessMyAppointments /></WellnessOnly>} />
+              <Route path="wellness/book-appointment" element={<WellnessOnly><WellnessBookAppointment /></WellnessOnly>} />
               {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
               <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
-              {/* Zylu-Gap #800 — Blocked Numbers admin (manages /opt-outs).
-                  Add is ADMIN+MANAGER (backend gate), Unblock is ADMIN-only
-                  (DPDP §11). The page hides the Unblock button for
-                  non-admins so the modal never fires a 403 round-trip. */}
-              <Route path="wellness/whatsapp/blocked-numbers" element={
-                <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Blocked Numbers requires admin or manager access.">
-                    <WellnessBlockedNumbers />
-                  </RoleGuard>
-                </WellnessOnly>
-              } />
+              <Route path="wellness/whatsapp/templates" element={<WellnessOnly><WellnessWhatsAppTemplates /></WellnessOnly>} />
               <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
               <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
               {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}
@@ -1535,71 +1462,113 @@ export default function App() {
               <Route path="wellness/loyalty" element={<WellnessOnly><WellnessLoyalty /></WellnessOnly>} />
               <Route path="wellness/waitlist" element={<WellnessOnly><WellnessWaitlist /></WellnessOnly>} />
               <Route path="wellness/inventory" element={<WellnessOnly><WellnessInventory /></WellnessOnly>} />
-              {/* Wave 11 Agent HH — Inventory backbone admin pages (5 routes).
-                  All ADMIN/MANAGER-only via RoleGuard wrap. */}
+              {/* Wave 11 Agent HH — Inventory backbone admin pages. All
+                  6 pages gated on `inventory.read` for sidebar + page-mount
+                  visibility (matches the page catalog). The create / edit
+                  / delete actions inside each page are gated separately at
+                  the backend route level (.write / .update / .delete /
+                  .manage in routes/inventory.js) — a read-only role sees
+                  the page in read-only mode; the action buttons should
+                  hide themselves based on per-action permission checks
+                  via usePermissions(). */}
               <Route path="wellness/product-categories" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Product categories require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'products', action: 'read' }}
+                    feature="Product categories"
+                    lockedInPlace
+                  >
                     <WellnessProductCategories />
                   </RoleGuard>
                 </WellnessOnly>
               } />
-              {/* Zylu-Gap #933 — Products admin list (precursor for #816). */}
               <Route path="wellness/products" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Products require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'products', action: 'read' }}
+                    feature="Products"
+                    lockedInPlace
+                  >
                     <WellnessProducts />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/vendors" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Vendors require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'inventory', action: 'read' }}
+                    feature="Vendors"
+                    lockedInPlace
+                  >
                     <WellnessVendors />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/inventory-receipts" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Inventory receipts require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'inventory', action: 'read' }}
+                    feature="Inventory receipts"
+                    lockedInPlace
+                  >
                     <WellnessInventoryReceipts />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/inventory-adjustments" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Inventory adjustments require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'inventory', action: 'read' }}
+                    feature="Inventory adjustments"
+                    lockedInPlace
+                  >
                     <WellnessInventoryAdjustments />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/auto-consumption-rules" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Auto-consumption rules require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'products', action: 'read' }}
+                    feature="Auto-consumption rules"
+                    lockedInPlace
+                  >
                     <WellnessAutoConsumptionRules />
                   </RoleGuard>
                 </WellnessOnly>
               } />
-              {/* Wave 11 Agent GG — Resource availability admin pages (3 routes).
-                  All ADMIN/MANAGER-only. The booking-conflict gate runs on
-                  every POST/PUT visit. */}
+              {/* Wave 11 Agent GG — Resource availability admin pages.
+                  Gated on settings.read (matches page catalog). The
+                  booking-conflict gate runs on every POST/PUT visit. */}
               <Route path="wellness/resources" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Resources require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'settings', action: 'read' }}
+                    feature="Resources"
+                    lockedInPlace
+                  >
                     <WellnessResources />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/holidays" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Holidays require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'settings', action: 'read' }}
+                    feature="Holidays"
+                    lockedInPlace
+                  >
                     <WellnessHolidays />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/working-hours" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Working hours require manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'settings', action: 'read' }}
+                    feature="Working hours"
+                    lockedInPlace
+                  >
                     <WellnessWorkingHours />
                   </RoleGuard>
                 </WellnessOnly>
@@ -1614,27 +1583,12 @@ export default function App() {
                   except plain USER) so a cashier user can ring sales. */}
               <Route path="wellness/pos" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="POS requires staff access.">
+                  <RoleGuard
+                    requiredPermission={{ module: 'pos', action: 'read' }}
+                    feature="Point of Sale"
+                    lockedInPlace
+                  >
                     <WellnessPointOfSale />
-                  </RoleGuard>
-                </WellnessOnly>
-              } />
-              {/* #823: /pos direct-URL alias. Bookmarks, external deep-links,
-                  and operators who type the URL bare were hitting the 404
-                  catch-all because the canonical route is /wellness/pos.
-                  WellnessOnly on the canonical route still rejects non-
-                  wellness tenants downstream. Mirrors the #309/#305 alias
-                  patterns for /wellness/invoices and /wellness/inventory. */}
-              <Route path="pos" element={<Navigate to="/wellness/pos" replace />} />
-              {/* Zylu-Gap #770/#779/#780/#781 — Cash Register admin page.
-                  Lists registers, drills into per-register shift detail
-                  (status header + open/close/deposit/withdraw + transactions).
-                  Same role envelope as POS so a cashier can open their own
-                  shift here without leaving the staff role bucket. */}
-              <Route path="wellness/cash-registers" element={
-                <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="Cash Registers requires staff access.">
-                    <WellnessCashRegisters />
                   </RoleGuard>
                 </WellnessOnly>
               } />

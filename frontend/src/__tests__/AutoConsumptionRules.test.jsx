@@ -106,11 +106,12 @@ vi.mock('../utils/api', () => ({
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyObj = {
   error: notifyError,
   info: notifyInfo,
   success: notifySuccess,
-  confirm: () => Promise.resolve(true),
+  confirm: (...args) => notifyConfirm(...args),
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -185,16 +186,13 @@ function renderPage() {
   );
 }
 
-let confirmSpy;
 beforeEach(() => {
   fetchApiMock.mockReset();
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
-  confirmSpy = undefined;
-});
-afterEach(() => {
-  if (confirmSpy) confirmSpy.mockRestore();
+  notifyConfirm.mockReset();
+  notifyConfirm.mockResolvedValue(true);
 });
 
 describe('<AutoConsumptionRules /> — page chrome', () => {
@@ -279,7 +277,7 @@ describe('<AutoConsumptionRules /> — New-rule form toggle', () => {
     fireEvent.click(screen.getByRole('button', { name: /New rule/i }));
     // Form fields visible — qty input by placeholder.
     expect(
-      screen.getByPlaceholderText(/Qty per visit/i),
+      document.querySelector('input[type="number"][min="0.01"]'),
     ).toBeInTheDocument();
     // Two selects (service + product) present.
     expect(screen.getAllByRole('combobox').length).toBeGreaterThanOrEqual(2);
@@ -291,7 +289,7 @@ describe('<AutoConsumptionRules /> — New-rule form toggle', () => {
     ).toBeInTheDocument();
     // Click Cancel → form closes, label flips back.
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
-    expect(screen.queryByPlaceholderText(/Qty per visit/i)).toBeNull();
+    expect(document.querySelector('input[type="number"][min="0.01"]')).toBeNull();
     expect(
       screen.getByRole('button', { name: /New rule/i }),
     ).toBeInTheDocument();
@@ -304,7 +302,7 @@ describe('<AutoConsumptionRules /> — New-rule form toggle', () => {
       expect(screen.getByText('PRP Hair Therapy')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole('button', { name: /New rule/i }));
-    const qtyInput = screen.getByPlaceholderText(/Qty per visit/i);
+    const qtyInput = document.querySelector('input[type="number"][min="0.01"]');
     expect(qtyInput).toBeRequired();
     expect(qtyInput).toHaveAttribute('min', '0.01');
     expect(qtyInput).toHaveAttribute('step', '0.01');
@@ -325,7 +323,7 @@ describe('<AutoConsumptionRules /> — create POST', () => {
     const selects = screen.getAllByRole('combobox');
     fireEvent.change(selects[0], { target: { value: '502' } }); // Laser service
     fireEvent.change(selects[1], { target: { value: '902' } }); // Gel product
-    fireEvent.change(screen.getByPlaceholderText(/Qty per visit/i), {
+    fireEvent.change(document.querySelector('input[type="number"][min="0.01"]'), {
       target: { value: '2.5' },
     });
     // isActive defaults true; leave unchanged.
@@ -378,7 +376,7 @@ describe('<AutoConsumptionRules /> — edit prefill + PUT (qty + isActive only)'
     fireEvent.click(editButtons[0]); // first rule = RULE_PRP (id 11).
 
     // Pre-fill: qty input shows "2".
-    const qtyInput = screen.getByPlaceholderText(/Qty per visit/i);
+    const qtyInput = document.querySelector('input[type="number"][min="0.01"]');
     expect(qtyInput.value).toBe('2');
 
     // Service + product selects DISABLED in edit mode (SUT lines 104, 108).
@@ -413,10 +411,10 @@ describe('<AutoConsumptionRules /> — edit prefill + PUT (qty + isActive only)'
   });
 });
 
-describe('<AutoConsumptionRules /> — delete (native window.confirm)', () => {
+describe('<AutoConsumptionRules /> — delete (notify.confirm)', () => {
   it('confirm()=true → DELETE /api/wellness/auto-consumption-rules/:id + notify.success', async () => {
     installFetchMock();
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    notifyConfirm.mockResolvedValue(true);
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('PRP Hair Therapy')).toBeInTheDocument();
@@ -426,9 +424,15 @@ describe('<AutoConsumptionRules /> — delete (native window.confirm)', () => {
     expect(deleteButtons.length).toBeGreaterThanOrEqual(3);
     fireEvent.click(deleteButtons[0]); // first rule = RULE_PRP (id 11).
 
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/Delete this auto-consumption rule/i),
-    );
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalled();
+    });
+    const confirmArg = notifyConfirm.mock.calls[0][0];
+    // notify.confirm receives an object with title/message — verify the message matches.
+    const confirmText = typeof confirmArg === 'string'
+      ? confirmArg
+      : (confirmArg?.message || '');
+    expect(confirmText).toMatch(/Delete this auto-consumption rule/i);
     await waitFor(() => {
       const delCall = fetchApiMock.mock.calls.find(
         ([u, opts]) =>
@@ -444,15 +448,18 @@ describe('<AutoConsumptionRules /> — delete (native window.confirm)', () => {
 
   it('confirm()=false → no DELETE fired + no notify.success', async () => {
     installFetchMock();
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    notifyConfirm.mockResolvedValue(false);
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('PRP Hair Therapy')).toBeInTheDocument();
     });
     const deleteButtons = screen.getAllByLabelText('Delete rule');
     fireEvent.click(deleteButtons[0]);
-    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalled();
+    });
     // Microtask wait — make sure no async DELETE sneaks through.
+    await Promise.resolve();
     await Promise.resolve();
     const delCall = fetchApiMock.mock.calls.find(
       ([, opts]) => opts?.method === 'DELETE',

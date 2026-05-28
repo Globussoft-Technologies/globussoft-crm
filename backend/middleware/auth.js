@@ -62,6 +62,11 @@ const verifyToken = async (req, res, next) => {
     if (verified.tenantId === undefined || verified.tenantId === null) {
       verified.tenantId = 1;
     }
+
+    // RBAC: Extract isOwner and userType from token
+    // These fields are set during login and included in the JWT
+    verified.isOwner = verified.isOwner === true; // Ensure boolean
+    verified.userType = verified.userType || 'STAFF'; // Default to STAFF for backward compat
     // Block awaiting2FA temp tokens from accessing protected resources
     if (verified.awaiting2FA === true) {
       return unauthorized(res, "Two-factor authentication required. Complete 2FA verification first.");

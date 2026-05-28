@@ -1,54 +1,129 @@
-import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import { Search, Plus, Users, Phone, Mail, Pencil, Download, Tag, FileSpreadsheet, FileDown, Upload } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import {
+  Search,
+  Plus,
+  Users,
+  Phone,
+  Mail,
+  Pencil,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  Tag as TagIcon,
+  Filter,
+  Trash2,
+  Download,
+  UserPlus,
+  Tags as BulkTagIcon,
+  Mail as MailIcon,
+  Calendar as CalendarIcon,
+  AtSign,
+  Globe,
+  FileText,
+} from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { formatDate } from "../../utils/date";
+import { DateRangeFilter, resolveDateRangeYmd, EMPTY_DATE_FILTER } from "../../components/wellness/DateRangeFilter";
+import CsvImportExportToolbar from "../../components/wellness/CsvImportExportToolbar";
+
+const PAGE_SIZE = 20;
+const SOURCE_OPTIONS = [
+  { value: "walk-in", label: "Walk-in" },
+  { value: "indiamart", label: "IndiaMART" },
+  { value: "google-ad", label: "Google ad" },
+  { value: "referral", label: "Referral" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "meta-ad", label: "Meta ad" },
+  { value: "import-zylu", label: "Import (Zylu)" },
+];
+const GENDER_OPTIONS = [
+  { value: "M", label: "Male" },
+  { value: "F", label: "Female" },
+  { value: "Other", label: "Other" },
+];
+// Lightweight palette for tags whose `color` is null — keyed by id so each
+// tag gets a stable colour across renders without polluting the DB.
+const TAG_PALETTE = [
+  "#7c9b97",
+  "#cd9481",
+  "#9d8cb0",
+  "#8aabd3",
+  "#d4a06a",
+  "#7fb18c",
+  "#c688a3",
+  "#8ac2c4",
+];
+function tagColour(tag) {
+  if (tag?.color) return tag.color;
+  const id = Number(tag?.id) || 0;
+  return TAG_PALETTE[Math.abs(id) % TAG_PALETTE.length];
+}
+
+// Read multi-select list from a URLSearchParams instance — accepts either
+// repeated entries or comma-joined; serializes back as a single
+// comma-joined value to keep the URL short.
+function readListParam(params, key) {
+  const all = params.getAll(key);
+  if (!all.length) return [];
+  const out = [];
+  const seen = new Set();
+  for (const v of all) {
+    for (const part of String(v).split(",")) {
+      const s = part.trim();
+      if (s && !seen.has(s)) {
+        seen.add(s);
+        out.push(s);
+      }
+    }
+  }
+  return out;
+}
 
 export default function Patients() {
   const notify = useNotify();
-  const formRef = useRef(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // ── URL-driven state ────────────────────────────────────────────────
+  const q = searchParams.get("q") || "";
+  const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
+  const sourceFilter = readListParam(searchParams, "source");
+  const genderFilter = readListParam(searchParams, "gender");
+  const tagFilter = readListParam(searchParams, "tags");
+  const addedFrom = searchParams.get("addedFrom") || "";
+  const addedTo = searchParams.get("addedTo") || "";
+
+  // Update URL helper — preserves keys we don't touch.
+  const updateParams = (patch, options = {}) => {
+    const next = new URLSearchParams(searchParams);
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) {
+        next.delete(k);
+      } else if (Array.isArray(v)) {
+        next.delete(k);
+        next.set(k, v.join(","));
+      } else {
+        next.set(k, String(v));
+      }
+    }
+    setSearchParams(next, options);
+  };
+
+  // ── Page-local state ────────────────────────────────────────────────
+  // `q` and `page` are URL-driven (declared above from `searchParams`);
+  // do NOT shadow them with local useState — the search bar and pager
+  // both call setQ/setPage defined below as URL writers.
   const [patients, setPatients] = useState([]);
   const [total, setTotal] = useState(0);
-  // #829 — track 403 from /api/wellness/patients so the empty-state copy
-  // honestly says "Access restricted" instead of the misleading "No patients
-  // match." that pre-fix made permission-blocked users think their tenant
-  // was simply empty.
-  const [permissionDenied, setPermissionDenied] = useState(false);
-  const [q, setQ] = useState("");
-  // #820 (tick #192) — list-filter dropdowns wired to the additive backend
-  // filters shipped tick #191 (`4fa87b0a`, `applyPatientListFilters` helper
-  // in routes/wellness.js:208). Source vocab mirrors the New-patient form
-  // <option>s exactly (single source of truth — see the #317 comment at the
-  // form's source <select>) so a filter chip and the saved value can never
-  // disagree the way they did pre-#317. Empty string = filter inactive.
-  // Gender values match the backend's case-normalized accepted set {F,M,O};
-  // anything else is silently ignored server-side (see the helper's comment
-  // block at line 198). createdFrom / createdTo are ISO-date strings from
-  // <input type="date"> — backend parses with `new Date(value)` and ignores
-  // bad strings, so empty + clear-on-change reset is safe.
-  const [source, setSource] = useState("");
-  const [gender, setGender] = useState("");
-  const [createdFrom, setCreatedFrom] = useState("");
-  const [createdTo, setCreatedTo] = useState("");
-  // #820 Part 1 — server-side pagination via ?limit&offset on
-  // GET /api/wellness/patients. Backend already supports it (route at
-  // backend/routes/wellness.js:405 reads `limit` / `offset` via capLimit,
-  // returns `{patients, total}`); previously we fetched the first 50 and
-  // paginated client-side, which broke once a tenant exceeded 50 rows
-  // because page 2+ would render the SAME first-50 set. Now we fetch
-  // exactly the current page and trust `total` for the total-count surface.
-  const [page, setPage] = useState(1);
-  const [rowsPerPage, setRowsPerPage] = useState(25);
-  // #820 Part 2 — individual tag-add. Tracks which patient's inline tag-add
-  // input is open (id or null) and the in-progress new-tag input value +
-  // busy flag while the PATCH is in flight. The bulk-tags endpoint accepts
-  // a single-item patientIds array, so adding a tag to one patient is just
-  // a one-row invocation of that surface — no new backend route needed.
-  const [tagAddOpenId, setTagAddOpenId] = useState(null);
-  const [newTagInput, setNewTagInput] = useState("");
-  const [rowTagBusy, setRowTagBusy] = useState(false);
+  // Pagination — backend at /api/wellness/patients accepts ?limit (cap 200)
+  // + ?offset and returns { patients, total }. `pageSize` stays local
+  // (not in URL) so the dropdown choice persists per-tab without polluting
+  // shareable links. `page` itself lives in the URL via setPage below.
+  const [pageSize, setPageSize] = useState(50);
   // #331-bug fix: form-create flag added so handleCreate can request a refresh
   // without re-introducing a stale-state read. The previous direct `load()`
   // call inside handleCreate re-fetched with whatever `q` the closure had
@@ -56,142 +131,55 @@ export default function Patients() {
   // search effect.
   const [reloadTick, setReloadTick] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  // #931 + #816 Patients slice — CSV export. Backend at
-  // /api/wellness/patients.csv (phiReadGate; accepts ?q & ?locationId
-  // matching the current view). fetch+blob trick because plain <a href>
-  // can't set the Authorization header.
-  const [csvBusy, setCsvBusy] = useState(false);
-  // #820 (tick #188) — XLSX export, mirrors CSV semantics + filters.
-  // Backend endpoint `/api/wellness/patients.xlsx` (tick #187 ed00be9b)
-  // returns a binary XLSX buffer with the same phiReadGate + ?q & ?locationId
-  // filter shape. Both buttons disable while EITHER export is in flight to
-  // prevent double-fire / race-condition downloads of stale snapshots.
-  const [xlsxBusy, setXlsxBusy] = useState(false);
-  // #820 (tick #190) — "Download template" button. Fetches the CSV import
-  // template (9-column header `name/phone/email/dob/gender/source/locationId/
-  // tags/notes` + 1 fictional example row + UTF-8 BOM) so users have a
-  // pre-shaped CSV to fill in before uploading via the (forthcoming) bulk-
-  // import handler. Backend endpoint `GET /api/wellness/patients/import-
-  // template.csv` shipped tick #189 (`6b4831bb`). The template is invariant
-  // — no `?masked=1`, no filter forwarding — so the call is parameterless.
-  // Like the other two export buttons, this disables while ANY of CSV /
-  // XLSX / template is mid-download so a slow response can't race with a
-  // user-triggered re-click.
-  const [templateBusy, setTemplateBusy] = useState(false);
-  // #820 (tick #194) — Import Patients. Modal-driven CSV upload that POSTs to
-  // /api/wellness/patients/import (multipart/form-data; field name `file`;
-  // backend uses multer csvUpload.single('file') so the field name is
-  // load-bearing). Backend (tick #193 `69ee75dc`) returns
-  // `{ summary: {totalRows, imported, duplicates, invalid}, errors[], createdIds[] }`.
-  // The modal shows the summary message + a capped (50-row) errors table +
-  // a "Download full error CSV" affordance built client-side from errors[].
-  // Shares the combined busy gate with CSV / XLSX / template so a slow upload
-  // can't race with a user-triggered export. On success: list reloads so the
-  // new rows appear.
-  const [importModalOpen, setImportModalOpen] = useState(false);
-  const [importFile, setImportFile] = useState(null);
-  const [importBusy, setImportBusy] = useState(false);
-  const [importResult, setImportResult] = useState(null);
-  // #931 — bulk-select + bulk-tag-add. Selected patient ids live in a Set so
-  // toggle / clear is O(1). Modal stays open when the request errors so the
-  // user can correct the tags input and retry without re-selecting rows.
-  const [selectedIds, setSelectedIds] = useState(() => new Set());
-  const [tagModalOpen, setTagModalOpen] = useState(false);
-  const [tagInput, setTagInput] = useState("");
-  const [tagBusy, setTagBusy] = useState(false);
-  // #931 (tick #197) — bulk-tag-REMOVE companion modal. Backend endpoint
-  // PATCH /api/wellness/patients/bulk-tags shipped tick #196 (`5b610a56`)
-  // accepts an optional `removeTags` array alongside the existing `addTags`.
-  // Kept as a sibling modal (Option A) rather than a mode-toggle inside the
-  // add-tags modal because the file's existing CTA pattern is one-label-one-
-  // action ("Add tags to N selected", "Export CSV", "Export XLSX") and a
-  // mode toggle would invert that for no operator-cognition gain.
-  const [removeTagModalOpen, setRemoveTagModalOpen] = useState(false);
-  const [removeTagInput, setRemoveTagInput] = useState("");
-  const [removeTagBusy, setRemoveTagBusy] = useState(false);
-  const [editingId, setEditingId] = useState(null);
   const [locations, setLocations] = useState([]);
-  // #205: dob added so the form can capture it; gender already exists. Phone
-  // is now required (Indian mobile shape); email is optional but validated
-  // shape-wise when present.
-  const [form, setForm] = useState({
-    name: "",
-    phone: "",
-    email: "",
-    dob: "",
-    gender: "",
-    source: "walk-in",
-    locationId: "",
-    // #792 — anniversary + GST. Anniversary feeds marketing automations
-    // (anniversary-day campaigns); GST is required on the invoice surface
-    // for B2B / corporate-account patients.
-    anniversary: "",
-    gst: "",
-  });
-
-  // #331: search box dropped the first character of a fresh query.
-  //
-  // Root cause: two interacting issues.
-  //  1. On mount, the debounced fetch effect ran with q=''. Under React 18
-  //     StrictMode (and dev double-invoke) this scheduled a no-op
-  //     "fetch all patients" request that completed AFTER the user's first
-  //     keystroke fetch. The second response overwrote the filtered list,
-  //     re-rendered the table as "No patients found" because the
-  //     subsequent typed-query fetch had already updated `loading=false`
-  //     and `patients=[]` was the most recent server reply for an
-  //     in-flight cancelled request whose stale resolution still landed.
-  //  2. The `load` closure captured `q` at definition time. By the time
-  //     the timer fired, `q` could be one keystroke behind the input
-  //     value because re-renders re-create `load`, but the timer ID being
-  //     cleaned up was the one captured by the OUTER useEffect — fine
-  //     for cancellation, but the bound `load` that did get called still
-  //     used the latest q. The actual cause was (1) — the racing empty
-  //     fetch — but to be safe we also (a) read `q` via a ref so the
-  //     timer body always sees the current value, (b) tag each fetch
-  //     with a request id and ignore stale responses, and (c) skip the
-  //     no-op empty-string fetch on initial mount.
-  const qRef = useRef(q);
+  const [showFilters, setShowFilters] = useState(false);
+  // Both create + edit go through the same modal (PatientCreateModal).
+  // `editingPatient` carries the patient object when editing; null = create.
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingPatient, setEditingPatient] = useState(null);
+  const [showBulkTagModal, setShowBulkTagModal] = useState(false);
+  // Header "+ Add" dropdown (New patient / Bulk tag).
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const addMenuRef = useRef(null);
   useEffect(() => {
-    qRef.current = q;
-  }, [q]);
+    if (!addMenuOpen) return undefined;
+    const onDocClick = (e) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target)) setAddMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [addMenuOpen]);
+
+  // Selection: persists across pagination within the session. Keyed by id.
+  const [selected, setSelected] = useState(() => new Set());
+
+  // Tags (tenant-wide list) + per-row popover state.
+  const [allTags, setAllTags] = useState([]);
+  const [tagPopover, setTagPopover] = useState(null); // { type: 'row', patientId } | { type: 'bulk-add' } | { type: 'bulk-remove' } | null
+
+  // #331 fix preserved: ref-based current q + request-id discipline so
+  // a slow empty-q fetch can't stomp on a fresh typed-query fetch.
+  const qRef = useRef(q);
+  useEffect(() => { qRef.current = q; }, [q]);
   const reqIdRef = useRef(0);
   const didMountRef = useRef(false);
 
-  const load = (currentQ, currentPage = page, currentRows = rowsPerPage) => {
+  const load = (currentQ) => {
     const myReqId = ++reqIdRef.current;
     setLoading(true);
-    // #820 Part 1 — server-side window. Pass limit + offset every call so
-    // the backend returns exactly the rows we'll render. `total` from the
-    // envelope drives the "Showing X-Y of Z" + totalPages indicators.
-    const params = new URLSearchParams();
-    if (currentQ) params.set("q", currentQ);
-    // #820 (tick #192) — additive list filters. Each is appended only when
-    // set so the URL stays compact for the default unfiltered view.
-    if (source) params.set("source", source);
-    if (gender) params.set("gender", gender);
-    if (createdFrom) params.set("createdFrom", createdFrom);
-    if (createdTo) params.set("createdTo", createdTo);
-    params.set("limit", String(currentRows));
-    params.set("offset", String((currentPage - 1) * currentRows));
-    const url = `/api/wellness/patients?${params.toString()}`;
+    const url = currentQ
+      ? `/api/wellness/patients?q=${encodeURIComponent(currentQ)}`
+      : "/api/wellness/patients";
     fetchApi(url)
       .then((d) => {
-        // Drop stale responses — a slow empty-query fetch must not stomp
-        // on a fresher typed-query fetch.
         if (myReqId !== reqIdRef.current) return;
-        setPatients(d.patients);
-        setTotal(d.total);
-        setPermissionDenied(false);
+        setPatients(d.patients || []);
+        setTotal(d.total || 0);
       })
-      .catch((err) => {
+      .catch(() => {
         if (myReqId !== reqIdRef.current) return;
         setPatients([]);
         setTotal(0);
-        // #829 — distinguish 403 (caller's role lacks PHI access) from
-        // genuine empty / network failure so the empty-state row can show
-        // honest copy. fetchApi already toasts the 403 string.
-        setPermissionDenied(err?.status === 403);
       })
       .finally(() => {
         if (myReqId !== reqIdRef.current) return;
@@ -199,518 +187,184 @@ export default function Patients() {
       });
   };
 
-  // #931 + #816 Patients slice — Export the current view (honors the active
-  // search query `q`) as CSV. Mirrors the Services.jsx / Memberships.jsx /
-  // BookingPages.jsx CSV pattern from commits 41d15f8 / 5069871 / 962d82a.
-  // Endpoint applies phiReadGate so a USER without PHI access will receive
-  // 403; we surface that via notify (no need to also flip permissionDenied
-  // since the table state isn't affected).
-  const exportCsv = async () => {
-    setCsvBusy(true);
-    try {
-      const token = getAuthToken();
-      const params = new URLSearchParams();
-      if (q) params.set('q', q);
-      // #820 (tick #192) — forward the active filter snapshot to the CSV
-      // endpoint so the exported file matches the on-screen filtered view.
-      if (source) params.set('source', source);
-      if (gender) params.set('gender', gender);
-      if (createdFrom) params.set('createdFrom', createdFrom);
-      if (createdTo) params.set('createdTo', createdTo);
-      const qs = params.toString() ? `?${params.toString()}` : '';
-      const res = await fetch(`/api/wellness/patients.csv${qs}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`Export failed (${res.status})`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `patients-${new Date().toISOString().slice(0, 10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      notify.success(`Exported ${total.toLocaleString()} patient${total === 1 ? '' : 's'}.`);
-    } catch (e) {
-      notify.error(e.message || 'CSV export failed.');
-    } finally {
-      setCsvBusy(false);
-    }
+  // Snap back to page 1 whenever the search query OR page-size changes —
+  // otherwise typing into the search box with `page=5` selected would
+  // request offset=200 on a result set that may only have 3 matches and
+  // render an empty table even though matches exist.
+  useEffect(() => {
+    setPage(1);
+  }, [q, pageSize]);
+
+  const loadTags = () => {
+    fetchApi("/api/wellness/patients/tags")
+      .then((d) => setAllTags(d.tags || []))
+      .catch(() => setAllTags([]));
   };
 
-  // #820 (tick #188) — XLSX export. Mirrors exportCsv exactly except for
-  // the endpoint + file extension. Backend (`GET /api/wellness/patients.xlsx`,
-  // shipped tick #187 `ed00be9b`) emits a binary Open-XML spreadsheet buffer
-  // (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet) with
-  // the same row shape + masking + filter semantics as the CSV handler. The
-  // download mechanics are identical — fetch → .blob() → createObjectURL →
-  // anchor click → revoke — because the Authorization header forbids a plain
-  // <a href> approach.
-  const exportXlsx = async () => {
-    setXlsxBusy(true);
-    try {
-      const token = getAuthToken();
-      const params = new URLSearchParams();
-      if (q) params.set('q', q);
-      // #820 (tick #192) — mirror exportCsv: forward the active filter
-      // snapshot so the XLSX export matches the filtered on-screen view.
-      if (source) params.set('source', source);
-      if (gender) params.set('gender', gender);
-      if (createdFrom) params.set('createdFrom', createdFrom);
-      if (createdTo) params.set('createdTo', createdTo);
-      const qs = params.toString() ? `?${params.toString()}` : '';
-      const res = await fetch(`/api/wellness/patients.xlsx${qs}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`Export failed (${res.status})`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `patients-${new Date().toISOString().slice(0, 10)}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      notify.success(`Exported ${total.toLocaleString()} patient${total === 1 ? '' : 's'}.`);
-    } catch (e) {
-      notify.error(e.message || 'XLSX export failed.');
-    } finally {
-      setXlsxBusy(false);
-    }
-  };
-
-  // #820 (tick #190) — Download the CSV import template. Same fetch+blob+
-  // anchor-click mechanic as exportCsv / exportXlsx because the Authorization
-  // header forbids a plain <a href> approach. No query params on this one:
-  // the template is invariant (header row + 1 fictional example row + UTF-8
-  // BOM), independent of any filter state.
-  const downloadTemplate = async () => {
-    setTemplateBusy(true);
-    try {
-      const token = getAuthToken();
-      const res = await fetch('/api/wellness/patients/import-template.csv', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`Template download failed (${res.status})`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'patients-import-template.csv';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      notify.success('Import template downloaded.');
-    } catch (e) {
-      notify.error(e.message || 'Template download failed.');
-    } finally {
-      setTemplateBusy(false);
-    }
-  };
-
-  // #820 (tick #194) — Import Patients. Builds a FormData with the selected
-  // CSV file (field name `file` — matches multer's csvUpload.single('file')
-  // on the backend), POSTs it to /api/wellness/patients/import, and stashes
-  // the response envelope so the modal can render the summary + errors. On
-  // success-with-any-imports we also bump reloadTick so the freshly created
-  // rows appear in the list. Uses raw fetch (not fetchApi) so the multipart
-  // Content-Type boundary header is set automatically by the browser.
-  const submitImport = async () => {
-    if (!importFile) {
-      notify.error('Pick a CSV file to upload.');
+  // Initial mount + when any list-affecting URL param changes.
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      load("");
       return;
     }
-    setImportBusy(true);
-    try {
-      const token = getAuthToken();
-      const formData = new FormData();
-      formData.append('file', importFile);
-      const res = await fetch('/api/wellness/patients/import', {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: formData,
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        throw new Error(
-          data?.error || data?.message || `Import failed (${res.status})`,
-        );
-      }
-      setImportResult(data);
-      const imported = data?.summary?.imported ?? 0;
-      const total = data?.summary?.totalRows ?? 0;
-      if (imported > 0) {
-        notify.success(`Imported ${imported} of ${total} patients.`);
-        // Reload the list so the newly created rows appear.
-        setReloadTick((t) => t + 1);
-      } else if (total > 0) {
-        notify.error(`No rows imported (${total} attempted).`);
-      }
-    } catch (e) {
-      notify.error(e?.message || 'Import failed.');
-    } finally {
-      setImportBusy(false);
-    }
+    // #548: standardised on SEARCH_DEBOUNCE_MS (300ms) — was 250ms; pen-test
+    // flagged drift between Patients (250) and Omnibar (300). One source of
+    // truth in utils/timing.js.
+    const t = setTimeout(() => load(qRef.current), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [q, reloadTick]);
+
+  useEffect(() => {
+    fetchApi("/api/wellness/locations").then(setLocations).catch(() => setLocations([]));
+    loadTags();
+  }, []);
+
+  // Edit pencil opens the same modal as create, pre-filled with this
+  // patient's data. PUT is performed by PatientCreateModal when its
+  // `editPatient` prop is set.
+  const startEdit = (patient) => {
+    setEditingPatient(patient);
   };
 
-  // #820 (tick #194) — Download a CSV of the per-row import errors so the
-  // operator can fix them in their source file and re-upload. Built client-
-  // side via Blob + URL.createObjectURL since the errors[] array already
-  // travels with the import response — no separate backend round-trip needed.
-  const downloadErrorCsv = () => {
-    const errors = importResult?.errors || [];
-    if (errors.length === 0) return;
-    const header = 'row,errorCode,errorMessage';
-    const escapeCsv = (v) => {
-      const s = String(v ?? '');
-      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-      return s;
-    };
-    const rows = errors.map((e) =>
-      [escapeCsv(e.row), escapeCsv(e.errorCode), escapeCsv(e.errorMessage)].join(','),
-    );
-    const csv = '﻿' + [header, ...rows].join('\r\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `patient-import-errors-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  };
+  // ── Filter mutators (URL-driven) ─────────────────────────────────
+  // The filter modal batches all filter changes into a single
+  // updateParams call via its `onApply` hook, so per-field setters are
+  // no longer needed at the page level — only `setQ` (search bar) and
+  // `setPage` (pagination buttons) remain.
+  const setQ = (val) => updateParams({ q: val, page: 1 });
+  const setPage = (val) => updateParams({ page: val });
 
-  // #931 — bulk-select helpers. `toggleSelect` flips an individual row;
-  // `toggleSelectAllVisible` selects every patient on the current page if
-  // any are unselected, otherwise clears the whole selection. We deliberately
-  // operate on the CURRENT PAGE only — selecting all rows across pages would
-  // be a surprising side-effect since the user can't see what they're tagging.
-  const toggleSelect = (id) => {
-    setSelectedIds((prev) => {
+  const activeFilterCount =
+    sourceFilter.length + genderFilter.length + tagFilter.length + (addedFrom ? 1 : 0) + (addedTo ? 1 : 0);
+
+  // ── Row selection ─────────────────────────────────────────────────
+  const toggleRow = (id) => {
+    setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
   };
-  const toggleSelectAllVisible = (visibleList) => {
-    setSelectedIds((prev) => {
-      const allSelected = visibleList.length > 0 && visibleList.every((p) => prev.has(p.id));
-      if (allSelected) {
-        const next = new Set(prev);
-        for (const p of visibleList) next.delete(p.id);
-        return next;
-      }
+  const pageIds = patients.map((p) => p.id);
+  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const someOnPageSelected = pageIds.some((id) => selected.has(id));
+  const togglePage = () => {
+    setSelected((prev) => {
       const next = new Set(prev);
-      for (const p of visibleList) next.add(p.id);
+      if (allOnPageSelected) {
+        for (const id of pageIds) next.delete(id);
+      } else {
+        for (const id of pageIds) next.add(id);
+      }
       return next;
     });
   };
+  const clearSelection = () => setSelected(new Set());
 
-  // #931 — submit the bulk-tag-add modal. Parses the comma-separated tag
-  // input, trims + lowercases + dedupes client-side (server also re-dedupes
-  // defensively). On success: clear modal state, clear selection, refresh
-  // list. On error: modal stays open so the user can correct the tag string.
-  const submitBulkTags = async () => {
-    const raw = tagInput || "";
-    const parsed = raw
-      .split(",")
-      .map((t) => t.trim().toLowerCase())
-      .filter((t) => t.length > 0);
-    const deduped = Array.from(new Set(parsed));
-    if (deduped.length === 0) {
-      notify.error("Enter at least one tag (comma-separated).");
-      return;
-    }
-    if (deduped.length > 20) {
-      notify.error("Cannot add more than 20 tags in a single request.");
-      return;
-    }
-    const patientIds = Array.from(selectedIds);
-    if (patientIds.length === 0) {
-      notify.error("No patients selected.");
-      return;
-    }
-    setTagBusy(true);
+  // ── Bulk operations ──────────────────────────────────────────────
+  const bulkAddTag = async (tag) => {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
     try {
-      const res = await fetchApi("/api/wellness/patients/bulk-tags", {
-        method: "PATCH",
-        body: JSON.stringify({ patientIds, addTags: deduped }),
-      });
-      const updatedCount = res?.updated ?? patientIds.length;
-      notify.success(
-        `Added ${deduped.length} tag${deduped.length === 1 ? "" : "s"} to ${updatedCount} patient${updatedCount === 1 ? "" : "s"}.`,
-      );
-      setTagInput("");
-      setTagModalOpen(false);
-      setSelectedIds(new Set());
-      setReloadTick((t) => t + 1);
-    } catch (e) {
-      notify.error(e?.message || "Failed to add tags.");
-      // Modal stays open intentionally so the user can retry.
-    } finally {
-      setTagBusy(false);
-    }
-  };
-
-  // #931 (tick #197) — submit the bulk-tag-REMOVE modal. Same shape as
-  // submitBulkTags but passes `removeTags` instead of `addTags`. Backend
-  // returns `{ removed: N, updated: M }` per tick #196 (5b610a56); toast
-  // prefers the `removed` count when present, falling back to `updated`
-  // for old-server cases (defensive — both fields are populated post-tick
-  // #196). On success: clear modal state, clear selection, refresh list so
-  // chips disappear immediately. On error: modal stays open for retry.
-  const submitBulkRemoveTags = async () => {
-    const raw = removeTagInput || "";
-    const parsed = raw
-      .split(",")
-      .map((t) => t.trim().toLowerCase())
-      .filter((t) => t.length > 0);
-    const deduped = Array.from(new Set(parsed));
-    if (deduped.length === 0) {
-      notify.error("Enter at least one tag (comma-separated).");
-      return;
-    }
-    if (deduped.length > 20) {
-      notify.error("Cannot remove more than 20 tags in a single request.");
-      return;
-    }
-    const patientIds = Array.from(selectedIds);
-    if (patientIds.length === 0) {
-      notify.error("No patients selected.");
-      return;
-    }
-    setRemoveTagBusy(true);
-    try {
-      const res = await fetchApi("/api/wellness/patients/bulk-tags", {
-        method: "PATCH",
-        body: JSON.stringify({ patientIds, removeTags: deduped }),
-      });
-      const updatedCount = res?.updated ?? patientIds.length;
-      const removedCount = res?.removed ?? deduped.length;
-      notify.success(
-        `Removed ${removedCount} tag${removedCount === 1 ? "" : "s"} from ${updatedCount} patient${updatedCount === 1 ? "" : "s"}.`,
-      );
-      setRemoveTagInput("");
-      setRemoveTagModalOpen(false);
-      setSelectedIds(new Set());
-      setReloadTick((t) => t + 1);
-    } catch (e) {
-      notify.error(e?.message || "Failed to remove tags.");
-      // Modal stays open intentionally so the user can retry.
-    } finally {
-      setRemoveTagBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    // First mount: do exactly one immediate load with empty q so the table
-    // populates, but don't go through the debounced path that races with
-    // the user's first keystroke.
-    if (!didMountRef.current) {
-      didMountRef.current = true;
-      load("", 1, rowsPerPage);
-      return;
-    }
-    // #548: standardised on SEARCH_DEBOUNCE_MS (300ms) — was 250ms; pen-test
-    // flagged drift between Patients (250) and Omnibar (300). One source of
-    // truth in utils/timing.js.
-    // #820 Part 1 — page / rowsPerPage are now load() dependencies so paging
-    // and per-page changes issue fresh server-side fetches.
-    // #820 (tick #192) — source / gender / createdFrom / createdTo added as
-    // deps so changing any filter triggers a (debounced) refetch.
-    const t = setTimeout(() => load(qRef.current, page, rowsPerPage), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, reloadTick, page, rowsPerPage, source, gender, createdFrom, createdTo]);
-
-  useEffect(() => {
-    fetchApi("/api/wellness/locations")
-      .then(setLocations)
-      .catch(() => setLocations([]));
-  }, []);
-
-  useEffect(() => {
-    if (showAdd && formRef.current) {
-      formRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, [showAdd]);
-
-  // #820 Part 1 — reset to page 1 whenever the active filter OR per-page
-  // size changes, otherwise the user can be stranded on page 3 of a result
-  // set that only has 1 page after they tighten the search or bump per-page
-  // from 25 to 100.
-  // #820 (tick #192) — source / gender / createdFrom / createdTo added so a
-  // user on page 4 of "all patients" who picks gender=F doesn't see an
-  // empty list because the new (smaller) result set has fewer pages.
-  useEffect(() => {
-    setPage(1);
-    // #931 — clear bulk-selection when the filter changes; previously-selected
-    // ids may no longer be visible, and silently bulk-tagging hidden rows
-    // would violate "what you see is what you tag" expectations.
-    setSelectedIds(new Set());
-  }, [q, rowsPerPage, source, gender, createdFrom, createdTo]);
-
-  // #820 Part 1 — server-side pagination: `patients` already contains
-  // exactly the rows for the current page. `totalPages` is computed from the
-  // backend's `total` (full population count), not the locally-fetched slice.
-  const totalPages = Math.max(1, Math.ceil(total / rowsPerPage));
-  const startIdx = (page - 1) * rowsPerPage;
-  const visiblePatients = patients;
-
-  // #820 Part 2 — defensive parse of `patient.tags` JSON-string column.
-  // Possible incoming shapes: null, "", malformed JSON, or a real array.
-  // Anything that doesn't parse to an array of strings yields `[]` so the
-  // table render is never thrown by polluted data.
-  const parseTags = (raw) => {
-    if (!raw) return [];
-    try {
-      const arr = JSON.parse(raw);
-      if (!Array.isArray(arr)) return [];
-      return arr.filter((t) => typeof t === "string" && t.trim().length > 0);
-    } catch {
-      return [];
-    }
-  };
-
-  // #820 Part 2 — add a single tag to a single patient via the bulk-tags
-  // endpoint (server already accepts patientIds: [oneId]). Re-fetches the
-  // current page on success so the new chip appears in the row. Validation
-  // mirrors the modal: trim, lower, length 1–50.
-  const submitRowTag = async (patientId) => {
-    const cleaned = (newTagInput || "").trim().toLowerCase();
-    if (cleaned.length < 1 || cleaned.length > 50) {
-      notify.error("Tag must be 1–50 characters.");
-      return;
-    }
-    setRowTagBusy(true);
-    try {
-      await fetchApi("/api/wellness/patients/bulk-tags", {
-        method: "PATCH",
-        body: JSON.stringify({ patientIds: [patientId], addTags: [cleaned] }),
-      });
-      notify.success(`Added "${cleaned}".`);
-      setNewTagInput("");
-      setTagAddOpenId(null);
-      setReloadTick((t) => t + 1);
-    } catch (e) {
-      notify.error(e?.message || "Failed to add tag.");
-    } finally {
-      setRowTagBusy(false);
-    }
-  };
-
-  // #108: phone may be optional, but if present must look like a real phone number
-  // (10–15 digits after stripping +, -, spaces, parens). Pre-fix the form accepted
-  // arbitrary text like "abc123notaphone".
-  // #205: phone is now required and must look like an Indian mobile (10-digit
-  // starting 6-9, optional +91 prefix). Existing isValidPhone kept for
-  // legacy callers; #205 uses the stricter check below at submit time.
-  const isValidPhone = (p) => {
-    if (!p || !p.trim()) return true; // optional
-    const digits = p.replace(/\D/g, "");
-    return digits.length >= 10 && digits.length <= 15;
-  };
-  const INDIAN_MOBILE_RE = /^(\+91)?[6-9]\d{9}$/;
-  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-  // #595 — visual canonicalisation on blur. Returns the input as E.164
-  // (`+919876543210`) when it parses as a valid Indian mobile; otherwise
-  // returns the input unchanged so the user can see and correct what they
-  // typed. Backend also runs toE164() so the stored value is canonical
-  // even if the user submits before blurring.
-  const toE164OnBlur = (raw) => {
-    if (!raw) return raw;
-    const cleaned = String(raw).replace(/[\s\-()]/g, "");
-    if (cleaned.startsWith("+91") && /^\+91[6-9]\d{9}$/.test(cleaned)) return cleaned;
-    if (/^91[6-9]\d{9}$/.test(cleaned)) return "+" + cleaned;
-    if (/^[6-9]\d{9}$/.test(cleaned)) return "+91" + cleaned;
-    return raw;
-  };
-
-  const startEdit = (patient) => {
-    setForm({
-      name: patient.name || "",
-      phone: patient.phone || "",
-      email: patient.email || "",
-      dob: patient.dob ? String(patient.dob).slice(0, 10) : "",
-      gender: patient.gender || "",
-      source: patient.source || "walk-in",
-      locationId: patient.locationId || "",
-      // #792 — anniversary stored as ISO string in API, sliced to YYYY-MM-DD
-      // for the native date-picker input. GST already stored uppercase.
-      anniversary: patient.anniversary ? String(patient.anniversary).slice(0, 10) : "",
-      gst: patient.gst || "",
-    });
-    setEditingId(patient.id);
-    setShowAdd(true);
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    // #337: reject whitespace-only names. The HTML `required` attribute on
-    // the input only checks `value.length >= 1`, so "   " sails through.
-    // Trim before any other validation so we also normalise the saved name.
-    const trimmedName = (form.name || "").trim();
-    if (trimmedName.length < 1) {
-      notify.error("Name is required");
-      return;
-    }
-    // #205: phone required + Indian mobile shape. Strip spaces / dashes /
-    // parens before testing so common formatting (+91 98765-43210) passes.
-    const phoneRaw = (form.phone || "").trim();
-    const phoneClean = phoneRaw.replace(/[\s\-()]/g, "");
-    if (!phoneClean) {
-      notify.error("Phone is required");
-      return;
-    }
-    if (!INDIAN_MOBILE_RE.test(phoneClean)) {
-      notify.error(
-        "Enter a valid Indian mobile number (10 digits, starting 6-9; +91 prefix optional).",
-      );
-      return;
-    }
-    // #205: email optional, but if filled must look like an email.
-    const emailRaw = (form.email || "").trim();
-    if (emailRaw && !EMAIL_RE.test(emailRaw)) {
-      notify.error("Enter a valid email address (e.g. patient@example.com).");
-      return;
-    }
-    try {
-      const payload = {
-        ...form,
-        name: trimmedName,
-        locationId: form.locationId ? parseInt(form.locationId) : null,
-      };
-      await fetchApi("/api/wellness/patients", {
+      const res = await fetchApi(`/api/wellness/patients/tags/bulk`, {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ patientIds: ids, tagIds: [tag.id] }),
       });
-      notify.success(`Patient "${trimmedName}" added`);
-      setForm({
-        name: "",
-        phone: "",
-        email: "",
-        dob: "",
-        gender: "",
-        source: "walk-in",
-        locationId: locations[0]?.id || "",
-        anniversary: "",
-        gst: "",
-      });
-      setShowAdd(false);
-      // #331: bump reloadTick instead of calling load() directly so the
-      // debounced effect handles the refresh consistently and reads the
-      // latest q via the ref.
+      notify.success(`Added "${tag.name}" to ${res?.assigned ?? 0} link(s)`);
+      setTagPopover(null);
       setReloadTick((t) => t + 1);
-    } catch (_err) {
-      /* fetchApi already toasted */
+    } catch (_err) { /* toasted */ }
+  };
+  const bulkRemoveTag = async (tag) => {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    try {
+      // Raw fetch (not fetchApi) — fetchApi short-circuits every DELETE
+      // response to `true` so we'd lose the actual `removed` count from
+      // the response body.
+      const token = getAuthToken();
+      const resp = await fetch(`/api/wellness/patients/tags/bulk`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ patientIds: ids, tagIds: [tag.id] }),
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        notify.error(body?.error || `Remove failed (${resp.status})`);
+        return;
+      }
+      notify.success(`Removed "${tag.name}" from ${body?.removed ?? 0} link(s)`);
+      setTagPopover(null);
+      setReloadTick((t) => t + 1);
+    } catch (_err) { /* toasted */ }
+  };
+
+  // ── Bulk export of selected rows (CSV/XLSX) ──────────────────────
+  const [bulkExportMenuOpen, setBulkExportMenuOpen] = useState(false);
+  const bulkExportMenuRef = useRef(null);
+  useEffect(() => {
+    if (!bulkExportMenuOpen) return undefined;
+    const onDocClick = (e) => {
+      if (bulkExportMenuRef.current && !bulkExportMenuRef.current.contains(e.target)) {
+        setBulkExportMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [bulkExportMenuOpen]);
+  const exportSelected = async (format) => {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    const params = new URLSearchParams();
+    params.set("format", format);
+    params.set("ids", ids.join(","));
+    try {
+      const token = getAuthToken();
+      const res = await fetch(`/api/wellness/patients/export?${params.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        notify.error(body.error || `Export failed (${res.status})`);
+        return;
+      }
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `patients-selected-${new Date().toISOString().slice(0, 10)}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+      notify.success(`Exported ${ids.length} patient(s)`);
+      setBulkExportMenuOpen(false);
+    } catch (e) {
+      notify.error(`Export failed: ${e.message}`);
     }
   };
+
+  // ── Pagination math ──────────────────────────────────────────────
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+
+  // ── Filters object passed to CsvImportExportToolbar (so its export
+  //    + import always respects the active filters + search). ──────
+  const toolbarFilters = useMemo(
+    () => ({
+      q: q || undefined,
+      source: sourceFilter.length ? sourceFilter.join(",") : undefined,
+      gender: genderFilter.length ? genderFilter.join(",") : undefined,
+      tags: tagFilter.length ? tagFilter.join(",") : undefined,
+      addedFrom: addedFrom || undefined,
+      addedTo: addedTo || undefined,
+    }),
+    [q, sourceFilter, genderFilter, tagFilter, addedFrom, addedTo],
+  );
 
   return (
     <div style={{ padding: "2rem", animation: "fadeIn 0.5s ease-out" }}>
@@ -741,577 +395,367 @@ export default function Patients() {
             {total.toLocaleString()} total
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          {/* #931 — bulk-tag-add CTA. Visible only when ≥1 row is selected so
-              it doesn't compete with the New-patient + Export CSV buttons in
-              the default chrome. Opens the comma-separated-tags modal which
-              POSTs to /api/wellness/patients/bulk-tags. */}
-          {selectedIds.size > 0 && (
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+          <CsvImportExportToolbar
+            entity="customers"
+            label="Patients"
+            filters={toolbarFilters}
+            formats={["csv", "xlsx"]}
+            endpoints={{
+              export: "/api/wellness/patients/export",
+              template: "/api/wellness/patients/import-template",
+            }}
+            onImported={() => setReloadTick((t) => t + 1)}
+          />
+          <div ref={addMenuRef} style={{ position: "relative" }}>
             <button
-              type="button"
-              onClick={() => setTagModalOpen(true)}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+              onClick={() => setAddMenuOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={addMenuOpen}
+              style={primaryTealBtn}
             >
-              <Tag size={16} /> Add tags to {selectedIds.size} selected
+              <Plus size={16} /> Add <ChevronDown size={14} style={{ opacity: 0.9 }} />
             </button>
-          )}
-          {/* #931 (tick #197) — bulk-tag-REMOVE CTA. Mirrors the add-tags
-              button shape (visible only when ≥1 row selected) so the two
-              affordances appear together when the user has work to do; the
-              secondary "outlined" chrome differentiates it from the primary
-              Add-tags action so a stressed operator doesn't fat-finger the
-              destructive option. Opens the comma-separated-tags-to-remove
-              modal which PATCHes /api/wellness/patients/bulk-tags with
-              `removeTags` instead of `addTags`. */}
-          {selectedIds.size > 0 && (
-            <button
-              type="button"
-              onClick={() => setRemoveTagModalOpen(true)}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer' }}
-            >
-              <Tag size={16} /> Remove tags from {selectedIds.size} selected
-            </button>
-          )}
-          {/* #931 + #816 Patients slice — CSV export honors the current search
-              filter. Hidden when there's nothing to export OR when the role
-              already saw the access-restricted state (avoids tempting the user
-              to try an export that will just toast 403).
-              #820 (tick #188) — both CSV + XLSX buttons disable while EITHER
-              export is in flight so a slow XLSX download doesn't race with a
-              user-triggered CSV (and vice-versa) on the same filter snapshot.
-              #820 (tick #190) — also disable while the template download is
-              in-flight so all three buttons share a single busy gate. */}
-          {!permissionDenied && (
-            <button
-              type="button"
-              onClick={exportCsv}
-              disabled={csvBusy || xlsxBusy || templateBusy || importBusy || total === 0}
-              title={q ? `Download ${total} matching patient${total === 1 ? '' : 's'} as CSV` : `Download all ${total} patients as CSV`}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || importBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || importBusy || total === 0) ? 0.6 : 1 }}
-            >
-              <Download size={16} /> Export CSV
-            </button>
-          )}
-          {/* #820 (tick #188) — XLSX export. Same chrome / styling as the CSV
-              button to keep the two surfaces visually paired; differentiated
-              only by the spreadsheet icon + label. Backend endpoint at
-              /api/wellness/patients.xlsx (tick #187 ed00be9b). */}
-          {!permissionDenied && (
-            <button
-              type="button"
-              onClick={exportXlsx}
-              disabled={csvBusy || xlsxBusy || templateBusy || importBusy || total === 0}
-              title={q ? `Download ${total} matching patient${total === 1 ? '' : 's'} as XLSX` : `Download all ${total} patients as XLSX`}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || importBusy || total === 0) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || importBusy || total === 0) ? 0.6 : 1 }}
-            >
-              <FileSpreadsheet size={16} /> Export XLSX
-            </button>
-          )}
-          {/* #820 (tick #190) — "Download template" button. Surfaces the
-              import-template CSV so users can fill in a pre-shaped file
-              before uploading via the bulk-import handler. Visible to ALL
-              roles (no permissionDenied gate) — the template itself contains
-              no PHI; it's just headers + one fictional example row. Always
-              enabled when no download is in-flight (no `total === 0` gate;
-              the template is invariant of the current view's row count).
-              Shares the combined busy gate with the two export buttons so a
-              slow template download disables the others (and vice-versa). */}
-          <button
-            type="button"
-            onClick={downloadTemplate}
-            disabled={csvBusy || xlsxBusy || templateBusy || importBusy}
-            title="Download a CSV template (headers + example row) for bulk patient import"
-            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || importBusy) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || importBusy) ? 0.6 : 1 }}
-          >
-            <FileDown size={16} /> Download template
-          </button>
-          {/* #820 (tick #194) — Import Patients. Opens a modal with a CSV
-              file picker; on submit POSTs multipart to /api/wellness/patients
-              /import (multer csvUpload.single('file') — field name `file` is
-              load-bearing). Backend (tick #193 `69ee75dc`) is gated by
-              phiWriteGate so a USER without write access will receive 403;
-              hide the button when permissionDenied so we don't tempt the user
-              into a guaranteed-403 click. Shares the combined busy gate with
-              the three export buttons. */}
-          {!permissionDenied && (
-            <button
-              type="button"
-              onClick={() => {
-                setImportModalOpen(true);
-                setImportFile(null);
-                setImportResult(null);
-              }}
-              disabled={csvBusy || xlsxBusy || templateBusy || importBusy}
-              title="Upload a CSV file to bulk-import patients (use the template above for the column layout)"
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: (csvBusy || xlsxBusy || templateBusy || importBusy) ? 'not-allowed' : 'pointer', opacity: (csvBusy || xlsxBusy || templateBusy || importBusy) ? 0.6 : 1 }}
-            >
-              <Upload size={16} /> Import Patients
-            </button>
-          )}
-          <button
-            onClick={() => {
-              setShowAdd(!showAdd);
-              if (showAdd) {
-                setEditingId(null);
-                setForm({
-                  name: "",
-                  phone: "",
-                email: "",
-                dob: "",
-                gender: "",
-                source: "walk-in",
-                locationId: locations[0]?.id || "",
-                anniversary: "",
-                gst: "",
-              });
-            }
-          }}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "0.3rem",
-            padding: "0.5rem 1rem",
-            background: "var(--accent-color)",
-            color: "#fff",
-            border: "none",
-            borderRadius: 8,
-            cursor: "pointer",
-          }}
-        >
-            <Plus size={16} /> {showAdd ? "Cancel" : "New patient"}
-          </button>
+            {addMenuOpen && (
+              <div role="menu" style={primaryMenuStyle}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setAddMenuOpen(false);
+                    setShowCreateModal(true);
+                  }}
+                  style={primaryMenuItem}
+                >
+                  <UserPlus size={15} style={{ flexShrink: 0 }} />
+                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15 }}>
+                    <strong style={{ fontSize: "0.9rem" }}>New patient</strong>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                      Create a single customer record
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setAddMenuOpen(false);
+                    setShowBulkTagModal(true);
+                  }}
+                  style={primaryMenuItem}
+                >
+                  <BulkTagIcon size={15} style={{ flexShrink: 0 }} />
+                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15 }}>
+                    <strong style={{ fontSize: "0.9rem" }}>Bulk tag</strong>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                      Add or remove tags across many customers
+                    </span>
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
-      {showAdd && (
-        <form
-          ref={formRef}
-          onSubmit={handleSubmit}
-          className="glass"
-          style={{
-            padding: "1rem",
-            marginBottom: "1rem",
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-            gap: "0.75rem",
-            alignItems: "end",
-          }}
-        >
-          <input
-            placeholder="Name *"
-            required
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            style={inputStyle}
-          />
-          {/* #205: phone required (Indian mobile). Add inputMode + pattern so
-              mobile keyboards default numeric and HTML5 native validation
-              catches the obvious cases. JS-side check still runs on submit. */}
-          {/* #595: onBlur canonicalises the visible value to E.164 so the
-              user sees the form actually being saved (`+919876543210`) and
-              spots a typo before submit. */}
-          <input
-            placeholder="Phone *"
-            required
-            type="tel"
-            inputMode="tel"
-            pattern="\+?[0-9]{10,15}"
-            title="Indian mobile: 10 digits, starting 6-9 (auto-prefixed with +91 on blur)"
-            value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            onBlur={(e) => setForm({ ...form, phone: toE164OnBlur(e.target.value) })}
-            style={inputStyle}
-          />
-          <input
-            placeholder="Email"
-            type="email"
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-            style={inputStyle}
-          />
-          {/* #205: DOB optional. Type=date so the browser shows a real picker. */}
-          <input
-            placeholder="Date of birth"
-            type="date"
-            value={form.dob}
-            onChange={(e) => setForm({ ...form, dob: e.target.value })}
-            style={inputStyle}
-          />
-          <select
-            value={form.gender}
-            onChange={(e) => setForm({ ...form, gender: e.target.value })}
-            style={inputStyle}
-          >
-            <option value="">Gender (optional)</option>
-            <option value="M">Male</option>
-            <option value="F">Female</option>
-            <option value="Other">Other</option>
-          </select>
-          {/* #317: option `value` is the canonical lowercase / kebab-case
-              enum that matches the DB. Display labels stay human-readable.
-              Pre-fix, mixed casing between this form ("Referral") and what
-              the backend stored ("referral") meant the source filter dropdown
-              showed two distinct entries for the same logical source and
-              filtered patients incorrectly. Keeping a single source of truth
-              here prevents the divergence from re-emerging. */}
-          <select
-            value={form.source}
-            onChange={(e) => setForm({ ...form, source: e.target.value })}
-            style={inputStyle}
-          >
-            <option value="walk-in">Walk-in</option>
-            <option value="referral">Referral</option>
-            <option value="website-form">Website form</option>
-            <option value="whatsapp">WhatsApp</option>
-            <option value="instagram">Instagram</option>
-            <option value="meta-ad">Meta ad</option>
-            <option value="google-ad">Google ad</option>
-            <option value="indiamart">IndiaMART</option>
-          </select>
-          {locations.length > 1 && (
-            <select
-              value={form.locationId}
-              onChange={(e) => setForm({ ...form, locationId: e.target.value })}
-              style={inputStyle}
-            >
-              <option value="">Select clinic</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          )}
-          {/* #792 — anniversary feeds anniversary-day marketing
-              automations. Optional (patient may be unmarried). */}
-          <input
-            placeholder="Anniversary"
-            type="date"
-            value={form.anniversary}
-            onChange={(e) => setForm({ ...form, anniversary: e.target.value })}
-            style={inputStyle}
-            aria-label="Anniversary"
-          />
-          {/* #792 — GSTIN for B2B / corporate-account invoicing. 15-char
-              alphanumeric. Optional. */}
-          <input
-            placeholder="GSTIN (15 chars)"
-            type="text"
-            maxLength={15}
-            value={form.gst}
-            onChange={(e) =>
-              setForm({ ...form, gst: e.target.value.toUpperCase() })
-            }
-            style={inputStyle}
-            aria-label="GSTIN"
-          />
-          <button
-            type="submit"
-            style={{
-              padding: "0.55rem 1rem",
-              background: "var(--success-color)",
-              color: "#fff",
-              border: "none",
-              borderRadius: 8,
-              cursor: "pointer",
-            }}
-          >
-            {editingId ? "Save Changes" : "Save"}
-          </button>
-        </form>
-      )}
-
-      {/* #820 (tick #192) — search + filters row. The search input keeps
-          its 1fr flex sizing; the four filter controls (source / gender /
-          createdFrom / createdTo) sit alongside it in the same glass card
-          so the user can compose them as one logical filter expression.
-          Wrapped with `flex-wrap: wrap` so narrow viewports stack the
-          controls instead of pushing them offscreen. Date inputs are NOT
-          wrapped in a <form>, so the HTML5 form-validation gotcha (per
-          tick #181 standing rule) does not apply here. */}
+      {/* Search bar + filter toggle.
+          - opaque --surface-color background (instead of the .glass blur)
+            so the input reads cleanly on both light & dark themes
+          - 1px theme border that lifts to the primary color on focus,
+            with a soft glow ring (3px teal-tinted box-shadow)
+          - the Filters button is rendered as a sibling for cleaner
+            separation from the input field itself */}
       <div
-        className="glass"
         style={{
-          padding: "0.75rem 1rem",
-          marginBottom: "1rem",
           display: "flex",
-          alignItems: "center",
-          gap: "0.5rem",
+          gap: "0.6rem",
+          marginBottom: "1rem",
+          alignItems: "stretch",
           flexWrap: "wrap",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flex: "1 1 240px", minWidth: 200 }}>
-          <Search size={16} color="var(--text-secondary)" />
+        {/* Icon-inside-input pattern: the <input> itself is the visible
+            bar. The wellness theme already styles inputs with a border +
+            bg + focus glow (see [wellness.css](theme/wellness.css)
+            input/input:focus rules), so we let it own the appearance —
+            no outer wrapper border, no double-shell. The magnifying
+            glass and clear button are absolute-positioned inside the
+            relative wrapper. */}
+        <div style={{ flex: 1, minWidth: 260, position: "relative", display: "flex" }}>
+          <Search
+            size={16}
+            color="var(--text-secondary)"
+            style={{
+              position: "absolute",
+              left: 14,
+              top: "50%",
+              transform: "translateY(-50%)",
+              pointerEvents: "none",
+              flexShrink: 0,
+            }}
+            aria-hidden
+          />
           <input
             placeholder="Search by name, phone, or email…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             style={{
-              flex: 1,
-              background: "transparent",
-              border: "none",
-              outline: "none",
+              width: "100%",
+              padding: q ? "0.65rem 2.5rem 0.65rem 2.4rem" : "0.65rem 0.85rem 0.65rem 2.4rem",
+              borderRadius: 10,
+              fontSize: "0.92rem",
+              fontFamily: "inherit",
+              // Fallback for generic vertical; wellness's `input` rule
+              // overrides with `!important`. Either way the input ends
+              // up with a proper themed border + bg.
+              background: "var(--surface-color, #fff)",
+              border: "1px solid var(--border-color, rgba(0,0,0,0.12))",
               color: "var(--text-primary)",
-              fontSize: "0.9rem",
+              outline: "none",
+              boxSizing: "border-box",
             }}
           />
+          {q && (
+            <button
+              type="button"
+              onClick={() => setQ("")}
+              title="Clear search"
+              aria-label="Clear search"
+              style={{
+                position: "absolute",
+                right: 8,
+                top: "50%",
+                transform: "translateY(-50%)",
+                background: "var(--subtle-bg, rgba(0,0,0,0.06))",
+                border: "none",
+                borderRadius: 999,
+                color: "var(--text-secondary)",
+                cursor: "pointer",
+                padding: "0.2rem",
+                display: "inline-flex",
+                alignItems: "center",
+                lineHeight: 1,
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
-        {/* #820 (tick #192) — Source filter. Vocab mirrors the New-patient
-            form <option>s exactly (single source of truth — see #317
-            comment in the form). Empty default option = "All sources". */}
-        <select
-          aria-label="Filter by source"
-          value={source}
-          onChange={(e) => setSource(e.target.value)}
-          style={filterInputStyle(!!source)}
+        <button
+          type="button"
+          onClick={() => setShowFilters(true)}
+          aria-haspopup="dialog"
+          aria-expanded={showFilters}
+          aria-label="Open filters"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.45rem",
+            padding: "0.55rem 1rem",
+            background: activeFilterCount > 0
+              ? "var(--primary-color, var(--accent-color))"
+              : "var(--surface-color, #fff)",
+            color: activeFilterCount > 0 ? "#fff" : "var(--text-primary)",
+            border: `1px solid ${activeFilterCount > 0
+              ? "var(--primary-color, var(--accent-color))"
+              : "var(--border-color, rgba(0,0,0,0.12))"}`,
+            borderRadius: 10,
+            cursor: "pointer",
+            fontSize: "0.88rem",
+            fontWeight: 500,
+            boxShadow: "var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.04))",
+            transition: "background 0.15s ease, border-color 0.15s ease",
+          }}
         >
-          <option value="">All sources</option>
-          <option value="walk-in">Walk-in</option>
-          <option value="referral">Referral</option>
-          <option value="website-form">Website form</option>
-          <option value="whatsapp">WhatsApp</option>
-          <option value="instagram">Instagram</option>
-          <option value="meta-ad">Meta ad</option>
-          <option value="google-ad">Google ad</option>
-          <option value="indiamart">IndiaMART</option>
-        </select>
-        {/* #820 (tick #192) — Gender filter. Values match the backend's
-            case-normalised accepted set {F, M, O}; anything else is
-            silently ignored server-side. */}
-        <select
-          aria-label="Filter by gender"
-          value={gender}
-          onChange={(e) => setGender(e.target.value)}
-          style={filterInputStyle(!!gender)}
-        >
-          <option value="">All genders</option>
-          <option value="F">Female</option>
-          <option value="M">Male</option>
-          <option value="O">Other</option>
-        </select>
-        {/* #820 (tick #192) — Created-from / Created-to date filters.
-            Wired to backend ?createdFrom / ?createdTo which gate on
-            `Patient.createdAt`. Bad dates are silently ignored server-side. */}
-        <label style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.78rem", color: "var(--text-secondary)" }}>
-          <span>From</span>
-          <input
-            type="date"
-            aria-label="Created from"
-            value={createdFrom}
-            onChange={(e) => setCreatedFrom(e.target.value)}
-            style={filterInputStyle(!!createdFrom)}
-          />
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.78rem", color: "var(--text-secondary)" }}>
-          <span>To</span>
-          <input
-            type="date"
-            aria-label="Created to"
-            value={createdTo}
-            onChange={(e) => setCreatedTo(e.target.value)}
-            style={filterInputStyle(!!createdTo)}
-          />
-        </label>
+          <Filter size={14} />
+          Filters
+          {activeFilterCount > 0 && (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                minWidth: 18,
+                height: 18,
+                padding: "0 0.35rem",
+                borderRadius: 999,
+                background: "rgba(255,255,255,0.25)",
+                color: "#fff",
+                fontSize: "0.72rem",
+                fontWeight: 600,
+              }}
+            >
+              {activeFilterCount}
+            </span>
+          )}
+        </button>
       </div>
+
+      {showFilters && (
+        <FilterModal
+          onClose={() => setShowFilters(false)}
+          initial={{
+            source: sourceFilter,
+            gender: genderFilter,
+            addedFrom,
+            addedTo,
+            tags: tagFilter,
+          }}
+          allTags={allTags}
+          onApply={(next) => {
+            // Single URL write so we don't trip the debounced fetch four
+            // times in quick succession (each `set...` already collapses
+            // page back to 1).
+            updateParams({
+              source: next.source,
+              gender: next.gender,
+              tags: next.tags,
+              addedFrom: next.addedFrom,
+              addedTo: next.addedTo,
+              page: 1,
+            });
+          }}
+        />
+      )}
+
+      {/* Bulk action bar */}
+      {selected.size > 0 && (
+        <div
+          role="region"
+          aria-live="polite"
+          aria-label={`${selected.size} patient(s) selected`}
+          className="glass"
+          style={{
+            padding: "0.6rem 1rem",
+            marginBottom: "1rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.6rem",
+            flexWrap: "wrap",
+            borderRadius: 12,
+            border: "1px solid var(--primary-color, var(--accent-color))",
+            // .glass applies backdrop-filter which creates a stacking
+            // context; without an explicit z-index, the table card below
+            // (also .glass) paints over the Export Selected dropdown
+            // because both contexts have an implicit z=auto and the
+            // table is later in the DOM. Lift this bar above the table
+            // so the dropdown can render on top.
+            position: "relative",
+            zIndex: 20,
+          }}
+        >
+          <strong style={{ fontSize: "0.9rem" }}>{selected.size} selected</strong>
+          <button type="button" onClick={() => setTagPopover({ type: "bulk-add" })} style={bulkBtnStyle}>
+            <TagIcon size={14} /> Add Tag
+          </button>
+          <button type="button" onClick={() => setTagPopover({ type: "bulk-remove" })} style={bulkBtnStyle}>
+            <Trash2 size={14} /> Remove Tag
+          </button>
+          <div ref={bulkExportMenuRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={() => setBulkExportMenuOpen((v) => !v)}
+              style={bulkBtnStyle}
+              aria-haspopup="menu"
+              aria-expanded={bulkExportMenuOpen}
+            >
+              <Download size={14} /> Export Selected <ChevronDown size={12} />
+            </button>
+            {bulkExportMenuOpen && (
+              <div role="menu" style={dropdownMenuStyle}>
+                <button type="button" role="menuitem" onClick={() => exportSelected("csv")} style={dropdownItemStyle}>CSV</button>
+                <button type="button" role="menuitem" onClick={() => exportSelected("xlsx")} style={dropdownItemStyle}>Excel (XLSX)</button>
+              </div>
+            )}
+          </div>
+          <span style={{ flex: 1 }} />
+          <button type="button" onClick={clearSelection} style={{ ...iconBtnSmall, padding: "0.35rem 0.7rem" }}>
+            Clear selection
+          </button>
+
+          {/* Bulk tag picker popovers */}
+          {tagPopover?.type === "bulk-add" && (
+            <TagPickerPopover
+              allTags={allTags}
+              onPick={bulkAddTag}
+              onClose={() => setTagPopover(null)}
+              onCreated={(newTag) => {
+                setAllTags((prev) => (prev.some((t) => t.id === newTag.id) ? prev : [...prev, newTag].sort((a, b) => a.name.localeCompare(b.name))));
+                return bulkAddTag(newTag);
+              }}
+              showCreate
+              title="Add tag to selected"
+            />
+          )}
+          {tagPopover?.type === "bulk-remove" && (
+            <TagPickerPopover
+              allTags={allTags}
+              onPick={bulkRemoveTag}
+              onClose={() => setTagPopover(null)}
+              showCreate={false}
+              title="Remove tag from selected"
+            />
+          )}
+        </div>
+      )}
 
       {loading && <div>Loading…</div>}
 
       {!loading && (
-        <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
-          {/* #229: table-layout: fixed prevents a single very long patient name
-              from blowing the column widths and pushing later columns offscreen.
-              Combined with the ellipsis style on the name cell. */}
-          <table
-            className="stable-table"
-            style={{
-              borderCollapse: "collapse",
-            }}
-          >
+        <div className="glass" style={{ padding: 0, overflow: "visible" }}>
+          <table className="stable-table" style={{ borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                {/* #931 — bulk-select. Header checkbox selects/clears all
-                    currently-visible (current page) patients; per-row
-                    checkboxes toggle individual selection. */}
-                <th style={{ ...thStyle, width: "4%", textAlign: "center" }}>
+                <th style={{ ...thStyle, width: 38, paddingRight: 4 }}>
                   <input
                     type="checkbox"
-                    aria-label="Select all visible patients"
-                    checked={
-                      visiblePatients.length > 0 &&
-                      visiblePatients.every((p) => selectedIds.has(p.id))
-                    }
-                    onChange={() => toggleSelectAllVisible(visiblePatients)}
+                    aria-label="Select all on page"
+                    checked={allOnPageSelected}
+                    ref={(el) => { if (el) el.indeterminate = !allOnPageSelected && someOnPageSelected; }}
+                    onChange={togglePage}
                   />
                 </th>
-                <th style={{ ...thStyle, width: "14%" }}>Name</th>
-                <th style={{ ...thStyle, width: "12%" }}>Phone</th>
-                <th style={{ ...thStyle, width: "14%" }}>Email</th>
-                <th style={{ ...thStyle, width: "7%" }}>Gender</th>
-                <th style={{ ...thStyle, width: "10%" }}>Source</th>
-                {/* #820 Part 2 — Tags column. Renders chips from
-                    patient.tags (JSON-string) + a `+` button per row that
-                    opens an inline input to attach a tag without leaving
-                    the list view. */}
-                <th style={{ ...thStyle, width: "16%" }}>Tags</th>
-                <th style={{ ...thStyle, width: "11%" }}>Added</th>
-                <th style={{ ...thStyle, width: "8%", textAlign: "center" }}>
-                  Actions
-                </th>
+                <th style={{ ...thStyle, width: "22%" }}>Name</th>
+                <th style={{ ...thStyle, width: "14%" }}>Phone</th>
+                <th style={{ ...thStyle, width: "22%" }}>Email</th>
+                <th style={{ ...thStyle, width: "10%" }}>Gender</th>
+                <th style={{ ...thStyle, width: "14%" }}>Source</th>
+                <th style={{ ...thStyle, width: "12%" }}>Added</th>
+                <th style={{ ...thStyle, width: "6%", textAlign: "center" }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {visiblePatients.map((p) => (
-                <tr
-                  key={p.id}
-                  style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
-                >
-                  {/* #931 — per-row bulk-select checkbox. */}
-                  <td style={{ ...tdStyle, textAlign: "center" }}>
+              {patients.map((p) => (
+                <tr key={p.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                  <td style={{ ...tdStyle, paddingRight: 4 }}>
                     <input
                       type="checkbox"
                       aria-label={`Select ${p.name}`}
-                      checked={selectedIds.has(p.id)}
-                      onChange={() => toggleSelect(p.id)}
+                      checked={selected.has(p.id)}
+                      onChange={() => toggleRow(p.id)}
                     />
                   </td>
                   <td style={nameTdStyle} title={p.name}>
-                    <Link
-                      to={`/wellness/patients/${p.id}`}
-                      style={{
-                        color: "var(--accent-color)",
-                        textDecoration: "none",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <Link to={`/wellness/patients/${p.id}`} style={{ color: "var(--accent-color)", textDecoration: "none", fontWeight: 500 }}>
                       {p.name}
                     </Link>
                   </td>
                   <td style={tdStyle}>
                     {p.phone && (
                       <span>
-                        <Phone size={12} style={{ verticalAlign: "middle" }} />{" "}
-                        {p.phone}
+                        <Phone size={12} style={{ verticalAlign: "middle" }} /> {p.phone}
                       </span>
                     )}
                   </td>
                   <td style={tdStyle}>
                     {p.email && (
                       <span>
-                        <Mail size={12} style={{ verticalAlign: "middle" }} />{" "}
-                        {p.email}
+                        <Mail size={12} style={{ verticalAlign: "middle" }} /> {p.email}
                       </span>
                     )}
                   </td>
                   <td style={tdStyle}>{p.gender || "—"}</td>
                   <td style={tdStyle}>{p.source || "—"}</td>
-                  {/* #820 Part 2 — Tags column. Existing tags render as
-                      small chips; the `+` button opens an inline input
-                      (Enter to save, Escape to cancel). The PATCH call
-                      hits the bulk-tags endpoint with a single-item
-                      patientIds array — same write path the modal uses,
-                      so server-side validation + dedupe + audit stay
-                      consistent across both surfaces. */}
-                  <td style={tdStyle} data-testid={`tags-cell-${p.id}`}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', alignItems: 'center' }}>
-                      {parseTags(p.tags).map((t) => (
-                        <span
-                          key={t}
-                          data-testid={`tag-chip-${p.id}-${t}`}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.2rem',
-                            padding: '0.1rem 0.45rem',
-                            background: 'rgba(255,255,255,0.07)',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: 999,
-                            fontSize: '0.72rem',
-                            color: 'var(--text-primary)',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {t}
-                        </span>
-                      ))}
-                      {tagAddOpenId === p.id ? (
-                        <span style={{ display: 'inline-flex', gap: '0.2rem', alignItems: 'center' }}>
-                          <input
-                            type="text"
-                            autoFocus
-                            aria-label={`New tag for ${p.name}`}
-                            value={newTagInput}
-                            onChange={(e) => setNewTagInput(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                submitRowTag(p.id);
-                              } else if (e.key === 'Escape') {
-                                e.preventDefault();
-                                setTagAddOpenId(null);
-                                setNewTagInput('');
-                              }
-                            }}
-                            disabled={rowTagBusy}
-                            placeholder="tag"
-                            style={{
-                              padding: '0.15rem 0.4rem',
-                              background: 'rgba(255,255,255,0.05)',
-                              border: '1px solid rgba(255,255,255,0.1)',
-                              borderRadius: 6,
-                              color: 'var(--text-primary)',
-                              fontSize: '0.75rem',
-                              outline: 'none',
-                              width: 80,
-                            }}
-                          />
-                          <button
-                            type="button"
-                            aria-label={`Save tag for ${p.name}`}
-                            onClick={() => submitRowTag(p.id)}
-                            disabled={rowTagBusy || newTagInput.trim().length === 0}
-                            style={{
-                              padding: '0.15rem 0.5rem',
-                              background: 'var(--primary-color, var(--accent-color))',
-                              color: '#fff',
-                              border: 'none',
-                              borderRadius: 6,
-                              fontSize: '0.7rem',
-                              cursor: (rowTagBusy || newTagInput.trim().length === 0) ? 'not-allowed' : 'pointer',
-                              opacity: (rowTagBusy || newTagInput.trim().length === 0) ? 0.6 : 1,
-                            }}
-                          >
-                            Add
-                          </button>
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          aria-label={`Add tag to ${p.name}`}
-                          data-testid={`tag-add-${p.id}`}
-                          onClick={() => {
-                            setTagAddOpenId(p.id);
-                            setNewTagInput('');
-                          }}
-                          title="Add a tag"
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            width: 22,
-                            height: 22,
-                            background: 'transparent',
-                            border: '1px dashed rgba(255,255,255,0.2)',
-                            borderRadius: 999,
-                            color: 'var(--primary-color, var(--accent-color))',
-                            cursor: 'pointer',
-                            padding: 0,
-                          }}
-                        >
-                          <Plus size={12} />
-                        </button>
-                      )}
-                    </div>
-                  </td>
                   <td style={tdStyle}>
                     {formatDate(p.createdAt)}
                   </td>
@@ -1336,516 +780,648 @@ export default function Patients() {
               ))}
               {patients.length === 0 && (
                 <tr>
-                  <td
-                    colSpan={9}
-                    style={{
-                      ...tdStyle,
-                      textAlign: "center",
-                      color: permissionDenied ? "var(--warning-color, #f59e0b)" : "var(--text-secondary)",
-                      padding: permissionDenied ? "2rem 1rem" : undefined,
-                    }}
-                  >
-                    {/* #829 — honest empty-state when the API returned 403.
-                        Pre-fix the same "No patients match." copy rendered for
-                        both real-empty and permission-blocked, so a Demo User
-                        viewing a populated clinic saw a phantom empty list. */}
-                    {permissionDenied ? (
-                      <>
-                        <strong>Access restricted.</strong>
-                        <div style={{ fontSize: "0.85rem", marginTop: "0.5rem", color: "var(--text-secondary)" }}>
-                          Your role does not have permission to view patient records. Patient data is hidden — not absent. Ask an Admin to grant clinical access if you need it.
-                        </div>
-                      </>
-                    ) : (
-                      "No patients match."
-                    )}
+                  <td colSpan={8} style={{ ...tdStyle, textAlign: "center", color: "var(--text-secondary)" }}>
+                    No patients match.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
-          {/* #820 Part 1 — pagination footer with rows-per-page selector +
-              page-number indicator. Hidden when total is 0 (empty state)
-              so the empty-state row stays uncluttered. `total` is the
-              backend's full-population count from the {patients, total}
-              envelope; `patients.length` is just the current slice. */}
-          {total > 0 && (
-            <div
-              data-testid="patients-pagination"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "0.75rem 1rem",
-                borderTop: "1px solid rgba(255,255,255,0.06)",
-                color: "var(--text-secondary)",
-                fontSize: "0.85rem",
-                flexWrap: "wrap",
-                gap: "0.75rem",
-              }}
-            >
-              <span data-testid="patients-pagination-indicator">
-                Showing {startIdx + 1}-{Math.min(startIdx + rowsPerPage, total)} of {total}
-              </span>
-              <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                  <span>Rows per page</span>
-                  <select
-                    aria-label="Rows per page"
-                    data-testid="rows-per-page-select"
-                    value={rowsPerPage}
-                    onChange={(e) => setRowsPerPage(parseInt(e.target.value, 10))}
-                    style={{
-                      background: "rgba(255,255,255,0.05)",
-                      border: "1px solid rgba(255,255,255,0.1)",
-                      borderRadius: 6,
-                      color: "var(--text-primary)",
-                      padding: "0.25rem 0.4rem",
-                      fontSize: "0.8rem",
-                      outline: "none",
-                    }}
-                  >
-                    {[25, 50, 100].map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  data-testid="patients-page-prev"
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  style={{
-                    background: "transparent",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    color: page <= 1 ? "var(--text-secondary)" : "var(--text-primary)",
-                    padding: "0.35rem 0.75rem",
-                    borderRadius: 6,
-                    cursor: page <= 1 ? "not-allowed" : "pointer",
-                    opacity: page <= 1 ? 0.5 : 1,
-                  }}
-                >
-                  Previous
-                </button>
-                <span style={{ color: "var(--text-primary)" }} data-testid="patients-page-indicator">
-                  Page {page} of {totalPages}
-                </span>
-                <button
-                  type="button"
-                  data-testid="patients-page-next"
-                  disabled={page >= totalPages}
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  style={{
-                    background: "transparent",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    color: page >= totalPages ? "var(--text-secondary)" : "var(--text-primary)",
-                    padding: "0.35rem 0.75rem",
-                    borderRadius: 6,
-                    cursor: page >= totalPages ? "not-allowed" : "pointer",
-                    opacity: page >= totalPages ? 0.5 : 1,
-                  }}
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
+          <PatientPager
+            total={total}
+            page={page}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
         </div>
       )}
 
-      {/* #931 — bulk-tag-add modal. Comma-separated tag input; Apply fires
-          PATCH /api/wellness/patients/bulk-tags. On success: modal closes,
-          selection clears, list refreshes. On error: modal stays open. */}
-      {tagModalOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="bulk-tag-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={(e) => {
-            // Click on backdrop closes (unless mid-request).
-            if (e.target === e.currentTarget && !tagBusy) {
-              setTagModalOpen(false);
-            }
-          }}
-        >
-          <div
-            className="glass"
-            style={{
-              padding: '1.5rem',
-              borderRadius: 12,
-              minWidth: 360,
-              maxWidth: 480,
-              background: 'var(--bg-primary, #1a1a2e)',
-              border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-            }}
-          >
-            <h3 id="bulk-tag-modal-title" style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.1rem', fontWeight: 600 }}>
-              Add tags to {selectedIds.size} patient{selectedIds.size === 1 ? '' : 's'}
-            </h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-              Enter tags separated by commas. Tags are stored lowercased and deduped against existing tags.
-            </p>
-            <input
-              type="text"
-              aria-label="Tags (comma-separated)"
-              placeholder="vip, dermatology, follow-up"
-              value={tagInput}
-              onChange={(e) => setTagInput(e.target.value)}
-              disabled={tagBusy}
-              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  if (tagBusy) return;
-                  setTagModalOpen(false);
-                  setTagInput("");
-                }}
-                disabled={tagBusy}
-                style={{
-                  padding: '0.5rem 1rem',
-                  background: 'transparent',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-                  borderRadius: 8,
-                  cursor: tagBusy ? 'not-allowed' : 'pointer',
-                  opacity: tagBusy ? 0.6 : 1,
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={submitBulkTags}
-                disabled={tagBusy || tagInput.trim().length === 0}
-                style={{
-                  padding: '0.5rem 1rem',
-                  background: 'var(--primary-color, var(--accent-color))',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 8,
-                  cursor: (tagBusy || tagInput.trim().length === 0) ? 'not-allowed' : 'pointer',
-                  opacity: (tagBusy || tagInput.trim().length === 0) ? 0.6 : 1,
-                }}
-              >
-                {tagBusy ? 'Applying…' : 'Apply'}
-              </button>
-            </div>
-          </div>
+      {!loading && total > PAGE_SIZE && (
+        <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center", marginTop: "1rem", alignItems: "center", flexWrap: "wrap" }}>
+          <button disabled={safePage <= 1} onClick={() => setPage(Math.max(1, safePage - 1))} style={paginationBtn(safePage <= 1)}>
+            <ChevronLeft size={14} /> Previous
+          </button>
+          <span style={{ padding: "0.5rem 1rem", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+            Page {safePage} of {totalPages} · {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, total)} of {total.toLocaleString()}
+          </span>
+          <button disabled={safePage >= totalPages} onClick={() => setPage(Math.min(totalPages, safePage + 1))} style={paginationBtn(safePage >= totalPages)}>
+            Next <ChevronRight size={14} />
+          </button>
         </div>
       )}
 
-      {/* #931 (tick #197) — bulk-tag-REMOVE modal. Companion to the add-tags
-          modal above; same comma-separated tag input + same Apply/Cancel
-          shape so muscle memory carries between the two. PATCHes
-          /api/wellness/patients/bulk-tags with `removeTags`. On success:
-          modal closes, selection clears, list refreshes so the now-removed
-          chips disappear immediately. On error: modal stays open. */}
-      {removeTagModalOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="bulk-remove-tag-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
+      {(showCreateModal || editingPatient) && (
+        <PatientCreateModal
+          key={editingPatient ? `edit-${editingPatient.id}` : "create"}
+          locations={locations}
+          editPatient={editingPatient}
+          onClose={() => {
+            setShowCreateModal(false);
+            setEditingPatient(null);
           }}
-          onClick={(e) => {
-            // Click on backdrop closes (unless mid-request).
-            if (e.target === e.currentTarget && !removeTagBusy) {
-              setRemoveTagModalOpen(false);
-            }
+          onCreated={() => {
+            setShowCreateModal(false);
+            setEditingPatient(null);
+            if (!editingPatient) updateParams({ page: 1 });
+            setReloadTick((t) => t + 1);
           }}
-        >
-          <div
-            className="glass"
-            style={{
-              padding: '1.5rem',
-              borderRadius: 12,
-              minWidth: 360,
-              maxWidth: 480,
-              background: 'var(--bg-primary, #1a1a2e)',
-              border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-            }}
-          >
-            <h3 id="bulk-remove-tag-modal-title" style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.1rem', fontWeight: 600 }}>
-              Remove tags from {selectedIds.size} patient{selectedIds.size === 1 ? '' : 's'}
-            </h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-              Enter tags separated by commas. Tags not present on a patient are silently skipped.
-            </p>
-            <input
-              type="text"
-              aria-label="Tags to remove (comma-separated)"
-              placeholder="vip, dermatology, follow-up"
-              value={removeTagInput}
-              onChange={(e) => setRemoveTagInput(e.target.value)}
-              disabled={removeTagBusy}
-              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  if (removeTagBusy) return;
-                  setRemoveTagModalOpen(false);
-                  setRemoveTagInput("");
-                }}
-                disabled={removeTagBusy}
-                style={{
-                  padding: '0.5rem 1rem',
-                  background: 'transparent',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-                  borderRadius: 8,
-                  cursor: removeTagBusy ? 'not-allowed' : 'pointer',
-                  opacity: removeTagBusy ? 0.6 : 1,
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={submitBulkRemoveTags}
-                disabled={removeTagBusy || removeTagInput.trim().length === 0}
-                style={{
-                  padding: '0.5rem 1rem',
-                  background: 'var(--primary-color, var(--accent-color))',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 8,
-                  cursor: (removeTagBusy || removeTagInput.trim().length === 0) ? 'not-allowed' : 'pointer',
-                  opacity: (removeTagBusy || removeTagInput.trim().length === 0) ? 0.6 : 1,
-                }}
-              >
-                {removeTagBusy ? 'Applying…' : 'Apply'}
-              </button>
-            </div>
-          </div>
-        </div>
+        />
       )}
-
-      {/* #820 (tick #194) — Import Patients modal. Two visual states:
-          (a) pre-submit: file picker + helper text pointing at the template
-              download button + Upload + Cancel buttons.
-          (b) post-submit: summary message ("Imported X of Y rows. Z duplicates
-              skipped. W rows failed validation.") + errors[] table capped at
-              50 rows + "Download full error CSV" affordance. Close button
-              becomes the only action. */}
-      {importModalOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="import-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
+      {showBulkTagModal && (
+        <BulkTagModal
+          allTags={allTags}
+          onClose={() => setShowBulkTagModal(false)}
+          onTagsChanged={() => {
+            // The bulk modal mutates tags on patients; refresh the list so
+            // the chips in the main table reflect the bulk action.
+            setReloadTick((t) => t + 1);
           }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !importBusy) {
-              setImportModalOpen(false);
-              setImportFile(null);
-              setImportResult(null);
-            }
+          onTagCreated={(tag) => {
+            setAllTags((prev) =>
+              prev.some((t) => t.id === tag.id) ? prev : [...prev, tag].sort((a, b) => a.name.localeCompare(b.name)),
+            );
           }}
-        >
-          <div
-            className="glass"
-            style={{
-              padding: '1.5rem',
-              borderRadius: 12,
-              minWidth: 420,
-              maxWidth: 720,
-              maxHeight: '85vh',
-              overflowY: 'auto',
-              background: 'var(--bg-primary, #1a1a2e)',
-              border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-            }}
-          >
-            <h3 id="import-modal-title" style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.1rem', fontWeight: 600 }}>
-              Import Patients
-            </h3>
-            {!importResult && (
-              <>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                  Upload a CSV file with patient rows. Download the template first if you haven&apos;t already — its column layout (name, phone, email, dob, gender, source, locationId, tags, notes) is what the import expects.
-                </p>
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  aria-label="CSV file"
-                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-                  disabled={importBusy}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    padding: '0.55rem 0.75rem',
-                    background: 'rgba(255,255,255,0.05)',
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    borderRadius: 8,
-                    color: 'var(--text-primary)',
-                    fontSize: '0.85rem',
-                    boxSizing: 'border-box',
-                  }}
-                />
-                {importFile && (
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: '0.4rem' }}>
-                    Selected: <strong>{importFile.name}</strong> ({Math.round(importFile.size / 1024)} KB)
-                  </p>
-                )}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (importBusy) return;
-                      setImportModalOpen(false);
-                      setImportFile(null);
-                      setImportResult(null);
-                    }}
-                    disabled={importBusy}
-                    style={{
-                      padding: '0.5rem 1rem',
-                      background: 'transparent',
-                      color: 'var(--text-primary)',
-                      border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-                      borderRadius: 8,
-                      cursor: importBusy ? 'not-allowed' : 'pointer',
-                      opacity: importBusy ? 0.6 : 1,
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={submitImport}
-                    disabled={importBusy || !importFile}
-                    style={{
-                      padding: '0.5rem 1rem',
-                      background: 'var(--primary-color, var(--accent-color))',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: 8,
-                      cursor: (importBusy || !importFile) ? 'not-allowed' : 'pointer',
-                      opacity: (importBusy || !importFile) ? 0.6 : 1,
-                    }}
-                  >
-                    {importBusy ? 'Uploading…' : 'Upload'}
-                  </button>
-                </div>
-              </>
-            )}
-            {importResult && (
-              <>
-                {(() => {
-                  const s = importResult.summary || {};
-                  const total = s.totalRows ?? 0;
-                  const imported = s.imported ?? 0;
-                  const duplicates = s.duplicates ?? 0;
-                  const invalid = s.invalid ?? 0;
-                  return (
-                    <p data-testid="import-summary" style={{ color: 'var(--text-primary)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-                      Imported <strong>{imported}</strong> of <strong>{total}</strong> rows. {duplicates} duplicate{duplicates === 1 ? '' : 's'} skipped. {invalid} row{invalid === 1 ? '' : 's'} failed validation.
-                    </p>
-                  );
-                })()}
-                {Array.isArray(importResult.errors) && importResult.errors.length > 0 && (
-                  <div style={{ marginBottom: '0.75rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
-                      <strong style={{ fontSize: '0.85rem' }}>
-                        Errors ({importResult.errors.length}){importResult.errors.length > 50 ? ' — showing first 50' : ''}
-                      </strong>
-                      <button
-                        type="button"
-                        onClick={downloadErrorCsv}
-                        style={{
-                          padding: '0.3rem 0.7rem',
-                          background: 'transparent',
-                          color: 'var(--text-primary)',
-                          border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-                          borderRadius: 6,
-                          cursor: 'pointer',
-                          fontSize: '0.78rem',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.3rem',
-                        }}
-                      >
-                        <Download size={14} /> Download full error CSV
-                      </button>
-                    </div>
-                    <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6 }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-                        <thead>
-                          <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)' }}>
-                            <th style={{ ...thStyle, padding: '0.4rem 0.75rem', width: '12%' }}>Row</th>
-                            <th style={{ ...thStyle, padding: '0.4rem 0.75rem', width: '28%' }}>Code</th>
-                            <th style={{ ...thStyle, padding: '0.4rem 0.75rem', width: '60%' }}>Message</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {importResult.errors.slice(0, 50).map((er, i) => (
-                            <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                              <td style={{ ...tdStyle, padding: '0.35rem 0.75rem' }}>{er.row}</td>
-                              <td style={{ ...tdStyle, padding: '0.35rem 0.75rem' }}>{er.errorCode}</td>
-                              <td style={{ ...tdStyle, padding: '0.35rem 0.75rem', whiteSpace: 'normal' }}>{er.errorMessage}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setImportModalOpen(false);
-                      setImportFile(null);
-                      setImportResult(null);
-                    }}
-                    style={{
-                      padding: '0.5rem 1rem',
-                      background: 'var(--primary-color, var(--accent-color))',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: 8,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Close
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        />
       )}
     </div>
   );
 }
 
+// Pagination footer — Prev / numbered pages (windowed) / Next + items-per-
+// page selector. Rendered below the table so it's always reachable even
+// with a tall list. Hides itself when total fits within a single page.
+function PatientPager({ total, page, pageSize, onPageChange, onPageSizeChange }) {
+  const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const pages = useMemo(() => {
+    // Compact window: always show 1, the current page ±2, and pageCount,
+    // with ellipses where there's a gap. Keeps the bar narrow on long
+    // lists (e.g. 600+ patients = 13+ pages of 50).
+    const out = new Set([1, pageCount, safePage]);
+    for (let i = Math.max(2, safePage - 2); i <= Math.min(pageCount - 1, safePage + 2); i++) {
+      out.add(i);
+    }
+    const sorted = Array.from(out).sort((a, b) => a - b);
+    const withGaps = [];
+    sorted.forEach((p, i) => {
+      if (i > 0 && p - sorted[i - 1] > 1) withGaps.push("…");
+      withGaps.push(p);
+    });
+    return withGaps;
+  }, [pageCount, safePage]);
+
+  if (total === 0) return null;
+  const start = (safePage - 1) * pageSize + 1;
+  const end = Math.min(start + pageSize - 1, total);
+
+  const pillBtn = (active, disabled) => ({
+    minWidth: 32, height: 32, padding: "0 0.5rem",
+    background: active ? "var(--primary-color, var(--accent-color))" : "transparent",
+    color: active ? "#fff" : "var(--text-primary)",
+    border: "1px solid var(--border-color, rgba(255,255,255,0.18))",
+    borderRadius: 6, cursor: disabled ? "not-allowed" : "pointer",
+    fontSize: "0.85rem", display: "inline-flex", alignItems: "center", justifyContent: "center",
+    opacity: disabled ? 0.4 : 1,
+  });
+
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", justifyContent: "space-between", padding: "0.85rem 1rem", borderTop: "1px solid var(--border-color, rgba(255,255,255,0.08))", fontSize: "0.85rem" }}>
+      <div style={{ color: "var(--text-secondary)" }}>
+        Showing <strong style={{ color: "var(--text-primary)" }}>{start}–{end}</strong> of <strong style={{ color: "var(--text-primary)" }}>{total}</strong> patients
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+        <label style={{ color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+          Rows
+          <select
+            value={pageSize}
+            onChange={(e) => onPageSizeChange(parseInt(e.target.value, 10))}
+            style={{ padding: "0.3rem 0.5rem", borderRadius: 6, border: "1px solid var(--border-color, rgba(255,255,255,0.18))", background: "var(--surface-color, rgba(255,255,255,0.04))", color: "var(--text-primary)" }}
+          >
+            {[25, 50, 100, 200].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={() => onPageChange(safePage - 1)}
+          disabled={safePage <= 1}
+          aria-label="Previous page"
+          style={pillBtn(false, safePage <= 1)}
+        >
+          <ChevronLeft size={14} />
+        </button>
+        {pages.map((p, i) => (
+          p === "…"
+            ? <span key={`gap-${i}`} style={{ color: "var(--text-secondary)", padding: "0 0.2rem" }}>…</span>
+            : <button
+                key={p}
+                type="button"
+                onClick={() => onPageChange(p)}
+                aria-current={p === safePage ? "page" : undefined}
+                style={pillBtn(p === safePage, false)}
+              >
+                {p}
+              </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => onPageChange(safePage + 1)}
+          disabled={safePage >= pageCount}
+          aria-label="Next page"
+          style={pillBtn(false, safePage >= pageCount)}
+        >
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Reusable tag picker popover ─────────────────────────────────────
+function TagPickerPopover({ allTags, onPick, onClose, onCreated, onCreate, excludeIds = [], showCreate = true, title }) {
+  const [query, setQuery] = useState("");
+  const inputRef = useRef(null);
+  const containerRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => {
+    const handler = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) onClose();
+    };
+    const keyHandler = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("keydown", keyHandler);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("keydown", keyHandler);
+    };
+  }, [onClose]);
+
+  const trimmed = query.trim();
+  const filtered = allTags
+    .filter((t) => !excludeIds.includes(t.id))
+    .filter((t) => !trimmed || t.name.toLowerCase().includes(trimmed.toLowerCase()));
+  const exactMatch = trimmed && filtered.some((t) => t.name.toLowerCase() === trimmed.toLowerCase());
+
+  return (
+    <div
+      ref={containerRef}
+      role="dialog"
+      aria-label={title || "Tag picker"}
+      style={tagPopoverStyle}
+    >
+      <div style={{ padding: "0.5rem 0.6rem", borderBottom: "1px solid var(--border-color, rgba(0,0,0,0.08))" }}>
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search or create…"
+          aria-label="Search tags"
+          style={{
+            width: "100%",
+            background: "var(--surface-color, #fff)",
+            border: "1px solid var(--border-color, rgba(0,0,0,0.12))",
+            borderRadius: 6,
+            color: "var(--text-primary)",
+            padding: "0.35rem 0.55rem",
+            fontSize: "0.85rem",
+            outline: "none",
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (filtered.length && !exactMatch && trimmed === "") return;
+              if (filtered[0] && (!trimmed || filtered[0].name.toLowerCase() === trimmed.toLowerCase())) {
+                onPick(filtered[0]);
+              } else if (showCreate && trimmed && !exactMatch && onCreate) {
+                onCreate(trimmed);
+              }
+            }
+          }}
+        />
+      </div>
+      <div style={{ maxHeight: 200, overflowY: "auto", padding: "0.25rem" }}>
+        {filtered.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onPick(t)}
+            style={{ ...tagOptionStyle, display: "flex", alignItems: "center", gap: "0.4rem" }}
+          >
+            <span style={{ width: 8, height: 8, borderRadius: 4, background: tagColour(t) }} />
+            {t.name}
+          </button>
+        ))}
+        {filtered.length === 0 && !trimmed && (
+          <div style={{ padding: "0.5rem", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+            No tags yet.
+          </div>
+        )}
+        {showCreate && trimmed && !exactMatch && (
+          <button
+            type="button"
+            onClick={() => {
+              if (onCreate) onCreate(trimmed);
+              else if (onCreated) onCreated({ name: trimmed });
+            }}
+            style={{ ...tagOptionStyle, color: "var(--primary-color, var(--accent-color))" }}
+          >
+            + Create “{trimmed}”
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Reusable multi-select chip list ─────────────────────────────────
+// ── FilterModal — popup with dropdown selectors for each filter ────
+// Holds a DRAFT copy of the active filters; nothing commits until the
+// user clicks "Apply". Cancel / outside-click / Esc discards the draft.
+function FilterModal({ onClose, initial, allTags, onApply }) {
+  const [draft, setDraft] = useState({
+    source: initial.source || [],
+    gender: initial.gender || [],
+    // Existing addedFrom/addedTo URL params reconstruct as a custom-preset filter
+    // so the picker re-opens on the user's current selection.
+    dateFilter: (initial.addedFrom || initial.addedTo)
+      ? { preset: 'custom', start: initial.addedFrom || '', end: initial.addedTo || '' }
+      : EMPTY_DATE_FILTER,
+    tags: initial.tags || [],
+  });
+  const hasDateFilter = draft.dateFilter && draft.dateFilter.preset !== 'all';
+  const activeCount =
+    draft.source.length +
+    draft.gender.length +
+    draft.tags.length +
+    (hasDateFilter ? 1 : 0);
+  const reset = () =>
+    setDraft({ source: [], gender: [], dateFilter: EMPTY_DATE_FILTER, tags: [] });
+  const apply = () => {
+    const [addedFrom, addedTo] = resolveDateRangeYmd(draft.dateFilter);
+    onApply({
+      source: draft.source,
+      gender: draft.gender,
+      addedFrom: addedFrom || "",
+      addedTo: addedTo || "",
+      tags: draft.tags,
+    });
+    onClose();
+  };
+  return (
+    <ModalShell
+      title="Filter customers"
+      onClose={onClose}
+      width={560}
+      footer={
+        <>
+          <span style={{ marginRight: "auto", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+            {activeCount} filter{activeCount === 1 ? "" : "s"} active
+          </span>
+          <button
+            type="button"
+            onClick={reset}
+            disabled={activeCount === 0}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: activeCount === 0
+                ? "var(--text-tertiary, var(--text-secondary))"
+                : "var(--primary-color, var(--accent-color))",
+              cursor: activeCount === 0 ? "default" : "pointer",
+              fontSize: "0.85rem",
+              fontWeight: 500,
+              padding: "0.35rem 0.6rem",
+              borderRadius: 6,
+              opacity: activeCount === 0 ? 0.55 : 1,
+            }}
+          >
+            Reset
+          </button>
+          <button type="button" onClick={onClose} style={iconBtnSmall}>Cancel</button>
+          <button
+            type="button"
+            onClick={apply}
+            style={{ ...primaryTealBtn, padding: "0.55rem 1.25rem" }}
+          >
+            Apply
+          </button>
+        </>
+      }
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem" }}>
+        <FilterFieldRow label="Source" icon={<Globe size={14} />}>
+          <MultiSelectDropdown
+            options={SOURCE_OPTIONS}
+            selected={draft.source}
+            onChange={(v) => setDraft({ ...draft, source: v })}
+            placeholder="All sources"
+          />
+        </FilterFieldRow>
+        <FilterFieldRow label="Gender" icon={<UserPlus size={14} />}>
+          <MultiSelectDropdown
+            options={GENDER_OPTIONS}
+            selected={draft.gender}
+            onChange={(v) => setDraft({ ...draft, gender: v })}
+            placeholder="Any gender"
+          />
+        </FilterFieldRow>
+        <FilterFieldRow label="Added date" icon={<CalendarIcon size={14} />}>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            <DateRangeFilter
+              value={draft.dateFilter}
+              onChange={(next) => setDraft({ ...draft, dateFilter: next })}
+              label={null}
+            />
+          </div>
+        </FilterFieldRow>
+        <FilterFieldRow label="Tags" icon={<TagIcon size={14} />}>
+          <MultiSelectDropdown
+            options={allTags.map((t) => ({ value: String(t.id), label: t.name, color: tagColour(t) }))}
+            selected={draft.tags}
+            onChange={(v) => setDraft({ ...draft, tags: v })}
+            placeholder="Any tag"
+            searchable
+            chipColours
+          />
+        </FilterFieldRow>
+      </div>
+    </ModalShell>
+  );
+}
+
+function FilterFieldRow({ label, icon, children }) {
+  return (
+    <div>
+      <div style={{ ...filterLabelStyle, marginBottom: "0.45rem", display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+        {icon}
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── MultiSelectDropdown — trigger button + checkbox-list popover ───
+// Open/close is local state; close on outside-click / Esc. Optional
+// `searchable` adds a filter input on top of the list (used by Tags).
+// `chipColours` renders a small color dot next to each option (used by
+// Tags so the user can recognise their own labels visually).
+//
+// The popover renders with `position: fixed` and coordinates computed
+// from the trigger's bounding rect. Two reasons:
+//   1. The dropdown lives inside a modal whose body has `overflow:auto`
+//      — with `position:absolute` the popover gets clipped at the
+//      modal's bottom edge (the user had to scroll inside the modal
+//      to reveal the Tags list).
+//   2. The popover auto-flips upward when there's not enough room
+//      below the trigger — so the last filter in the modal can show
+//      its full list without forcing the modal to scroll at all.
+function MultiSelectDropdown({ options, selected, onChange, placeholder, searchable = false, chipColours = false }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [popoverPos, setPopoverPos] = useState(null);
+  const wrapRef = useRef(null);
+  const triggerRef = useRef(null);
+  // The popover is rendered via createPortal to document.body (see the
+  // big comment near the popover render). It is therefore NOT a DOM
+  // descendant of wrapRef, so the outside-click handler needs its own
+  // ref to recognise clicks-on-popover as "inside".
+  const popoverRef = useRef(null);
+
+  // Compute fixed-positioned coordinates from the trigger's rect.
+  //
+  // Auto-flip heuristic (revised):
+  //   * Open UPWARD if the trigger's vertical center sits in the
+  //     bottom ~45% of the viewport AND there's at least POPOVER_MIN
+  //     room above.
+  //   * Otherwise open downward.
+  //
+  // The previous heuristic ("only flip up when spaceBelow < 160px")
+  // didn't work inside a modal — the popover can flow outside the
+  // modal into the dim backdrop area, so `spaceBelow` was always
+  // plenty even when the popover ended up visually awkward (cut off
+  // at the modal bottom edge / overlapping the page below). Biasing
+  // by trigger position relative to the viewport gives the result
+  // the user expects: a filter at the bottom of the modal opens up.
+  //
+  // maxHeight is clamped to the available space minus 12 px viewport
+  // breathing room so the popover never bleeds past the viewport.
+  const POPOVER_DESIRED = 320;
+  const POPOVER_MIN = 160;
+  const computePos = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) return null;
+    const rect = trigger.getBoundingClientRect();
+    const vpH = window.innerHeight;
+    const spaceBelow = vpH - rect.bottom - 12;
+    const spaceAbove = rect.top - 12;
+    const triggerCenterY = rect.top + rect.height / 2;
+    const inLowerHalf = triggerCenterY > vpH * 0.55;
+    const openUp = inLowerHalf && spaceAbove >= POPOVER_MIN;
+    const available = openUp ? spaceAbove : spaceBelow;
+    const maxH = Math.max(POPOVER_MIN, Math.min(available, POPOVER_DESIRED));
+    if (openUp) {
+      return {
+        left: rect.left,
+        bottom: vpH - rect.top + 6,
+        width: rect.width,
+        maxHeight: maxH,
+      };
+    }
+    return {
+      left: rect.left,
+      top: rect.bottom + 6,
+      width: rect.width,
+      maxHeight: maxH,
+    };
+  };
+
+  useEffect(() => {
+    if (!open) return undefined;
+    setPopoverPos(computePos());
+    const recompute = () => setPopoverPos(computePos());
+    const onDoc = (e) => {
+      // Popover is portalled to document.body, so it's NOT a DOM
+      // descendant of wrapRef. Check both refs.
+      const insideWrap = wrapRef.current && wrapRef.current.contains(e.target);
+      const insidePopover = popoverRef.current && popoverRef.current.contains(e.target);
+      if (!insideWrap && !insidePopover) setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", recompute);
+    // Capture-phase scroll listener catches ANY scroll — page, modal
+    // body, any nested overflow:auto container — and keeps the popover
+    // glued to the trigger as it moves.
+    window.addEventListener("scroll", recompute, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", recompute);
+      window.removeEventListener("scroll", recompute, true);
+    };
+  }, [open]);
+
+  const toggle = (value) => {
+    if (selected.includes(value)) onChange(selected.filter((v) => v !== value));
+    else onChange([...selected, value]);
+  };
+
+  // Summary shown inside the trigger.
+  let summary;
+  if (selected.length === 0) {
+    summary = <span style={{ color: "var(--text-tertiary, var(--text-secondary))" }}>{placeholder}</span>;
+  } else if (selected.length === 1) {
+    const lone = options.find((o) => o.value === selected[0]);
+    summary = lone ? lone.label : "1 selected";
+  } else {
+    summary = `${selected.length} selected`;
+  }
+
+  const filtered = searchable && search.trim()
+    ? options.filter((o) => o.label.toLowerCase().includes(search.trim().toLowerCase()))
+    : options;
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          ...modalInputStyle,
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+          cursor: "pointer",
+          textAlign: "left",
+          minHeight: 42,
+          padding: "0.55rem 0.8rem",
+        }}
+      >
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {summary}
+        </span>
+        {selected.length > 0 && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => { e.stopPropagation(); onChange([]); }}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange([]); } }}
+            aria-label="Clear selection"
+            title="Clear selection"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "0.15rem",
+              borderRadius: 999,
+              background: "var(--subtle-bg, rgba(0,0,0,0.04))",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+            }}
+          >
+            <X size={12} />
+          </span>
+        )}
+        <ChevronDown size={14} style={{ color: "var(--text-secondary)", transition: "transform 0.12s ease", transform: open ? "rotate(180deg)" : "none" }} />
+      </button>
+      {open && popoverPos && createPortal(
+        <div
+          ref={popoverRef}
+          role="listbox"
+          style={{
+            position: "fixed",
+            ...popoverPos,
+            // Above the modal overlay (z=1000). Portalled to document.body
+            // (see comment at the top of the component) so it escapes the
+            // modal's `.glass` backdrop-filter — that backdrop-filter
+            // creates a containing block for position:fixed descendants
+            // per CSS spec, which is why the previous in-place render
+            // came out invisible / off-screen.
+            zIndex: 1100,
+            // IMPORTANT: --bg-color (not --surface-color). In dark
+            // wellness, --surface-color is rgba(30,38,40,0.6) — 60%
+            // transparent — which makes the popover see-through and
+            // illegible against the modal's form fields behind it.
+            // --bg-color is opaque in BOTH themes.
+            background: "var(--bg-color, #fff)",
+            border: "1px solid var(--border-color, rgba(0,0,0,0.18))",
+            borderRadius: 10,
+            boxShadow: "var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.25))",
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {searchable && (
+            <div style={{ padding: "0.5rem 0.6rem", borderBottom: "1px solid var(--border-color, rgba(0,0,0,0.08))" }}>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search…"
+                aria-label="Search options"
+                style={{
+                  width: "100%",
+                  padding: "0.35rem 0.55rem",
+                  border: "1px solid var(--border-color, rgba(0,0,0,0.12))",
+                  borderRadius: 6,
+                  background: "var(--surface-color, #fff)",
+                  color: "var(--text-primary)",
+                  fontSize: "0.85rem",
+                  outline: "none",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
+          )}
+          <div style={{ overflowY: "auto", padding: "0.25rem 0", flex: 1, minHeight: 0 }}>
+            {filtered.length === 0 && (
+              <div style={{ padding: "0.6rem 0.8rem", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                {searchable && search.trim() ? "No matches." : "No options."}
+              </div>
+            )}
+            {filtered.map((opt) => {
+              const isSelected = selected.includes(opt.value);
+              return (
+                <label
+                  key={opt.value}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.55rem",
+                    padding: "0.45rem 0.8rem",
+                    cursor: "pointer",
+                    fontSize: "0.88rem",
+                    color: "var(--text-primary)",
+                    background: isSelected ? "var(--subtle-bg, rgba(0,0,0,0.04))" : "transparent",
+                    transition: "background 0.1s ease",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggle(opt.value)}
+                    aria-label={opt.label}
+                  />
+                  {chipColours && opt.color && (
+                    <span style={{ width: 8, height: 8, borderRadius: 4, background: opt.color, flexShrink: 0 }} />
+                  )}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{opt.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+// ── Styles ──────────────────────────────────────────────────────────
 const thStyle = {
   textAlign: "left",
   padding: "0.75rem 1rem",
@@ -1862,30 +1438,1052 @@ const tdStyle = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
 };
-// #229: name cell ellipses long names so they don't blow out the table layout.
 const nameTdStyle = { ...tdStyle, maxWidth: 220 };
-const inputStyle = {
-  padding: "0.55rem 0.75rem",
-  background: "rgba(255,255,255,0.05)",
-  border: "1px solid rgba(255,255,255,0.08)",
+const iconBtnSmall = {
+  background: "var(--subtle-bg, rgba(0,0,0,0.04))",
+  border: "1px solid var(--border-color, rgba(0,0,0,0.12))",
+  borderRadius: 6,
+  color: "var(--text-secondary)",
+  cursor: "pointer",
+  padding: "0.25rem 0.4rem",
+  display: "inline-flex",
+  alignItems: "center",
+  flexShrink: 0,
+  fontSize: "0.8rem",
+};
+const filterLabelStyle = {
+  fontSize: "0.75rem",
+  fontWeight: 600,
+  color: "var(--text-secondary)",
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  marginBottom: "0.5rem",
+  display: "inline-flex",
+  alignItems: "center",
+};
+const paginationBtn = (disabled) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: "0.25rem",
+  padding: "0.5rem 1rem",
+  background: disabled ? "transparent" : "var(--subtle-bg, rgba(0,0,0,0.04))",
+  border: "1px solid var(--border-color, rgba(0,0,0,0.12))",
+  borderRadius: 8,
+  cursor: disabled ? "not-allowed" : "pointer",
+  color: disabled ? "var(--text-secondary)" : "var(--text-primary)",
+  fontSize: "0.85rem",
+  opacity: disabled ? 0.5 : 1,
+});
+const bulkBtnStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "0.3rem",
+  padding: "0.4rem 0.75rem",
+  background: "var(--subtle-bg, rgba(0,0,0,0.04))",
+  border: "1px solid var(--border-color, rgba(0,0,0,0.12))",
   borderRadius: 8,
   color: "var(--text-primary)",
-  fontSize: "0.9rem",
-  outline: "none",
+  cursor: "pointer",
+  fontSize: "0.85rem",
 };
-// #820 (tick #192) — filter input style. Active filters (non-empty value)
-// get a primary-color border tint so the user sees at a glance which
-// dropdowns are narrowing the result set. Uses the wellness theme's
-// --primary-color (teal) with the generic theme's --accent-color (blue) as
-// fallback per the standing rule on primary CTA color tokens.
-const filterInputStyle = (active) => ({
-  padding: "0.4rem 0.6rem",
-  background: "rgba(255,255,255,0.05)",
-  border: active
-    ? "1px solid var(--primary-color, var(--accent-color))"
-    : "1px solid rgba(255,255,255,0.08)",
-  borderRadius: 6,
+const tagChipStyle = (colour) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "0.2rem",
+  padding: "0.15rem 0.45rem",
+  borderRadius: 999,
+  background: `${colour}33`,
   color: "var(--text-primary)",
-  fontSize: "0.82rem",
-  outline: "none",
+  border: `1px solid ${colour}66`,
+  fontSize: "0.75rem",
+  whiteSpace: "nowrap",
 });
+// Variant rendered as a real <button> so clicks toggle the tag into
+// the BulkTagModal's selectedTags. Selected state gets a heavier
+// outline + brighter fill + a tick so the user can see what's marked
+// for the next Add / Remove operation.
+const inRowChipBtnStyle = (colour, isSelected) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "0.25rem",
+  padding: isSelected ? "0.15rem 0.5rem" : "0.15rem 0.45rem",
+  borderRadius: 999,
+  background: isSelected ? `${colour}66` : `${colour}22`,
+  color: "var(--text-primary)",
+  border: isSelected ? `2px solid ${colour}` : `1px solid ${colour}55`,
+  fontSize: "0.75rem",
+  fontWeight: isSelected ? 600 : 400,
+  whiteSpace: "nowrap",
+  cursor: "pointer",
+  outline: "none",
+  transition: "background 0.12s ease, border-color 0.12s ease",
+});
+const chipRemoveStyle = {
+  background: "transparent",
+  border: "none",
+  color: "inherit",
+  cursor: "pointer",
+  padding: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  opacity: 0.7,
+};
+const overflowChipStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "0.15rem 0.45rem",
+  borderRadius: 999,
+  background: "var(--subtle-bg, rgba(0,0,0,0.06))",
+  color: "var(--text-secondary)",
+  fontSize: "0.75rem",
+  cursor: "default",
+};
+const tagPopoverStyle = {
+  position: "absolute",
+  top: "100%",
+  left: 0,
+  marginTop: 6,
+  zIndex: 200,
+  minWidth: 220,
+  // --bg-color (not --surface-color) — see comment on the MultiSelect
+  // dropdown popover: --surface-color is translucent in dark wellness.
+  background: "var(--bg-color, #fff)",
+  border: "1px solid var(--border-color, rgba(0,0,0,0.18))",
+  borderRadius: 10,
+  boxShadow: "var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.25))",
+};
+const tagOptionStyle = {
+  width: "100%",
+  textAlign: "left",
+  padding: "0.4rem 0.6rem",
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  color: "var(--text-primary)",
+  fontSize: "0.85rem",
+  borderRadius: 6,
+};
+const dropdownMenuStyle = {
+  position: "absolute",
+  top: "calc(100% + 4px)",
+  right: 0,
+  minWidth: 160,
+  // --bg-color: opaque in both themes (--surface-color is translucent
+  // in dark wellness, which makes menu items hard to read).
+  background: "var(--bg-color, #fff)",
+  border: "1px solid var(--border-color, rgba(0,0,0,0.18))",
+  borderRadius: 8,
+  boxShadow: "var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.25))",
+  padding: "0.25rem",
+  zIndex: 100,
+  display: "flex",
+  flexDirection: "column",
+};
+const dropdownItemStyle = {
+  textAlign: "left",
+  padding: "0.5rem 0.75rem",
+  background: "transparent",
+  color: "var(--text-primary, inherit)",
+  border: "none",
+  borderRadius: 6,
+  cursor: "pointer",
+  fontSize: "0.85rem",
+};
+
+// ── Primary (teal) dropdown button styles ──────────────────────────
+// Per the wellness-theme standing rule, primary CTAs read from
+// --primary-color (teal in wellness; falls back to --accent-color in
+// generic). This keeps the "Add" button on-brand in both verticals.
+const primaryTealBtn = {
+  display: "flex",
+  alignItems: "center",
+  gap: "0.3rem",
+  padding: "0.5rem 1rem",
+  background: "var(--primary-color, var(--accent-color))",
+  color: "#fff",
+  border: "none",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 500,
+};
+const primaryMenuStyle = {
+  position: "absolute",
+  top: "calc(100% + 6px)",
+  right: 0,
+  minWidth: 240,
+  // --bg-color: opaque in both themes (--surface-color is translucent
+  // in dark wellness, which makes "New patient" / "Bulk tag" items
+  // hard to read against the page behind them).
+  background: "var(--bg-color, #fff)",
+  border: "1px solid var(--border-color, rgba(0,0,0,0.18))",
+  borderRadius: 10,
+  boxShadow: "var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.25))",
+  padding: "0.4rem",
+  zIndex: 200,
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.15rem",
+};
+const primaryMenuItem = {
+  display: "flex",
+  alignItems: "center",
+  gap: "0.6rem",
+  textAlign: "left",
+  padding: "0.55rem 0.7rem",
+  background: "transparent",
+  color: "var(--text-primary)",
+  border: "none",
+  borderRadius: 8,
+  cursor: "pointer",
+};
+
+// ── Modal shell (reused by both create + bulk-tag modals) ──────────
+// Theme-adaptive: we let the `.glass` class supply the background
+// (translucent white in light mode, translucent dark teal in dark
+// mode — both already defined in [theme/wellness.css](src/theme/wellness.css))
+// and never set an inline background or `color` here. Borders + the
+// header/footer separators use `--border-color` which also adapts.
+function ModalShell({ title, onClose, children, footer, width = 560 }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  // Page-scroll lock while the modal is mounted.
+  //
+  // The app shell layout (components/Layout.jsx) uses
+  //   .app-shell { overflow:hidden; height:100vh }
+  //   <main>     { flex:1; overflowY:auto }   ← React inline style
+  // — so the actual scrollable element is <main>, NOT <body>.
+  //
+  // IMPORTANT: we save/restore the LONGHAND properties (overflowY +
+  // overflowX) rather than the `overflow` shorthand. Setting the
+  // shorthand on a node whose inline style only has the longhand
+  // (`overflowY:auto`) wipes that longhand when the shorthand is
+  // cleared on cleanup — leaving <main> with no overflow rule at
+  // all and the page stuck un-scrollable until refresh. Touching
+  // longhands keeps the shorthand untouched and vice-versa.
+  useEffect(() => {
+    const mainEl = document.querySelector("main");
+    const html = document.documentElement;
+    const body = document.body;
+    const targets = [mainEl, html, body].filter(Boolean);
+    const prev = targets.map((el) => ({
+      el,
+      overflowY: el.style.overflowY,
+      overflowX: el.style.overflowX,
+    }));
+    targets.forEach((el) => {
+      el.style.overflowY = "hidden";
+      el.style.overflowX = "hidden";
+    });
+    return () => {
+      prev.forEach(({ el, overflowY, overflowX }) => {
+        el.style.overflowY = overflowY;
+        el.style.overflowX = overflowX;
+      });
+    };
+  }, []);
+  // Portal the modal out to document.body. The app's <main> element
+  // gets `transform: translateY(0)` (from .animate-fade-in's `forwards`
+  // fill-mode in index.css) which, per CSS spec, creates a containing
+  // block for `position: fixed` descendants — so an in-place modal
+  // gets positioned relative to <main>'s scrolled content, not the
+  // viewport. When <main> is scrolled (e.g. user clicked Edit on a
+  // row near the bottom of the list), the modal renders far above
+  // the visible area and only the footer slice is visible.
+  // Rendering through document.body escapes the transformed ancestor.
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+        padding: "1rem",
+      }}
+    >
+      <div
+        className="glass"
+        style={{
+          width: "100%",
+          maxWidth: width,
+          maxHeight: "92vh",
+          display: "flex",
+          flexDirection: "column",
+          borderRadius: 14,
+          // .glass already sets border + background; keep `border` here as a
+          // no-op fallback so a future theme without .glass still renders.
+          border: "1px solid var(--border-color, rgba(0,0,0,0.1))",
+          boxShadow: "var(--shadow-lg, 0 24px 60px rgba(0,0,0,0.25))",
+          overflow: "hidden",
+        }}
+      >
+        <header
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "1rem 1.25rem",
+            borderBottom: "1px solid var(--border-color, rgba(0,0,0,0.08))",
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600, color: "var(--text-primary)" }}>{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              padding: "0.25rem",
+              display: "inline-flex",
+            }}
+          >
+            <X size={18} />
+          </button>
+        </header>
+        <div style={{ padding: "1.25rem", overflow: "auto", flex: 1, color: "var(--text-primary)" }}>{children}</div>
+        {footer && (
+          <footer
+            style={{
+              padding: "0.85rem 1.25rem",
+              borderTop: "1px solid var(--border-color, rgba(0,0,0,0.08))",
+              display: "flex",
+              gap: "0.6rem",
+              justifyContent: "flex-end",
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            {footer}
+          </footer>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ── Create-customer modal ──────────────────────────────────────────
+function PatientCreateModal({ locations, onClose, onCreated, editPatient = null }) {
+  const notify = useNotifyFromModal();
+  const isEdit = !!editPatient;
+  const INDIAN_MOBILE_RE = /^(\+91)?[6-9]\d{9}$/;
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const toE164OnBlur = (raw) => {
+    if (!raw) return raw;
+    const cleaned = String(raw).replace(/[\s\-()]/g, "");
+    if (cleaned.startsWith("+91") && /^\+91[6-9]\d{9}$/.test(cleaned)) return cleaned;
+    if (/^91[6-9]\d{9}$/.test(cleaned)) return "+" + cleaned;
+    if (/^[6-9]\d{9}$/.test(cleaned)) return "+91" + cleaned;
+    return raw;
+  };
+
+  // Date fields come back from the API as ISO strings; <input type="date">
+  // needs YYYY-MM-DD. Strip the time half.
+  const toDateInput = (val) => {
+    if (!val) return "";
+    if (typeof val === "string") return val.slice(0, 10);
+    try { return new Date(val).toISOString().slice(0, 10); } catch { return ""; }
+  };
+
+  const [form, setForm] = useState(() => editPatient ? {
+    name: editPatient.name || "",
+    phone: editPatient.phone || "",
+    email: editPatient.email || "",
+    gender: editPatient.gender || "",
+    taxType: editPatient.taxType || "",
+    source: editPatient.source || "walk-in",
+    instagramHandle: editPatient.instagramHandle || "",
+    dob: toDateInput(editPatient.dob),
+    anniversary: toDateInput(editPatient.anniversary),
+    notes: editPatient.notes || "",
+    locationId: editPatient.locationId || locations[0]?.id || "",
+  } : {
+    name: "",
+    phone: "",
+    email: "",
+    gender: "",
+    taxType: "",
+    source: "walk-in",
+    instagramHandle: "",
+    dob: "",
+    anniversary: "",
+    notes: "",
+    locationId: locations[0]?.id || "",
+  });
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const trimmedName = (form.name || "").trim();
+    if (trimmedName.length < 1) { notify.error("Full name is required"); return; }
+    const phoneClean = (form.phone || "").trim().replace(/[\s\-()]/g, "");
+    if (!phoneClean) { notify.error("Phone is required"); return; }
+    if (!INDIAN_MOBILE_RE.test(phoneClean)) {
+      notify.error("Enter a valid Indian mobile (10 digits, starting 6-9; +91 optional).");
+      return;
+    }
+    const emailRaw = (form.email || "").trim();
+    if (emailRaw && !EMAIL_RE.test(emailRaw)) {
+      notify.error("Enter a valid email address (e.g. customer@example.com).");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const payload = {
+        name: trimmedName,
+        phone: form.phone,
+        email: emailRaw || null,
+        gender: form.gender || null,
+        taxType: form.taxType || null,
+        source: form.source || null,
+        instagramHandle: form.instagramHandle ? form.instagramHandle.trim().replace(/^@/, "") : null,
+        dob: form.dob || null,
+        anniversary: form.anniversary || null,
+        notes: form.notes || null,
+        locationId: form.locationId ? parseInt(form.locationId) : null,
+      };
+      if (isEdit) {
+        await fetchApi(`/api/wellness/patients/${editPatient.id}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        notify.success(`Customer "${trimmedName}" updated`);
+      } else {
+        await fetchApi("/api/wellness/patients", { method: "POST", body: JSON.stringify(payload) });
+        notify.success(`Customer "${trimmedName}" added`);
+      }
+      onCreated();
+    } catch (_err) { /* toast fired by fetchApi */ }
+    finally { setSubmitting(false); }
+  };
+
+  return (
+    <ModalShell
+      title={isEdit ? "Edit customer" : "Create customer"}
+      onClose={onClose}
+      width={620}
+      footer={
+        <>
+          <button type="button" onClick={onClose} style={iconBtnSmall}>Cancel</button>
+          <button
+            type="submit"
+            form="patient-create-form"
+            disabled={submitting}
+            style={{ ...primaryTealBtn, padding: "0.55rem 1.25rem", opacity: submitting ? 0.6 : 1 }}
+          >
+            {submitting
+              ? (isEdit ? "Saving…" : "Adding…")
+              : (isEdit ? "Save changes" : "Add customer")}
+          </button>
+        </>
+      }
+    >
+      <form id="patient-create-form" onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <FormField label="Phone number" required icon={<Phone size={14} />}>
+          <input
+            type="tel"
+            inputMode="tel"
+            required
+            value={form.phone}
+            placeholder="+91 9876543210"
+            onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            onBlur={(e) => setForm({ ...form, phone: toE164OnBlur(e.target.value) })}
+            style={modalInputStyle}
+          />
+        </FormField>
+        <FormField label="Full name" required icon={<UserPlus size={14} />}>
+          <input
+            required
+            value={form.name}
+            placeholder="John Doe"
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            style={modalInputStyle}
+          />
+        </FormField>
+        <FormField label="Gender">
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            {[
+              { value: "M", label: "Male" },
+              { value: "F", label: "Female" },
+              { value: "Other", label: "Other" },
+            ].map((g) => (
+              <button
+                key={g.value}
+                type="button"
+                onClick={() => setForm({ ...form, gender: g.value })}
+                aria-pressed={form.gender === g.value}
+                style={{
+                  flex: "1 1 90px",
+                  padding: "0.7rem 0.5rem",
+                  borderRadius: 10,
+                  border: `1px solid ${form.gender === g.value ? "var(--primary-color, var(--accent-color))" : "var(--border-color, rgba(0,0,0,0.12))"}`,
+                  background: form.gender === g.value ? "var(--primary-color, var(--accent-color))" : "var(--subtle-bg, rgba(0,0,0,0.02))",
+                  color: form.gender === g.value ? "#fff" : "var(--text-primary)",
+                  cursor: "pointer",
+                  fontWeight: 500,
+                  fontSize: "0.9rem",
+                }}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+        </FormField>
+        <FormField label="Email" icon={<MailIcon size={14} />}>
+          <input
+            type="email"
+            value={form.email}
+            placeholder="customer@example.com"
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            style={modalInputStyle}
+          />
+        </FormField>
+        <FormField label="Tax type">
+          <div style={{ display: "flex", gap: "1rem", paddingTop: 4 }}>
+            {[
+              { value: "individual", label: "Individual" },
+              { value: "business", label: "Business" },
+            ].map((t) => (
+              <label key={t.value} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", cursor: "pointer", fontSize: "0.9rem" }}>
+                <input
+                  type="radio"
+                  name="taxType"
+                  value={t.value}
+                  checked={form.taxType === t.value}
+                  onChange={() => setForm({ ...form, taxType: t.value })}
+                />
+                {t.label}
+              </label>
+            ))}
+          </div>
+        </FormField>
+        <FormField label="Instagram handle" icon={<AtSign size={14} />}>
+          <input
+            value={form.instagramHandle}
+            placeholder="@yourhandle"
+            onChange={(e) => setForm({ ...form, instagramHandle: e.target.value })}
+            style={modalInputStyle}
+          />
+        </FormField>
+        <FormField label="Lead source" icon={<Globe size={14} />}>
+          <select
+            value={form.source}
+            onChange={(e) => setForm({ ...form, source: e.target.value })}
+            style={modalInputStyle}
+          >
+            <option value="walk-in">Walk-in</option>
+            <option value="referral">Referral</option>
+            <option value="website-form">Website form</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="instagram">Instagram</option>
+            <option value="meta-ad">Meta ad</option>
+            <option value="google-ad">Google ad</option>
+            <option value="indiamart">IndiaMART</option>
+          </select>
+        </FormField>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))", gap: "1rem" }}>
+          <FormField label="Date of birth" icon={<CalendarIcon size={14} />}>
+            <input
+              type="date"
+              value={form.dob}
+              onChange={(e) => setForm({ ...form, dob: e.target.value })}
+              style={modalInputStyle}
+            />
+          </FormField>
+          <FormField label="Date of anniversary" icon={<CalendarIcon size={14} />}>
+            <input
+              type="date"
+              value={form.anniversary}
+              onChange={(e) => setForm({ ...form, anniversary: e.target.value })}
+              style={modalInputStyle}
+            />
+          </FormField>
+        </div>
+        {locations.length > 1 && (
+          <FormField label="Clinic">
+            <select
+              value={form.locationId}
+              onChange={(e) => setForm({ ...form, locationId: e.target.value })}
+              style={modalInputStyle}
+            >
+              <option value="">Select clinic</option>
+              {locations.map((l) => (
+                <option key={l.id} value={l.id}>{l.name}</option>
+              ))}
+            </select>
+          </FormField>
+        )}
+        <FormField label="Notes" icon={<FileText size={14} />}>
+          <textarea
+            value={form.notes}
+            placeholder="Add any context, allergies, preferences…"
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}
+            style={{ ...modalInputStyle, minHeight: 80, resize: "vertical", fontFamily: "inherit" }}
+          />
+        </FormField>
+      </form>
+    </ModalShell>
+  );
+}
+
+// Small helper that re-exposes useNotify inside the modal components
+// (they're top-level here, so they need their own hook call).
+function useNotifyFromModal() {
+  return useNotify();
+}
+
+function FormField({ label, required, icon, children }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 500 }}>
+        {required && <span style={{ color: "#e57373" }}>*</span>}
+        {icon}
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+const modalInputStyle = {
+  width: "100%",
+  padding: "0.6rem 0.8rem",
+  // Theme-adaptive: surface-color is white in light wellness, dark-teal-tint
+  // in dark wellness. Border picks the same adaptive token. The wellness
+  // theme also has an `[data-vertical="wellness"] input { ... !important }`
+  // rule that wins anyway, but we keep the inline values sane for both
+  // themes + generic vertical.
+  background: "var(--surface-color, #fff)",
+  border: "1px solid var(--border-color, rgba(0,0,0,0.12))",
+  borderRadius: 8,
+  color: "var(--text-primary)",
+  fontSize: "0.92rem",
+  outline: "none",
+  boxSizing: "border-box",
+};
+
+// ── Bulk-customer-tagging modal ─────────────────────────────────────
+// Two-pane: paginated customer list (50/page) + tag multi-select. Bottom
+// actions: Remove Tags / Add Tags. Selection persists across pages.
+function BulkTagModal({ allTags, onClose, onTagsChanged, onTagCreated }) {
+  const notify = useNotifyFromModal();
+  const PAGE = 50;
+  const [page, setPage] = useState(1);
+  const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [selectedPatients, setSelectedPatients] = useState(() => new Set());
+  const [selectedTags, setSelectedTags] = useState(() => new Set());
+  const [acting, setActing] = useState(false);
+  const [showTagPicker, setShowTagPicker] = useState(false);
+  // Bumped after a successful bulk op so the modal's own row list
+  // refetches (the chip strip on each row reflects current state).
+  const [reloadTick, setReloadTick] = useState(0);
+  const tagPickerRef = useRef(null);
+
+  // Debounce search input.
+  useEffect(() => {
+    const t = setTimeout(() => { setDebouncedQ(q.trim()); setPage(1); }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  // Fetch customers page.
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams();
+    if (debouncedQ) params.set("q", debouncedQ);
+    params.set("limit", String(PAGE));
+    params.set("offset", String((page - 1) * PAGE));
+    setLoading(true);
+    fetchApi(`/api/wellness/patients?${params.toString()}`)
+      .then((d) => {
+        if (cancelled) return;
+        setRows(d.patients || []);
+        setTotal(d.total || 0);
+      })
+      .catch(() => { if (!cancelled) { setRows([]); setTotal(0); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [page, debouncedQ, reloadTick]);
+
+  // Close tag picker on outside click.
+  useEffect(() => {
+    if (!showTagPicker) return undefined;
+    const onDoc = (e) => {
+      if (tagPickerRef.current && !tagPickerRef.current.contains(e.target)) setShowTagPicker(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [showTagPicker]);
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE));
+  const pageIds = rows.map((r) => r.id);
+  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedPatients.has(id));
+  const someOnPageSelected = pageIds.some((id) => selectedPatients.has(id));
+  const togglePageAll = () => {
+    setSelectedPatients((prev) => {
+      const next = new Set(prev);
+      if (allOnPageSelected) for (const id of pageIds) next.delete(id);
+      else for (const id of pageIds) next.add(id);
+      return next;
+    });
+  };
+  const togglePatient = (id) => {
+    setSelectedPatients((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleTag = (tagId) => {
+    setSelectedTags((prev) => {
+      const next = new Set(prev);
+      if (next.has(tagId)) next.delete(tagId);
+      else next.add(tagId);
+      return next;
+    });
+  };
+
+  const performBulk = async (op) => {
+    const patientIds = Array.from(selectedPatients);
+    const tagIds = Array.from(selectedTags);
+    if (!patientIds.length) { notify.error("Select at least one customer"); return; }
+    if (!tagIds.length) { notify.error("Select at least one tag"); return; }
+    setActing(true);
+    try {
+      if (op === "add") {
+        const res = await fetchApi(`/api/wellness/patients/tags/bulk`, {
+          method: "POST",
+          body: JSON.stringify({ patientIds, tagIds }),
+        });
+        notify.success(`Added tag(s) — ${res?.assigned ?? 0} new link(s)`);
+      } else {
+        // fetchApi short-circuits every DELETE response to `true` (see
+        // api.js:200) so the JSON body with the `removed` count gets
+        // discarded. Use raw fetch here so we can show the real number
+        // AND surface a precise failure if the request 4xx/5xxs.
+        const token = getAuthToken();
+        const resp = await fetch(`/api/wellness/patients/tags/bulk`, {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ patientIds, tagIds }),
+        });
+        const body = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          notify.error(body?.error || `Remove failed (${resp.status})`);
+          return;
+        }
+        notify.success(`Removed tag(s) — ${body?.removed ?? 0} link(s)`);
+      }
+      onTagsChanged();
+      // Clear the tag selection (the action's done) and refetch the
+      // modal's row list so each customer's chip strip reflects the
+      // new state — pre-fix the user had to close + reopen to see
+      // tags actually disappear after a remove.
+      setSelectedTags(new Set());
+      setReloadTick((t) => t + 1);
+    } catch (_err) { /* toasted */ }
+    finally { setActing(false); }
+  };
+
+  const selectedTagObjects = allTags.filter((t) => selectedTags.has(t.id));
+
+  return (
+    <ModalShell
+      title="Bulk customer tagging"
+      onClose={onClose}
+      width={920}
+      footer={
+        <>
+          <span style={{ marginRight: "auto", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+            {selectedPatients.size} customer(s) · {selectedTags.size} tag(s) selected
+          </span>
+          <button type="button" onClick={onClose} style={iconBtnSmall}>Cancel</button>
+          <button
+            type="button"
+            onClick={() => performBulk("remove")}
+            disabled={acting || !selectedPatients.size || !selectedTags.size}
+            style={{
+              ...bulkBtnStyle,
+              opacity: acting || !selectedPatients.size || !selectedTags.size ? 0.5 : 1,
+              border: "1px solid #e57373",
+              color: "#e57373",
+            }}
+          >
+            <Trash2 size={14} /> Remove tags
+          </button>
+          <button
+            type="button"
+            onClick={() => performBulk("add")}
+            disabled={acting || !selectedPatients.size || !selectedTags.size}
+            style={{
+              ...primaryTealBtn,
+              padding: "0.5rem 1.25rem",
+              opacity: acting || !selectedPatients.size || !selectedTags.size ? 0.6 : 1,
+            }}
+          >
+            <Plus size={14} /> Add tags
+          </button>
+        </>
+      }
+    >
+      <p style={{ marginTop: 0, color: "var(--text-secondary)", fontSize: "0.88rem" }}>
+        Select multiple customers and tags, then add or remove tags in bulk. Selection
+        persists as you page through the list.
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: "1.25rem", alignItems: "start" }}>
+        {/* ── Customers pane ──────────────────────────────── */}
+        <div>
+          <div style={{ ...filterLabelStyle, marginBottom: "0.5rem" }}>Customers</div>
+          {/* Icon-inside-input search bar (same pattern as the main page).
+              No wrapper border — wellness's input rule supplies the
+              border + bg + focus glow, so we don't double-shell. */}
+          <div style={{ position: "relative", marginBottom: "0.6rem" }}>
+            <Search
+              size={14}
+              color="var(--text-secondary)"
+              style={{
+                position: "absolute",
+                left: 12,
+                top: "50%",
+                transform: "translateY(-50%)",
+                pointerEvents: "none",
+              }}
+              aria-hidden
+            />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search by name or phone…"
+              style={{
+                width: "100%",
+                padding: "0.5rem 0.75rem 0.5rem 2.1rem",
+                borderRadius: 10,
+                fontSize: "0.9rem",
+                fontFamily: "inherit",
+                background: "var(--surface-color, #fff)",
+                border: "1px solid var(--border-color, rgba(0,0,0,0.12))",
+                color: "var(--text-primary)",
+                outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.3rem 0", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+            <input
+              type="checkbox"
+              checked={allOnPageSelected}
+              ref={(el) => { if (el) el.indeterminate = !allOnPageSelected && someOnPageSelected; }}
+              onChange={togglePageAll}
+            />
+            Select all on page
+          </label>
+          <div
+            style={{
+              maxHeight: 360,
+              overflowY: "auto",
+              border: "1px solid var(--border-color, rgba(0,0,0,0.08))",
+              borderRadius: 10,
+              background: "var(--subtle-bg, rgba(0,0,0,0.02))",
+            }}
+          >
+            {loading && (
+              <div style={{ padding: "1rem", color: "var(--text-secondary)", fontSize: "0.85rem" }}>Loading…</div>
+            )}
+            {!loading && rows.length === 0 && (
+              <div style={{ padding: "1rem", color: "var(--text-secondary)", fontSize: "0.85rem" }}>No customers match.</div>
+            )}
+            {!loading && rows.map((p) => {
+              const checked = selectedPatients.has(p.id);
+              return (
+                <div
+                  key={p.id}
+                  // Using <div> rather than <label> because we have
+                  // interactive chip buttons inside; with a <label>
+                  // the browser delegates the label click to the
+                  // <input>, double-firing alongside the chip's own
+                  // onClick. Manual row-click handler skips the chip
+                  // case via the closest("[data-tag-chip]") guard.
+                  onClick={(e) => {
+                    if (e.target.closest("[data-tag-chip]")) return;
+                    togglePatient(p.id);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "0.6rem",
+                    padding: "0.5rem 0.7rem",
+                    borderBottom: "1px solid var(--border-color, rgba(0,0,0,0.06))",
+                    background: checked ? "rgba(38,88,85,0.18)" : "transparent",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => togglePatient(p.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label={`Select ${p.name || "customer"}`}
+                    style={{ marginTop: 4 }}
+                  />
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem", minWidth: 0, flex: 1 }}>
+                    <span style={{ fontSize: "0.9rem", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {p.name || "(unnamed)"}
+                    </span>
+                    <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>{p.phone || "—"}</span>
+                    {Array.isArray(p.tags) && p.tags.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.2rem" }}>
+                        {p.tags.slice(0, 6).map((t) => {
+                          const isTagSelected = selectedTags.has(t.id);
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              data-tag-chip="1"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleTag(t.id);
+                              }}
+                              title={isTagSelected ? `Deselect ${t.name}` : `Select ${t.name}`}
+                              style={inRowChipBtnStyle(tagColour(t), isTagSelected)}
+                            >
+                              {isTagSelected && <span aria-hidden style={{ fontSize: "0.7rem" }}>✓</span>}
+                              {t.name}
+                            </button>
+                          );
+                        })}
+                        {p.tags.length > 6 && (
+                          <span style={overflowChipStyle}>+{p.tags.length - 6}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Pagination */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "0.6rem", gap: "0.5rem", flexWrap: "wrap" }}>
+            <span style={{ color: "var(--text-secondary)", fontSize: "0.78rem" }}>
+              {total === 0 ? "0 of 0" : `${(page - 1) * PAGE + 1}–${Math.min(page * PAGE, total)} of ${total.toLocaleString()}`}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              <button
+                type="button"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                style={paginationBtn(page <= 1)}
+                aria-label="Previous page"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+                {page} / {totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                style={paginationBtn(page >= totalPages)}
+                aria-label="Next page"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Tags pane ──────────────────────────────────── */}
+        <div>
+          <div style={{ ...filterLabelStyle, marginBottom: "0.5rem" }}>Tags</div>
+          <div ref={tagPickerRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={() => setShowTagPicker((v) => !v)}
+              aria-haspopup="dialog"
+              aria-expanded={showTagPicker}
+              style={{
+                ...modalInputStyle,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                cursor: "pointer",
+                textAlign: "left",
+                minHeight: 44,
+              }}
+            >
+              <span style={{ flex: 1, color: selectedTags.size ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                {selectedTags.size ? `${selectedTags.size} tag(s) selected` : "Select tags…"}
+              </span>
+              <ChevronDown size={14} />
+            </button>
+            {showTagPicker && (
+              <TagPickerPopover
+                allTags={allTags}
+                onPick={(tag) => toggleTag(tag.id)}
+                onCreated={(tag) => { if (onTagCreated) onTagCreated(tag); toggleTag(tag.id); }}
+                onCreate={async (name) => {
+                  try {
+                    const res = await fetchApi("/api/wellness/patients/tags", {
+                      method: "POST",
+                      body: JSON.stringify({ name }),
+                    });
+                    if (res?.tag) {
+                      if (onTagCreated) onTagCreated(res.tag);
+                      toggleTag(res.tag.id);
+                    }
+                  } catch (_err) { /* toasted */ }
+                }}
+                onClose={() => setShowTagPicker(false)}
+                showCreate
+                title="Pick tags"
+              />
+            )}
+          </div>
+
+          {selectedTagObjects.length > 0 && (
+            <div style={{ marginTop: "0.75rem", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+              {selectedTagObjects.map((t) => (
+                <span key={t.id} style={tagChipStyle(tagColour(t))}>
+                  {t.name}
+                  <button
+                    type="button"
+                    onClick={() => toggleTag(t.id)}
+                    aria-label={`Remove ${t.name} from selection`}
+                    style={chipRemoveStyle}
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <p style={{ marginTop: "1rem", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+            Tip: choose multiple tags and apply them in one shot. &ldquo;Remove tags&rdquo; only affects
+            customers that currently have the selected tags.
+          </p>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}

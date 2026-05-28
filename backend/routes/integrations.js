@@ -435,4 +435,142 @@ router.get("/callified/sso", verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/integrations/callified/external-transcripts
+// Fetches campaign and transcript data from Callified's external API.
+// Uses API key from database (stored via Settings UI).
+router.get("/callified/external-transcripts", verifyToken, async (req, res) => {
+  try {
+    const callifiedApiUrl = process.env.CALLIFIED_API_URL;
+    const tenantId = req.user.tenantId;
+
+    if (!callifiedApiUrl) {
+      return res.status(503).json({
+        error: "Callified API URL not configured",
+        help: "Contact your administrator to configure Callified integration"
+      });
+    }
+
+    // Get API key from database (Integration table)
+    const integration = await prisma.integration.findFirst({
+      where: {
+        tenantId,
+        provider: "callified",
+        isActive: true
+      }
+    });
+
+    if (!integration?.token) {
+      return res.status(503).json({
+        error: "Callified integration not configured for your organization",
+        help: "Go to Settings → Integrations → Callified and add your Callified API key"
+      });
+    }
+
+    const callifiedApiKey = integration.token;
+
+    console.log(`[integrations] Fetching Callified transcripts for tenant ${tenantId}`);
+
+    // Call Callified API with X-API-Key header
+    const response = await fetch(`${callifiedApiUrl}/api/external/transcripts`, {
+      method: "GET",
+      headers: {
+        "X-API-Key": callifiedApiKey,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[integrations] Callified transcripts error: ${response.status}`, errorText);
+
+      if (response.status === 401) {
+        return res.status(401).json({
+          error: "Callified API key is invalid",
+          help: "Update your API key in Settings → Integrations → Callified"
+        });
+      }
+
+      throw new Error(`Callified API returned ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    // Update lastUsed timestamp
+    await prisma.integration.update({
+      where: { id: integration.id },
+      data: { updatedAt: new Date() }
+    });
+
+    res.json(data);
+  } catch (err) {
+    console.error("[integrations] callified external-transcripts:", err.message);
+
+    let statusCode = 503;
+    if (err.message?.includes("401")) statusCode = 401;
+    else if (err.message?.includes("404")) statusCode = 404;
+
+    res.status(statusCode).json({
+      error: "Failed to fetch Callified data",
+      details: process.env.NODE_ENV === "development" ? err.message : "Callified endpoint not available"
+    });
+  }
+});
+
+// AdsGPT Configuration — get/update tenant's AdsGPT aMember login (username or email)
+// GET is public (all authenticated users can read to USE their tenant's config)
+// PUT requires ADMIN (only admins can modify the config)
+router.get("/adsgpt/config", verifyToken, async (req, res) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { adsgptLogin: true }
+    });
+
+    if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+
+    res.json({
+      adsgptLogin: tenant.adsgptLogin || "",
+      configured: !!tenant.adsgptLogin
+    });
+  } catch (err) {
+    console.error("[integrations] adsgpt/config GET:", err);
+    res.status(500).json({ error: "Failed to fetch AdsGPT configuration" });
+  }
+});
+
+router.put("/adsgpt/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { adsgptLogin } = req.body;
+
+    if (!adsgptLogin || typeof adsgptLogin !== "string") {
+      return res.status(400).json({ error: "Username or email is required" });
+    }
+
+    const login = adsgptLogin.trim();
+
+    // Validate format: either email or username
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login);
+    const isUsername = /^[a-zA-Z0-9_.-]+$/.test(login) && login.length >= 3;
+
+    if (!isEmail && !isUsername) {
+      return res.status(400).json({ error: "Enter a valid username (3+ characters) or email address" });
+    }
+
+    const tenant = await prisma.tenant.update({
+      where: { id: req.user.tenantId },
+      data: { adsgptLogin: login },
+      select: { adsgptLogin: true, name: true }
+    });
+
+    res.json({
+      success: true,
+      adsgptLogin: tenant.adsgptLogin,
+      message: `AdsGPT login updated to "${tenant.adsgptLogin}"`
+    });
+  } catch (err) {
+    console.error("[integrations] adsgpt/config PUT:", err);
+    res.status(500).json({ error: "Failed to update AdsGPT configuration" });
+  }
+});
+
 module.exports = router;

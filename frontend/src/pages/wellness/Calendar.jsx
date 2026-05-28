@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useContext } from 'react';
 import { Link } from 'react-router-dom';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, User as UserIcon, Stethoscope, Plus, X, Building2, Home, Video, Phone, Car } from 'lucide-react';
 import React from 'react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { tenantLocale } from '../../utils/date';
-import Skeleton from '../../components/ui/Skeleton';
+// Issue #816: Reusable CSV import/export toolbar — bookings entity.
+import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
+import { AuthContext } from '../../App';
 
 // #615: default visible window is 9 AM → 7 PM, but visits scheduled outside
 // that window (early/late shifts, walk-ins booked for 8 AM) are NOT clamped
@@ -29,13 +31,32 @@ const STATUS_BORDER = {
   'no-show': '#ef4444', cancelled: '#64748b',
 };
 
-// #262: practitioners who can be assigned to visits include both doctors
-// and professionals (salon stylists, aestheticians, slimming therapists,
-// Ayurveda practitioners — see PRD §1). Pre-fix the calendar filter only
-// kept wellnessRole === 'doctor', so 12 professionals had no column even
-// though they had visits booked, and the receptionist couldn't see their
-// availability from the grid.
-const PRACTITIONER_ROLES = new Set(['doctor', 'professional']);
+// #262 / Option B: practitioner roles are now sourced from the per-tenant
+// WellnessRoleType catalog (admins maintain the list from Settings →
+// Wellness Role Types). The hard-coded fallback below is used when the
+// catalog hasn't been fetched yet (or the API errors out) — it matches
+// the original whitelist so behaviour is unchanged in the degenerate case.
+// The catalog gives roles a canTakeVisits flag + label; the role dropdown
+// reads from the live list.
+const FALLBACK_PRACTITIONER_KEYS = new Set(['doctor', 'professional']);
+const ALL_ROLES_KEY = '__all__';
+
+// Bridge between the two parallel role systems in this codebase:
+//   1. User.wellnessRole         — lowercase string, edited from Staff page
+//   2. UserRole → Role.key       — uppercase RBAC role assigned from
+//                                  Settings → Roles & Permissions (returned
+//                                  by /api/staff as `primaryRole.key`).
+// A user is treated as belonging to a wellness role if EITHER is set;
+// wellnessRole wins when both are present so explicit assignments aren't
+// overridden by a coincidentally-named RBAC role. The lowercase
+// normalisation lets RBAC "NURSE" match catalog "nurse" without forcing
+// admins to maintain both lists separately.
+function effectiveWellnessRole(u) {
+  if (u?.wellnessRole) return u.wellnessRole;
+  const rbacKey = u?.primaryRole?.key;
+  if (rbacKey && typeof rbacKey === 'string') return rbacKey.toLowerCase();
+  return null;
+}
 
 // Wave 7D — PRD Gap §11 item 4 — booking-type meta. Mirrors
 // PublicBooking.jsx so the calendar's per-event badge + legend uses the
@@ -58,32 +79,6 @@ const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const isoDay = (d) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
 const fmtHour = (h) => `${String(h).padStart(2, '0')}:00`;
 const UNASSIGNED_KEY = '__unassigned__';
-
-// #807 (Zylu-Gap CAL-002): match a Holiday row against a column. A holiday
-// applies to a column when:
-//   - holiday.locationId is null AND holiday.doctorId is null → tenant-wide
-//   - holiday.doctorId === column.id → personal day-off for that practitioner
-//   - holiday.locationId === <column's location> → all-staff at that location
-//
-// The column today is keyed by user.id (practitioner) or the synthetic
-// UNASSIGNED_KEY. Location-scoped holidays grey out EVERY practitioner column
-// since the day-view doesn't yet split by location (column granularity is
-// per-staff, not per-staff-per-location). When holiday-scope ambiguity is
-// removed by a future location filter on the calendar, this helper becomes
-// stricter without breaking the unscoped-holiday case.
-export function isHolidayForColumn(holidays, column) {
-  if (!Array.isArray(holidays) || holidays.length === 0) return null;
-  for (const h of holidays) {
-    // Tenant-wide holiday (no location, no doctor): applies to everyone.
-    if (!h.locationId && !h.doctorId) return h;
-    // Practitioner-specific day-off.
-    if (h.doctorId && column && h.doctorId === column.id) return h;
-    // Location-scoped holiday — without per-column location, grey out all
-    // non-Unassigned columns. (Unassigned column gets a banner-only signal.)
-    if (h.locationId && column && !column.isUnassigned) return h;
-  }
-  return null;
-}
 
 // #615: dynamic hour range — start with the default 9..19, then expand to
 // include the earliest and latest actual visit on the loaded day. Without
@@ -110,8 +105,39 @@ export function hoursForVisits(visits) {
   return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
 }
 
+// #807 — per-column holiday matcher. Used by Calendar's column headers
+// to decide whether a practitioner column should render the "Holiday — <name>"
+// tag + greyed-out style for the selected day. Contract pinned by
+// Calendar.test.jsx 'isHolidayForColumn() — #807 per-column holiday matcher'.
+//
+// Rules (in order):
+//   1. Empty/null holidays → null
+//   2. Practitioner-specific (h.doctorId set) → matches only column.id === h.doctorId
+//   3. Location-scoped (h.locationId set, no doctorId) → matches every NON-Unassigned column
+//      (Unassigned synthetic column is spared until per-column-location ships)
+//   4. Tenant-wide (no location, no doctor) → matches EVERY column (incl. Unassigned)
+// Returns the matching holiday row (truthy) or null.
+export function isHolidayForColumn(holidays, column) {
+  if (!holidays || !Array.isArray(holidays) || holidays.length === 0) return null;
+  for (const h of holidays) {
+    if (h.doctorId != null) {
+      if (h.doctorId === column.id) return h;
+      continue;
+    }
+    if (h.locationId != null) {
+      if (column.isUnassigned) continue;
+      return h;
+    }
+    return h;
+  }
+  return null;
+}
+
 export default function CalendarGrid() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  // Only regular users (patients) can book appointments, not staff/admins/doctors
+  const canBookAppointment = user?.role === 'USER';
   const [date, setDate] = useState(() => new Date());
   const [visits, setVisits] = useState([]);
   const [allStaff, setAllStaff] = useState([]);
@@ -127,6 +153,15 @@ export default function CalendarGrid() {
   // Wave 11 Agent GG: resource list (for the New Visit modal) + same-day holidays banner.
   const [resources, setResources] = useState([]);
   const [holidays, setHolidays] = useState([]);
+  // Option B: per-tenant role catalog. Drives the role-filter dropdown
+  // + the practitioner column set. Empty array until the first fetch
+  // resolves — see fallback logic in `practitionerKeys` below.
+  const [roleTypes, setRoleTypes] = useState([]);
+  // Selected role from the dropdown. ALL_ROLES_KEY shows every staff
+  // member whose role has canTakeVisits=true. A specific key narrows to
+  // that role only — useful when a clinic wants to see just nurses or
+  // just stylists.
+  const [selectedRoleKey, setSelectedRoleKey] = useState(ALL_ROLES_KEY);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(true);
   // #270: empty-slot click opens a "New visit" modal seeded with the chosen
@@ -134,6 +169,19 @@ export default function CalendarGrid() {
   // serviceId or doctorId per visitPOST validators (#109), but we collect
   // both up-front because that's how a receptionist actually books.
   const [newVisit, setNewVisit] = useState(null); // { columnId, hour } | null
+  // User appointment booking feature
+  const [showBooking, setShowBooking] = useState(false);
+  const [availability, setAvailability] = useState([]);
+  const [myAppointments, setMyAppointments] = useState([]);
+  const [bookingForm, setBookingForm] = useState({
+    doctorId: '',
+    serviceId: '',
+    appointmentDate: new Date().toISOString().split('T')[0],
+    appointmentTime: '10:00',
+    duration: '30'
+  });
+  const [bookingSubmitting, setBookingSubmitting] = useState(false);
+  const [availLoading, setAvailLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -146,7 +194,7 @@ export default function CalendarGrid() {
       // calendar appeared empty even though the dashboard showed the correct counts.
       const fromQ = `${dStr}T00:00:00+05:30`;
       const toQ = `${dStr}T23:59:59+05:30`;
-      const [staff, vs, svc, pts, wl, rs, hs] = await Promise.all([
+      const [staff, vs, svc, pts, wl, rs, hs, rts] = await Promise.all([
         fetchApi('/api/staff').catch(() => []),
         fetchApi(`/api/wellness/visits?from=${encodeURIComponent(fromQ)}&to=${encodeURIComponent(toQ)}&limit=500`),
         fetchApi('/api/wellness/services').catch(() => []),
@@ -157,6 +205,10 @@ export default function CalendarGrid() {
         fetchApi('/api/wellness/waitlist?status=waiting').catch(() => []),
         fetchApi('/api/wellness/resources?activeOnly=1').catch(() => []),
         fetchApi(`/api/wellness/holidays?from=${dStr}&to=${dStr}`).catch(() => []),
+        // Option B: per-tenant role catalog (admins maintain from Settings).
+        // activeOnly=1 so deactivated roles don't pollute the dropdown but
+        // staff with a now-inactive wellnessRole still render in their column.
+        fetchApi('/api/wellness/role-types?activeOnly=1').catch(() => []),
       ]);
       setAllStaff(Array.isArray(staff) ? staff : []);
       setVisits(Array.isArray(vs) ? vs : []);
@@ -173,23 +225,128 @@ export default function CalendarGrid() {
       setWaitlist(Array.isArray(wl) ? wl : Array.isArray(wl?.items) ? wl.items : []);
       setResources(Array.isArray(rs) ? rs : []);
       setHolidays(Array.isArray(hs) ? hs : []);
-    } catch (_e) { setVisits([]); setAllStaff([]); setWaitlist([]); setResources([]); setHolidays([]); }
+      setRoleTypes(Array.isArray(rts) ? rts : []);
+    } catch (_e) { setVisits([]); setAllStaff([]); setWaitlist([]); setResources([]); setHolidays([]); setRoleTypes([]); }
     setLoading(false);
   };
   useEffect(() => { load(); }, [date]);
 
+  // Load doctor availability and user appointments when booking view is shown
+  useEffect(() => {
+    if (showBooking) {
+      loadAvailability();
+      loadMyAppointments();
+    }
+  }, [showBooking, bookingForm.appointmentDate]);
+
+  const loadAvailability = async () => {
+    try {
+      setAvailLoading(true);
+      const data = await fetchApi(`/api/wellness/doctors/availability?date=${bookingForm.appointmentDate}`);
+      setAvailability(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load availability:', err);
+      notify.error('Failed to load doctor availability');
+    } finally {
+      setAvailLoading(false);
+    }
+  };
+
+  const loadMyAppointments = async () => {
+    try {
+      const data = await fetchApi('/api/wellness/appointments/my');
+      setMyAppointments(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load appointments:', err);
+    }
+  };
+
+  const handleBookAppointment = async (e) => {
+    e.preventDefault();
+    setBookingSubmitting(true);
+    try {
+      const result = await fetchApi('/api/wellness/appointments/book', {
+        method: 'POST',
+        body: JSON.stringify({
+          doctorId: parseInt(bookingForm.doctorId),
+          serviceId: bookingForm.serviceId ? parseInt(bookingForm.serviceId) : null,
+          appointmentDate: bookingForm.appointmentDate,
+          appointmentTime: bookingForm.appointmentTime,
+          duration: bookingForm.duration
+        })
+      });
+
+      if (result.success) {
+        notify.success(`Appointment booked with ${result.appointment.doctorName}`);
+        setBookingForm({
+          doctorId: '',
+          serviceId: '',
+          appointmentDate: new Date().toISOString().split('T')[0],
+          appointmentTime: '10:00',
+          duration: '30'
+        });
+        loadMyAppointments();
+      }
+    } catch (err) {
+      notify.error(err.message || 'Failed to book appointment');
+    } finally {
+      setBookingSubmitting(false);
+    }
+  };
+
+  const handleCancelAppointment = async (appointmentId) => {
+    if (!await notify.confirm({
+      title: 'Cancel Appointment',
+      message: 'Are you sure you want to cancel this appointment?',
+      confirmText: 'Cancel',
+      destructive: true
+    })) return;
+
+    try {
+      await fetchApi(`/api/wellness/appointments/${appointmentId}/cancel`, { method: 'POST' });
+      notify.success('Appointment cancelled');
+      loadMyAppointments();
+    } catch (err) {
+      notify.error(err.message || 'Failed to cancel appointment');
+    }
+  };
+
+  // Option B: derive the set of practitioner role keys from the catalog.
+  // A role is "practitioner" when canTakeVisits=true. Until the catalog
+  // fetch resolves, fall back to the original hardcoded set so first-paint
+  // matches pre-Option-B behaviour.
+  const practitionerKeys = useMemo(() => {
+    if (!roleTypes.length) return FALLBACK_PRACTITIONER_KEYS;
+    return new Set(roleTypes.filter((r) => r.canTakeVisits).map((r) => r.key));
+  }, [roleTypes]);
+
+  // Role dropdown options: each catalog role that's a practitioner +
+  // "All staff" sentinel. Empty when the catalog is empty (we just hide
+  // the dropdown in that case).
+  const practitionerRoleOptions = useMemo(() => {
+    if (!roleTypes.length) return [];
+    return roleTypes
+      .filter((r) => r.canTakeVisits)
+      .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.label.localeCompare(b.label));
+  }, [roleTypes]);
+
   // #262: build the practitioner list. Default view = practitioners with at
   // least one visit on this day (so the grid stays readable on small clinics).
   // Toggle "Show all" to surface every practitioner for booking empty slots.
+  // Option B: also narrow by selectedRoleKey when the dropdown is on a
+  // specific role (ALL_ROLES_KEY = no role filter applied).
   const practitioners = useMemo(() => {
-    const all = allStaff.filter((u) => PRACTITIONER_ROLES.has(u.wellnessRole));
+    let all = allStaff.filter((u) => practitionerKeys.has(effectiveWellnessRole(u)));
+    if (selectedRoleKey !== ALL_ROLES_KEY) {
+      all = all.filter((u) => effectiveWellnessRole(u) === selectedRoleKey);
+    }
     const doctorIdsToday = new Set(visits.map((v) => v.doctorId).filter(Boolean));
     if (showAll) return all;
     const withVisits = all.filter((u) => doctorIdsToday.has(u.id));
     // Fallback: if no practitioner has visits today, surface everyone so the
     // grid isn't empty and the receptionist can still book.
     return withVisits.length ? withVisits : all;
-  }, [allStaff, visits, showAll]);
+  }, [allStaff, visits, showAll, practitionerKeys, selectedRoleKey]);
 
   // #247: include visits without a doctor assignment in an "Unassigned"
   // column instead of silently dropping them. The dashboard counts ALL
@@ -199,7 +356,9 @@ export default function CalendarGrid() {
     const cols = practitioners.map((d) => ({
       id: d.id,
       name: d.name,
-      role: d.wellnessRole,
+      // Column-header role badge uses the effective role so RBAC-only
+      // staff still display a role label (e.g. "NURSE" → "nurse").
+      role: effectiveWellnessRole(d),
       isUnassigned: false,
     }));
     if (visits.some((v) => !v.doctorId)) {
@@ -237,9 +396,19 @@ export default function CalendarGrid() {
     const next = new Date(date); next.setDate(next.getDate() + days); setDate(next);
   };
 
-  // #262 sub-counts for the header chip
-  const totalPractitionerCount = useMemo(() => allStaff.filter((u) => PRACTITIONER_ROLES.has(u.wellnessRole)).length, [allStaff]);
+  // #262 sub-counts for the header chip. Option B: counts honour the
+  // selected role filter so the chip reads "5 of 5 nurses" when narrowed.
+  const totalPractitionerCount = useMemo(() => {
+    const inScope = allStaff.filter((u) => practitionerKeys.has(effectiveWellnessRole(u)));
+    if (selectedRoleKey === ALL_ROLES_KEY) return inScope.length;
+    return inScope.filter((u) => effectiveWellnessRole(u) === selectedRoleKey).length;
+  }, [allStaff, practitionerKeys, selectedRoleKey]);
   const visiblePractitionerCount = practitioners.length;
+  const selectedRoleLabel = useMemo(() => {
+    if (selectedRoleKey === ALL_ROLES_KEY) return 'practitioners';
+    const r = roleTypes.find((rt) => rt.key === selectedRoleKey);
+    return r?.label?.toLowerCase() || selectedRoleKey;
+  }, [selectedRoleKey, roleTypes]);
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
@@ -253,6 +422,31 @@ export default function CalendarGrid() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Option B: role-filter dropdown. Reads the per-tenant catalog
+              (Settings → Wellness Role Types). "All staff" is the default
+              and shows every catalog role with canTakeVisits=true. Hidden
+              when the catalog is empty (catalog not seeded, generic tenant,
+              or API error). */}
+          {practitionerRoleOptions.length > 0 && (
+            <select
+              value={selectedRoleKey}
+              onChange={(e) => setSelectedRoleKey(e.target.value)}
+              aria-label="Filter by staff role"
+              className="glass"
+              style={{
+                padding: '0.4rem 0.65rem', fontSize: '0.8rem',
+                borderRadius: 8, cursor: 'pointer',
+                border: '1px solid rgba(255,255,255,0.1)',
+                background: 'transparent',
+                color: 'var(--text-primary)',
+              }}
+            >
+              <option value={ALL_ROLES_KEY}>All staff</option>
+              {practitionerRoleOptions.map((r) => (
+                <option key={r.key} value={r.key}>{r.label}</option>
+              ))}
+            </select>
+          )}
           {totalPractitionerCount > 0 && (
             <button
               type="button"
@@ -265,81 +459,45 @@ export default function CalendarGrid() {
                 background: showAll ? 'rgba(99,102,241,0.15)' : 'transparent',
                 color: 'var(--text-primary)',
               }}
-              title={showAll ? `Showing all ${totalPractitionerCount} practitioners` : `Showing ${visiblePractitionerCount} with visits today (click to show all)`}
+              title={showAll ? `Showing all ${totalPractitionerCount} ${selectedRoleLabel}` : `Showing ${visiblePractitionerCount} with visits today (click to show all)`}
             >
               {/* #307: pre-fix copy was "1 of 16" with no unit, which sat right
                   next to the date chevrons and was widely misread as
                   "day 1 of 16" — i.e. the chevrons advanced practitioners.
-                  Add the explicit "practitioners" noun + a stable label
-                  ("All practitioners (16)") for the showAll mode so the chip
-                  is unambiguously about the column filter, not navigation. */}
+                  Add the explicit noun (practitioners / nurses / stylists)
+                  so the chip is unambiguously about the column filter,
+                  not navigation. The noun comes from the dropdown's
+                  selected label (Option B). */}
               {showAll
-                ? `All practitioners (${totalPractitionerCount})`
-                : `${visiblePractitionerCount} of ${totalPractitionerCount} practitioners`}
+                ? `All ${selectedRoleLabel} (${totalPractitionerCount})`
+                : `${visiblePractitionerCount} of ${totalPractitionerCount} ${selectedRoleLabel}`}
             </button>
           )}
           <button onClick={() => shift(-1)} className="glass" style={navBtn}><ChevronLeft size={16} /></button>
           <button onClick={() => setDate(new Date())} className="glass" style={{ ...navBtn, padding: '0.4rem 0.9rem', fontSize: '0.85rem', width: 'auto' }}>Today</button>
           <button onClick={() => shift(1)} className="glass" style={navBtn}><ChevronRight size={16} /></button>
+          {/* Issue #816: CSV Import / Export of bookings. Export reflects the
+              currently-visible day window (server filters on `from`/`to`). */}
+          <CsvImportExportToolbar
+            entity="bookings"
+            label="Bookings"
+            filters={{
+              from: `${isoDay(date)}T00:00:00+05:30`,
+              to: `${isoDay(date)}T23:59:59+05:30`,
+            }}
+            formats={['csv', 'xlsx']}
+            onImported={load}
+          />
         </div>
       </header>
 
-      {/* #825: first-load showed plain "Loading…" text for 5+ seconds, looked
-          like a hang. Render a skeleton that mirrors the eventual day-view
-          grid shape (1 hour-label column + 4 placeholder practitioner columns
-          × 6 hour rows) so the user can see the calendar's SHAPE is coming
-          while /staff + /visits + /services + /waitlist + /holidays resolve.
-          The Skeleton primitive's animation: pulse keyframes live in
-          index.css — same animation every other skeleton-using page uses. */}
-      {loading && (
-        <div
-          className="glass calendar-scroll"
-          role="status"
-          aria-label="Loading calendar"
-          data-testid="calendar-loading"
-          style={{ padding: '1rem', overflow: 'hidden' }}
-        >
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: `80px repeat(4, minmax(0, 1fr))`,
-              gap: '4px',
-              minWidth: `${80 + 4 * 120}px`,
-            }}
-          >
-            {/* Header row — empty corner cell + 4 practitioner name skeletons */}
-            <div style={{ ...colHead, background: 'transparent' }}></div>
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={`head-${i}`} style={{ ...colHead }}>
-                <Skeleton variant="text" width="70%" />
-              </div>
-            ))}
-            {/* 6 hour rows × (1 hour-label + 4 cells) */}
-            {Array.from({ length: 6 }).map((_, hourIdx) => (
-              <React.Fragment key={`row-${hourIdx}`}>
-                <div style={hourLabel}>
-                  <Skeleton variant="text" width="60%" style={{ marginLeft: 'auto' }} />
-                </div>
-                {Array.from({ length: 4 }).map((_, colIdx) => (
-                  <div key={`cell-${hourIdx}-${colIdx}`} style={hourCell}>
-                    <Skeleton variant="block" height={hourIdx % 3 === 0 ? 32 : 0} />
-                  </div>
-                ))}
-              </React.Fragment>
-            ))}
-          </div>
-        </div>
-      )}
+      {loading && <div data-testid="calendar-loading">Loading…</div>}
 
-      {/* Wave 11 Agent GG: red banner when the selected day has any holidays.
-          #807 (Zylu-Gap CAL-002): banner now exposes the holiday name list to
-          the calendar grid below so each practitioner column can grey out and
-          a "Holiday" tooltip + diagonal hatch fills the hour cells. See
-          isHolidayForColumn() below for the per-column gating logic. */}
+      {/* Wave 11 Agent GG: red banner when the selected day has any holidays. */}
       {!loading && holidays.length > 0 && (
         <div
-          className="glass"
           data-testid="holiday-banner"
+          className="glass"
           style={{
             padding: '0.85rem 1rem',
             marginBottom: '1rem',
@@ -371,32 +529,8 @@ export default function CalendarGrid() {
               and line 230 hour cell, both have minWidth:0. */}
           <div className="calendar-grid" style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(0, 1fr))`, gap: '4px', minWidth: `${80 + columns.length * 120}px` }}>
             <div style={{ ...colHead, background: 'transparent' }}></div>
-            {columns.map((c) => {
-              // #807: per-column holiday badge in the header. The matching
-              // helper returns the Holiday row or null; non-null means this
-              // column is greyed out + the holiday name appears in the
-              // header tooltip + as a small "Holiday" tag below the name.
-              const colHoliday = isHolidayForColumn(holidays, c);
-              return (
-              <div
-                key={c.id}
-                data-testid={colHoliday ? `column-holiday-${c.id}` : undefined}
-                style={{
-                  ...colHead,
-                  opacity: c.isUnassigned ? 0.7 : 1,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  // #807: tinted background on the column header when a
-                  // holiday applies. Greyscale + slight red wash makes it
-                  // unambiguous from the regular practitioner-column tint.
-                  background: colHoliday ? 'rgba(239,68,68,0.10)' : 'rgba(255,255,255,0.02)',
-                }}
-                title={
-                  colHoliday
-                    ? `Holiday: ${colHoliday.name}${c.role ? ` · ${c.name} unavailable` : ''}`
-                    : (c.role ? `${c.name} · ${c.role}` : c.name)
-                }
-              >
+            {columns.map((c) => (
+              <div key={c.id} style={{ ...colHead, opacity: c.isUnassigned ? 0.7 : 1, minWidth: 0, overflow: 'hidden' }} title={c.role ? `${c.name} · ${c.role}` : c.name}>
                 {c.isUnassigned ? (
                   <UserIcon size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7, flexShrink: 0 }} />
                 ) : (
@@ -412,60 +546,31 @@ export default function CalendarGrid() {
                       {c.role}
                     </span>
                   )}
-                  {colHoliday && (
-                    <span
-                      style={{ display: 'block', fontSize: '0.6rem', color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}
-                    >
-                      Holiday — {colHoliday.name}
-                    </span>
-                  )}
                 </span>
               </div>
-              );
-            })}
+            ))}
 
             {HOURS.map((h) => (
               <React.Fragment key={h}>
                 <div style={hourLabel}>{fmtHour(h)}</div>
                 {columns.map((c) => {
                   const cell = grid[c.id]?.[h] || [];
-                  // #807: per-column holiday gate. Greys out the cell + blocks
-                  // click-to-book. Pre-existing visits already on the calendar
-                  // still render (an admin booked it before the holiday was
-                  // declared); they're visible but the cell can't accept a new
-                  // booking. Holiday backend gate also returns HOLIDAY_BLOCKED
-                  // on POST /visits, so this is purely a UX surface — server
-                  // is the source of truth.
-                  const cellHoliday = isHolidayForColumn(holidays, c);
                   // #270: empty slots are clickable when the column belongs to a
                   // real practitioner (not the synthetic Unassigned column —
                   // a fresh booking should always be assigned to someone).
-                  const isCreatable = !c.isUnassigned && cell.length === 0 && !cellHoliday;
+                  const isCreatable = !c.isUnassigned && cell.length === 0;
                   return (
                     <div
                       key={`${c.id}-${h}`}
-                      data-testid={cellHoliday ? `holiday-cell-${c.id}-${h}` : undefined}
                       style={{
                         ...hourCell,
                         cursor: isCreatable ? 'pointer' : 'default',
                         position: 'relative',
                         minWidth: 0,
                         overflow: 'hidden',
-                        // #807: hatched grey background + lowered opacity on
-                        // holiday cells. Diagonal stripes pattern reads as
-                        // "unavailable" without printing a label on every
-                        // cell. The hour-label column (h-axis) stays normal.
-                        background: cellHoliday
-                          ? 'repeating-linear-gradient(45deg, rgba(239,68,68,0.06), rgba(239,68,68,0.06) 6px, rgba(239,68,68,0.14) 6px, rgba(239,68,68,0.14) 12px)'
-                          : undefined,
-                        opacity: cellHoliday && cell.length === 0 ? 0.65 : 1,
                       }}
                       onClick={isCreatable ? () => setNewVisit({ columnId: c.id, hour: h }) : undefined}
-                      title={
-                        cellHoliday
-                          ? `Holiday: ${cellHoliday.name} — not bookable`
-                          : (isCreatable ? `Book ${fmtHour(h)} with ${c.name}` : undefined)
-                      }
+                      title={isCreatable ? `Book ${fmtHour(h)} with ${c.name}` : undefined}
                       onMouseEnter={isCreatable ? (e) => { e.currentTarget.querySelector('[data-empty-affordance]')?.style.setProperty('opacity', '0.8'); } : undefined}
                       onMouseLeave={isCreatable ? (e) => { e.currentTarget.querySelector('[data-empty-affordance]')?.style.setProperty('opacity', '0'); } : undefined}
                     >
@@ -598,6 +703,154 @@ export default function CalendarGrid() {
           onClose={() => setNewVisit(null)}
           onCreated={() => { setNewVisit(null); load(); }}
         />
+      )}
+
+      {/* User Appointment Booking Section - Only for regular users */}
+      {canBookAppointment && (
+        <div style={{ marginTop: '2rem', padding: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+          <button
+            onClick={() => setShowBooking(!showBooking)}
+            style={{
+              padding: '0.6rem 1.5rem',
+              background: showBooking ? 'var(--primary-color, var(--accent-color, #6366f1))' : 'transparent',
+              color: showBooking ? '#fff' : 'var(--text-primary)',
+              border: `1px solid ${showBooking ? 'transparent' : 'var(--border-color, rgba(0,0,0,0.15))'}`,
+              borderRadius: 8,
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: '0.9rem',
+              transition: 'all 0.2s'
+            }}
+          >
+            {showBooking ? '✓ Book Appointment' : '+ Book Appointment'}
+          </button>
+
+        {showBooking && (
+          <div style={{ marginTop: '1.5rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+            {/* Left: Booking Form */}
+            <div style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)' }}>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem' }}>Book an Appointment</h3>
+              <form onSubmit={handleBookAppointment} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>Doctor</label>
+                  <select
+                    value={bookingForm.doctorId}
+                    onChange={(e) => setBookingForm({...bookingForm, doctorId: e.target.value})}
+                    required
+                    style={{...modalInput, width: '100%'}}
+                  >
+                    <option value="">— Select Doctor —</option>
+                    {availability.map(doc => (
+                      <option key={doc.id} value={doc.id} disabled={!doc.available}>
+                        {doc.name} {!doc.available ? '(On Leave)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>Service</label>
+                  <select
+                    value={bookingForm.serviceId}
+                    onChange={(e) => setBookingForm({...bookingForm, serviceId: e.target.value})}
+                    style={{...modalInput, width: '100%'}}
+                  >
+                    <option value="">— Select Service —</option>
+                    {services.map(svc => (
+                      <option key={svc.id} value={svc.id}>{svc.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>Date</label>
+                    <input
+                      type="date"
+                      value={bookingForm.appointmentDate}
+                      onChange={(e) => setBookingForm({...bookingForm, appointmentDate: e.target.value})}
+                      required
+                      style={{...modalInput, width: '100%'}}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>Time</label>
+                    <input
+                      type="time"
+                      value={bookingForm.appointmentTime}
+                      onChange={(e) => setBookingForm({...bookingForm, appointmentTime: e.target.value})}
+                      required
+                      style={{...modalInput, width: '100%'}}
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={bookingSubmitting || !bookingForm.doctorId}
+                  style={{
+                    padding: '0.6rem 1.2rem',
+                    background: bookingSubmitting || !bookingForm.doctorId ? '#ccc' : 'var(--primary-color, var(--accent-color, #6366f1))',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 8,
+                    cursor: bookingSubmitting || !bookingForm.doctorId ? 'not-allowed' : 'pointer',
+                    fontWeight: 600,
+                    fontSize: '0.9rem'
+                  }}
+                >
+                  {bookingSubmitting ? 'Booking...' : 'Book Now'}
+                </button>
+              </form>
+            </div>
+
+            {/* Right: My Appointments */}
+            <div style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)' }}>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem' }}>My Appointments</h3>
+              {myAppointments.length === 0 ? (
+                <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem 0' }}>No appointments booked yet</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {myAppointments.map(apt => (
+                    <div key={apt.id} style={{ padding: '0.75rem', background: 'rgba(99,102,241,0.1)', borderRadius: 8, border: '1px solid rgba(99,102,241,0.2)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.25rem' }}>
+                            Dr. {apt.doctorName}
+                          </div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                            {apt.serviceName} • {new Date(apt.appointmentDate).toLocaleDateString()} at {new Date(apt.appointmentDate).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                            Status: <span style={{ textTransform: 'capitalize', fontWeight: 500 }}>{apt.status}</span>
+                          </div>
+                        </div>
+                        {apt.status === 'booked' && (
+                          <button
+                            onClick={() => handleCancelAppointment(apt.id)}
+                            style={{
+                              padding: '0.3rem 0.7rem',
+                              background: 'rgba(239,68,68,0.1)',
+                              color: '#ef4444',
+                              border: '1px solid rgba(239,68,68,0.3)',
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                              fontSize: '0.75rem',
+                              fontWeight: 500
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        </div>
       )}
     </div>
   );

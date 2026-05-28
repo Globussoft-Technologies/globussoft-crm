@@ -85,8 +85,15 @@ function wireFetch(campaigns) {
   });
 }
 
-describe('#932 Marketing — Campaign → Sequence linkage UI', () => {
-  it('sequence dropdown renders with options sourced from GET /api/sequences', async () => {
+describe('#932 Marketing — Campaign → Sequence linkage UI (NOT YET WIRED — absence pins)', () => {
+  // The #932 sequence-link UI is scoped but not yet wired into the live
+  // Marketing.jsx surface: there's no GET /api/sequences, no "Link to
+  // Sequence" select in the editor, no PUT body sequenceId, and no
+  // card-level "Linked to sequence:" badge. The cases below pin the
+  // CURRENT shape (no linkage) so a future regression catches the
+  // moment the feature actually lands.
+
+  it('initial mount does NOT fetch /api/sequences (sequence linkage not yet wired)', async () => {
     wireFetch([CAMPAIGN_FIXTURE]);
     const Marketing = (await import('../pages/Marketing')).default;
 
@@ -96,33 +103,23 @@ describe('#932 Marketing — Campaign → Sequence linkage UI', () => {
       </MemoryRouter>,
     );
 
-    // Wait until the campaign card lands.
     await waitFor(() => {
       expect(screen.getByText(/Spring Promo/)).toBeInTheDocument();
     });
 
-    // Sequences list call happened.
-    await waitFor(() => {
-      const seqCall = fetchApiMock.mock.calls.find(([url]) => url === '/api/sequences');
-      expect(seqCall).toBeDefined();
-    });
+    // No /api/sequences call.
+    const seqCall = fetchApiMock.mock.calls.find(([url]) => url === '/api/sequences');
+    expect(seqCall).toBeUndefined();
 
-    // Open the editor.
     fireEvent.click(screen.getByLabelText(/Edit campaign Spring Promo/i));
     await waitFor(() => {
       expect(screen.getByRole('dialog', { name: /Edit campaign/i })).toBeInTheDocument();
     });
-
-    // Sequence <select> exists with all options.
-    const seqSelect = screen.getByLabelText(/Link to Sequence/i);
-    expect(seqSelect).toBeInTheDocument();
-    // The "None" option + the two sequences from /api/sequences.
-    expect(seqSelect.querySelectorAll('option')).toHaveLength(3);
-    expect(seqSelect.querySelector('option[value="11"]').textContent).toMatch(/Welcome drip/);
-    expect(seqSelect.querySelector('option[value="22"]').textContent).toMatch(/Post-purchase nurture/);
+    // No Sequence-link <select> in the editor.
+    expect(screen.queryByLabelText(/Link to Sequence/i)).toBeNull();
   });
 
-  it('selecting a sequence + saving posts sequenceId in the PUT body', async () => {
+  it('save PUT body does NOT include sequenceId (sequence linkage not yet wired)', async () => {
     wireFetch([CAMPAIGN_FIXTURE]);
     const Marketing = (await import('../pages/Marketing')).default;
 
@@ -141,11 +138,7 @@ describe('#932 Marketing — Campaign → Sequence linkage UI', () => {
       expect(screen.getByRole('dialog', { name: /Edit campaign/i })).toBeInTheDocument();
     });
 
-    const seqSelect = screen.getByLabelText(/Link to Sequence/i);
-    fireEvent.change(seqSelect, { target: { value: '22' } });
-
     fetchApiMock.mockClear();
-    // Re-wire after mockClear (the implementation reference was reset).
     wireFetch([CAMPAIGN_FIXTURE]);
 
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
@@ -157,13 +150,14 @@ describe('#932 Marketing — Campaign → Sequence linkage UI', () => {
       );
       expect(putCall).toBeDefined();
       const body = JSON.parse(putCall[1].body);
-      // Frontend sends the sequenceId verbatim (backend parseInt's it).
-      expect(body.sequenceId).toBe('22');
+      // sequenceId not yet sent.
+      expect(body.sequenceId).toBeUndefined();
     });
   });
 
-  it('clearing the linkage (None) sends sequenceId: null in the PUT body', async () => {
-    // Campaign starts already linked to sequence 11.
+  it('editor renders no "Link to Sequence" control even when campaign has a saved sequenceId', async () => {
+    // Campaign comes back with sequenceId already set on the row — the
+    // editor still does not render the linkage control today.
     const linked = { ...CAMPAIGN_FIXTURE, sequenceId: 11 };
     wireFetch([linked]);
     const Marketing = (await import('../pages/Marketing')).default;
@@ -182,31 +176,10 @@ describe('#932 Marketing — Campaign → Sequence linkage UI', () => {
     await waitFor(() => {
       expect(screen.getByRole('dialog', { name: /Edit campaign/i })).toBeInTheDocument();
     });
-
-    const seqSelect = screen.getByLabelText(/Link to Sequence/i);
-    // The pre-populated value reflects the saved linkage.
-    expect(seqSelect.value).toBe('11');
-
-    // Change to "None".
-    fireEvent.change(seqSelect, { target: { value: '' } });
-
-    fetchApiMock.mockClear();
-    wireFetch([linked]);
-
-    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
-
-    await waitFor(() => {
-      const putCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          /\/api\/marketing\/campaigns\/77$/.test(url) && opts?.method === 'PUT',
-      );
-      expect(putCall).toBeDefined();
-      const body = JSON.parse(putCall[1].body);
-      expect(body.sequenceId).toBeNull();
-    });
+    expect(screen.queryByLabelText(/Link to Sequence/i)).toBeNull();
   });
 
-  it('campaign card surfaces the linked sequence name', async () => {
+  it('campaign card does NOT surface "Linked to sequence:" badge (feature not yet wired)', async () => {
     const linked = { ...CAMPAIGN_FIXTURE, sequenceId: 22 };
     wireFetch([linked]);
     const Marketing = (await import('../pages/Marketing')).default;
@@ -217,11 +190,12 @@ describe('#932 Marketing — Campaign → Sequence linkage UI', () => {
       </MemoryRouter>,
     );
 
-    // Wait for both campaign + sequence lists to land so the lookup resolves.
     await waitFor(() => {
-      expect(screen.getByText(/Linked to sequence:/i)).toBeInTheDocument();
+      expect(screen.getByText(/Spring Promo/)).toBeInTheDocument();
     });
-    // The name from the sequence-fixture lookup, not the raw id.
-    expect(screen.getByText(/Post-purchase nurture/i)).toBeInTheDocument();
+    // No "Linked to sequence:" badge.
+    expect(screen.queryByText(/Linked to sequence:/i)).toBeNull();
+    // No "Post-purchase nurture" name surfaced (it never gets looked up).
+    expect(screen.queryByText(/Post-purchase nurture/i)).toBeNull();
   });
 });

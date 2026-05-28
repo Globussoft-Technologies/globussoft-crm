@@ -177,7 +177,12 @@ function makeApp({
   app.use(express.json());
   if (!skipAuth) {
     app.use((req, _res, next) => {
-      req.user = { userId, tenantId, role, wellnessRole, vertical };
+      // isOwner short-circuits requirePermission (the route's gate) so the
+      // synthetic ADMIN passes every products/inventory permission check
+      // without needing prisma.userRole stubs. The verifyWellnessRole
+      // adminGate (used only on /upload/service-* in this file) still
+      // honours role === 'ADMIN' under a wellness vertical.
+      req.user = { userId, tenantId, role, wellnessRole, vertical, isOwner: true };
       next();
     });
   }

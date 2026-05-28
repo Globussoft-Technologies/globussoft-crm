@@ -116,6 +116,31 @@ app.use(cors({
   },
   credentials: true,
 }));
+// ─── WhatsApp webhook (P1 — must mount BEFORE express.json) ──────────────
+// Meta signs the raw request body with HMAC-SHA-256 using META_APP_SECRET.
+// Any JSON re-serialization would change the byte stream and break the
+// signature check. We therefore mount the webhook router here — earlier
+// than the global JSON body parser — with its own express.raw() so the
+// middleware in middleware/metaWebhook.js sees a Buffer.
+//
+// The router responds 200 immediately and processes events asynchronously
+// via setImmediate; downstream middlewares (express.json, helmet, auth
+// guard, etc.) never run for these requests because the response is
+// already flushed.
+//
+// Existing GET/POST /webhook stubs inside routes/whatsapp.js are tombstones
+// that log + 503 if they ever fire — that would indicate this mount-order
+// is wrong.
+// Attach `req.io` BEFORE the webhook mount so the webhook handler can
+// emit Socket.IO events to connected operators (real-time inbox push).
+// Pre-fix: the matching middleware lower down (~line 322) ran AFTER
+// the webhook router → `req.io` was undefined inside handleMessagesEvent
+// → emit silently no-op'd → frontend never received the
+// `whatsapp:received` event → users had to refresh manually.
+app.use((req, _res, next) => { req.io = io; next(); });
+
+app.use("/api/whatsapp/webhook", require("./routes/whatsapp_webhook"));
+
 app.use(express.json({ limit: "10mb" }));
 // Twilio voice/telephony/SMS webhooks and Mailgun/Razorpay form posts send
 // `application/x-www-form-urlencoded`. Without this parser req.body is empty
@@ -305,11 +330,9 @@ const presenceColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '
 const { setIO } = require('./lib/eventBus');
 setIO(io);
 
-// Attach socket to requests so routes can emit events
-app.use((req, res, next) => {
-  req.io = io;
-  next();
-});
+// req.io is now attached at the top of the middleware chain (above the
+// webhook mount) so the WhatsApp webhook handler can use it. No need
+// to re-attach here — left as a comment marker only.
 
 io.on("connection", (socket) => {
   console.log(`[Socket] Client connected: ${socket.id}`);
@@ -338,6 +361,13 @@ io.on("connection", (socket) => {
 
 // Import Enterprise Routes
 const authRoutes = require("./routes/auth");
+const rolesRoutes = require("./routes/roles");
+const widgetsRoutes = require("./routes/widgets");
+const pagesRoutes = require("./routes/pages");
+// /api/users — per-target user endpoints (currently just :userId/permissions).
+// Sister surface to /api/auth/me/* but addresses ANY user, with same-tenant +
+// roles.read guards inside the handler.
+const usersRoutes = require("./routes/users");
 const contactsRoutes = require("./routes/contacts");
 const dealsRoutes = require("./routes/deals");
 const calendarRoutes = require("./routes/calendar");
@@ -541,6 +571,11 @@ const adminRoutes = require("./routes/admin");
 const serviceCategoriesRoutes = require("./routes/service_categories");
 const drugsRoutes = require("./routes/drugs");
 const csvIoRoutes = require("./routes/csv_io");
+// Wave 3 — Staff availability blocks (breaks, leave, personal time)
+const blockTimesRoutes = require("./routes/block-times");
+// Issue #816 — per-entity CSV import/export with template + async modes for
+// the wellness list pages (services, packages, products, customers, bookings).
+const wellnessCsvRoutes = require("./routes/wellnessCsv");
 
 // OpenAPI Swagger Bootloader
 //
@@ -568,8 +603,12 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/csp/report"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/csp/report"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
+  // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
+  // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
+  // by the route-level verifyToken+verifyRole middleware below.
+  if (req.method === 'GET' && req.path === '/subscriptions/plans') return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
     checkSubscription(req, res, next);
@@ -595,6 +634,10 @@ app.param("id", validateNumericId);
 
 // Map API Endpoints
 app.use("/api/auth", authRoutes);
+app.use("/api/roles", rolesRoutes);
+app.use("/api/widgets", widgetsRoutes);
+app.use("/api/pages", pagesRoutes);
+app.use("/api/users", usersRoutes);
 app.use("/api/contacts", contactsRoutes);
 app.use("/api/deals", dealsRoutes);
 app.use("/api/calendar", calendarRoutes);
@@ -635,6 +678,11 @@ app.use("/api/audit", auditRoutes);
 app.use("/api/marketplace-leads", marketplaceLeadsRoutes);
 app.use("/api/sms", smsRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
+// P2: WhatsApp embedded-signup onboarding routes. Mounted as a separate
+// router under /api/whatsapp/onboard so the rate-limiter + auth guard
+// pipeline above applies, but the route handlers live in
+// routes/whatsapp_onboard.js. Feature-flagged via WHATSAPP_EMBEDDED_SIGNUP_ENABLED.
+app.use("/api/whatsapp/onboard", require("./routes/whatsapp_onboard"));
 app.use("/api/telephony", telephonyRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
@@ -760,10 +808,14 @@ app.use("/api/wellness", wellnessRoutes);
 // does NOT own (product-categories, vendors, inventory/receipts,
 // inventory/adjustments, inventory/movements, auto-consumption-rules).
 app.use("/api/wellness", inventoryRoutes);
+// Wave 3 — Staff availability blocks (breaks, leave, personal time). Wellness-gated.
+app.use("/api/wellness/block-times", blockTimesRoutes);
 // Wave 7 Agent A — Service catalogue depth + Drug catalogue + CSV io.
 app.use("/api/wellness/service-categories", serviceCategoriesRoutes);
 app.use("/api/wellness/drugs", drugsRoutes);
 app.use("/api/csv", csvIoRoutes);
+// Issue #816 — /api/wellness/csv/:entity/{template|export|import|import/async|jobs}.
+app.use("/api/wellness/csv", wellnessCsvRoutes);
 // Wave 2 Agent II — POS / cash register / shift / sale backbone. Mounted at
 // /api/pos. Wellness-vertical-gated; generic tenants get a clean 403.
 app.use("/api/pos", posRoutes);
@@ -839,8 +891,20 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
   }
 });
 
-// Server File Uploads Statically
+// Server File Uploads Statically.
+// Mounted at BOTH `/uploads` (legacy, kept for any non-Nginx setups that
+// proxy the bare path) AND `/api/uploads` (canonical). The `/api/uploads`
+// mount is the one that actually works on the deployed demo + the Vite dev
+// server, because Nginx only proxies `/api/*` to the backend (and the Vite
+// dev proxy is configured the same way). Bare `/uploads/*` requests hit
+// the static-frontend host first and fall through the SPA catch-all → the
+// browser renders the React index.html as if it were an image → broken
+// image. New upload routes should return `/api/uploads/...` URLs; the
+// PHI gating remains the route-level concern (filenames are
+// pseudo-random, but the static mount itself is intentionally public so
+// `<img src>` works without an Authorization header).
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
 // Health Check Endpoint
 const prisma = require("./lib/prisma");
 
@@ -944,6 +1008,34 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`[Backend] Enterprise Express Server running securely on port ${PORT}`);
+
+  // Auto-heal RBAC state on boot so requiredPermission-gated UI (e.g. the
+  // "Roles" sidebar entry) appears consistently across local / dev / prod
+  // without manual seed-rbac-only.js runs. Fire-and-forget: a DB hiccup must
+  // never crash the server. Set DISABLE_RBAC_BOOT_SYNC=1 to opt out.
+  const { ensureRbacOnBoot } = require('./scripts/ensureRbacOnBoot');
+  ensureRbacOnBoot()
+    .then((stats) => {
+      if (!stats) return;
+      const wrote = stats.rolesCreated + stats.permsCreated + stats.assignmentsCreated;
+      if (wrote > 0) {
+        console.log(`[rbac-boot] backfilled — roles:${stats.rolesCreated} perms:${stats.permsCreated} assignments:${stats.assignmentsCreated} (skipped users:${stats.usersSkipped})`);
+      } else {
+        console.log('[rbac-boot] RBAC state already compatible — no changes.');
+      }
+    })
+    .catch((err) => console.error('[rbac-boot] non-fatal error:', err && err.message ? err.message : err));
+
+  // Self-heal the SubscriptionPlan catalog so a fresh install / wiped DB /
+  // partial seed always has the 3 canonical plans on /pricing. Idempotent —
+  // existing rows are left alone (Owner edits via Manage Plans persist
+  // across restarts). Fire-and-forget; never crash boot on a DB hiccup.
+  // Set DISABLE_PLANS_BOOT_SYNC=1 to opt out.
+  if (process.env.DISABLE_PLANS_BOOT_SYNC !== '1') {
+    const ensureSubscriptionPlans = require('./lib/ensureSubscriptionPlans');
+    ensureSubscriptionPlans()
+      .catch((err) => console.error('[plans-boot] non-fatal error:', err && err.message ? err.message : err));
+  }
 });
 
 // Graceful shutdown — required for c8 / V8 line coverage to flush its temp
@@ -1133,6 +1225,27 @@ if (process.env.DISABLE_CRONS === '1') {
   // Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
   const { initSlaBreachCron } = require('./cron/slaBreachEngine');
   initSlaBreachCron();
+
+  // WhatsApp SaaS P3 — async outbound delivery (every 30s) + media download
+  // pipeline (every 60s). Both engines no-op gracefully when the underlying
+  // WhatsAppConfig is missing or token is unset, so they're safe to enable
+  // even before any tenant has completed onboarding. The outbound engine
+  // receives `io` to broadcast whatsapp:sent events back to the frontend
+  // as queued messages complete delivery.
+  const { initWhatsappOutboundCron } = require('./cron/whatsappOutboundEngine');
+  initWhatsappOutboundCron(io);
+  const { initWhatsappMediaCron } = require('./cron/whatsappMediaEngine');
+  initWhatsappMediaCron();
+
+  // WhatsApp SaaS P4 — daily token-refresh probe + template-sync safety net.
+  // Token refresh proactively extends short-lived tokens 7 days before expiry
+  // via fb_exchange_token; surfaces unrecoverable expiry via Notification +
+  // soft-disconnect. Template sync pulls every approved template from Meta
+  // nightly so the local table stays in sync even when webhook events drop.
+  const { initWhatsappTokenRefreshCron } = require('./cron/whatsappTokenRefreshEngine');
+  initWhatsappTokenRefreshCron();
+  const { initWhatsappTemplateSyncCron } = require('./cron/whatsappTemplateSyncEngine');
+  initWhatsappTemplateSyncCron();
 
   // #541 (OPS-1): Demo Hygiene — hourly purge of `_QA_PROBE_*` /
   // `E2E_FLOW_*` test residue from patient list + admin-config models.

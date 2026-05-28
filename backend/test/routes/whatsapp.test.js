@@ -458,16 +458,22 @@ describe('GET /config — admin-only + masked credentials (#651)', () => {
 
 // ─── Webhook (NO AUTH) ──────────────────────────────────────────────────────
 
-describe('GET /webhook — Meta verify challenge', () => {
-  test('403 when verifyWebhook returns verified:false (bad token)', async () => {
-    // Pretend an active config exists so the route reads its token.
-    prisma.whatsAppConfig.findFirst.mockResolvedValue({
-      id: 1,
-      webhookVerifyToken: 'good-token',
-      isActive: true,
-      tenantId: 1,
-    });
+// ─── Webhook handlers on routes/whatsapp.js are TOMBSTONES (P1) ─────────────
+//
+// The real Meta webhook handlers were extracted to routes/whatsapp_webhook.js
+// and are mounted in server.js BEFORE the global express.json() so the raw
+// body survives X-Hub-Signature-256 verification. The handlers that remain
+// in routes/whatsapp.js are deliberate tombstones that respond
+// 503 WEBHOOK_MOUNT_ORDER if they ever execute — that response only happens
+// when server.js's mount order is wrong.
+//
+// This test file mounts JUST routes/whatsapp.js, so requests to
+// /api/whatsapp/webhook hit the tombstones. Pin that tombstone response
+// shape so a regression that silently re-introduces a real-but-now-duplicate
+// webhook implementation in routes/whatsapp.js gets caught here.
 
+describe('GET /webhook — tombstone (real handler lives in routes/whatsapp_webhook.js)', () => {
+  test('503 WEBHOOK_MOUNT_ORDER — tombstone fires when mount order is wrong', async () => {
     const app = makeApp();
     const res = await request(app)
       .get('/api/whatsapp/webhook')
@@ -477,13 +483,14 @@ describe('GET /webhook — Meta verify challenge', () => {
         'hub.challenge': 'abc123',
       });
 
-    expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/Verification failed/i);
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('WEBHOOK_MOUNT_ORDER');
+    expect(res.body.error).toMatch(/Webhook routing misconfigured/i);
   });
 });
 
-describe('POST /webhook — Meta event ingress', () => {
-  test('responds 200 {received:true} immediately + ignores non-WABA payloads', async () => {
+describe('POST /webhook — tombstone (real handler lives in routes/whatsapp_webhook.js)', () => {
+  test('503 WEBHOOK_MOUNT_ORDER + does not touch the message table', async () => {
     const app = makeApp();
     const res = await request(app)
       .post('/api/whatsapp/webhook')
@@ -492,10 +499,9 @@ describe('POST /webhook — Meta event ingress', () => {
         entry: [{ changes: [{ field: 'messages', value: { messages: [] } }] }],
       });
 
-    expect(res.status).toBe(200);
-    expect(res.body.received).toBe(true);
-    // The route bails out after the response when object !== whatsapp_business_account,
-    // so no message rows were created.
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('WEBHOOK_MOUNT_ORDER');
+    // The tombstone returns before any DB work — no rows written.
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
   });
 });

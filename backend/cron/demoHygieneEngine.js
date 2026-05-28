@@ -296,13 +296,17 @@ async function purgeVisits(cutoff) {
   return { deleted, skipped, candidates: candidates.length };
 }
 
-async function purgeTeardownNamedModel(modelName, cutoff) {
+async function purgeTeardownNamedModel(modelName, cutoff, cutoffField = "createdAt") {
   // #741 — generic helper for models that accumulate `_teardown_<spec>_<id>`
   // and `_test_<spec>_<id>` name prefixes from the e2e teardown
   // rename pattern (#747). Used for TreatmentPlan + MembershipPlan
   // (both have `name` String column + clinical-child FKs that mostly
   // cascade safely). Symmetric to purgeNamedModel but uses
   // TEARDOWN_NAME_PREFIXES rather than QA_NAME_PREFIXES.
+  //
+  // `cutoffField` lets callers point at a non-createdAt time column —
+  // TreatmentPlan has `startedAt` instead of `createdAt`, which crashed
+  // every tick until this param was added.
   const delegate = prisma[modelName];
   if (!delegate) return { deleted: 0, skipped: 0, candidates: 0 };
   let deleted = 0;
@@ -310,7 +314,7 @@ async function purgeTeardownNamedModel(modelName, cutoff) {
   const candidates = await delegate.findMany({
     where: {
       AND: [
-        { createdAt: { lt: cutoff } },
+        { [cutoffField]: { lt: cutoff } },
         {
           OR: TEARDOWN_NAME_PREFIXES.map((p) => ({
             name: { startsWith: p },
@@ -400,6 +404,7 @@ async function runDemoHygiene({ ageHours } = {}) {
     summary.treatmentPlan = await purgeTeardownNamedModel(
       "treatmentPlan",
       cutoff,
+      "startedAt", // TreatmentPlan has no createdAt column; startedAt is its row-birth timestamp
     );
     summary.membershipPlan = await purgeTeardownNamedModel(
       "membershipPlan",

@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import WhatsAppEmbeddedSignup from '../components/WhatsAppEmbeddedSignup';
 
 // Allow-list of valid tab keys for the ?tab= deep-link param. Anything
 // outside this list falls back to the SMS default. Closes #519.
@@ -356,8 +357,12 @@ export default function Channels() {
       {/* WhatsApp Config */}
       {activeTab === 'whatsapp' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {/* P2: Embedded Signup — primary onboarding flow. Falls back to
+              the manual paste form below for tenants who can't use ES
+              (self-hosted enterprise, or pre-App-Review test mode). */}
+          <WhatsAppEmbeddedSignup />
           <ConfigCard
-            provider={{ provider: 'meta_cloud', label: 'Meta Cloud API', fields: [{ key: 'phoneNumberId', label: 'Phone Number ID' }, { key: 'accessToken', label: 'Access Token', secret: true }, { key: 'businessAccountId', label: 'Business Account ID' }, { key: 'webhookVerifyToken', label: 'Webhook Verify Token', secret: true }] }}
+            provider={{ provider: 'meta_cloud', label: 'Meta Cloud API (manual paste — advanced)', fields: [{ key: 'phoneNumberId', label: 'Phone Number ID' }, { key: 'accessToken', label: 'Access Token', secret: true }, { key: 'businessAccountId', label: 'Business Account ID' }, { key: 'webhookVerifyToken', label: 'Webhook Verify Token', secret: true }] }}
             config={configsByProvider['meta_cloud'] || {}}
             onChangeField={(field, value) => updateProviderField('meta_cloud', field, value)}
             onSave={() => handleSaveConfig('meta_cloud', '/api/whatsapp/config/meta_cloud')}
@@ -697,7 +702,17 @@ function WebhookInfo({ label, url, copied, copyText }) {
 }
 
 function TemplateSection({ kind, templates, onDelete, onCreate, onEdit, onDuplicate, onSend, onBlast, onPreview, statusColors }) {
+  const notify = useNotify();
   const showStatus = kind === 'whatsapp';
+  const handleDelete = async (t) => {
+    const ok = await notify.confirm({
+      title: 'Delete template',
+      message: `Delete template "${t.name}"?`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (ok) onDelete(t.id);
+  };
   return (
     <div className="card" style={{ padding: '1.5rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -737,7 +752,7 @@ function TemplateSection({ kind, templates, onDelete, onCreate, onEdit, onDuplic
                 {onBlast && (
                   <IconBtn title={kind === 'push' ? 'Send to All Subscribers' : 'Send Blast'} onClick={() => onBlast(t)}><Megaphone size={15} /></IconBtn>
                 )}
-                <IconBtn title="Delete" onClick={() => { if (window.confirm(`Delete template "${t.name}"?`)) onDelete(t.id); }} danger><Trash2 size={15} /></IconBtn>
+                <IconBtn title="Delete" onClick={() => handleDelete(t)} danger><Trash2 size={15} /></IconBtn>
               </div>
             </div>
           ))}

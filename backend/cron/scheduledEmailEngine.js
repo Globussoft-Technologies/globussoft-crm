@@ -2,11 +2,10 @@ const cron = require("node-cron");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 
-const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
 
 async function sendViaSendGrid(to, subject, body) {
-  const key = process.env.SENDGRID_API_KEY || SENDGRID_API_KEY;
+  const key = process.env.SENDGRID_API_KEY;
   if (!key) return { sent: false, reason: "no_api_key" };
   const htmlBody = body.replace(/\n/g, "<br>");
   const payload = {

@@ -114,7 +114,8 @@ describe('<Surveys /> — list + CRUD + response-view shell', () => {
       if (url.endsWith('/aggregate')) return Promise.resolve(aggregateFixture);
       if (url.endsWith('/stats')) return Promise.resolve(aggregateFixture);
       if (url.endsWith('/responses')) return Promise.resolve([]);
-      if (url === '/api/contacts') return Promise.resolve([]);
+      if (url === '/api/contacts' || url.startsWith('/api/contacts?')) return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/patients')) return Promise.resolve({ patients: [], total: 0 });
       return Promise.resolve({});
     });
   });
@@ -408,7 +409,7 @@ describe('<Surveys /> — list + CRUD + response-view shell', () => {
       }
       if (url.endsWith('/aggregate')) return Promise.resolve(aggregateFixture);
       if (url.endsWith('/responses')) return Promise.resolve([]);
-      if (url === '/api/contacts') return Promise.resolve(contactsFixture);
+      if (url === '/api/contacts' || (typeof url === 'string' && url.startsWith('/api/contacts?'))) return Promise.resolve(contactsFixture);
       return Promise.resolve({});
     });
     render(<Surveys />);
@@ -419,7 +420,7 @@ describe('<Surveys /> — list + CRUD + response-view shell', () => {
 
     await user.click(screen.getByRole('button', { name: /send survey/i }));
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/search contacts/i)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/search by name/i)).toBeInTheDocument();
     });
     expect(screen.getByText('Aarav Patel')).toBeInTheDocument();
     expect(screen.getByText('Priya Singh')).toBeInTheDocument();
@@ -435,7 +436,7 @@ describe('<Surveys /> — list + CRUD + response-view shell', () => {
       }
       if (url.endsWith('/aggregate')) return Promise.resolve(aggregateFixture);
       if (url.endsWith('/responses')) return Promise.resolve([]);
-      if (url === '/api/contacts') return Promise.resolve([
+      if (url === '/api/contacts' || (typeof url === 'string' && url.startsWith('/api/contacts?'))) return Promise.resolve([
         { id: 201, name: 'Test Lead', email: 'tl@example.com' },
       ]);
       return Promise.resolve({});
@@ -460,7 +461,7 @@ describe('<Surveys /> — list + CRUD + response-view shell', () => {
       }
       if (url.endsWith('/aggregate')) return Promise.resolve(aggregateFixture);
       if (url.endsWith('/responses')) return Promise.resolve([]);
-      if (url === '/api/contacts') return Promise.resolve([
+      if (url === '/api/contacts' || (typeof url === 'string' && url.startsWith('/api/contacts?'))) return Promise.resolve([
         { id: 301, name: 'Riya Sharma', email: 'riya@example.com' },
         { id: 302, name: 'Karan Mehta', email: 'karan@example.com' },
       ]);
@@ -496,7 +497,7 @@ describe('<Surveys /> — list + CRUD + response-view shell', () => {
     });
     // Success message renders.
     await waitFor(() => {
-      expect(screen.getByText(/sent to 2 of 2 contacts/i)).toBeInTheDocument();
+      expect(screen.getByText(/sent to 2 of 2 recipients/i)).toBeInTheDocument();
     });
   });
 
@@ -508,7 +509,7 @@ describe('<Surveys /> — list + CRUD + response-view shell', () => {
       }
       if (url.endsWith('/aggregate')) return Promise.resolve(aggregateFixture);
       if (url.endsWith('/responses')) return Promise.resolve([]);
-      if (url === '/api/contacts') return Promise.resolve([
+      if (url === '/api/contacts' || (typeof url === 'string' && url.startsWith('/api/contacts?'))) return Promise.resolve([
         { id: 401, name: 'Aarav Patel', email: 'aarav@acme.com', company: 'Acme' },
         { id: 402, name: 'Priya Singh', email: 'priya@globus.com', company: 'Globus' },
       ]);
@@ -522,7 +523,7 @@ describe('<Surveys /> — list + CRUD + response-view shell', () => {
     await waitFor(() => expect(screen.getByText('Aarav Patel')).toBeInTheDocument());
 
     // Type "globus" — only Priya should remain.
-    const searchInput = screen.getByPlaceholderText(/search contacts/i);
+    const searchInput = screen.getByPlaceholderText(/search by name/i);
     await user.type(searchInput, 'globus');
 
     await waitFor(() => {

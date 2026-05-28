@@ -321,6 +321,17 @@ async function main() {
     console.log(`[seed-wellness] backfilled locationId on ${patientsBackfilled.count} patients, ${visitsBackfilled.count} visits`);
   }
 
+  // 1b. Wellness role catalog — per-tenant replacement for the old hard-coded
+  // VALID_WELLNESS_ROLES whitelist. Admins can add custom roles (e.g. "nurse")
+  // from Settings; Staff edit + Calendar grid read from this catalog.
+  try {
+    const { seedDefaultsForTenant } = require("../lib/wellnessRoleTypes");
+    await seedDefaultsForTenant(tenant.id);
+    console.log(`[seed-wellness] wellness role catalog seeded`);
+  } catch (e) {
+    console.warn(`[seed-wellness] role-catalog seed skipped: ${e.message}`);
+  }
+
   // 2. Staff
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
   const userMap = {};

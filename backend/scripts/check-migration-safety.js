@@ -238,9 +238,20 @@ function runMigrateDiff({ schema, against, verbose }) {
     if (e.status === 2) {
       stdout = (e.stdout || '').toString();
     } else {
+      // Throw with engine context so main() can emit a valid JSON
+      // report even when the diff itself fails. Previously this path
+      // called process.exit(2) with stderr-only output — the
+      // downstream CI step then crashed with "Unexpected end of JSON
+      // input" when it tried to require() the empty report file. With
+      // a structured throw, --json runs always produce parseable
+      // output and the CI gate fails cleanly via the engineFailed
+      // signal instead of a SyntaxError.
       const stderr = e.stderr ? e.stderr.toString() : '';
-      process.stderr.write(`[migration-safety] prisma migrate diff failed (exit ${e.status}):\n${stderr || e.message}\n`);
-      process.exit(2);
+      const err = new Error(`prisma migrate diff failed (exit ${e.status})`);
+      err.engineFailed = true;
+      err.engineExit = e.status;
+      err.engineStderr = stderr || e.message;
+      throw err;
     }
   }
   return stdout;
@@ -601,7 +612,38 @@ function main() {
     ? { allowUnique: false, allowDrop: false, allowNotNull: false, allowNarrow: false }
     : readBlessingsFromCommitMessage();
 
-  const sql = runMigrateDiff(opts);
+  let sql;
+  try {
+    sql = runMigrateDiff(opts);
+  } catch (e) {
+    // prisma migrate diff failed (typically: baseline schema can't be
+    // parsed because it landed in main before this gate was added, or
+    // a prisma engine bug). Emit a structured failure report so the
+    // CI workflow can read it without crashing on JSON.parse, then
+    // exit 2 to signal engine failure distinct from a risk finding.
+    process.stderr.write(`[migration-safety] ${e.message}:\n${e.engineStderr || ''}\n`);
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({
+        schema: opts.schema,
+        against: opts.against,
+        statementCount: 0,
+        riskCount: 0,
+        suppressedCount: 0,
+        blessedCount: 0,
+        blessings: {
+          allowUnique: !!opts.blessings.allowUnique,
+          allowDrop: !!opts.blessings.allowDrop,
+          allowNotNull: !!opts.blessings.allowNotNull,
+          allowNarrow: !!opts.blessings.allowNarrow,
+        },
+        risks: [],
+        engineFailed: true,
+        engineExit: e.engineExit || null,
+        engineError: (e.engineStderr || '').slice(0, 4000),
+      }, null, 2) + '\n');
+    }
+    process.exit(2);
+  }
   if (opts.verbose) {
     process.stderr.write('--- migrate diff SQL ---\n');
     process.stderr.write(sql);

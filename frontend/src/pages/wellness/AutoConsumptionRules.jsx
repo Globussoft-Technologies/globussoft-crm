@@ -75,7 +75,14 @@ export default function AutoConsumptionRules() {
   };
 
   const remove = async (r) => {
-    if (!window.confirm('Delete this auto-consumption rule? Future visits will no longer auto-decrement stock for this service+product.')) return;
+    const ok = await notify.confirm({
+      title: 'Delete auto-consumption rule',
+      message:
+        'Delete this auto-consumption rule? Future visits will no longer auto-decrement stock for this service+product.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/auto-consumption-rules/${r.id}`, { method: 'DELETE' });
       notify.success('Rule deleted.');
@@ -109,7 +116,10 @@ export default function AutoConsumptionRules() {
             <option value="">Product…</option>
             {products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
           </select>
-          <input type="number" min="0.01" step="0.01" required placeholder="Qty per visit" value={form.quantityPerVisit} onChange={(e) => setForm({ ...form, quantityPerVisit: e.target.value })} style={inputStyle} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            <input type="number" min="0.01" step="0.01" required placeholder="e.g., 50 (for 50ml)" value={form.quantityPerVisit} onChange={(e) => setForm({ ...form, quantityPerVisit: e.target.value })} style={inputStyle} title="Quantity consumed per treatment in the product's unit (usually ml)" />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Amount in product's unit (ml, units, etc.)</span>
+          </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9rem' }}>
             <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
             Active
@@ -131,7 +141,7 @@ export default function AutoConsumptionRules() {
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
                 <th style={cellStyle}>Service</th>
                 <th style={cellStyle}>Product</th>
-                <th style={cellStyle}>Qty / visit</th>
+                <th style={cellStyle} title="Quantity in product's unit (ml, units, etc.)">Qty / visit</th>
                 <th style={cellStyle}>Stock</th>
                 <th style={cellStyle}>Status</th>
                 <th style={cellStyle}></th>

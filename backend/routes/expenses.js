@@ -186,7 +186,7 @@ router.get("/:id", async (req, res) => {
 // POST /api/expenses — create expense
 router.post("/", async (req, res) => {
   try {
-    const { title, amount, category, notes, expenseDate, contactId, receiptUrl } = req.body;
+    const { title, amount, category, description, notes, expenseDate, contactId, receiptUrl } = req.body;
 
     if (!title) return res.status(400).json({ error: "title is required" });
     if (amount === undefined || amount === null) return res.status(400).json({ error: "amount is required" });
@@ -194,6 +194,7 @@ router.post("/", async (req, res) => {
     const expense = await prisma.expense.create({
       data: {
         title,
+        description: description || null,
         amount: parseFloat(amount),
         category: category || "General",
         notes: notes || null,
@@ -233,13 +234,14 @@ router.put("/:id", async (req, res) => {
     const existing = await prisma.expense.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Expense not found" });
 
-    const { title, amount, category, status, notes, expenseDate, contactId, receiptUrl } = req.body;
+    const { title, amount, category, status, description, notes, expenseDate, contactId, receiptUrl } = req.body;
 
     const data = {};
     if (title !== undefined) data.title = title;
     if (amount !== undefined) data.amount = parseFloat(amount);
     if (category !== undefined) data.category = category;
     if (status !== undefined) data.status = status;
+    if (description !== undefined) data.description = description;
     if (notes !== undefined) data.notes = notes;
     if (receiptUrl !== undefined) data.receiptUrl = receiptUrl;
     if (expenseDate !== undefined) data.expenseDate = expenseDate ? new Date(expenseDate) : null;

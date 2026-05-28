@@ -81,7 +81,7 @@ function renderPage(user = ADMIN_USER) {
 function renderPageInsideRoleGuard(user) {
   return render(
     <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1 }, loading: false }}>
-      <RoleGuard allow={['ADMIN']} feature="Wallet Bonus Rules">
+      <RoleGuard allow={['ADMIN']} feature="Wallet Bonus Rules" lockedInPlace>
         <WalletRules />
       </RoleGuard>
     </AuthContext.Provider>,
@@ -193,8 +193,12 @@ describe('<WalletRules /> — admin wallet bonus rule CRUD page', () => {
     // page-not-rendered from page-rendered.)
     expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
     expect(screen.queryByTestId('wallet-rules-new-btn')).not.toBeInTheDocument();
-    // The page never mounted → fetchApi was never called.
-    expect(fetchApiMock).not.toHaveBeenCalled();
+    // The page never mounted → fetchApi was NEVER called for /api/wallet/rules.
+    // RoleGuard's usePermissions may probe /api/auth/me/permissions on mount;
+    // assert only that the page's own data fetch did not happen.
+    expect(
+      fetchApiMock.mock.calls.find(([u]) => u === '/api/wallet/rules'),
+    ).toBeUndefined();
   });
 
   it('RBAC: ADMIN role inside the same RoleGuard wrapper DOES see the page', async () => {

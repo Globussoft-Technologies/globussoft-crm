@@ -30,7 +30,13 @@ export default function CashbackRulesPage() {
   useEffect(() => { load(); }, []);
 
   const remove = async (id) => {
-    if (!confirm('Delete this cashback rule? Past wallet credits remain.')) return;
+    const ok = await notify.confirm({
+      title: 'Delete cashback rule',
+      message: 'Delete this cashback rule? Past wallet credits remain.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/cashback-rules/${id}`, { method: 'DELETE' });
       notify.success('Rule deleted');
@@ -65,23 +71,30 @@ export default function CashbackRulesPage() {
               <th style={th}>Name</th>
               <th style={th}>Earn %</th>
               <th style={th}>Min spend</th>
-              <th style={th}>Active</th>
+              <th style={th}>Expires</th>
+              <th style={th}>Status</th>
               <th style={th}></th>
             </tr>
           </thead>
           <tbody>
-            {rules.map((r) => (
-              <tr key={r.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                <td style={td}>{r.name}</td>
-                <td style={td}>{r.earnPercent}%</td>
-                <td style={td}>{r.minSpend ? formatMoney(r.minSpend) : '—'}</td>
-                <td style={td}>{r.isActive ? 'Yes' : 'No'}</td>
-                <td style={td}>
-                  <button onClick={() => setEditOpen(r)} style={iconBtn}><Pencil size={14} /></button>
-                  <button onClick={() => remove(r.id)} style={iconBtn}><Trash2 size={14} /></button>
-                </td>
-              </tr>
-            ))}
+            {rules.map((r) => {
+              const expired = r.expiresAt && new Date(r.expiresAt).getTime() <= Date.now();
+              const status = !r.isActive ? 'Disabled' : (expired ? 'Expired' : 'Active');
+              const statusColor = !r.isActive ? 'var(--text-secondary)' : (expired ? '#c0392b' : 'var(--primary-color, var(--accent-color))');
+              return (
+                <tr key={r.id} style={{ borderBottom: '1px solid var(--border-color)', opacity: expired || !r.isActive ? 0.6 : 1 }}>
+                  <td style={td}>{r.name}</td>
+                  <td style={td}>{r.earnPercent}%</td>
+                  <td style={td}>{r.minSpend ? formatMoney(r.minSpend) : '—'}</td>
+                  <td style={td}>{r.expiresAt ? new Date(r.expiresAt).toLocaleDateString() : '—'}</td>
+                  <td style={{ ...td, color: statusColor, fontWeight: 500 }}>{status}</td>
+                  <td style={td}>
+                    <button onClick={() => setEditOpen(r)} style={iconBtn}><Pencil size={14} /></button>
+                    <button onClick={() => remove(r.id)} style={iconBtn}><Trash2 size={14} /></button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -104,6 +117,7 @@ function RuleEditor({ row, onSaved, onCancel }) {
     earnPercent: row.earnPercent ?? '',
     minSpend: row.minSpend ?? '',
     isActive: row.isActive ?? true,
+    expiresAt: row.expiresAt ? new Date(row.expiresAt).toISOString().slice(0, 10) : '',
   });
   const [submitting, setSubmitting] = useState(false);
   const notify = useNotify();
@@ -113,11 +127,19 @@ function RuleEditor({ row, onSaved, onCancel }) {
     const v = Number(form.earnPercent);
     if (!Number.isFinite(v) || v < 0 || v > 100) return notify.error('Earn % must be 0..100.');
 
+    let expiresAt = null;
+    if (form.expiresAt) {
+      const d = new Date(form.expiresAt + 'T23:59:59');
+      if (Number.isNaN(d.getTime())) return notify.error('Expiry date is invalid.');
+      expiresAt = d.toISOString();
+    }
+
     const body = {
       name: form.name.trim(),
       earnPercent: v,
       minSpend: form.minSpend !== '' && form.minSpend != null ? Number(form.minSpend) : null,
       isActive: form.isActive,
+      expiresAt,
     };
     setSubmitting(true);
     try {
@@ -147,6 +169,18 @@ function RuleEditor({ row, onSaved, onCancel }) {
         </label>
         <label style={lbl}>Min spend (blank = no floor)
           <input type="number" value={form.minSpend} onChange={(e) => setForm({ ...form, minSpend: e.target.value })} style={inp} step="0.01" />
+        </label>
+        <label style={lbl}>Expiry date (blank = never expires)
+          <input
+            type="date"
+            value={form.expiresAt}
+            onChange={(e) => setForm({ ...form, expiresAt: e.target.value })}
+            min={new Date().toISOString().slice(0, 10)}
+            style={inp}
+          />
+          <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            After end-of-day on this date the rule stops awarding cashback (existing wallet credits are kept).
+          </span>
         </label>
         <label style={{ ...lbl, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />

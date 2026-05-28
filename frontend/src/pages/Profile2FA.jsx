@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Shield, ShieldCheck, ShieldOff, Key, Copy, CheckCircle, AlertTriangle, Loader2, QrCode, Lock } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import PasswordInput from '../components/PasswordInput';
 
 const card = {
   padding: '1.5rem',
@@ -282,12 +283,11 @@ export default function Profile2FA() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.75rem' }}>
             <div>
               <label style={labelStyle}>Current password</label>
-              <input
-                type="password"
-                className="input-field"
+              <PasswordInput
                 placeholder="••••••••"
                 value={disablePassword}
                 onChange={(e) => setDisablePassword(e.target.value)}
+                autoComplete="current-password"
               />
             </div>
             <div>

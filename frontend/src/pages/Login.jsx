@@ -2,6 +2,7 @@ import React, { useState, useContext, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Mail, Square } from "lucide-react";
 import { AuthContext } from "../App";
+import PasswordInput from "../components/PasswordInput";
 
 const Login = () => {
   const [email, setEmail] = useState("admin@globussoft.com");
@@ -154,6 +155,15 @@ const Login = () => {
   //      the previous /home generic-fallback so vertical tenants land on
   //      their correct surface even in degraded-fetch scenarios.
   const resolveLandingPath = async (data) => {
+    // CUSTOMER users (self-service registered via /customer/register) only
+    // have access to /portal in the page catalog, which currently renders
+    // the legacy "Support & Knowledge Base" page — not a customer
+    // dashboard. Route them to /home (the role-aware widget dashboard)
+    // which is always accessible and shows their permitted widgets +
+    // quick actions instead.
+    if (data.user?.role === 'CUSTOMER') {
+      return '/home';
+    }
     const configuredLanding =
       data.user?.landingPath || data.user?.primaryRole?.landingPath || null;
     const verticalDefault = verticalDefaultLanding(data.tenant?.vertical);
@@ -433,12 +443,11 @@ const Login = () => {
                 >
                   Password
                 </label>
-                <input
-                  type="password"
-                  className="input-field"
+                <PasswordInput
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
                 />
               </div>
               <label
@@ -472,6 +481,11 @@ const Login = () => {
               </button>
             </form>
 
+            {/* SSO providers (Google / Microsoft) hidden for now —
+                pending tenant-level SSO config + provider credentials.
+                Flip SHOW_SSO to true to re-enable. */}
+            {false && (
+            <>
             <div
               style={{
                 display: "flex",
@@ -562,6 +576,8 @@ const Login = () => {
                 <span>Sign in with Microsoft</span>
               </button>
             </div>
+            </>
+            )}
 
             <div style={{ marginTop: "1rem", textAlign: "center" }}>
               <button

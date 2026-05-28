@@ -194,6 +194,12 @@ const phiReadGate = verifyWellnessRole(
     anyOfPermissions: [
       { module: "patients", action: "read" },
       { module: "appointments", action: "read" },
+      // `my_appointments.read` + `waitlist.read` opened in v3.8.x when
+      // the `appointments` module was split per-page — a doctor with
+      // only `my_appointments.read` still needs to call the underlying
+      // /api/wellness/* read endpoints to hydrate their page.
+      { module: "my_appointments", action: "read" },
+      { module: "waitlist", action: "read" },
       { module: "calendar", action: "read" },
       { module: "visits", action: "read" },
       { module: "prescriptions", action: "read" },
@@ -207,6 +213,12 @@ const phiWriteGate = verifyWellnessRole(
     anyOfPermissions: [
       { module: "patients", action: "write" },
       { module: "appointments", action: "write" },
+      // `book_appointment.write` + `waitlist.write` opened in v3.8.x
+      // when the `appointments` module was split per-page — a telecaller
+      // with only `book_appointment.write` still needs to call the
+      // booking endpoint, and waitlist promote needs `waitlist.write`.
+      { module: "book_appointment", action: "write" },
+      { module: "waitlist", action: "write" },
       { module: "calendar", action: "write" },
       { module: "visits", action: "write" },
       { module: "prescriptions", action: "write" },
@@ -5725,14 +5737,19 @@ router.get(
     ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
     {
       // Resources back the Calendar page (calendar.read), Appointments
-      // list (appointments.read), the Resources admin page (settings.read),
-      // and any clinical surface that needs to check room availability.
-      // Any one of these read grants unlocks the endpoint so admins
-      // don't have to grant an exact-matching permission — just the
-      // permission for the page the user is trying to use.
+      // list (appointments.read), My Appointments (my_appointments.read),
+      // Book Appointment (book_appointment.write), Waitlist (waitlist.read),
+      // the Resources admin page (settings.read), and any clinical surface
+      // that needs to check room availability. Any one of these grants
+      // unlocks the endpoint so admins don't have to grant an exact-
+      // matching permission — just the permission for the page the user
+      // is trying to use.
       anyOfPermissions: [
         { module: "calendar", action: "read" },
         { module: "appointments", action: "read" },
+        { module: "my_appointments", action: "read" },
+        { module: "book_appointment", action: "write" },
+        { module: "waitlist", action: "read" },
         { module: "settings", action: "read" },
         { module: "patients", action: "read" },
         { module: "visits", action: "read" },
@@ -5923,6 +5940,9 @@ router.get("/holidays", verifyWellnessRole(
     anyOfPermissions: [
       { module: "calendar", action: "read" },
       { module: "appointments", action: "read" },
+      { module: "my_appointments", action: "read" },
+      { module: "book_appointment", action: "write" },
+      { module: "waitlist", action: "read" },
       { module: "settings", action: "read" },
       { module: "patients", action: "read" },
       { module: "visits", action: "read" },
@@ -6070,6 +6090,9 @@ router.get(
       anyOfPermissions: [
         { module: "calendar", action: "read" },
         { module: "appointments", action: "read" },
+        { module: "my_appointments", action: "read" },
+        { module: "book_appointment", action: "write" },
+        { module: "waitlist", action: "read" },
         { module: "settings", action: "read" },
         { module: "patients", action: "read" },
         { module: "visits", action: "read" },

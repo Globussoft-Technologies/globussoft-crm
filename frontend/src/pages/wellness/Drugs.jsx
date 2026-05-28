@@ -7,7 +7,24 @@
  * UI can pre-fill from.
  */
 import { useEffect, useState } from 'react';
-import { Pill, Plus, Pencil, Search } from 'lucide-react';
+import { Pill, Plus, Pencil, Trash2, Search } from 'lucide-react';
+
+const ICON_BTN_STYLE = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 30,
+  height: 30,
+  background: 'transparent',
+  border: '1px solid var(--border-soft, rgba(255,255,255,0.15))',
+  borderRadius: 6,
+  color: 'var(--text-primary)',
+  cursor: 'pointer',
+  transition: 'background 0.15s, border-color 0.15s',
+};
+const DANGER_ICON_BTN_STYLE = { ...ICON_BTN_STYLE, color: 'var(--danger-color, #ef4444)' };
+const TH_STYLE = { padding: '0.6rem 0.75rem', fontWeight: 600, color: 'var(--text-secondary)', fontSize: '0.85rem' };
+const TD_STYLE = { padding: '0.6rem 0.75rem', verticalAlign: 'middle' };
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 // Issue #816: Reusable CSV import/export toolbar.
@@ -120,16 +137,47 @@ export default function Drugs() {
         </div>
       </header>
 
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '1rem' }}>
-        <Search size={16} />
-        <input
-          placeholder="Search by name or generic name…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') load(search); }}
-          style={{ flex: 1, padding: '0.4rem 0.6rem' }}
-        />
-        <button onClick={() => load(search)}>Search</button>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'stretch', marginBottom: '1rem' }}>
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+          padding: '0 0.75rem',
+          background: 'var(--bg-elev, rgba(255,255,255,0.04))',
+          border: '1px solid var(--border-soft, rgba(255,255,255,0.12))',
+          borderRadius: 8,
+        }}>
+          <Search size={16} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+          <input
+            className="naked-input"
+            placeholder="Search by name or generic name…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') load(search); }}
+            style={{
+              flex: 1,
+              padding: '0.55rem 0',
+              color: 'var(--text-primary)',
+              fontSize: '0.9rem',
+            }}
+          />
+        </div>
+        <button
+          onClick={() => load(search)}
+          style={{
+            padding: '0 1.25rem',
+            background: 'var(--primary-color, var(--accent-color))',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            cursor: 'pointer',
+            fontWeight: 500,
+            fontSize: '0.9rem',
+          }}
+        >
+          Search
+        </button>
       </div>
 
       {showAdd && (
@@ -162,28 +210,46 @@ export default function Drugs() {
       ) : (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
-            <tr style={{ textAlign: 'left' }}>
-              <th>Name</th>
-              <th>Generic</th>
-              <th>Form</th>
-              <th>Strength</th>
-              <th>Default dosage</th>
-              <th>Status</th>
-              <th />
+            <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-soft)' }}>
+              <th style={TH_STYLE}>Name</th>
+              <th style={TH_STYLE}>Generic</th>
+              <th style={TH_STYLE}>Form</th>
+              <th style={TH_STYLE}>Strength</th>
+              <th style={TH_STYLE}>Default dosage</th>
+              <th style={TH_STYLE}>Status</th>
+              <th style={{ ...TH_STYLE, textAlign: 'right' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {drugs.map((d) => (
               <tr key={d.id} style={{ borderTop: '1px solid var(--border-soft)' }}>
-                <td style={{ padding: '0.5rem 0' }}>{d.name}</td>
-                <td>{d.genericName || '—'}</td>
-                <td>{d.dosageForm}</td>
-                <td>{d.strengthValue ? `${d.strengthValue} ${d.strengthUnit || ''}`.trim() : '—'}</td>
-                <td>{d.defaultDosage || '—'}</td>
-                <td>{d.isActive ? 'Active' : 'Inactive'}</td>
-                <td style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button onClick={() => startEdit(d)} title="Edit"><Pencil size={14} /></button>
-                  <button onClick={() => remove(d)} title="Delete">×</button>
+                <td style={TD_STYLE}>{d.name}</td>
+                <td style={TD_STYLE}>{d.genericName || '—'}</td>
+                <td style={TD_STYLE}>{d.dosageForm}</td>
+                <td style={TD_STYLE}>{d.strengthValue ? `${d.strengthValue} ${d.strengthUnit || ''}`.trim() : '—'}</td>
+                <td style={TD_STYLE}>{d.defaultDosage || '—'}</td>
+                <td style={TD_STYLE}>
+                  <span style={{
+                    display: 'inline-block',
+                    padding: '0.2rem 0.6rem',
+                    borderRadius: 999,
+                    fontSize: '0.78rem',
+                    fontWeight: 500,
+                    background: d.isActive ? 'rgba(34, 197, 94, 0.12)' : 'rgba(148, 163, 184, 0.15)',
+                    color: d.isActive ? '#22c55e' : 'var(--text-secondary)',
+                  }}>
+                    {d.isActive ? 'Active' : 'Inactive'}
+                  </span>
+                </td>
+                <td style={{ ...TD_STYLE, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <div style={{ display: 'inline-flex', gap: '0.4rem' }}>
+                    <button onClick={() => startEdit(d)} title="Edit" aria-label={`Edit ${d.name}`} style={ICON_BTN_STYLE}>
+                      <Pencil size={14} />
+                    </button>
+                    <button onClick={() => remove(d)} title="Delete" aria-label={`Delete ${d.name}`} style={DANGER_ICON_BTN_STYLE}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

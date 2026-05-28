@@ -11,6 +11,7 @@ import { Key, Eye, Plus, Trash2, AlertTriangle, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import PasswordInput from "../../components/PasswordInput";
 
 const CATEGORIES = [
   { value: "", label: "All categories" },
@@ -142,7 +143,7 @@ export default function Suppliers() {
             </select>
             <input placeholder="Supplier name" value={form.supplierName} onChange={(e) => setForm({ ...form, supplierName: e.target.value })} style={input} />
             <input placeholder="Login ID" value={form.loginId} onChange={(e) => setForm({ ...form, loginId: e.target.value })} style={input} />
-            <input placeholder="Password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} style={input} />
+            <PasswordInput placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} style={input} className="" autoComplete="off" />
           </div>
           <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
             <button type="button" onClick={add} style={primaryBtn}>Save</button>

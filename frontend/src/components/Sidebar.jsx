@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useEffect,
   useCallback,
+  useMemo,
 } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { io } from "socket.io-client";
@@ -448,7 +449,19 @@ const Sidebar = ({
     const tail = current[target.length];
     return tail === "/" || tail === undefined;
   };
-  const Link = ({
+  // PERF: keep these inner components' identities STABLE across re-renders.
+  // Defining `const Link = (...) => {...}` inside the function body creates a
+  // fresh function reference every render. React treats fresh identities as
+  // a DIFFERENT component type and unmounts + remounts the entire subtree —
+  // ~50-60 NavLinks for a wellness admin, each with its own internal
+  // useLocation subscription + className evaluation. With Sidebar
+  // re-rendering on every route change, socket counter tick, permissions
+  // resolve, AdsGPT config fetch, and mobileOpen toggle, that's the
+  // dominant source of sidebar lag. Fix: ref-backed impls + useMemo([], …)
+  // so the component identity React sees is stable, while the closure-
+  // captured state (isAdmin, location, hasPermission, …) stays live.
+  const linkImplRef = useRef(null);
+  linkImplRef.current = ({
     to,
     icon: Icon,
     label,
@@ -501,8 +514,16 @@ const Sidebar = ({
       </NavLink>
     );
   };
+  const Link = useMemo(
+    () =>
+      function Link(props) {
+        return linkImplRef.current(props);
+      },
+    [],
+  );
 
-  const ExtLink = ({ href, icon: Icon, label }) => (
+  const extLinkImplRef = useRef(null);
+  extLinkImplRef.current = ({ href, icon: Icon, label }) => (
     <a
       href={href}
       target="_blank"
@@ -513,6 +534,13 @@ const Sidebar = ({
       <Icon size={20} /> <span style={{ flex: 1 }}>{label}</span>
       <ExternalLink size={14} style={{ opacity: 0.6 }} />
     </a>
+  );
+  const ExtLink = useMemo(
+    () =>
+      function ExtLink(props) {
+        return extLinkImplRef.current(props);
+      },
+    [],
   );
 
   // Accessible pages — fetched from /api/pages/me (the server's
@@ -580,7 +608,9 @@ const Sidebar = ({
       window.removeEventListener("adsgpt:config-updated", handleConfigUpdate);
   }, []);
 
-  const AdsGptLink = ({ icon: Icon = Sparkles, label = "AdsGPT" }) => {
+  // Ref-backed impl + stable useMemo identity — same perf rationale as Link.
+  const adsGptImplRef = useRef(null);
+  adsGptImplRef.current = ({ icon: Icon = Sparkles, label = "AdsGPT" }) => {
     const handleClick = async (e) => {
       e.preventDefault();
       if (adsLoading) return;
@@ -623,11 +653,22 @@ const Sidebar = ({
       </button>
     );
   };
+  const AdsGptLink = useMemo(
+    () =>
+      function AdsGptLink(props) {
+        return adsGptImplRef.current(props);
+      },
+    [],
+  );
 
   // SSO-authenticated Callified launcher — generates a signed JWT and opens
   // the Callified dashboard. If SSO fails, shows an error notification.
   const [callifiedLoading, setCallifiedLoading] = useState(false);
-  const CallifiedLink = ({ icon: Icon = PhoneCall, label = "Callified" }) => {
+  const callifiedImplRef = useRef(null);
+  callifiedImplRef.current = ({
+    icon: Icon = PhoneCall,
+    label = "Callified",
+  }) => {
     const handleClick = async (e) => {
       e.preventDefault();
       if (callifiedLoading) return;
@@ -673,6 +714,13 @@ const Sidebar = ({
       </button>
     );
   };
+  const CallifiedLink = useMemo(
+    () =>
+      function CallifiedLink(props) {
+        return callifiedImplRef.current(props);
+      },
+    [],
+  );
 
   // T2.1: when the drawer is open at <900px, the sidebar IS a modal dialog —
   // it's the focused, foregrounded layer over a backdrop and the rest of the
@@ -1041,9 +1089,14 @@ function renderWellnessNav({
           WELLNESS_HEADERLESS_CATEGORIES is the set already rendered above
           (Core / Manager); everything else gets its category name as the
           section header. Empty categories (user has no accessible pages
-          in them) collapse silently. */}
+          in them) collapse silently. The "User" category holds personal-
+          user surfaces (Notification Settings) and is hidden from admin/
+          manager — they manage their own notification preferences via the
+          Settings surface, not via a dedicated sidebar entry. Mirrors the
+          guard on the generic-sidebar fallback below. */}
       {WELLNESS_CATEGORY_ORDER
         .filter((cat) => !WELLNESS_HEADERLESS_CATEGORIES.has(cat))
+        .filter((cat) => !(cat === "User" && isManager))
         .map((cat) => renderCategory(cat, { showHeader: true }))}
       {/* Wave 2 Agent JJ — Staff Attendance + Leave Management. */}
       <div style={labelStyle}>Staff</div>
@@ -1546,8 +1599,12 @@ function renderGenericNav({
   void permissionsReady;
   return (
     <>
-      {/* Core — visible to ALL roles */}
-      <Link to="/home" icon={LayoutDashboard} label="Home" />
+      {/* Core — Home is the role-aware widget dashboard for non-admins.
+          Admins already see /dashboard (Enterprise Overview) which covers
+          the same ground, so the Home link is hidden for them to keep
+          their nav focused. Mirrors the catalog-level hideForAdminTier
+          flag used by the wellness sidebar. */}
+      {!isAdmin && <Link to="/home" icon={LayoutDashboard} label="Home" />}
       <Link to="/dashboard" icon={LayoutDashboard} label="Dashboard" />
       {/* AdsGPT + Callified are marketing / call-centre integrations
           intended for ADMIN + MANAGER only. Mirrors the same gate in the
@@ -1827,7 +1884,15 @@ const navStyle = {
   gap: "0.625rem",
   borderRadius: "8px",
   color: "var(--text-primary)",
-  transition: "all 0.2s ease",
+  // PERF: was `transition: "all 0.2s ease"`. `all` transitions every property
+  // change — including layout-affecting ones — and fires on every hover state
+  // change. Restrict to the properties the :hover/.active rules actually
+  // animate: background-color and color. (Earlier this list included
+  // `transform 0.2s ease` to cover a hover `translateX(4px)` effect, but
+  // that effect was removed because the visual wave during scroll read as
+  // lag. Listing transform here with no rule animating it kept the
+  // compositor in "live layer" mode for nav-links — drop it.)
+  transition: "background-color 0.2s ease, color 0.2s ease",
   textDecoration: "none",
   fontSize: "0.9rem",
   flexShrink: 0,

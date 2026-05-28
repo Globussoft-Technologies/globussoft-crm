@@ -9487,7 +9487,11 @@ const brandingLogoUpload = multer({
 
 function requireTenantAdmin(req, res, next) {
   if (!req.user || req.user.role !== "ADMIN") {
-    return res.status(403).json({ error: "Tenant ADMIN required" });
+    // Neutral copy + structured code — no internal role-taxonomy leakage.
+    return res.status(403).json({
+      error: "You do not have permission to perform this action",
+      code: "TENANT_ADMIN_REQUIRED",
+    });
   }
   next();
 }
@@ -9582,7 +9586,11 @@ router.get("/branding", async (req, res) => {
 function requireManagerPlus(req, res, next) {
   const role = req.user?.role;
   if (role === "ADMIN" || role === "MANAGER") return next();
-  return res.status(403).json({ error: "Manager or admin role required" });
+  // Neutral copy + structured code — no internal role-taxonomy leakage.
+  return res.status(403).json({
+    error: "You do not have permission to perform this action",
+    code: "MANAGER_ROLE_REQUIRED",
+  });
 }
 
 // #614 — Loyalty rules (earn / burn config). Per-tenant row in LoyaltyConfig.

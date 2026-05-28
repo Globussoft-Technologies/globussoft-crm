@@ -75,11 +75,33 @@ vi.mock('../hooks/usePermissions', () => ({
 import { AuthContext } from '../App';
 import Staff from '../pages/Staff';
 
+// Roles catalog returned by GET /api/roles. The new Staff UI pulls its
+// single-Role dropdown from this list (RoleSelect popover in the Add/Edit
+// modals). Keys 'ADMIN' / 'MANAGER' / 'USER' map onto the legacy access tier;
+// any other key (doctor / professional / helper) maps to that wellnessRole
+// via deriveWellnessRole.
+const ROLES_CATALOG = {
+  roles: [
+    { id: 100, key: 'ADMIN',        name: 'Admin',        userType: 'STAFF', isActive: true, isSystem: true },
+    { id: 101, key: 'MANAGER',      name: 'Manager',      userType: 'STAFF', isActive: true, isSystem: true },
+    { id: 102, key: 'USER',         name: 'User',         userType: 'STAFF', isActive: true, isSystem: true },
+    { id: 200, key: 'doctor',       name: 'Doctor',       userType: 'STAFF', isActive: true, isSystem: false },
+    { id: 201, key: 'professional', name: 'Professional', userType: 'STAFF', isActive: true, isSystem: false },
+    { id: 202, key: 'helper',       name: 'Helper',       userType: 'STAFF', isActive: true, isSystem: false },
+  ],
+};
+
+const WELLNESS_ROLE_TYPES = [
+  { id: 1, key: 'doctor',       label: 'Doctor',       isActive: true },
+  { id: 2, key: 'professional', label: 'Professional', isActive: true },
+  { id: 3, key: 'helper',       label: 'Helper',       isActive: true },
+];
+
 const STAFF_ROWS = [
-  { id: 1,  name: 'Rishu Agarwal',  email: 'rishu@enhancedwellness.in', role: 'ADMIN',  wellnessRole: null,           createdAt: '2026-01-01T00:00:00Z', deactivatedAt: null },
-  { id: 2,  name: 'Dr. Harsh Kumar', email: 'drharsh@enhancedwellness.in', role: 'USER',  wellnessRole: 'doctor',     createdAt: '2026-01-02T00:00:00Z', deactivatedAt: null },
-  { id: 3,  name: 'Priya Pro',       email: 'priya@enhancedwellness.in',   role: 'USER',  wellnessRole: 'professional', createdAt: '2026-01-03T00:00:00Z', deactivatedAt: null },
-  { id: 4,  name: 'Inactive Aman',   email: 'aman@enhancedwellness.in',    role: 'USER',  wellnessRole: 'helper',     createdAt: '2026-01-04T00:00:00Z', deactivatedAt: '2026-04-01T00:00:00Z' },
+  { id: 1,  name: 'Rishu Agarwal',  email: 'rishu@enhancedwellness.in', role: 'ADMIN',  wellnessRole: null,           primaryRole: { id: 100, key: 'ADMIN',        name: 'Admin' },        createdAt: '2026-01-01T00:00:00Z', deactivatedAt: null },
+  { id: 2,  name: 'Dr. Harsh Kumar', email: 'drharsh@enhancedwellness.in', role: 'USER',  wellnessRole: 'doctor',     primaryRole: { id: 200, key: 'doctor',       name: 'Doctor' },       createdAt: '2026-01-02T00:00:00Z', deactivatedAt: null },
+  { id: 3,  name: 'Priya Pro',       email: 'priya@enhancedwellness.in',   role: 'USER',  wellnessRole: 'professional', primaryRole: { id: 201, key: 'professional', name: 'Professional' }, createdAt: '2026-01-03T00:00:00Z', deactivatedAt: null },
+  { id: 4,  name: 'Inactive Aman',   email: 'aman@enhancedwellness.in',    role: 'USER',  wellnessRole: 'helper',     primaryRole: { id: 202, key: 'helper',       name: 'Helper' },       createdAt: '2026-01-04T00:00:00Z', deactivatedAt: '2026-04-01T00:00:00Z' },
 ];
 
 function renderStaff(viewerRole = 'ADMIN', overrides = {}) {
@@ -89,13 +111,18 @@ function renderStaff(viewerRole = 'ADMIN', overrides = {}) {
     if (url === '/api/staff') return Promise.resolve(STAFF_ROWS);
     if (url === '/api/staff/commission-profiles') return Promise.resolve([]);
     if (url.startsWith('/api/staff/revenue-goals')) return Promise.resolve([]);
+    if (url === '/api/roles') return Promise.resolve(ROLES_CATALOG);
+    if (url === '/api/wellness/role-types?activeOnly=1') return Promise.resolve(WELLNESS_ROLE_TYPES);
     return Promise.resolve({});
   });
   return render(
     <MemoryRouter>
       <AuthContext.Provider value={{
         user: { userId: 1, name: 'Rishu Agarwal', email: 'rishu@enhancedwellness.in', role: viewerRole },
-        setUser: vi.fn(), token: 'tk', tenant: { id: 1 }, loading: false,
+        // vertical='wellness' is required so loadWellnessRoleTypes() fires
+        // (gated on isWellness at Staff.jsx:313). Without it, deriveWellnessRole
+        // always returns null because wellnessRoleTypes stays empty.
+        setUser: vi.fn(), token: 'tk', tenant: { id: 1, vertical: 'wellness' }, loading: false,
       }}>
         <Staff />
       </AuthContext.Provider>
@@ -278,64 +305,57 @@ describe('<Staff /> — Invite modal (#891)', () => {
   it('submitting the Add Staff form POSTs to /api/staff with the form fields', async () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
+    // Wait for the /api/roles fetch to populate availableRoles — without this
+    // the RoleSelect popover renders an empty list and the click below would
+    // race against the role load.
+    await waitFor(() =>
+      expect(fetchApiMock.mock.calls.some((c) => c[0] === '/api/roles')).toBe(true)
+    );
     fireEvent.click(screen.getByTestId('staff-add-button'));
 
-    // Fill all required inputs via the data-testid hooks (placeholders differ
-    // from the older "invite" naming — the page now ships an Add Staff modal
-    // posting to /api/staff directly, not the legacy /api/auth/register).
     fireEvent.change(screen.getByTestId('staff-create-name'),     { target: { value: 'Asha Newhire' } });
     fireEvent.change(screen.getByTestId('staff-create-email'),    { target: { value: 'asha@enhancedwellness.in' } });
     fireEvent.change(screen.getByTestId('staff-create-password'), { target: { value: 'TempPw!1234' } });
 
-    // Submit via the Add staff member button.
+    // Post-e7253919: pick the role via the upward-opening RoleSelect popover
+    // (replaces the old 3-way native <select> split). Click the trigger, then
+    // click the "User" option to seed rbacRoleId — saveCreate requires it.
+    fireEvent.click(screen.getByTestId('staff-create-role'));
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: /^User$/i })).toBeInTheDocument()
+    );
+    fireEvent.click(screen.getByRole('option', { name: /^User$/i }));
+
     fireEvent.click(screen.getByTestId('staff-create-save'));
 
-    // POST /api/staff received the form payload.
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls;
       const invite = calls.find((c) => c[0] === '/api/staff' && c[1]?.method === 'POST');
       expect(invite).toBeTruthy();
       const body = JSON.parse(invite[1].body);
+      // saveCreate derives access tier + wellnessRole from the single Role pick.
+      // 'USER' → access tier USER, wellnessRole null (no catalog match).
       expect(body).toEqual(expect.objectContaining({
         name: 'Asha Newhire',
         email: 'asha@enhancedwellness.in',
         password: 'TempPw!1234',
-        role: 'USER', // default selection
+        role: 'USER',
+        wellnessRole: null,
+        rbacRoleId: 102,
       }));
       expect(invite[1].method).toBe('POST');
     });
   });
 });
 
-describe('<Staff /> — inline role change (PUT /api/staff/:id/role)', () => {
-  beforeEach(() => {
-    fetchApiMock.mockReset();
-  });
-
-  it('changing the role <select> on a non-wellness row PUTs the new role', async () => {
-    // Need a row whose wellnessRole is null so the inline <select> renders
-    // (wellness rows show a read-only badge instead — by design, see SUT:413).
-    // Rishu (id=1) has wellnessRole: null → shows the editable role select.
-    renderStaff('ADMIN');
-    await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
-
-    // The select for the admin row carries the row's current role value.
-    const selects = screen.getAllByRole('combobox');
-    // Find the select whose current value is ADMIN — that's Rishu's row.
-    const rishuSelect = selects.find((s) => s.value === 'ADMIN');
-    expect(rishuSelect).toBeDefined();
-
-    fireEvent.change(rishuSelect, { target: { value: 'MANAGER' } });
-
-    // PUT /api/staff/1/role { role: 'MANAGER' } fired.
-    await waitFor(() => {
-      const put = fetchApiMock.mock.calls.find(
-        (c) => c[0] === '/api/staff/1/role' && c[1]?.method === 'PUT'
-      );
-      expect(put).toBeTruthy();
-      expect(JSON.parse(put[1].body)).toEqual({ role: 'MANAGER' });
-    });
-  });
+// Post-e7253919: the per-row inline role <select> + the PUT /api/staff/:id/role
+// endpoint hit are no longer how role changes flow. The new UI consolidates
+// role editing into the Edit modal's single RoleSelect popover, which fires
+// PUT /api/staff/:id with the full editable shape (covered by the "Save edit"
+// describe below). Kept skipped (not deleted) so the contract history is
+// visible in the test file.
+describe.skip('<Staff /> — inline role change (PUT /api/staff/:id/role) — removed in e7253919', () => {
+  it.skip('contract moved to PUT /api/staff/:id via Edit modal', () => {});
 });
 
 describe('<Staff /> — Deactivate flow (PATCH /api/staff/:id)', () => {
@@ -440,6 +460,14 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
   it('Save changes PUTs the full editable shape to /api/staff/:id', async () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+    // saveEdit's deriveWellnessRole() reads from wellnessRoleTypes; both that
+    // catalog AND availableRoles must finish loading before we click Save, or
+    // the derivation falls back to null and the shape pin fails.
+    await waitFor(() => {
+      const urls = fetchApiMock.mock.calls.map((c) => c[0]);
+      expect(urls).toContain('/api/roles');
+      expect(urls).toContain('/api/wellness/role-types?activeOnly=1');
+    });
     fireEvent.click(screen.getByTestId('staff-action-edit-2'));
     await waitFor(() => expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument());
 
@@ -452,12 +480,16 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
       );
       expect(put).toBeTruthy();
       const body = JSON.parse(put[1].body);
-      // Pin every field the modal sends.
+      // saveEdit derives access tier + wellnessRole from the pre-populated
+      // rbacRoleId (Dr. Harsh's primaryRole.id=200, key='doctor'). Doctor key
+      // → access tier USER (not in ACCESS_TIER_KEYS) + wellnessRole='doctor'
+      // (matches the wellness catalog).
       expect(body).toEqual(expect.objectContaining({
         name: 'Dr. Harsh Kumar',
         email: 'drharsh@enhancedwellness.in',
         role: 'USER',
         wellnessRole: 'doctor',
+        rbacRoleId: 200,
       }));
       // commissionProfileId column is sent (null when unassigned) — pins the
       // PRD Gap §1.5 shape so backend can clear / set the FK.
@@ -465,17 +497,26 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
     });
   });
 
-  it('clearing wellnessRole sends null (not empty string) so backend can clear the column', async () => {
+  it('picking a non-wellness role sends wellnessRole=null (cleared on the wire)', async () => {
+    // Post-e7253919: there's no separate wellnessRole <select> in the Edit
+    // modal anymore — the single Role pick drives both access tier and
+    // wellnessRole via deriveWellnessRole. Picking a role whose key isn't in
+    // the wellness catalog (e.g. 'User') results in wellnessRole=null on the
+    // wire so the backend can clear the column.
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(fetchApiMock.mock.calls.some((c) => c[0] === '/api/roles')).toBe(true)
+    );
     fireEvent.click(screen.getByTestId('staff-action-edit-2'));
     await waitFor(() => expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument());
 
-    // Find the wellnessRole select (the one whose current value is 'doctor').
-    const selects = screen.getAllByRole('combobox');
-    const wellnessSelect = selects.find((s) => s.value === 'doctor');
-    expect(wellnessSelect).toBeDefined();
-    fireEvent.change(wellnessSelect, { target: { value: '' } });
+    // Open the RoleSelect popover and pick the non-wellness "User" role.
+    fireEvent.click(screen.getByTestId('staff-edit-role'));
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: /^User$/i })).toBeInTheDocument()
+    );
+    fireEvent.click(screen.getByRole('option', { name: /^User$/i }));
 
     fireEvent.click(screen.getByTestId('staff-edit-save'));
 
@@ -485,8 +526,10 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
       );
       expect(put).toBeTruthy();
       const body = JSON.parse(put[1].body);
-      // '' becomes null on the wire (SUT:198).
+      // 'USER' key doesn't match the wellness catalog → wellnessRole=null.
       expect(body.wellnessRole).toBeNull();
+      expect(body.role).toBe('USER');
+      expect(body.rbacRoleId).toBe(102);
     });
   });
 });
@@ -559,22 +602,26 @@ describe('<Staff /> — wellness row renders read-only badge (not select)', () =
     fetchApiMock.mockReset();
   });
 
-  it('row with wellnessRol=doctor shows badge "Doctor", no inline role <select>', async () => {
+  it('row with wellnessRole=doctor shows badge "Doctor", no inline role <select>', async () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
-    // displayRole() capitalises the wellnessRole, so "doctor" → "Doctor".
-    // The text appears in the row as a read-only span (not a <select>).
+    // Post-e7253919: RoleBadge renders primaryRole.name on every row (read-only
+    // span). The doctor / professional / helper labels come from each row's
+    // primaryRole.name; there's no per-row inline <select> anymore — role
+    // editing happens via the Edit modal's RoleSelect popover (covered in the
+    // "Save edit" describe).
     expect(screen.getByText('Doctor')).toBeInTheDocument();
     expect(screen.getByText('Professional')).toBeInTheDocument();
     expect(screen.getByText('Helper')).toBeInTheDocument();
+    // Rishu's row shows Admin too (was inline <select> pre-refactor).
+    expect(screen.getByText('Admin')).toBeInTheDocument();
 
-    // The inline-role <select> only renders for rows where wellnessRole is
-    // null (Rishu's row). All wellness rows show a read-only badge.
-    // So there should be EXACTLY one combobox (Rishu's role select).
+    // No native <select role="combobox"> renders at initial load: the Filter
+    // panel is closed, no Add/Edit modal is mounted, commission-profiles is
+    // empty so the modal's commission <select> stays gated off.
     const comboboxes = screen.queryAllByRole('combobox');
-    expect(comboboxes.length).toBe(1);
-    expect(comboboxes[0].value).toBe('ADMIN');
+    expect(comboboxes.length).toBe(0);
   });
 });
 

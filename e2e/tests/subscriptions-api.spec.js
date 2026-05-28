@@ -146,9 +146,15 @@ test.describe('subscriptions API — GET /status', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 test.describe('subscriptions API — GET /plans', () => {
-  test('GET /plans without Authorization → 401/403', async ({ request }) => {
+  test('GET /plans is PUBLIC (marketing catalog) → 200 without Authorization', async ({ request }) => {
+    // GET /subscriptions/plans is deliberately public — the /pricing page
+    // fetches it anonymously pre-login (server.js global-guard exception:
+    // "Public marketing catalog"). Admin CRUD (POST/PUT/DELETE + /plans/admin)
+    // stays auth-gated. This pins the public-read contract.
     const r = await request.get(`${API}/subscriptions/plans`);
-    expect([401, 403]).toContain(r.status());
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body)).toBe(true);
   });
 
   test('GET /plans returns 200 with array; each plan has id, name, price (number), currency, features (array)', async ({ request }) => {

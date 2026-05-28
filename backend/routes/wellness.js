@@ -7352,7 +7352,11 @@ router.get(
 // the full clinic financials. Lock to admin/manager.
 router.get(
   "/dashboard",
-  adminOrPerm("reports", "read"),
+  // #207/#216 financial-leak fix — owner dashboard shows org-wide P&L, so
+  // admin/manager ONLY (hard gate). The generic `reports.read` permission is
+  // held by the base "User" role that every clinical staffer has, so a
+  // permission fallback (adminOrPerm) would leak revenue to doctors.
+  verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
       const tenantId = req.user.tenantId;

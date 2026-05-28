@@ -268,18 +268,14 @@ describe('Layout', () => {
     expect(btn).toHaveAttribute('type', 'button');
   });
 
-  // #851 -- search button dispatches the `omnibar:open` CustomEvent so the
-  // Omnibar listener can open without keyboard-shortcut discoverability.
-  it('search button dispatches an omnibar:open CustomEvent', () => {
-    const listener = vi.fn();
-    window.addEventListener('omnibar:open', listener);
-    renderLayout();
-    const searchBtn = screen.getByLabelText(/Open global search/i);
-    fireEvent.click(searchBtn);
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener.mock.calls[0][0]).toBeInstanceOf(CustomEvent);
-    window.removeEventListener('omnibar:open', listener);
-  });
+  // #851 -- the legacy "Open global search" header button dispatched
+  // `omnibar:open` so the dropdown panel would open without a keyboard
+  // shortcut. e7253919 replaced the button with an INLINE <Omnibar /> in the
+  // header (see Layout.jsx:376), so the dispatch contract no longer has a UI
+  // surface in Layout — the omnibar:open listener is still wired in Omnibar
+  // for any external caller that hasn't migrated (Omnibar.jsx:283), and the
+  // listener side is covered by Omnibar.test.jsx.
+  it.skip('search button dispatches an omnibar:open CustomEvent — removed in e7253919 (inline Omnibar)', () => {});
 
   // #528 (CRIT-03 fix) -- logout calls POST /api/auth/logout server-side
   // BEFORE clearing local state, so the JWT is added to the RevokedToken

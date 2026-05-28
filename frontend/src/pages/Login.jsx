@@ -4,6 +4,10 @@ import { Mail, Square } from "lucide-react";
 import { AuthContext } from "../App";
 import PasswordInput from "../components/PasswordInput";
 
+// SSO providers (Google / Microsoft) hidden for now — pending tenant-level
+// SSO config + provider credentials. Flip to true to re-enable.
+const SHOW_SSO = false;
+
 const Login = () => {
   const [email, setEmail] = useState("admin@globussoft.com");
   const [password, setPassword] = useState("password123");
@@ -481,10 +485,7 @@ const Login = () => {
               </button>
             </form>
 
-            {/* SSO providers (Google / Microsoft) hidden for now —
-                pending tenant-level SSO config + provider credentials.
-                Flip SHOW_SSO to true to re-enable. */}
-            {false && (
+            {SHOW_SSO && (
             <>
             <div
               style={{

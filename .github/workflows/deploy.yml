@@ -230,39 +230,24 @@ jobs:
           tail -50 /tmp/backend.log
           exit 1
 
-      # Cache the Playwright browser binary (~167 MB Chrome). actions/setup-node
-      # caches npm packages but NOT ~/.cache/ms-playwright, so without this the
-      # chromium download re-runs every job and chews most of the time budget
-      # (root cause of the 15-min-timeout cancellations). Keyed on the e2e
-      # lockfile hash → invalidates only when the pinned playwright version
-      # changes.
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('e2e/package-lock.json') }}
-
-      - name: E2E install + playwright browsers
+      - name: E2E install (no browser binary — gated specs are request-only)
         working-directory: e2e
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
-          # The gated specs are ALL request-fixture (HTTP) tests — none of
-          # the 144 *-api specs launch a browser (no page/goto/browser.launch).
-          # So install the chromium BINARY only (restored instantly from the
-          # cache step above on a hit; one-time ~167 MB download on a miss)
-          # and SKIP `--with-deps`: the OS libraries/fonts it installs are
-          # only needed to *launch* chromium, which never happens in this
-          # gate. Dropping --with-deps removes the per-run apt-get font
-          # install that was padding the job toward the timeout.
-          npx playwright install chromium
-          # The chromium project sets storageState: 'playwright/.auth/
-          # user.json'. That file is created by the auth.setup project
-          # (which we skip via --no-deps). Pre-create an empty state so
-          # the chromium project loads cleanly. Same trick the coverage
-          # SSH script used. Without this every spec fails at fixture
-          # init with ENOENT.
+          # DELIBERATELY no `playwright install chromium`. Every spec in the
+          # gate list below uses Playwright's `request` (HTTP) fixture — none
+          # launch a browser. The one UI test (forgot-password.spec.js) skips
+          # at COLLECTION time under IS_LOCAL_STACK, so its `page` fixture is
+          # never resolved and no browser launch is attempted. Skipping the
+          # 167 MB Chromium download cuts ~9-12 min off EVERY run (the runner
+          # CDN throttles this download badly + the cache missed whenever a
+          # run failed before its post-save step). If a future GATED spec
+          # needs a real browser, re-add `npx playwright install chromium`
+          # (and ideally an actions/cache step on ~/.cache/ms-playwright).
+          # The chromium project sets storageState: playwright/.auth/user.json
+          # (created by the auth.setup project, which we skip via --no-deps).
+          # Pre-create an empty state so the project loads without ENOENT.
           mkdir -p playwright/.auth
           echo '{"cookies":[],"origins":[]}' > playwright/.auth/user.json
 

@@ -511,8 +511,8 @@ router.get("/patients", phiReadGate, async (req, res) => {
     const [patients, total] = await Promise.all([
       prisma.patient.findMany({
         where,
-        take: Math.min(parseInt(limit), 200),
-        skip: parseInt(offset),
+        take: Math.min(parseInt(limit, 10) || 50, 200),
+        skip: parseInt(offset, 10) || 0,
         orderBy: { createdAt: "desc" },
         include: {
           tags: {
@@ -2178,8 +2178,8 @@ router.get("/visits", phiReadGate, async (req, res) => {
 
     const visits = await prisma.visit.findMany({
       where,
-      take: Math.min(parseInt(limit), 500),
-      skip: parseInt(offset),
+      take: Math.min(parseInt(limit, 10) || 100, 500),
+      skip: parseInt(offset, 10) || 0,
       orderBy: { visitDate: "desc" },
       include: {
         patient: { select: { id: true, name: true, phone: true } },
@@ -2930,7 +2930,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
     if (patientId) where.patientId = parseInt(patientId);
     const items = await prisma.prescription.findMany({
       where,
-      take: Math.min(parseInt(limit), 200),
+      take: Math.min(parseInt(limit, 10) || 50, 200),
       orderBy: { createdAt: "desc" },
       include: {
         patient: { select: { id: true, name: true } },
@@ -3109,7 +3109,7 @@ router.get("/consents", phiReadGate, async (req, res) => {
     if (patientId) where.patientId = parseInt(patientId);
     const items = await prisma.consentForm.findMany({
       where,
-      take: Math.min(parseInt(limit), 200),
+      take: Math.min(parseInt(limit, 10) || 50, 200),
       orderBy: { signedAt: "desc" },
       select: {
         id: true,
@@ -4274,11 +4274,19 @@ router.get("/membership-plans", async (req, res) => {
   try {
     const includeInactive =
       req.query.includeInactive === "1" || req.query.includeInactive === "true";
+    const includeTeardown =
+      req.query.includeTeardown === "1" || req.query.includeTeardown === "true";
     const plans = await prisma.membershipPlan.findMany({
       where: tenantWhere(req, includeInactive ? {} : { isActive: true }),
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
     });
-    res.json(plans);
+    // #747 — hide test-fixture plans (_teardown_* / _test_*) from default lists
+    // so staff can't accidentally sell a real membership against a test row.
+    // Admin override surfaces them via ?includeTeardown=1.
+    const visible = includeTeardown
+      ? plans
+      : plans.filter((p) => !/^_teardown_|^_test_/.test(p.name || ""));
+    res.json(visible);
   } catch (e) {
     console.error("[wellness] list membership plans error:", e.message);
     res.status(500).json({ error: "Failed to list membership plans" });
@@ -4567,6 +4575,14 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
     });
     if (!plan)
       return res.status(404).json({ error: "Membership plan not found" });
+    // #748 — never post a real purchase against a test-fixture plan, even if it
+    // slipped through with isActive=true. Mirrors the #747 default-list filter.
+    if (/^_teardown_|^_test_/.test(plan.name || "")) {
+      return res.status(410).json({
+        error: "This plan is a test fixture and cannot be purchased",
+        code: "PLAN_ARCHIVED_OR_TEST",
+      });
+    }
     if (!plan.isActive) {
       return res
         .status(409)

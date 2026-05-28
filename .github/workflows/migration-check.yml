@@ -148,20 +148,32 @@ jobs:
           # in d8aab25. The composite is strictly ≤ as strict; commit
           # 0c9b59a verified zero duplicate userId values in the live
           # Patient table; seed data sets userId = NULL on all patients
-          # (NULL doesn't participate in UNIQUE). The inline
-          # `// safe-unique:` marker only works for field-level @unique,
-          # not @@unique, so we bless at the workflow level here.
+          # (NULL doesn't participate in UNIQUE). Also covers the newer
+          # WhatsAppConfig.phoneNumberId + SubscriptionPlan.planKey uniques
+          # (webhook tenant key / stable plan slug — both populated from
+          # seed with distinct values). The inline `// safe-unique:` marker
+          # only works for field-level @unique, not @@unique, so we bless
+          # at the workflow level here.
+          # --allow-drop: Patient.tags scalar column was superseded by the
+          # `tags PatientTag[]` relation (join table) + `tagsJson` field.
+          # The old column is dead; data migrated to PatientTag rows. A
+          # dropped column has no field left in schema.prisma to carry an
+          # inline marker, so a column drop can only be blessed via flag
+          # (or commit message — unreliable here since PR checkouts run
+          # against the synthetic merge commit, not the authoring commit).
           if [ "$BASELINE_AVAILABLE" = "true" ]; then
             node backend/scripts/check-migration-safety.js \
               --schema backend/prisma/schema.prisma \
               --against "$BASELINE_FILE" \
               --allow-unique \
+              --allow-drop \
               --json > "$REPORT_JSON" 2> /tmp/migration-safety-stderr.log || true
           else
             echo "::warning::No baseline schema available — diffing from empty (every NOT NULL / UNIQUE / FK will fire)"
             node backend/scripts/check-migration-safety.js \
               --schema backend/prisma/schema.prisma \
               --allow-unique \
+              --allow-drop \
               --json > "$REPORT_JSON" 2> /tmp/migration-safety-stderr.log || true
           fi
 

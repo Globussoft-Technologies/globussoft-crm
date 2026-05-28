@@ -2916,8 +2916,9 @@ function requireClinicalRole(req, res, next) {
     return res.status(401).json({ error: "Authentication required" });
   if (req.user.role === "ADMIN") return next();
   if (req.user.wellnessRole === "doctor") return next();
+  // Neutral copy + structured code — no internal role-taxonomy leakage.
   return res.status(403).json({
-    error: "Only clinical staff (doctor) may write prescriptions",
+    error: "You do not have permission to perform this action",
     code: "CLINICAL_ROLE_REQUIRED",
   });
 }

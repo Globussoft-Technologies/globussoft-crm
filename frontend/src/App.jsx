@@ -45,6 +45,13 @@ const UserSettings = lazy(() => import("./pages/UserSettings"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
 const TravelCustomerPortal = lazy(() => import("./pages/travel/TravelCustomerPortal"));
+const PublicTripMicrosite = lazy(() => import("./pages/travel/PublicTripMicrosite"));
+const TravelKycCallback = lazy(() => import("./pages/travel/TravelKycCallback"));
+// Cross-vertical staff attendance dashboard — visible to wellness + travel
+// tenants. Backend (/api/attendance/list + /summary) is role-gated to
+// ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
+const AttendanceDashboard = lazy(() => import("./pages/AttendanceDashboard"));
+const WellnessAttendanceCalendar = lazy(() => import("./pages/wellness/AttendanceCalendar"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
 const CPQ = lazy(() => import("./pages/CPQ"));
 const CustomObjects = lazy(() => import("./pages/CustomObjects"));
@@ -596,6 +603,14 @@ export default function App() {
                       (wellness patient OTP). Travel-tenant scoped on the
                       backend via requireTravelPortalTenant. */}
                   <Route path="/travel/portal" element={<TravelCustomerPortal />} />
+                  {/* Public TMC trip microsite (parent/teacher, no login) +
+                      the DigiLocker/Aadhaar OAuth callback landing pages.
+                      All three are public — server openPath allowlist covers
+                      the backend. The two callback routes catch DigiLocker's
+                      ?code&state redirect and complete verification. */}
+                  <Route path="/p/tripmicrosite/:publicUuid" element={<PublicTripMicrosite />} />
+                  <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
+                  <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
                   <Route
                     path="/book/:slug"
                     element={<WellnessPublicBooking />}
@@ -1174,6 +1189,14 @@ export default function App() {
               } />
               {/* Wave 2 Agent JJ — Staff Attendance + Leave Management. */}
               <Route path="wellness/attendance" element={<WellnessOnly><WellnessAttendance /></WellnessOnly>} />
+              {/* Admin/Manager attendance dashboard — KPI tiles + all-staff
+                  list + admin-only edit/delete. Mounted under both wellness
+                  and travel since both verticals have staff that punch in/out.
+                  Page itself reads tenant from AuthContext and uses the same
+                  /api/attendance/* routes; no per-vertical branching needed. */}
+              <Route path="wellness/attendance-dashboard" element={<WellnessOnly><AttendanceDashboard /></WellnessOnly>} />
+              <Route path="wellness/attendance/calendar" element={<WellnessOnly><WellnessAttendanceCalendar /></WellnessOnly>} />
+              <Route path="travel/attendance" element={<AttendanceDashboard />} />
               <Route path="wellness/leave" element={<WellnessOnly><WellnessLeave /></WellnessOnly>} />
               {/* Wave 2 Agent II — POS / Cash Register / Shift / Sale.
                   Backend is wellness-vertical-gated + role

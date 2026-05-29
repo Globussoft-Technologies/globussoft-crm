@@ -198,11 +198,34 @@ router.post("/send", verifyToken, async (req, res) => {
     // not. Internal callers needing direct-send still call the provider
     // helpers (`sendText`, `sendTemplate`) directly — only this route
     // (the operator-facing surface) goes async.
+    // Template sends carry `templateName` + `parameters` but no free-form
+    // `body`, so the stored message would render as "(empty)" in the operator
+    // inbox. Render the approved template's text with the {{n}} parameters
+    // substituted so the chat shows what was actually sent to the customer.
+    let storedBody = body || null;
+    if (!storedBody && templateName) {
+      const tpl = await prisma.whatsAppTemplate.findFirst({
+        where: { tenantId: req.user.tenantId, name: templateName },
+        select: { body: true },
+      }).catch(() => null);
+      const params = Array.isArray(parameters) ? parameters : [];
+      if (tpl?.body) {
+        storedBody = tpl.body.replace(/\{\{(\d+)\}\}/g, (match, n) => {
+          const val = params[parseInt(n, 10) - 1];
+          return val != null && val !== "" ? String(val) : match;
+        });
+      } else {
+        // Template text not found locally — at least label the bubble with
+        // the template name instead of leaving it "(empty)".
+        storedBody = `[template: ${templateName}]`;
+      }
+    }
+
     const message = await prisma.whatsAppMessage.create({
       data: {
         to,
         from: config.phoneNumberId || "",
-        body: body || null,
+        body: storedBody,
         direction: "OUTBOUND",
         status: "QUEUED",
         templateName: templateName || null,
@@ -1031,6 +1054,45 @@ router.post("/threads/:id/mark-read", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("WhatsApp thread mark-read error:", err);
     res.status(500).json({ error: "Failed to mark thread read" });
+  }
+});
+
+// DELETE /threads/:id — permanently delete a conversation (the thread + all
+// its messages). ADMIN-only, matching the other irreversible WhatsApp action
+// (DELETE /opt-outs). The thread→message relation is onDelete: SetNull, so we
+// delete the message rows explicitly first (otherwise they'd be orphaned with
+// a null threadId rather than removed); child WaOutboundJob / WaMediaJob rows
+// cascade from that. Both steps run in one transaction so a partial delete
+// can't leave a thread with no messages or vice-versa. Contact / opt-out /
+// patient links are untouched — only the conversation is removed. Meta can't
+// delete messages off the recipient's phone, so this is a CRM-side delete.
+router.delete("/threads/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const thread = await prisma.whatsAppThread.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      select: { id: true, contactPhone: true },
+    });
+    if (!thread) return res.status(404).json({ error: "Thread not found" });
+
+    const [{ count }] = await prisma.$transaction([
+      prisma.whatsAppMessage.deleteMany({
+        where: { threadId: thread.id, tenantId: req.user.tenantId },
+      }),
+      prisma.whatsAppThread.delete({ where: { id: thread.id } }),
+    ]);
+
+    await writeAudit("WhatsAppThread", "DELETE", thread.id, req.user.userId, req.user.tenantId, {
+      contactPhone: thread.contactPhone,
+      deletedMessages: count,
+    });
+
+    res.json({ success: true, deletedMessages: count });
+  } catch (err) {
+    console.error("WhatsApp thread delete error:", err);
+    res.status(500).json({ error: "Failed to delete thread" });
   }
 });
 

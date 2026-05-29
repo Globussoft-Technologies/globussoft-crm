@@ -566,3 +566,109 @@ test.describe("Travel microsites API — OTP flow (PRD §4.5)", () => {
     expect((await res.json()).code).toBe("INVALID_UUID");
   });
 });
+
+// ─── PRD §4.5 + §4.7 — public Aadhaar / DigiLocker verification ──────
+//
+// Parent-facing flow on the public microsite. NO app-side OTP gate —
+// DigiLocker authenticates the individual during its own consent flow. We
+// pin the public participant list + the contract error paths; the stub
+// exchange itself is unit-covered in
+// backend/test/services/digilockerClient.test.js.
+const AADHAAR_PUBLIC = (uuid) => `${BASE_URL}/api/travel/microsites/public/${uuid}/verify/aadhaar`;
+const PARTICIPANTS_PUBLIC = (uuid) => `${BASE_URL}/api/travel/microsites/public/${uuid}/participants`;
+
+test.describe("Travel microsites API — Aadhaar verification (public)", () => {
+  test("GET /participants → 200 with a participants array, no passport/DOB PII", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const res = await request.get(PARTICIPANTS_PUBLIC(micrositeUuid), { timeout: REQUEST_TIMEOUT });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.participants)).toBe(true);
+    // Minimal projection only — never passport / DOB on the public list.
+    for (const p of body.participants) {
+      expect(p).not.toHaveProperty("passportNumber");
+      expect(p).not.toHaveProperty("dob");
+    }
+  });
+
+  test("GET /participants with garbage UUID → 400 INVALID_UUID", async ({ request }) => {
+    const res = await request.get(PARTICIPANTS_PUBLIC("not-a-uuid"), { timeout: REQUEST_TIMEOUT });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_UUID");
+  });
+
+  test("start without participantId → 400 MISSING_FIELDS (no OTP required)", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite");
+    // No Authorization header, no token — confirms the route is publicly
+    // reachable (openPath) and needs only a participantId.
+    const res = await request.post(`${AADHAAR_PUBLIC(micrositeUuid)}/start`, {
+      headers: { "Content-Type": "application/json" },
+      data: {},
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_FIELDS");
+  });
+
+  test("start with a bogus participantId → 404 PARTICIPANT_NOT_FOUND", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite");
+    const res = await request.post(`${AADHAAR_PUBLIC(micrositeUuid)}/start`, {
+      headers: { "Content-Type": "application/json" },
+      data: { participantId: 9999999 },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("PARTICIPANT_NOT_FOUND");
+  });
+
+  test("start with garbage UUID → 400 INVALID_UUID", async ({ request }) => {
+    const res = await request.post(`${AADHAAR_PUBLIC("not-a-uuid")}/start`, {
+      headers: { "Content-Type": "application/json" },
+      data: { participantId: 1 },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_UUID");
+  });
+
+  test("start for unknown microsite → 404 NOT_FOUND", async ({ request }) => {
+    const res = await request.post(
+      `${AADHAAR_PUBLIC("00000000-0000-0000-0000-000000000000")}/start`,
+      { headers: { "Content-Type": "application/json" }, data: { participantId: 1 }, timeout: REQUEST_TIMEOUT },
+    );
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("NOT_FOUND");
+  });
+
+  test("callback without state → 400 MISSING_FIELDS", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite");
+    const res = await request.post(`${AADHAAR_PUBLIC(micrositeUuid)}/callback`, {
+      headers: { "Content-Type": "application/json" },
+      data: { code: "abc" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_FIELDS");
+  });
+
+  test("callback with unknown state → 404 SESSION_NOT_FOUND", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite");
+    const res = await request.post(`${AADHAAR_PUBLIC(micrositeUuid)}/callback`, {
+      headers: { "Content-Type": "application/json" },
+      data: { state: `nonexistent-${Date.now()}`, code: "abc" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("SESSION_NOT_FOUND");
+  });
+
+  test("callback with garbage UUID → 400 INVALID_UUID", async ({ request }) => {
+    const res = await request.post(`${AADHAAR_PUBLIC("garbage")}/callback`, {
+      headers: { "Content-Type": "application/json" },
+      data: { state: "x", code: "y" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_UUID");
+  });
+});

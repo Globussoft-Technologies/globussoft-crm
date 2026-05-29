@@ -28,7 +28,7 @@
 // stub gets swapped — the route layer + DB shape depend on the
 // { state, oauthUrl } / { aadhaarLast4, aadhaarTokenId } envelopes.
 
-import { describe, test, expect, afterEach } from 'vitest';
+import { describe, test, expect, afterEach, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCjs = createRequire(import.meta.url);
@@ -308,5 +308,42 @@ describe('exchangeCallback — real-mode error paths', () => {
     // No `code` arg — stub mode generates synthetic values from state alone.
     const out = await client.exchangeCallback({ state: 'state-x' });
     expect(out.aadhaarLast4).toBe('9999');
+  });
+});
+
+describe('exchangeCallback — redirect_uri override (OAuth authorize/token match)', () => {
+  test('uses the passed redirectUri over DIGILOCKER_REDIRECT_URI in the token exchange', async () => {
+    process.env.APISETU_PARTNER_API_KEY = 'k';
+    process.env.APISETU_CLIENT_ID = 'cid';
+    process.env.DIGILOCKER_REDIRECT_URI = 'https://env.example/portal/callback';
+
+    const calls = [];
+    const origFetch = global.fetch;
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url: String(url), opts });
+      if (String(url).includes('/token')) {
+        return { ok: true, json: async () => ({ access_token: 'at', digilockerid: 'dl-1' }) };
+      }
+      // eAadhaar XML — uid carries the last-4 the parser extracts.
+      return { ok: true, text: async () => '<KycRes><Poi uid="XXXXXXXX1234"/></KycRes>' };
+    });
+    try {
+      const client = loadClient();
+      const out = await client.exchangeCallback({
+        state: 'st',
+        code: 'auth-code',
+        redirectUri: 'https://session.example/travel/kyc/callback',
+      });
+      expect(out.aadhaarLast4).toBe('1234');
+      const tokenCall = calls.find((c) => c.url.includes('/token'));
+      expect(tokenCall).toBeTruthy();
+      // Token-exchange body must carry the SESSION redirect_uri (the one used
+      // at authorize time), NOT the env default — otherwise OAuth rejects it.
+      expect(tokenCall.opts.body).toContain(encodeURIComponent('https://session.example/travel/kyc/callback'));
+      expect(tokenCall.opts.body).not.toContain(encodeURIComponent('https://env.example/portal/callback'));
+    } finally {
+      global.fetch = origFetch;
+      delete process.env.DIGILOCKER_REDIRECT_URI;
+    }
   });
 });

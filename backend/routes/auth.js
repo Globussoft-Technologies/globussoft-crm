@@ -132,10 +132,12 @@ router.post("/register", async (req, res) => {
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) return res.status(400).json({ error: "User already exists" });
+    // Org creation makes a brand-new tenant, so (email, newTenantId) can never
+    // collide — email is unique per-tenant now (see User schema). The same
+    // email is allowed to own/belong to multiple orgs, so there is no global
+    // "already exists" pre-check here.
 
-    const validVerticals = ['generic', 'wellness'];
+    const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -188,10 +190,12 @@ router.post("/signup", async (req, res) => {
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) return res.status(400).json({ error: "User already exists" });
+    // Org creation makes a brand-new tenant, so (email, newTenantId) can never
+    // collide — email is unique per-tenant now (see User schema). The same
+    // email is allowed to own/belong to multiple orgs, so there is no global
+    // "already exists" pre-check here.
 
-    const validVerticals = ['generic', 'wellness'];
+    const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -260,26 +264,24 @@ router.get("/customer/tenants", async (req, res) => {
 // Creates a new User with userType: 'CUSTOMER' and assigns the tenant's CUSTOMER role
 router.post("/customer/register", async (req, res) => {
   try {
-    console.log('[customer/register] Full req.body:', JSON.stringify(req.body));
-    console.log('[customer/register] Stripped fields:', req.strippedFields);
-
-    // Restore tenantId from strippedFields if it was stripped
-    let { email, password, name, tenantId } = req.body || {};
-    if (!tenantId && req.strippedFields?.tenantId) {
-      tenantId = req.strippedFields.tenantId;
-      console.log('[customer/register] Restored tenantId from strippedFields:', tenantId);
-    }
+    // The target tenant is supplied in the body and MUST be named
+    // `registrationTenantId`, NOT `tenantId`: the global stripDangerous
+    // middleware deletes `tenantId` from every request body (see CLAUDE.md
+    // standing rules), so a `tenantId` field would always arrive undefined
+    // and registration would 400. `registrationTenantId` is not on the strip
+    // list, so it passes through intact.
+    const { email, password, name, registrationTenantId } = req.body || {};
 
     // Input validation
     if (!email || typeof email !== "string" || !password || typeof password !== "string") {
       return res.status(400).json({ error: "email, password, and registrationTenantId are required" });
     }
 
-    console.log('[customer/register] Received tenantId:', tenantId, 'type:', typeof tenantId);
-
-    if (!tenantId || typeof tenantId !== "number") {
-      console.log('[customer/register] Validation FAILED - tenantId:', tenantId, 'type:', typeof tenantId);
-      return res.status(400).json({ error: "tenantId must be a valid number" });
+    // Coerce to a number — JSON sends it numeric, but accept a numeric string
+    // defensively. Reject anything that isn't a positive integer.
+    const tenantId = Number(registrationTenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(400).json({ error: "registrationTenantId must be a valid number" });
     }
 
     // Password complexity check
@@ -292,8 +294,10 @@ router.post("/customer/register", async (req, res) => {
       return res.status(400).json({ error: "Invalid tenant ID" });
     }
 
-    // Check email doesn't already exist
-    const existingUser = await prisma.user.findUnique({ where: { email } });
+    // Check email isn't already registered IN THIS ORG. Email is unique
+    // per-tenant, so the same address may register at another org — we only
+    // block a duplicate within the same tenant.
+    const existingUser = await prisma.user.findFirst({ where: { email, tenantId } });
     if (existingUser) {
       return res.status(400).json({ error: "Email already registered" });
     }
@@ -368,9 +372,9 @@ router.post("/customer/register", async (req, res) => {
 // (1000 req/15min on auth/login per server.js).
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { email, password, loginTenantId } = req.body || {};
 
-    // Input validation — without this, an empty body crashes findUnique with
+    // Input validation — without this, an empty body crashes findFirst with
     // PrismaClientValidationError (email: undefined). Return 400 instead.
     if (!email || typeof email !== "string" || !password || typeof password !== "string") {
       return res.status(400).json({ error: "email and password are required" });
@@ -378,7 +382,16 @@ router.post("/login", async (req, res) => {
 
     // Admin/admin bypass intentionally removed for security hardening.
 
-    const user = await prisma.user.findUnique({ where: { email }, include: { tenant: true } });
+    // Email is unique per-tenant, not globally (see schema User model), so an
+    // email can match an account in more than one org. The login form sends
+    // the chosen org as `loginTenantId` (a non-stripped name — `tenantId`
+    // would be deleted by stripDangerous). When supplied we scope to it; when
+    // absent (legacy API callers) we fall back to the first match by email.
+    const scopedTenantId = Number(loginTenantId);
+    const tenantFilter = Number.isInteger(scopedTenantId) && scopedTenantId > 0
+      ? { tenantId: scopedTenantId }
+      : {};
+    const user = await prisma.user.findFirst({ where: { email, ...tenantFilter }, include: { tenant: true } });
     // #192: when the email isn't found, run a dummy bcrypt compare against a
     // fixed-cost hash so the unknown-email path takes the same wall time as
     // the known-email-wrong-password path. Closes the timing-oracle that let
@@ -444,6 +457,9 @@ router.post("/login", async (req, res) => {
         email: user.email,
         name: user.name,
         role: user.role,
+        // userType lets the frontend route self-service customers to the
+        // customer portal instead of the staff dashboard.
+        userType: user.userType || 'STAFF',
         wellnessRole: user.wellnessRole || null,
         primaryRole, // { id, key, name, landingPath } | null
         landingPath: primaryRole?.landingPath || null,
@@ -530,7 +546,10 @@ router.post("/forgot-password", async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: "Email is required" });
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    // Email is unique per-tenant now, so findFirst (not findUnique). If the
+    // same email exists in multiple orgs this resets the first match; a future
+    // enhancement could disambiguate by org, but the common case is one org.
+    const user = await prisma.user.findFirst({ where: { email } });
 
     if (user) {
       const token = crypto.randomBytes(32).toString("hex");
@@ -713,7 +732,9 @@ router.put("/me", verifyToken, async (req, res) => {
     if (name) updateData.name = name;
 
     if (email) {
-      const existing = await prisma.user.findUnique({ where: { email } });
+      // Email is unique per-tenant — only block if another account IN THE
+      // SAME tenant already uses it.
+      const existing = await prisma.user.findFirst({ where: { email, tenantId: req.user.tenantId } });
       if (existing && existing.id !== req.user.userId) {
         return res.status(400).json({ error: "Email already in use by another account" });
       }

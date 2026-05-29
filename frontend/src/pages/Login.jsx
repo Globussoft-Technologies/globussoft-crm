@@ -28,8 +28,25 @@ const Login = () => {
   // sessionStorage-vs-localStorage trade-off.
   const [rememberMe, setRememberMe] = useState(true);
 
+  // Organization picker. The same email can now belong to more than one org
+  // (User.email is unique per-tenant, not globally), so login sends the chosen
+  // org as `loginTenantId`. Empty = "let the server pick the first match",
+  // which keeps single-org emails (incl. the demo quick-logins) working.
+  const [orgs, setOrgs] = useState([]);
+  const [orgTenantId, setOrgTenantId] = useState("");
+
   const { setUser, setToken, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
+
+  // Load the public tenant list to populate the Organization dropdown.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/public/tenants")
+      .then((r) => r.json())
+      .then((data) => { if (!cancelled) setOrgs(Array.isArray(data) ? data : []); })
+      .catch(() => { if (!cancelled) setOrgs([]); });
+    return () => { cancelled = true; };
+  }, []);
 
   // Handle SSO redirect callback — server bounces user here with ?sso_token=...&tenant=...
   useEffect(() => {
@@ -150,6 +167,11 @@ const Login = () => {
   //      the previous /home generic-fallback so vertical tenants land on
   //      their correct surface even in degraded-fetch scenarios.
   const resolveLandingPath = async (data) => {
+    // Self-service customers (userType=CUSTOMER) don't belong in the staff
+    // CRM — the enterprise dashboard makes no sense for them and the staff
+    // APIs (incl. /api/pages/me) 403 via the blockCustomers middleware. Send
+    // them straight to the customer portal instead.
+    if (data.user?.userType === 'CUSTOMER') return '/portal';
     const configuredLanding =
       data.user?.landingPath || data.user?.primaryRole?.landingPath || null;
     const verticalDefault = verticalDefaultLanding(data.tenant?.vertical);
@@ -193,7 +215,7 @@ const Login = () => {
     navigate(target);
   };
 
-  const performLogin = async (loginEmail, loginPassword) => {
+  const performLogin = async (loginEmail, loginPassword, tenantId) => {
     setError("");
     if (!loginEmail || !loginPassword) {
       setError("Please fill out all required fields");
@@ -203,7 +225,13 @@ const Login = () => {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+        // `loginTenantId` (not `tenantId` — that's stripped server-side) scopes
+        // the lookup to the chosen org. Omitted when no org is selected.
+        body: JSON.stringify({
+          email: loginEmail,
+          password: loginPassword,
+          ...(tenantId ? { loginTenantId: Number(tenantId) } : {}),
+        }),
       });
 
       const data = await response.json();
@@ -225,7 +253,7 @@ const Login = () => {
 
   const handleLogin = (e) => {
     e.preventDefault();
-    performLogin(email, password);
+    performLogin(email, password, orgTenantId);
   };
 
   const quickLogin = (qEmail, qPassword) => {
@@ -379,6 +407,28 @@ const Login = () => {
         {!require2FA && (
           <>
             <form onSubmit={handleLogin}>
+              <div style={{ marginBottom: "1rem" }}>
+                <label
+                  style={{
+                    display: "block",
+                    marginBottom: "0.5rem",
+                    fontSize: "0.875rem",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  Organization
+                </label>
+                <select
+                  className="input-field"
+                  value={orgTenantId}
+                  onChange={(e) => setOrgTenantId(e.target.value)}
+                >
+                  <option value="">All organizations</option>
+                  {orgs.map((o) => (
+                    <option key={o.id} value={String(o.id)}>{o.name}</option>
+                  ))}
+                </select>
+              </div>
               <div style={{ marginBottom: "1rem" }}>
                 <label
                   style={{

@@ -236,6 +236,19 @@ const PAGE_CATALOG = [
     requiredPermissions: [],
   },
   {
+    // Admin/Manager all-staff dashboard — KPI tiles + attendance list.
+    // The backend /api/attendance/summary + /list endpoints are role-gated
+    // (ADMIN/MANAGER), so non-managers wouldn't get useful data here. The
+    // page itself renders a friendly read-only fallback for plain users.
+    // Sidebar surfacing is gated on `reports.read` so plain USER roles
+    // don't see a dashboard link that returns an empty/forbidden view.
+    path: '/wellness/attendance-dashboard',
+    label: 'Attendance Dashboard',
+    description: 'All-staff KPIs + attendance list (admin / manager view)',
+    category: 'Staff',
+    requiredPermissions: [{ module: 'reports', action: 'read' }],
+  },
+  {
     path: '/wellness/leave',
     label: 'Leave',
     description: 'Request leave + view your balance',

@@ -304,6 +304,24 @@ router.post('/', async (req, res) => {
 
     const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
     try { const { emitEvent } = require('../lib/eventBus'); await emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
+    // [GP-CRM integration] Fire lead.new to registered webhooks (e.g. GlobusPhone)
+    // when a Lead contact is created. Carries the id/name/phone/email shape the
+    // partner expects (the emitEvent above uses a workflow-rule payload keyed on
+    // contactId). Fire-and-forget — a webhook failure must never block the 201.
+    if (contact.status === "Lead") {
+      try {
+        const { deliverWebhooks } = require('../lib/webhookDelivery');
+        await deliverWebhooks("lead.new", {
+          id: contact.id,
+          name: contact.name,
+          phone: contact.phone,
+          email: contact.email,
+          status: contact.status,
+          assignedToId: contact.assignedToId,
+          tenantId: req.user.tenantId,
+        }, req.user.tenantId);
+      } catch (_e) { /* webhook delivery is fire-and-forget */ }
+    }
     // #179: audit row for new contact.
     await writeAudit('Contact', 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
     res.status(201).json(contact);
@@ -396,6 +414,33 @@ router.put('/:id', async (req, res) => {
         req.io
       );
     } catch (_e) {}
+
+    // [GP-CRM integration] Push a partner-shaped contact.updated (and, when the
+    // status changed, lead.stage_changed) to registered webhooks. The emitEvent
+    // above carries a workflow-rule payload keyed on contactId; GlobusPhone needs
+    // id/name/phone/email, so we deliver a second, partner-shaped event here.
+    // Both are fire-and-forget — a delivery failure must never block the update.
+    try {
+      const { deliverWebhooks } = require('../lib/webhookDelivery');
+      await deliverWebhooks("contact.updated", {
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        email: contact.email,
+        status: contact.status,
+        assignedToId: contact.assignedToId,
+        tenantId: req.user.tenantId,
+      }, req.user.tenantId);
+      if (existing.status !== contact.status) {
+        await deliverWebhooks("lead.stage_changed", {
+          id: contact.id,
+          status: contact.status,
+          previousStatus: existing.status,
+          assignedToId: contact.assignedToId,
+          tenantId: req.user.tenantId,
+        }, req.user.tenantId);
+      }
+    } catch (_e) { /* webhook delivery is fire-and-forget */ }
 
     // gap #17: lead.converted — fires when a Contact's status flips from "Lead"
     // to "Customer" or "Prospect". Separate trigger from contact.updated so a
@@ -598,6 +643,19 @@ router.put('/:id/assign', async (req, res) => {
       data: { assignedToId: assignedToId ? parseInt(assignedToId) : null },
       include: { assignedTo: { select: { id: true, name: true, email: true } } }
     });
+    // [GP-CRM integration] Notify registered webhooks (e.g. GlobusPhone) that
+    // this contact/lead was re-assigned to a different agent. Fire-and-forget.
+    try {
+      const { deliverWebhooks } = require('../lib/webhookDelivery');
+      await deliverWebhooks("lead.assigned", {
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        status: contact.status,
+        assignedToId: contact.assignedToId,
+        tenantId: req.user.tenantId,
+      }, req.user.tenantId);
+    } catch (_e) { /* webhook delivery is fire-and-forget */ }
     res.json(contact);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to assign agent' });
@@ -1037,6 +1095,23 @@ router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
       where: { id: existing.id },
       data: { deletedAt: new Date() }
     });
+    // [GP-CRM integration] CRM has no contact.deleted event (soft-delete only).
+    // Signal the deletion via contact.updated with a non-null deletedAt so a
+    // partner (e.g. GlobusPhone) evicts its caller-ID cache for this number.
+    // Fire-and-forget — never block the soft-delete response.
+    try {
+      const { deliverWebhooks } = require('../lib/webhookDelivery');
+      await deliverWebhooks("contact.updated", {
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        email: contact.email,
+        status: contact.status,
+        assignedToId: contact.assignedToId,
+        deletedAt: contact.deletedAt,
+        tenantId: req.user.tenantId,
+      }, req.user.tenantId);
+    } catch (_e) { /* webhook delivery is fire-and-forget */ }
     res.json({ ...contact, softDeleted: true });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to delete contact' });
@@ -1060,6 +1135,22 @@ router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
       where: { id: existing.id },
       data: { deletedAt: null }
     });
+    // [GP-CRM integration] Signal restoration via contact.updated with
+    // deletedAt: null so a partner (e.g. GlobusPhone) re-populates caller ID
+    // for this number. Fire-and-forget.
+    try {
+      const { deliverWebhooks } = require('../lib/webhookDelivery');
+      await deliverWebhooks("contact.updated", {
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        email: contact.email,
+        status: contact.status,
+        assignedToId: contact.assignedToId,
+        deletedAt: contact.deletedAt,
+        tenantId: req.user.tenantId,
+      }, req.user.tenantId);
+    } catch (_e) { /* webhook delivery is fire-and-forget */ }
     res.json({ ...contact, restored: true });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to restore contact' });

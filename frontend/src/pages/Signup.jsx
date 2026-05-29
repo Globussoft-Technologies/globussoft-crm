@@ -32,7 +32,8 @@ const Signup = () => {
         setUser(data.user);
         setToken(data.token);
         if (data.tenant && setTenant) setTenant(data.tenant);
-        const destination = data.tenant?.vertical === 'wellness' ? '/wellness' : '/dashboard';
+        const v = data.tenant?.vertical;
+        const destination = v === 'wellness' ? '/wellness' : v === 'travel' ? '/travel' : '/dashboard';
         navigate(destination);
       } else {
         setError(data.message || data.error || 'Registration failed securely. Please verify fields.');
@@ -92,6 +93,16 @@ const Signup = () => {
                   onChange={(e) => setVertical(e.target.value)}
                 />
                 Wellness (Clinic/Salon)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+                <input
+                  type="radio"
+                  name="vertical"
+                  value="travel"
+                  checked={vertical === 'travel'}
+                  onChange={(e) => setVertical(e.target.value)}
+                />
+                Travel (Agency)
               </label>
             </div>
           </div>

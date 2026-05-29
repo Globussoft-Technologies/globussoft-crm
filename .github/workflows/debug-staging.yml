@@ -16,24 +16,11 @@ jobs:
           script: |
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
 
-            echo "=== all pm2 processes ==="
-            pm2 list
+            echo "=== staging backend process details ==="
+            pm2 show globussoft-crm-staging-backend
 
-            echo "=== crm-staging nginx config ==="
-            grep -r "crm-staging" /etc/nginx/sites-enabled/ -l 2>/dev/null | xargs cat 2>/dev/null || \
-            grep -r "crm-staging" /etc/nginx/conf.d/ -l 2>/dev/null | xargs cat 2>/dev/null || \
-            echo "not found in sites-enabled or conf.d"
-
-            echo "=== staging .env DATABASE_URL ==="
-            grep DATABASE_URL /home/empcloud-development/globussoft-crm/backend/.env
-
-            echo "=== available mysql databases ==="
-            mysql -u root -e "SHOW DATABASES;" 2>/dev/null || \
-            node -e "
-            const { execSync } = require('child_process');
-            require('dotenv').config({ path: '/home/empcloud-development/globussoft-crm/backend/.env' });
-            const url = process.env.DATABASE_URL;
-            console.log('DATABASE_URL:', url);
-            " 2>/dev/null
+            echo "=== staging backend cwd ==="
+            STAGING_PID=$(pm2 pid globussoft-crm-staging-backend 2>/dev/null)
+            ls -la /proc/$STAGING_PID/cwd 2>/dev/null || echo "pid $STAGING_PID"
 
             echo "done"

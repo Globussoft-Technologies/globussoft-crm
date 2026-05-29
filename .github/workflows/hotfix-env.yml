@@ -16,9 +16,9 @@ jobs:
           script: |
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
             cd /home/empcloud-development/globussoft-crm/backend
-            DB_URL=$(grep DATABASE_URL .env | cut -d'=' -f2-)
-            DB_PASS=$(echo "$DB_URL" | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|')
-            DB_USER=$(echo "$DB_URL" | sed 's|.*://\([^:]*\):.*|\1|')
-            DB_HOST=$(echo "$DB_URL" | sed 's|.*@\([^:/]*\)[:/].*|\1|')
-            DB_NAME=$(echo "$DB_URL" | sed 's|.*/\([^?]*\).*|\1|')
-            mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "SHOW TABLES LIKE 'WaOutboundJob';" 2>/dev/null
+            node -e "
+            const p = new (require('@prisma/client').PrismaClient)();
+            p.\$queryRaw\`SHOW TABLES LIKE 'WaOutboundJob'\`
+              .then(r => { console.log('RESULT:', JSON.stringify(r)); process.exit(0); })
+              .catch(e => { console.error('ERROR:', e.message); process.exit(1); });
+            "

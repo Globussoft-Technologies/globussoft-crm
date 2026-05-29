@@ -267,6 +267,25 @@ function TabBtn({ active, onClick, icon: Icon, label }) {
 
 function CatalogTab({ services, loading, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
   const notify = useNotify();
+  // Sort selector — backend returns services in its default order (name
+  // alphabetical). Users asked for a "newest first" option so the most
+  // recently added service is easy to find without scrolling. Sorting
+  // happens client-side over the already-fetched list so the toggle is
+  // instant (no re-fetch).
+  const [sortBy, setSortBy] = useState('default');
+  const sortedServices = useMemo(() => {
+    if (!Array.isArray(services)) return [];
+    if (sortBy === 'default') return services;
+    const tsOf = (s) => {
+      const t = s?.createdAt ? new Date(s.createdAt).getTime() : 0;
+      return Number.isFinite(t) ? t : 0;
+    };
+    const copy = [...services];
+    if (sortBy === 'newest') copy.sort((a, b) => tsOf(b) - tsOf(a));
+    if (sortBy === 'oldest') copy.sort((a, b) => tsOf(a) - tsOf(b));
+    return copy;
+  }, [services, sortBy]);
+
   return (
     <>
       {/* Visually-hidden section heading so screen readers see h1 -> h2 hierarchy
@@ -361,8 +380,45 @@ function CatalogTab({ services, loading, categories, categoriesLoading, showAdd,
 
       {loading && <div>Loading…</div>}
 
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          gap: '0.5rem',
+          marginBottom: '0.75rem',
+        }}
+      >
+        <label
+          htmlFor="services-sort"
+          style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}
+        >
+          Sort by
+        </label>
+        <select
+          id="services-sort"
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value)}
+          aria-label="Sort services"
+          style={{
+            padding: '0.4rem 0.7rem',
+            background: 'var(--surface-color)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 8,
+            fontSize: '0.85rem',
+            cursor: 'pointer',
+            outline: 'none',
+          }}
+        >
+          <option value="default" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Default</option>
+          <option value="newest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Newest first</option>
+          <option value="oldest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Oldest first</option>
+        </select>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-        {services.map((s) => (
+        {sortedServices.map((s) => (
           <ServiceCard
             key={s.id}
             service={s}
@@ -809,10 +865,23 @@ function DetailRow({ label, value }) {
   );
 }
 
-// Solid dark backdrop so the Edit / Delete icons stay legible when they
-// sit on top of a service image (transparent background made them
-// disappear against bright photos).
-const iconBtn = { background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.18)', color: '#fff', padding: '0.3rem', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' };
+// Theme-adaptive glass backdrop so the Edit / Delete icons stay legible
+// across BOTH dark and light themes, AND when they sit on top of a
+// service image. --surface-hover resolves to a near-opaque tile in each
+// theme (dark slate in dark mode, near-white in light mode) and
+// --text-primary contrasts naturally with it.
+const iconBtn = {
+  background: 'var(--surface-hover)',
+  border: '1px solid var(--border-color)',
+  color: 'var(--text-primary)',
+  padding: '0.3rem',
+  borderRadius: 6,
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  backdropFilter: 'blur(4px)',
+};
 
 // Shared upload control — preview + replace + remove. Used by the Create
 // form AND the inline edit form on each service card.

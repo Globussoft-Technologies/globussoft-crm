@@ -48,6 +48,8 @@ beforeEach(() => {
   };
   prisma.serviceConsumption = {
     create: vi.fn().mockResolvedValue({ id: 999 }),
+    // Idempotency dedupe lookup — default to "no prior consumption rows".
+    findMany: vi.fn().mockResolvedValue([]),
   };
   prisma.product = {
     update: vi.fn().mockResolvedValue({ id: 200, currentStock: 49 }),
@@ -315,5 +317,177 @@ describe('lib/autoConsumptionApplier — extended coverage', () => {
     expect(result.rules).toBe(1);
     expect(result.applied).toHaveLength(1);
     expect(prisma.serviceConsumption.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unit-conversion + idempotency cases
+// ─────────────────────────────────────────────────────────────────────────────
+describe('lib/autoConsumptionApplier — unit conversion', () => {
+  test('rule.unit=ml against product stocked in ltr converts before deducting', async () => {
+    // Rule says "15 ml per visit"; product is stocked in ltr with volume=1
+    // (one 1-ltr bottle = 1000 ml in base). After conversion, consumedMl=0.015
+    // ltr; partialMlUsed accumulates 0.015 / 1.000 → no whole-unit decrement.
+    const rule = {
+      id: 10,
+      serviceId: 100,
+      productId: 300,
+      quantityPerVisit: 15,
+      unit: 'ml',
+      isActive: true,
+      product: { id: 300, name: 'Carbon Gel', currentStock: 5, threshold: 1, volume: 1, unit: 'ltr', partialMlUsed: 0 },
+    };
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([rule]);
+    await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    const stockUpdate = prisma.product.update.mock.calls[0][0];
+    // 15 ml → 0.015 ltr; no whole bottle consumed yet.
+    expect(stockUpdate.data.partialMlUsed).toBeCloseTo(0.015, 5);
+    expect(stockUpdate.data.currentStock).toBeUndefined();
+    // ServiceConsumption row records the qty in the product's base unit.
+    const consumption = prisma.serviceConsumption.create.mock.calls[0][0];
+    expect(consumption.data.qty).toBeCloseTo(0.015, 5);
+  });
+
+  test('rule.unit=gm against product stocked in kg converts correctly', async () => {
+    // 500 gm rule against a 1 kg bottle (volume=1) → consumedMl=0.5 kg, half a bottle.
+    const rule = {
+      id: 11,
+      serviceId: 100,
+      productId: 301,
+      quantityPerVisit: 500,
+      unit: 'gm',
+      isActive: true,
+      product: { id: 301, name: 'Bulk Powder', currentStock: 5, threshold: 1, volume: 1, unit: 'kg', partialMlUsed: 0.6 },
+    };
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([rule]);
+    await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    const stockUpdate = prisma.product.update.mock.calls[0][0];
+    // 0.6 + 0.5 = 1.1 → one whole bottle deducted, 0.1 partial remaining.
+    expect(stockUpdate.data.currentStock.decrement).toBe(1);
+    expect(stockUpdate.data.partialMlUsed).toBeCloseTo(0.1, 5);
+  });
+
+  test('rule.unit matching product.unit skips conversion (no float drift)', async () => {
+    const rule = {
+      id: 12,
+      serviceId: 100,
+      productId: 302,
+      quantityPerVisit: 3.5,
+      unit: 'ml',
+      isActive: true,
+      product: { id: 302, name: 'Saline', currentStock: 10, threshold: 1, volume: 1, unit: 'ml', partialMlUsed: 0 },
+    };
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([rule]);
+    await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    const consumption = prisma.serviceConsumption.create.mock.calls[0][0];
+    expect(consumption.data.qty).toBe(3.5);
+  });
+
+  test('rule.unit absent falls back to product.unit (back-compat)', async () => {
+    // Pre-existing rules created before the unit field landed have rule.unit=null.
+    // They must continue to deduct at face value with no conversion.
+    const rule = {
+      id: 13,
+      serviceId: 100,
+      productId: 303,
+      quantityPerVisit: 2,
+      unit: null,
+      isActive: true,
+      product: { id: 303, name: 'Cotton', currentStock: 5, threshold: 1, volume: 1, unit: 'piece', partialMlUsed: 0 },
+    };
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([rule]);
+    await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    const stockUpdate = prisma.product.update.mock.calls[0][0];
+    expect(stockUpdate.data.currentStock.decrement).toBe(2);
+  });
+
+  test('incompatible unit pair (piece vs ml) skips with UNIT_INCOMPATIBLE reason', async () => {
+    // Defensive layer — the route's create/PUT validation should block this,
+    // but if a rule slips through (e.g. product unit changed after rule
+    // creation), the applier must skip rather than deduct garbage.
+    const rule = {
+      id: 14,
+      serviceId: 100,
+      productId: 304,
+      quantityPerVisit: 1,
+      unit: 'piece',
+      isActive: true,
+      product: { id: 304, name: 'Saline', currentStock: 5, threshold: 1, volume: 1, unit: 'ml', partialMlUsed: 0 },
+    };
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([rule]);
+    const result = await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    expect(result.applied).toHaveLength(0);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].reason).toContain('UNIT_INCOMPATIBLE');
+    expect(prisma.serviceConsumption.create).not.toHaveBeenCalled();
+    expect(prisma.product.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('lib/autoConsumptionApplier — idempotency (duplicate completion events)', () => {
+  test('skips rules whose product already has a ServiceConsumption row for this visit', async () => {
+    // Simulate the bus firing visit.completed twice (network retry, socket
+    // re-broadcast). On the second fire, the dedupe lookup finds the prior
+    // row and the rule must be skipped.
+    prisma.autoConsumptionRule.findMany.mockResolvedValue(RULES);
+    prisma.serviceConsumption.findMany.mockResolvedValue([{ productId: 200 }]);
+    const result = await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    expect(result.rules).toBe(2);
+    expect(result.applied).toHaveLength(1);
+    expect(result.applied[0].productId).toBe(201);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].reason).toBe('ALREADY_APPLIED');
+    // Only one product.update call — for the not-yet-deducted product.
+    expect(prisma.product.update).toHaveBeenCalledTimes(1);
+  });
+
+  test('skips ALL rules when every product is already deducted (full replay)', async () => {
+    prisma.autoConsumptionRule.findMany.mockResolvedValue(RULES);
+    prisma.serviceConsumption.findMany.mockResolvedValue([
+      { productId: 200 },
+      { productId: 201 },
+    ]);
+    const result = await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    expect(result.applied).toHaveLength(0);
+    expect(result.skipped).toHaveLength(2);
+    expect(prisma.serviceConsumption.create).not.toHaveBeenCalled();
+    expect(prisma.product.update).not.toHaveBeenCalled();
+  });
+
+  test('queries serviceConsumption.findMany scoped to visitId + tenantId', async () => {
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([RULES[0]]);
+    await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 42, status: 'completed',
+    });
+    expect(prisma.serviceConsumption.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { visitId: 7, tenantId: 42 },
+      })
+    );
+  });
+
+  test('dedupe lookup failure does NOT block deduction (graceful degrade)', async () => {
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([RULES[0]]);
+    prisma.serviceConsumption.findMany.mockRejectedValueOnce(new Error('table-locked'));
+    const result = await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    // Lookup failed → applier proceeds without dedupe; rule still applies.
+    expect(result.applied).toHaveLength(1);
+    expect(result.skipped).toHaveLength(0);
   });
 });

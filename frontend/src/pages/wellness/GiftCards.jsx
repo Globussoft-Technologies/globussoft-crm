@@ -259,13 +259,14 @@ export default function GiftCardsPage() {
 // explicit expiresAt isn't sent, so a card with `validityDays=90` has
 // `expiresAt = createdAt + 90d` by default.
 const VALIDITY_OPTIONS = [
-  { value: '',    label: 'No expiry' },
-  { value: '30',  label: '1 month' },
-  { value: '60',  label: '2 months' },
-  { value: '90',  label: '3 months' },
-  { value: '180', label: '6 months' },
-  { value: '365', label: '1 year' },
-  { value: '730', label: '2 years' },
+  { value: '',       label: 'No expiry' },
+  { value: '30',     label: '1 month' },
+  { value: '60',     label: '2 months' },
+  { value: '90',     label: '3 months' },
+  { value: '180',    label: '6 months' },
+  { value: '365',    label: '1 year' },
+  { value: '730',    label: '2 years' },
+  { value: 'custom', label: 'Custom (days)' },
 ];
 
 // Default color swatches the admin picks from. Stored as a 7-char hex
@@ -280,6 +281,10 @@ function IssueModal({ onDone, onCancel }) {
   // marked up). Color is a UI accent only.
   const [name, setName] = useState('');
   const [validity, setValidity] = useState('');
+  // `customDays` is only meaningful when `validity === 'custom'`. Lets the
+  // operator type any 1..3650 day count — useful for promo cards that
+  // expire in days, not the dropdown's month/year presets.
+  const [customDays, setCustomDays] = useState('');
   const [giftValue, setGiftValue] = useState('');
   const [price, setPrice] = useState('');
   const [color, setColor] = useState(COLOR_SWATCHES[0]);
@@ -308,7 +313,17 @@ function IssueModal({ onDone, onCancel }) {
         price: p,             // new field — what the buyer paid
         color,
       };
-      if (validity) body.validityDays = parseInt(validity, 10);
+      if (validity === 'custom') {
+        const cd = parseInt(customDays, 10);
+        if (!Number.isInteger(cd) || cd < 1 || cd > 3650) {
+          notify.error('Custom validity must be a whole number of days between 1 and 3650.');
+          setSubmitting(false);
+          return;
+        }
+        body.validityDays = cd;
+      } else if (validity) {
+        body.validityDays = parseInt(validity, 10);
+      }
       const row = await fetchApi('/api/wellness/giftcards', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -352,6 +367,20 @@ function IssueModal({ onDone, onCancel }) {
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
+          {validity === 'custom' && (
+            <input
+              type="number"
+              value={customDays}
+              onChange={(e) => setCustomDays(e.target.value)}
+              style={{ ...inp, marginTop: '0.5rem' }}
+              min="1"
+              max="3650"
+              step="1"
+              placeholder="Number of days (1–3650)"
+              data-testid="giftcard-custom-days-input"
+              autoFocus
+            />
+          )}
         </label>
         <label style={lbl}>
           <span><span style={{ color: 'var(--danger-color, #ef4444)' }}>* </span>Gift value</span>

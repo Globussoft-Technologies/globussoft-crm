@@ -1,6 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const multer = require("multer");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const crypto = require("crypto");
@@ -10,6 +11,41 @@ const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 const { resolvePrimaryRole } = require("../lib/roleResolution");
 const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
+// Module-object require so vi.mock-style replacement of the exports at
+// test time is observable here (the destructured form captures function
+// references at require-time and bypasses any later patching).
+const s3Service = require("../services/s3Service");
+
+// Memory-storage multer for profile-picture uploads — 5 MB cap, image-only.
+// The route below hands the buffer to s3Service.uploadImage() which gates
+// the mimetype again, but rejecting at the multer layer gives a cleaner
+// error path for oversized files (multer's MulterError vs a thrown
+// "Invalid image MIME type" deep in the S3 client).
+const profilePictureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+// Wrap multer's single-file middleware so MulterError instances (e.g.
+// LIMIT_FILE_SIZE) are translated into JSON responses inside this route
+// rather than bubbling up to the global error handler as a 500. Without
+// this, a 6 MB upload returns the default express error page instead of
+// a clean { code: "FILE_TOO_LARGE" } envelope the frontend can read.
+function profilePictureUploadHandler(req, res, next) {
+  profilePictureUpload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({
+          error: "Profile picture must be 5 MB or smaller",
+          code: "FILE_TOO_LARGE",
+        });
+      }
+      return res.status(400).json({ error: "Upload error", code: err.code });
+    }
+    if (err) return next(err);
+    next();
+  });
+}
 
 // After a fresh tenant is created via /register or /signup, ensure the
 // canonical RBAC role set exists for that tenant AND the freshly-created
@@ -710,7 +746,7 @@ router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, wellnessRole: true, tenantId: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
+      select: { id: true, name: true, email: true, role: true, wellnessRole: true, profilePicture: true, tenantId: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -860,7 +896,7 @@ router.put("/me", verifyToken, async (req, res) => {
     const updatedUser = await prisma.user.update({
       where: { id: req.user.userId },
       data: updateData,
-      select: { id: true, name: true, email: true, role: true, createdAt: true }
+      select: { id: true, name: true, email: true, role: true, profilePicture: true, createdAt: true }
     });
 
     // #179: audit profile changes. CRITICAL: never include the password value
@@ -885,6 +921,146 @@ router.put("/me", verifyToken, async (req, res) => {
     res.json(updatedUser);
   } catch (_error) {
     res.status(500).json({ error: "Failed to update profile" });
+  }
+});
+
+// POST /api/auth/me/profile-picture — upload (or replace) the signed-in
+// user's avatar. multipart/form-data with a single `file` field. On
+// replace, the previous S3 object is deleted so the bucket doesn't
+// accumulate orphans. The delete is best-effort: a failure to remove the
+// old key is logged but does not fail the upload (the new picture is
+// already in S3 and the DB pointer would otherwise be stale).
+router.post(
+  "/me/profile-picture",
+  verifyToken,
+  profilePictureUploadHandler,
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: "No file uploaded", code: "NO_FILE" });
+      }
+
+      const existing = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { id: true, profilePicture: true },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      let newUrl;
+      try {
+        newUrl = await s3Service.uploadImage(
+          req.file.buffer,
+          req.file.originalname || "profile.jpg",
+          req.file.mimetype,
+          `avatars/${req.user.userId}`,
+        );
+      } catch (uploadErr) {
+        if (/Invalid image MIME type/.test(uploadErr.message || "")) {
+          return res.status(415).json({
+            error: "Profile picture must be an image (jpeg/png/gif/webp/svg)",
+            code: "UNSUPPORTED_MEDIA",
+          });
+        }
+        if (/S3 bucket not configured/.test(uploadErr.message || "")) {
+          return res.status(503).json({
+            error: "Profile picture storage is not configured",
+            code: "STORAGE_UNCONFIGURED",
+          });
+        }
+        throw uploadErr;
+      }
+
+      const updated = await prisma.user.update({
+        where: { id: req.user.userId },
+        data: { profilePicture: newUrl },
+        select: { id: true, name: true, email: true, role: true, profilePicture: true },
+      });
+
+      // Best-effort delete of the previous S3 object so we don't leak
+      // orphan avatars on every replace.
+      if (existing.profilePicture && existing.profilePicture !== newUrl) {
+        const oldKey = s3Service.extractKeyFromUrl(existing.profilePicture);
+        if (oldKey) {
+          try {
+            await s3Service.deleteFile(oldKey);
+          } catch (delErr) {
+            console.warn(
+              "[auth/me/profile-picture] failed to delete previous S3 key:",
+              oldKey,
+              delErr.message,
+            );
+          }
+        }
+      }
+
+      await writeAudit(
+        "User",
+        "UPDATE_PROFILE_PICTURE",
+        updated.id,
+        req.user.userId,
+        req.user.tenantId,
+        { replaced: !!existing.profilePicture },
+      );
+
+      res.json(updated);
+    } catch (err) {
+      console.error("[auth/me/profile-picture] upload error:", err && err.message);
+      res.status(500).json({ error: "Failed to upload profile picture" });
+    }
+  },
+);
+
+// DELETE /api/auth/me/profile-picture — clear the avatar + remove the S3
+// object. Idempotent: returns 200 with profilePicture:null whether or not
+// one was set.
+router.delete("/me/profile-picture", verifyToken, async (req, res) => {
+  try {
+    const existing = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: { id: true, profilePicture: true },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (existing.profilePicture) {
+      const key = s3Service.extractKeyFromUrl(existing.profilePicture);
+      if (key) {
+        try {
+          await s3Service.deleteFile(key);
+        } catch (delErr) {
+          console.warn(
+            "[auth/me/profile-picture] failed to delete S3 key:",
+            key,
+            delErr.message,
+          );
+        }
+      }
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: req.user.userId },
+      data: { profilePicture: null },
+      select: { id: true, name: true, email: true, role: true, profilePicture: true },
+    });
+
+    if (existing.profilePicture) {
+      await writeAudit(
+        "User",
+        "DELETE_PROFILE_PICTURE",
+        updated.id,
+        req.user.userId,
+        req.user.tenantId,
+        {},
+      );
+    }
+
+    res.json(updated);
+  } catch (err) {
+    console.error("[auth/me/profile-picture] delete error:", err && err.message);
+    res.status(500).json({ error: "Failed to remove profile picture" });
   }
 });
 

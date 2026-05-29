@@ -426,6 +426,7 @@ model User {
   emailSignature String? @db.Text
   language       String  @default("en")
   timezone       String  @default("UTC")
+  profilePicture String? // S3 URL — uploaded via POST /api/auth/me/profile-picture; old key deleted from S3 on replace
 
   // SSO
   googleId    String? @unique
@@ -3976,6 +3977,10 @@ model AutoConsumptionRule {
   // Units of `product` consumed per `service` visit (e.g. 3.5 for 3.5 mL of
   // saline per facial). Float so fractional mL/g/cc are representable.
   quantityPerVisit Float
+  // Unit the admin entered the quantity in (ml, gm, kg, piece, unit, bottle,
+  // tube, pack, ltr). Nullable for back-compat — when null, the applier falls
+  // back to Product.unit. Validated against the allowed enum in the route.
+  unit             String?
   isActive         Boolean  @default(true)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt

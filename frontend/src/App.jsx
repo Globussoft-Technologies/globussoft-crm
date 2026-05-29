@@ -293,6 +293,7 @@ const WellnessDrugs = lazy(() => import("./pages/wellness/Drugs"));
 // (4 admin/manager-gated pages under /wellness/* — see RoleGuard wrap below).
 const WellnessWallet = lazy(() => import("./pages/wellness/Wallet"));
 const WellnessGiftCards = lazy(() => import("./pages/wellness/GiftCards"));
+const WellnessBuyGiftCards = lazy(() => import("./pages/wellness/BuyGiftCards"));
 const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
@@ -1483,6 +1484,14 @@ export default function App() {
                   >
                     <WellnessGiftCards />
                   </RoleGuard>
+                </WellnessOnly>
+              } />
+              {/* Customer-facing storefront — any authenticated user
+                  can browse + buy. Gift card value lands on the chosen
+                  patient's wallet on Razorpay payment success. */}
+              <Route path="wellness/buy-giftcards" element={
+                <WellnessOnly>
+                  <WellnessBuyGiftCards />
                 </WellnessOnly>
               } />
               <Route path="wellness/coupons" element={

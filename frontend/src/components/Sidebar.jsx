@@ -157,7 +157,9 @@ const Sidebar = ({
       const arr = JSON.parse(raw);
       if (!Array.isArray(arr) || arr.length === 0) return null;
       return arr;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   })();
   // RBAC: fine-grained permission gate for new sidebar entries. Legacy
   // adminOnly / managerOnly / wellnessRoles continue to work as before;
@@ -769,23 +771,33 @@ const Sidebar = ({
           }}
         >
           <img
-            src="/globussoft-logo.png"
+            src={logoUrl || "/globussoft-logo.png"}
             alt={brand}
+            onError={(e) => {
+              if (e.currentTarget.src.indexOf("/globussoft-logo.png") === -1) {
+                e.currentTarget.src = "/globussoft-logo.png";
+              }
+            }}
             style={{
               width: 44,
               height: 44,
               borderRadius: 6,
+              // object-fit:cover + object-position:left anchors a wide
+              // "icon + wordmark" source by its left edge so only the
+              // icon portion sits in the slot; icon-only square sources
+              // pass through unchanged.
               objectFit: "cover",
-              objectPosition: "left",
+              objectPosition: "left center",
               flexShrink: 0,
+              background: "#fff",
             }}
           />
           <h1
             style={{
-              fontSize: "1.1rem",
+              fontSize: "0.97rem",
               fontWeight: "bold",
               fontFamily: "var(--font-family)",
-              lineHeight: 1.1,
+              lineHeight: 1.15,
               margin: 0,
             }}
           >
@@ -821,28 +833,28 @@ const Sidebar = ({
                 accessiblePages,
               })
             : isTravel
-            ? renderTravelNav({
-                Link,
-                isAdmin,
-                isManager,
-                sectionLabelStyle,
-                counts,
-                subBrandAccess,
-                activeSubBrand,
-                setActiveSubBrand,
-              })
-            : renderGenericNav({
-                Link,
-                ExtLink,
-                AdsGptLink,
-                CallifiedLink,
-                isAdmin,
-                isManager,
-                hasPermission,
-                permissionsReady,
-                counts,
-                user,
-              })}
+              ? renderTravelNav({
+                  Link,
+                  isAdmin,
+                  isManager,
+                  sectionLabelStyle,
+                  counts,
+                  subBrandAccess,
+                  activeSubBrand,
+                  setActiveSubBrand,
+                })
+              : renderGenericNav({
+                  Link,
+                  ExtLink,
+                  AdsGptLink,
+                  CallifiedLink,
+                  isAdmin,
+                  isManager,
+                  hasPermission,
+                  permissionsReady,
+                  counts,
+                  user,
+                })}
         </nav>
       </aside>
     </>
@@ -907,6 +919,7 @@ const PAGE_ICON_BY_PATH = {
   "/payments": CreditCard,
   "/wellness/wallet": WalletIcon,
   "/wellness/giftcards": Gift,
+  "/wellness/buy-giftcards": ShoppingBag,
   "/wellness/coupons": TicketPercent,
   "/wellness/cashback-rules": Coins,
   // Marketing
@@ -1080,7 +1093,8 @@ function renderWellnessNav({
   const renderMergedCategory = (category, extras) => {
     const items = byCategory[category] || [];
     const hasItems = items.length > 0;
-    const hasExtras = extras !== null && extras !== undefined && extras !== false;
+    const hasExtras =
+      extras !== null && extras !== undefined && extras !== false;
     if (!hasItems && !hasExtras) return null;
     return (
       <Fragment key={category}>
@@ -1107,15 +1121,23 @@ function renderWellnessNav({
         managerOnly
       />
     ),
-    "Finance": (
+    // Cash Registers is an admin/manager surface (shift open/close,
+    // float reconciliation, petty-cash ledger). Regular users (doctors,
+    // nurses, telecallers, customers) don't operate the till and were
+    // previously seeing a sidebar link that routed nowhere — the page
+    // exists at pages/wellness/CashRegisters.jsx but isn't wired into
+    // App.jsx yet, so clicking it 404s. Gating to manager/admin closes
+    // both gaps until the route lands.
+    Finance: isManager ? (
       <Link
         key="/wellness/cash-registers"
         to="/wellness/cash-registers"
         icon={Banknote}
         label="Cash Registers"
+        managerOnly
       />
-    ),
-    "Marketing": isManager ? (
+    ) : null,
+    Marketing: isManager ? (
       <Link
         key="/campaigns"
         to="/campaigns"
@@ -1159,8 +1181,9 @@ function renderWellnessNav({
           straggler render under ONE shared header. Everything else uses
           plain renderCategory. Admin is rendered explicitly below (last
           section in the sidebar) so management surfaces sit at the bottom. */}
-      {WELLNESS_CATEGORY_ORDER
-        .filter((cat) => !WELLNESS_HEADERLESS_CATEGORIES.has(cat))
+      {WELLNESS_CATEGORY_ORDER.filter(
+        (cat) => !WELLNESS_HEADERLESS_CATEGORIES.has(cat),
+      )
         .filter((cat) => cat !== "Admin")
         .filter((cat) => !(cat === "User" && isManager))
         .map((cat) => {
@@ -1199,11 +1222,7 @@ function renderWellnessNav({
           (p) => p.path !== "/settings",
         );
         const showHardcoded = isAdmin || isManager;
-        if (
-          otherAdminItems.length === 0 &&
-          !showHardcoded &&
-          !settingsPage
-        ) {
+        if (otherAdminItems.length === 0 && !showHardcoded && !settingsPage) {
           return null;
         }
         return (
@@ -1258,13 +1277,11 @@ function renderWellnessNav({
         </>
       )}
 
-      {/* User Notification Settings — only for regular users, not admin/manager */}
-      {!isAdmin && !isManager && (
-        <>
-          <div style={labelStyle}>User</div>
-          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
-        </>
-      )}
+      {/* Notification Settings is rendered via the page-catalog "User"
+          category iteration above (WELLNESS_CATEGORY_ORDER loop). The
+          previous hardcoded fallback block here caused a duplicate entry
+          for non-admin/non-manager users — the catalog version uses the
+          Bell icon, this one used Settings (gear). Removed to deduplicate. */}
     </>
   );
 }
@@ -1299,16 +1316,32 @@ function renderTravelNav({
     { value: "travelstall", label: "Travel Stall" },
     { value: "visasure", label: "Visa Sure" },
   ];
-  const visibleSubBrands = subBrandAccess === null
-    ? ALL_SUB_BRANDS
-    : ALL_SUB_BRANDS.filter((s) => subBrandAccess.includes(s.value));
+  const visibleSubBrands =
+    subBrandAccess === null
+      ? ALL_SUB_BRANDS
+      : ALL_SUB_BRANDS.filter((s) => subBrandAccess.includes(s.value));
   const showSwitcher = visibleSubBrands.length >= 2;
   return (
     <>
       <div style={labelStyle}>Travel</div>
       {showSwitcher && (
-        <div style={{ padding: "4px 12px 8px", display: "flex", alignItems: "center", gap: 6 }}>
-          <label htmlFor="travel-sub-brand-switcher" style={{ fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+        <div
+          style={{
+            padding: "4px 12px 8px",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <label
+            htmlFor="travel-sub-brand-switcher"
+            style={{
+              fontSize: 10,
+              color: "var(--text-secondary)",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
             Sub-brand
           </label>
           <select
@@ -1316,15 +1349,21 @@ function renderTravelNav({
             value={activeSubBrand || ""}
             onChange={(e) => setActiveSubBrand(e.target.value || null)}
             style={{
-              flex: 1, fontSize: 12, padding: "4px 6px", borderRadius: 4,
+              flex: 1,
+              fontSize: 12,
+              padding: "4px 6px",
+              borderRadius: 4,
               border: "1px solid var(--border-color)",
-              background: "var(--surface-color)", color: "var(--text-primary)",
+              background: "var(--surface-color)",
+              color: "var(--text-primary)",
             }}
             aria-label="Switch active sub-brand"
           >
             <option value="">All ({visibleSubBrands.length})</option>
             {visibleSubBrands.map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
             ))}
           </select>
         </div>
@@ -1338,7 +1377,11 @@ function renderTravelNav({
           Leads page. InboxIcon (alias for Inbox) is already imported in
           the lucide-react block; matches the page's own icon choice. */}
       <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" />
-      <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" />
+      <Link
+        to="/travel/diagnostics"
+        icon={ClipboardCheck}
+        label="Diagnostics"
+      />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
       <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
       <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
@@ -1349,8 +1392,18 @@ function renderTravelNav({
       <Link to="/travel/sightseeing" icon={Camera} label="Sightseeing Master" />
       {/* Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates admin entry.
           Adjacent to Sightseeing Master because both are #907 admin pages. */}
-      <Link to="/travel/itinerary-templates" icon={LayoutTemplate} label="Itinerary Templates" />
-      {isAdmin && <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" />}
+      <Link
+        to="/travel/itinerary-templates"
+        icon={LayoutTemplate}
+        label="Itinerary Templates"
+      />
+      {isAdmin && (
+        <Link
+          to="/travel/pricing-rules"
+          icon={BadgePercent}
+          label="Pricing Rules"
+        />
+      )}
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />
       <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" />
       {/* Hotel inventory search surfaces — moved from the wellness sidebar
@@ -1358,8 +1411,20 @@ function renderTravelNav({
           Booking/Expedia = direct-API (Q11 cred). Both are travel-only by
           design; routes are wrapped in <TravelOnly> in App.jsx so a direct
           URL hit from a non-travel tenant bounces to landingFor. */}
-      {isManager && <Link to="/admin/ratehawk-search" icon={Hotel} label="RateHawk Search" />}
-      {isManager && <Link to="/admin/booking-expedia-search" icon={BedDouble} label="Booking / Expedia" />}
+      {isManager && (
+        <Link
+          to="/admin/ratehawk-search"
+          icon={Hotel}
+          label="RateHawk Search"
+        />
+      )}
+      {isManager && (
+        <Link
+          to="/admin/booking-expedia-search"
+          icon={BedDouble}
+          label="Booking / Expedia"
+        />
+      )}
       {/* Arc 2 #903 — cross-supplier Payables (A/P) review. Operator surface
           aggregating every TravelSupplierPayable across every supplier into
           one table; complements the per-supplier expand on SuppliersAdmin.
@@ -1371,28 +1436,58 @@ function renderTravelNav({
           so the link is visible to every role; canWrite + Delete gates live
           inside the page. Award icon picked over BadgePercent (taken by
           Pricing Rules) and TicketPercent (taken by wellness Coupons). */}
-      <Link to="/travel/commission-profiles" icon={Award} label="Commission Profiles" />
+      <Link
+        to="/travel/commission-profiles"
+        icon={Award}
+        label="Commission Profiles"
+      />
       <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" />
       {/* Arc 2 #900 slice 2 — operator-facing Quote Builder (line items +
           totals + action cluster). Distinct from the CRUD list above.
           MANAGER+ per RoleGuard on the route element. */}
-      {isManager && <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" />}
+      {isManager && (
+        <Link
+          to="/travel/quotes/builder"
+          icon={Calculator}
+          label="Quote Builder"
+        />
+      )}
       <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" />
       {/* Arc 2 #901 slice 7 — cross-invoice payment-milestone dashboard
           (consumes /api/travel/payment-schedules/upcoming). Billing-adjacent
           slot under Invoices is the right home: operator surface for
           upcoming/overdue milestones across all travel invoices. */}
       <Link to="/travel/milestones" icon={Clock} label="Milestones" />
-      {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />}
-      {isAdmin && <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" />}
+      {isAdmin && (
+        <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />
+      )}
+      {isAdmin && (
+        <Link
+          to="/travel/religious-packets"
+          icon={BookOpen}
+          label="Religious Packets"
+        />
+      )}
       {/* tick #181 — curriculum-mappings CRUD admin (consumes
           /api/travel-curriculum). TMC vertical school-trip pitch deck.
           ADMIN-only per backend RBAC + RoleGuard on the route element. */}
-      {isAdmin && <Link to="/travel/curriculum-mappings" icon={GraduationCap} label="Curriculum Mappings" />}
+      {isAdmin && (
+        <Link
+          to="/travel/curriculum-mappings"
+          icon={GraduationCap}
+          label="Curriculum Mappings"
+        />
+      )}
       {/* tick #186 — Marketing Flyer Studio Phase 2 SHELL (#908).
           MANAGER+ operator-facing surface; real impl per PRD §8 build
           order in docs/PRD_TRAVEL_MARKETING_FLYER.md. */}
-      {isManager && <Link to="/travel/marketing/flyer-studio" icon={FileImage} label="Marketing Flyer Studio" />}
+      {isManager && (
+        <Link
+          to="/travel/marketing/flyer-studio"
+          icon={FileImage}
+          label="Marketing Flyer Studio"
+        />
+      )}
       {/* #908 slice 2 — FlyerTemplates library list (companion to the live
           composer above). Operator-saved templates with palette-swatch
           preview; "Use as starting point" handoff into the Studio. Same
@@ -1400,7 +1495,13 @@ function renderTravelNav({
           Palette icon picked for the page's 5-hex palette swatch preview
           and to read as a "template library" (not the FileImage active
           composer). */}
-      {isManager && <Link to="/travel/flyer-templates" icon={Palette} label="Flyer Templates" />}
+      {isManager && (
+        <Link
+          to="/travel/flyer-templates"
+          icon={Palette}
+          label="Flyer Templates"
+        />
+      )}
 
       {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells, admin-only.
           Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}
@@ -1408,11 +1509,23 @@ function renderTravelNav({
         <>
           <div style={labelStyle}>Visa Sure</div>
           <Link to="/travel/visa" icon={Stamp} label="Dashboard" />
-          <Link to="/travel/visa/applications" icon={BadgeCheck} label="Applications" />
-          <Link to="/travel/visa/checklists" icon={ClipboardList} label="Checklists" />
+          <Link
+            to="/travel/visa/applications"
+            icon={BadgeCheck}
+            label="Applications"
+          />
+          <Link
+            to="/travel/visa/checklists"
+            icon={ClipboardList}
+            label="Checklists"
+          />
           {/* tick #178 — embassy-rules CRUD admin (consumes /api/embassy-rules).
               ADMIN-only per backend RBAC + RoleGuard on the route element. */}
-          <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" />
+          <Link
+            to="/travel/visa/embassy-rules"
+            icon={Shield}
+            label="Embassy Rules"
+          />
         </>
       )}
 
@@ -1468,7 +1581,11 @@ function renderTravelNav({
       {!isAdmin && !isManager && (
         <>
           <div style={labelStyle}>User</div>
-          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
+          <Link
+            to="/notification-settings"
+            icon={Settings}
+            label="Notification Settings"
+          />
         </>
       )}
     </>
@@ -1643,8 +1760,7 @@ function renderGenericNav({
           to admit them. The inner `adminOnly` links keep gating on the
           legacy role string, so a custom role with only roles.read sees just
           the Roles entry under this divider — which is the correct UX. */}
-      {(isAdmin ||
-        (permissionsReady && hasPermission("roles", "read"))) && (
+      {(isAdmin || (permissionsReady && hasPermission("roles", "read"))) && (
         <div
           style={{
             paddingTop: "0.75rem",

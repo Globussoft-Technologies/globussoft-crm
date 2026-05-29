@@ -109,8 +109,8 @@ function KpiTile({ icon: Icon, label, value, hint }) {
   return (
     <div
       style={{
-        background: 'var(--surface-color, #fff)',
-        border: '1px solid var(--border-color, #e2e8f0)',
+        background: 'var(--surface-color)',
+        border: '1px solid var(--border-color)',
         borderRadius: 12,
         padding: '1rem 1.25rem',
         display: 'flex',
@@ -119,12 +119,12 @@ function KpiTile({ icon: Icon, label, value, hint }) {
         minWidth: 0,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary, #64748b)', fontSize: 13 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)', fontSize: 13 }}>
         <Icon size={16} aria-hidden />
         <span>{label}</span>
         {hint ? <Info size={12} aria-label={hint} title={hint} style={{ opacity: 0.6 }} /> : null}
       </div>
-      <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--text-color, #0f172a)' }}>{value}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--text-primary)' }}>{value}</div>
     </div>
   );
 }
@@ -187,12 +187,13 @@ function EditAttendanceModal({ row, onClose, onSaved }) {
       <form
         onSubmit={onSubmit}
         style={{
-          background: 'var(--surface-color, #fff)',
-          color: 'var(--text-color, #0f172a)',
+          background: 'var(--bg-color)',
+          color: 'var(--text-primary)',
+          border: '1px solid var(--border-color)',
           borderRadius: 12, padding: 24,
           width: 'min(520px, 92vw)',
           maxHeight: '92vh', overflowY: 'auto',
-          boxShadow: '0 8px 30px rgba(0,0,0,0.25)',
+          boxShadow: '0 8px 30px rgba(0,0,0,0.45)',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -211,50 +212,50 @@ function EditAttendanceModal({ row, onClose, onSaved }) {
 
         <div style={{ display: 'grid', gap: 12 }}>
           <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>Date</span>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Date</span>
             <input type="text" value={fmtDate(row.date)} readOnly
-              style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: 6, background: 'var(--bg-color, #f8fafc)' }} />
+              style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
           </label>
 
           <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>Clock-In</span>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Clock-In</span>
             <input type="datetime-local" value={form.clockInAt}
               onChange={(e) => setForm({ ...form, clockInAt: e.target.value })}
-              style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: 6 }} />
+              style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--input-bg)', color: 'var(--text-primary)', colorScheme: 'dark light' }} />
           </label>
 
           <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>Clock-Out</span>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Clock-Out</span>
             <input type="datetime-local" value={form.clockOutAt}
               onChange={(e) => setForm({ ...form, clockOutAt: e.target.value })}
-              style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: 6 }} />
+              style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--input-bg)', color: 'var(--text-primary)', colorScheme: 'dark light' }} />
           </label>
 
           <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>Status</span>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Status</span>
             <select value={form.status}
               onChange={(e) => setForm({ ...form, status: e.target.value })}
-              style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: 6 }}
+              style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--input-bg)', color: 'var(--text-primary)' }}
             >
-              <option value="PRESENT">Present</option>
-              <option value="HALF_DAY">Half Day</option>
-              <option value="LATE">Late</option>
-              <option value="ABSENT">Absent</option>
-              <option value="HOLIDAY">Holiday</option>
+              <option value="PRESENT" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Present</option>
+              <option value="HALF_DAY" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Half Day</option>
+              <option value="LATE" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Late</option>
+              <option value="ABSENT" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Absent</option>
+              <option value="HOLIDAY" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Holiday</option>
             </select>
           </label>
 
           <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>Notes</span>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Notes</span>
             <textarea value={form.notes} rows={3}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: 6, fontFamily: 'inherit' }} />
+              style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, fontFamily: 'inherit', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
           </label>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
           <button type="button" onClick={onClose} disabled={saving}
-            style={{ padding: '0.5rem 1rem', borderRadius: 6, border: '1px solid var(--border-color, #e2e8f0)', background: 'transparent', cursor: 'pointer', color: 'inherit' }}>
+            style={{ padding: '0.5rem 1rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'transparent', cursor: 'pointer', color: 'inherit' }}>
             Cancel
           </button>
           <button type="submit" disabled={saving}
@@ -324,8 +325,8 @@ export default function AttendanceDashboard() {
   if (!isManagerOrAdmin) {
     return (
       <div style={{ padding: 24 }}>
-        <h1 style={{ margin: 0, marginBottom: 12 }}>Attendance</h1>
-        <p style={{ color: 'var(--text-secondary, #64748b)' }}>
+        <h1 style={{ margin: 0, marginBottom: 12, color: 'var(--text-primary)' }}>Attendance</h1>
+        <p style={{ color: 'var(--text-secondary)' }}>
           The all-staff attendance dashboard is visible to administrators and managers.
           For your own attendance history, head to the standard Attendance page.
         </p>
@@ -356,19 +357,19 @@ export default function AttendanceDashboard() {
     <div style={{ padding: '1.5rem', maxWidth: 1600, margin: '0 auto' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 8 }}>
-        <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)' }}>
           <ClipboardList size={24} aria-hidden /> Attendance
         </h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)' }}>
             <span>Period</span>
             <select
               value={period}
               onChange={(e) => setPeriod(e.target.value)}
-              style={{ padding: '0.4rem 0.6rem', borderRadius: 6, border: '1px solid var(--border-color, #e2e8f0)' }}
+              style={{ padding: '0.4rem 0.6rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
             >
               {PERIOD_OPTIONS.map((p) => (
-                <option key={p.value} value={p.value}>{p.label}</option>
+                <option key={p.value} value={p.value} style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>{p.label}</option>
               ))}
             </select>
           </label>
@@ -376,13 +377,13 @@ export default function AttendanceDashboard() {
             type="button"
             onClick={load}
             aria-label="Refresh"
-            style={{ padding: '0.4rem 0.6rem', borderRadius: 6, border: '1px solid var(--border-color, #e2e8f0)', background: 'transparent', cursor: 'pointer', color: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}
+            style={{ padding: '0.4rem 0.6rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'transparent', cursor: 'pointer', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 4 }}
           >
             <RefreshCw size={14} aria-hidden /> Refresh
           </button>
         </div>
       </div>
-      <p style={{ marginTop: 4, color: 'var(--text-secondary, #64748b)' }}>Business Performance</p>
+      <p style={{ marginTop: 4, color: 'var(--text-secondary)' }}>Business Performance</p>
 
       {/* KPI grid */}
       <div
@@ -401,13 +402,14 @@ export default function AttendanceDashboard() {
       {/* Attendance List */}
       <section
         style={{
-          background: 'var(--surface-color, #fff)',
-          border: '1px solid var(--border-color, #e2e8f0)',
+          background: 'var(--surface-color)',
+          border: '1px solid var(--border-color)',
+          color: 'var(--text-primary)',
           borderRadius: 12, padding: '1rem 1.25rem',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-          <h2 style={{ margin: 0, fontSize: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <h2 style={{ margin: 0, fontSize: 18, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)' }}>
             <ClipboardList size={18} aria-hidden /> Attendance List
           </h2>
           <Link
@@ -415,8 +417,8 @@ export default function AttendanceDashboard() {
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
               padding: '0.4rem 0.9rem', borderRadius: 999,
-              border: '1px solid var(--border-color, #e2e8f0)',
-              color: 'inherit', textDecoration: 'none', fontSize: 13,
+              border: '1px solid var(--border-color)',
+              color: 'var(--text-primary)', textDecoration: 'none', fontSize: 13,
             }}
           >
             <CalendarIcon size={14} aria-hidden /> Calendar View
@@ -424,16 +426,16 @@ export default function AttendanceDashboard() {
         </div>
 
         {loading ? (
-          <div style={{ padding: 24, color: 'var(--text-secondary, #64748b)' }}>Loading…</div>
+          <div style={{ padding: 24, color: 'var(--text-secondary)' }}>Loading…</div>
         ) : rows.length === 0 ? (
-          <div style={{ padding: 24, color: 'var(--text-secondary, #64748b)', textAlign: 'center' }}>
+          <div style={{ padding: 24, color: 'var(--text-secondary)', textAlign: 'center' }}>
             No attendance rows for the selected period.
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, color: 'var(--text-primary)' }}>
               <thead>
-                <tr style={{ textAlign: 'left', color: 'var(--text-secondary, #64748b)' }}>
+                <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
                   <th style={th}>Employee Name</th>
                   <th style={th}>Date</th>
                   <th style={th}>Check-In</th>
@@ -449,7 +451,7 @@ export default function AttendanceDashboard() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id} style={{ borderTop: '1px solid var(--border-light, #f1f5f9)' }}>
+                  <tr key={r.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                     <td style={td}>{r.user?.name || `User #${r.userId}`}</td>
                     <td style={td}>{fmtDate(r.date)}</td>
                     <td style={td}>{fmtTime(r.clockInAt)}</td>
@@ -494,7 +496,7 @@ export default function AttendanceDashboard() {
         )}
 
         {summary?.policy ? (
-          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-secondary, #64748b)' }}>
+          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
             Shift policy: {String(summary.policy.shiftStartHour).padStart(2, '0')}:{String(summary.policy.shiftStartMinute).padStart(2, '0')} → {String(summary.policy.shiftEndHour).padStart(2, '0')}:{String(summary.policy.shiftEndMinute).padStart(2, '0')} UTC, ±{summary.policy.onTimeToleranceMin} min tolerance.
           </div>
         ) : null}
@@ -518,24 +520,24 @@ export default function AttendanceDashboard() {
 // ──────────────────────────────────────────────────────────────────
 // Style atoms
 // ──────────────────────────────────────────────────────────────────
-const th = { padding: '0.6rem 0.5rem', fontWeight: 600, fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, borderBottom: '1px solid var(--border-color, #e2e8f0)' };
+const th = { padding: '0.6rem 0.5rem', fontWeight: 600, fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, borderBottom: '1px solid var(--border-color)' };
 const td = { padding: '0.6rem 0.5rem', verticalAlign: 'middle' };
 const iconBtn = {
-  background: 'transparent', border: '1px solid var(--border-color, #e2e8f0)',
+  background: 'transparent', border: '1px solid var(--border-color)',
   borderRadius: 6, padding: '0.3rem 0.5rem', cursor: 'pointer', color: 'inherit',
   display: 'inline-flex', alignItems: 'center',
 };
 
 function Pill({ text }) {
   if (text === 'N/A') {
-    return <span style={{ color: 'var(--text-secondary, #94a3b8)' }}>N/A</span>;
+    return <span style={{ color: 'var(--text-secondary)' }}>N/A</span>;
   }
   const colorMap = {
-    'Early':    { bg: 'rgba(245,158,11,0.15)', fg: '#b45309' },
-    'On Time':  { bg: 'rgba(16,185,129,0.15)', fg: '#047857' },
-    'Late':     { bg: 'rgba(220,38,38,0.15)',  fg: '#b91c1c' },
+    'Early':    { bg: 'rgba(245,158,11,0.18)', fg: '#fbbf24' },
+    'On Time':  { bg: 'rgba(16,185,129,0.18)', fg: '#34d399' },
+    'Late':     { bg: 'rgba(220,38,38,0.18)',  fg: '#f87171' },
   };
-  const c = colorMap[text] || { bg: 'rgba(100,116,139,0.15)', fg: '#475569' };
+  const c = colorMap[text] || { bg: 'rgba(100,116,139,0.18)', fg: '#cbd5e1' };
   return (
     <span style={{ background: c.bg, color: c.fg, padding: '2px 8px', borderRadius: 999, fontSize: 12, fontWeight: 600 }}>
       {text}
@@ -547,8 +549,8 @@ function AbsentPill({ absent }) {
   return (
     <span
       style={{
-        background: absent ? 'rgba(220,38,38,0.15)' : 'rgba(16,185,129,0.15)',
-        color: absent ? '#b91c1c' : '#047857',
+        background: absent ? 'rgba(220,38,38,0.18)' : 'rgba(16,185,129,0.18)',
+        color: absent ? '#f87171' : '#34d399',
         padding: '2px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600,
       }}
     >

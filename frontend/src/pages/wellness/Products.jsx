@@ -11,6 +11,8 @@ export default function Products() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [selectedProductForDetails, setSelectedProductForDetails] = useState(null);
+  const [recentConsumption, setRecentConsumption] = useState([]);
+  const [loadingConsumption, setLoadingConsumption] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
@@ -43,6 +45,27 @@ export default function Products() {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Fetch the last 5 CONSUMPTION movements when the details modal opens so
+  // the user can trace which completed visits actually drove the deductions.
+  useEffect(() => {
+    if (!selectedProductForDetails?.id) {
+      setRecentConsumption([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingConsumption(true);
+    fetchApi(`/api/wellness/inventory/movements?productId=${selectedProductForDetails.id}`)
+      .then((res) => {
+        if (cancelled) return;
+        const movs = Array.isArray(res?.movements) ? res.movements : [];
+        const consumption = movs.filter((m) => m.kind === 'CONSUMPTION').slice(0, 5);
+        setRecentConsumption(consumption);
+      })
+      .catch(() => { if (!cancelled) setRecentConsumption([]); })
+      .finally(() => { if (!cancelled) setLoadingConsumption(false); });
+    return () => { cancelled = true; };
+  }, [selectedProductForDetails?.id]);
 
   const loadData = async () => {
     try {
@@ -421,7 +444,7 @@ export default function Products() {
                 </div>
                 {selectedProductForDetails.partialMlUsed > 0 && selectedProductForDetails.volume && (
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    (+ {selectedProductForDetails.partialMlUsed.toFixed(1)} {selectedProductForDetails.unit} from current open unit)
+                    (− {selectedProductForDetails.partialMlUsed.toFixed(1)} {selectedProductForDetails.unit} consumed from open unit)
                   </div>
                 )}
               </div>
@@ -432,16 +455,53 @@ export default function Products() {
                     <div style={{ fontSize: '0.9rem', marginBottom: '0.5rem' }}>
                       <span style={{ color: 'var(--text-secondary)' }}>Total remaining: </span>
                       <strong style={{ fontSize: '1.3rem', color: '#10b981' }}>
-                        {(selectedProductForDetails.currentStock * selectedProductForDetails.volume + (selectedProductForDetails.partialMlUsed || 0)).toLocaleString('en-IN')}
+                        {(selectedProductForDetails.currentStock * selectedProductForDetails.volume - (selectedProductForDetails.partialMlUsed || 0)).toLocaleString('en-IN')}
                       </strong>
                       <span style={{ marginLeft: '0.5rem', color: 'var(--text-secondary)' }}>{selectedProductForDetails.unit}</span>
                     </div>
                   </div>
 
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.75rem', fontStyle: 'italic' }}>
-                    = {selectedProductForDetails.currentStock} units × {selectedProductForDetails.volume} {selectedProductForDetails.unit}/unit + {(selectedProductForDetails.partialMlUsed || 0).toFixed(1)} {selectedProductForDetails.unit}
+                    = {selectedProductForDetails.currentStock} units × {selectedProductForDetails.volume} {selectedProductForDetails.unit}/unit − {(selectedProductForDetails.partialMlUsed || 0).toFixed(1)} {selectedProductForDetails.unit}
                   </div>
                 </>
+              )}
+            </div>
+
+            {/* Recent consumption (last 5 visits that deducted from this product) */}
+            <div style={{ padding: '1rem 1.25rem', background: 'rgba(99, 102, 241, 0.06)', borderRadius: 8, border: '1px solid rgba(99, 102, 241, 0.18)', marginBottom: '1rem' }}>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>
+                Recent consumption (last 5)
+              </div>
+              {loadingConsumption ? (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Loading…</div>
+              ) : recentConsumption.length === 0 ? (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  No auto-consumption recorded yet for this product.
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
+                      <th style={{ padding: '0.3rem 0.4rem', fontWeight: 500 }}>When</th>
+                      <th style={{ padding: '0.3rem 0.4rem', fontWeight: 500 }}>Visit</th>
+                      <th style={{ padding: '0.3rem 0.4rem', fontWeight: 500, textAlign: 'right' }}>Deducted</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentConsumption.map((m) => (
+                      <tr key={m.id} style={{ borderTop: '1px solid rgba(99, 102, 241, 0.12)' }}>
+                        <td style={{ padding: '0.4rem' }}>
+                          {m.at ? new Date(m.at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—'}
+                        </td>
+                        <td style={{ padding: '0.4rem' }}>#{m.visitId ?? '—'}</td>
+                        <td style={{ padding: '0.4rem', textAlign: 'right', fontWeight: 600, color: '#ef4444' }}>
+                          {Number(m.delta).toFixed(1)} {selectedProductForDetails.unit || ''}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </div>
 

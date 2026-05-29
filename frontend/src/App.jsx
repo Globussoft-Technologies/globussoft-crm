@@ -810,7 +810,11 @@ export default function App() {
                       Distinct from /portal (Knowledge Base) + /wellness/portal
                       (wellness patient OTP). Travel-tenant scoped on the
                       backend via requireTravelPortalTenant. */}
-                  <Route path="/travel/portal" element={<TravelCustomerPortal />} />
+                  {/* Wildcard: TravelCustomerPortal handles its own sub-paths
+                      (/login, /bookings, etc.) internally — must stay /* or
+                      those sub-routes 404. The more-specific kyc/callback route
+                      below still wins via React Router's specificity ranking. */}
+                  <Route path="/travel/portal/*" element={<TravelCustomerPortal />} />
                   {/* Public TMC trip microsite (parent/teacher, no login) +
                       the DigiLocker/Aadhaar OAuth callback landing pages.
                       All three are public — server openPath allowlist covers

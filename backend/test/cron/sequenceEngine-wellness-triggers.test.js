@@ -202,3 +202,228 @@ describe('sequenceEngine.processStepListEnrollment — drip steps fire on wellne
     expect(data.tenantId).toBe(1);
   });
 });
+
+// ─── eventBus rule-level wellness-trigger behaviour (#616 — extended) ─────
+//
+// The existing 4 cases above pin the FIND-MANY shape: trigger names match,
+// typos don't, tenant scope is preserved. The 6 cases below extend coverage
+// at the ACTION-EXECUTION layer — verifying that when a wellness trigger
+// fires AND a rule matches, the correct action wires execute against the
+// payload + config. Distinct surface from the sibling main test
+// (sequenceEngine.test.js) which only exercises the cron tick + step-list
+// dispatcher; rule-level executeAction belongs in eventBus and is the
+// wellness-vertical's primary surface for "what does a clinical event
+// actually DO to drive a drip?".
+
+describe('eventBus.emitEvent — wellness-trigger action dispatch (#616 — extended)', () => {
+  test('evaluateCondition gates a visit.completed rule on amountCharged threshold', async () => {
+    // Rule fires send_notification ONLY when amountCharged > 1000.
+    // The clinical-billing pattern: "send aftercare drip when visit was
+    // billed". Verifies the rule.condition gate sits between findMany and
+    // executeAction — a matching rule with a failing condition does NOT
+    // dispatch its action.
+    const ruleWithCondition = {
+      id: 21,
+      tenantId: 1,
+      triggerType: 'visit.completed',
+      actionType: 'send_notification',
+      targetState: JSON.stringify({ userId: 99, title: 'High-value aftercare' }),
+      condition: JSON.stringify([{ field: 'amountCharged', op: 'gt', value: 1000 }]),
+      isActive: true,
+    };
+
+    // First emit: amountCharged=1500 → condition TRUE → notification fires.
+    prisma.automationRule.findMany.mockResolvedValueOnce([ruleWithCondition]);
+    await emitEvent('visit.completed', { visitId: 42, amountCharged: 1500 }, 1);
+    expect(prisma.notification.create).toHaveBeenCalledTimes(1);
+
+    prisma.notification.create.mockClear();
+
+    // Second emit: amountCharged=500 → condition FALSE → no notification.
+    prisma.automationRule.findMany.mockResolvedValueOnce([ruleWithCondition]);
+    await emitEvent('visit.completed', { visitId: 43, amountCharged: 500 }, 1);
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+  });
+
+  test('create_task action fires on visit.completed (post-visit follow-up pattern)', async () => {
+    // Wellness clinics use the create_task action to drop a follow-up onto
+    // a doctor's queue 3 days after a visit completes. Verifies the action
+    // wire writes a Task row with dueDate ~ now+dueInDays and uses
+    // payload.contactId for the linked entity.
+    prisma.automationRule.findMany.mockResolvedValueOnce([
+      {
+        id: 31,
+        tenantId: 1,
+        triggerType: 'visit.completed',
+        actionType: 'create_task',
+        targetState: JSON.stringify({
+          title: 'Aftercare follow-up call',
+          dueInDays: 7,
+          assignToId: 42,
+        }),
+        condition: null,
+        isActive: true,
+      },
+    ]);
+
+    const before = Date.now();
+    await emitEvent('visit.completed', { visitId: 99, contactId: 700, userId: 12 }, 1);
+    const after = Date.now();
+
+    expect(prisma.task.create).toHaveBeenCalledTimes(1);
+    const arg = prisma.task.create.mock.calls[0][0].data;
+    expect(arg.title).toBe('Aftercare follow-up call');
+    expect(arg.userId).toBe(42);
+    expect(arg.contactId).toBe(700);
+    expect(arg.tenantId).toBe(1);
+    // dueDate must land at ~now+7days. We assert a generous bound: [before+7d, after+7d + slack].
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const due = new Date(arg.dueDate).getTime();
+    expect(due).toBeGreaterThanOrEqual(before + sevenDaysMs - 2000);
+    expect(due).toBeLessThanOrEqual(after + sevenDaysMs + 2000);
+  });
+
+  test('multi-rule fan-out: two active rules on visit.completed both execute', async () => {
+    // Wellness tenants frequently chain notifications: one rule for the
+    // doctor, one for the front-desk. Both rules with matching triggers
+    // and active isActive must both fire when the event emits.
+    prisma.automationRule.findMany.mockResolvedValueOnce([
+      {
+        id: 41,
+        tenantId: 1,
+        triggerType: 'visit.completed',
+        actionType: 'send_notification',
+        targetState: JSON.stringify({ userId: 10, title: 'Doctor follow-up' }),
+        condition: null,
+        isActive: true,
+      },
+      {
+        id: 42,
+        tenantId: 1,
+        triggerType: 'visit.completed',
+        actionType: 'send_notification',
+        targetState: JSON.stringify({ userId: 11, title: 'Front-desk billing review' }),
+        condition: null,
+        isActive: true,
+      },
+    ]);
+
+    await emitEvent('visit.completed', { visitId: 50, patientId: 7 }, 1);
+
+    expect(prisma.notification.create).toHaveBeenCalledTimes(2);
+    const userIds = prisma.notification.create.mock.calls.map((c) => c[0].data.userId).sort();
+    expect(userIds).toEqual([10, 11]);
+  });
+
+  test('every dispatched wellness-trigger rule writes an auditLog row', async () => {
+    // The executeAction function ends with a prisma.auditLog.create call —
+    // every wellness-trigger fire that successfully dispatches an action
+    // must leave a workflow audit trail. This is the audit-integrity
+    // contract: a clinical event firing a drip is a traceable workflow.
+    prisma.automationRule.findMany.mockResolvedValueOnce([
+      {
+        id: 51,
+        tenantId: 1,
+        triggerType: 'consent.signed',
+        actionType: 'send_notification',
+        targetState: JSON.stringify({ userId: 88, title: 'Consent ack' }),
+        condition: null,
+        isActive: true,
+      },
+    ]);
+
+    await emitEvent('consent.signed', { patientId: 7, consentId: 22 }, 1);
+
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    const auditArg = prisma.auditLog.create.mock.calls[0][0].data;
+    expect(auditArg.action).toBe('WORKFLOW');
+    expect(auditArg.entity).toBe('AutomationRule');
+    expect(auditArg.entityId).toBe(51);
+    expect(auditArg.tenantId).toBe(1);
+    // details is a JSON-serialised summary including trigger + action + payload.
+    const details = JSON.parse(auditArg.details);
+    expect(details.trigger).toBe('consent.signed');
+    expect(details.action).toBe('send_notification');
+    expect(details.payload.patientId).toBe(7);
+  });
+
+  test('isActive=false wellness rules are excluded by the findMany where clause', async () => {
+    // The where clause includes isActive: true — paused rules MUST NOT
+    // be returned to the action-dispatch loop. We verify by inspecting
+    // the call shape (the engine doesn't filter post-fetch; the DB
+    // filter is the source of truth).
+    prisma.automationRule.findMany.mockResolvedValueOnce([]);
+    await emitEvent('visit.completed', { visitId: 1 }, 1);
+
+    const callArg = prisma.automationRule.findMany.mock.calls[0][0];
+    expect(callArg.where.isActive).toBe(true);
+    // And of course no action fired (empty result set).
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+    expect(prisma.task.create).not.toHaveBeenCalled();
+  });
+});
+
+// ─── multi-step wellness drip walk-through ─────────────────────────────
+
+describe('sequenceEngine.processStepListEnrollment — wellness drip multi-step walk', () => {
+  test('email → wait → sms sequence parks at the wait then fires the email step', async () => {
+    // Canonical wellness drip shape: send aftercare email at visit completion,
+    // wait 24h, then send an SMS check-in. Verifies the step-list dispatcher
+    // walks until a wait step parks the enrollment, persists the advanced
+    // cursor + nextRun, and does NOT fire the post-wait SMS in the same tick
+    // (that's the next tick's job). The case is wellness-specific in framing
+    // (post-visit SMS check-in) but pins the same multi-step dispatcher the
+    // sibling test exercises in isolation.
+    const enrollment = {
+      id: 200,
+      sequenceId: 7,
+      tenantId: 1,
+      currentStep: 0,
+      contact: {
+        id: 9,
+        name: 'Priya',
+        email: 'priya@example.in',
+        phone: '+919812345678',
+      },
+    };
+    const steps = [
+      {
+        id: 1,
+        sequenceId: 7,
+        position: 0,
+        kind: 'email',
+        emailTemplate: { subject: 'Aftercare for {{name}}', body: 'Hi {{name}}, …' },
+      },
+      {
+        id: 2,
+        sequenceId: 7,
+        position: 1,
+        kind: 'wait',
+        delayMinutes: 1440, // 24h
+      },
+      {
+        id: 3,
+        sequenceId: 7,
+        position: 2,
+        kind: 'sms',
+        smsBody: 'Hi {{name}}, how are you feeling today?',
+      },
+    ];
+
+    await processStepListEnrollment(enrollment, steps);
+
+    // Email step fired (step 0).
+    expect(prisma.emailMessage.create).toHaveBeenCalledTimes(1);
+    const emailData = prisma.emailMessage.create.mock.calls[0][0].data;
+    expect(emailData.subject).toBe('Aftercare for Priya');
+    // SMS step did NOT fire this tick — wait at step 1 parked the enrollment.
+    expect(prisma.smsMessage.create).not.toHaveBeenCalled();
+    // Final persist: cursor advanced past the wait (to position 2), nextRun
+    // set, status NOT flipped to Completed (enrollment still Active).
+    const updateCalls = prisma.sequenceEnrollment.update.mock.calls;
+    const last = updateCalls[updateCalls.length - 1][0];
+    expect(last.data.currentStep).toBe(2);
+    expect(last.data.nextRun).toBeInstanceOf(Date);
+    expect(last.data.status).toBeUndefined();
+  });
+});

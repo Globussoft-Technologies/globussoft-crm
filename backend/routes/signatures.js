@@ -180,7 +180,7 @@ router.post("/decline/:token", async (req, res) => {
 // AUTHENTICATED ROUTES (tenant-scoped via req.user.tenantId)
 // ──────────────────────────────────────────────────────────────────
 
-// GET /api/signatures — list with optional filters
+// GET /api/signatures — list with optional filters (and ?fields=summary)
 router.get("/", async (req, res) => {
   try {
     const { status, documentType } = req.query;
@@ -188,10 +188,35 @@ router.get("/", async (req, res) => {
     if (status) where.status = status;
     if (documentType) where.documentType = documentType;
 
-    const requests = await prisma.signatureRequest.findMany({
+    // #920 slice 39: ?fields=summary slim-shape opt-in. Mirrors slices 1-36.
+    // SignatureRequest carries one heavy column (`signature @db.LongText` —
+    // the base64 data URL of the rendered signature image once signed) plus
+    // the sensitive `signToken` (single-use URL key that bypasses the global
+    // auth guard) and `signerEmail` (PII). When the caller passes
+    // ?fields=summary we drop ALL THREE, plus tenantId, returning only the
+    // chrome columns Signatures.jsx's list UI needs (id, documentType,
+    // documentId, signerName, status, expiresAt, signedAt, createdAt).
+    // Opt-in additive — existing callers (no ?fields, or any non-exact
+    // value) get the full row shape unchanged so detail-view and resend
+    // flows continue to receive signerEmail + signToken when they need it.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        documentType: true,
+        documentId: true,
+        signerName: true,
+        status: true,
+        expiresAt: true,
+        signedAt: true,
+        createdAt: true,
+      };
+    }
+    const requests = await prisma.signatureRequest.findMany(findManyArgs);
     res.json(requests);
   } catch (err) {
     console.error("[Signatures] list error:", err);

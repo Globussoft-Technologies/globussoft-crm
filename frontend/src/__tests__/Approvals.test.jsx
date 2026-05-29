@@ -284,4 +284,283 @@ describe('<Approvals /> — page surface', () => {
       expect(call).toBeTruthy();
     });
   });
+
+  // ─── EXTENDED COVERAGE — additional contracts ────────────────────────
+
+  const sampleRejected = {
+    id: 12,
+    entity: 'Discount',
+    entityId: 99,
+    reason: 'Too aggressive',
+    status: 'REJECTED',
+    requestedBy: 3,
+    requester: { name: 'Charlie User', email: 'charlie@acme.test', role: 'USER' },
+    requestedAt: '2026-04-27T09:00:00.000Z',
+    approvedBy: 1,
+    approvedAt: '2026-04-27T11:00:00.000Z',
+    approver: { name: 'Admin', email: 'a@x.com' },
+    comment: 'Margin too thin',
+  };
+
+  it('status badges render for PENDING / APPROVED / REJECTED across the list', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/approvals')) {
+        return Promise.resolve([samplePending, sampleApproved, sampleRejected]);
+      }
+      return Promise.resolve(null);
+    });
+    renderApprovals(ADMIN_USER);
+    await waitFor(() =>
+      expect(screen.getAllByText('Charlie User').length).toBeGreaterThanOrEqual(3)
+    );
+    expect(screen.getByText('PENDING')).toBeInTheDocument();
+    expect(screen.getByText('APPROVED')).toBeInTheDocument();
+    expect(screen.getByText('REJECTED')).toBeInTheDocument();
+    // Entity short-name "Discount" appears in both the row AND the filter
+    // dropdown <option>, so use getAllByText and assert >=2.
+    expect(screen.getAllByText('Discount').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('entity filter: changing entity dropdown re-fires endpoint with ?entity=<value>', async () => {
+    renderApprovals(ADMIN_USER);
+    await waitFor(() =>
+      expect(screen.getAllByText('Charlie User').length).toBeGreaterThanOrEqual(1)
+    );
+    fetchApiMock.mockClear();
+
+    const entitySelect = screen.getByDisplayValue('All Entities');
+    fireEvent.change(entitySelect, { target: { value: 'Quote' } });
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && /entity=Quote/.test(u)
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('request count display: header shows "N requests" matching the list length', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/approvals')) {
+        return Promise.resolve([samplePending, sampleApproved, sampleRejected]);
+      }
+      return Promise.resolve(null);
+    });
+    renderApprovals(ADMIN_USER);
+    await waitFor(() => {
+      expect(screen.getByText(/^3 requests$/i)).toBeInTheDocument();
+    });
+    // Singular form when count is 1
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/approvals')) {
+        return Promise.resolve([samplePending]);
+      }
+      return Promise.resolve(null);
+    });
+  });
+
+  it('clear-filters button: visible when a filter is set + resets selects on click', async () => {
+    renderApprovals(ADMIN_USER);
+    await waitFor(() =>
+      expect(screen.getAllByText('Charlie User').length).toBeGreaterThanOrEqual(1)
+    );
+    // No Clear button when both filters empty
+    expect(screen.queryByRole('button', { name: /^Clear$/i })).not.toBeInTheDocument();
+
+    const statusSelect = screen.getByDisplayValue('All Statuses');
+    fireEvent.change(statusSelect, { target: { value: 'APPROVED' } });
+
+    // Clear button now appears
+    const clearBtn = await screen.findByRole('button', { name: /^Clear$/i });
+    expect(clearBtn).toBeInTheDocument();
+
+    fetchApiMock.mockClear();
+    fireEvent.click(clearBtn);
+
+    // Status dropdown is back to "All Statuses"
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('All Statuses')).toBeInTheDocument();
+    });
+    // Clear button disappears again
+    expect(screen.queryByRole('button', { name: /^Clear$/i })).not.toBeInTheDocument();
+  });
+
+  it('View action opens the detail modal with status + reason + requester', async () => {
+    renderApprovals(ADMIN_USER);
+    await waitFor(() =>
+      expect(screen.getAllByText('Charlie User').length).toBeGreaterThanOrEqual(1)
+    );
+    const viewBtns = screen.getAllByRole('button', { name: /View/i });
+    fireEvent.click(viewBtns[0]);
+
+    // Modal renders with title "Deal #42" — confirm modal is open via heading
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Deal #42/i })).toBeInTheDocument();
+    });
+    // Detail labels: "Status" / "Reason" / "Requested At" all appear as both
+    // table headers AND modal detail-row labels, so use getAllByText >=2.
+    // "Requested By" only appears in the modal (the table header is "Requested By")
+    // and the modal label is also "Requested By", so it appears twice too.
+    expect(screen.getAllByText('Status').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('Requested By').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('Requested At').length).toBeGreaterThanOrEqual(2);
+    // "Reason" appears as both table header AND modal label
+    expect(screen.getAllByText('Reason').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('Create modal: opens on "New Request"; cancel closes it', async () => {
+    renderApprovals(ADMIN_USER);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /New Request/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New Request/i }));
+
+    // Modal title visible
+    expect(
+      await screen.findByRole('heading', { name: /New Approval Request/i })
+    ).toBeInTheDocument();
+    // Entity ID input present
+    expect(screen.getByPlaceholderText(/e\.g\. 123/i)).toBeInTheDocument();
+
+    // Click Cancel — modal goes away
+    const cancelBtn = screen.getByRole('button', { name: /^Cancel$/i });
+    fireEvent.click(cancelBtn);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('heading', { name: /New Approval Request/i })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('Create submit: POSTs /api/approvals with entity + entityId + reason payload', async () => {
+    renderApprovals(ADMIN_USER);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /New Request/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New Request/i }));
+
+    await screen.findByRole('heading', { name: /New Approval Request/i });
+
+    // Fill Entity ID + reason
+    const idInput = screen.getByPlaceholderText(/e\.g\. 123/i);
+    fireEvent.change(idInput, { target: { value: '555' } });
+    const reasonInput = screen.getByPlaceholderText(/25% discount for enterprise/i);
+    fireEvent.change(reasonInput, { target: { value: 'Q4 push' } });
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/approvals' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 999, status: 'PENDING' });
+      }
+      if (url.startsWith('/api/approvals')) return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    // Submit
+    fireEvent.click(screen.getByRole('button', { name: /Submit Request/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/approvals' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.entity).toBe('Deal');     // default
+      expect(body.entityId).toBe(555);      // parseInt'd
+      expect(body.reason).toBe('Q4 push');
+    });
+  });
+
+  it('Reject submit: POSTs /api/approvals/<id>/reject with the comment body', async () => {
+    renderApprovals(ADMIN_USER);
+    await waitFor(() =>
+      expect(screen.getAllByText('Charlie User').length).toBeGreaterThanOrEqual(1)
+    );
+
+    // Click row-level Reject
+    const rejectBtns = screen.getAllByRole('button', { name: /^Reject$/i });
+    fireEvent.click(rejectBtns[0]);
+
+    // Modal renders the required textarea
+    const commentBox = await screen.findByPlaceholderText(
+      /Explain why this is being rejected/i
+    );
+    fireEvent.change(commentBox, { target: { value: 'Outside policy' } });
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === `/api/approvals/${samplePending.id}/reject` && opts?.method === 'POST') {
+        return Promise.resolve({ id: samplePending.id, status: 'REJECTED' });
+      }
+      if (url.startsWith('/api/approvals')) return Promise.resolve([sampleApproved]);
+      return Promise.resolve(null);
+    });
+
+    // The submit Reject button is the last one in the DOM (modal footer)
+    const allRejectBtns = screen.getAllByRole('button', { name: /Reject/i });
+    fireEvent.click(allRejectBtns[allRejectBtns.length - 1]);
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          url === `/api/approvals/${samplePending.id}/reject` && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.comment).toBe('Outside policy');
+    });
+  });
+
+  it('Approve modal: empty comment POSTs with comment: null (optional comment)', async () => {
+    renderApprovals(ADMIN_USER);
+    await waitFor(() =>
+      expect(screen.getAllByText('Charlie User').length).toBeGreaterThanOrEqual(1)
+    );
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === `/api/approvals/${samplePending.id}/approve` && opts?.method === 'POST') {
+        return Promise.resolve({ id: samplePending.id, status: 'APPROVED' });
+      }
+      if (url.startsWith('/api/approvals')) return Promise.resolve([sampleApproved]);
+      return Promise.resolve(null);
+    });
+
+    const approveBtns = screen.getAllByRole('button', { name: /^\s*Approve\s*$/ });
+    fireEvent.click(approveBtns[0]);
+
+    // Modal opened — DON'T fill the comment
+    await screen.findByPlaceholderText(/Add an approval note/i);
+
+    // Click the modal Approve submit button
+    const modalApproveBtns = screen.getAllByRole('button', { name: /^\s*Approve\s*$/ });
+    fireEvent.click(modalApproveBtns[modalApproveBtns.length - 1]);
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          url === `/api/approvals/${samplePending.id}/approve` && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      // Empty comment becomes null per the SUT: `comment: comment || null`
+      expect(body.comment).toBeNull();
+    });
+  });
+
+  it('error state: failed list fetch leaves the page on empty-state without crashing', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/approvals')) {
+        return Promise.reject(new Error('boom'));
+      }
+      return Promise.resolve(null);
+    });
+    renderApprovals(ADMIN_USER);
+    await waitFor(() => {
+      expect(screen.getByText(/No approval requests found\./i)).toBeInTheDocument();
+    });
+    // Heading still renders — no white-screen crash
+    expect(
+      screen.getByRole('heading', { name: /Approval Requests/i })
+    ).toBeInTheDocument();
+  });
 });

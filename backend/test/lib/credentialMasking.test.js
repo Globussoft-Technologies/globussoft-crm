@@ -181,3 +181,84 @@ describe('maskConfigRow', () => {
     expect(masked.accessToken.last4).toBe('****WXYZ');
   });
 });
+
+// Extension: boundary / immutability / defensive-shape coverage.
+//
+// These cases pin the SUT's exact behaviour at length boundaries (the 8-char
+// new-shape cap, the 12-char legacy-shape cap), the pure-sentinel `****`
+// case, the "**** in the middle" rejection, and several maskConfigRow
+// invariants (no input mutation, empty sensitiveFields = pass-through,
+// non-existent field name still produces the unconfigured shape).
+describe('credentialMasking — boundary + immutability extensions', () => {
+  test('looksLikeMaskedSentinel at exact length boundaries (8 / 9 / 12 / 13)', () => {
+    // New-shape: starts with **** AND length ≤ 8 → true at 8, false at 9
+    expect(looksLikeMaskedSentinel('****1234')).toBe(true);   // 8 chars exactly
+    expect(looksLikeMaskedSentinel('****12345')).toBe(false); // 9 chars: rejected
+    // Legacy-shape: ends with **** AND length ≤ 12 → true at 12, false at 13
+    expect(looksLikeMaskedSentinel('12345678****')).toBe(true);  // 12 chars exactly
+    expect(looksLikeMaskedSentinel('123456789****')).toBe(false); // 13 chars: rejected
+  });
+
+  test('looksLikeMaskedSentinel returns true for pure "****" (4 chars, canonical empty sentinel)', () => {
+    // This is the shape emitted by maskCredential when the plaintext is 0
+    // chars after decryption — the canonical "no tail" sentinel.
+    expect(looksLikeMaskedSentinel(MASK_SUFFIX)).toBe(true);
+    expect(MASK_SUFFIX.length).toBe(4);
+  });
+
+  test('looksLikeMaskedSentinel returns false when **** appears only in the middle', () => {
+    // Neither startsWith(****) nor endsWith(****) — not a sentinel
+    expect(looksLikeMaskedSentinel('abc****def')).toBe(false);
+    expect(looksLikeMaskedSentinel('a****b')).toBe(false);
+  });
+
+  test('maskConfigRow does NOT mutate the input row (spread creates a fresh object)', () => {
+    const row = {
+      id: 99,
+      provider: 'twilio',
+      apiKey: 'original-plaintext-KEEP',
+      authToken: 'original-token-SAME',
+    };
+    const before = { ...row };
+    const masked = maskConfigRow(row, ['apiKey', 'authToken']);
+    // Original row's sensitive fields untouched
+    expect(row.apiKey).toBe(before.apiKey);
+    expect(row.authToken).toBe(before.authToken);
+    expect(row.id).toBe(before.id);
+    expect(row.provider).toBe(before.provider);
+    // But the returned shape carries the masked values
+    expect(masked.apiKey).toEqual({ configured: true, last4: '****KEEP' });
+    expect(masked).not.toBe(row); // identity check: fresh object
+  });
+
+  test('maskConfigRow with empty sensitiveFields array returns row unchanged (no transformation)', () => {
+    const row = { a: 1, apiKey: 'never-touched-XYZ', other: true };
+    const masked = maskConfigRow(row, []);
+    // All keys preserved verbatim, no masking applied
+    expect(masked.a).toBe(1);
+    expect(masked.apiKey).toBe('never-touched-XYZ');
+    expect(masked.other).toBe(true);
+    // Still a fresh object (spread)
+    expect(masked).not.toBe(row);
+  });
+
+  test('maskConfigRow with a non-existent field name adds the unconfigured shape', () => {
+    // describeCredential(undefined) → {configured:false, last4:null}, so the
+    // loop populates out[f] even when the field was never on the row. Pin
+    // this defensive behaviour so a typo'd config-field list doesn't
+    // accidentally LEAK a credential by leaving the original value visible.
+    const row = { a: 1 };
+    const masked = maskConfigRow(row, ['nonExistent']);
+    expect(masked.nonExistent).toEqual({ configured: false, last4: null });
+    expect(masked.a).toBe(1);
+  });
+
+  test('encrypt → decrypt round-trip preserves special characters (\\n, \\t, brackets, punctuation)', () => {
+    const plain = '!@#$%^&*()\n\t<>{}[]|\\/:;"\'`~';
+    const cipher = encryptCredential(plain);
+    expect(cipher).not.toBe(plain); // actually encrypted
+    expect(cipher.startsWith('ENC:v1:')).toBe(true);
+    expect(decryptCredential(cipher)).toBe(plain);
+  });
+});
+

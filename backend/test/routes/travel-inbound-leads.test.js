@@ -846,8 +846,9 @@ describe('GET /api/travel/inbound/leads/by-channel — slice 10 rollup', () => {
       tenantSlug: 'travel-stall',
       total: 25,
     });
-    // byChannel has one entry per VALID_CHANNEL (7), in the canonical
-    // enum order. Channels not in the groupBy result default to 0.
+    // byChannel has one entry per VALID_CHANNEL (10 after slice 16
+    // wired indiamart/justdial/tradeindia), in the canonical enum order.
+    // Channels not in the groupBy result default to 0.
     const expectedShape = [
       { channel: 'voyagr', count: 12 },
       { channel: 'webform', count: 5 },
@@ -856,6 +857,9 @@ describe('GET /api/travel/inbound/leads/by-channel — slice 10 rollup', () => {
       { channel: 'adsgpt', count: 0 },
       { channel: 'metaads', count: 0 },
       { channel: 'manual', count: 0 },
+      { channel: 'indiamart', count: 0 },
+      { channel: 'justdial', count: 0 },
+      { channel: 'tradeindia', count: 0 },
     ];
     expect(res.body.byChannel).toEqual(expectedShape);
     // No unknown bucket when every source maps cleanly.
@@ -863,10 +867,13 @@ describe('GET /api/travel/inbound/leads/by-channel — slice 10 rollup', () => {
   });
 
   test('unknown source suffix buckets into "unknown" + total still reconciles', async () => {
-    // Legacy or future-enum source we don't recognize today.
+    // Legacy or future-enum source we don't recognize today. Slice 16
+    // promoted indiamart/justdial/tradeindia into VALID_CHANNELS, so
+    // pick a placeholder source that's still genuinely outside the enum
+    // (e.g. an old/decommissioned channel identifier).
     prisma.contact.groupBy.mockResolvedValueOnce([
       { source: 'inbound:voyagr', _count: { _all: 2 } },
-      { source: 'inbound:indiamart', _count: { _all: 3 } }, // not in VALID_CHANNELS
+      { source: 'inbound:legacydialer', _count: { _all: 3 } }, // not in VALID_CHANNELS
     ]);
 
     const res = await request(makeApp())
@@ -1012,7 +1019,7 @@ describe('GET /api/travel/inbound/leads/by-channel — slice 10 rollup', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(0);
-    expect(res.body.byChannel).toHaveLength(7); // VALID_CHANNELS.length, no unknown
+    expect(res.body.byChannel).toHaveLength(10); // VALID_CHANNELS.length (slice 16: + indiamart/justdial/tradeindia), no unknown
     expect(res.body.byChannel.every((b) => b.count === 0)).toBe(true);
   });
 

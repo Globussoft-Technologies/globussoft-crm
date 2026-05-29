@@ -28,15 +28,37 @@ const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, scrubZ
  */
 function extractPdfText(buf) {
   const str = buf.toString('latin1');
-  const streamRe = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
-  let m;
   let allOps = '';
-  while ((m = streamRe.exec(str)) !== null) {
-    const raw = Buffer.from(m[1], 'latin1');
+  // Slice each stream body by its declared `/Length` rather than scanning
+  // for the next `endstream`. FlateDecode binary can legitimately contain
+  // the literal bytes `\nendstream`, which truncated the old non-greedy
+  // `stream...endstream` regex — that varied by the platform's zlib output,
+  // so this test passed on Windows but failed on Linux CI. `/Length` is the
+  // PDF-spec-authoritative byte count (pdfkit emits it as a direct integer).
+  const lenRe = /\/Length\s+(\d+)\b[^>]*>>\s*stream\r?\n/g;
+  let m;
+  while ((m = lenRe.exec(str)) !== null) {
+    const len = parseInt(m[1], 10);
+    const start = lenRe.lastIndex; // latin1 is 1 byte/char → char idx == byte offset
+    const raw = buf.subarray(start, start + len);
     try {
       allOps += zlib.inflateSync(raw).toString('latin1');
     } catch {
       allOps += raw.toString('latin1');
+    }
+  }
+  // Fallback to the legacy scan if no /Length-declared streams matched
+  // (defensive — keeps any non-pdfkit PDF shape working).
+  if (!allOps) {
+    const streamRe = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+    let s;
+    while ((s = streamRe.exec(str)) !== null) {
+      const raw = Buffer.from(s[1], 'latin1');
+      try {
+        allOps += zlib.inflateSync(raw).toString('latin1');
+      } catch {
+        allOps += raw.toString('latin1');
+      }
     }
   }
   let out = '';

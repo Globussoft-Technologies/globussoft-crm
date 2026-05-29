@@ -19,6 +19,11 @@
 // Rounding edge: 33.33 + 33.33 + 33.34 must equal 100.00 exactly (matches
 // gstCalculation.js + tcsCalculation.js round2 convention) so combined
 // month-end-close reports don't accumulate floating-point drift.
+//
+// Extension batch (#903 slices 18 + 20): adds coverage for the monthly +
+// quarterly rollup helpers (monthKey / quarterForMonth / quarterKey /
+// computeMonthlyRollup / computeQuarterlyRollup) feeding the per-supplier
+// dashboard widgets (PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.d).
 
 import { describe, test, expect } from "vitest";
 
@@ -27,6 +32,12 @@ const {
   bucketForDays,
   classifyPayable,
   computeAgingReport,
+  ROLLUP_STATUSES,
+  monthKey,
+  computeMonthlyRollup,
+  quarterForMonth,
+  quarterKey,
+  computeQuarterlyRollup,
 } = await import("../../lib/payableAging.js");
 
 const ONE_DAY_MS = 86_400_000;
@@ -262,5 +273,294 @@ describe("computeAgingReport() — aggregation", () => {
     const r = computeAgingReport(payables, { asOf: ASOF });
     expect(r.bucketTotals["1-30"]).toEqual({ count: 3, totalAmount: 50 });
     expect(r.grandTotal).toBe(50);
+  });
+});
+
+// === Monthly + quarterly rollup coverage (#903 slices 18 + 20) ===
+//
+// Extension batch — pins monthKey + quarterForMonth + quarterKey +
+// computeMonthlyRollup + computeQuarterlyRollup against the per-supplier
+// dashboard's "monthly invoice rollup" + "next 4 quarters payable schedule"
+// widgets (PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.d).
+//
+// IMPORTANT contract drift from computeAgingReport:
+//   - computeAgingReport EXCLUDES paid + cancelled (they're not liabilities).
+//   - computeMonthlyRollup / computeQuarterlyRollup INCLUDE paid + cancelled
+//     (they're surfaced under byStatus so operators see "₹50K owed (45K
+//     pending, 5K paid)" without further drill-down per the SUT comment).
+//   - Rollups only exclude null entries + null/invalid dueDate.
+// The tests below pin BOTH taxonomies so a future "unify the exclusion rules"
+// refactor surfaces clearly which contract it's breaking.
+
+describe("monthKey(d)", () => {
+  test("UTC date → YYYY-MM key with zero-padded month", () => {
+    expect(monthKey(new Date("2026-01-15T12:00:00.000Z"))).toBe("2026-01");
+    expect(monthKey(new Date("2026-09-01T00:00:00.000Z"))).toBe("2026-09");
+    expect(monthKey(new Date("2026-12-31T12:00:00.000Z"))).toBe("2026-12");
+  });
+
+  test("last UTC instant of month stays in that month (no roll-forward)", () => {
+    expect(monthKey(new Date("2026-01-31T23:59:59.999Z"))).toBe("2026-01");
+    expect(monthKey(new Date("2026-03-31T23:59:59.999Z"))).toBe("2026-03");
+  });
+
+  test("invalid Date → 'NaN-NaN' (pin actual: SUT does not validate)", () => {
+    // SUT extracts getUTCFullYear() + getUTCMonth() unconditionally; an
+    // Invalid Date yields NaN for both → string-templated to "NaN-NaN".
+    // Callers (computeMonthlyRollup) gate via Number.isNaN(due.getTime())
+    // BEFORE calling monthKey so this never surfaces in production paths.
+    expect(monthKey(new Date("not-a-date"))).toBe("NaN-NaN");
+  });
+});
+
+describe("quarterForMonth(m)", () => {
+  test("month 1-3 → Q1", () => {
+    expect(quarterForMonth(1)).toBe(1);
+    expect(quarterForMonth(2)).toBe(1);
+    expect(quarterForMonth(3)).toBe(1);
+  });
+
+  test("month 4-6 → Q2", () => {
+    expect(quarterForMonth(4)).toBe(2);
+    expect(quarterForMonth(5)).toBe(2);
+    expect(quarterForMonth(6)).toBe(2);
+  });
+
+  test("month 7-9 → Q3", () => {
+    expect(quarterForMonth(7)).toBe(3);
+    expect(quarterForMonth(8)).toBe(3);
+    expect(quarterForMonth(9)).toBe(3);
+  });
+
+  test("month 10-12 → Q4", () => {
+    expect(quarterForMonth(10)).toBe(4);
+    expect(quarterForMonth(11)).toBe(4);
+    expect(quarterForMonth(12)).toBe(4);
+  });
+
+  test("out-of-range month → garbage quarter (pin actual: SUT does not validate)", () => {
+    // SUT is Math.floor((m - 1) / 3) + 1; for m=0 returns 0; m=13 returns 5.
+    // Callers (computeQuarterlyRollup) only ever pass 1..12 parsed from a
+    // monthKey output, so this never surfaces. Pinning the math so a future
+    // "add validation" refactor is a deliberate decision, not an accident.
+    expect(quarterForMonth(0)).toBe(0);
+    expect(quarterForMonth(13)).toBe(5);
+    expect(quarterForMonth(-1)).toBe(0);
+  });
+});
+
+describe("quarterKey(year, q)", () => {
+  test("2026, 1 → '2026-Q1'", () => {
+    expect(quarterKey(2026, 1)).toBe("2026-Q1");
+    expect(quarterKey(2026, 4)).toBe("2026-Q4");
+    expect(quarterKey(2030, 3)).toBe("2030-Q3");
+  });
+
+  test("out-of-range quarter → string template no validation (pin actual)", () => {
+    // SUT is pure `${year}-Q${q}` interpolation — no clamping. Callers only
+    // ever pass 1..4 from quarterForMonth on a real month, so 0/5/-1 never
+    // surface. Pin so a future "add validation" refactor is deliberate.
+    expect(quarterKey(2026, 0)).toBe("2026-Q0");
+    expect(quarterKey(2026, 5)).toBe("2026-Q5");
+    expect(quarterKey(2026, -1)).toBe("2026-Q-1");
+  });
+});
+
+describe("ROLLUP_STATUSES constant", () => {
+  test("exports the four canonical rollup statuses", () => {
+    expect(ROLLUP_STATUSES).toEqual(["pending", "scheduled", "paid", "cancelled"]);
+  });
+});
+
+describe("computeMonthlyRollup(payables)", () => {
+  test("empty input → empty months[], zeros (not null)", () => {
+    const r = computeMonthlyRollup([]);
+    expect(r.months).toEqual([]);
+    expect(r.grandTotal).toBe(0);
+    expect(r.totalCount).toBe(0);
+    expect(r.excludedCount).toBe(0);
+    expect(r.excludedReasons).toEqual({});
+  });
+
+  test("null/undefined input → empty rollup", () => {
+    expect(computeMonthlyRollup(null).months).toEqual([]);
+    expect(computeMonthlyRollup(undefined).months).toEqual([]);
+  });
+
+  test("multiple months → sorted ASC + per-status break populated", () => {
+    const payables = [
+      // March: 2 pending + 1 paid
+      { status: "pending", dueDate: "2026-03-01", amount: 100 },
+      { status: "pending", dueDate: "2026-03-15", amount: 200 },
+      { status: "paid", dueDate: "2026-03-20", amount: 50 },
+      // January: 1 scheduled
+      { status: "scheduled", dueDate: "2026-01-10", amount: 1000 },
+      // May: 1 cancelled
+      { status: "cancelled", dueDate: "2026-05-05", amount: 25 },
+    ];
+    const r = computeMonthlyRollup(payables);
+    expect(r.months.map((m) => m.month)).toEqual(["2026-01", "2026-03", "2026-05"]);
+
+    const jan = r.months[0];
+    expect(jan.totalAmount).toBe(1000);
+    expect(jan.totalCount).toBe(1);
+    expect(jan.byStatus.scheduled).toEqual({ count: 1, totalAmount: 1000 });
+    expect(jan.byStatus.pending).toEqual({ count: 0, totalAmount: 0 });
+
+    const mar = r.months[1];
+    expect(mar.totalAmount).toBe(350);
+    expect(mar.totalCount).toBe(3);
+    expect(mar.byStatus.pending).toEqual({ count: 2, totalAmount: 300 });
+    expect(mar.byStatus.paid).toEqual({ count: 1, totalAmount: 50 });
+
+    const may = r.months[2];
+    expect(may.totalAmount).toBe(25);
+    expect(may.byStatus.cancelled).toEqual({ count: 1, totalAmount: 25 });
+
+    expect(r.grandTotal).toBe(1375);
+    expect(r.totalCount).toBe(5);
+    expect(r.excludedCount).toBe(0);
+  });
+
+  test("rollup taxonomy DIFFERS from aging report — paid + cancelled are INCLUDED", () => {
+    // computeAgingReport excludes paid + cancelled (excludedReasons grows).
+    // computeMonthlyRollup includes them under byStatus + only excludes
+    // missing-payable / missing-dueDate / invalid-dueDate. This test pins
+    // that asymmetry so a "unify exclusion rules" refactor is deliberate.
+    const payables = [
+      { status: "pending", dueDate: "2026-04-01", amount: 100 },
+      { status: "paid", dueDate: "2026-04-02", amount: 200 },
+      { status: "cancelled", dueDate: "2026-04-03", amount: 300 },
+      { status: "pending", dueDate: null, amount: 999 },          // excluded
+      { status: "pending", dueDate: "not-a-date", amount: 999 },  // excluded
+      null,                                                        // excluded
+    ];
+    const r = computeMonthlyRollup(payables);
+    expect(r.months.length).toBe(1);
+    const apr = r.months[0];
+    expect(apr.totalCount).toBe(3);
+    expect(apr.totalAmount).toBe(600);
+    expect(apr.byStatus.pending).toEqual({ count: 1, totalAmount: 100 });
+    expect(apr.byStatus.paid).toEqual({ count: 1, totalAmount: 200 });
+    expect(apr.byStatus.cancelled).toEqual({ count: 1, totalAmount: 300 });
+    expect(r.grandTotal).toBe(600);
+    expect(r.excludedCount).toBe(3);
+    expect(r.excludedReasons).toEqual({
+      NO_DUE_DATE: 1,
+      INVALID_DUE_DATE: 1,
+      NO_PAYABLE: 1,
+    });
+  });
+
+  test("unknown status → counted in totalAmount + totalCount but NOT in byStatus", () => {
+    // SUT comment: "Unknown statuses still land in totalAmount + totalCount
+    // but are intentionally NOT echoed under byStatus".
+    const payables = [
+      { status: "pending", dueDate: "2026-06-01", amount: 100 },
+      { status: "weird-future-status", dueDate: "2026-06-02", amount: 500 },
+    ];
+    const r = computeMonthlyRollup(payables);
+    const jun = r.months[0];
+    expect(jun.totalAmount).toBe(600);
+    expect(jun.totalCount).toBe(2);
+    expect(jun.byStatus.pending).toEqual({ count: 1, totalAmount: 100 });
+    // No "weird-future-status" key surfaces in byStatus — only canonical
+    // ROLLUP_STATUSES keys live there.
+    expect(Object.keys(jun.byStatus).sort()).toEqual(
+      ["cancelled", "paid", "pending", "scheduled"],
+    );
+  });
+
+  test("missing status defaults to 'pending' (SUT: typeof !== 'string' fallback)", () => {
+    const payables = [
+      { dueDate: "2026-07-15", amount: 50 },                  // no status
+      { status: null, dueDate: "2026-07-20", amount: 25 },    // null status
+    ];
+    const r = computeMonthlyRollup(payables);
+    expect(r.months[0].byStatus.pending).toEqual({ count: 2, totalAmount: 75 });
+  });
+});
+
+describe("computeQuarterlyRollup(payables)", () => {
+  test("empty input → empty quarters[], zeros", () => {
+    const r = computeQuarterlyRollup([]);
+    expect(r.quarters).toEqual([]);
+    expect(r.grandTotal).toBe(0);
+    expect(r.totalCount).toBe(0);
+    expect(r.excludedCount).toBe(0);
+    expect(r.excludedReasons).toEqual({});
+  });
+
+  test("multi-quarter spread → sorted ASC by (year, q)", () => {
+    const payables = [
+      // 2026 Q3 (Jul-Sep)
+      { status: "pending", dueDate: "2026-08-15", amount: 800 },
+      // 2025 Q4 (Oct-Dec)
+      { status: "pending", dueDate: "2025-11-05", amount: 100 },
+      // 2026 Q1 (Jan-Mar) — 2 entries collapsed from Jan + Feb
+      { status: "pending", dueDate: "2026-01-10", amount: 50 },
+      { status: "scheduled", dueDate: "2026-02-20", amount: 150 },
+    ];
+    const r = computeQuarterlyRollup(payables);
+    expect(r.quarters.map((q) => q.quarter)).toEqual(["2025-Q4", "2026-Q1", "2026-Q3"]);
+
+    const q1_2026 = r.quarters[1];
+    expect(q1_2026.year).toBe(2026);
+    expect(q1_2026.q).toBe(1);
+    expect(q1_2026.totalAmount).toBe(200);
+    expect(q1_2026.totalCount).toBe(2);
+    expect(q1_2026.byStatus.pending).toEqual({ count: 1, totalAmount: 50 });
+    expect(q1_2026.byStatus.scheduled).toEqual({ count: 1, totalAmount: 150 });
+
+    expect(r.grandTotal).toBe(1100);
+    expect(r.totalCount).toBe(4);
+  });
+
+  test("Q1/Q2 boundary: 2026-03-31 last instant vs 2026-04-01 → 2 distinct quarters", () => {
+    const payables = [
+      { status: "pending", dueDate: "2026-03-31T23:59:59.999Z", amount: 100 },
+      { status: "pending", dueDate: "2026-04-01T00:00:00.000Z", amount: 200 },
+    ];
+    const r = computeQuarterlyRollup(payables);
+    expect(r.quarters.length).toBe(2);
+    expect(r.quarters[0].quarter).toBe("2026-Q1");
+    expect(r.quarters[0].totalAmount).toBe(100);
+    expect(r.quarters[1].quarter).toBe("2026-Q2");
+    expect(r.quarters[1].totalAmount).toBe(200);
+  });
+
+  test("quarterly exclusion taxonomy mirrors monthly (composes via computeMonthlyRollup)", () => {
+    // Quarterly delegates to monthly for both bucketing AND exclusions; this
+    // pins that exclusion-reason taxonomy is identical (NO_PAYABLE /
+    // NO_DUE_DATE / INVALID_DUE_DATE) so the contract stays consistent.
+    const payables = [
+      { status: "pending", dueDate: "2026-04-10", amount: 100 },
+      { status: "pending", dueDate: null, amount: 999 },
+      { status: "pending", dueDate: "bogus", amount: 999 },
+      null,
+    ];
+    const r = computeQuarterlyRollup(payables);
+    expect(r.quarters.length).toBe(1);
+    expect(r.quarters[0].quarter).toBe("2026-Q2");
+    expect(r.quarters[0].totalAmount).toBe(100);
+    expect(r.excludedCount).toBe(3);
+    expect(r.excludedReasons).toEqual({
+      NO_DUE_DATE: 1,
+      INVALID_DUE_DATE: 1,
+      NO_PAYABLE: 1,
+    });
+  });
+
+  test("4 quarters in one year → all 4 emitted in order", () => {
+    const payables = [
+      { status: "pending", dueDate: "2026-10-15", amount: 4 }, // Q4
+      { status: "pending", dueDate: "2026-01-15", amount: 1 }, // Q1
+      { status: "pending", dueDate: "2026-07-15", amount: 3 }, // Q3
+      { status: "pending", dueDate: "2026-04-15", amount: 2 }, // Q2
+    ];
+    const r = computeQuarterlyRollup(payables);
+    expect(r.quarters.map((q) => q.q)).toEqual([1, 2, 3, 4]);
+    expect(r.quarters.map((q) => q.totalAmount)).toEqual([1, 2, 3, 4]);
+    expect(r.grandTotal).toBe(10);
   });
 });

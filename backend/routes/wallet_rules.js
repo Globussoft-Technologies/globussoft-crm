@@ -156,6 +156,142 @@ router.get("/", verifyToken, readRoleGate, async (req, res) => {
   }
 });
 
+// ============================================================================
+// GET /api/wallet/rules/stats — tenant-wide wallet-bonus-rule rollup
+// (PRD_WALLET_TOPUP §3.6 D16 polish — first /stats endpoint for the wallet
+// admin CRUD surface).
+//
+// Mirrors travel_suppliers.js /suppliers/stats posture (read-only aggregate;
+// no audit row). Powers the future Wallet Rules admin page header KPI strip
+// ("5 active · 2 expiring soon · 1 expired · last created 3h ago").
+//
+// Auth: verifyToken + readRoleGate (ADMIN/MANAGER). Tenant-scoped via
+// req.user.tenantId.
+//
+// Query params (both optional):
+//   ?from  — ISO date; lower-bound on createdAt
+//   ?to    — ISO date; upper-bound on createdAt
+// Invalid date → 400 { error, code: "INVALID_DATE" }.
+//
+// Aggregates over prisma.walletBonusRule:
+//   total          — count of all rows in window
+//   active         — count where active=true
+//   inactive       — count where active=false
+//   currentlyValid — count where active=true AND validFrom<=now (or null)
+//                    AND validTo>=now (or null)
+//   expired        — count where validTo<now AND validTo IS NOT NULL
+//   expiringSoon   — count where active=true AND validTo within next 30 days
+//                    AND validTo IS NOT NULL
+//   lastCreatedAt  — ISO of the most-recent createdAt (null when empty;
+//                    rows with null createdAt are still counted in `total`
+//                    but skipped by the lastCreatedAt selector)
+//
+// NO audit row written — anodyne read-only meta surface; matches
+// /suppliers/stats convention.
+//
+// Express route ordering: literal /stats MUST be declared BEFORE the
+// /:id family (PUT /:id at line ~212, DELETE /:id at line ~274), otherwise
+// "stats" would be parsed as `:id="stats"` and trip the parseInt invalid-id
+// 400 before reaching this handler.
+// ============================================================================
+router.get("/stats", verifyToken, readRoleGate, async (req, res) => {
+  try {
+    const where = tenantWhere(req);
+
+    // Optional ISO date bounds on createdAt.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Pull the minimal column slice needed for in-process aggregation.
+    // The set is bounded by tenant + (optional) createdAt window; in
+    // practice tenants hold <100 bonus rules, so unbounded findMany is
+    // safe here (cf. travel_suppliers which caps at 2000).
+    const rules = await prisma.walletBonusRule.findMany({
+      where,
+      select: {
+        active: true,
+        validFrom: true,
+        validTo: true,
+        createdAt: true,
+      },
+    });
+
+    const now = new Date();
+    const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    let active = 0;
+    let inactive = 0;
+    let currentlyValid = 0;
+    let expired = 0;
+    let expiringSoon = 0;
+    /** @type {Date | null} */
+    let lastCreatedAt = null;
+
+    for (const r of rules) {
+      if (r.active) active += 1;
+      else inactive += 1;
+
+      const vf = r.validFrom ? new Date(r.validFrom) : null;
+      const vt = r.validTo ? new Date(r.validTo) : null;
+      const vfOk = !vf || Number.isNaN(vf.getTime()) || vf <= now;
+      const vtOk = !vt || Number.isNaN(vt.getTime()) || vt >= now;
+      if (r.active && vfOk && vtOk) currentlyValid += 1;
+
+      if (vt && !Number.isNaN(vt.getTime()) && vt < now) expired += 1;
+
+      if (
+        r.active &&
+        vt &&
+        !Number.isNaN(vt.getTime()) &&
+        vt >= now &&
+        vt <= thirtyDaysFromNow
+      ) {
+        expiringSoon += 1;
+      }
+
+      if (r.createdAt) {
+        const c = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+        if (!Number.isNaN(c.getTime())) {
+          if (!lastCreatedAt || c > lastCreatedAt) lastCreatedAt = c;
+        }
+      }
+    }
+
+    return res.json({
+      total: rules.length,
+      active,
+      inactive,
+      currentlyValid,
+      expired,
+      expiringSoon,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (e) {
+    console.error("[wallet_rules] stats error:", e.message);
+    return res.status(500).json({ error: "Failed to compute wallet bonus rule stats" });
+  }
+});
+
 /**
  * POST /api/wallet/rules
  * ADMIN-only. Body: { name, minAmountCents, bonusPercent, validityMonths,

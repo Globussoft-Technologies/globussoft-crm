@@ -282,4 +282,324 @@ describe('<Estimates /> — page surface', () => {
       expect(screen.getByText(/Total Value:\s*\$2000\.00/i)).toBeInTheDocument();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Extended cases (2026-05 — bump test/SUT ratio above 50% threshold).
+  // ---------------------------------------------------------------------------
+
+  it('clicking the "Drafts" pill filters the ledger to Draft rows only', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+
+    // 2 drafts (EST-001, EST-003), 1 sent (EST-002).
+    const draftsPill = screen.getByRole('button', { pressed: false, name: /Drafts$/ });
+    fireEvent.click(draftsPill);
+
+    await waitFor(() => {
+      expect(screen.getByText('EST-001')).toBeInTheDocument();
+      expect(screen.getByText('EST-003')).toBeInTheDocument();
+      expect(screen.queryByText('EST-002')).not.toBeInTheDocument();
+    });
+
+    // Drafts total = 5000 + 1500 = 6500.
+    expect(screen.getByText(/Total Value:\s*\$6500\.00/i)).toBeInTheDocument();
+  });
+
+  it('re-clicking the active status pill resets the filter back to all', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+
+    const draftsPill = screen.getByRole('button', { pressed: false, name: /Drafts$/ });
+    fireEvent.click(draftsPill);
+    await waitFor(() => {
+      expect(screen.queryByText('EST-002')).not.toBeInTheDocument();
+    });
+
+    // Re-click "Drafts" — toggles back to 'all'.
+    const draftsPressed = screen.getByRole('button', { pressed: true, name: /Drafts$/ });
+    fireEvent.click(draftsPressed);
+
+    await waitFor(() => {
+      expect(screen.getByText('EST-001')).toBeInTheDocument();
+      expect(screen.getByText('EST-002')).toBeInTheDocument();
+      expect(screen.getByText('EST-003')).toBeInTheDocument();
+    });
+
+    // All button should be aria-pressed=true now.
+    const allBtn = screen.getByRole('button', { name: /\d+ All/ });
+    expect(allBtn).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('"+ Add Line Item" adds a second line; X button removes it', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+
+    // Initially there is one line item (index 1).
+    expect(screen.getByLabelText(/Line item 1 description/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Line item 2 description/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /\+ Add Line Item/i }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Line item 2 description/i)).toBeInTheDocument();
+    });
+
+    // Remove line 2.
+    fireEvent.click(screen.getByRole('button', { name: /Remove line item 2/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/Line item 2 description/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('removing the last remaining line item is a no-op (keeps at least one)', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+
+    // Click remove on line 1 — should NOT remove it, since prev.length <= 1.
+    fireEvent.click(screen.getByRole('button', { name: /Remove line item 1/i }));
+
+    // Line 1 still present.
+    expect(screen.getByLabelText(/Line item 1 description/i)).toBeInTheDocument();
+  });
+
+  it('Save: discount is folded into unitPrice before submit (10% off ₹100 → ₹90)', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/estimates' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 100, status: 'Draft' });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.change(screen.getByLabelText(/Estimate title/i), {
+      target: { value: 'Discount test' },
+    });
+    fireEvent.change(screen.getByLabelText(/Line item 1 description/i), {
+      target: { value: 'Discounted hours' },
+    });
+    fireEvent.change(screen.getByLabelText(/Line item 1 quantity/i), {
+      target: { value: '1' },
+    });
+    fireEvent.change(screen.getByLabelText(/Line item 1 unit price/i), {
+      target: { value: '100' },
+    });
+    fireEvent.change(screen.getByLabelText(/Line item 1 discount percent/i), {
+      target: { value: '10' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Estimate/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/estimates' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      // 100 * (1 - 10/100) = 90.
+      expect(body.lineItems[0].unitPrice).toBe(90);
+      // Discount itself is NOT sent (column not persisted yet).
+      expect(body.lineItems[0].discount).toBeUndefined();
+    });
+  });
+
+  it('Save: contactId/dealId/validUntil/notes pass through the body when set; omitted otherwise', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/estimates' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 101 });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.change(screen.getByLabelText(/Estimate title/i), {
+      target: { value: 'Bare estimate' },
+    });
+    fireEvent.change(screen.getByLabelText(/Line item 1 description/i), {
+      target: { value: 'Item' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Create Estimate/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/estimates' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.title).toBe('Bare estimate');
+      // Empty form fields are sent as `undefined` → JSON.stringify drops them.
+      expect(body.contactId).toBeUndefined();
+      expect(body.dealId).toBeUndefined();
+      expect(body.validUntil).toBeUndefined();
+      expect(body.notes).toBeUndefined();
+    });
+  });
+
+  it('Save: after a successful POST the form + line items reset to initial state', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/estimates' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 102 });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    const titleInput = screen.getByLabelText(/Estimate title/i);
+    fireEvent.change(titleInput, { target: { value: 'Reset me' } });
+    fireEvent.change(screen.getByLabelText(/Line item 1 description/i), {
+      target: { value: 'X' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Estimate/i }));
+
+    await waitFor(() => {
+      // After reset, the title input is empty again.
+      expect(titleInput.value).toBe('');
+      // The first line item description is empty again.
+      expect(screen.getByLabelText(/Line item 1 description/i).value).toBe('');
+    });
+  });
+
+  it('Save: hasInvalidLine short-circuits POST and surfaces a range-error toast', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+
+    // Title is required (HTML5), but we set everything valid then push qty out
+    // of range to trigger the disable/return-early path. Disabled button means
+    // a fireEvent.click is a no-op; submit form via the form-submit path.
+    fireEvent.change(screen.getByLabelText(/Estimate title/i), {
+      target: { value: 'Invalid range' },
+    });
+    fireEvent.change(screen.getByLabelText(/Line item 1 quantity/i), {
+      target: { value: '999999' },
+    });
+
+    // Button is disabled — click should NOT POST.
+    const submitBtn = screen.getByRole('button', { name: /Create Estimate/i });
+    expect(submitBtn).toBeDisabled();
+    fireEvent.click(submitBtn);
+
+    // Range inline message is shown.
+    expect(screen.getByText(/out of range/i)).toBeInTheDocument();
+    // No POST was sent.
+    const postCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === '/api/estimates' && opts?.method === 'POST'
+    );
+    expect(postCall).toBeFalsy();
+  });
+
+  it('Grand Total reflects qty * price * (1 - disc%) when valid', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/Line item 1 quantity/i), {
+      target: { value: '4' },
+    });
+    fireEvent.change(screen.getByLabelText(/Line item 1 unit price/i), {
+      target: { value: '50' },
+    });
+    fireEvent.change(screen.getByLabelText(/Line item 1 discount percent/i), {
+      target: { value: '0' },
+    });
+
+    await waitFor(() => {
+      // The Grand Total row shows $200.00 (4 * 50 * 1).
+      const grandTotalLabel = screen.getByText(/Grand Total/i);
+      expect(grandTotalLabel).toBeInTheDocument();
+      // 4 * 50 = 200.
+      expect(screen.getAllByText(/\$200\.00/).length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it('Contact <select> is populated with options for each /api/contacts entry', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+
+    // The contact select has 2 options + the placeholder.
+    const contactSelect = screen.getByLabelText('Contact');
+    expect(contactSelect.tagName).toBe('SELECT');
+    // 1 placeholder + 2 real options = 3.
+    expect(contactSelect.querySelectorAll('option').length).toBe(3);
+    // The names should be present in option text (with email in parens).
+    expect(contactSelect.textContent).toMatch(/Acme Corp/);
+    expect(contactSelect.textContent).toMatch(/Globex Inc/);
+  });
+
+  it('Deal <select> is populated with options for each /api/deals entry', async () => {
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+
+    const dealSelect = screen.getByLabelText(/Associated deal/i);
+    expect(dealSelect.tagName).toBe('SELECT');
+    // 1 placeholder + 1 real deal.
+    expect(dealSelect.querySelectorAll('option').length).toBe(2);
+    expect(dealSelect.textContent).toMatch(/Acme Renewal/);
+  });
+
+  it('handles loadData errors gracefully and renders empty state', async () => {
+    fetchApiMock.mockImplementation(() => Promise.reject(new Error('boom')));
+    renderEstimates();
+
+    // After the failed Promise.all, all setters fall through their catch,
+    // estimates stays [], and the empty-state copy renders.
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No estimates yet\. Create one to get started\./i)
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('renders status badges for non-Draft/Sent rows (Accepted/Rejected/Converted)', async () => {
+    const mixedStatusEstimates = [
+      { id: 10, estimateNum: 'EST-AA', title: 'Acc', status: 'Accepted',  totalAmount: 100, validUntil: null, contact: { id: 1, name: 'X', email: 'x@x.test' }, lineItems: [] },
+      { id: 11, estimateNum: 'EST-RJ', title: 'Rej', status: 'Rejected',  totalAmount: 200, validUntil: null, contact: { id: 1, name: 'X', email: 'x@x.test' }, lineItems: [] },
+      { id: 12, estimateNum: 'EST-CV', title: 'Cnv', status: 'Converted', totalAmount: 300, validUntil: null, contact: { id: 1, name: 'X', email: 'x@x.test' }, lineItems: [] },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/estimates') return Promise.resolve(mixedStatusEstimates);
+      if (url === '/api/contacts') return Promise.resolve([]);
+      if (url === '/api/deals') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-AA')).toBeInTheDocument());
+
+    expect(screen.getByText('Accepted')).toBeInTheDocument();
+    expect(screen.getByText('Rejected')).toBeInTheDocument();
+    expect(screen.getByText('Converted')).toBeInTheDocument();
+
+    // Estimates that aren't 'Converted' have a Convert button; the Converted
+    // row hides Convert. So the page total should be 2 Convert buttons.
+    const convertButtons = screen.getAllByRole('button', { name: /Convert estimate/i });
+    expect(convertButtons.length).toBe(2);
+  });
+
+  it('renders "-" when an estimate has no contact and no validUntil', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/estimates') {
+        return Promise.resolve([
+          { id: 50, estimateNum: 'EST-NO', title: 'No contact', status: 'Draft', totalAmount: 0, validUntil: null, contact: null, lineItems: [] },
+        ]);
+      }
+      if (url === '/api/contacts') return Promise.resolve([]);
+      if (url === '/api/deals') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    renderEstimates();
+    await waitFor(() => expect(screen.getByText('EST-NO')).toBeInTheDocument());
+
+    // At least 2 "-" cells (contact + validUntil) in the row.
+    expect(screen.getAllByText('-').length).toBeGreaterThanOrEqual(2);
+  });
 });

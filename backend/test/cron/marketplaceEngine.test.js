@@ -467,3 +467,266 @@ describe('cron/marketplaceEngine — initMarketplaceCron registration', () => {
     });
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────
+// Extension cases — appended (do NOT modify or interleave with the 17 above).
+// Coverage targets:
+//   • Unknown provider name → no fetch, no create, lastSyncAt still updates
+//   • IndiaMART RESPONSE-wrapped envelope vs bare array
+//   • IndiaMART fallback identifiers (QUERY_ID, SENDER_PHONE)
+//   • JustDial bare-array response shape + lead_id / id fallback chain
+//   • TradeIndia rfi_id + contact_person fallback identifiers
+//   • Cron-tick fault isolation: one provider error does NOT block siblings
+//   • Cron-tick outer-catch: prisma.findMany throw does NOT kill the tick
+//   • Empty active configs list → tick is a graceful no-op
+// ───────────────────────────────────────────────────────────────────────
+
+describe('cron/marketplaceEngine — extension: provider dispatch edge cases', () => {
+  test('unknown provider name falls through the if/else chain (no fetch, lastSyncAt still bumped)', async () => {
+    // Contract: when provider doesn't match indiamart/justdial/tradeinda, fetched
+    // stays 0 (no sync function called) but lastSyncAt is still updated. This pins
+    // the "graceful unknown-provider" behaviour — useful if a new provider value
+    // ever lands in MarketplaceConfig before the engine learns it.
+    prisma.marketplaceConfig.findUnique.mockResolvedValue({
+      provider: 'newvendor',
+      isActive: true,
+      apiKey: 'k',
+      lastSyncAt: null,
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await marketplaceEngine.syncMarketplace('newvendor', null);
+    logSpy.mockRestore();
+    expect(result.fetched).toBe(0);
+    expect(result.created).toBe(0);
+    expect(result.duplicates).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    // lastSyncAt should still be touched — that part of the contract runs AFTER
+    // the if/else branches regardless of which (or no) provider matched.
+    expect(prisma.marketplaceConfig.update).toHaveBeenCalledWith({
+      where: { provider: 'newvendor' },
+      data: { lastSyncAt: expect.any(Date) },
+    });
+  });
+});
+
+describe('cron/marketplaceEngine — extension: IndiaMART response shapes & fallbacks', () => {
+  test('RESPONSE-wrapped envelope ({ RESPONSE: [...] }) is parsed identically to a bare array', async () => {
+    // IndiaMART's actual production API returns { RESPONSE: [...] } (object envelope).
+    // The SUT supports BOTH bare-array and object-envelope; this case pins the envelope
+    // path so a future SUT refactor doesn't silently regress to "array only".
+    prisma.marketplaceConfig.findUnique.mockResolvedValue({
+      provider: 'indiamart',
+      isActive: true,
+      glueCrmKey: 'k',
+      lastSyncAt: null,
+    });
+    fetchMock.mockResolvedValue(
+      fakeResponse({
+        body: {
+          RESPONSE: [
+            { UNIQUE_QUERY_ID: 'IM-ENV-1', SENDER_NAME: 'EnvelopedLead' },
+          ],
+        },
+      })
+    );
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await marketplaceEngine.syncMarketplace('indiamart', null);
+    logSpy.mockRestore();
+    expect(result.fetched).toBe(1);
+    expect(result.created).toBe(1);
+    expect(prisma.marketplaceLead.create.mock.calls[0][0].data.externalLeadId).toBe('IM-ENV-1');
+    expect(prisma.marketplaceLead.create.mock.calls[0][0].data.name).toBe('EnvelopedLead');
+  });
+
+  test('IndiaMART externalId falls back to QUERY_ID when UNIQUE_QUERY_ID absent', async () => {
+    // Per SUT line 71: externalId = UNIQUE_QUERY_ID || QUERY_ID || ''. Pin the
+    // QUERY_ID fallback — without this, an older IndiaMART payload variant goes
+    // silently skipped and we lose leads.
+    prisma.marketplaceConfig.findUnique.mockResolvedValue({
+      provider: 'indiamart',
+      isActive: true,
+      apiKey: 'k',
+      lastSyncAt: null,
+    });
+    fetchMock.mockResolvedValue(
+      fakeResponse({
+        body: [
+          // No UNIQUE_QUERY_ID — only QUERY_ID
+          { QUERY_ID: 'IM-FALLBACK-Q-42', SENDER_NAME: 'FallbackLead', SENDER_PHONE: '+91 555 0123' },
+        ],
+      })
+    );
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await marketplaceEngine.syncMarketplace('indiamart', null);
+    logSpy.mockRestore();
+    expect(result.created).toBe(1);
+    const createArgs = prisma.marketplaceLead.create.mock.calls[0][0].data;
+    expect(createArgs.externalLeadId).toBe('IM-FALLBACK-Q-42');
+    // SENDER_PHONE should also be picked up as the phone field when SENDER_MOBILE absent.
+    expect(createArgs.phone).toBe('+91 555 0123');
+  });
+});
+
+describe('cron/marketplaceEngine — extension: JustDial response shapes & id fallbacks', () => {
+  test('JustDial bare-array response (not envelope-wrapped) is parsed identically', async () => {
+    // SUT line 117: leads = Array.isArray(data) ? data : data.leads || []. The
+    // existing happy-path test only exercises the { leads: [...] } envelope shape.
+    // Pin the bare-array path so the dual-shape contract holds.
+    prisma.marketplaceConfig.findUnique.mockResolvedValue({
+      provider: 'justdial',
+      isActive: true,
+      apiKey: 'k',
+      lastSyncAt: null,
+    });
+    fetchMock.mockResolvedValue(
+      fakeResponse({
+        body: [
+          { leadid: 'JD-BARE-1', name: 'BareJD', phone: '+919000000000' },
+        ],
+      })
+    );
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await marketplaceEngine.syncMarketplace('justdial', null);
+    logSpy.mockRestore();
+    expect(result.created).toBe(1);
+    expect(prisma.marketplaceLead.create.mock.calls[0][0].data.externalLeadId).toBe('JD-BARE-1');
+    expect(prisma.marketplaceLead.create.mock.calls[0][0].data.phone).toBe('+919000000000');
+  });
+
+  test('JustDial externalId falls back through leadid → lead_id → id chain', async () => {
+    // SUT line 121: externalId = leadid || lead_id || id || ''. Pin the SECOND
+    // and THIRD fallbacks — current happy-path test only covers leadid.
+    prisma.marketplaceConfig.findUnique.mockResolvedValue({
+      provider: 'justdial',
+      isActive: true,
+      apiKey: 'k',
+      lastSyncAt: null,
+    });
+    fetchMock.mockResolvedValue(
+      fakeResponse({
+        body: {
+          leads: [
+            { lead_id: 'JD-2ND-FB', name: 'SecondFallback' },
+            { id: 'JD-3RD-FB', name: 'ThirdFallback' },
+          ],
+        },
+      })
+    );
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await marketplaceEngine.syncMarketplace('justdial', null);
+    logSpy.mockRestore();
+    expect(result.created).toBe(2);
+    const ids = prisma.marketplaceLead.create.mock.calls.map((c) => c[0].data.externalLeadId);
+    expect(ids).toEqual(['JD-2ND-FB', 'JD-3RD-FB']);
+  });
+});
+
+describe('cron/marketplaceEngine — extension: TradeIndia field fallbacks', () => {
+  test('TradeIndia externalId falls back to rfi_id when inquiry_id absent + contact_person fills name', async () => {
+    // SUT line 174: externalId = inquiry_id || rfi_id || ''. And line 185:
+    // name = sender_name || contact_person || null. Pin both fallback paths
+    // — TradeIndia ships at least two distinct payload schemas in production.
+    prisma.marketplaceConfig.findUnique.mockResolvedValue({
+      provider: 'tradeindia',
+      isActive: true,
+      apiKey: 'k',
+      apiSecret: 's',
+      lastSyncAt: null,
+    });
+    fetchMock.mockResolvedValue(
+      fakeResponse({
+        body: {
+          inquiries: [
+            {
+              // No inquiry_id — must fall back to rfi_id
+              rfi_id: 'TI-RFI-77',
+              // No sender_name — must fall back to contact_person
+              contact_person: 'Eva Buyer',
+              sender_email: 'eva@example.com',
+              product_name: 'Industrial Pump',
+            },
+          ],
+        },
+      })
+    );
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await marketplaceEngine.syncMarketplace('tradeindia', null);
+    logSpy.mockRestore();
+    expect(result.created).toBe(1);
+    const data = prisma.marketplaceLead.create.mock.calls[0][0].data;
+    expect(data.externalLeadId).toBe('TI-RFI-77');
+    expect(data.name).toBe('Eva Buyer');
+    expect(data.email).toBe('eva@example.com');
+    expect(data.product).toBe('Industrial Pump');
+  });
+});
+
+describe('cron/marketplaceEngine — extension: cron-tick fault isolation', () => {
+  test('one provider syncMarketplace throw does NOT block sibling providers in same tick', async () => {
+    // SUT line 232-236: per-provider try/catch inside the loop. Pin the isolation:
+    // if syncMarketplace throws on provider #1, provider #2 still runs. Without
+    // this guard one bad partner-API call could brick the entire 5-min cycle.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    marketplaceEngine.initMarketplaceCron(null);
+
+    prisma.marketplaceConfig.findMany.mockResolvedValue([
+      { provider: 'indiamart' },
+      { provider: 'justdial' },
+    ]);
+
+    // First findUnique (indiamart) throws synchronously inside syncMarketplace.
+    // Second findUnique (justdial) resolves to inactive → fast no-op.
+    let call = 0;
+    prisma.marketplaceConfig.findUnique.mockImplementation(async () => {
+      call++;
+      if (call === 1) throw new Error('PRISMA_DOWN');
+      return { isActive: false };
+    });
+
+    const tick = scheduleMock.mock.calls[0][1];
+    await tick(); // must not reject
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    // Both providers attempted, despite #1 throwing.
+    expect(prisma.marketplaceConfig.findUnique).toHaveBeenCalledTimes(2);
+  });
+
+  test('outer-catch wrapper swallows prisma.findMany throw — tick stays alive', async () => {
+    // SUT lines 228-240: outer try/catch wraps the whole tick body. If
+    // findMany itself throws (DB connection blip), the tick MUST NOT reject —
+    // otherwise it surfaces as unhandledPromiseRejection and strict Node settings
+    // could kill the process.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    marketplaceEngine.initMarketplaceCron(null);
+
+    prisma.marketplaceConfig.findMany.mockRejectedValue(new Error('DB_CONNECTION_LOST'));
+
+    const tick = scheduleMock.mock.calls[0][1];
+    // Tick must resolve (not reject) — guarded by outer try/catch.
+    await expect(tick()).resolves.toBeUndefined();
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    // Outer-catch path: findUnique never reached because the loop never started.
+    expect(prisma.marketplaceConfig.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('empty active configs list → tick is a graceful no-op (no provider work, no throw)', async () => {
+    // SUT line 230: findMany returns []. The for-loop body never runs. Pin this
+    // because a freshly-provisioned tenant with no configured marketplaces is the
+    // STEADY STATE for most installs.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    marketplaceEngine.initMarketplaceCron(null);
+
+    prisma.marketplaceConfig.findMany.mockResolvedValue([]);
+
+    const tick = scheduleMock.mock.calls[0][1];
+    await expect(tick()).resolves.toBeUndefined();
+    logSpy.mockRestore();
+    // No syncMarketplace work → no findUnique, no fetch, no create.
+    expect(prisma.marketplaceConfig.findUnique).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(prisma.marketplaceLead.create).not.toHaveBeenCalled();
+  });
+});

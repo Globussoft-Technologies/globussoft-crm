@@ -499,6 +499,9 @@ router.post("/public/:id/respond", async (req, res) => {
 // other column depending on Survey.type.
 router.get("/", async (req, res) => {
   try {
+    // staging_crm: tenant-scoped where with optional type + isActive filters.
+    // Applies to BOTH the summary slim path (below) AND the full enriched path
+    // so the filter behavior is consistent across both shapes.
     const where = { tenantId: req.user.tenantId };
     if (typeof req.query.type === "string" && VALID_TYPES.includes(req.query.type)) {
       where.type = req.query.type;
@@ -507,6 +510,32 @@ router.get("/", async (req, res) => {
       if (req.query.isActive === "true") where.isActive = true;
       else if (req.query.isActive === "false") where.isActive = false;
     }
+
+    // #920 slice 8: ?fields=summary slim-shape opt-in. Mirrors slices 1-7
+    // (contacts/deals/tickets/tasks/projects/expenses/notifications). When
+    // the caller passes ?fields=summary we (a) restrict the Prisma `select`
+    // to the columns a list view actually renders (id, name, type,
+    // isActive, createdAt) and (b) skip the per-survey response rollup
+    // (responseCount / avgScore / npsScore) so the route stays cheap.
+    // Opt-in additive — existing callers (no ?fields, or any non-exact
+    // value) get the full enriched row shape unchanged.
+    const isSummary = req.query.fields === "summary";
+
+    if (isSummary) {
+      const slim = await prisma.survey.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          isActive: true,
+          createdAt: true,
+        },
+      });
+      return res.json(slim);
+    }
+
     const surveys = await prisma.survey.findMany({
       where,
       orderBy: { createdAt: "desc" },

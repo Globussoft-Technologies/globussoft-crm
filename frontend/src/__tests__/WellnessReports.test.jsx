@@ -253,7 +253,7 @@ afterEach(() => {
 });
 
 describe('<WellnessReports /> — page chrome + tab strip', () => {
-  it('renders heading + four tab buttons + two date inputs synchronously', async () => {
+  it('renders heading + four tab buttons synchronously', async () => {
     renderWithRouter();
     expect(
       screen.getByRole('heading', { name: /^Reports$/i }),
@@ -270,12 +270,9 @@ describe('<WellnessReports /> — page chrome + tab strip', () => {
     expect(
       screen.getByRole('button', { name: /Marketing Attribution/i }),
     ).toBeInTheDocument();
-    // Two `type=date` inputs: from and to. RTL doesn't ship a date-role,
-    // grep the underlying DOM.
-    const dateInputs = document.querySelectorAll('input[type="date"]');
-    expect(dateInputs.length).toBe(2);
-    // Settle the mount-time debounced fetch so React's pending work
-    // doesn't leak to the next test.
+    // SUT drift: date inputs were replaced by the shared DateRangeFilter
+    // component (preset buttons + calendar popover, no native type=date
+    // inputs). Just settle the mount-time fetch and move on.
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled(), WAIT_OPTS);
   });
 });

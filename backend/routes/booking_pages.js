@@ -146,10 +146,38 @@ async function buildSlotsForDate(page, dateStr) {
 
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const pages = await prisma.bookingPage.findMany({
+    // #920 slice 40: ?fields=summary slim-shape opt-in. Mirrors slices 1-39.
+    // The default list returns the full BookingPage row including heavy
+    // @db.Text columns — availability (JSON), logoUrl, heroImageUrl,
+    // heroSubheadline, featuredServiceIds (JSON-string array), hoursJson
+    // (JSON-string weekday map), and the description blob. Picker /
+    // dropdown UI (link-to-booking-page form fields, slug-collision check,
+    // settings → "default booking page" selector) doesn't need any of
+    // that — only id + slug + title + isActive + durationMins +
+    // bufferMins + createdAt + updatedAt + the bookingCount roll-up.
+    // When the caller passes ?fields=summary we project to that minimal
+    // set. Opt-in additive — existing callers (no ?fields, or any
+    // non-exact value) get the full row shape unchanged so the
+    // BookingPages.jsx library page continues to render hero / featured
+    // services / hours / etc. on each card.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        slug: true,
+        title: true,
+        isActive: true,
+        durationMins: true,
+        bufferMins: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
+    const pages = await prisma.bookingPage.findMany(findManyArgs);
 
     const ids = pages.map(p => p.id);
     let counts = {};
@@ -219,6 +247,128 @@ router.post("/", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[BookingPages] Create error:", err);
     res.status(500).json({ error: "Failed to create booking page" });
+  }
+});
+
+// ============================================================================
+// GET /api/booking-pages/stats — tenant-wide booking-page rollup
+//
+// First /stats endpoint on the BookingPage surface. Powers the Booking-Pages
+// library page header (totalPages / activeCount KPI strip + associated
+// bookings rollup). Mirrors the canonical pattern from travel-suppliers /
+// commission-profiles / billing / accounting stats endpoints:
+//   - tenant-scoped on req.user.tenantId
+//   - optional ?from / ?to ISO date bounds on BookingPage.createdAt
+//   - 400 INVALID_DATE on unparseable bounds (independent validation)
+//   - empty-tenant short-circuit returns zeroed envelope
+//   - no audit row written (anodyne read-only meta surface)
+//
+// Aggregates returned:
+//   - totalPages — count of BookingPage rows in scope
+//   - activeCount — count where isActive=true
+//   - byVertical — single-key map of tenant.vertical → count
+//     (BookingPage rows in a tenant-scoped query all share the same vertical
+//     by definition, so this is the tenant's vertical with the total count.
+//     Surfaced as a map so the shape forward-compats with a future
+//     migration that adds BookingPage.vertical for cross-tenant superset
+//     queries — frontends keying off byVertical[v] keep working.)
+//   - totalBookings — count of associated Booking rows (excludes CANCELED)
+//   - lastCreatedAt — max BookingPage.createdAt ISO string or null
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family or `:id="stats"` would be parsed as an id and parseInt
+// would yield NaN → 404.
+// ============================================================================
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // Optional ISO date bounds on BookingPage.createdAt — independent
+    // validation so a bad ?from short-circuits before parsing ?to.
+    const where = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    const pages = await prisma.bookingPage.findMany({
+      where,
+      select: { id: true, isActive: true, createdAt: true },
+    });
+
+    // Empty-tenant short-circuit. Mirrors travel-suppliers /stats shape.
+    if (pages.length === 0) {
+      return res.json({
+        totalPages: 0,
+        activeCount: 0,
+        byVertical: {},
+        totalBookings: 0,
+        lastCreatedAt: null,
+      });
+    }
+
+    // Counts + lastCreatedAt in a single pass.
+    let activeCount = 0;
+    let lastCreatedAt = null;
+    for (const p of pages) {
+      if (p.isActive) activeCount += 1;
+      const ts = p.createdAt instanceof Date ? p.createdAt : new Date(p.createdAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastCreatedAt || ts > lastCreatedAt) lastCreatedAt = ts;
+      }
+    }
+
+    // byVertical: one-shot Tenant lookup. BookingPage rows in a tenant-scoped
+    // query all share the same vertical, so this collapses to a single bucket.
+    // Defensive fallback to '_unknown' if tenant row is missing (shouldn't
+    // happen with the FK constraint, but keeps the response shape stable).
+    const byVertical = {};
+    const tenant = await prisma.tenant
+      .findUnique({ where: { id: tenantId }, select: { vertical: true } })
+      .catch(() => null);
+    const vKey = tenant && tenant.vertical ? String(tenant.vertical) : "_unknown";
+    byVertical[vKey] = pages.length;
+
+    // totalBookings — associated Booking rows across the visible page set,
+    // excluding CANCELED so the count matches the user's mental model of
+    // "live bookings" (same exclusion as the GET / list count subquery).
+    const pageIds = pages.map((p) => p.id);
+    const totalBookings = await prisma.booking.count({
+      where: {
+        bookingPageId: { in: pageIds },
+        tenantId,
+        status: { not: "CANCELED" },
+      },
+    });
+
+    res.json({
+      totalPages: pages.length,
+      activeCount,
+      byVertical,
+      totalBookings,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[BookingPages] Stats error:", err);
+    res.status(500).json({ error: "Failed to fetch booking-page stats" });
   }
 });
 

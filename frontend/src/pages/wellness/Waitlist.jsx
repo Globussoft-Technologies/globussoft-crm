@@ -129,7 +129,7 @@ export default function Waitlist() {
         </div>
         <button
           onClick={() => setShowAdd((v) => !v)}
-          style={{ padding: '0.55rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.9rem' }}
+          style={{ padding: '0.55rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.9rem' }}
         >
           <Plus size={16} /> Add to waitlist
         </button>
@@ -143,7 +143,7 @@ export default function Waitlist() {
             onClick={() => setFilter(opt.value)}
             style={{
               padding: '0.4rem 0.85rem',
-              background: filter === opt.value ? 'var(--accent-color)' : 'transparent',
+              background: filter === opt.value ? 'var(--primary-color, var(--accent-color))' : 'transparent',
               color: filter === opt.value ? '#fff' : 'var(--text-primary)',
               border: '1px solid rgba(255,255,255,0.1)',
               borderRadius: 999,

@@ -6,10 +6,32 @@ const prisma = require("../lib/prisma");
 // List all email templates
 router.get("/", async (req, res) => {
   try {
-    const templates = await prisma.emailTemplate.findMany({
+    // #920 slice 9: ?fields=summary slim-shape opt-in. Mirrors slice 1
+    // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+    // badc9cca), slice 4 (tasks), slice 5 (projects), slice 6 (expenses),
+    // slice 7 (notifications). When the caller passes ?fields=summary we
+    // drop the heaviest column (`body` is @db.Text and frequently holds
+    // multi-KB HTML email payloads) and return only the columns the
+    // SequenceBuilder / EmailTemplates list picker actually renders.
+    // Opt-in additive — existing callers (no ?fields, or any non-exact
+    // value) get the full row shape unchanged.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId: req.user.tenantId },
       orderBy: { updatedAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        subject: true,
+        category: true,
+        tenantId: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
+    const templates = await prisma.emailTemplate.findMany(findManyArgs);
     res.json(templates);
   } catch (err) {
     console.error("[EmailTemplates] List error:", err);

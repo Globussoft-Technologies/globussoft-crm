@@ -65,13 +65,45 @@ function computeStats(test) {
 }
 
 // ── GET / — list AB tests ────────────────────────────────────────
+//
+// Slim-shape opt-in (#920 slice 45): when called with ?fields=summary,
+// the handler drops the heavy `variantA`/`variantB` JSON-text columns
+// from the Prisma select and skips the `serialize()` + `computeStats()`
+// decoration — useful for the marketing-AB-test admin index /
+// autocomplete / picker surfaces that only need id+name+status+counter
+// columns and don't render the variant bodies. Existing callers (no
+// ?fields, or any non-exact value) get the full row shape with parsed
+// variants + stats envelope unchanged. Same strict opt-in pattern as
+// routes/canned_responses.js + routes/sla.js (slices 1-42).
 router.get("/", async (req, res) => {
   try {
     const tenantId = tenantOf(req);
-    const tests = await prisma.abTest.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        campaignId: true,
+        status: true,
+        winningVariant: true,
+        variantASent: true,
+        variantBSent: true,
+        variantAClicked: true,
+        variantBClicked: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
+    const tests = await prisma.abTest.findMany(findManyArgs);
+    if (isSummary) {
+      // Slim rows ship as-is — no variant JSON to parse, no stats envelope.
+      res.json(tests);
+      return;
+    }
     res.json(tests.map((t) => ({ ...serialize(t), stats: computeStats(t) })));
   } catch (err) {
     console.error("[ab_tests/list]", err);
@@ -104,6 +136,99 @@ router.post("/", async (req, res) => {
   } catch (err) {
     console.error("[ab_tests/create]", err);
     res.status(500).json({ error: "Failed to create AB test" });
+  }
+});
+
+// ── GET /stats — tenant-wide aggregate ───────────────────────────
+//
+// Marketing polish: per-tenant rollup over the AbTest population powering
+// the marketing-AB-test admin dashboard's "fleet view" tiles. Computed
+// in-memory after a single findMany select (no GROUP BY round-trip), since
+// the AbTest population per tenant is bounded by human admin creation
+// (~tens-to-low-hundreds in practice, not the per-second-write cardinality
+// of EmailMessage / SmsMessage).
+//
+// Express route ordering note: this literal-path /stats MUST be declared
+// BEFORE the /:id family below — otherwise the dynamic /:id matcher
+// catches the literal string "stats" and treats it as a numeric id parse
+// failure. Same pattern as routes/landing_pages.js /stats (#163).
+//
+// Aggregates returned:
+//   - total            number of AbTest rows in tenant (optionally
+//                      windowed by createdAt via ?from/?to)
+//   - byStatus         { DRAFT, RUNNING, COMPLETED, ... } count map
+//   - completedCount   count where status='COMPLETED'
+//   - activeCount      count where status='RUNNING' (non-terminal)
+//   - winnerDistribution { A, B, none } over winningVariant column
+//                      (none = winningVariant IS NULL, including
+//                      DRAFT + RUNNING + COMPLETED-without-winner)
+//   - lastCreatedAt    max createdAt ISO string, or null when empty
+//
+// NO audit row written (read-only meta surface).
+router.get("/stats", async (req, res) => {
+  try {
+    const tenantId = tenantOf(req);
+    const where = { tenantId };
+
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res
+          .status(400)
+          .json({ error: "from must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res
+          .status(400)
+          .json({ error: "to must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    const rows = await prisma.abTest.findMany({
+      where,
+      select: { status: true, winningVariant: true, createdAt: true },
+    });
+
+    const byStatus = {};
+    const winnerDistribution = { A: 0, B: 0, none: 0 };
+    let completedCount = 0;
+    let activeCount = 0;
+    let lastCreatedAt = null;
+
+    for (const r of rows) {
+      const bucket = r.status || "DRAFT";
+      byStatus[bucket] = (byStatus[bucket] || 0) + 1;
+      if (bucket === "COMPLETED") completedCount += 1;
+      if (bucket === "RUNNING") activeCount += 1;
+
+      if (r.winningVariant === "A") winnerDistribution.A += 1;
+      else if (r.winningVariant === "B") winnerDistribution.B += 1;
+      else winnerDistribution.none += 1;
+
+      if (r.createdAt) {
+        const ca = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+        if (!lastCreatedAt || ca > lastCreatedAt) lastCreatedAt = ca;
+      }
+    }
+
+    res.json({
+      total: rows.length,
+      byStatus,
+      completedCount,
+      activeCount,
+      winnerDistribution,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[ab_tests/stats-tenant]", err);
+    res.status(500).json({ error: "Failed to compute AB-test stats" });
   }
 });
 

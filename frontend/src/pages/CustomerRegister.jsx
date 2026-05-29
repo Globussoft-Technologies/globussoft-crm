@@ -1,8 +1,10 @@
-import { useContext, useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { AuthContext } from '../App';
-import { setAuthToken } from '../utils/api';
-import { invalidatePermissionCache } from '../hooks/usePermissions';
+import { useContext, useState, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { CheckCircle2, XCircle } from "lucide-react";
+import { AuthContext } from "../App";
+import { setAuthToken } from "../utils/api";
+import { invalidatePermissionCache } from "../hooks/usePermissions";
+import PasswordInput from "../components/PasswordInput";
 
 // Self-service customer registration page (public, no auth required).
 // Backend handler at POST /api/auth/customer/register creates a User row with
@@ -17,8 +19,8 @@ import { invalidatePermissionCache } from '../hooks/usePermissions';
 // orgs created via /api/auth/signup appear automatically once active.
 
 function tenantLabel(t) {
-  if (t.vertical === 'wellness') return `${t.name} (Wellness Clinic)`;
-  if (t.vertical === 'generic') return `${t.name} (Generic CRM)`;
+  if (t.vertical === "wellness") return `${t.name} (Wellness Clinic)`;
+  if (t.vertical === "generic") return `${t.name} (Generic CRM)`;
   return t.name;
 }
 
@@ -39,25 +41,25 @@ export default function CustomerRegister() {
   const [tenants, setTenants] = useState([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
   const [form, setForm] = useState({
-    email: '',
-    name: '',
-    tenantId: '',
-    password: '',
-    confirmPassword: '',
+    email: "",
+    name: "",
+    tenantId: "",
+    password: "",
+    confirmPassword: "",
   });
   const [errors, setErrors] = useState({});
-  const [submitError, setSubmitError] = useState('');
+  const [submitError, setSubmitError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
   // Fetch tenants from backend
   useEffect(() => {
     const loadTenants = async () => {
       try {
-        const res = await fetch('/api/auth/public/tenants');
+        const res = await fetch("/api/auth/public/tenants");
         const data = await res.json();
         setTenants(data || []);
       } catch (err) {
-        console.error('Failed to load tenants:', err);
+        console.error("Failed to load tenants:", err);
         setTenants([]);
       } finally {
         setTenantsLoading(false);
@@ -66,29 +68,36 @@ export default function CustomerRegister() {
     loadTenants();
   }, []);
 
-  const update = (field) => (e) => setForm({ ...form, [field]: e.target.value });
+  const update = (field) => (e) =>
+    setForm({ ...form, [field]: e.target.value });
   const strength = passwordStrength(form.password);
   const strengthLabel =
-    strength <= 2 ? 'Weak' : strength === 3 ? 'Fair' : strength === 4 ? 'Good' : 'Strong';
+    strength <= 2
+      ? "Weak"
+      : strength === 3
+        ? "Fair"
+        : strength === 4
+          ? "Good"
+          : "Strong";
   const strengthColor =
-    strength <= 2 ? '#ef4444' : strength === 3 ? '#f59e0b' : '#10b981';
+    strength <= 2 ? "#ef4444" : strength === 3 ? "#f59e0b" : "#10b981";
 
   const validate = () => {
     const e = {};
     if (!form.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-      e.email = 'Enter a valid email';
+      e.email = "Enter a valid email";
     }
-    if (!form.name.trim()) e.name = 'Full name is required';
-    if (!form.tenantId) e.tenantId = 'Select an organization';
+    if (!form.name.trim()) e.name = "Full name is required";
+    if (!form.tenantId) e.tenantId = "Select an organization";
     if (!form.password || form.password.length < 8) {
-      e.password = 'Password must be at least 8 characters';
+      e.password = "Password must be at least 8 characters";
     } else if (!/[A-Za-z]/.test(form.password)) {
-      e.password = 'Password must contain a letter';
+      e.password = "Password must contain a letter";
     } else if (!/[0-9]/.test(form.password)) {
-      e.password = 'Password must contain a number';
+      e.password = "Password must contain a number";
     }
     if (form.password !== form.confirmPassword) {
-      e.confirmPassword = 'Passwords do not match';
+      e.confirmPassword = "Passwords do not match";
     }
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -96,13 +105,13 @@ export default function CustomerRegister() {
 
   const handleSubmit = async (ev) => {
     ev.preventDefault();
-    setSubmitError('');
+    setSubmitError("");
     if (!validate()) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/auth/customer/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/auth/customer/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: form.email.trim().toLowerCase(),
           password: form.password,
@@ -115,11 +124,14 @@ export default function CustomerRegister() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const msg = String(data?.error || '');
+        const msg = String(data?.error || "");
         if (res.status === 409 || /already/i.test(msg)) {
-          setErrors((prev) => ({ ...prev, email: 'This email is already registered' }));
+          setErrors((prev) => ({
+            ...prev,
+            email: "This email is already registered",
+          }));
         } else if (res.status === 400) {
-          setSubmitError(msg || 'Please check your inputs and try again.');
+          setSubmitError(msg || "Please check your inputs and try again.");
         } else {
           setSubmitError(msg || `Registration failed (${res.status})`);
         }
@@ -136,10 +148,10 @@ export default function CustomerRegister() {
       if (data?.tenant) setTenant(data.tenant);
       invalidatePermissionCache();
       // Route based on tenant vertical: wellness tenants → /wellness, others → /dashboard
-      const vertical = data?.tenant?.vertical || 'generic';
-      navigate(vertical === 'wellness' ? '/wellness' : '/dashboard');
+      const vertical = data?.tenant?.vertical || "generic";
+      navigate(vertical === "wellness" ? "/wellness" : "/dashboard");
     } catch {
-      setSubmitError('Server error. Please try again.');
+      setSubmitError("Server error. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -148,33 +160,35 @@ export default function CustomerRegister() {
   return (
     <div
       style={{
-        minHeight: '100vh',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: '2rem 1rem',
+        minHeight: "100vh",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        padding: "2rem 1rem",
       }}
     >
       <div
         className="glass"
         style={{
-          width: '100%',
+          width: "100%",
           maxWidth: 480,
-          padding: '2rem',
+          padding: "2rem",
           borderRadius: 12,
-          border: '1px solid var(--border-color)',
+          border: "1px solid var(--border-color)",
         }}
       >
-        <h1 style={{ marginBottom: '0.25rem', fontSize: '1.5rem' }}>Create your account</h1>
+        <h1 style={{ marginBottom: "0.25rem", fontSize: "1.5rem" }}>
+          Create your account
+        </h1>
         <p
           style={{
-            color: 'var(--text-secondary)',
-            marginBottom: '1.5rem',
-            fontSize: '0.875rem',
+            color: "var(--text-secondary)",
+            marginBottom: "1.5rem",
+            fontSize: "0.875rem",
           }}
         >
-          Self-service customer registration. Staff members must be invited by an
-          administrator.
+          Self-service customer registration. Staff members must be invited by
+          an administrator.
         </p>
 
         <form onSubmit={handleSubmit} noValidate>
@@ -185,7 +199,7 @@ export default function CustomerRegister() {
               className="input-field"
               autoComplete="email"
               value={form.email}
-              onChange={update('email')}
+              onChange={update("email")}
               disabled={isLoading}
               required
             />
@@ -198,7 +212,7 @@ export default function CustomerRegister() {
               className="input-field"
               autoComplete="name"
               value={form.name}
-              onChange={update('name')}
+              onChange={update("name")}
               disabled={isLoading}
               required
             />
@@ -213,11 +227,15 @@ export default function CustomerRegister() {
               id="cr-tenant"
               className="input-field"
               value={form.tenantId}
-              onChange={update('tenantId')}
+              onChange={update("tenantId")}
               disabled={isLoading || tenantsLoading}
               required
             >
-              <option value="">{tenantsLoading ? 'Loading organizations...' : 'Select an organization…'}</option>
+              <option value="">
+                {tenantsLoading
+                  ? "Loading organizations..."
+                  : "Select an organization…"}
+              </option>
               {tenants.map((t) => (
                 <option key={t.id} value={String(t.id)}>
                   {t.name}
@@ -232,44 +250,44 @@ export default function CustomerRegister() {
             error={errors.password}
             help="At least 8 characters, including a letter and a number."
           >
-            <input
+            <PasswordInput
               id="cr-password"
-              type="password"
-              className="input-field"
               autoComplete="new-password"
               value={form.password}
-              onChange={update('password')}
+              onChange={update("password")}
               disabled={isLoading}
               required
             />
             {form.password && (
               <div
                 style={{
-                  marginTop: '0.4rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
+                  marginTop: "0.4rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
                 }}
               >
                 <div
                   style={{
                     flex: 1,
                     height: 4,
-                    background: 'var(--border-color)',
+                    background: "var(--border-color)",
                     borderRadius: 2,
-                    overflow: 'hidden',
+                    overflow: "hidden",
                   }}
                 >
                   <div
                     style={{
                       width: `${(strength / 5) * 100}%`,
-                      height: '100%',
+                      height: "100%",
                       background: strengthColor,
-                      transition: 'width 0.15s, background 0.15s',
+                      transition: "width 0.15s, background 0.15s",
                     }}
                   />
                 </div>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                <span
+                  style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}
+                >
                   {strengthLabel}
                 </span>
               </div>
@@ -281,28 +299,53 @@ export default function CustomerRegister() {
             htmlFor="cr-confirm"
             error={errors.confirmPassword}
           >
-            <input
+            <PasswordInput
               id="cr-confirm"
-              type="password"
-              className="input-field"
               autoComplete="new-password"
               value={form.confirmPassword}
-              onChange={update('confirmPassword')}
+              onChange={update("confirmPassword")}
               disabled={isLoading}
               required
             />
+            {form.confirmPassword && (
+              <div
+                style={{
+                  marginTop: "0.4rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.35rem",
+                  fontSize: "0.75rem",
+                  color:
+                    form.password === form.confirmPassword
+                      ? "#10b981"
+                      : "#ef4444",
+                }}
+              >
+                {form.password === form.confirmPassword ? (
+                  <>
+                    <CheckCircle2 size={14} aria-hidden />
+                    <span>Passwords match</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle size={14} aria-hidden />
+                    <span>Passwords don't match</span>
+                  </>
+                )}
+              </div>
+            )}
           </Field>
 
           {submitError && (
             <div
               role="alert"
               style={{
-                background: 'rgba(239,68,68,0.1)',
-                color: '#ef4444',
-                padding: '0.6rem 0.75rem',
+                background: "rgba(239,68,68,0.1)",
+                color: "#ef4444",
+                padding: "0.6rem 0.75rem",
                 borderRadius: 6,
-                fontSize: '0.875rem',
-                marginBottom: '0.75rem',
+                fontSize: "0.875rem",
+                marginBottom: "0.75rem",
               }}
             >
               {submitError}
@@ -313,26 +356,26 @@ export default function CustomerRegister() {
             type="submit"
             className="btn-primary"
             disabled={isLoading}
-            style={{ width: '100%' }}
+            style={{ width: "100%" }}
           >
-            {isLoading ? 'Creating account…' : 'Create account'}
+            {isLoading ? "Creating account…" : "Create account"}
           </button>
         </form>
 
         <div
           style={{
-            marginTop: '1rem',
-            textAlign: 'center',
-            fontSize: '0.875rem',
-            color: 'var(--text-secondary)',
+            marginTop: "1rem",
+            textAlign: "center",
+            fontSize: "0.875rem",
+            color: "var(--text-secondary)",
           }}
         >
-          Already have an account?{' '}
+          Already have an account?{" "}
           <Link
             to="/login"
             style={{
-              color: 'var(--primary-color, var(--accent-color))',
-              textDecoration: 'none',
+              color: "var(--primary-color, var(--accent-color))",
+              textDecoration: "none",
               fontWeight: 500,
             }}
           >
@@ -346,14 +389,14 @@ export default function CustomerRegister() {
 
 function Field({ label, htmlFor, error, help, children }) {
   return (
-    <div style={{ marginBottom: '0.85rem' }}>
+    <div style={{ marginBottom: "0.85rem" }}>
       <label
         htmlFor={htmlFor}
         style={{
-          display: 'block',
-          fontSize: '0.8rem',
-          color: 'var(--text-secondary)',
-          marginBottom: '0.25rem',
+          display: "block",
+          fontSize: "0.8rem",
+          color: "var(--text-secondary)",
+          marginBottom: "0.25rem",
           fontWeight: 500,
         }}
       >
@@ -363,10 +406,10 @@ function Field({ label, htmlFor, error, help, children }) {
       {help && !error && (
         <small
           style={{
-            display: 'block',
-            marginTop: '0.25rem',
-            color: 'var(--text-secondary)',
-            fontSize: '0.7rem',
+            display: "block",
+            marginTop: "0.25rem",
+            color: "var(--text-secondary)",
+            fontSize: "0.7rem",
           }}
         >
           {help}
@@ -376,10 +419,10 @@ function Field({ label, htmlFor, error, help, children }) {
         <small
           role="alert"
           style={{
-            display: 'block',
-            marginTop: '0.25rem',
-            color: '#ef4444',
-            fontSize: '0.75rem',
+            display: "block",
+            marginTop: "0.25rem",
+            color: "#ef4444",
+            fontSize: "0.75rem",
           }}
         >
           {error}

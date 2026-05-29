@@ -395,17 +395,40 @@ router.delete('/contact/:id', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────────
-// GET /api/gdpr/consent/:contactId — list consent records
+// GET /api/gdpr/consent/:contactId?fields=summary — list consent records
 // ──────────────────────────────────────────────────────────────────
 router.get('/consent/:contactId', async (req, res) => {
   try {
     const contactId = parseInt(req.params.contactId);
     if (isNaN(contactId)) return res.status(400).json({ error: 'Invalid contact ID' });
 
-    const records = await prisma.consentRecord.findMany({
+    // #920 slice 32: ?fields=summary slim-shape opt-in. Mirrors slices 1-31.
+    // ConsentRecord carries two forensic blobs the consent-picker UI never
+    // shows: `ipAddress` (network-source provenance) + `userAgent`
+    // (browser fingerprint). When the caller passes ?fields=summary we
+    // drop those plus tenantId, returning only the columns needed for a
+    // "what consents has this contact granted" status grid (id, contactId,
+    // type, granted, source, createdAt). Opt-in additive — existing
+    // callers (no ?fields, or any non-exact value) get the full row shape
+    // unchanged. The full-shape branch is what the GDPR Article-15 export
+    // path relies on (ipAddress + userAgent are part of the legally
+    // mandated DSAR payload), so we must NOT make `summary` the default.
+    const isSummary = req.query.fields === 'summary';
+    const findManyArgs = {
       where: { contactId, tenantId: req.user.tenantId },
       orderBy: { createdAt: 'desc' },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        contactId: true,
+        type: true,
+        granted: true,
+        source: true,
+        createdAt: true,
+      };
+    }
+    const records = await prisma.consentRecord.findMany(findManyArgs);
     res.json(records);
   } catch (err) {
     console.error('[GDPR] Consent fetch error:', err);

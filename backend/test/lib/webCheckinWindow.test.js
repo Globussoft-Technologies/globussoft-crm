@@ -125,4 +125,69 @@ describe("computeWindowOpenAt", () => {
     expect(AIRLINE_WINDOWS_HOURS.UK).toBe(48);
     expect(AIRLINE_WINDOWS_HOURS.EK).toBe(48);
   });
+
+  // ── Tier-2 (Phase 1.5) 48h carriers explicit pin ──────────────────
+  // PRD §4.6 Phase 1.5 promotion: SpiceJet, Akasa, Qatar all open
+  // T-48h. If a future refactor flips any of these to 24h (e.g. "we
+  // want to start sweeping closer in to save quota") the cron's row
+  // creation silently shrinks the window — and downstream sweepers
+  // miss the early-bird Tier-2 traveller flow that PRD §4.6 commits to.
+  test("SpiceJet (SG) → T-48h (Tier-2)", () => {
+    const dep = new Date("2026-06-15T10:00:00Z");
+    const win = computeWindowOpenAt(dep, "SG");
+    expect(win.getTime()).toBe(dep.getTime() - 48 * HOUR_MS);
+    expect(AIRLINE_WINDOWS_HOURS.SG).toBe(48);
+  });
+
+  test("Akasa (QP) → T-48h (Tier-2)", () => {
+    const dep = new Date("2026-06-15T10:00:00Z");
+    const win = computeWindowOpenAt(dep, "QP");
+    expect(win.getTime()).toBe(dep.getTime() - 48 * HOUR_MS);
+    expect(AIRLINE_WINDOWS_HOURS.QP).toBe(48);
+  });
+
+  test("Qatar (QR) → T-48h (Tier-2)", () => {
+    const dep = new Date("2026-06-15T10:00:00Z");
+    const win = computeWindowOpenAt(dep, "QR");
+    expect(win.getTime()).toBe(dep.getTime() - 48 * HOUR_MS);
+    expect(AIRLINE_WINDOWS_HOURS.QR).toBe(48);
+  });
+
+  // ── Table contract: size, frozen, defaults ────────────────────────
+  // Pin the AIRLINE_WINDOWS_HOURS export shape. If a refactor changes
+  // the export (e.g. lazy-evaluated getter, mutable object, table-loaded
+  // from JSON-with-typos) these are the load-bearing invariants.
+  test("AIRLINE_WINDOWS_HOURS table size = 11 + Object.isFrozen", () => {
+    expect(Object.keys(AIRLINE_WINDOWS_HOURS).length).toBe(11);
+    expect(Object.isFrozen(AIRLINE_WINDOWS_HOURS)).toBe(true);
+    expect(DEFAULT_WINDOW_HOURS).toBe(48);
+  });
+
+  // ── Defensive coercion: non-string airline codes ──────────────────
+  // The SUT does `String(code || "").toUpperCase()`. Boolean true
+  // coerces to "true" → "TRUE", not in table → 48h default. Numeric 6
+  // coerces to "6", not "6E", so even an IndiGo-passenger-typing-a-number
+  // edge case correctly falls through to default rather than silently
+  // mismatching "6E". Pins the defensive degrade-to-default behaviour.
+  test("Boolean airline code coerces via String() → defaults to 48h", () => {
+    const dep = new Date("2026-06-15T10:00:00Z");
+    const win = computeWindowOpenAt(dep, true);
+    // String(true) === 'true' → 'TRUE' → not in table → default
+    expect(win.getTime()).toBe(dep.getTime() - DEFAULT_WINDOW_HOURS * HOUR_MS);
+  });
+
+  test("Numeric airline code coerces via String() → defaults to 48h (6 ≠ '6E')", () => {
+    const dep = new Date("2026-06-15T10:00:00Z");
+    const win = computeWindowOpenAt(dep, 6);
+    // String(6) === '6' → '6' → not in table (key is '6E' not '6') → default
+    expect(win.getTime()).toBe(dep.getTime() - DEFAULT_WINDOW_HOURS * HOUR_MS);
+  });
+
+  // ── NaN departure (Number.isFinite gate) ──────────────────────────
+  // Distinct from "invalid date string": NaN bypasses the new-Date
+  // constructor and lands as departure timestamp directly. Pins that
+  // the Number.isFinite check catches it.
+  test("NaN departure → null (Number.isFinite gate)", () => {
+    expect(computeWindowOpenAt(NaN, "6E")).toBeNull();
+  });
 });

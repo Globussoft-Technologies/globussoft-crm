@@ -56,10 +56,28 @@ router.get("/", readGate, async (req, res) => {
 
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
 
+    // ?fields=summary → slim shape for typeahead callers. Drops heavy free-text
+    // `notes` (@db.Text — admin-only contraindications / scheduling info) and
+    // timestamps + tenantId chrome that the typeahead UI never renders.
+    // Opt-in additive — unspecified fields query returns the full row.
+    const isSummary = req.query.fields === "summary";
+    const select = isSummary
+      ? {
+          id: true,
+          name: true,
+          genericName: true,
+          dosageForm: true,
+          strengthValue: true,
+          strengthUnit: true,
+          isActive: true,
+        }
+      : undefined;
+
     const items = await prisma.drug.findMany({
       where,
       orderBy: [{ name: "asc" }],
       take: limit,
+      ...(select ? { select } : {}),
     });
     res.json(items);
   } catch (e) {

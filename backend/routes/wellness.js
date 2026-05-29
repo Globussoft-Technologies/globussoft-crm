@@ -70,6 +70,7 @@ const {
   uploadImage,
   deleteFile,
   extractKeyFromUrl,
+  BUCKET_NAME: S3_BUCKET_NAME,
 } = require("../services/s3Service");
 // Plan #PAT-EXPORT — XLSX writer for patients export + import template.
 // Lazy-loaded at handler time so the require can't crash boot if the
@@ -114,7 +115,9 @@ function verifyPatientToken(req, res, next) {
 
 const router = express.Router();
 
-// Multer storage for visit photos: uses memory storage, uploads to S3
+// Visit photos: memory storage so the buffer can go to EITHER S3 (when
+// AWS creds are configured) OR the local filesystem fallback (CI / any env
+// without S3). The POST handler below branches on S3_BUCKET_NAME.
 const photoUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per photo
@@ -191,6 +194,12 @@ const phiReadGate = verifyWellnessRole(
     anyOfPermissions: [
       { module: "patients", action: "read" },
       { module: "appointments", action: "read" },
+      // `my_appointments.read` + `waitlist.read` opened in v3.8.x when
+      // the `appointments` module was split per-page — a doctor with
+      // only `my_appointments.read` still needs to call the underlying
+      // /api/wellness/* read endpoints to hydrate their page.
+      { module: "my_appointments", action: "read" },
+      { module: "waitlist", action: "read" },
       { module: "calendar", action: "read" },
       { module: "visits", action: "read" },
       { module: "prescriptions", action: "read" },
@@ -204,6 +213,12 @@ const phiWriteGate = verifyWellnessRole(
     anyOfPermissions: [
       { module: "patients", action: "write" },
       { module: "appointments", action: "write" },
+      // `book_appointment.write` + `waitlist.write` opened in v3.8.x
+      // when the `appointments` module was split per-page — a telecaller
+      // with only `book_appointment.write` still needs to call the
+      // booking endpoint, and waitlist promote needs `waitlist.write`.
+      { module: "book_appointment", action: "write" },
+      { module: "waitlist", action: "write" },
       { module: "calendar", action: "write" },
       { module: "visits", action: "write" },
       { module: "prescriptions", action: "write" },
@@ -508,8 +523,8 @@ router.get("/patients", phiReadGate, async (req, res) => {
     const [patients, total] = await Promise.all([
       prisma.patient.findMany({
         where,
-        take: Math.min(parseInt(limit), 200),
-        skip: parseInt(offset),
+        take: Math.min(parseInt(limit, 10) || 50, 200),
+        skip: parseInt(offset, 10) || 0,
         orderBy: { createdAt: "desc" },
         include: {
           tags: {
@@ -2175,8 +2190,8 @@ router.get("/visits", phiReadGate, async (req, res) => {
 
     const visits = await prisma.visit.findMany({
       where,
-      take: Math.min(parseInt(limit), 500),
-      skip: parseInt(offset),
+      take: Math.min(parseInt(limit, 10) || 100, 500),
+      skip: parseInt(offset, 10) || 0,
       orderBy: { visitDate: "desc" },
       include: {
         patient: { select: { id: true, name: true, phone: true } },
@@ -2645,6 +2660,57 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
 });
 
 // ── Visit photos (before/after) ────────────────────────────────────
+//
+// #743 — photos are stored on the local filesystem and served under
+// /api/wellness/visits/:id/photos/:filename (proxied to the backend by
+// Nginx). The legacy /uploads/* path fell through to the SPA catch-all and
+// returned text/html. Serving here stamps an explicit image Content-Type,
+// guards against path traversal, tenant-scopes the read, and validates the
+// upload mime. No S3 dependency — works in CI / any env without AWS creds.
+const PHOTO_MIME_BY_EXT = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+function photoContentType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  return PHOTO_MIME_BY_EXT[ext] || null;
+}
+
+router.get("/visits/:id/photos/:filename", phiReadGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const filename = req.params.filename || "";
+    // Defense-in-depth path-traversal guard (diskStorage sanitises on write,
+    // but a hand-crafted GET could try `..%2F../etc/passwd`).
+    if (!/^[a-zA-Z0-9._-]+$/.test(filename) || filename.includes("..")) {
+      return res.status(400).json({ error: "invalid filename", code: "INVALID_FILENAME" });
+    }
+    const mime = photoContentType(filename);
+    if (!mime) {
+      return res.status(415).json({ error: "unsupported image type", code: "UNSUPPORTED_MEDIA" });
+    }
+    // Tenant-scope: the visit must belong to the caller's tenant.
+    const visit = await prisma.visit.findFirst({
+      where: tenantWhere(req, { id }),
+      select: { id: true },
+    });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+
+    const filePath = path.join(__dirname, "..", "uploads", "wellness", "visits", String(id), filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Photo not found" });
+    }
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.sendFile(filePath);
+  } catch (e) {
+    console.error("[wellness] photo serve error:", e.message);
+    res.status(500).json({ error: "Photo serve failed" });
+  }
+});
 
 router.post(
   "/visits/:id/photos",
@@ -2658,20 +2724,41 @@ router.post(
       });
       if (!visit) return res.status(404).json({ error: "Visit not found" });
 
+      // #743 — reject non-image uploads at the API layer.
+      const files = req.files || [];
+      for (const f of files) {
+        const mime = photoContentType(f.originalname || "");
+        if (!mime) {
+          return res.status(415).json({
+            error: "photos must be image/jpeg, image/png, image/webp or image/gif",
+            code: "UNSUPPORTED_MEDIA",
+          });
+        }
+      }
+
+      // S3-primary, local-FS fallback. When AWS creds are configured
+      // (S3_BUCKET_NAME set) photos go to S3 and we store the S3 URL —
+      // unchanged prod behaviour. When S3 isn't configured (CI / any env
+      // without creds) we persist to the local filesystem and store the
+      // Nginx-proxied /api/wellness/visits/:id/photos/:filename path (served
+      // by the GET route above), so the feature never hard-depends on S3.
+      const useS3 = !!S3_BUCKET_NAME;
+      const added = [];
+      for (const f of files) {
+        if (useS3) {
+          const url = await uploadImage(f.buffer, f.originalname, f.mimetype, `visits/${id}`);
+          added.push(url);
+        } else {
+          const dir = path.join(__dirname, "..", "uploads", "wellness", "visits", String(id));
+          fs.mkdirSync(dir, { recursive: true });
+          const safe = `${Date.now()}-${(f.originalname || "photo").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+          fs.writeFileSync(path.join(dir, safe), f.buffer);
+          added.push(`/api/wellness/visits/${id}/photos/${safe}`);
+        }
+      }
+
       const which = req.body.kind === "after" ? "photosAfter" : "photosBefore";
       const existing = visit[which] ? JSON.parse(visit[which]) : [];
-
-      // Upload files to S3 in parallel
-      const uploadPromises = (req.files || []).map((file) =>
-        uploadImage(
-          file.buffer,
-          file.originalname,
-          file.mimetype,
-          `visits/${id}`,
-        ),
-      );
-
-      const added = await Promise.all(uploadPromises);
       const merged = [...existing, ...added];
 
       const _updated = await prisma.visit.update({
@@ -2841,8 +2928,9 @@ function requireClinicalRole(req, res, next) {
     return res.status(401).json({ error: "Authentication required" });
   if (req.user.role === "ADMIN") return next();
   if (req.user.wellnessRole === "doctor") return next();
+  // Neutral copy + structured code — no internal role-taxonomy leakage.
   return res.status(403).json({
-    error: "Only clinical staff (doctor) may write prescriptions",
+    error: "You do not have permission to perform this action",
     code: "CLINICAL_ROLE_REQUIRED",
   });
 }
@@ -2854,7 +2942,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
     if (patientId) where.patientId = parseInt(patientId);
     const items = await prisma.prescription.findMany({
       where,
-      take: Math.min(parseInt(limit), 200),
+      take: Math.min(parseInt(limit, 10) || 50, 200),
       orderBy: { createdAt: "desc" },
       include: {
         patient: { select: { id: true, name: true } },
@@ -3033,7 +3121,7 @@ router.get("/consents", phiReadGate, async (req, res) => {
     if (patientId) where.patientId = parseInt(patientId);
     const items = await prisma.consentForm.findMany({
       where,
-      take: Math.min(parseInt(limit), 200),
+      take: Math.min(parseInt(limit, 10) || 50, 200),
       orderBy: { signedAt: "desc" },
       select: {
         id: true,
@@ -3576,6 +3664,31 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
       return res
         .status(400)
         .json({ error: "name, totalSessions, patientId required" });
+    }
+    // #745 — duplicate-prevention: reject an exact-match plan created in the
+    // last 5 minutes with 409 IDEMPOTENT_DUPLICATE (kills rapid double-click /
+    // retried-seed dup explosions while still allowing legitimate same-name
+    // plans created months apart). TreatmentPlan has no `createdAt` column —
+    // `startedAt` (@default now) serves the dedupe window. Ported from main
+    // (partial-port gap).
+    {
+      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+      const dupe = await prisma.treatmentPlan.findFirst({
+        where: tenantWhere(req, {
+          patientId: parseInt(patientId),
+          name: name,
+          totalSessions: parseInt(totalSessions),
+          startedAt: { gte: fiveMinAgo },
+        }),
+        select: { id: true },
+      });
+      if (dupe) {
+        return res.status(409).json({
+          error: "An identical treatment plan was created in the last 5 minutes",
+          code: "IDEMPOTENT_DUPLICATE",
+          existingId: dupe.id,
+        });
+      }
     }
     const plan = await prisma.treatmentPlan.create({
       data: {
@@ -4173,11 +4286,19 @@ router.get("/membership-plans", async (req, res) => {
   try {
     const includeInactive =
       req.query.includeInactive === "1" || req.query.includeInactive === "true";
+    const includeTeardown =
+      req.query.includeTeardown === "1" || req.query.includeTeardown === "true";
     const plans = await prisma.membershipPlan.findMany({
       where: tenantWhere(req, includeInactive ? {} : { isActive: true }),
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
     });
-    res.json(plans);
+    // #747 — hide test-fixture plans (_teardown_* / _test_*) from default lists
+    // so staff can't accidentally sell a real membership against a test row.
+    // Admin override surfaces them via ?includeTeardown=1.
+    const visible = includeTeardown
+      ? plans
+      : plans.filter((p) => !/^_teardown_|^_test_/.test(p.name || ""));
+    res.json(visible);
   } catch (e) {
     console.error("[wellness] list membership plans error:", e.message);
     res.status(500).json({ error: "Failed to list membership plans" });
@@ -4466,6 +4587,14 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
     });
     if (!plan)
       return res.status(404).json({ error: "Membership plan not found" });
+    // #748 — never post a real purchase against a test-fixture plan, even if it
+    // slipped through with isActive=true. Mirrors the #747 default-list filter.
+    if (/^_teardown_|^_test_/.test(plan.name || "")) {
+      return res.status(410).json({
+        error: "This plan is a test fixture and cannot be purchased",
+        code: "PLAN_ARCHIVED_OR_TEST",
+      });
+    }
     if (!plan.isActive) {
       return res
         .status(409)
@@ -5608,14 +5737,19 @@ router.get(
     ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
     {
       // Resources back the Calendar page (calendar.read), Appointments
-      // list (appointments.read), the Resources admin page (settings.read),
-      // and any clinical surface that needs to check room availability.
-      // Any one of these read grants unlocks the endpoint so admins
-      // don't have to grant an exact-matching permission — just the
-      // permission for the page the user is trying to use.
+      // list (appointments.read), My Appointments (my_appointments.read),
+      // Book Appointment (book_appointment.write), Waitlist (waitlist.read),
+      // the Resources admin page (settings.read), and any clinical surface
+      // that needs to check room availability. Any one of these grants
+      // unlocks the endpoint so admins don't have to grant an exact-
+      // matching permission — just the permission for the page the user
+      // is trying to use.
       anyOfPermissions: [
         { module: "calendar", action: "read" },
         { module: "appointments", action: "read" },
+        { module: "my_appointments", action: "read" },
+        { module: "book_appointment", action: "write" },
+        { module: "waitlist", action: "read" },
         { module: "settings", action: "read" },
         { module: "patients", action: "read" },
         { module: "visits", action: "read" },
@@ -5806,6 +5940,9 @@ router.get("/holidays", verifyWellnessRole(
     anyOfPermissions: [
       { module: "calendar", action: "read" },
       { module: "appointments", action: "read" },
+      { module: "my_appointments", action: "read" },
+      { module: "book_appointment", action: "write" },
+      { module: "waitlist", action: "read" },
       { module: "settings", action: "read" },
       { module: "patients", action: "read" },
       { module: "visits", action: "read" },
@@ -5953,6 +6090,9 @@ router.get(
       anyOfPermissions: [
         { module: "calendar", action: "read" },
         { module: "appointments", action: "read" },
+        { module: "my_appointments", action: "read" },
+        { module: "book_appointment", action: "write" },
+        { module: "waitlist", action: "read" },
         { module: "settings", action: "read" },
         { module: "patients", action: "read" },
         { module: "visits", action: "read" },
@@ -6504,7 +6644,12 @@ async function computePerLocation(req) {
 
 router.get(
   "/reports/pnl-by-service",
-  adminOrPerm("reports", "read"),
+  // #207/#216 financial-leak fix: financial reports are admin/manager ONLY.
+  // Hard wellnessRole gate (NOT adminOrPerm) — the generic `reports.read`
+  // permission is held by the base "User" role (seed.js), which every
+  // wellness clinical staffer (doctor/professional/helper/telecaller) has,
+  // so a permission fallback would leak P&L/revenue data to them.
+  verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
       const result = await computePnlByService(req);
@@ -6520,7 +6665,8 @@ router.get(
 
 router.get(
   "/reports/per-professional",
-  adminOrPerm("reports", "read"),
+  // #207/#216 financial-leak fix — admin/manager only (see pnl-by-service).
+  verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
       const result = await computePerProfessional(req);
@@ -6538,7 +6684,8 @@ router.get(
 
 router.get(
   "/reports/attribution",
-  adminOrPerm("reports", "read"),
+  // #207/#216 financial-leak fix — admin/manager only (see pnl-by-service).
+  verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
       const result = await computeAttribution(req);
@@ -6554,7 +6701,8 @@ router.get(
 
 router.get(
   "/reports/per-location",
-  adminOrPerm("reports", "read"),
+  // #207/#216 financial-leak fix — admin/manager only (see pnl-by-service).
+  verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
       const result = await computePerLocation(req);
@@ -7344,7 +7492,11 @@ router.get(
 // the full clinic financials. Lock to admin/manager.
 router.get(
   "/dashboard",
-  adminOrPerm("reports", "read"),
+  // #207/#216 financial-leak fix — owner dashboard shows org-wide P&L, so
+  // admin/manager ONLY (hard gate). The generic `reports.read` permission is
+  // held by the base "User" role that every clinical staffer has, so a
+  // permission fallback (adminOrPerm) would leak revenue to doctors.
+  verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
       const tenantId = req.user.tenantId;
@@ -9375,7 +9527,11 @@ const brandingLogoUpload = multer({
 
 function requireTenantAdmin(req, res, next) {
   if (!req.user || req.user.role !== "ADMIN") {
-    return res.status(403).json({ error: "Tenant ADMIN required" });
+    // Neutral copy + structured code — no internal role-taxonomy leakage.
+    return res.status(403).json({
+      error: "You do not have permission to perform this action",
+      code: "TENANT_ADMIN_REQUIRED",
+    });
   }
   next();
 }
@@ -9470,7 +9626,11 @@ router.get("/branding", async (req, res) => {
 function requireManagerPlus(req, res, next) {
   const role = req.user?.role;
   if (role === "ADMIN" || role === "MANAGER") return next();
-  return res.status(403).json({ error: "Manager or admin role required" });
+  // Neutral copy + structured code — no internal role-taxonomy leakage.
+  return res.status(403).json({
+    error: "You do not have permission to perform this action",
+    code: "MANAGER_ROLE_REQUIRED",
+  });
 }
 
 // #614 — Loyalty rules (earn / burn config). Per-tenant row in LoyaltyConfig.

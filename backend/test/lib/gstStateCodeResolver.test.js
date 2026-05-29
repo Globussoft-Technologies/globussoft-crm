@@ -225,3 +225,91 @@ describe('gstStateCodeResolver — format-agnosticism', () => {
     expect(result.customerStateCode).toBe('in-ka');
   });
 });
+
+// === Edge / async-error coverage (+6 cases) ===
+//
+// Fills the SUT-contract gaps left by the original 17 cases:
+//
+//  18. resolveStateCodes() with NO arguments at all → uses `= {}` default
+//      destructure (no prisma, no IDs, no overrides) → operator=IN-MH,
+//      customer mirrors. Pins no-throw on missing args.
+//  19. prisma.tenant.findUnique rejection → SUT has no try/catch, must
+//      propagate. Pin via `await expect(...).rejects.toThrow()`.
+//  20. prisma.contact.findUnique rejection → same propagation contract.
+//      Operator side resolves first (Tenant ok), Contact side throws.
+//  21. operatorOverride truthy + tenantId null → override wins, ZERO
+//      Tenant lookup; Contact lookup STILL fires for the customer side.
+//  22. customerOverride truthy + contactId null → override wins, ZERO
+//      Contact lookup; Tenant lookup STILL fires for the operator side.
+//  23. operatorOverride=0 (falsy) → defensive: `||` treats 0 as no override,
+//      DB lookup fires. Pins the JSDoc's "truthy wins" wording at the
+//      type-coercion edge.
+describe('gstStateCodeResolver — edge / async-error', () => {
+  test('no args at all (zero arguments) → does not throw, defaults both sides to IN-MH', async () => {
+    // The SUT uses `= {}` default destructure on the params object,
+    // so calling with NO args must still resolve cleanly. No prisma
+    // is referenced because neither tenantId nor contactId is truthy.
+    const result = await resolveStateCodes();
+    expect(result).toEqual({ operatorStateCode: 'IN-MH', customerStateCode: 'IN-MH' });
+  });
+
+  test('prisma.tenant.findUnique rejection → propagates to caller', async () => {
+    const prisma = {
+      tenant: { findUnique: vi.fn().mockRejectedValue(new Error('DB down')) },
+      contact: { findUnique: vi.fn().mockResolvedValue(null) },
+    };
+    await expect(
+      resolveStateCodes({ prisma, tenantId: 1, contactId: 5 })
+    ).rejects.toThrow('DB down');
+  });
+
+  test('prisma.contact.findUnique rejection → propagates to caller', async () => {
+    const prisma = {
+      tenant: { findUnique: vi.fn().mockResolvedValue({ gstStateCode: 'IN-GJ' }) },
+      contact: { findUnique: vi.fn().mockRejectedValue(new Error('contact lookup blew up')) },
+    };
+    await expect(
+      resolveStateCodes({ prisma, tenantId: 1, contactId: 5 })
+    ).rejects.toThrow('contact lookup blew up');
+  });
+
+  test('operatorOverride truthy + tenantId null → skips Tenant lookup but Contact lookup still fires', async () => {
+    const prisma = makePrismaStub({ contactRow: { stateCode: 'IN-KA' } });
+    const result = await resolveStateCodes({
+      prisma,
+      tenantId: null,
+      contactId: 5,
+      operatorOverride: 'IN-GJ',
+    });
+    expect(result).toEqual({ operatorStateCode: 'IN-GJ', customerStateCode: 'IN-KA' });
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+    expect(prisma.contact.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  test('customerOverride truthy + contactId null → skips Contact lookup but Tenant lookup still fires', async () => {
+    const prisma = makePrismaStub({ tenantRow: { gstStateCode: 'IN-GJ' } });
+    const result = await resolveStateCodes({
+      prisma,
+      tenantId: 1,
+      contactId: null,
+      customerOverride: 'IN-KA',
+    });
+    expect(result).toEqual({ operatorStateCode: 'IN-GJ', customerStateCode: 'IN-KA' });
+    expect(prisma.tenant.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.contact.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('operatorOverride=0 (falsy) → `||` treats as no override, DB lookup fires', async () => {
+    // Defensive pin: the JSDoc says "truthy wins", and the SUT uses `||`.
+    // 0 is falsy in JS, so even though a caller passing 0 is nonsensical
+    // (state codes are strings), the helper falls through to the DB row.
+    const prisma = makePrismaStub({ tenantRow: { gstStateCode: 'IN-TN' } });
+    const result = await resolveStateCodes({
+      prisma,
+      tenantId: 1,
+      operatorOverride: 0,
+    });
+    expect(result.operatorStateCode).toBe('IN-TN');
+    expect(prisma.tenant.findUnique).toHaveBeenCalledTimes(1);
+  });
+});

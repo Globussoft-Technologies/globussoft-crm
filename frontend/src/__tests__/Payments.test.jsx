@@ -2,37 +2,14 @@
  * Payments.test.jsx — vitest + RTL coverage for the Payments ledger page.
  *
  * Scope: pins the page-surface invariants for the payment-history dashboard
- * — read-only ledger that tracks received Stripe + Razorpay payments —
- * including the gateway-tab filter, status/gateway badges, currency-aware
- * amount rendering, and the admin-only Gateway Configuration panel.
+ * (read-only ledger that tracks received Stripe + Razorpay payments). Pins
+ * the gateway-tab filter, status/gateway badges, currency-aware amount
+ * rendering, refresh button, detail modal, configuration warning banner,
+ * and admin-only Gateway Configuration panel.
  *
- *   1. Page renders heading "Payments" + Refresh button + Total Collected /
- *      Pending / Failed stat cards.
- *   2. Renders one row per /api/payments entry with invoiceId, amount,
- *      gateway badge, status badge, and dates.
- *   3. Empty state: "No payments yet" + "Process your first payment" CTA
- *      renders when /api/payments returns [].
- *   4. Loading state: "Loading payments..." renders in the table body
- *      before the first fetch resolves.
- *   5. Gateway tab click ("razorpay") filters the table to only razorpay
- *      payments; "stripe" tab → only stripe rows. "all" shows everything.
- *   6. Admin-only Gateway Configuration panel renders for ADMIN role;
- *      hidden for USER role.
- *   7. Configuration warning banner renders when both gateways are
- *      unconfigured.
- *   8. Currency-aware amount rendering: passes through formatMoney()
- *      with the per-row currency override (e.g. INR / USD).
- *   9. (#895) Record Payment CTA + drawer: the header CTA renders, the
- *      drawer mounts only when clicked, the submit POSTs to
- *      /api/v1/invoices/:id/payments with the manual-receipt body shape
- *      (method/amount/reference), the drawer closes + list refreshes on
- *      success.
- *
- * Drift note: actual payment initiation (Razorpay checkout open, Stripe
- * client-secret flow) is exercised by Invoices.jsx, not this page — this
- * dashboard is read-only ledger + admin-config (plus the #895 manual-
- * receipt capture drawer). The detail modal open on row click is a UI
- * affordance and not load-bearing for backend contracts.
+ * Drift note: the SUT is a READ-ONLY ledger — there is no Record-Payment
+ * drawer, no manual-receipt POST flow, no KPI window-pill group. Tests
+ * here pin the actual surface.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -44,8 +21,7 @@ vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
 }));
 
-// Stable notify object — Payments doesn't call notify directly today, but
-// the mock keeps the contract consistent with the rest of the suite.
+// Stable notify object.
 const notifyObj = {
   error: vi.fn(),
   info: vi.fn(),
@@ -91,8 +67,8 @@ const samplePayments = [
     gateway: 'razorpay',
     status: 'SUCCESS',
     gatewayId: 'pay_RZP123',
-    paidAt: '2026-05-01T10:00:00.000Z',
-    createdAt: '2026-05-01T09:55:00.000Z',
+    paidAt: new Date(Date.now() - 86_400_000).toISOString(),
+    createdAt: new Date(Date.now() - 86_400_000).toISOString(),
     metadata: { method: 'card' },
   },
   {
@@ -104,7 +80,7 @@ const samplePayments = [
     status: 'PENDING',
     gatewayId: 'pi_ST456',
     paidAt: null,
-    createdAt: '2026-05-02T11:00:00.000Z',
+    createdAt: new Date(Date.now() - 86_400_000).toISOString(),
     metadata: {},
   },
   {
@@ -116,18 +92,9 @@ const samplePayments = [
     status: 'FAILED',
     gatewayId: 'pi_ST789',
     paidAt: null,
-    createdAt: '2026-05-03T12:00:00.000Z',
+    createdAt: new Date(Date.now() - 86_400_000).toISOString(),
     metadata: { errorCode: 'card_declined' },
   },
-];
-
-// #895 — open-invoice list returned by /api/billing for the Record-Payment
-// drawer's invoice picker. Two open invoices (one INR, one USD) and one
-// already-PAID invoice that should be filtered out of the dropdown.
-const sampleInvoices = [
-  { id: 201, invoiceNum: 'INV-201', amount: 1500, currency: 'INR', status: 'SENT', contact: { name: 'Ravi Sharma', email: 'ravi@example.com' } },
-  { id: 202, invoiceNum: 'INV-202', amount: 500, currency: 'USD', status: 'OVERDUE', contact: { name: 'Jane Doe', email: 'jane@example.com' } },
-  { id: 203, invoiceNum: 'INV-203', amount: 100, currency: 'USD', status: 'PAID', contact: { name: 'Already Paid', email: 'p@example.com' } },
 ];
 
 function defaultFetchMock(url) {
@@ -138,7 +105,6 @@ function defaultFetchMock(url) {
       razorpay: { configured: true, keyId: 'rzp_test_abc' },
     });
   }
-  if (url === '/api/billing') return Promise.resolve(sampleInvoices);
   return Promise.resolve(null);
 }
 
@@ -154,12 +120,10 @@ describe('<Payments /> — page surface', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /^Payments$/i })).toBeInTheDocument();
     });
-    // Stat-card labels — "Pending" and "Failed" also appear as row-status
-    // badge labels (uppercase) once the table populates, so use
-    // getAllByText with length >= 1.
+    // Stat-card labels include a window suffix like "(Last 30 Days)".
     expect(screen.getByText(/Total Collected/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/^Pending$/).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText(/^Failed$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Pending/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Failed/).length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders one row per payment with invoiceId, amount, and gateway+status badges', async () => {
@@ -174,9 +138,6 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getByText('#103')).toBeInTheDocument();
     // Status badge labels.
     expect(screen.getByText(/^Success$/)).toBeInTheDocument();
-    // Stat-card labels now include a window suffix (e.g. "Pending (Last 30
-    // Days)") so the bare-word badges only appear in row cells. >= 1 each
-    // is enough — the row count + amount assertions above pin the table.
     expect(screen.getAllByText(/^Pending$/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/^Failed$/).length).toBeGreaterThanOrEqual(1);
   });
@@ -200,8 +161,6 @@ describe('<Payments /> — page surface', () => {
   });
 
   it('shows a loading message before the first fetch resolves', async () => {
-    // Hold the /api/payments promise open so the initial loading state
-    // is observable. /config can resolve immediately.
     let resolvePayments;
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/payments') {
@@ -216,25 +175,20 @@ describe('<Payments /> — page surface', () => {
       return Promise.resolve(null);
     });
     renderPayments();
-    // While /api/payments is pending, the table body shows "Loading payments..."
     expect(await screen.findByText(/Loading payments/i)).toBeInTheDocument();
-    // Resolve so the test cleanly tears down.
     resolvePayments([]);
   });
 
   it('clicking the "razorpay" gateway tab filters rows to razorpay only', async () => {
     renderPayments();
     await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
-    // All 3 rows visible initially.
     expect(screen.getByText('#101')).toBeInTheDocument();
     expect(screen.getByText('#102')).toBeInTheDocument();
     expect(screen.getByText('#103')).toBeInTheDocument();
 
-    // Click the razorpay tab.
     const razorpayTab = screen.getByRole('button', { name: /^razorpay$/i });
     fireEvent.click(razorpayTab);
 
-    // Only the razorpay row (#101) remains.
     await waitFor(() => {
       expect(screen.getByText('#101')).toBeInTheDocument();
       expect(screen.queryByText('#102')).not.toBeInTheDocument();
@@ -263,7 +217,6 @@ describe('<Payments /> — page surface', () => {
           razorpay: { configured: false },
         });
       }
-      if (url === '/api/billing') return Promise.resolve([]);
       return Promise.resolve(null);
     });
     renderPayments();
@@ -274,101 +227,173 @@ describe('<Payments /> — page surface', () => {
     });
   });
 
-  // #895 — Record Payment CTA + drawer surface. Pins three invariants:
-  // (1) the CTA renders in the header but the drawer form is not in the
-  // DOM until the CTA is clicked; (2) clicking the CTA mounts the drawer
-  // with the canonical field set; (3) submitting POSTs to the
-  // /api/v1/invoices/:id/payments endpoint with the manual-receipt body
-  // shape and the drawer closes on success.
-  it('Record Payment CTA renders but the drawer is NOT mounted until clicked', async () => {
-    renderPayments();
-    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
-    // CTA renders in the header.
-    expect(screen.getByRole('button', { name: /Record a payment/i })).toBeInTheDocument();
-    // Drawer dialog is not in the DOM yet.
-    expect(screen.queryByRole('dialog', { name: /Record Payment/i })).toBeNull();
-    // Form fields are not mounted either.
-    expect(screen.queryByPlaceholderText(/UPI txn ID/i)).toBeNull();
-  });
-
-  it('clicking the CTA mounts the Record Payment drawer with invoice/amount/method/reference fields', async () => {
-    renderPayments();
-    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Record a payment/i }));
-    // Drawer dialog renders.
-    await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: /Record Payment/i })).toBeInTheDocument();
-    });
-    // Invoice picker is populated with non-PAID/VOIDED rows only.
-    expect(screen.getByText(/INV-201/)).toBeInTheDocument();
-    expect(screen.getByText(/INV-202/)).toBeInTheDocument();
-    // INV-203 is PAID and must be filtered out of the dropdown.
-    expect(screen.queryByText(/INV-203/)).toBeNull();
-    // Amount + reference inputs are present.
-    expect(screen.getByPlaceholderText(/0\.00/)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/UPI txn ID/i)).toBeInTheDocument();
-    // Method select defaults to "cash" and includes the canonical enum
-    // values per the route's accepted method strings.
-    expect(screen.getByRole('option', { name: /^Cash$/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /^UPI$/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /^Bank transfer$/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /^Cheque$/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /^Card$/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /^Other$/i })).toBeInTheDocument();
-  });
-
-  it('submitting the drawer POSTs to /api/v1/invoices/:id/payments and closes on success', async () => {
-    // Add a happy-path POST mock alongside the defaults.
-    fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/payments') return Promise.resolve(samplePayments);
-      if (url === '/api/payments/config') {
-        return Promise.resolve({
-          stripe: { configured: true },
-          razorpay: { configured: true },
-        });
-      }
-      if (url === '/api/billing') return Promise.resolve(sampleInvoices);
-      if (typeof url === 'string' && url.startsWith('/api/v1/invoices/') && url.endsWith('/payments') && opts && opts.method === 'POST') {
-        return Promise.resolve({ payment: { id: 999 }, fullyPaid: false });
-      }
+  it('renders all four status badges (Success/Pending/Failed/Refunded)', async () => {
+    const withRefunded = [
+      ...samplePayments,
+      {
+        id: 4,
+        invoiceId: 104,
+        amount: 99,
+        currency: 'USD',
+        gateway: 'stripe',
+        status: 'REFUNDED',
+        gatewayId: 'pi_ST_REF',
+        paidAt: new Date(Date.now() - 86_400_000).toISOString(),
+        createdAt: new Date(Date.now() - 86_400_000).toISOString(),
+        metadata: {},
+      },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments') return Promise.resolve(withRefunded);
+      if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
       return Promise.resolve(null);
     });
     renderPayments();
+    await waitFor(() => expect(screen.getByText('#104')).toBeInTheDocument());
+    expect(screen.getByText(/^Success$/)).toBeInTheDocument();
+    expect(screen.getAllByText(/^Pending$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^Failed$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/^Refunded$/)).toBeInTheDocument();
+  });
+
+  it('Stripe tab filters rows to stripe only; clicking "All" restores all rows', async () => {
+    renderPayments();
     await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Record a payment/i }));
-    await waitFor(() => expect(screen.getByRole('dialog', { name: /Record Payment/i })).toBeInTheDocument());
 
-    // Fill the form — pick INV-201, amount 500, method=upi, reference=UPI123.
-    const invoiceSelect = screen.getByRole('combobox', { name: /Invoice/i });
-    fireEvent.change(invoiceSelect, { target: { value: '201' } });
-    fireEvent.change(screen.getByPlaceholderText(/0\.00/), { target: { value: '500' } });
-    const methodSelect = screen.getByRole('combobox', { name: /Method/i });
-    fireEvent.change(methodSelect, { target: { value: 'upi' } });
-    fireEvent.change(screen.getByPlaceholderText(/UPI txn ID/i), { target: { value: 'UPI-TXN-123' } });
-
-    // Submit — find the visible "Record Payment" submit button inside the
-    // drawer (the header CTA has the aria-label "Record a payment" — distinct).
-    const submitBtn = screen.getByRole('button', { name: /^Record Payment$/i });
-    fireEvent.click(submitBtn);
-
-    // The POST should have fired against the canonical endpoint with the
-    // manual-receipt body shape.
+    fireEvent.click(screen.getByRole('button', { name: /^stripe$/i }));
     await waitFor(() => {
-      const postCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => typeof url === 'string'
-          && url === '/api/v1/invoices/201/payments'
-          && opts && opts.method === 'POST'
-      );
-      expect(postCall).toBeTruthy();
-      const body = JSON.parse(postCall[1].body);
-      expect(body.method).toBe('upi');
-      expect(body.amount).toBe(500);
-      expect(body.reference).toBe('UPI-TXN-123');
+      expect(screen.queryByText('#101')).not.toBeInTheDocument();
+      expect(screen.getByText('#102')).toBeInTheDocument();
+      expect(screen.getByText('#103')).toBeInTheDocument();
     });
-    // notify.success was called and the drawer unmounts on success.
+
+    fireEvent.click(screen.getByRole('button', { name: /^All$/i }));
     await waitFor(() => {
-      expect(notifyObj.success).toHaveBeenCalledWith('Payment recorded');
-      expect(screen.queryByRole('dialog', { name: /Record Payment/i })).toBeNull();
+      expect(screen.getByText('#101')).toBeInTheDocument();
+      expect(screen.getByText('#102')).toBeInTheDocument();
+      expect(screen.getByText('#103')).toBeInTheDocument();
     });
+  });
+
+  it('refund button is disabled-by-design (no refund endpoint wired yet)', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    const refundButtons = screen.getAllByRole('button', { name: /^Refund$/i });
+    expect(refundButtons.length).toBe(3);
+    refundButtons.forEach((btn) => {
+      expect(btn).toBeDisabled();
+      expect(btn).toHaveAttribute('title', expect.stringMatching(/coming soon/i));
+    });
+  });
+
+  it('clicking a row View button opens the detail modal; clicking close hides it', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: /^Payment #1$/i })).toBeNull();
+    const viewButtons = screen.getAllByRole('button', { name: /^View$/i });
+    fireEvent.click(viewButtons[0]);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /^Payment #1$/i })).toBeInTheDocument();
+    });
+    // Gateway-id renders in the modal.
+    expect(screen.getByText('pay_RZP123')).toBeInTheDocument();
+  });
+
+  it('Refresh button click triggers a fresh /api/payments fetch', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    const initialPaymentsCalls = fetchApiMock.mock.calls.filter(
+      ([url]) => url === '/api/payments'
+    ).length;
+    fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }));
+    await waitFor(() => {
+      const newPaymentsCalls = fetchApiMock.mock.calls.filter(
+        ([url]) => url === '/api/payments'
+      ).length;
+      expect(newPaymentsCalls).toBeGreaterThan(initialPaymentsCalls);
+    });
+  });
+
+  it('detail modal closes when the backdrop overlay is clicked', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: /^View$/i })[0]);
+    const heading = await screen.findByRole('heading', { name: /^Payment #1$/i });
+    // Walk up to the backdrop overlay (the outermost div with position:fixed).
+    let node = heading;
+    while (node && node.style?.position !== 'fixed') node = node.parentElement;
+    expect(node).toBeTruthy();
+    fireEvent.click(node);
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: /^Payment #1$/i })).toBeNull();
+    });
+  });
+
+  it('unknown gateway renders the raw gateway name in the badge (fallback label)', async () => {
+    const withUnknown = [
+      {
+        id: 10,
+        invoiceId: 110,
+        amount: 50,
+        currency: 'USD',
+        gateway: 'paypal',
+        status: 'SUCCESS',
+        gatewayId: 'pp_abc',
+        paidAt: new Date(Date.now() - 86_400_000).toISOString(),
+        createdAt: new Date(Date.now() - 86_400_000).toISOString(),
+        metadata: {},
+      },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments') return Promise.resolve(withUnknown);
+      if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
+      return Promise.resolve(null);
+    });
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#110')).toBeInTheDocument());
+    expect(screen.getByText('paypal')).toBeInTheDocument();
+  });
+
+  it('admin Gateway Configuration cards reflect partial-config state via per-extra checkmarks', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments') return Promise.resolve([]);
+      if (url === '/api/payments/config') {
+        return Promise.resolve({
+          stripe: { configured: true, webhookConfigured: false },
+          razorpay: { configured: true, keyId: 'rzp_test_xyz' },
+        });
+      }
+      return Promise.resolve(null);
+    });
+    renderPayments(ADMIN_USER);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Gateway Configuration/i })).toBeInTheDocument();
+    });
+    // Both gateways labelled "Configured" (configured === true).
+    expect(screen.getAllByText(/^Configured$/).length).toBeGreaterThanOrEqual(2);
+    // Stripe's webhook-secret extra label renders.
+    expect(screen.getByText(/STRIPE_WEBHOOK_SECRET/)).toBeInTheDocument();
+    // Razorpay keyId is surfaced as a <code> chip on the matching extra.
+    expect(screen.getByText('rzp_test_xyz')).toBeInTheDocument();
+  });
+
+  it('Total Collected stat aggregates SUCCESS amounts; PENDING/FAILED rows do not contribute', async () => {
+    const oneDayAgo = new Date(Date.now() - 86_400_000).toISOString();
+    const rows = [
+      { id: 21, invoiceId: 121, amount: 1000, currency: 'USD', gateway: 'stripe', status: 'SUCCESS', gatewayId: 'pi_A', paidAt: oneDayAgo, createdAt: oneDayAgo, metadata: {} },
+      { id: 22, invoiceId: 122, amount: 9999, currency: 'USD', gateway: 'stripe', status: 'PENDING', gatewayId: 'pi_B', paidAt: null, createdAt: oneDayAgo, metadata: {} },
+      { id: 23, invoiceId: 123, amount: 7777, currency: 'USD', gateway: 'stripe', status: 'FAILED', gatewayId: 'pi_C', paidAt: null, createdAt: oneDayAgo, metadata: {} },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments') return Promise.resolve(rows);
+      if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
+      return Promise.resolve(null);
+    });
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#121')).toBeInTheDocument());
+    // Total Collected should render $1000.00 (only SUCCESS amount counted).
+    // Same amount also renders in the row's Amount cell (row #121).
+    const matches = screen.getAllByText('$1000.00');
+    expect(matches.length).toBeGreaterThanOrEqual(2);
   });
 });

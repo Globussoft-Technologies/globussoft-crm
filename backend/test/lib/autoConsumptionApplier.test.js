@@ -196,3 +196,124 @@ describe('lib/autoConsumptionApplier — start (eventBus listener)', () => {
     expect(afterSecond).toBe(afterFirst);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Extension cases (Tick #N) — pin under-covered branches in applyAutoConsumptionForVisit
+// ─────────────────────────────────────────────────────────────────────────────
+describe('lib/autoConsumptionApplier — extended coverage', () => {
+  test('emits low-stock warning when consumed units take stock to <= 0', async () => {
+    // Cotton has currentStock=3, threshold=5; consume 5 units (volume=1 → 5 units deducted)
+    // → newStock = -2, must warn.
+    const drainRule = {
+      ...RULES[1],
+      quantityPerVisit: 5,
+      product: { ...RULES[1].product, currentStock: 3, volume: 1 },
+    };
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([drainRule]);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = await applyAutoConsumptionForVisit({
+        id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+      });
+      expect(result.applied).toHaveLength(1);
+      // At least one console.warn call contains the low-stock signal.
+      const lowStockCall = warnSpy.mock.calls.find((c) =>
+        typeof c[0] === 'string' && c[0].includes('[autoConsumption]') && c[0].includes('low-stock')
+      );
+      expect(lowStockCall).toBeDefined();
+      expect(lowStockCall[0]).toContain('Cotton');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('no-ops when visit object is missing id', async () => {
+    // Even with a serviceId, an id-less visit is malformed — must early-return.
+    const result = await applyAutoConsumptionForVisit({ serviceId: 100, tenantId: 1, status: 'completed' });
+    expect(result).toEqual({ rules: 0, applied: [], skipped: [] });
+    expect(prisma.autoConsumptionRule.findMany).not.toHaveBeenCalled();
+  });
+
+  test('applied[] entries carry { ruleId, productId, qty } shape', async () => {
+    prisma.autoConsumptionRule.findMany.mockResolvedValue(RULES);
+    const result = await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    expect(result.applied).toHaveLength(2);
+    // qty is the raw consumedMl (rule.quantityPerVisit) — not unit count.
+    expect(result.applied[0]).toEqual({ ruleId: 1, productId: 200, qty: 1 });
+    expect(result.applied[1]).toEqual({ ruleId: 2, productId: 201, qty: 0.5 });
+  });
+
+  test('does NOT write audit log when applied.length === 0 (all rules failed)', async () => {
+    prisma.autoConsumptionRule.findMany.mockResolvedValue(RULES);
+    // Every transaction throws → applied stays empty, audit must be skipped.
+    prisma.$transaction = vi.fn(async () => { throw new Error('all dead'); });
+    const result = await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    expect(result.applied).toHaveLength(0);
+    expect(result.skipped).toHaveLength(2);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('does NOT write an audit log on multi-rule apply (system-triggered, no userId; ServiceConsumption is the ledger)', async () => {
+    // The applier intentionally skips writeAudit — the audit schema requires a
+    // valid userId FK, and auto-consumption fires from the eventBus / cron with
+    // no real user actor. The ServiceConsumption rows form the auditable ledger.
+    prisma.autoConsumptionRule.findMany.mockResolvedValue(RULES);
+    await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('swallows audit-write failures without throwing or marking applied as skipped', async () => {
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([RULES[0]]);
+    // writeAudit() itself wraps its body in try/catch — a rejection from
+    // auditLog.create() must NOT propagate out of applyAutoConsumptionForVisit
+    // and must NOT mark the rule as skipped.
+    prisma.auditLog.create.mockRejectedValueOnce(new Error('audit-table-locked'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = await applyAutoConsumptionForVisit({
+        id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+      });
+      // Audit failure is non-fatal — applied entries survive intact.
+      expect(result.applied).toHaveLength(1);
+      expect(result.skipped).toHaveLength(0);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('whole-unit quantityPerVisit (2) consumes exactly 2 units (no Math.max overflow)', async () => {
+    // Math.max(1, Math.ceil(2)) === 2; pin the boundary so the floor doesn't inflate.
+    const wholeRule = {
+      ...RULES[0],
+      quantityPerVisit: 2,
+      product: { ...RULES[0].product, currentStock: 10 },
+    };
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([wholeRule]);
+    await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    const stockUpdate = prisma.product.update.mock.calls[0][0];
+    expect(stockUpdate.data.currentStock.decrement).toBe(2);
+    const consumption = prisma.serviceConsumption.create.mock.calls[0][0];
+    expect(consumption.data.qty).toBe(2);
+  });
+
+  test('visit with undefined status (status field absent) still applies rules', async () => {
+    // The SUT check is `if (visit.status && visit.status !== "completed")` — a
+    // missing status is treated as "proceed" (the create-route fast-path doesn't
+    // always set status before the eventBus fires).
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([RULES[0]]);
+    const result = await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, /* no status field */
+    });
+    expect(result.rules).toBe(1);
+    expect(result.applied).toHaveLength(1);
+    expect(prisma.serviceConsumption.create).toHaveBeenCalledTimes(1);
+  });
+});

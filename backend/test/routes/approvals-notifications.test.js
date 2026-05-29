@@ -228,3 +228,162 @@ describe('POST /api/approvals — Notification side-effect (PRD §12 #4a)', () =
     expect(notif.message).not.toContain('undefined');
   });
 });
+
+// ─── Notification fan-out — additional coverage ───────────────────────────
+// These cases extend the original 5 to cover the contracts the sibling
+// approvals.test.js does NOT exercise: batch shape, approver pool filtering,
+// per-recipient userId mapping, link format invariant, reason-boundary slice,
+// and the "no notification on validation failure / on approve|reject" side-
+// effect surface.
+
+describe('POST /api/approvals — Notification fan-out shape', () => {
+  test('createMany fires exactly ONCE per request (single batch, not per-approver)', async () => {
+    // Contract: route uses createMany with a data: [...] array, NOT a loop
+    // calling create() per recipient. This pins the batch shape so a future
+    // refactor that splits into per-approver create() calls (subtly worse —
+    // breaks transactionality, multiplies DB round-trips) surfaces here.
+    prisma.approvalRequest.create.mockResolvedValueOnce({
+      id: 100, entity: 'Deal', entityId: 1, reason: null,
+      status: 'PENDING', requestedBy: 7, tenantId: 1,
+    });
+    prisma.user.findMany.mockResolvedValueOnce([
+      { id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 },
+    ]);
+
+    await request(makeApp()).post('/api/approvals').send({ entity: 'Deal', entityId: 1 });
+
+    expect(prisma.notification.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.notification.createMany.mock.calls[0][0].data).toHaveLength(5);
+  });
+
+  test('each notification row gets the matching approver userId (no cross-recipient leak)', async () => {
+    // Pin the userId → recipient mapping: every row's userId is one of the
+    // approver IDs returned by user.findMany, no duplicates, no missing.
+    prisma.approvalRequest.create.mockResolvedValueOnce({
+      id: 101, entity: 'Deal', entityId: 1, reason: null,
+      status: 'PENDING', requestedBy: 7, tenantId: 1,
+    });
+    prisma.user.findMany.mockResolvedValueOnce([
+      { id: 11 }, { id: 22 }, { id: 33 },
+    ]);
+
+    await request(makeApp()).post('/api/approvals').send({ entity: 'Deal', entityId: 1 });
+
+    const data = prisma.notification.createMany.mock.calls[0][0].data;
+    const ids = data.map((n) => n.userId).sort();
+    expect(ids).toEqual([11, 22, 33]);
+  });
+
+  test('approver query is tenant-scoped (cross-tenant approvers never receive notifications)', async () => {
+    // The route's approver lookup is where: {tenantId, role: in[ADMIN,MANAGER]}.
+    // This case pins that the tenantId filter is present + matches req.user.tenantId,
+    // not some other constant.
+    prisma.approvalRequest.create.mockResolvedValueOnce({
+      id: 102, entity: 'Quote', entityId: 1, reason: null,
+      status: 'PENDING', requestedBy: 7, tenantId: 42,
+    });
+    prisma.user.findMany.mockResolvedValueOnce([]);
+
+    await request(makeApp({ tenantId: 42, userId: 7 }))
+      .post('/api/approvals')
+      .send({ entity: 'Quote', entityId: 1 });
+
+    const approverCall = prisma.user.findMany.mock.calls.find(
+      (c) => c[0]?.where?.role && Array.isArray(c[0].where.role.in),
+    );
+    expect(approverCall).toBeDefined();
+    expect(approverCall[0].where.tenantId).toBe(42);
+    // The select clause should ONLY pull id (privacy minimisation — we don't
+    // need names / emails to write the notification row).
+    expect(approverCall[0].select).toEqual({ id: true });
+  });
+
+  test('USER role users are NOT in the approver lookup (role filter is in[ADMIN,MANAGER])', async () => {
+    // The route restricts the approver pool to ADMIN + MANAGER. Plain USER
+    // role members must NOT appear in the role: in[...] filter — they don't
+    // have /to-approve queue access, so they shouldn't get the notification.
+    prisma.approvalRequest.create.mockResolvedValueOnce({
+      id: 103, entity: 'Deal', entityId: 1, reason: null,
+      status: 'PENDING', requestedBy: 7, tenantId: 1,
+    });
+    prisma.user.findMany.mockResolvedValueOnce([]);
+
+    await request(makeApp()).post('/api/approvals').send({ entity: 'Deal', entityId: 1 });
+
+    const approverCall = prisma.user.findMany.mock.calls.find(
+      (c) => c[0]?.where?.role && Array.isArray(c[0].where.role.in),
+    );
+    expect(approverCall[0].where.role.in).not.toContain('USER');
+    expect(approverCall[0].where.role.in).toEqual(['ADMIN', 'MANAGER']);
+  });
+
+  test('link field is exactly `/approvals/<created.id>` (frontend deep-link contract)', async () => {
+    // The frontend NotificationBell uses link as the click-target.
+    // Trailing slash, query string, or template-literal interpolation bugs
+    // would break the deep-link — pin the exact format.
+    prisma.approvalRequest.create.mockResolvedValueOnce({
+      id: 9876, entity: 'Deal', entityId: 1, reason: null,
+      status: 'PENDING', requestedBy: 7, tenantId: 1,
+    });
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 1 }, { id: 2 }]);
+
+    await request(makeApp()).post('/api/approvals').send({ entity: 'Deal', entityId: 1 });
+
+    const data = prisma.notification.createMany.mock.calls[0][0].data;
+    data.forEach((n) => {
+      expect(n.link).toBe('/approvals/9876');
+    });
+  });
+
+  test('title format is exactly `Approval pending: <entity> #<entityId>`', async () => {
+    // Pin the title format. The bell renders title verbatim — a refactor
+    // that drops the "Approval pending:" prefix would silently render a
+    // less-discoverable bell entry.
+    prisma.approvalRequest.create.mockResolvedValueOnce({
+      id: 200, entity: 'Quote', entityId: 77, reason: null,
+      status: 'PENDING', requestedBy: 7, tenantId: 1,
+    });
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 1 }]);
+
+    await request(makeApp()).post('/api/approvals').send({ entity: 'Quote', entityId: 77 });
+
+    const notif = prisma.notification.createMany.mock.calls[0][0].data[0];
+    expect(notif.title).toBe('Approval pending: Quote #77');
+  });
+
+  test('reason exactly 80 chars long → message contains the full reason (boundary, no truncation)', async () => {
+    // Boundary case: slice(0, 80) returns the full string when input.length === 80.
+    // Pins that the truncation is "max 80 chars FROM the reason", not "always
+    // truncated even when short enough". Use 'Z' (absent from the static
+    // template "A new approval request was created for ...") to avoid the
+    // regex matching template letters from the prefix.
+    const reason80 = 'Z'.repeat(80);
+    prisma.approvalRequest.create.mockResolvedValueOnce({
+      id: 201, entity: 'Deal', entityId: 1, reason: reason80,
+      status: 'PENDING', requestedBy: 7, tenantId: 1,
+    });
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 1 }]);
+
+    await request(makeApp())
+      .post('/api/approvals')
+      .send({ entity: 'Deal', entityId: 1, reason: reason80 });
+
+    const notif = prisma.notification.createMany.mock.calls[0][0].data[0];
+    const zMatch = notif.message.match(/Z+/);
+    expect(zMatch).not.toBeNull();
+    expect(zMatch[0].length).toBe(80); // exactly 80, not 79 (off-by-one) or 81 (over-slice)
+  });
+
+  test('validation 400 (missing entity) → approver query NOT run, createMany NOT called', async () => {
+    // The approver lookup + fan-out is downstream of the entity validator.
+    // A 400 short-circuit must NOT touch user.findMany or notification.createMany —
+    // doing so would burn DB round-trips on every bad client request.
+    const res = await request(makeApp())
+      .post('/api/approvals')
+      .send({ entityId: 10 }); // entity missing
+
+    expect(res.status).toBe(400);
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
+  });
+});

@@ -22,10 +22,40 @@ function shape(t, extra = {}) {
   };
 }
 
-// GET / — list territories with counts
+// GET /?fields=summary — list territories with counts
 router.get("/", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
+    // #920 slice 22: ?fields=summary slim-shape opt-in. Mirrors slices 1-20.
+    // Territory is a thin model — when the caller passes ?fields=summary we
+    // drop tenantId (leaks tenant identity to clients that don't need it),
+    // createdAt + updatedAt (timestamp metadata not needed by list-view
+    // chrome), AND skip the contact.groupBy rollup (cross-table aggregate
+    // not needed by dropdown / picker-style list rendering). Returns only:
+    // id, name, regions (parsed), assignedUserIds (parsed). Opt-in additive
+    // — existing callers (no ?fields, or any non-exact value) get the full
+    // row shape with contactCount unchanged.
+    const isSummary = req.query.fields === "summary";
+
+    if (isSummary) {
+      const rows = await prisma.territory.findMany({
+        where: { tenantId },
+        orderBy: { id: "asc" },
+        select: {
+          id: true,
+          name: true,
+          regions: true,
+          assignedUserIds: true,
+        },
+      });
+      return res.json(rows.map(t => ({
+        id: t.id,
+        name: t.name,
+        regions: safeJson(t.regions, []),
+        assignedUserIds: safeJson(t.assignedUserIds, []),
+      })));
+    }
+
     const territories = await prisma.territory.findMany({
       where: { tenantId },
       orderBy: { id: "asc" },

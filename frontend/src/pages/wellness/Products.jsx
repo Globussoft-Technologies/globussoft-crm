@@ -313,7 +313,7 @@ export default function Products() {
                   </td>
                   <td style={{ padding: '1rem', fontFamily: 'monospace', fontSize: '0.9rem' }}>{product.sku || '-'}</td>
                   <td style={{ padding: '1rem', fontSize: '0.9rem' }}>{getCategoryName(product.categoryId)}</td>
-                  <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 500 }}>₹{product.price.toFixed(2)}</td>
+                  <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 500 }}>₹{(product.price ?? 0).toFixed(2)}</td>
                   <td style={{ padding: '1rem', textAlign: 'center' }}>
                     <span
                       onClick={() => setSelectedProductForDetails(product)}
@@ -406,7 +406,7 @@ export default function Products() {
 
               <div>
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Price</div>
-                <div style={{ fontWeight: 600, fontSize: '1.1rem' }}>₹{selectedProductForDetails.price.toFixed(2)}</div>
+                <div style={{ fontWeight: 600, fontSize: '1.1rem' }}>₹{(selectedProductForDetails.price ?? 0).toFixed(2)}</div>
               </div>
             </div>
 

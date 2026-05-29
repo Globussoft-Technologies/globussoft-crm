@@ -659,6 +659,11 @@ const bookings = {
   readPermissions: [
     { module: "calendar", action: "read" },
     { module: "appointments", action: "read" },
+    // Post-split per-page modules (v3.8.x) — a doctor with only
+    // `my_appointments.read` should still be able to export their own
+    // booking rows; ditto a telecaller with `waitlist.read`.
+    { module: "my_appointments", action: "read" },
+    { module: "waitlist", action: "read" },
     { module: "visits", action: "read" },
     { module: "patients", action: "read" },
   ],
@@ -666,6 +671,8 @@ const bookings = {
   writePermissions: [
     { module: "calendar", action: "write" },
     { module: "appointments", action: "write" },
+    { module: "book_appointment", action: "write" },
+    { module: "waitlist", action: "write" },
     { module: "visits", action: "write" },
   ],
   buildWhere: (req) => {

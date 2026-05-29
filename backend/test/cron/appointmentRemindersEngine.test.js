@@ -75,28 +75,43 @@ import prisma from '../../lib/prisma.js';
 import {
   processTenant,
   tickAppointmentReminders,
+  runNoShowRiskForTenant,
+  runNoShowRiskForAllWellnessTenants,
 } from '../../cron/appointmentRemindersEngine.js';
 
 beforeAll(() => {
   prisma.visit = { findMany: vi.fn() };
-  prisma.smsMessage = { findFirst: vi.fn(), create: vi.fn() };
+  prisma.smsMessage = { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() };
   prisma.contact = { findUnique: vi.fn() };
   prisma.tenant = { findMany: vi.fn() };
+  prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
+  prisma.user = { findMany: vi.fn() };
+  prisma.loyaltyTransaction = { findMany: vi.fn() };
 });
 
 beforeEach(() => {
   prisma.visit.findMany.mockReset();
   prisma.smsMessage.findFirst.mockReset();
+  prisma.smsMessage.findMany.mockReset();
   prisma.smsMessage.create.mockReset();
   prisma.contact.findUnique.mockReset();
   prisma.tenant.findMany.mockReset();
+  prisma.notification.findFirst.mockReset();
+  prisma.notification.create.mockReset();
+  prisma.user.findMany.mockReset();
+  prisma.loyaltyTransaction.findMany.mockReset();
 
   // Defaults — every test overrides what it cares about.
   prisma.visit.findMany.mockResolvedValue([]);
   prisma.smsMessage.findFirst.mockResolvedValue(null); // no dedup hit
+  prisma.smsMessage.findMany.mockResolvedValue([]);
   prisma.smsMessage.create.mockResolvedValue({ id: 'sms-x' });
   prisma.contact.findUnique.mockResolvedValue(null);
   prisma.tenant.findMany.mockResolvedValue([]);
+  prisma.notification.findFirst.mockResolvedValue(null);
+  prisma.notification.create.mockResolvedValue({ id: 'notif-x' });
+  prisma.user.findMany.mockResolvedValue([]);
+  prisma.loyaltyTransaction.findMany.mockResolvedValue([]);
 });
 
 const TENANT = { id: 'tenant-A', name: 'Enhanced Wellness', slug: 'enhanced' };
@@ -676,6 +691,259 @@ describe('cron/appointmentRemindersEngine — tickAppointmentReminders orchestra
     errSpy.mockRestore();
 
     expect(res.tenantsProcessed).toBe(0);
+    expect(errCallCount).toBeGreaterThan(0);
+  });
+});
+
+// ─── Additional coverage extensions (+8 cases) ──────────────────────────────
+// What's covered below:
+//   - composeBody time-formatting carries Asia/Kolkata locale (am/pm + colon-minute)
+//   - Multiple visits in same window aggregate to queued24=N (loop counter)
+//   - Junk-contact gate short-circuits dedup (contact.findUnique runs BEFORE findFirst probe)
+//   - Dedup OR-clause omits contactId when null (only `to: phone` survives)
+//   - runNoShowRiskForTenant: zero upcoming visits → early-return {scored:0, flagged:0, notified:0}
+//   - runNoShowRiskForTenant: high-risk visit → notification fanned out to doctor + ADMIN/MANAGER
+//     with dedup link `/wellness/visits/:id` + type='warning'
+//   - runNoShowRiskForTenant: low-risk visit (score < NOSHOW_THRESHOLD=60) → no notification
+//   - runNoShowRiskForAllWellnessTenants: per-tenant error isolation
+
+describe('cron/appointmentRemindersEngine — composeBody locale formatting', () => {
+  test('time string carries Asia/Kolkata "h:MM AM/PM" format from toLocaleString', async () => {
+    // Use a fixed-clock 24h visit so we can assert the time string is non-ISO
+    // and contains am/pm + colon. The exact hour value is non-deterministic
+    // across timezones — pin the FORMAT (am/pm marker + colon-separated minutes)
+    // rather than a literal hour.
+    const v = visit({
+      id: 'v-locale',
+      hours: 24,
+      patient: { id: 'p', name: 'Asha', phone: '+91900', contactId: null },
+      service: { id: 's', name: 'Botox' },
+    });
+    prisma.visit.findMany.mockResolvedValueOnce([v]).mockResolvedValueOnce([]);
+
+    await processTenant(TENANT);
+    const body = prisma.smsMessage.create.mock.calls[0][0].data.body;
+    // toLocaleString("en-IN") with hour12:true renders "h:MM am/pm" (lowercase
+    // on Node ICU builds, sometimes "AM/PM" elsewhere — match case-insensitive).
+    expect(body).toMatch(/tomorrow at \d{1,2}:\d{2}\s?(am|pm|AM|PM)/i);
+    // Not the ISO catch-fallback (which would have a 'T' separator + 'Z').
+    expect(body).not.toMatch(/T\d{2}:\d{2}/);
+  });
+});
+
+describe('cron/appointmentRemindersEngine — batch aggregation', () => {
+  test('three 24h-window visits → queued24=3, three SmsMessage.create calls', async () => {
+    prisma.visit.findMany
+      .mockResolvedValueOnce([
+        visit({
+          id: 'v-A',
+          hours: 24,
+          patient: { id: 'pA', name: 'A', phone: '+91A', contactId: null },
+          service: null,
+        }),
+        visit({
+          id: 'v-B',
+          hours: 24,
+          patient: { id: 'pB', name: 'B', phone: '+91B', contactId: null },
+          service: null,
+        }),
+        visit({
+          id: 'v-C',
+          hours: 24,
+          patient: { id: 'pC', name: 'C', phone: '+91C', contactId: null },
+          service: null,
+        }),
+      ])
+      .mockResolvedValueOnce([]);
+
+    const res = await processTenant(TENANT);
+    expect(res.queued24).toBe(3);
+    expect(res.queued1).toBe(0);
+    expect(res.skipped).toBe(0);
+    expect(prisma.smsMessage.create).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('cron/appointmentRemindersEngine — Junk-contact / dedup interaction', () => {
+  test('Junk-contact → contact.findUnique runs BUT smsMessage.findFirst (dedup) does NOT', async () => {
+    // The engine should short-circuit on Junk BEFORE doing the dedup probe.
+    // Pinning this saves dedup-probe DB roundtrips for known-junk numbers.
+    prisma.visit.findMany
+      .mockResolvedValueOnce([
+        visit({
+          id: 'v-junk-shortcircuit',
+          hours: 24,
+          patient: {
+            id: 'p',
+            name: 'Spammer',
+            phone: '+91900',
+            contactId: 'contact-junk',
+          },
+          service: null,
+        }),
+      ])
+      .mockResolvedValueOnce([]);
+    prisma.contact.findUnique.mockResolvedValue({ status: 'Junk' });
+
+    const res = await processTenant(TENANT);
+    expect(res.skipped).toBe(1);
+    expect(prisma.contact.findUnique).toHaveBeenCalledTimes(1);
+    // Dedup probe skipped — junk gate fires first.
+    expect(prisma.smsMessage.findFirst).not.toHaveBeenCalled();
+    expect(prisma.smsMessage.create).not.toHaveBeenCalled();
+  });
+
+  test('dedup probe OR-clause omits {contactId:null} — only {to: phone} when contactId absent', async () => {
+    // Engine builds `or` array conditionally: only pushes contactId/phone
+    // when truthy. Walk-in visits (contactId=null) must NOT produce an
+    // {contactId: null} clause that would match every prior contactless SMS.
+    prisma.visit.findMany
+      .mockResolvedValueOnce([
+        visit({
+          id: 'v-walkin',
+          hours: 24,
+          patient: {
+            id: 'p',
+            name: 'Walk-in',
+            phone: '+91WALKIN',
+            contactId: null,
+          },
+          service: null,
+        }),
+      ])
+      .mockResolvedValueOnce([]);
+
+    await processTenant(TENANT);
+    const probe = prisma.smsMessage.findFirst.mock.calls[0][0];
+    // OR-clause has exactly one entry: { to: '+91WALKIN' }.
+    expect(probe.where.OR).toEqual([{ to: '+91WALKIN' }]);
+    // Critical: must NOT contain a null-contactId entry that would over-match.
+    expect(probe.where.OR).not.toContainEqual({ contactId: null });
+  });
+});
+
+describe('cron/appointmentRemindersEngine — runNoShowRiskForTenant (PRD Gap §12 #4e)', () => {
+  test('zero upcoming visits → early return {scored:0, flagged:0, notified:0}, no further queries', async () => {
+    prisma.visit.findMany.mockResolvedValueOnce([]); // upcoming visits in 48h window
+
+    const res = await runNoShowRiskForTenant('tenant-X');
+    expect(res).toEqual({ scored: 0, flagged: 0, notified: 0 });
+    // Early-return: signals queries (pastNoShows / anyVisits / smsSent /
+    // loyalty) and user.findMany must NOT have been issued.
+    expect(prisma.visit.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+  });
+
+  test('high-risk visit → notification fanned to doctor + ADMIN/MANAGER with /wellness/visits/:id link', async () => {
+    const now = Date.now();
+    // Visit at hoursOut=2 (in T-24h..T-1h window, so +20 score), istHour=4 AM
+    // (off-hours +10). Patient has past no-show (+30) and was not previously
+    // visited (+15) → score ≈ 75, well above NOSHOW_THRESHOLD=60.
+    // Construct visitDate at 04:00 IST = 22:30 UTC the prior day. To keep
+    // it inside [now, now+48h] we anchor at now+2h and trust that as the
+    // window check; the scoring uses istHour and hoursOut.
+    const visitDate = new Date(now + 2 * 3600 * 1000);
+    // Force istHour to fall outside [10,18) — pick a date 2h out that maps
+    // to a wee-hour IST: we override with a fixed hour by setting visitDate
+    // directly.
+    visitDate.setUTCHours(22, 30, 0, 0); // 04:00 IST (UTC+5:30)
+    // If that pushed visitDate into the past, bump to tomorrow.
+    if (visitDate.getTime() < now) visitDate.setUTCDate(visitDate.getUTCDate() + 1);
+
+    const upcoming = {
+      id: 'visit-risk',
+      patientId: 'pat-1',
+      visitDate,
+      patient: { id: 'pat-1', name: 'Risky Patient', phone: '+91555' },
+      doctor: { id: 'doc-1' },
+    };
+    prisma.visit.findMany
+      .mockResolvedValueOnce([upcoming]) // upcoming visits
+      .mockResolvedValueOnce([{ patientId: 'pat-1' }]) // pastNoShows (+30)
+      .mockResolvedValueOnce([]); // anyVisits (empty → +15 first-visit)
+    prisma.smsMessage.findMany.mockResolvedValueOnce([]); // no reminder sent (+20)
+    prisma.loyaltyTransaction.findMany.mockResolvedValueOnce([]); // no loyalty offset
+
+    prisma.user.findMany.mockResolvedValueOnce([
+      { id: 'admin-1' },
+      { id: 'mgr-1' },
+    ]);
+    prisma.notification.findFirst.mockResolvedValue(null); // no prior notifs
+
+    const res = await runNoShowRiskForTenant('tenant-X');
+
+    expect(res.scored).toBe(1);
+    expect(res.flagged).toBe(1);
+    // Recipients: doc-1 + admin-1 + mgr-1 = 3 notifications (Set-dedup'd).
+    expect(res.notified).toBe(3);
+    expect(prisma.notification.create).toHaveBeenCalledTimes(3);
+
+    // Pin the dedup link shape — /wellness/visits/:id + type='warning'.
+    const firstCall = prisma.notification.create.mock.calls[0][0];
+    expect(firstCall.data.link).toBe('/wellness/visits/visit-risk');
+    expect(firstCall.data.type).toBe('warning');
+    expect(firstCall.data.tenantId).toBe('tenant-X');
+    expect(firstCall.data.title).toMatch(/High no-show risk: Risky Patient/);
+  });
+
+  test('low-risk visit (score < 60) → no notification', async () => {
+    const now = Date.now();
+    // Loyal patient (-10), prior-visited (no +15), reminder sent (no +20),
+    // visit at istHour=12 (no +10), no past no-shows (no +30) → score = 0.
+    const visitDate = new Date(now + 6 * 3600 * 1000);
+    visitDate.setUTCHours(6, 30, 0, 0); // 12:00 IST
+    if (visitDate.getTime() < now) visitDate.setUTCDate(visitDate.getUTCDate() + 1);
+
+    const upcoming = {
+      id: 'visit-safe',
+      patientId: 'pat-safe',
+      visitDate,
+      patient: { id: 'pat-safe', name: 'Loyal Asha', phone: '+91777' },
+      doctor: { id: 'doc-2' },
+    };
+    prisma.visit.findMany
+      .mockResolvedValueOnce([upcoming])
+      .mockResolvedValueOnce([]) // no past no-shows
+      .mockResolvedValueOnce([{ patientId: 'pat-safe' }]); // prior visits → no +15
+    prisma.smsMessage.findMany.mockResolvedValueOnce([{ to: '+91777' }]); // reminded → no +20
+    prisma.loyaltyTransaction.findMany.mockResolvedValueOnce([
+      { patientId: 'pat-safe' },
+    ]); // loyal → -10
+
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 'admin-1' }]);
+
+    const res = await runNoShowRiskForTenant('tenant-X');
+    expect(res.scored).toBe(1);
+    expect(res.flagged).toBe(0);
+    expect(res.notified).toBe(0);
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('cron/appointmentRemindersEngine — runNoShowRiskForAllWellnessTenants', () => {
+  test('one failing tenant does NOT abort the loop — sibling tenant still scored', async () => {
+    prisma.tenant.findMany.mockResolvedValueOnce([
+      { id: 'T-fail', slug: 'fail' },
+      { id: 'T-ok', slug: 'ok' },
+    ]);
+    // T-fail: visit.findMany throws (caught by runNoShowRiskForTenant's outer
+    // try in the orchestrator). T-ok: zero visits → clean early-return.
+    prisma.visit.findMany
+      .mockRejectedValueOnce(new Error('DB connection lost')) // T-fail upcoming
+      .mockResolvedValueOnce([]); // T-ok upcoming
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await runNoShowRiskForAllWellnessTenants();
+
+    const errCallCount = errSpy.mock.calls.length;
+    errSpy.mockRestore();
+    logSpy.mockRestore();
+
+    // Both tenants attempted; one failure logged; loop continued.
+    expect(prisma.visit.findMany).toHaveBeenCalledTimes(2);
     expect(errCallCount).toBeGreaterThan(0);
   });
 });

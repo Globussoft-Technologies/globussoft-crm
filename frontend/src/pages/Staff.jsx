@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X, UserPlus, Search, Filter as FilterIcon } from 'lucide-react';
+import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X, UserPlus, Search, Filter as FilterIcon, ChevronDown } from 'lucide-react';
 import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { formatDate } from '../utils/date';
@@ -13,10 +13,34 @@ const ROLE_CONFIG = {
   USER:    { color: '#6b7280', bg: 'rgba(107,114,128,0.1)' },
 };
 
-// #236: wellness verticals don't want to see "USER" for every doctor — show
-// their wellnessRole (doctor / professional / stylist / helper / telecaller)
-// as the primary label. Falls through to RBAC role for generic tenants.
+// Access-tier keys mirrored in the RBAC catalog. Picking one of these from
+// the unified Role dropdown maps 1:1 onto User.role; any other RBAC role
+// (DOCTOR / NURSE / RECEPTIONIST / custom) defaults the access tier to USER.
+const ACCESS_TIER_KEYS = new Set(['ADMIN', 'MANAGER', 'USER']);
+
+function deriveAccessTier(rbacRole) {
+  if (!rbacRole) return 'USER';
+  const k = String(rbacRole.key || '').toUpperCase();
+  return ACCESS_TIER_KEYS.has(k) ? k : 'USER';
+}
+
+// If the picked RBAC role's key matches a wellness role catalog entry
+// (case-insensitive — RBAC keys are uppercase, catalog keys are lowercase),
+// auto-assign that wellnessRole so reports/auto-routing keep working without
+// the admin having to pick it separately.
+function deriveWellnessRole(rbacRole, wellnessRoleTypes) {
+  if (!rbacRole || !Array.isArray(wellnessRoleTypes)) return null;
+  const lc = String(rbacRole.key || '').toLowerCase();
+  if (!lc) return null;
+  const match = wellnessRoleTypes.find((r) => r.key === lc);
+  return match ? match.key : null;
+}
+
+// #236 + role consolidation: show the assigned RBAC role's name when it
+// exists (Doctor / Nurse / Receptionist / custom); otherwise fall back to
+// the wellnessRole label (legacy tenants), then to the access tier.
 function displayRole(member) {
+  if (member.primaryRole?.name) return member.primaryRole.name;
   if (member.wellnessRole) {
     return member.wellnessRole.charAt(0).toUpperCase() + member.wellnessRole.slice(1);
   }
@@ -56,16 +80,167 @@ function actionButtonStyle(kind) {
   };
 }
 
-function RoleBadge({ role }) {
-  const cfg = ROLE_CONFIG[role] || ROLE_CONFIG.USER;
+// Unified role badge. Prefers the assigned RBAC role's name (Doctor / Nurse /
+// Receptionist / custom) and falls back to the legacy access tier so every
+// row renders a single, non-stacked badge — keeps the Role column clean even
+// for staff whose RBAC backfill hasn't run yet.
+function RoleBadge({ member }) {
+  const name = member.primaryRole?.name || member.role || '—';
+  const key = String(member.primaryRole?.key || member.role || '').toUpperCase();
+  const tierCfg = ROLE_CONFIG[key];
+  // System access tiers keep their distinctive hues; everything else uses the
+  // wellness teal palette so custom roles read as a single visual family.
+  const cfg = tierCfg || {
+    color: 'var(--primary-color, #265855)',
+    bg: 'rgba(38,88,85,0.1)',
+  };
   return (
     <span style={{
       padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem',
       fontWeight: 'bold', backgroundColor: cfg.bg, color: cfg.color,
       border: `1px solid ${cfg.color}33`, whiteSpace: 'nowrap',
+      textTransform: tierCfg ? 'uppercase' : 'capitalize',
     }}>
-      {role}
+      {name}
     </span>
+  );
+}
+
+// Upward-opening role picker for the Add/Edit Staff modals. Replaces the
+// native <select> so the menu always opens ABOVE the trigger (the trigger
+// sits near the bottom of the modal — a native select would open downward
+// and clip off-screen on smaller viewports). max-height + overflow-y:auto
+// give it a built-in scrollbar once the role catalog grows past ~7 items.
+//
+// Intentionally lean: click-outside to close, click-option to pick + close,
+// no keyboard nav / type-ahead — the native select features that go missing
+// are low-traffic for this 5–15 option picker.
+function RoleSelect({ value, onChange, options, testId, placeholder = '— Select a role —' }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDocClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  const selected = options.find((o) => String(o.id) === String(value));
+  const label = selected
+    ? `${selected.name}${selected.description ? ` — ${selected.description}` : ''}`
+    : placeholder;
+
+  // Selected highlight uses the theme's accent token so the colour swap
+  // happens automatically with the rest of the palette — avoids the
+  // hardcoded teal-on-light-grey clash that showed up in light mode.
+  const selectedBg = 'color-mix(in srgb, var(--accent-color) 14%, transparent)';
+  const hoverBg = 'var(--subtle-bg-3)';
+
+  return (
+    <div ref={ref} style={{ position: 'relative', marginTop: '0.25rem' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        data-testid={testId}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="input-field"
+        style={{
+          width: '100%',
+          textAlign: 'left',
+          padding: '0.55rem 0.75rem',
+          cursor: 'pointer',
+          color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.5rem',
+          // Override .input-field's --input-bg (navy in dark mode) so the
+          // trigger matches the dropdown panel + modal card tone instead of
+          // standing out as a saturated blue rectangle.
+          background:
+            'linear-gradient(var(--surface-color), var(--surface-color)), var(--bg-color)',
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {label}
+        </span>
+        <ChevronDown
+          size={14}
+          style={{
+            opacity: 0.6,
+            flexShrink: 0,
+            transform: open ? 'rotate(180deg)' : 'none',
+            transition: 'transform 0.15s',
+          }}
+        />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% + 4px)',
+            left: 0,
+            right: 0,
+            maxHeight: 260,
+            overflowY: 'auto',
+            // Layered background: --surface-color (the same charcoal/white
+            // tone the modal card uses) painted over an opaque --bg-color
+            // base. Picking --surface-color alone would let the modal show
+            // through at 60% opacity; layering it preserves the modal hue
+            // while keeping the panel fully readable.
+            background:
+              'linear-gradient(var(--surface-color), var(--surface-color)), var(--bg-color)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 8,
+            boxShadow: '0 -8px 24px rgba(0, 0, 0, 0.18)',
+            padding: '0.25rem',
+            zIndex: 1100,
+          }}
+        >
+          {options.map((opt) => {
+            const isSel = String(opt.id) === String(value);
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="option"
+                aria-selected={isSel}
+                onClick={() => { onChange(String(opt.id)); setOpen(false); }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = hoverBg; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = isSel ? selectedBg : 'transparent'; }}
+                style={{
+                  width: '100%', textAlign: 'left',
+                  padding: '0.5rem 0.7rem',
+                  marginBottom: '2px',
+                  background: isSel ? selectedBg : 'transparent',
+                  color: 'var(--text-primary)',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: isSel ? 600 : 400,
+                  display: 'block',
+                }}
+              >
+                {opt.name}
+                {opt.description && (
+                  <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>
+                    {' — '}{opt.description}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -237,33 +412,30 @@ export default function Staff() {
     }
   };
 
-  const updateRole = async (id, role) => {
-    try {
-      await fetchApi(`/api/staff/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
-      loadStaff();
-    } catch (err) {
-      notify.error(err.message || 'Failed to update role.');
-    }
-  };
-
   // #618 — Edit / Deactivate / Reset Password / Resend Invite handlers.
   const openEdit = (member) => {
     setEditing({
       id: member.id,
       name: member.name || '',
       email: member.email || '',
-      role: member.role || 'USER',
-      wellnessRole: member.wellnessRole || '',
       // PRD Gap §1.5 — current commission-profile assignment (null = unassigned).
       commissionProfileId: member.commissionProfileId == null ? '' : String(member.commissionProfileId),
-      // Pre-populate the RBAC role dropdown from the member's current
-      // primary role (surfaced by GET /api/staff). Empty string = unset.
+      // Pre-populate the single Role dropdown from the member's current
+      // primary RBAC role (surfaced by GET /api/staff). Empty string = unset
+      // so admins must explicitly pick a role before saving.
       rbacRoleId: member.primaryRole?.id ? String(member.primaryRole.id) : '',
     });
   };
 
   const saveEdit = async () => {
     if (!editing) return;
+    if (!editing.rbacRoleId) { notify.error('Please choose a role.'); return; }
+    // Same single-pick → 3-field derivation as saveCreate. The backend
+    // contract still accepts role + wellnessRole + rbacRoleId independently;
+    // we just stop asking the admin to fill them out separately.
+    const rbacRole = availableRoles.find((r) => String(r.id) === String(editing.rbacRoleId));
+    const accessTier = deriveAccessTier(rbacRole);
+    const wellnessRole = deriveWellnessRole(rbacRole, wellnessRoleTypes);
     setSavingEdit(true);
     try {
       await fetchApi(`/api/staff/${editing.id}`, {
@@ -271,19 +443,11 @@ export default function Staff() {
         body: JSON.stringify({
           name: editing.name,
           email: editing.email,
-          role: editing.role,
-          // Send null (not '') when wellnessRole is cleared so the backend
-          // can clear the column rather than reject an empty string.
-          wellnessRole: editing.wellnessRole || null,
+          role: accessTier,
+          wellnessRole: wellnessRole || null,
           // PRD Gap §1.5 — number or null. '' becomes null (clear assignment).
           commissionProfileId: editing.commissionProfileId === '' ? null : Number(editing.commissionProfileId),
-          // rbacRoleId: '' → explicit null (clear), number → assign that
-          // role, undefined → don't touch. We always send the field here
-          // because the admin can have explicitly cleared the dropdown,
-          // and the backend distinguishes null-vs-undefined.
-          rbacRoleId: editing.rbacRoleId === ''
-            ? null
-            : parseInt(editing.rbacRoleId, 10),
+          rbacRoleId: parseInt(editing.rbacRoleId, 10),
         }),
       });
       notify.success('Staff member updated.');
@@ -296,19 +460,14 @@ export default function Staff() {
     }
   };
 
-  // Open the Add-Staff modal with empty defaults. The legacy `role` field
-  // (USER/MANAGER/ADMIN) drives the User.role column. The new `rbacRoleId`
-  // is the modern junction-table assignment — what /home routing and the
-  // widget layout key off of. Empty rbacRoleId = let the boot-time RBAC
-  // sync auto-assign the matching role, but for new staff the admin
-  // should always pick one explicitly so the user lands on the right page.
+  // Open the Add-Staff modal with empty defaults. After the role-consolidation
+  // there's a single rbacRoleId field — saveCreate derives the legacy access
+  // tier (ADMIN/MANAGER/USER) and wellnessRole from the picked role's key.
   const openCreate = () => {
     setCreating({
       name: '',
       email: '',
       password: '',
-      role: 'USER',
-      wellnessRole: '',
       rbacRoleId: '',
     });
   };
@@ -323,7 +482,16 @@ export default function Staff() {
     if (!name) { notify.error('Please enter the staff member’s name.'); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { notify.error('Please enter a valid work email address.'); return; }
     if (password.length < 6) { notify.error('Password must be at least 6 characters.'); return; }
-    if (!['ADMIN', 'MANAGER', 'USER'].includes(creating.role)) { notify.error('Please choose a role.'); return; }
+    if (!creating.rbacRoleId) { notify.error('Please choose a role.'); return; }
+    // Derive the legacy access tier + wellnessRole from the single Role pick
+    // so the backend's existing contract (which still takes role + wellnessRole
+    // + rbacRoleId) keeps working. ADMIN/MANAGER/USER picks map 1:1 onto the
+    // access tier; everything else defaults to USER. If the role key matches
+    // a wellness catalog entry (doctor / nurse / professional / …), seed
+    // wellnessRole so reports + auto-routing work without a second pick.
+    const rbacRole = availableRoles.find((r) => String(r.id) === String(creating.rbacRoleId));
+    const accessTier = deriveAccessTier(rbacRole);
+    const wellnessRole = deriveWellnessRole(rbacRole, wellnessRoleTypes);
     setSavingCreate(true);
     try {
       await fetchApi('/api/staff', {
@@ -332,13 +500,9 @@ export default function Staff() {
           name,
           email,
           password,
-          role: creating.role,
-          wellnessRole: creating.wellnessRole || null,
-          // Empty string → undefined so the backend treats it as "no
-          // RBAC role specified" rather than "clear to null".
-          rbacRoleId: creating.rbacRoleId
-            ? parseInt(creating.rbacRoleId, 10)
-            : undefined,
+          role: accessTier,
+          wellnessRole: wellnessRole || null,
+          rbacRoleId: parseInt(creating.rbacRoleId, 10),
         }),
       });
       notify.success(`${name} added to the team.`);
@@ -870,58 +1034,7 @@ export default function Staff() {
                       {member.email}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem' }}>
-                      {member.wellnessRole ? (
-                        // For wellness staff, display the wellnessRole as a
-                        // read-only badge (it's edited elsewhere). The RBAC
-                        // role dropdown still works for non-wellness members.
-                        <span
-                          title={`RBAC role: ${member.role}`}
-                          style={{
-                            background: 'rgba(38,88,85,0.1)',
-                            color: 'var(--accent-color, #265855)',
-                            border: '1px solid rgba(38,88,85,0.3)',
-                            borderRadius: '999px',
-                            padding: '0.2rem 0.6rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 600,
-                            textTransform: 'capitalize',
-                            display: 'inline-block',
-                          }}
-                        >
-                          {displayRole(member)}
-                        </span>
-                      ) : canManageStaff ? (
-                        <select
-                          value={member.role}
-                          onChange={e => updateRole(member.id, e.target.value)}
-                          style={{
-                            background: ROLE_CONFIG[member.role]?.bg || 'transparent',
-                            color: ROLE_CONFIG[member.role]?.color || 'inherit',
-                            border: `1px solid ${ROLE_CONFIG[member.role]?.color || 'var(--border-color)'}33`,
-                            borderRadius: '999px', padding: '0.2rem 0.5rem', fontSize: '0.75rem',
-                            fontWeight: 'bold', cursor: 'pointer', outline: 'none',
-                          }}
-                        >
-                          <option value="ADMIN">ADMIN</option>
-                          <option value="MANAGER">MANAGER</option>
-                          <option value="USER">USER</option>
-                        </select>
-                      ) : (
-                        // #323: non-admins see role as a read-only badge.
-                        <RoleBadge role={member.role} />
-                      )}
-                      {/* Surface the primary RBAC role assignment next to
-                          the legacy access tier. Helps admins eyeball
-                          which staff are mapped to which custom role
-                          (DOCTOR / NURSE / etc.) without opening Edit. */}
-                      {member.primaryRole && member.primaryRole.key !== member.role && (
-                        <div style={{
-                          marginTop: 4, fontSize: '0.7rem', color: 'var(--text-secondary)',
-                          display: 'flex', alignItems: 'center', gap: '0.25rem',
-                        }}>
-                          <Shield size={11} /> {member.primaryRole.name}
-                        </div>
-                      )}
+                      <RoleBadge member={member} />
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                       {formatDate(member.createdAt)}
@@ -1078,51 +1191,20 @@ export default function Staff() {
                   style={{ width: '100%', marginTop: '0.25rem' }}
                 />
               </label>
+              {/* Single Role dropdown — replaces the prior 3-way split
+                  (access tier + job role + wellness role). The picked RBAC
+                  role's key drives all three values via saveCreate's
+                  deriveAccessTier + deriveWellnessRole helpers, so admins
+                  see one decision instead of three. Uses the upward-opening
+                  RoleSelect so the menu doesn't clip past the modal edge. */}
               <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                 Role
-                <select
-                  className="input-field"
-                  value={creating.role}
-                  onChange={(e) => setCreating({ ...creating, role: e.target.value })}
-                  data-testid="staff-create-role"
-                  style={{ width: '100%', marginTop: '0.25rem' }}
-                >
-                  <option value="USER">USER — sees their own tasks + pipeline</option>
-                  <option value="MANAGER">MANAGER — team overview + reports</option>
-                  <option value="ADMIN">ADMIN — full enterprise overview</option>
-                </select>
-              </label>
-              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Job role <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(drives /home dashboard + permissions)</span>
-                <select
-                  className="input-field"
+                <RoleSelect
                   value={creating.rbacRoleId}
-                  onChange={(e) => setCreating({ ...creating, rbacRoleId: e.target.value })}
-                  data-testid="staff-create-rbac-role"
-                  style={{ width: '100%', marginTop: '0.25rem' }}
-                >
-                  <option value="">— Use access tier default —</option>
-                  {availableRoles.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}{r.description ? ` — ${r.description}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Wellness role <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(optional)</span>
-                <select
-                  className="input-field"
-                  value={creating.wellnessRole}
-                  onChange={(e) => setCreating({ ...creating, wellnessRole: e.target.value })}
-                  data-testid="staff-create-wellness-role"
-                  style={{ width: '100%', marginTop: '0.25rem' }}
-                >
-                  <option value="">— None —</option>
-                  {wellnessRoleTypes.map((r) => (
-                    <option key={r.id} value={r.key}>{r.label}</option>
-                  ))}
-                </select>
+                  onChange={(v) => setCreating({ ...creating, rbacRoleId: v })}
+                  options={availableRoles}
+                  testId="staff-create-role"
+                />
               </label>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
@@ -1201,78 +1283,41 @@ export default function Staff() {
                   style={{ width: '100%', marginTop: '0.25rem' }}
                 />
               </label>
+              {/* Single Role dropdown — replaces Access tier + Job role +
+                  Wellness role. saveEdit's derivation maps the picked RBAC
+                  key onto User.role + wellnessRole so the existing backend
+                  contract keeps working. Uses the upward-opening RoleSelect
+                  so the menu doesn't clip past the modal edge. */}
               <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Access tier
-                <select
-                  className="input-field"
-                  value={editing.role}
-                  onChange={(e) => setEditing({ ...editing, role: e.target.value })}
-                  style={{ width: '100%', marginTop: '0.25rem' }}
-                >
-                  <option value="ADMIN">ADMIN</option>
-                  <option value="MANAGER">MANAGER</option>
-                  <option value="USER">USER</option>
-                </select>
-              </label>
-              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Job role <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(drives /home dashboard + permissions)</span>
-                <select
-                  className="input-field"
+                Role
+                <RoleSelect
                   value={editing.rbacRoleId}
-                  onChange={(e) => setEditing({ ...editing, rbacRoleId: e.target.value })}
-                  data-testid="staff-edit-rbac-role"
-                  style={{ width: '100%', marginTop: '0.25rem' }}
-                >
-                  <option value="">— None —</option>
-                  {availableRoles.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}{r.description ? ` — ${r.description}` : ''}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setEditing({ ...editing, rbacRoleId: v })}
+                  options={availableRoles}
+                  testId="staff-edit-role"
+                />
               </label>
-              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Wellness role <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(optional)</span>
-                <select
-                  className="input-field"
-                  value={editing.wellnessRole}
-                  onChange={(e) => setEditing({ ...editing, wellnessRole: e.target.value })}
-                  style={{ width: '100%', marginTop: '0.25rem' }}
-                >
-                  <option value="">— None —</option>
-                  {/* If the staff member currently holds a wellnessRole
-                      that's NOT in the active catalog (deactivated /
-                      deleted by an admin after assignment), surface it
-                      as a disabled placeholder option so the dropdown
-                      still reflects the saved value instead of silently
-                      showing "— None —". */}
-                  {editing.wellnessRole &&
-                   !wellnessRoleTypes.some((r) => r.key === editing.wellnessRole) && (
-                    <option value={editing.wellnessRole} disabled>
-                      {editing.wellnessRole} (no longer in catalog)
-                    </option>
-                  )}
-                  {wellnessRoleTypes.map((r) => (
-                    <option key={r.id} value={r.key}>{r.label}</option>
-                  ))}
-                </select>
-              </label>
-              {/* PRD Gap §1.5 — assign a commission profile. Empty = no profile. */}
-              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Commission profile <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(optional)</span>
-                <select
-                  className="input-field"
-                  value={editing.commissionProfileId}
-                  onChange={(e) => setEditing({ ...editing, commissionProfileId: e.target.value })}
-                  data-testid="staff-edit-commission-profile"
-                  style={{ width: '100%', marginTop: '0.25rem' }}
-                >
-                  <option value="">— None —</option>
-                  {commissionProfiles.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </label>
+              {/* PRD Gap §1.5 — assign a commission profile. Hidden when
+                  the tenant has zero profiles defined so admins aren't
+                  prompted to fill an empty dropdown; once they create
+                  profiles elsewhere, the field reappears automatically. */}
+              {commissionProfiles.length > 0 && (
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Commission profile <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(optional)</span>
+                  <select
+                    className="input-field"
+                    value={editing.commissionProfileId}
+                    onChange={(e) => setEditing({ ...editing, commissionProfileId: e.target.value })}
+                    data-testid="staff-edit-commission-profile"
+                    style={{ width: '100%', marginTop: '0.25rem' }}
+                  >
+                    <option value="">— None —</option>
+                    {commissionProfiles.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
               <button

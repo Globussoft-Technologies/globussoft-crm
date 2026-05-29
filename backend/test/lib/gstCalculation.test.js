@@ -134,6 +134,58 @@ describe("computeGstSplit (single taxable amount)", () => {
     expect(r.sgst).toBe(30);
     expect(r.totalTax).toBe(60);
   });
+
+  test("half-up boundary: ₹333.33 × 5% intra-state → totalTax 16.67 (JSDoc reference, half-up not banker's)", () => {
+    // 333.33 * 5% = 16.6665 → half-up gives 16.67 (banker's would give 16.66).
+    // Pins the JSDoc rationale in the SUT header — this is THE reference
+    // example used to justify Math.round-based half-up over banker's.
+    // Distinct from tdsCalculation.js which uses Number.EPSILON nudge;
+    // GST module deliberately does NOT (operator-PDF rounding alignment).
+    const r = computeGstSplit({
+      taxableAmount: 333.33,
+      gstPercent: 5,
+      isInterstate: false,
+    });
+    // halfRate = 2.5; 333.33 * 2.5% = 8.33325 → half-up = 8.33 each side
+    expect(r.cgst).toBe(8.33);
+    expect(r.sgst).toBe(8.33);
+    expect(r.totalTax).toBe(16.67);
+    expect(r.gross).toBe(350);
+  });
+
+  test("NaN / non-finite amount → Number(amt) || 0 coercion → all-zero output", () => {
+    // taxableAmount: NaN → Number(NaN) is NaN → NaN || 0 → 0.
+    // Pins the defensive coercion path so a poisoned upstream value
+    // doesn't NaN-propagate through gross/totalTax in the response.
+    const r = computeGstSplit({
+      taxableAmount: NaN,
+      gstPercent: 18,
+      isInterstate: false,
+    });
+    expect(r).toEqual({
+      cgst: 0,
+      sgst: 0,
+      igst: 0,
+      totalTax: 0,
+      gross: 0,
+    });
+  });
+
+  test("string amount 'abc' → Number coercion to NaN → 0 → all-zero output", () => {
+    // String 'abc' → Number('abc') is NaN → NaN || 0 → 0.
+    // Same defensive path as NaN; pins it for the string-input variant
+    // (e.g. malformed body field that bypassed validator).
+    const r = computeGstSplit({
+      taxableAmount: "abc",
+      gstPercent: 18,
+      isInterstate: true,
+    });
+    expect(r.cgst).toBe(0);
+    expect(r.sgst).toBe(0);
+    expect(r.igst).toBe(0);
+    expect(r.totalTax).toBe(0);
+    expect(r.gross).toBe(0);
+  });
 });
 
 describe("computeGstForLines (multiple line items)", () => {
@@ -223,6 +275,28 @@ describe("computeGstForLines (multiple line items)", () => {
     expect(r.buckets).toEqual([]);
     expect(r.grandTotal).toBe(0);
   });
+
+  test("scrambled input order [18, 5, 12] → buckets returned in [5, 12, 18] ascending (NFR-4.2 determinism)", () => {
+    // Pin the rate-ascending sort against an input permutation that
+    // doesn't happen to be already-sorted. Three distinct rates with
+    // a deliberately-scrambled feed order forces the Array.from(...).sort()
+    // path to actually do work. If someone refactors to .keys() iteration
+    // order (insertion-order in Map), this test catches it.
+    const r = computeGstForLines(
+      [
+        { taxableAmount: 1000, gstPercent: 18 },
+        { taxableAmount: 2000, gstPercent: 5 },
+        { taxableAmount: 1500, gstPercent: 12 },
+      ],
+      false
+    );
+    expect(r.buckets).toHaveLength(3);
+    expect(r.buckets.map((b) => b.gstPercent)).toEqual([5, 12, 18]);
+    // Sanity: each bucket's math is right too
+    expect(r.buckets[0].cgst).toBe(50); // 2000 * 2.5%
+    expect(r.buckets[1].cgst).toBe(90); // 1500 * 6%
+    expect(r.buckets[2].cgst).toBe(90); // 1000 * 9%
+  });
 });
 
 describe("isInterstateSupply (state-code comparison)", () => {
@@ -257,6 +331,20 @@ describe("isInterstateSupply (state-code comparison)", () => {
   test("missing operator state (undefined) → throws", () => {
     expect(() => isInterstateSupply(undefined, "IN-MH")).toThrow(
       /both state codes are required/
+    );
+  });
+
+  test("whitespace-only string → empty after trim → throws (distinct message branch)", () => {
+    // Pins the second throw site — the post-trim emptiness check
+    // (route layer can rely on the catch-all). String('   ') is
+    // non-null so the null/undefined branch passes; trim+upper then
+    // yields '' which fires the second guard with the "got empty
+    // string" message variant.
+    expect(() => isInterstateSupply("   ", "IN-MH")).toThrow(
+      /got empty string/
+    );
+    expect(() => isInterstateSupply("IN-MH", "\t\n ")).toThrow(
+      /got empty string/
     );
   });
 });
@@ -299,5 +387,15 @@ describe("gstRateForCategory (default-rate lookup)", () => {
     expect(gstRateForCategory("HOTEL")).toBe(12);
     expect(gstRateForCategory("Hotel")).toBe(12);
     expect(gstRateForCategory("hotel")).toBe(12);
+  });
+
+  test("trims whitespace before lookup: ' hotel ' / '  FLIGHT  ' resolve to canonical rates", () => {
+    // Pins the .trim() in the lookup path. An upstream form field
+    // with leading/trailing whitespace would otherwise miss the
+    // CATEGORY_RATES map and fall through to DEFAULT_RATE — silently
+    // wrong (e.g. ' hotel ' would render 18% instead of 12%).
+    expect(gstRateForCategory(" hotel ")).toBe(12);
+    expect(gstRateForCategory("  FLIGHT  ")).toBe(5);
+    expect(gstRateForCategory("\ttour_package\n")).toBe(5);
   });
 });

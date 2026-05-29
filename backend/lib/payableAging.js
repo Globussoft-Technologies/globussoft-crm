@@ -283,6 +283,144 @@ function computeMonthlyRollup(payables) {
   };
 }
 
+// === Quarterly rollup (Arc 2 #903 slice 20) ===
+//
+// Group a list of payables into per-YYYY-Qn buckets, splitting count +
+// total amount by status (pending / scheduled / paid / cancelled). Feeds
+// the per-supplier dashboard "next 4 quarters payable schedule" widget
+// (PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.d + §3.5.b "commission ledger per
+// FY" — the FY ledger composes from quarterly which composes from
+// monthly).
+//
+// Quarter boundaries are calendar-based (Q1=Jan-Mar, Q2=Apr-Jun,
+// Q3=Jul-Sep, Q4=Oct-Dec). Indian financial-year quarters (Apr-Jun = Q1
+// FY, etc.) are out of scope for this slice — surface both labels in a
+// future slice if the finance team needs them.
+//
+// Composes from computeMonthlyRollup by collapsing each (year, quarter)
+// triplet of monthly buckets — preserves the per-status break + exclusion
+// reasons so callers get a strict superset of the monthly contract at a
+// coarser granularity.
+//
+// === Output shape ===
+//
+//   {
+//     quarters: [
+//       { quarter: "2026-Q1", year: 2026, q: 1,
+//         totalAmount: 750, totalCount: 18,
+//         byStatus: {
+//           pending:   { count: 14, totalAmount: 700 },
+//           scheduled: { count: 0,  totalAmount: 0 },
+//           paid:      { count: 4,  totalAmount: 50 },
+//           cancelled: { count: 0,  totalAmount: 0 },
+//         },
+//       },
+//       ...
+//     ],
+//     grandTotal: 750,
+//     totalCount: 18,
+//     excludedCount: 0,
+//     excludedReasons: {},
+//   }
+//
+// Quarters sorted ASC by (year, q). Empty quarters (no payables) are NOT
+// emitted — mirror the monthly contract; callers fill gaps client-side.
+
+/**
+ * Compute the calendar quarter (1..4) for a 1-based month (1..12).
+ *
+ * @param {number} month1to12
+ * @returns {number} — 1..4
+ */
+function quarterForMonth(month1to12) {
+  return Math.floor((month1to12 - 1) / 3) + 1;
+}
+
+/**
+ * Format a (year, quarter) pair as YYYY-Qn (e.g. "2026-Q1").
+ *
+ * @param {number} year
+ * @param {number} q — 1..4
+ * @returns {string}
+ */
+function quarterKey(year, q) {
+  return `${year}-Q${q}`;
+}
+
+/**
+ * Build a per-YYYY-Qn rollup of payables, split by status.
+ *
+ * Composes from computeMonthlyRollup — every monthly bucket is folded
+ * into its enclosing (year, quarter) pair so the per-status break
+ * preserves the same correctness contract.
+ *
+ * Exclusion reasons mirror the monthly rollup (NO_PAYABLE / NO_DUE_DATE
+ * / INVALID_DUE_DATE) since the underlying classifier is shared.
+ *
+ * @param {Array} payables
+ * @returns {{
+ *   quarters: Array<{ quarter: string, year: number, q: number,
+ *     totalAmount: number, totalCount: number,
+ *     byStatus: Record<string, { count: number, totalAmount: number }>
+ *   }>,
+ *   grandTotal: number,
+ *   totalCount: number,
+ *   excludedCount: number,
+ *   excludedReasons: Record<string, number>
+ * }}
+ */
+function computeQuarterlyRollup(payables) {
+  const monthly = computeMonthlyRollup(payables);
+  const buckets = new Map(); // key=YYYY-Qn -> aggregate
+
+  for (const m of monthly.months) {
+    // m.month is "YYYY-MM"; parse year + month then map to quarter.
+    const [yStr, mStr] = m.month.split("-");
+    const year = Number(yStr);
+    const month = Number(mStr);
+    const q = quarterForMonth(month);
+    const key = quarterKey(year, q);
+
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = {
+        quarter: key,
+        year,
+        q,
+        totalAmount: 0,
+        totalCount: 0,
+        byStatus: {},
+      };
+      for (const s of ROLLUP_STATUSES) {
+        bucket.byStatus[s] = { count: 0, totalAmount: 0 };
+      }
+      buckets.set(key, bucket);
+    }
+
+    bucket.totalAmount = round2(bucket.totalAmount + m.totalAmount);
+    bucket.totalCount += m.totalCount;
+    for (const s of ROLLUP_STATUSES) {
+      bucket.byStatus[s].count += m.byStatus[s].count;
+      bucket.byStatus[s].totalAmount = round2(
+        bucket.byStatus[s].totalAmount + m.byStatus[s].totalAmount,
+      );
+    }
+  }
+
+  const quarters = [...buckets.values()].sort((a, b) => {
+    if (a.year !== b.year) return a.year - b.year;
+    return a.q - b.q;
+  });
+
+  return {
+    quarters,
+    grandTotal: monthly.grandTotal,
+    totalCount: monthly.totalCount,
+    excludedCount: monthly.excludedCount,
+    excludedReasons: monthly.excludedReasons,
+  };
+}
+
 module.exports = {
   AGING_BUCKETS,
   bucketForDays,
@@ -291,4 +429,7 @@ module.exports = {
   ROLLUP_STATUSES,
   monthKey,
   computeMonthlyRollup,
+  quarterForMonth,
+  quarterKey,
+  computeQuarterlyRollup,
 };

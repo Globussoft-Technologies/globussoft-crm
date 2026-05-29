@@ -110,10 +110,18 @@ describe('GET /api/travel/suppliers/:id/scorecard', () => {
     });
     // Layout: 5 paid (3 on-time, 1 late, 1 missing dueDate),
     //         2 cancelled, 1 pending, 1 scheduled → bookingVolume = 9.
+    //
+    // Note: every on-time row uses paidAt STRICTLY EARLIER than dueDate by at
+    // least 1 day. The earlier shape `paidAt: dateDaysFromNow(-5), dueDate:
+    // dateDaysFromNow(-5)` was flaky on slow CI runners because each call to
+    // dateDaysFromNow() reads Date.now() at a different microsecond — under
+    // load the gap can extend into milliseconds, flipping paidAt > dueDate and
+    // mis-classifying the row as LATE. Always make the timeliness intent
+    // unambiguous by spacing paidAt and dueDate by ≥1 day.
     prisma.travelSupplierPayable.findMany.mockResolvedValue([
-      // 3 on-time paid
+      // 3 on-time paid (paidAt strictly < dueDate; ≥1d apart for clock safety)
       { status: 'paid', dueDate: dateDaysFromNow(-10), paidAt: dateDaysFromNow(-15), amount: '1000.00' },
-      { status: 'paid', dueDate: dateDaysFromNow(-5),  paidAt: dateDaysFromNow(-5),  amount: '2000.50' },
+      { status: 'paid', dueDate: dateDaysFromNow(-4),  paidAt: dateDaysFromNow(-5),  amount: '2000.50' },
       { status: 'paid', dueDate: dateDaysFromNow(-20), paidAt: dateDaysFromNow(-25), amount: '3000.25' },
       // 1 late paid
       { status: 'paid', dueDate: dateDaysFromNow(-30), paidAt: dateDaysFromNow(-20), amount: '4000.00' },

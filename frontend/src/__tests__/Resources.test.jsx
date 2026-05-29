@@ -98,14 +98,17 @@ vi.mock('../utils/api', () => ({
 }));
 
 // Stable notify object — RTL standing rule (Wave 11 cfb5789, Wave 12 f59e91d).
+// confirm is a vi.fn so individual tests can flip the resolved value
+// (re-installed in beforeEach because vitest.setup.js calls restoreAllMocks).
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyObj = {
   error: notifyError,
   info: notifyInfo,
   success: notifySuccess,
-  confirm: () => Promise.resolve(true),
+  confirm: notifyConfirm,
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -162,6 +165,10 @@ beforeEach(() => {
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
+  // Re-install notify.confirm impl (vitest.setup's restoreAllMocks wipes
+  // vi.fn() implementations between tests).
+  notifyConfirm.mockReset();
+  notifyConfirm.mockImplementation(() => Promise.resolve(true));
   confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
@@ -386,12 +393,12 @@ describe('<Resources /> — edit prefill + PUT', () => {
 });
 
 describe('<Resources /> — delete flow', () => {
-  it('window.confirm true → DELETE /api/wellness/resources/:id + notify.success + refetch', async () => {
+  it('notify.confirm true → DELETE /api/wellness/resources/:id + notify.success + refetch', async () => {
     installFetchMock();
     render(<Resources />);
     const laserRow = (await screen.findByText(/^Laser Room 1$/)).closest('tr');
     const delBtn = within(laserRow).getByRole('button', { name: /^Delete$/ });
-    confirmSpy.mockReturnValueOnce(true);
+    notifyConfirm.mockImplementationOnce(() => Promise.resolve(true));
     fireEvent.click(delBtn);
     await waitFor(() => {
       const deleteCall = fetchApiMock.mock.calls.find(
@@ -405,12 +412,12 @@ describe('<Resources /> — delete flow', () => {
     );
   });
 
-  it('window.confirm false → no DELETE fires', async () => {
+  it('notify.confirm false → no DELETE fires', async () => {
     installFetchMock();
     render(<Resources />);
     const laserRow = (await screen.findByText(/^Laser Room 1$/)).closest('tr');
     const delBtn = within(laserRow).getByRole('button', { name: /^Delete$/ });
-    confirmSpy.mockReturnValueOnce(false);
+    notifyConfirm.mockImplementationOnce(() => Promise.resolve(false));
     fireEvent.click(delBtn);
     // Drain microtasks.
     await Promise.resolve();

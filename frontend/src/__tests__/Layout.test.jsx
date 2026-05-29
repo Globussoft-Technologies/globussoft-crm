@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import React from 'react';
 import Layout from '../components/Layout';
-import { AuthContext } from '../App';
+import { AuthContext, ThemeContext } from '../App';
 
 // Stub the heavy children — we care about Layout's wiring
 vi.mock('../components/Sidebar', () => ({ default: () => <div data-testid="sidebar-stub" /> }));
@@ -212,5 +212,176 @@ describe('Layout', () => {
       (n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim() === '0',
     );
     expect(strayZeros).toHaveLength(0);
+  });
+
+  // -- Extended coverage (Layout.jsx is 416L; bring ratio above 51%) --
+  //
+  // The cases below target uncovered branches identified by reading the SUT
+  // end-to-end: SMS banner gating by role + features.smsConfigured,
+  // hamburger aria-controls + aria-expanded initial state, search button
+  // event dispatch (#851), logout server-side revocation call (#528),
+  // theme-toggle ThemeContext branch (#862), document.title tenant-
+  // awareness (#704), build footer rendering (#634), and push-setup
+  // token gating.
+
+  // T1.2 -- SMS banner visible to ADMIN when smsConfigured===false.
+  it('renders the SMS-not-configured banner for ADMIN when features.smsConfigured is false', () => {
+    renderLayout({
+      user: { name: 'Admin', email: 'a@x.test', role: 'ADMIN', features: { smsConfigured: false } },
+    });
+    expect(screen.getByTestId('sms-not-configured-banner')).toBeInTheDocument();
+  });
+
+  it('renders the SMS banner for MANAGER too (isStaff branch)', () => {
+    renderLayout({
+      user: { name: 'Mgr', email: 'm@x.test', role: 'MANAGER', features: { smsConfigured: false } },
+    });
+    expect(screen.getByTestId('sms-not-configured-banner')).toBeInTheDocument();
+  });
+
+  it('hides the SMS banner for regular USERs even when smsConfigured===false', () => {
+    renderLayout({
+      user: { name: 'User', email: 'u@x.test', role: 'USER', features: { smsConfigured: false } },
+    });
+    expect(screen.queryByTestId('sms-not-configured-banner')).not.toBeInTheDocument();
+  });
+
+  it('hides the SMS banner when smsConfigured===true', () => {
+    renderLayout({
+      user: { name: 'Admin', email: 'a@x.test', role: 'ADMIN', features: { smsConfigured: true } },
+    });
+    expect(screen.queryByTestId('sms-not-configured-banner')).not.toBeInTheDocument();
+  });
+
+  // T2.1 -- hamburger toggle exposes correct aria attributes for desktop
+  // resting state. JSDOM matchMedia defaults to non-mobile, and Layout's
+  // auto-close effect immediately reverts sidebarOpen to false after any
+  // open click on desktop. So we pin the wiring (aria-controls,
+  // aria-expanded initial, .sidebar-toggle class) rather than the
+  // open-flow which is asymmetric to the viewport.
+  it('hamburger toggle exposes correct aria-controls + initial aria-expanded', () => {
+    renderLayout();
+    const btn = screen.getByLabelText(/Open navigation menu/i);
+    expect(btn).toHaveAttribute('aria-expanded', 'false');
+    expect(btn).toHaveAttribute('aria-controls', 'app-sidebar');
+    expect(btn).toHaveClass('sidebar-toggle');
+    expect(btn).toHaveAttribute('type', 'button');
+  });
+
+  // #851 -- the legacy "Open global search" header button dispatched
+  // `omnibar:open` so the dropdown panel would open without a keyboard
+  // shortcut. e7253919 replaced the button with an INLINE <Omnibar /> in the
+  // header (see Layout.jsx:376), so the dispatch contract no longer has a UI
+  // surface in Layout — the omnibar:open listener is still wired in Omnibar
+  // for any external caller that hasn't migrated (Omnibar.jsx:283), and the
+  // listener side is covered by Omnibar.test.jsx.
+  it.skip('search button dispatches an omnibar:open CustomEvent — removed in e7253919 (inline Omnibar)', () => {});
+
+  // #528 (CRIT-03 fix) -- logout calls POST /api/auth/logout server-side
+  // BEFORE clearing local state, so the JWT is added to the RevokedToken
+  // denylist. Without this, a captured bearer remains valid for 7 days.
+  it('logout calls POST /api/auth/logout for server-side JWT revocation (#528)', async () => {
+    renderLayout();
+    const btn = screen.getByLabelText(/Log out/i);
+    fireEvent.click(btn);
+    await new Promise((r) => setTimeout(r, 10));
+    const logoutCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === '/api/auth/logout',
+    );
+    expect(logoutCalls.length).toBeGreaterThanOrEqual(1);
+    expect(logoutCalls[0][1]).toMatchObject({ method: 'POST', silent: true });
+  });
+
+  // #862 -- theme toggle button is gated on ThemeContext.toggleTheme. With
+  // no provider, the guard (`useContext(ThemeContext) || {}`) returns
+  // undefined and the button is skipped.
+  it('theme toggle button is absent when ThemeContext is not provided', () => {
+    renderLayout();
+    expect(screen.queryByLabelText(/Switch theme/i)).not.toBeInTheDocument();
+  });
+
+  it('theme toggle button renders + calls toggleTheme when ThemeContext provides one', () => {
+    const toggleTheme = vi.fn();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <ThemeContext.Provider value={{ theme: 'light', toggleTheme }}>
+          <AuthContext.Provider value={{
+            user: { name: 'Alice', email: 'a@x.test', role: 'USER' },
+            setUser: vi.fn(), token: 't-abc', setToken: vi.fn(),
+            tenant: { vertical: 'generic', name: 'Default Org' }, setTenant: vi.fn(),
+          }}>
+            <Routes>
+              <Route path="/" element={<Layout />}>
+                <Route index element={<div data-testid="outlet">HOME</div>} />
+              </Route>
+            </Routes>
+          </AuthContext.Provider>
+        </ThemeContext.Provider>
+      </MemoryRouter>
+    );
+    const themeBtn = screen.getByLabelText(/Switch theme \(currently light\)/i);
+    expect(themeBtn).toBeInTheDocument();
+    fireEvent.click(themeBtn);
+    expect(toggleTheme).toHaveBeenCalledTimes(1);
+  });
+
+  // #704 -- document.title reflects tenant.name so operators with many
+  // open tabs can pick out the CRM tab fast.
+  it('updates document.title with the tenant name (#704)', async () => {
+    renderLayout({ tenant: { id: 1, name: 'Acme Corp', vertical: 'generic' } });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(document.title).toBe('Acme Corp — CRM');
+  });
+
+  it('falls back to "Globussoft CRM" title when tenant.name is missing', async () => {
+    renderLayout({ tenant: { vertical: 'generic' } });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(document.title).toBe('Globussoft CRM');
+  });
+
+  // #634 / #656 -- the build footer always shows the version (visible to
+  // everyone, already in /api/health). The git-SHA component is gated to
+  // ADMINs in the SUT (recon-leak guard).
+  it('build footer renders with the version for any authenticated user', () => {
+    renderLayout({ user: { name: 'U', email: 'u@x.test', role: 'USER' } });
+    const footer = screen.getByTestId('app-build-footer');
+    expect(footer).toBeInTheDocument();
+    expect(footer.textContent).toMatch(/v[\w.\-]+/);
+  });
+
+  // Push setup is gated on a truthy token; without a token, setupPush is
+  // never invoked (avoids registering push for the not-yet-authenticated
+  // splash/login path).
+  it('does NOT call setupPush when token is falsy', () => {
+    setupPushMock.mockClear();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <AuthContext.Provider value={{
+          user: { name: 'A', email: 'a@x.test', role: 'USER' },
+          setUser: vi.fn(), token: null, setToken: vi.fn(),
+          tenant: { vertical: 'generic' }, setTenant: vi.fn(),
+        }}>
+          <Routes>
+            <Route path="/" element={<Layout />}>
+              <Route index element={<div data-testid="outlet">HOME</div>} />
+            </Route>
+          </Routes>
+        </AuthContext.Provider>
+      </MemoryRouter>
+    );
+    expect(setupPushMock).not.toHaveBeenCalled();
+  });
+
+  // The subscription-status fetch is gated on user truthiness. Pin the
+  // silent:true + endpoint to prevent a future refactor from flipping it
+  // to a noisy fetch on every render.
+  it('fetches /api/subscriptions/status when user is present', async () => {
+    renderLayout();
+    await new Promise((r) => setTimeout(r, 10));
+    const subCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === '/api/subscriptions/status',
+    );
+    expect(subCalls.length).toBeGreaterThanOrEqual(1);
+    expect(subCalls[0][1]).toMatchObject({ silent: true });
   });
 });

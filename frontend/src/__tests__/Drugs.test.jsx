@@ -104,11 +104,12 @@ vi.mock('../utils/api', () => ({
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyObj = {
   error: notifyError,
   info: notifyInfo,
   success: notifySuccess,
-  confirm: () => Promise.resolve(true),
+  confirm: notifyConfirm,
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -182,16 +183,13 @@ function renderPage() {
   );
 }
 
-let confirmSpy;
 beforeEach(() => {
   fetchApiMock.mockReset();
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
-  confirmSpy = undefined;
-});
-afterEach(() => {
-  if (confirmSpy) confirmSpy.mockRestore();
+  notifyConfirm.mockReset();
+  notifyConfirm.mockImplementation(() => Promise.resolve(true));
 });
 
 describe('<Drugs /> — page chrome', () => {
@@ -419,10 +417,11 @@ describe('<Drugs /> — edit prefill + PUT', () => {
   });
 });
 
-describe('<Drugs /> — delete (native window.confirm)', () => {
-  it('confirm()=true → DELETE /api/wellness/drugs/:id + notify.success', async () => {
+describe('<Drugs /> — delete (notify.confirm)', () => {
+  // SUT drift: delete uses notify.confirm({...}) (async), not window.confirm.
+  it('notify.confirm()=true → DELETE /api/wellness/drugs/:id + notify.success', async () => {
     installFetchMock();
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    notifyConfirm.mockImplementation(() => Promise.resolve(true));
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Crocin 500')).toBeInTheDocument();
@@ -431,8 +430,10 @@ describe('<Drugs /> — delete (native window.confirm)', () => {
     expect(deleteButtons.length).toBeGreaterThanOrEqual(3);
     fireEvent.click(deleteButtons[0]);
 
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/Delete "Crocin 500" from the catalogue\?/),
+    expect(notifyConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringMatching(/Delete "Crocin 500" from the catalogue\?/),
+      }),
     );
     await waitFor(() => {
       const delCall = fetchApiMock.mock.calls.find(
@@ -446,17 +447,18 @@ describe('<Drugs /> — delete (native window.confirm)', () => {
     );
   });
 
-  it('confirm()=false → no DELETE fired + no notify.success', async () => {
+  it('notify.confirm()=false → no DELETE fired + no notify.success', async () => {
     installFetchMock();
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    notifyConfirm.mockImplementation(() => Promise.resolve(false));
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Crocin 500')).toBeInTheDocument();
     });
     const deleteButtons = screen.getAllByTitle('Delete');
     fireEvent.click(deleteButtons[0]);
-    expect(confirmSpy).toHaveBeenCalled();
+    expect(notifyConfirm).toHaveBeenCalled();
     // Microtask wait — make sure no async DELETE sneaks through.
+    await Promise.resolve();
     await Promise.resolve();
     const delCall = fetchApiMock.mock.calls.find(
       ([, opts]) => opts?.method === 'DELETE',

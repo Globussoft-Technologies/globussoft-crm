@@ -105,6 +105,34 @@ export function hoursForVisits(visits) {
   return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
 }
 
+// #807 — per-column holiday matcher. Used by Calendar's column headers
+// to decide whether a practitioner column should render the "Holiday — <name>"
+// tag + greyed-out style for the selected day. Contract pinned by
+// Calendar.test.jsx 'isHolidayForColumn() — #807 per-column holiday matcher'.
+//
+// Rules (in order):
+//   1. Empty/null holidays → null
+//   2. Practitioner-specific (h.doctorId set) → matches only column.id === h.doctorId
+//   3. Location-scoped (h.locationId set, no doctorId) → matches every NON-Unassigned column
+//      (Unassigned synthetic column is spared until per-column-location ships)
+//   4. Tenant-wide (no location, no doctor) → matches EVERY column (incl. Unassigned)
+// Returns the matching holiday row (truthy) or null.
+export function isHolidayForColumn(holidays, column) {
+  if (!holidays || !Array.isArray(holidays) || holidays.length === 0) return null;
+  for (const h of holidays) {
+    if (h.doctorId != null) {
+      if (h.doctorId === column.id) return h;
+      continue;
+    }
+    if (h.locationId != null) {
+      if (column.isUnassigned) continue;
+      return h;
+    }
+    return h;
+  }
+  return null;
+}
+
 export default function CalendarGrid() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
@@ -463,11 +491,12 @@ export default function CalendarGrid() {
         </div>
       </header>
 
-      {loading && <div>Loading…</div>}
+      {loading && <div data-testid="calendar-loading">Loading…</div>}
 
       {/* Wave 11 Agent GG: red banner when the selected day has any holidays. */}
       {!loading && holidays.length > 0 && (
         <div
+          data-testid="holiday-banner"
           className="glass"
           style={{
             padding: '0.85rem 1rem',

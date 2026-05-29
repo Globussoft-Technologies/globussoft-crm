@@ -445,6 +445,112 @@ router.get("/config", async (req, res) => {
   res.json(body);
 });
 
+// ────────────────────────────────────────────────────────────────
+// GET /api/payments/stats
+//
+// CRM polish — first /stats aggregate for the Payment CRUD route.
+// Read-only tenant-wide KPI surface backing the finance dashboard's
+// gateway-by-channel + collections tile. Mirrors billing/stats +
+// travel-suppliers/stats posture — anodyne aggregate, NO audit row.
+//
+// Schema notes — actual Payment columns: amount (Float), status
+// (default PENDING; live values PENDING/SUCCESS/FAILED/REFUNDED per
+// schema.prisma:2426), gateway (stripe/razorpay/manual — populated
+// from the gateway provider name; the schema does NOT have a separate
+// `method` column, `gateway` IS the method axis), paidAt, createdAt.
+// `successfulAmount` aggregates over status='SUCCESS' (the schema's
+// success terminal; NOT 'COMPLETED' which is not a real Payment enum
+// value here — that's an Invoice-side enum).
+//
+// Auth: explicit verifyToken on the new endpoint (existing payments.js
+// handlers rely on the global server.js auth guard; new /stats follows
+// the billing/stats + travel_suppliers/stats convention of attaching
+// the middleware explicitly so the auth surface is grep-visible).
+//
+// Query params:
+//   ?from / ?to — optional ISO date bounds on createdAt. Invalid → 400
+//                 INVALID_DATE. Both optional and independent.
+//
+// Response envelope:
+//   { total, byStatus, byMethod, totalAmount, successfulAmount,
+//     lastPaymentAt }
+// ────────────────────────────────────────────────────────────────
+const { verifyToken } = require("../middleware/auth");
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    // Validate optional date bounds. Independent validation so a bad
+    // ?from doesn't get masked by a missing ?to and vice-versa.
+    const createdAtClause = {};
+    if (req.query.from !== undefined) {
+      const fromDate = new Date(req.query.from);
+      if (Number.isNaN(fromDate.getTime())) {
+        return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE" });
+      }
+      createdAtClause.gte = fromDate;
+    }
+    if (req.query.to !== undefined) {
+      const toDate = new Date(req.query.to);
+      if (Number.isNaN(toDate.getTime())) {
+        return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE" });
+      }
+      createdAtClause.lte = toDate;
+    }
+
+    const where = { tenantId: tenantOf(req) };
+    if (Object.keys(createdAtClause).length > 0) {
+      where.createdAt = createdAtClause;
+    }
+
+    // Pull just the columns we need to aggregate. Avoids dragging the
+    // full row (metadata blob in particular) into memory just to sum.
+    const rows = await prisma.payment.findMany({
+      where,
+      select: { status: true, gateway: true, amount: true, createdAt: true },
+    });
+
+    const total = rows.length;
+    const byStatus = {};
+    const byMethod = {};
+    let totalSum = 0;
+    let successSum = 0;
+    let lastCreatedAt = null;
+
+    for (const r of rows) {
+      const status = r.status || "PENDING";
+      byStatus[status] = (byStatus[status] || 0) + 1;
+      const method = r.gateway || "unknown";
+      byMethod[method] = (byMethod[method] || 0) + 1;
+      // Defensive: null/undefined amount counts as 0 so a partially-
+      // populated row (e.g. a webhook race that wrote status but not yet
+      // amount) doesn't NaN the whole aggregate.
+      const amt = Number(r.amount) || 0;
+      totalSum += amt;
+      if (status === "SUCCESS") {
+        successSum += amt;
+      }
+      if (r.createdAt && (lastCreatedAt === null || new Date(r.createdAt) > lastCreatedAt)) {
+        lastCreatedAt = new Date(r.createdAt);
+      }
+    }
+
+    // Half-up 2dp rounding helper. EPSILON tweak collapses JS float noise
+    // (0.1+0.2 type artefacts) so 100.555 rounds to 100.56 not 100.55.
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+    res.json({
+      total,
+      byStatus,
+      byMethod,
+      totalAmount: round2(totalSum),
+      successfulAmount: round2(successSum),
+      lastPaymentAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[payments/stats]", err);
+    res.status(500).json({ error: "Failed to compute payment stats" });
+  }
+});
+
 // GET /:id — payment details
 router.get("/:id", async (req, res) => {
   try {

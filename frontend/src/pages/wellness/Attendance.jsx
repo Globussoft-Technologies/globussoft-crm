@@ -164,7 +164,7 @@ export default function Attendance() {
 
       {/* My attendance history */}
       <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: 4 }}>
           <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Calendar size={20} aria-hidden /> My attendance
           </h2>
@@ -172,6 +172,9 @@ export default function Attendance() {
             <DateRangeFilter value={dateFilter} onChange={setDateFilter} label={null} includeAllOption={false} />
           </div>
         </div>
+        {dateFilter.preset === 'last30' && (
+          <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)', marginBottom: 12 }}>My Last 30 Days</div>
+        )}
         {loading ? (
           <div>Loading&hellip;</div>
         ) : history.length === 0 ? (
@@ -218,32 +221,129 @@ export default function Attendance() {
 }
 
 function ManagerStaffSnapshot() {
+  const notify = useNotify();
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const thirtyDaysAgo = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  })();
+  const [exportFrom, setExportFrom] = useState(thirtyDaysAgo);
+  const [exportTo, setExportTo] = useState(todayKey);
+  const [exporting, setExporting] = useState(false);
+
   useEffect(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    fetchApi(`/api/attendance/summary?from=${today}&to=${today}`)
+    fetchApi(`/api/attendance/summary?from=${todayKey}&to=${todayKey}`)
       .then(setSummary)
       .catch(() => setSummary(null))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const onExport = async () => {
+    setExporting(true);
+    try {
+      const data = await fetchApi(`/api/attendance/summary?from=${exportFrom}&to=${exportTo}`);
+      const rows = Object.values((data && data.byUser) || {});
+      const header = ['User ID', 'Days', 'Minutes', 'Late', 'Absent', 'Leaves'];
+      const lines = [header.join(',')];
+      for (const r of rows) {
+        lines.push([
+          r.userId ?? '',
+          r.days ?? 0,
+          r.minutes ?? 0,
+          r.late ?? 0,
+          r.absent ?? 0,
+          r.leaves ?? 0,
+        ].join(','));
+      }
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `payroll-${exportFrom}-to-${exportTo}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      notify.success(`Payroll CSV exported (${rows.length} rows)`);
+    } catch (e) {
+      const msg = e && e.body && e.body.error;
+      notify.error(msg || 'Payroll CSV export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Zylu-spec KPI numbers — backend may not emit early/onTime yet; default to 0.
+  const present = summary?.present || 0;
+  const halfDay = summary?.halfDay || 0;
+  const late = summary?.late || 0;
+  const absent = summary?.absent || 0;
+  const early = summary?.early || 0;
+  const onTime = summary?.onTime || 0;
+  const total = present + halfDay + late + absent;
+  const totalMinutes = summary?.totalMinutes || 0;
+
   return (
     <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-      <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Users size={20} aria-hidden /> Today &mdash; All Staff
-      </h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+        <h2 style={{ marginTop: 0, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Users size={20} aria-hidden /> Today &mdash; All Staff
+        </h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            From
+            <input
+              type="date"
+              aria-label="Payroll CSV from date"
+              value={exportFrom}
+              onChange={(e) => setExportFrom(e.target.value)}
+              style={{ padding: '4px 6px' }}
+            />
+          </label>
+          <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            To
+            <input
+              type="date"
+              aria-label="Payroll CSV to date"
+              value={exportTo}
+              onChange={(e) => setExportTo(e.target.value)}
+              style={{ padding: '4px 6px' }}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={onExport}
+            disabled={exporting}
+            style={{
+              padding: '6px 12px', borderRadius: 6,
+              border: '1px solid var(--border-color, #ddd)',
+              background: 'var(--surface-color, #fff)', color: 'var(--text-primary)',
+              cursor: exporting ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600,
+            }}
+          >
+            Export Payroll CSV
+          </button>
+        </div>
+      </div>
       {loading ? (
         <div>Loading&hellip;</div>
       ) : !summary ? (
         <div style={{ color: 'var(--text-secondary, #888)' }}>No data yet.</div>
       ) : (
         <div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: 12, marginBottom: 16 }}>
-            <Stat label="Present" value={summary.present || 0} />
-            <Stat label="Half-day" value={summary.halfDay || 0} />
-            <Stat label="Late" value={summary.late || 0} />
-            <Stat label="Absent" value={summary.absent || 0} />
-            <Stat label="Total minutes" value={summary.totalMinutes || 0} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 12, marginBottom: 16 }}>
+            <Stat label="Total" value={total} />
+            <Stat label="Absent" value={absent} />
+            <Stat label="Present" value={present} />
+            <Stat label="Early" value={early} />
+            <Stat label="On-Time" value={onTime} />
+            <Stat label="Late" value={late} />
+            <Stat label="Half-day" value={halfDay} />
+            <Stat label="Total minutes" value={totalMinutes} />
           </div>
           {Object.keys(summary.byUser || {}).length > 0 ? (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>

@@ -835,6 +835,176 @@ router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   } catch (e) {
     console.error("[attendance] admin-delete error:", e.message);
     res.status(500).json({ error: "Failed to delete attendance row" });
+// GET /api/attendance/by-month — HRMS polish.
+//
+// Tenant-wide monthly rollup of Attendance entries. Sibling to /summary
+// (a single point-in-time aggregate over an ISO date window); /by-month
+// is the per-month time series that powers the HR dashboard's
+// attendance-trend chart without N round-trips per month.
+//
+// Mirrors the canonical /by-month posture established by
+// travel_suppliers.js's /suppliers/by-month (PRD §3 #903 slice 24): UTC
+// YYYY-MM bucketing, JS-side aggregation over a light findMany
+// projection, "unknown" bucket for null/invalid createdAt (excluded when
+// ?from / ?to is set, kept otherwise so count surface stays accurate),
+// pagination AFTER aggregation + sort + filter, NO audit row written.
+//
+// Auth: verifyToken + verifyRole(['ADMIN','MANAGER']) — matches /summary
+// exactly. Aggregate KPIs across all users in the tenant are NOT
+// USER-readable.
+//
+// Query params:
+//   - ?from / ?to    — optional inclusive YYYY-MM bounds; invalid →
+//                      400 INVALID_MONTH_FORMAT
+//   - ?orderBy       — default month:asc; accepts month:{asc|desc},
+//                      count:{asc|desc}; unknown tokens degrade silently
+//                      to the default
+//   - ?limit/?offset — default 12 / 0; limit caps at 60
+//   - ?userId        — optional filter to a single user (per-user trend)
+//
+// Per-bucket aggregates:
+//   - count             — total attendance rows for the month
+//   - byStatus          — breakdown by Attendance.status enum
+//                         (PRESENT / HALF_DAY / LATE / ABSENT / HOLIDAY)
+//   - totalHoursWorked  — sum of Attendance.totalMinutes / 60, half-up 2dp
+//                         (the schema stores minutes; we expose hours so
+//                         the dashboard's trend chart axis stays usable)
+//   - lateCount         — count of rows where status === 'LATE'. (The
+//                         schema has no lateMinutes column; LATE is the
+//                         derived enum value the /summary aggregator
+//                         already surfaces.)
+//
+// Express route ordering: literal-path /by-month declared BEFORE the
+// /staff/:userId / /devices/:id families so :id="by-month" cannot reach
+// them. Same convention as /summary.
+// ==============================================================
+router.get("/by-month", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+    // YYYY-MM validation — mirrors /suppliers/by-month slice 24.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "count:asc",
+      "count:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Tenant-scoped where + optional per-user narrowing.
+    const where = { tenantId: req.user.tenantId };
+    if (req.query.userId) {
+      const uid = parseInt(req.query.userId, 10);
+      if (Number.isFinite(uid)) where.userId = uid;
+    }
+
+    // Light projection — status + totalMinutes + createdAt is enough for
+    // the bucket totals. No relation pulls.
+    const rows = await prisma.attendance.findMany({
+      where,
+      select: { status: true, totalMinutes: true, createdAt: true },
+    });
+
+    // Half-up round to 2dp — matches sibling /by-month aggregators.
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → bucket. Null/invalid
+    // createdAt rows land in "unknown".
+    const byMonth = new Map();
+    for (const r of rows) {
+      let monthKey = "unknown";
+      if (r.createdAt) {
+        const dt = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let bucket = byMonth.get(monthKey);
+      if (!bucket) {
+        bucket = {
+          month: monthKey,
+          count: 0,
+          byStatus: {},
+          totalMinutes: 0,
+          lateCount: 0,
+        };
+        byMonth.set(monthKey, bucket);
+      }
+      bucket.count += 1;
+      const status = r.status || "PRESENT";
+      bucket.byStatus[status] = (bucket.byStatus[status] || 0) + 1;
+      const mins = Number(r.totalMinutes);
+      if (Number.isFinite(mins)) bucket.totalMinutes += mins;
+      if (status === "LATE") bucket.lateCount += 1;
+    }
+
+    let months = [...byMonth.values()];
+
+    // Apply ?from / ?to bucket filter. "unknown" excluded when either
+    // bound is set (no comparable token); kept otherwise so the count
+    // surface remains complete. Mirrors slice 24.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM (also
+    // chronological). "unknown" sorts last in asc / first in desc
+    // (lexicographically > "9999-12").
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    // Convert totalMinutes -> totalHoursWorked (half-up 2dp) for the
+    // wire shape. We aggregate in minutes (integer-safe) and convert
+    // once at the boundary so floating-point drift can't accumulate
+    // across buckets.
+    const totalBuckets = months.length;
+    const projected = months.slice(skip, skip + take).map((b) => ({
+      month: b.month,
+      count: b.count,
+      byStatus: b.byStatus,
+      totalHoursWorked: round2(b.totalMinutes / 60),
+      lateCount: b.lateCount,
+    }));
+
+    res.json({
+      total: totalBuckets,
+      rows: projected,
+    });
+  } catch (e) {
+    console.error("[attendance] by-month error:", e.message);
+    res.status(500).json({ error: "Failed to compute monthly attendance rollup" });
   }
 });
 

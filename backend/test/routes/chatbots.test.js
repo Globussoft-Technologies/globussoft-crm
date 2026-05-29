@@ -196,6 +196,126 @@ describe('GET /api/chatbots', () => {
   });
 });
 
+// ─── GET /?fields=summary — slim-shape opt-in (#920 slice 19) ───────
+
+describe('GET /api/chatbots?fields=summary', () => {
+  test('uses a slim Prisma select that drops the heavy flow column', async () => {
+    const app = makeApp({ tenantId: 42 });
+    prisma.chatbot.findMany.mockResolvedValue([
+      { id: 1, name: 'Bot A', isActive: true, tenantId: 42, createdAt: new Date(), updatedAt: new Date() },
+    ]);
+
+    const res = await request(app).get('/api/chatbots?fields=summary');
+
+    expect(res.status).toBe(200);
+    // findMany invoked with a `select` payload (slim-shape branch taken).
+    const args = prisma.chatbot.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.select).toEqual({
+      id: true,
+      name: true,
+      isActive: true,
+      tenantId: true,
+      createdAt: true,
+      updatedAt: true,
+    });
+    // flow must NOT appear in the select — it's the heavy column we drop.
+    expect(args.select.flow).toBeUndefined();
+    // Tenant filter pinned even in the slim branch.
+    expect(args.where.tenantId).toBe(42);
+    // orderBy still preserved.
+    expect(args.orderBy).toEqual({ updatedAt: 'desc' });
+  });
+
+  test('returns rows verbatim — no conversationCount decoration in slim mode', async () => {
+    const app = makeApp({ tenantId: 1 });
+    prisma.chatbot.findMany.mockResolvedValue([
+      { id: 7, name: 'Bot X', isActive: true, tenantId: 1, createdAt: new Date(), updatedAt: new Date() },
+      { id: 8, name: 'Bot Y', isActive: false, tenantId: 1, createdAt: new Date(), updatedAt: new Date() },
+    ]);
+
+    const res = await request(app).get('/api/chatbots?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBe(2);
+    // Slim shape — no conversationCount, no parsed flow.
+    expect(res.body[0].conversationCount).toBeUndefined();
+    expect(res.body[0].flow).toBeUndefined();
+    expect(res.body[1].conversationCount).toBeUndefined();
+    expect(res.body[1].flow).toBeUndefined();
+    // Core identity + status fields preserved.
+    expect(res.body[0].id).toBe(7);
+    expect(res.body[0].name).toBe('Bot X');
+    expect(res.body[0].isActive).toBe(true);
+  });
+
+  test('slim branch skips the conversation groupBy query entirely', async () => {
+    const app = makeApp({ tenantId: 1 });
+    prisma.chatbot.findMany.mockResolvedValue([
+      { id: 1, name: 'Bot A', isActive: true, tenantId: 1, createdAt: new Date(), updatedAt: new Date() },
+    ]);
+
+    const res = await request(app).get('/api/chatbots?fields=summary');
+
+    expect(res.status).toBe(200);
+    // The per-row groupBy is the second-most-expensive part of the list
+    // handler — slim mode must avoid it.
+    expect(prisma.chatbotConversation.groupBy).not.toHaveBeenCalled();
+  });
+
+  test('absent ?fields preserves the full-row shape (back-compat)', async () => {
+    const app = makeApp({ tenantId: 1 });
+    prisma.chatbot.findMany.mockResolvedValue([
+      { id: 1, name: 'Bot A', flow: JSON.stringify({ nodes: [], edges: [] }), isActive: true, tenantId: 1 },
+    ]);
+    prisma.chatbotConversation.groupBy.mockResolvedValue([
+      { chatbotId: 1, _count: { _all: 3 } },
+    ]);
+
+    const res = await request(app).get('/api/chatbots'); // no ?fields
+
+    expect(res.status).toBe(200);
+    // findMany invoked WITHOUT a `select` payload — full-row shape preserved.
+    const args = prisma.chatbot.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // groupBy still fires in the full-row branch.
+    expect(prisma.chatbotConversation.groupBy).toHaveBeenCalledTimes(1);
+    // Response decorated with conversationCount + parsed flow as before.
+    expect(res.body[0].conversationCount).toBe(3);
+    expect(res.body[0].flow).toEqual({ nodes: [], edges: [] });
+  });
+
+  test('unknown ?fields value falls back to full-row shape (additive contract)', async () => {
+    const app = makeApp({ tenantId: 1 });
+    prisma.chatbot.findMany.mockResolvedValue([
+      { id: 1, name: 'Bot A', flow: JSON.stringify({ nodes: [], edges: [] }), isActive: true, tenantId: 1 },
+    ]);
+    prisma.chatbotConversation.groupBy.mockResolvedValue([]);
+
+    const res = await request(app).get('/api/chatbots?fields=bogus');
+
+    expect(res.status).toBe(200);
+    // Bogus value treated as "no opt-in" — no `select`, full-row branch.
+    const args = prisma.chatbot.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // Full-row response shape — flow parsed back to an object + decorated.
+    expect(res.body[0].flow).toEqual({ nodes: [], edges: [] });
+    expect(res.body[0].conversationCount).toBe(0);
+  });
+
+  test('empty result set in slim mode returns [] (no groupBy call)', async () => {
+    const app = makeApp({ tenantId: 1 });
+    prisma.chatbot.findMany.mockResolvedValue([]);
+
+    const res = await request(app).get('/api/chatbots?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+    expect(prisma.chatbotConversation.groupBy).not.toHaveBeenCalled();
+  });
+});
+
 // ─── POST / — create bot ────────────────────────────────────────────
 
 describe('POST /api/chatbots', () => {

@@ -153,3 +153,81 @@ describe('lib/webhookDelivery — deliverSingle', () => {
     expect(typeof opts.headers['X-CRM-Tenant']).toBe('string');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Boundary / shape coverage (tick #N — extends the 15 cases above with edge
+// cases on event-string segmentation, payload-serialization failure modes,
+// fan-out arg correctness, timestamp freshness, and concurrency).
+// ---------------------------------------------------------------------------
+describe('lib/webhookDelivery — boundary / shape', () => {
+  test('multi-segment event uses ONLY first segment for wildcard', async () => {
+    // event.split('.')[0] = 'deal' → wildcard = 'deal.*' (NOT 'deal.won.*')
+    prisma.webhook.findMany.mockResolvedValue([]);
+    await deliverWebhooks('deal.won.followup', { id: 1 }, 7);
+    const arg = prisma.webhook.findMany.mock.calls[0][0];
+    expect(arg.where.event.in).toEqual(['deal.won.followup', 'deal.*']);
+  });
+
+  test('empty event string is handled defensively (no throw)', async () => {
+    // ''.split('.')[0] = '' → wildcard = '.*'
+    prisma.webhook.findMany.mockResolvedValue([]);
+    await expect(deliverWebhooks('', { id: 1 }, 7)).resolves.toBeUndefined();
+    const arg = prisma.webhook.findMany.mock.calls[0][0];
+    expect(arg.where.event.in).toEqual(['', '.*']);
+  });
+
+  test('body.timestamp is a recent ISO (within last second)', async () => {
+    global.fetch.mockResolvedValue({ ok: true, status: 200 });
+    const before = Date.now();
+    await deliverSingle('https://x.com/wh', 'event', {}, 1);
+    const after = Date.now();
+    const [, opts] = global.fetch.mock.calls[0];
+    const body = JSON.parse(opts.body);
+    const ts = Date.parse(body.timestamp);
+    expect(Number.isNaN(ts)).toBe(false);
+    expect(ts).toBeGreaterThanOrEqual(before - 1);
+    expect(ts).toBeLessThanOrEqual(after + 1);
+  });
+
+  test('circular-reference payload: JSON.stringify throws → caught, no fetch, no re-throw', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const circular = { name: 'loop' };
+    circular.self = circular;
+    await expect(
+      deliverSingle('https://x.com/wh', 'event', circular, 1)
+    ).resolves.toBeUndefined();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  test('undefined tenantId becomes literal "undefined" in header (defensive String coercion)', async () => {
+    global.fetch.mockResolvedValue({ ok: true, status: 200 });
+    await deliverSingle('https://x.com/wh', 'event', {}, undefined);
+    const [, opts] = global.fetch.mock.calls[0];
+    expect(opts.headers['X-CRM-Tenant']).toBe('undefined');
+  });
+
+  test('opts.signal is an actual AbortSignal instance (Node 18+ AbortSignal.timeout)', async () => {
+    global.fetch.mockResolvedValue({ ok: true, status: 200 });
+    await deliverSingle('https://x.com/wh', 'event', {}, 1);
+    const [, opts] = global.fetch.mock.calls[0];
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test('concurrent deliverWebhooks calls via Promise.all → both resolve, fetch-call sum is correct', async () => {
+    // First call: 2 webhooks → 2 fetches. Second call: 1 webhook → 1 fetch. Total: 3.
+    prisma.webhook.findMany
+      .mockResolvedValueOnce([
+        { id: 1, targetUrl: 'https://a.example/wh' },
+        { id: 2, targetUrl: 'https://b.example/wh' },
+      ])
+      .mockResolvedValueOnce([{ id: 3, targetUrl: 'https://c.example/wh' }]);
+    global.fetch.mockResolvedValue({ ok: true, status: 200 });
+    await Promise.all([
+      deliverWebhooks('deal.won', { id: 1 }, 9),
+      deliverWebhooks('contact.created', { id: 2 }, 9),
+    ]);
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+});

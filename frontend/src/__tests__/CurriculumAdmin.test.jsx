@@ -551,3 +551,263 @@ describe('<CurriculumAdmin /> — edit + delete', () => {
     confirmSpy.mockRestore();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// Extension cases (test-cron tick) — round out the 553L baseline against
+// the 922L SUT to lift the ratio above 59%. Targets uncovered branches:
+//   - grade + subject filter query strings
+//   - Load-error banner + Retry button
+//   - Empty-state message when GET returns []
+//   - FitScoreBadge rendering when score is null/missing (em-dash)
+//   - Required-field validation: missing curriculum / grade / subject
+//   - Modal-close paths: explicit X button + backdrop click
+//   - POST body normalisation: empty learning outcome → null;
+//     destinationLabel trim; isActive=false branch
+//   - INVALID_DESTINATION_ID server error mapping → inline field error
+//   - Edit form pre-fills destinationId as a string (avoids NaN inputs)
+//   - Delete failure → notify.error path
+// ─────────────────────────────────────────────────────────────────────
+
+describe('<CurriculumAdmin /> — filter combinations + table states', () => {
+  it('grade + subject filters compose into the query string', async () => {
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    fetchApiMock.mockClear();
+
+    fireEvent.change(screen.getByLabelText(/Filter by grade/i), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText(/Filter by subject/i), { target: { value: 'Physics' } });
+
+    await waitFor(() => {
+      const composedCall = fetchApiMock.mock.calls.find(
+        ([u]) =>
+          typeof u === 'string'
+          && u.includes('grade=10')
+          && u.includes('subject=Physics'),
+      );
+      expect(composedCall).toBeTruthy();
+    });
+  });
+
+  it('GET rejection surfaces an error banner with a Retry button that re-fires the GET', async () => {
+    installFetchMock({ list: new Error('demo backend down') });
+    renderPage();
+    const retryBtn = await screen.findByRole('button', { name: /Retry/i });
+    expect(retryBtn).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/demo backend down/i);
+
+    // Switch to a healthy response and click Retry — table should populate.
+    installFetchMock();
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(retryBtn);
+    await waitFor(() => {
+      const retryCall = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/travel-curriculum')
+          && (!o?.method || o.method === 'GET'),
+      );
+      expect(retryCall).toBeTruthy();
+    });
+    expect(await screen.findByText(/Mughal architecture/i)).toBeInTheDocument();
+  });
+
+  it('renders empty-state copy when the GET returns zero mappings', async () => {
+    installFetchMock({ list: { mappings: [], total: 0, limit: 100, offset: 0 } });
+    renderPage();
+    expect(await screen.findByText(/No curriculum mappings match the current filters/i)).toBeInTheDocument();
+  });
+
+  it('renders an em-dash placeholder when fitScore is null on a mapping row', async () => {
+    const nullFit = makeMapping({
+      id: 777,
+      curriculum: 'Cambridge',
+      grade: '7',
+      subject: 'Music',
+      fitScore: null,
+      learningOutcome: 'Hindustani classical roots — Varanasi gharana visit',
+      destinationLabel: 'Varanasi music heritage',
+    });
+    installFetchMock({ list: { mappings: [nullFit], total: 1, limit: 100, offset: 0 } });
+    renderPage();
+    const row = await screen.findByTestId('curriculum-mapping-row-777');
+    // FitScoreBadge with score==null renders an em-dash, not the score class.
+    expect(row.querySelector('.curriculum-fit-score')).toBeNull();
+    // The em-dash placeholder is rendered.
+    expect(row.textContent).toContain('—');
+  });
+});
+
+describe('<CurriculumAdmin /> — required field validation + modal close', () => {
+  it('missing curriculum surfaces inline error and does NOT POST', async () => {
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId('curriculum-mapping-new'));
+    await screen.findByText(/New Curriculum Mapping/i);
+
+    // Leave curriculum blank, fill grade + subject only.
+    fireEvent.change(screen.getByTestId('curriculum-form-grade'), { target: { value: '9' } });
+    fireEvent.change(screen.getByTestId('curriculum-form-subject'), { target: { value: 'History' } });
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByTestId('curriculum-form-submit'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Curriculum is required/i)).toBeInTheDocument();
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel-curriculum' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('missing grade surfaces inline error and does NOT POST', async () => {
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId('curriculum-mapping-new'));
+    await screen.findByText(/New Curriculum Mapping/i);
+
+    fireEvent.change(screen.getByTestId('curriculum-form-curriculum'), { target: { value: 'CBSE' } });
+    fireEvent.change(screen.getByTestId('curriculum-form-subject'), { target: { value: 'History' } });
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByTestId('curriculum-form-submit'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Grade is required/i)).toBeInTheDocument();
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel-curriculum' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('missing subject surfaces inline error and does NOT POST', async () => {
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId('curriculum-mapping-new'));
+    await screen.findByText(/New Curriculum Mapping/i);
+
+    fireEvent.change(screen.getByTestId('curriculum-form-curriculum'), { target: { value: 'CBSE' } });
+    fireEvent.change(screen.getByTestId('curriculum-form-grade'), { target: { value: '9' } });
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByTestId('curriculum-form-submit'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Subject is required/i)).toBeInTheDocument();
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel-curriculum' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('modal close via X button hides the form', async () => {
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId('curriculum-mapping-new'));
+    await screen.findByText(/New Curriculum Mapping/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /Close/i }));
+    await waitFor(() => {
+      expect(screen.queryByText(/New Curriculum Mapping/i)).toBeNull();
+    });
+  });
+});
+
+describe('<CurriculumAdmin /> — POST body normalisation + server errors', () => {
+  it('POST body strips empty learningOutcome → null and trims destinationLabel; honours unchecked isActive', async () => {
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId('curriculum-mapping-new'));
+    await screen.findByText(/New Curriculum Mapping/i);
+
+    fireEvent.change(screen.getByTestId('curriculum-form-curriculum'), { target: { value: 'NIOS' } });
+    fireEvent.change(screen.getByTestId('curriculum-form-grade'), { target: { value: '12' } });
+    fireEvent.change(screen.getByTestId('curriculum-form-subject'), { target: { value: 'Sociology' } });
+    // Whitespace-only learning outcome → trim() === '' → null.
+    fireEvent.change(screen.getByTestId('curriculum-form-learning-outcome'), { target: { value: '   ' } });
+    // Padded destination label exercises the .trim() path.
+    fireEvent.change(screen.getByTestId('curriculum-form-destination-label'), { target: { value: '  Pondicherry heritage   ' } });
+    // Uncheck the Active checkbox (default = true).
+    fireEvent.click(screen.getByTestId('curriculum-form-active'));
+
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByTestId('curriculum-form-submit'));
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel-curriculum' && o?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.learningOutcome).toBeNull();
+      expect(body.destinationLabel).toBe('Pondicherry heritage');
+      expect(body.isActive).toBe(false);
+    });
+  });
+
+  it('server error mapping: INVALID_DESTINATION_ID → inline field error + notify.error', async () => {
+    const err = new Error('destinationId must be an integer');
+    err.code = 'INVALID_DESTINATION_ID';
+    err.data = { code: 'INVALID_DESTINATION_ID', error: err.message };
+
+    installFetchMock({ create: err });
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId('curriculum-mapping-new'));
+    await screen.findByText(/New Curriculum Mapping/i);
+
+    // Pass client-side gates so the request actually fires.
+    fireEvent.change(screen.getByTestId('curriculum-form-curriculum'), { target: { value: 'CBSE' } });
+    fireEvent.change(screen.getByTestId('curriculum-form-grade'), { target: { value: '9' } });
+    fireEvent.change(screen.getByTestId('curriculum-form-subject'), { target: { value: 'History' } });
+    fireEvent.click(screen.getByTestId('curriculum-form-submit'));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalled();
+      const msg = notifyError.mock.calls[0][0];
+      expect(msg).toMatch(/Destination id must be a whole number/i);
+    });
+    // Inline field error rendered on the destinationId field as well.
+    expect(screen.getAllByText(/Destination id must be a whole number/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('edit modal pre-fills destinationId as a string (avoids React number-input NaN warning)', async () => {
+    renderPage();
+    const editBtn = await screen.findByTestId('curriculum-mapping-edit-501');
+    fireEvent.click(editBtn);
+    await screen.findByText(/Edit Curriculum Mapping/i);
+
+    // The SUT calls String(m.destinationId) so the controlled <input
+    // type="number"> always receives a string value (not a Number).
+    const destIdInput = screen.getByTestId('curriculum-form-destination-id');
+    expect(destIdInput.value).toBe('42');
+    expect(typeof destIdInput.value).toBe('string');
+  });
+
+  it('delete failure surfaces notify.error and does NOT reload the list on success path', async () => {
+    const err = new Error('Mapping no longer exists');
+    err.code = 'CURRICULUM_NOT_FOUND';
+    err.data = { code: 'CURRICULUM_NOT_FOUND', error: err.message };
+    installFetchMock({ del: err });
+    renderPage();
+
+    const deleteBtn = await screen.findByTestId('curriculum-mapping-delete-501');
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fetchApiMock.mockClear();
+    installFetchMock({ del: err });
+
+    fireEvent.click(deleteBtn);
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalled();
+      const msg = notifyError.mock.calls[0][0];
+      expect(msg).toMatch(/no longer exists/i);
+    });
+    // Notify.success was NOT invoked on the failure path.
+    expect(notifySuccess).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+});

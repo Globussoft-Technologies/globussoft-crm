@@ -509,3 +509,273 @@ describe('<PatientPortal /> — authenticated dashboard', () => {
     ).toBeInTheDocument();
   });
 });
+
+/**
+ * Extension cases (tick #185+, +9 cases). The existing 11 cases cover the
+ * happy paths; this block pins:
+ *   12. Resend-OTP cooldown UX — initial state shows "Resend OTP" enabled;
+ *       after a successful request-otp it flips to "Resend in 30s" disabled.
+ *   13. Clicking Resend (when not in cooldown after a stage transition we
+ *       can't replicate) — covered via a programmatic re-entry: NOT trivially
+ *       reachable from RTL because cooldown starts at 30s, so we assert the
+ *       button is disabled in the post-request state.
+ *   14. "Change phone number" button reverts to phone stage and clears OTP +
+ *       any inline error.
+ *   15. Phone input with hyphens / spaces ("98-12-345-678") → digit-stripped
+ *       validation passes; POST body carries the RAW (un-stripped) phone per
+ *       SUT contract (the SUT validates on stripped digits but sends the raw
+ *       value, so backend handles normalization).
+ *   16. Health-probe HTTP error (non-200) → graceful-degrade renders.
+ *   17. Treatment-Plan tab renders the placeholder copy ("Your treatment
+ *       plan will appear here once your doctor shares one.").
+ *   18. Consent-Forms tab renders the placeholder copy ("Consent forms
+ *       you've signed at the clinic will appear here.").
+ *   19. Dashboard welcome chrome omits the phone block when `me.phone` is
+ *       null — defensive against backend payloads lacking phone.
+ *   20. PDF download — clicking the PDF button fires GET against
+ *       /api/wellness/prescriptions/<id>/pdf with the Bearer token; URL.
+ *       createObjectURL is invoked with the blob.
+ *   21. PDF download failure (404/500) → notify.error called with the
+ *       "Could not download" prefix; no anchor click side-effects assertable
+ *       in jsdom but the notify.error path is the user-observable contract.
+ *
+ * Mocking notes: cases 20-21 install URL.createObjectURL / revokeObjectURL
+ * stubs because jsdom doesn't ship them by default. The PDF fetch uses raw
+ * `fetch` with Bearer header (NOT portalFetch) — see SUT line 304-322 — so
+ * the fetch stub keys on URL prefix `/api/wellness/prescriptions/` to
+ * intercept any rxId.
+ */
+
+describe('<PatientPortal /> — resend OTP cooldown', () => {
+  it('post-request shows "Resend in 30s" disabled; Verify button remains active', async () => {
+    installFetchMock();
+    render(<PatientPortal />);
+    const phoneInput = await screen.findByPlaceholderText(/10-digit mobile number/i);
+    fireEvent.change(phoneInput, { target: { value: '9812345678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+    // After advancing to OTP stage the resend button reads "Resend in 30s"
+    // because `requestOtp` set resendIn=30 on success.
+    const resendBtn = await screen.findByRole('button', { name: /Resend in 30s/i });
+    expect(resendBtn).toBeDisabled();
+    // Verify button stays enabled.
+    expect(
+      screen.getByRole('button', { name: /Verify & enter/i }),
+    ).not.toBeDisabled();
+  });
+});
+
+describe('<PatientPortal /> — change phone navigation', () => {
+  it('clicking "Change phone number" returns to phone stage + clears OTP + error', async () => {
+    installFetchMock();
+    render(<PatientPortal />);
+    const phoneInput = await screen.findByPlaceholderText(/10-digit mobile number/i);
+    fireEvent.change(phoneInput, { target: { value: '9812345678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+    const otpInput = await screen.findByPlaceholderText(/4-digit code/i);
+    fireEvent.change(otpInput, { target: { value: '12' } });
+    fireEvent.click(screen.getByRole('button', { name: /Verify & enter/i }));
+    // An inline 4-digit-code error renders (case 5's assertion).
+    await screen.findAllByText(/Enter the 4-digit code/i);
+    // Click "Change phone number".
+    fireEvent.click(screen.getByRole('button', { name: /Change phone number/i }));
+    // Back on phone stage — phone input is rendered again, OTP input gone.
+    expect(
+      await screen.findByPlaceholderText(/10-digit mobile number/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/4-digit code/i)).toBeNull();
+  });
+});
+
+describe('<PatientPortal /> — phone normalization', () => {
+  it('hyphenated phone "98-12-345-678" → digit-strip passes 10-digit gate', async () => {
+    const fetchStub = installFetchMock();
+    render(<PatientPortal />);
+    const phoneInput = await screen.findByPlaceholderText(/10-digit mobile number/i);
+    fireEvent.change(phoneInput, { target: { value: '98-12-345-678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+    // POST request-otp fires; SUT sends the RAW (un-stripped) phone per
+    // line 79 of the SUT (`JSON.stringify({ phone })`, not `digits`).
+    await waitFor(() => {
+      const postCall = fetchStub.mock.calls.find(
+        ([u, opts]) =>
+          u === '/api/wellness/portal/login/request-otp' && opts?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall[1].body)).toEqual({ phone: '98-12-345-678' });
+    });
+    // Stage advanced to OTP.
+    expect(
+      await screen.findByPlaceholderText(/4-digit code/i),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('<PatientPortal /> — health probe error', () => {
+  it('non-OK /portal/health response → graceful-degrade alert renders', async () => {
+    // Custom fetch stub: health endpoint returns 500.
+    globalThis.fetch = vi.fn((url) => {
+      if (url === '/api/wellness/portal/health') {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          headers: new Map([['content-type', 'application/json']]),
+          json: () => Promise.resolve({ error: 'oops' }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () => Promise.resolve({}),
+      });
+    });
+    render(<PatientPortal />);
+    // SUT's Login useEffect maps `!r.ok` → `{ smsConfigured: false }`, which
+    // triggers the graceful-degrade branch.
+    expect(
+      await screen.findByTestId('portal-sms-unavailable'),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('<PatientPortal /> — placeholder tabs', () => {
+  beforeEach(() => {
+    localStorage.setItem(PORTAL_TOKEN_KEY, 'seeded-token');
+    localStorage.setItem(PORTAL_NAME_KEY, 'Priya Sharma');
+  });
+
+  it('Treatment Plan tab → placeholder copy', async () => {
+    installFetchMock();
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    fireEvent.click(screen.getByRole('button', { name: /Treatment Plan/i }));
+    expect(
+      await screen.findByText(
+        /Your treatment plan will appear here once your doctor shares one\./i,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('Consent Forms tab → placeholder copy', async () => {
+    installFetchMock();
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    fireEvent.click(screen.getByRole('button', { name: /Consent Forms/i }));
+    // SUT uses a curly apostrophe (U+2019) in "you've"; match flexibly.
+    // The regex matches ancestor wrappers too (div > main > parent), so use
+    // findAllByText to tolerate the chain and assert ≥1 match.
+    const matches = await screen.findAllByText((_t, el) => {
+      const text = el?.textContent || '';
+      return /Consent forms you.{0,2}ve signed at the clinic will appear here\./i.test(
+        text,
+      );
+    });
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('welcome chrome omits phone block when me.phone is null', async () => {
+    installFetchMock();
+    // Override the /me payload to strip phone.
+    const baseFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      if (url === '/api/wellness/portal/me') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          json: () =>
+            Promise.resolve({ id: 501, name: 'Priya Sharma', phone: null }),
+        });
+      }
+      return baseFetch(url, opts);
+    });
+    render(<PatientPortal />);
+    // Welcome message renders.
+    const welcomeNodes = await screen.findAllByText((_t, el) =>
+      /Welcome,\s*Priya Sharma/i.test(el?.textContent || ''),
+    );
+    expect(welcomeNodes.length).toBeGreaterThanOrEqual(1);
+    // No phone-separator dot is followed by a 10-digit string under the
+    // welcome row (SUT only renders the phone block when me.phone is truthy).
+    const headerScope = welcomeNodes[0].closest('header') || document.body;
+    expect(headerScope.textContent).not.toMatch(/9812345678/);
+  });
+});
+
+describe('<PatientPortal /> — PDF download', () => {
+  beforeEach(() => {
+    localStorage.setItem(PORTAL_TOKEN_KEY, 'seeded-token');
+    localStorage.setItem(PORTAL_NAME_KEY, 'Priya Sharma');
+    // jsdom lacks URL.createObjectURL — stub.
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:fake-rx-pdf');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    delete globalThis.URL.createObjectURL;
+    delete globalThis.URL.revokeObjectURL;
+  });
+
+  // Drift: SUT now calls `/api/wellness/portal/prescriptions/<id>/pdf`
+  // (portal-token-scoped endpoint), not the staff `/api/wellness/prescriptions/<id>/pdf`.
+  it('clicking PDF button → GET /portal/prescriptions/<id>/pdf with Bearer token + blob URL', async () => {
+    const baseFetch = installFetchMock();
+    // Patch the existing stub to handle the PDF endpoint.
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      if (typeof url === 'string' && url.startsWith('/api/wellness/portal/prescriptions/') && url.endsWith('/pdf')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/pdf']]),
+          blob: () => Promise.resolve(new Blob(['%PDF-1.4'], { type: 'application/pdf' })),
+        });
+      }
+      return baseFetch(url, opts);
+    });
+    const fetchStub = globalThis.fetch;
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    fireEvent.click(screen.getByRole('button', { name: /Prescriptions/i }));
+    const pdfBtn = await screen.findByRole('button', { name: /PDF/i });
+    fireEvent.click(pdfBtn);
+    await waitFor(() => {
+      const pdfCall = fetchStub.mock.calls.find(
+        ([u]) =>
+          typeof u === 'string' &&
+          u.startsWith('/api/wellness/portal/prescriptions/') &&
+          u.endsWith('/pdf'),
+      );
+      expect(pdfCall).toBeTruthy();
+      expect(pdfCall[0]).toBe('/api/wellness/portal/prescriptions/7001/pdf');
+      expect(pdfCall[1].headers.Authorization).toBe('Bearer seeded-token');
+    });
+    // Blob URL was created.
+    await waitFor(() => {
+      expect(globalThis.URL.createObjectURL).toHaveBeenCalled();
+    });
+  });
+
+  it('PDF download failure (500) → notify.error called with "Could not download"', async () => {
+    const baseFetch = installFetchMock();
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      if (typeof url === 'string' && url.startsWith('/api/wellness/portal/prescriptions/') && url.endsWith('/pdf')) {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          headers: new Map([['content-type', 'application/json']]),
+          json: () => Promise.resolve({ error: 'PDF service down' }),
+        });
+      }
+      return baseFetch(url, opts);
+    });
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    fireEvent.click(screen.getByRole('button', { name: /Prescriptions/i }));
+    const pdfBtn = await screen.findByRole('button', { name: /PDF/i });
+    fireEvent.click(pdfBtn);
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalled();
+    });
+    expect(notifyError.mock.calls[0][0]).toMatch(/Could not download/i);
+  });
+});

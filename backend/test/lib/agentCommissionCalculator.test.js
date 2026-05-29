@@ -261,3 +261,120 @@ describe("computeCommission — rounding contract", () => {
     expect(Number.isInteger(hybrid.commission * 100)).toBe(true);
   });
 });
+
+// =========================================================================
+// +7 NEW CASES — under-pinned surface areas:
+//   - String-coerced numeric inputs (Decimal-like wrapper interop)
+//   - Half-up rounding tie-breaker pin (1.005 → 1.01 via Number.EPSILON)
+//   - profileType field returned on unknown-type (preserves caller's bad input)
+//   - Negative percent / negative amountPerPax math (no rate clamp — pin contract)
+//   - Tiered with empty tiers array → "no tier coverage" breakdown
+//   - per_pax_flat with NaN paxCount → coerces to 0
+//   - hybrid with sale-below-threshold preserves base AND zero-overage breakdown
+// =========================================================================
+
+describe("computeCommission — string-coerced inputs (Decimal-like interop)", () => {
+  test("string saleAmount '100000' coerces via Number() → 5000 at 5%", () => {
+    // Routes / Prisma Decimal columns sometimes hand us strings; the SUT
+    // explicitly Number()-coerces saleAmount, so this must produce the
+    // same result as the numeric variant.
+    const r = computeCommission({
+      saleAmount: "100000",
+      profile: { type: "flat_percent", percent: 5 },
+    });
+    expect(r.commission).toBe(5000);
+    expect(r.profileType).toBe("flat_percent");
+  });
+
+  test("string percent '7.5' coerces → 7500 on 100000", () => {
+    // Profile values from a JSON column may also arrive as strings.
+    const r = computeCommission({
+      saleAmount: 100000,
+      profile: { type: "flat_percent", percent: "7.5" },
+    });
+    expect(r.commission).toBe(7500);
+  });
+});
+
+describe("computeCommission — half-up tie-breaker (Number.EPSILON nudge)", () => {
+  test("classic 1.005 case: 100.50 × 1% = 1.005 → rounds UP to 1.01, not DOWN to 1.00", () => {
+    // The Number.EPSILON guard in round2() is specifically designed to
+    // avoid the binary-representation artefact where 1.005 → 1.00. This
+    // pins the contract documented in the SUT's header.
+    const r = computeCommission({
+      saleAmount: 100.5,
+      profile: { type: "flat_percent", percent: 1 },
+    });
+    expect(r.commission).toBe(1.01);
+  });
+});
+
+describe("computeCommission — profileType preservation on unknown type", () => {
+  test("profileType field is the stringified original (audit-log friendliness)", () => {
+    // Per SUT header: "agents will see a $0 commission row and audit-log
+    // can flag the misconfigured profile". This pins that the bad type
+    // name flows through to profileType for the audit trail.
+    const r = computeCommission({
+      saleAmount: 100000,
+      profile: { type: "tiered_v2_experimental" },
+    });
+    expect(r.commission).toBe(0);
+    expect(r.profileType).toBe("tiered_v2_experimental");
+    expect(r.breakdown).toContain("tiered_v2_experimental");
+  });
+});
+
+describe("computeCommission — rate sign contract (no clamping)", () => {
+  test("negative percent on flat_percent computes negative commission (no clamp)", () => {
+    // Pin the contract: the SUT does NOT clamp rates to [0, 100]. A
+    // negative percent (e.g. a clawback row) propagates a negative
+    // commission. If a future "clamp negative rates to 0" decision is
+    // made, this test should be updated deliberately, not as a surprise.
+    const r = computeCommission({
+      saleAmount: 100000,
+      profile: { type: "flat_percent", percent: -5 },
+    });
+    expect(r.commission).toBe(-5000);
+    expect(r.profileType).toBe("flat_percent");
+  });
+
+  test("negative amountPerPax × positive pax → negative commission (no clamp)", () => {
+    // Same no-clamp contract for per_pax_flat.
+    const r = computeCommission({
+      saleAmount: 10000,
+      paxCount: 4,
+      profile: { type: "per_pax_flat", amountPerPax: -250 },
+    });
+    expect(r.commission).toBe(-1000);
+  });
+});
+
+describe("computeCommission — tiered edge cases", () => {
+  test("empty tiers array → 0 with 'no tier coverage' breakdown", () => {
+    // The route layer may persist a tiered profile with no tiers yet (UI
+    // wizard not finished). The SUT must return 0 + a descriptive
+    // breakdown — not throw, not return NaN.
+    const r = computeCommission({
+      saleAmount: 100000,
+      profile: { type: "tiered", tiers: [] },
+    });
+    expect(r.commission).toBe(0);
+    expect(r.breakdown).toBe("no tier coverage");
+    expect(r.profileType).toBe("tiered");
+  });
+});
+
+describe("computeCommission — per_pax_flat NaN paxCount coercion", () => {
+  test("NaN paxCount → coerced to 0 → 0 commission", () => {
+    // Mirror the saleAmount NaN-defensive contract for paxCount. A bad
+    // paxCount value (e.g. parseInt('abc')) must not cascade into a NaN
+    // commission row.
+    const r = computeCommission({
+      saleAmount: 10000,
+      paxCount: NaN,
+      profile: { type: "per_pax_flat", amountPerPax: 500 },
+    });
+    expect(r.commission).toBe(0);
+    expect(r.breakdown).toBe("0 pax × 500 = 0");
+  });
+});

@@ -391,4 +391,241 @@ describe('<Sandbox /> — page surface + role gate', () => {
     expect(screen.getByText('2.0 KB')).toBeInTheDocument();
     expect(screen.getByText('5.00 MB')).toBeInTheDocument();
   });
+
+  // ── Extension cases (snapshots / restore / isolation / destructive guards) ──
+
+  it('formatBytes GB branch: 2 GiB renders "2.00 GB"', async () => {
+    // formatBytes' fourth branch (n < 1024^3 → MB) is exercised above; this
+    // covers the final fall-through branch (n >= 1024^3 → GB).
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/sandbox') {
+        return Promise.resolve([
+          { id: 91, name: 'Gibi', description: null, createdAt: '2026-01-01T00:00:00Z', sizeBytes: 2 * 1024 * 1024 * 1024 },
+        ]);
+      }
+      return Promise.resolve(null);
+    });
+    renderSandbox('ADMIN');
+    await screen.findByText('Gibi');
+    expect(screen.getByText('2.00 GB')).toBeInTheDocument();
+  });
+
+  it('DANGER warning banner renders for both ADMIN and USER (always visible)', async () => {
+    renderSandbox('USER');
+    await screen.findByText('Pre-migration baseline');
+    expect(
+      screen.getByText(/DANGER: Restoring or resetting will permanently delete current data/i),
+    ).toBeInTheDocument();
+    // The banner copy lists the captured tables — pinned so a refactor that
+    // accidentally hides the "what's captured" disclosure is caught.
+    expect(
+      screen.getByText(/Snapshots capture Contacts, Deals, Activities/i),
+    ).toBeInTheDocument();
+  });
+
+  it('Create Snapshot: whitespace-only name does NOT POST (submitCreate early-return)', async () => {
+    renderSandbox('ADMIN');
+    await screen.findByText('Pre-migration baseline');
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Snapshot/i }));
+    // Type only spaces — passes the `required` browser-validation (which jsdom
+    // doesn't enforce anyway) but trips the explicit `.trim()` guard in
+    // submitCreate().
+    const nameInput = screen.getByPlaceholderText(/Pre-migration baseline/i);
+    fireEvent.change(nameInput, { target: { value: '   ' } });
+
+    // Submit via the form's submit button (the second "Create Snapshot" button).
+    const allCreateBtns = screen.getAllByRole('button', { name: /Create Snapshot/i });
+    const submitBtn = allCreateBtns[allCreateBtns.length - 1];
+    // Trigger form submission directly to bypass jsdom's lack of `required`
+    // enforcement.
+    const form = submitBtn.closest('form');
+    fireEvent.submit(form);
+
+    // Give the microtask queue a tick to settle.
+    await new Promise((r) => setTimeout(r, 0));
+    // No POST fired.
+    const postCall = fetchApiMock.mock.calls.find(
+      ([u, o]) => u === '/api/sandbox' && o?.method === 'POST',
+    );
+    expect(postCall).toBeUndefined();
+  });
+
+  it('Create Snapshot error path: fetchApi rejection surfaces notify.error', async () => {
+    renderSandbox('ADMIN');
+    await screen.findByText('Pre-migration baseline');
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sandbox' && opts?.method === 'POST') {
+        return Promise.reject(new Error('disk full'));
+      }
+      if (url === '/api/sandbox') return Promise.resolve(sampleSnapshots);
+      return Promise.resolve(null);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Snapshot/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Pre-migration baseline/i), {
+      target: { value: 'will fail' },
+    });
+    const allCreateBtns = screen.getAllByRole('button', { name: /Create Snapshot/i });
+    fireEvent.click(allCreateBtns[allCreateBtns.length - 1]);
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to create snapshot.*disk full/i),
+      );
+    });
+  });
+
+  it('Restore error path: fetchApi rejection surfaces notify.error and keeps modal open', async () => {
+    renderSandbox('ADMIN');
+    await screen.findByText('Pre-migration baseline');
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Restore/i })[0]);
+    const confirmBtn = await screen.findByRole('button', { name: /Confirm Restore/i });
+    fireEvent.change(screen.getByPlaceholderText('RESTORE'), {
+      target: { value: 'RESTORE' },
+    });
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url.match(/^\/api\/sandbox\/\d+\/restore$/) && opts?.method === 'POST') {
+        return Promise.reject(new Error('snapshot corrupt'));
+      }
+      if (url === '/api/sandbox') return Promise.resolve(sampleSnapshots);
+      return Promise.resolve(null);
+    });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Restore failed.*snapshot corrupt/i),
+      );
+    });
+    // Modal still mounted — the confirm button is still in the DOM (state
+    // cleanup only happens on success).
+    expect(screen.queryByRole('button', { name: /Confirm Restore/i })).toBeInTheDocument();
+  });
+
+  it('Reset Tenant error path: fetchApi rejection surfaces notify.error', async () => {
+    renderSandbox('ADMIN');
+    await screen.findByText('Pre-migration baseline');
+
+    fireEvent.click(screen.getByRole('button', { name: /Reset Tenant/i }));
+    const wipeBtn = await screen.findByRole('button', { name: /Wipe All Data/i });
+    fireEvent.change(screen.getByPlaceholderText('DELETE_EVERYTHING'), {
+      target: { value: 'DELETE_EVERYTHING' },
+    });
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sandbox/reset' && opts?.method === 'POST') {
+        return Promise.reject(new Error('db locked'));
+      }
+      if (url === '/api/sandbox') return Promise.resolve(sampleSnapshots);
+      return Promise.resolve(null);
+    });
+    fireEvent.click(wipeBtn);
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Reset failed.*db locked/i),
+      );
+    });
+  });
+
+  it('Restore modal: Cancel button closes the modal and clears the confirm text', async () => {
+    renderSandbox('ADMIN');
+    await screen.findByText('Pre-migration baseline');
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Restore/i })[0]);
+    await screen.findByRole('button', { name: /Confirm Restore/i });
+
+    // Type the confirm token so we can verify it's cleared on Cancel.
+    fireEvent.change(screen.getByPlaceholderText('RESTORE'), {
+      target: { value: 'RESTORE' },
+    });
+
+    // The Restore modal renders a Cancel button — multiple modals can share
+    // the name so scope to the dialog by looking inside it. There's only one
+    // Cancel rendered at a time, so a getAllByText fallback is safe.
+    const cancelBtns = screen.getAllByRole('button', { name: /^Cancel$/ });
+    fireEvent.click(cancelBtns[0]);
+
+    // Modal unmounted — Confirm Restore button no longer in the DOM.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Confirm Restore/i })).not.toBeInTheDocument();
+    });
+
+    // Re-open and verify the confirm text was reset (not persisted across
+    // open/close cycles).
+    fireEvent.click(screen.getAllByRole('button', { name: /Restore/i })[0]);
+    await screen.findByRole('button', { name: /Confirm Restore/i });
+    const reopenedInput = screen.getByPlaceholderText('RESTORE');
+    expect(reopenedInput.value).toBe('');
+  });
+
+  it('getRole: missing token + malformed payload both fall back to USER (Reset hidden)', async () => {
+    // First render — no token at all.
+    currentToken = null;
+    const { unmount } = render(<Sandbox />);
+    await screen.findByText('Pre-migration baseline');
+    expect(screen.queryByRole('button', { name: /Reset Tenant/i })).not.toBeInTheDocument();
+    unmount();
+
+    // Second render — token with a non-decodable payload segment.
+    currentToken = 'header.@@@not-base64@@@.sig';
+    render(<Sandbox />);
+    await screen.findByText('Pre-migration baseline');
+    expect(screen.queryByRole('button', { name: /Reset Tenant/i })).not.toBeInTheDocument();
+  });
+
+  it('Delete row buttons render only for ADMIN (per-row destructive isolation indicator)', async () => {
+    // ADMIN sees both Restore + Delete per row (2 snapshots × 2 buttons = 4
+    // destructive-row buttons + the top-bar Reset Tenant button).
+    renderSandbox('ADMIN');
+    await screen.findByText('Pre-migration baseline');
+    const restoreBtns = screen.getAllByRole('button', { name: /Restore/i });
+    const deleteBtns = screen.getAllByRole('button', { name: /^Delete$/i });
+    // Two row Restore buttons (one per snapshot).
+    expect(restoreBtns.length).toBe(2);
+    expect(deleteBtns.length).toBe(2);
+    // The id badge (#11, #12) is the per-row isolation indicator — every
+    // destructive action is scoped to the snapshot id it sits beside.
+    expect(screen.getByText('#11')).toBeInTheDocument();
+    expect(screen.getByText('#12')).toBeInTheDocument();
+  });
+
+  it('Reset Tenant success: modal closes, confirm input is cleared, list reloads', async () => {
+    renderSandbox('ADMIN');
+    await screen.findByText('Pre-migration baseline');
+
+    fireEvent.click(screen.getByRole('button', { name: /Reset Tenant/i }));
+    const wipeBtn = await screen.findByRole('button', { name: /Wipe All Data/i });
+    fireEvent.change(screen.getByPlaceholderText('DELETE_EVERYTHING'), {
+      target: { value: 'DELETE_EVERYTHING' },
+    });
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+    fireEvent.click(wipeBtn);
+
+    // Modal unmounts on success → the Wipe button leaves the DOM.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Wipe All Data/i })).not.toBeInTheDocument();
+    });
+    // A re-load GET fired post-reset.
+    await waitFor(() => {
+      const getCalls = fetchApiMock.mock.calls.filter(
+        ([u, o]) => u === '/api/sandbox' && (!o || !o.method || o.method === 'GET'),
+      );
+      expect(getCalls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Re-open the modal — confirm input was cleared on success.
+    fireEvent.click(screen.getByRole('button', { name: /Reset Tenant/i }));
+    await screen.findByRole('button', { name: /Wipe All Data/i });
+    const reopenedInput = screen.getByPlaceholderText('DELETE_EVERYTHING');
+    expect(reopenedInput.value).toBe('');
+  });
 });

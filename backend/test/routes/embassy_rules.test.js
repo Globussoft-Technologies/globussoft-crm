@@ -299,6 +299,95 @@ describe('Cross-tenant isolation', () => {
   });
 });
 
+describe('GET /api/embassy-rules?fields=summary (slim opt-in, #920 slice 42)', () => {
+  test('omits select arg by default — full rows returned', async () => {
+    prisma.embassyRule.findMany.mockResolvedValue([]);
+    prisma.embassyRule.count.mockResolvedValue(0);
+    const res = await request(makeApp())
+      .get('/api/embassy-rules')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    const call = prisma.embassyRule.findMany.mock.calls[0][0];
+    expect(call).not.toHaveProperty('select');
+  });
+
+  test('?fields=summary attaches slim select dropping actionLabel + conditionJson', async () => {
+    prisma.embassyRule.findMany.mockResolvedValue([]);
+    prisma.embassyRule.count.mockResolvedValue(0);
+    const res = await request(makeApp())
+      .get('/api/embassy-rules?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    const call = prisma.embassyRule.findMany.mock.calls[0][0];
+    expect(call.select).toBeDefined();
+    // Slim shape MUST NOT include the heavy fields.
+    expect(call.select.actionLabel).toBeUndefined();
+    expect(call.select.conditionJson).toBeUndefined();
+    // Slim shape MUST include identifying + filterable + chrome fields.
+    expect(call.select).toMatchObject({
+      id: true,
+      tenantId: true,
+      ruleType: true,
+      destinationCountry: true,
+      applicationType: true,
+      severity: true,
+      isActive: true,
+    });
+  });
+
+  test('?fields=summary is case-insensitive (SUMMARY also opts in)', async () => {
+    prisma.embassyRule.findMany.mockResolvedValue([]);
+    prisma.embassyRule.count.mockResolvedValue(0);
+    const res = await request(makeApp())
+      .get('/api/embassy-rules?fields=SUMMARY')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    const call = prisma.embassyRule.findMany.mock.calls[0][0];
+    expect(call.select).toBeDefined();
+    expect(call.select.actionLabel).toBeUndefined();
+  });
+
+  test('?fields=full (or any other value) does NOT trigger slim — full rows returned', async () => {
+    prisma.embassyRule.findMany.mockResolvedValue([]);
+    prisma.embassyRule.count.mockResolvedValue(0);
+    const res = await request(makeApp())
+      .get('/api/embassy-rules?fields=full')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    const call = prisma.embassyRule.findMany.mock.calls[0][0];
+    expect(call).not.toHaveProperty('select');
+  });
+
+  test('?fields=summary preserves tenant scoping + filter + pagination', async () => {
+    prisma.embassyRule.findMany.mockResolvedValue([
+      {
+        id: 11, tenantId: 1, ruleType: 'cooldown_period',
+        destinationCountry: 'AE', applicationType: 'tourist',
+        severity: 'warning', isActive: true,
+        createdAt: new Date(), updatedAt: new Date(),
+      },
+    ]);
+    prisma.embassyRule.count.mockResolvedValue(1);
+    const res = await request(makeApp())
+      .get('/api/embassy-rules?fields=summary&destinationCountry=ae&severity=warning&limit=25&offset=10')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN', { tenantId: 1 })}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 1, limit: 25, offset: 10 });
+    const call = prisma.embassyRule.findMany.mock.calls[0][0];
+    expect(call.where).toMatchObject({
+      tenantId: 1,
+      destinationCountry: 'AE',
+      severity: 'warning',
+    });
+    expect(call.take).toBe(25);
+    expect(call.skip).toBe(10);
+    expect(call.select).toBeDefined();
+    // Response row reflects whatever the (mocked) Prisma returned — slim shape.
+    expect(res.body.rules[0]).not.toHaveProperty('actionLabel');
+    expect(res.body.rules[0]).not.toHaveProperty('conditionJson');
+  });
+});
+
 describe('RBAC — USER role on write paths returns 403', () => {
   test('POST as USER → 403 RBAC_DENIED', async () => {
     const res = await request(makeApp())

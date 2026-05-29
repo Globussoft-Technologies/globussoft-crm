@@ -247,6 +247,157 @@ describe('GET / — list notifications', () => {
   });
 });
 
+// ── GET /?fields=summary — slim-shape opt-in (#920 slice 7) ──────────
+//
+// Mirror of slice 1 (contacts), slice 2 (deals), slice 3 (tickets),
+// slice 4 (tasks), slice 5 (projects). When the caller passes
+// ?fields=summary, the route emits a slim Prisma `select` keyed on the
+// columns NotificationBell + NotificationsCenter actually render and
+// drops the heavier columns (link, entityType, entityId, readAt,
+// type, priority, message) that would otherwise leak via list responses.
+
+describe('GET /?fields=summary — slim-shape opt-in (#920 slice 7)', () => {
+  test('?fields=summary triggers prisma.notification.findMany with `select` (slim cols), not the default no-select shape', async () => {
+    prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/notifications?fields=summary')
+      .set('Authorization', makeBearer({ userId: 7, tenantId: 1 }));
+
+    const args = prisma.notification.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.select).toEqual({
+      id: true,
+      title: true,
+      isRead: true,
+      userId: true,
+      tenantId: true,
+      createdAt: true,
+    });
+    // Slim shape must NOT include heavy/PII-leaking columns in the select map.
+    expect(args.select.link).toBeUndefined();
+    expect(args.select.entityType).toBeUndefined();
+    expect(args.select.entityId).toBeUndefined();
+    expect(args.select.message).toBeUndefined();
+    expect(args.select.readAt).toBeUndefined();
+    expect(args.select.type).toBeUndefined();
+    expect(args.select.priority).toBeUndefined();
+    // include must NOT be set on slim path.
+    expect(args.include).toBeUndefined();
+  });
+
+  test('default (no ?fields) preserves the full-row shape — no `select` arg passed to findMany', async () => {
+    prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/notifications')
+      .set('Authorization', makeBearer({ userId: 7, tenantId: 1 }));
+
+    const args = prisma.notification.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    expect(args.include).toBeUndefined();
+  });
+
+  test('?fields=summary response rows reflect the slim Prisma select verbatim', async () => {
+    // Prisma `select` honours only the chosen columns. The route forwards
+    // whatever Prisma returns, so we pin the contract by mocking the slim
+    // rows and confirming heavy keys are absent in the response body too.
+    prisma.notification.findMany.mockResolvedValue([
+      { id: 1, title: 'Slim A', isRead: false, userId: 7, tenantId: 1, createdAt: new Date('2026-05-26T00:00:00Z') },
+      { id: 2, title: 'Slim B', isRead: true, userId: 7, tenantId: 1, createdAt: new Date('2026-05-26T01:00:00Z') },
+    ]);
+    prisma.notification.count.mockResolvedValue(2);
+
+    const res = await request(makeApp())
+      .get('/api/notifications?fields=summary')
+      .set('Authorization', makeBearer({ userId: 7, tenantId: 1 }));
+
+    expect(res.status).toBe(200);
+    expect(res.body.notifications).toHaveLength(2);
+    for (const row of res.body.notifications) {
+      expect(row.id).toBeDefined();
+      expect(row.title).toBeDefined();
+      expect(row.isRead).toBeDefined();
+      expect(row.link).toBeUndefined();
+      expect(row.message).toBeUndefined();
+      expect(row.entityType).toBeUndefined();
+      expect(row.entityId).toBeUndefined();
+      expect(row.readAt).toBeUndefined();
+    }
+  });
+
+  test('?fields=summary preserves auth gate + tenant isolation on where clause', async () => {
+    // Missing Authorization → 401 even with ?fields=summary.
+    const unauth = await request(makeApp())
+      .get('/api/notifications?fields=summary');
+    expect(unauth.status).toBe(401);
+    expect(prisma.notification.findMany).not.toHaveBeenCalled();
+
+    // Authenticated call: tenantId is sourced from the JWT (not the query),
+    // so the where clause is tenant-isolated regardless of the slim opt-in.
+    prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
+    await request(makeApp())
+      .get('/api/notifications?fields=summary')
+      .set('Authorization', makeBearer({ userId: 99, tenantId: 2 }));
+    const args = prisma.notification.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ userId: 99, tenantId: 2 });
+  });
+
+  test('?fields=summary honors pagination params (?page + ?limit) alongside the slim select', async () => {
+    prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/notifications?fields=summary&page=3&limit=25')
+      .set('Authorization', makeBearer({ userId: 7, tenantId: 1 }));
+
+    const args = prisma.notification.findMany.mock.calls[0][0];
+    expect(args.take).toBe(25);
+    expect(args.skip).toBe(50); // (page - 1) * limit
+    expect(args.select).toBeDefined();
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=summary combines with existing filters (unread/status/priority/entityType) on the where clause', async () => {
+    prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/notifications?fields=summary&unread=true&priority=high&entityType=ticket')
+      .set('Authorization', makeBearer({ userId: 7, tenantId: 1 }));
+
+    const args = prisma.notification.findMany.mock.calls[0][0];
+    expect(args.where).toMatchObject({
+      userId: 7,
+      tenantId: 1,
+      isRead: false,
+      priority: 'high',
+      entityType: 'ticket',
+    });
+    // Slim select still applied.
+    expect(args.select).toBeDefined();
+    expect(args.select.id).toBe(true);
+  });
+
+  test('?fields=other (any non-exact value) falls through to the default full-row shape', async () => {
+    // Only the literal string "summary" opts into slim — every other value
+    // (including "Summary", "full", arbitrary tokens) must preserve the
+    // existing wire shape so we don't accidentally trim production callers.
+    prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/notifications?fields=Summary')
+      .set('Authorization', makeBearer({ userId: 7, tenantId: 1 }));
+
+    const args = prisma.notification.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+});
+
 // ── GET /unread-count ───────────────────────────────────────────────
 
 describe('GET /unread-count', () => {

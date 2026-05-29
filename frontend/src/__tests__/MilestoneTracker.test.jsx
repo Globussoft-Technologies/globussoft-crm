@@ -369,6 +369,239 @@ describe('<MilestoneTracker /> — error path', () => {
     });
     expect(notifyError.mock.calls[0][0]).toMatch(/Failed to load milestones/i);
   });
+
+  it('4xx response does NOT fire page-level notify.error (only fetchApi auto-toast)', async () => {
+    const err = new Error('Forbidden');
+    err.status = 403;
+    installFetchMock(err);
+    renderPage();
+    // Wait for the empty state to render — confirms the catch ran.
+    expect(
+      await screen.findByText(/No upcoming milestones in this window/i),
+    ).toBeInTheDocument();
+    // The page-level explicit toast is gated on >=500; 4xx falls through to
+    // fetchApi's auto-toast only, so notify.error must NOT be called from
+    // the SUT's own error branch.
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+});
+
+describe('<MilestoneTracker /> — extended coverage (cron-extension)', () => {
+  it('KPI card values reflect summary.byStatus counts (Pending=7 / Partial=3 / Paid=10 / Overdue=2)', async () => {
+    installFetchMock(
+      makeResponse({
+        milestones: [makeMilestone({ id: 1, invoiceNum: 'TINV-K-001' })],
+        total: 22,
+        summary: {
+          byStatus: { pending: 7, partial: 3, paid: 10, overdue: 2 },
+          totalExpected: '999.00',
+          totalReceived: '111.00',
+          currencyBreakdown: { INR: '999.00' },
+        },
+      }),
+    );
+    renderPage();
+    await screen.findByText('TINV-K-001');
+    const pendingCard = screen.getByRole('group', { name: /KPI Pending/i });
+    expect(pendingCard).toHaveTextContent('7');
+    const partialCard = screen.getByRole('group', { name: /KPI Partial/i });
+    expect(partialCard).toHaveTextContent('3');
+    const paidCard = screen.getByRole('group', { name: /KPI Paid/i });
+    expect(paidCard).toHaveTextContent('10');
+    const overdueCard = screen.getByRole('group', { name: /KPI Overdue/i });
+    expect(overdueCard).toHaveTextContent('2');
+  });
+
+  it('header copy pluralises: total=1 reads "1 milestone match" (singular); total=5 reads "5 milestones match"', async () => {
+    installFetchMock(
+      makeResponse({
+        milestones: [makeMilestone({ id: 31, invoiceNum: 'TINV-P-001' })],
+        total: 1,
+      }),
+    );
+    const { unmount } = renderPage();
+    await screen.findByText('TINV-P-001');
+    expect(screen.getByText(/1 milestone match/i)).toBeInTheDocument();
+    // Ensure it's the SINGULAR form — "1 milestones match" must not appear.
+    expect(screen.queryByText(/1 milestones match/i)).toBeNull();
+    unmount();
+
+    // Re-mount with total=5 to assert plural form.
+    fetchApiMock.mockReset();
+    installFetchMock(
+      makeResponse({
+        milestones: [makeMilestone({ id: 32, invoiceNum: 'TINV-P-002' })],
+        total: 5,
+      }),
+    );
+    renderPage();
+    await screen.findByText('TINV-P-002');
+    expect(screen.getByText(/5 milestones match/i)).toBeInTheDocument();
+  });
+
+  it('"All" chip click after a status filter is set clears ?status= from the next fetch', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    // First narrow to pending so ?status=pending is in flight.
+    fireEvent.click(
+      screen.getByRole('button', { name: /Filter by status: Pending/i }),
+    );
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.some(([url]) =>
+          typeof url === 'string' && url.includes('status=pending'),
+        ),
+      ).toBe(true);
+    });
+    fetchApiMock.mockClear();
+    // Then click "All" — ?status= should NOT appear in the next fetch.
+    fireEvent.click(
+      screen.getByRole('button', { name: /Filter by status: All/i }),
+    );
+    await waitFor(() => {
+      const last = fetchApiMock.mock.calls.at(-1);
+      expect(last).toBeTruthy();
+      expect(last[0]).not.toContain('status=');
+    });
+  });
+
+  it('window select is DISABLED when overdueOnly is checked, and re-enabled when unchecked', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    const windowSelect = screen.getByLabelText(/Window \(days from now\)/i);
+    expect(windowSelect).not.toBeDisabled();
+    fireEvent.click(screen.getByLabelText(/Overdue only/i));
+    await waitFor(() => {
+      expect(windowSelect).toBeDisabled();
+    });
+    // Untoggle — should re-enable.
+    fireEvent.click(screen.getByLabelText(/Overdue only/i));
+    await waitFor(() => {
+      expect(windowSelect).not.toBeDisabled();
+    });
+  });
+
+  it('"Previous" button: disabled at offset=0; enabled after Next; click re-fetches with offset=0', async () => {
+    installFetchMock(
+      makeResponse({
+        milestones: [makeMilestone()],
+        total: 200, // 4 pages
+      }),
+    );
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    const prevBtn = screen.getByRole('button', { name: /Previous page/i });
+    expect(prevBtn).toBeDisabled();
+    // Advance to offset=50.
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.some(([url]) =>
+          typeof url === 'string' && url.includes('offset=50'),
+        ),
+      ).toBe(true);
+    });
+    // After advancing, prev should be enabled.
+    await waitFor(() => {
+      expect(prevBtn).not.toBeDisabled();
+    });
+    fetchApiMock.mockClear();
+    fireEvent.click(prevBtn);
+    await waitFor(() => {
+      const back = fetchApiMock.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('offset=0'),
+      );
+      expect(back).toBeTruthy();
+    });
+  });
+
+  it('changing a filter after Next-paginating resets offset to 0', async () => {
+    installFetchMock(
+      makeResponse({
+        milestones: [makeMilestone()],
+        total: 200,
+      }),
+    );
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.some(([url]) =>
+          typeof url === 'string' && url.includes('offset=50'),
+        ),
+      ).toBe(true);
+    });
+    fetchApiMock.mockClear();
+    // Now flip the sub-brand filter — offset must reset to 0.
+    fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), {
+      target: { value: 'rfu' },
+    });
+    await waitFor(() => {
+      const resetCall = fetchApiMock.mock.calls.find(([url]) =>
+        typeof url === 'string'
+          && url.includes('subBrand=rfu')
+          && url.includes('offset=0'),
+      );
+      expect(resetCall).toBeTruthy();
+    });
+    // The SUT has TWO useEffects firing on a filter change: the load effect
+    // sees the stale offset=50 once before the reset effect collapses it to
+    // 0. After the dust settles, the FINAL call for ?subBrand=rfu must be
+    // offset=0 — i.e. operator's view doesn't end up paginated past empty
+    // results for the new filter.
+    await waitFor(() => {
+      const subBrandRfuCalls = fetchApiMock.mock.calls.filter(([url]) =>
+        typeof url === 'string' && url.includes('subBrand=rfu'),
+      );
+      const lastRfuCall = subBrandRfuCalls.at(-1);
+      expect(lastRfuCall).toBeTruthy();
+      expect(lastRfuCall[0]).toContain('offset=0');
+    });
+  });
+
+  it('milestone fallbacks: missing invoiceNum renders "#<invoiceId>"; null subBrand / milestoneOrder render "—"', async () => {
+    installFetchMock(
+      makeResponse({
+        milestones: [
+          makeMilestone({
+            id: 41,
+            invoiceId: 9999,
+            invoiceNum: null,
+            subBrand: null,
+            milestoneOrder: null,
+            daysUntilDue: null,
+            dueDate: null,
+          }),
+        ],
+      }),
+    );
+    renderPage();
+    // invoiceNum fallback uses the invoiceId.
+    expect(await screen.findByText('#9999')).toBeInTheDocument();
+    // null subBrand / null milestoneOrder / null daysUntilDue / null dueDate
+    // all collapse to "—" — at least four em-dash cells render.
+    const dashes = screen.getAllByText('—');
+    expect(dashes.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('currency-breakdown footer is ABSENT when summary.currencyBreakdown is empty', async () => {
+    installFetchMock(
+      makeResponse({
+        milestones: [],
+        summary: {
+          byStatus: {},
+          totalExpected: '0.00',
+          totalReceived: '0.00',
+          currencyBreakdown: {}, // empty — footer must not render
+        },
+      }),
+    );
+    renderPage();
+    await screen.findByText(/No upcoming milestones in this window/i);
+    expect(screen.queryByLabelText(/Currency breakdown/i)).toBeNull();
+    expect(screen.queryByText(/Currency breakdown \(this page\)/i)).toBeNull();
+  });
 });
 
 function renderPage() {

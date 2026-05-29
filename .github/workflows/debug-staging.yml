@@ -15,8 +15,15 @@ jobs:
           command_timeout: 10m
           script: |
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            ENV=~/globussoft-crm-staging/backend/.env
-            sed -i 's|WEBHOOK_BASE_URL=https://crm\.globusdemos\.com/|WEBHOOK_BASE_URL=https://crm-staging.globusdemos.com/|g' "$ENV"
-            grep WEBHOOK_BASE_URL "$ENV"
+
+            echo "=== revert production .env ==="
+            sed -i 's|WEBHOOK_BASE_URL=https://crm-staging\.globusdemos\.com/|WEBHOOK_BASE_URL=https://crm.globusdemos.com/|g' ~/globussoft-crm/backend/.env
+            grep WEBHOOK_BASE_URL ~/globussoft-crm/backend/.env
+            pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
+
+            echo "=== revert staging .env ==="
+            sed -i 's|WEBHOOK_BASE_URL=https://crm-staging\.globusdemos\.com/|WEBHOOK_BASE_URL=https://crm.globusdemos.com/|g' ~/globussoft-crm-staging/backend/.env
+            grep WEBHOOK_BASE_URL ~/globussoft-crm-staging/backend/.env
             pm2 restart globussoft-crm-staging-backend --update-env 2>&1 | tail -3
+
             echo "done"

@@ -331,10 +331,21 @@ const phiWriteGate = verifyWellnessRole(
       { module: "prescriptions", action: "write" },
       { module: "consents", action: "write" },
     ],
-    // Same backdoor concern as phiReadGate — helpers must never gain PHI
-    // mutation rights via their seeded USER role's appointments.write.
-    // Pinned by memberships-api.spec.js:642 + :646.
-    deny: ["helper"],
+    // Per the documented gate intent (comment at line 261):
+    //   "phiWriteGate — writes. Same minus telecaller — telecallers
+    //    route leads but don't author clinical records"
+    // The anyOfPermissions backdoor (added in v3.8.x for custom RBAC
+    // roles) accidentally lets telecaller through via the
+    // `appointments.write` grant they have for booking-from-call. Deny
+    // them explicitly so the gate matches its documented contract.
+    // Telecaller's legitimate write paths live on their own gates:
+    //   verifyWellnessRole(["telecaller","admin","manager"]) at lines
+    //   9173+9226 for queue dispose, plus the booking-specific gates
+    //   at /resources, /book/* etc. that list telecaller explicitly.
+    // Helpers are non-clinical (front-desk / runner roles) — never get
+    // PHI write access. Pinned by memberships-api.spec.js:642+646 and
+    // wellness-rbac-regression-api.spec.js:684 (POLICY 1).
+    deny: ["helper", "telecaller"],
   },
 );
 

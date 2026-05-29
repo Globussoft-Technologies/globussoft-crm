@@ -306,6 +306,12 @@ const phiReadGate = verifyWellnessRole(
       { module: "prescriptions", action: "read" },
       { module: "consents", action: "read" },
     ],
+    // helpers are seeded with role=USER (per seed-wellness.js:218-219)
+    // which grants appointments.read for self-service. Without an
+    // explicit deny, that backdoor lets a helper through phiReadGate
+    // and read full patient PHI. Pinned by
+    // wellness-rbac-regression-api.spec.js:488.
+    deny: ["helper"],
   },
 );
 const phiWriteGate = verifyWellnessRole(
@@ -325,6 +331,10 @@ const phiWriteGate = verifyWellnessRole(
       { module: "prescriptions", action: "write" },
       { module: "consents", action: "write" },
     ],
+    // Same backdoor concern as phiReadGate — helpers must never gain PHI
+    // mutation rights via their seeded USER role's appointments.write.
+    // Pinned by memberships-api.spec.js:642 + :646.
+    deny: ["helper"],
   },
 );
 

@@ -2762,7 +2762,11 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
     // GET via list filtered to this patient.
     const list = await authGet(request, `/api/wellness/prescriptions?patientId=${p.id}`);
     expect(list.status()).toBe(200);
-    const rxList = await list.json();
+    const listBody = await list.json();
+    // Drift: list now returns { items, total } envelope (wellness.js:3078)
+    // — keep tolerance for both shapes so a future reversion doesn't
+    // re-red this gate.
+    const rxList = Array.isArray(listBody) ? listBody : listBody.items;
     const row = rxList.find((r) => r.id === rxId);
     expect(row).toBeTruthy();
     expect(row.drugs, 'drugs must not be raw ENC:v1: ciphertext').not.toMatch(/^ENC:v1:/);

@@ -5,39 +5,32 @@ jobs:
   debug:
     runs-on: ubuntu-latest
     steps:
-      - name: Staging diagnostic
+      - name: Deploy main to crm-staging
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          command_timeout: 3m
+          command_timeout: 10m
           script: |
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            echo "=== 1. is enqueue code present in deployed file? (expect 1) ==="
-            grep -nc "await getQueue().enqueueSend" /home/empcloud-development/globussoft-crm/backend/routes/whatsapp.js
-
-            echo "=== 2. is DELETE locations route present? (expect 1) ==="
-            grep -nc "DELETE /api/wellness/locations" /home/empcloud-development/globussoft-crm/backend/routes/wellness.js || echo "0"
-
-            echo "=== 3. when was backend last restarted? ==="
-            pm2 info globussoft-crm-backend | grep -iE "uptime|restart|status"
-
-            echo "=== 4. cron tick activity in last 200 log lines ==="
-            pm2 logs globussoft-crm-backend --lines 200 --nostream 2>&1 | grep -iE "whatsappOutbound|graph\.facebook|enqueue|/send|tick error" | tail -40 || echo "NO MATCHES"
-
-            echo "=== 5. recent QUEUED messages — do they now have a jobId? ==="
-            cd /home/empcloud-development/globussoft-crm/backend && node -e "
-            const p = new (require('@prisma/client').PrismaClient)();
-            p.\$queryRaw\`
-              SELECT m.id, m.status AS msgStatus, m.createdAt,
-                     j.id AS jobId, j.status AS jobStatus, j.attempts,
-                     LEFT(j.lastError, 150) AS jobErr, j.runAt, j.lockedAt
-              FROM WhatsAppMessage m
-              LEFT JOIN WaOutboundJob j ON j.messageId = m.id
-              WHERE m.direction='OUTBOUND'
-              ORDER BY m.id DESC LIMIT 10
-            \`.then(r => { console.log(JSON.stringify(r, null, 2)); process.exit(0); })
-             .catch(e => { console.error(e.message); process.exit(1); });
-            "
+            cd /home/empcloud-development/globussoft-crm
+            git fetch origin
+            git checkout main
+            git reset --hard origin/main
+            echo "=== latest commit ==="
+            git log --oneline -3
+            echo "=== backend ==="
+            cd backend
+            npm ci --prefer-offline 2>&1 | tail -3
+            npx prisma generate 2>&1 | tail -3
+            npx prisma db push --accept-data-loss 2>&1 | tail -5
+            pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
+            echo "=== frontend ==="
+            cd ../frontend
+            npm ci --prefer-offline 2>&1 | tail -3
+            npx vite build --logLevel=error 2>&1 | tail -3
+            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S rsync -a --delete dist/ /var/www/crm-staging.globusdemos.com/ 2>&1 | tail -2
+            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S chown -R www-data:www-data /var/www/crm-staging.globusdemos.com/ 2>&1 | tail -1
+            echo "=== done ==="

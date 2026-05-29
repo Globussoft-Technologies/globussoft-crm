@@ -297,6 +297,12 @@ jobs:
             tests/travel-quote-lines-api.spec.js \
             tests/travel-idor-cross-tenant-api.spec.js \
             tests/wellness-role-types-api.spec.js \
+            tests/subscriptions-api.spec.js \
+            tests/funnel-api.spec.js \
+            tests/win-loss-api.spec.js \
+            tests/marketplace-leads-api.spec.js \
+            tests/approvals-api.spec.js \
+            tests/sso-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

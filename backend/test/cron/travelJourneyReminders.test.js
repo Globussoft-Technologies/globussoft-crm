@@ -23,6 +23,7 @@ import prisma from '../../lib/prisma.js';
 
 import {
   runJourneyRemindersForTenant,
+  runJourneyRemindersForAllTravelTenants,
   relevantMilestones,
   MILESTONES,
 } from '../../cron/travelJourneyReminders.js';
@@ -147,5 +148,88 @@ describe('cron/travelJourneyReminders — runJourneyRemindersForTenant', () => {
       .mockResolvedValueOnce({ id: 50 });
     const result = await runJourneyRemindersForTenant(1);
     expect(result.fired).toBe(1);
+  });
+
+  // ─── NEW CASES (+8) ─────────────────────────────────────────────────
+
+  test('T-3d itinerary fires the driver-hotel milestone (pure helper)', () => {
+    const startDate = new Date(Date.now() + 3 * 86400_000);
+    const hits = relevantMilestones(startDate);
+    expect(hits.map((m) => m.tag)).toContain('driver-hotel-t3');
+  });
+
+  test('T+2d itinerary fires the ziyarah milestone (pure helper)', () => {
+    const startDate = new Date(Date.now() - 2 * 86400_000);
+    const hits = relevantMilestones(startDate);
+    expect(hits.map((m) => m.tag)).toContain('ziyarah-t2');
+  });
+
+  test('query bounds: take=500 + select shape matches PRD §4.8', async () => {
+    await runJourneyRemindersForTenant(42);
+    const arg = prisma.itinerary.findMany.mock.calls[0][0];
+    expect(arg.take).toBe(500);
+    expect(arg.select).toEqual({
+      id: true, contactId: true, destination: true, startDate: true,
+    });
+  });
+
+  test('message body includes destination + itinerary id + portal advisor link', async () => {
+    const startDate = new Date(Date.now() + 86400_000);
+    prisma.itinerary.findMany.mockResolvedValue([
+      { id: 42, contactId: 100, destination: 'Madinah', startDate },
+    ]);
+    await runJourneyRemindersForTenant(1);
+    const createArg = prisma.notification.create.mock.calls[0][0];
+    expect(createArg.data.message).toContain('Itinerary 42');
+    expect(createArg.data.message).toContain('Madinah');
+    expect(createArg.data.message).toContain('/travel/itineraries');
+    expect(createArg.data.type).toBe('info');
+    expect(createArg.data.priority).toBe('normal');
+    expect(createArg.data.tenantId).toBe(1);
+  });
+
+  test('tenant.findUnique is invoked with the active tenantId (Q9 wabaId log plumbing)', async () => {
+    await runJourneyRemindersForTenant(77);
+    expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
+      where: { id: 77 },
+      select: { subBrandConfigJson: true },
+    });
+  });
+
+  test('dedup lookup filters on entityType=Itinerary + entityId + tagged title', async () => {
+    const startDate = new Date(Date.now() + 86400_000); // T-1d
+    prisma.itinerary.findMany.mockResolvedValue([
+      { id: 7, contactId: 100, destination: 'Makkah', startDate },
+    ]);
+    await runJourneyRemindersForTenant(1);
+    const findArg = prisma.notification.findFirst.mock.calls[0][0];
+    expect(findArg.where.tenantId).toBe(1);
+    expect(findArg.where.entityType).toBe('Itinerary');
+    expect(findArg.where.entityId).toBe(7);
+    expect(findArg.where.title).toContain('[group-meeting-t1]');
+  });
+
+  test('runJourneyRemindersForAllTravelTenants filters vertical=travel + isActive=true', async () => {
+    prisma.tenant.findMany = vi.fn().mockResolvedValue([]);
+    await runJourneyRemindersForAllTravelTenants();
+    const arg = prisma.tenant.findMany.mock.calls[0][0];
+    expect(arg.where).toEqual({ vertical: 'travel', isActive: true });
+    expect(arg.select).toEqual({ id: true, slug: true });
+  });
+
+  test('runJourneyRemindersForAllTravelTenants continues past a failing tenant + sums totalFired', async () => {
+    prisma.tenant.findMany = vi.fn().mockResolvedValue([
+      { id: 1, slug: 'tenantA' },
+      { id: 2, slug: 'tenantB' },
+    ]);
+    // Tenant A throws on the itinerary scan; tenant B fires 1 milestone.
+    const startDate = new Date(Date.now() + 86400_000);
+    prisma.itinerary.findMany
+      .mockRejectedValueOnce(new Error('db disconnect'))
+      .mockResolvedValueOnce([{ id: 9, contactId: 100, destination: 'Makkah', startDate }]);
+    const total = await runJourneyRemindersForAllTravelTenants();
+    // Tenant A failed entirely → 0; tenant B produced 1 fired. Total = 1.
+    expect(total).toBe(1);
+    expect(prisma.itinerary.findMany).toHaveBeenCalledTimes(2);
   });
 });

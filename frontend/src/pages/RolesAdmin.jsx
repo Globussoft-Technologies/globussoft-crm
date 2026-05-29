@@ -25,7 +25,10 @@ const PERMISSION_MODULES_FALLBACK = [
   { module: 'reports',       actions: ['read', 'write', 'delete', 'export'] },
   { module: 'billing',       actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
   { module: 'patients',      actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
-  { module: 'appointments',  actions: ['read', 'write', 'update', 'delete', 'export'] },
+  { module: 'appointments',     actions: ['read', 'write', 'update', 'delete', 'export'] },
+  { module: 'my_appointments',  actions: ['read'] },
+  { module: 'book_appointment', actions: ['write'] },
+  { module: 'waitlist',         actions: ['read', 'write'] },
   { module: 'prescriptions', actions: ['read', 'write', 'update', 'delete'] },
   { module: 'visits',        actions: ['read', 'write', 'update', 'delete'] },
   { module: 'products',      actions: ['read', 'write', 'update', 'delete', 'manage'] },
@@ -54,10 +57,93 @@ const PERMISSION_DOMAINS_FALLBACK = [
   { domain: 'Analytics',          modules: ['reports', 'dashboards', 'analytics'] },
   { domain: 'Automation',         modules: ['workflows', 'sequences'] },
   { domain: 'Documents',          modules: ['documents', 'contracts', 'signatures', 'estimates'] },
-  { domain: 'Wellness Clinical',  modules: ['patients', 'appointments', 'services', 'prescriptions', 'consents', 'visits'] },
+  { domain: 'Wellness Clinical',  modules: ['patients', 'appointments', 'my_appointments', 'book_appointment', 'waitlist', 'services', 'prescriptions', 'consents', 'visits'] },
   { domain: 'Wellness Inventory', modules: ['products', 'inventory', 'pos'] },
   { domain: 'Admin & Platform',   modules: ['staff', 'roles', 'settings', 'audit', 'integrations', 'developer'] },
 ];
+
+// One-line description per module so admins know what each permission box
+// actually controls. The "Unlocks: <pages>" hint built from /api/pages/catalog
+// only fires when a SPA page declares the module in its requiredPermissions —
+// e.g. `deals`, `projects`, `quotes`, `forecasting`, `quotas` are not pinned
+// to a specific catalog page, so without these descriptions those cards look
+// like bare checkboxes. Keep keys in sync with backend/lib/permissionCatalog.js.
+const MODULE_DESCRIPTIONS = {
+  // CRM Core
+  contacts:       'People and companies stored in your CRM.',
+  deals:          'Sales opportunities and revenue pipeline records.',
+  leads:          'Prospects before they become contacts (incl. marketplace + telecaller queue).',
+  tasks:          'To-dos assigned to users or linked to CRM records.',
+  projects:       'Multi-step engagements grouping deals, tasks, and contacts.',
+  pipeline:       'Sales pipeline stages and configuration.',
+  quotes:         'Price quotes and CPQ documents sent to prospects.',
+  forecasting:    'Revenue forecast roll-ups and weekly snapshots.',
+  quotas:         'Sales targets assigned to users or teams.',
+  // Communications
+  communications: 'Unified inbox across email / SMS / WhatsApp.',
+  email:          'Outbound email, templates, threading, and tracking.',
+  sms:            'SMS messages, templates, and provider config.',
+  whatsapp:       'WhatsApp Business Cloud API messages and templates.',
+  // Marketing
+  marketing:      'Marketing campaigns, audience segments, A/B tests, attribution.',
+  // Service & Support
+  tickets:        'Customer support tickets and SLA tracking.',
+  knowledge_base: 'Help-center articles, categories, and visibility.',
+  surveys:        'CSAT / NPS / custom surveys and responses.',
+  chatbots:       'Live-chat bots, conversation flows, and handoff rules.',
+  // Financial
+  billing:        'Invoices, recurring billing, credit notes.',
+  accounting:     'Ledger sync and accounting integrations (Tally / QuickBooks / Xero).',
+  payments:       'Payment records and transaction history.',
+  expenses:       'Employee expenses, approvals, and reimbursements.',
+  // Analytics
+  reports:        'Saved business reports and scheduled report delivery.',
+  dashboards:     'Custom analytics dashboards and KPI tiles.',
+  analytics:      'Raw analytics queries and bulk exports.',
+  // Automation
+  workflows:      'Trigger-action automation rules across CRM objects.',
+  sequences:      'Multi-step email/SMS drip cadences and enrollments.',
+  // Documents
+  documents:      'Document templates and generated PDFs.',
+  contracts:      'Contract records, versions, and renewal tracking.',
+  signatures:     'E-signature requests, signing flow, and audit trail.',
+  estimates:      'Estimates / proposals sent to customers.',
+  // Wellness Clinical
+  patients:       'Patient demographics and clinical PHI records.',
+  appointments:     'Tenant-wide appointments list (every appointment across the clinic).',
+  my_appointments:  'Personal "My Appointments" page — only appointments where this user is the assigned practitioner.',
+  book_appointment: 'Staff/patient appointment booking form (create new appointments on behalf of patients).',
+  waitlist:         'Patient waitlist queue — view and promote / disposition waiting patients to open slots.',
+  calendar:       'Day-grid calendar view (slot-click to book, drag to reschedule).',
+  services:       'Service catalog, packages, and pricing.',
+  prescriptions:  'Rx records, prescription PDFs, and dispense flow.',
+  consents:       'Signed consent forms and consent canvas signature capture.',
+  visits:         'Visit logs, clinical notes, treatment plans, and photo timeline.',
+  // Wellness Inventory
+  products:       'Product master catalog, categories, and auto-consumption rules.',
+  inventory:      'Stock movements — vendors, receipts, adjustments, stock ledger.',
+  pos:            'Point-of-sale register, sales, petty cash, and shift control.',
+  // Admin & Platform
+  staff:          'User accounts, profiles, role assignments, and onboarding.',
+  roles:          'RBAC roles and the per-role permission grants on this screen.',
+  settings:       'Tenant-wide settings and configuration.',
+  audit:          'Audit log read access and tamper-evidence verification.',
+  integrations:   'Third-party integration setup (calendars, SSO, SCIM, webhooks).',
+  developer:      'Developer tools, API keys, and platform diagnostics.',
+};
+
+// One-line description per action verb, surfaced as the hover tooltip on
+// each checkbox. Generic across modules — "read on patients" and "read on
+// deals" both grant the same shape of access, so a single canonical
+// description keeps the modal compact instead of N×6 per-cell strings.
+const ACTION_DESCRIPTIONS = {
+  read:   'View records and lists in this module.',
+  write:  'Create new records in this module.',
+  update: 'Edit existing records in this module.',
+  delete: 'Remove records in this module (typically soft-delete).',
+  export: 'Download or export module data to CSV / PDF / Excel.',
+  manage: 'Full administrative control — settings, bulk ops, and destructive admin actions.',
+};
 
 export default function RolesAdmin() {
   const {
@@ -976,6 +1062,7 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                         }}
                       >
                         <span
+                          title={MODULE_DESCRIPTIONS[module] || module}
                           style={{
                             fontSize: '0.75rem',
                             fontWeight: 700,
@@ -1005,15 +1092,19 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                         )}
                       </div>
                       {(() => {
-                        // Show "Unlocks: <pages>" so admins can map a
-                        // permission to the SPA pages it grants access
-                        // to. Answers the recurring "I can't find the
-                        // 'calendar' permission" confusion — Calendar
-                        // is unlocked by `appointments`, which now
-                        // says so directly under its header.
+                        // Module description (always shown when known) +
+                        // "Unlocks: <pages>" (shown when the page catalog
+                        // pins a SPA page to this module). The description
+                        // covers every module — modules that no page
+                        // declares in requiredPermissions (deals, projects,
+                        // quotes, forecasting, quotas, …) would otherwise
+                        // render as bare checkbox grids.
+                        const description = MODULE_DESCRIPTIONS[module];
                         const pages = pagesByModule.get(module);
-                        if (!pages || pages.size === 0) return null;
-                        const labels = Array.from(pages).sort();
+                        const labels = pages && pages.size > 0
+                          ? Array.from(pages).sort()
+                          : null;
+                        if (!description && !labels) return null;
                         return (
                           <div
                             style={{
@@ -1022,12 +1113,20 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                               marginBottom: '0.5rem',
                               lineHeight: 1.35,
                             }}
-                            title={`Pages requiring this permission: ${labels.join(', ')}`}
                           >
-                            Unlocks:{' '}
-                            <span style={{ color: 'var(--text-primary)', opacity: 0.85 }}>
-                              {labels.join(', ')}
-                            </span>
+                            {description && (
+                              <div style={{ marginBottom: labels ? '0.25rem' : 0 }}>
+                                {description}
+                              </div>
+                            )}
+                            {labels && (
+                              <div title={`Pages requiring this permission: ${labels.join(', ')}`}>
+                                Unlocks:{' '}
+                                <span style={{ color: 'var(--text-primary)', opacity: 0.85 }}>
+                                  {labels.join(', ')}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         );
                       })()}
@@ -1041,9 +1140,18 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                         {actions.map((a) => {
                           const key = `${module}.${a}`;
                           const checked = selected.has(key);
+                          const actionDesc = ACTION_DESCRIPTIONS[a];
+                          // Compose a contextual tooltip — the action verb
+                          // is generic, so prefix the module label to make
+                          // it scannable on hover ("Edit existing records
+                          // in this module." → "deals · Edit existing…").
+                          const tooltip = actionDesc
+                            ? `${module} · ${actionDesc}`
+                            : `${module}.${a}`;
                           return (
                             <label
                               key={a}
+                              title={tooltip}
                               style={{
                                 display: 'flex',
                                 alignItems: 'center',
@@ -1058,11 +1166,28 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                                 checked={checked}
                                 onChange={() => toggle(module, a)}
                                 disabled={readOnly}
+                                aria-describedby={`perm-desc-${module}-${a}`}
                                 style={{
                                   cursor: readOnly ? 'not-allowed' : 'pointer',
                                 }}
                               />
                               {a}
+                              <span
+                                id={`perm-desc-${module}-${a}`}
+                                style={{
+                                  position: 'absolute',
+                                  width: 1,
+                                  height: 1,
+                                  padding: 0,
+                                  margin: -1,
+                                  overflow: 'hidden',
+                                  clip: 'rect(0,0,0,0)',
+                                  whiteSpace: 'nowrap',
+                                  border: 0,
+                                }}
+                              >
+                                {tooltip}
+                              </span>
                             </label>
                           );
                         })}

@@ -3,102 +3,47 @@
  * membership-plan admin page (frontend/src/pages/wellness/Memberships.jsx).
  *
  * Scope: pins the page-surface invariants for the admin plan catalog —
- * heading + CTAs, loading state, parallel-fetch on mount (plans + services
- * + admin-only dashboard), empty state, plan card render (price/duration/
- * entitlements/inactive badge), New-plan form open/close, validation
- * (name required + at least one entitlement), and RBAC (USER hides
- * mutation CTAs + dashboard cards + does NOT GET the dashboard).
+ * heading + sub-copy, loading state, parallel-fetch on mount (plans +
+ * services), empty state, plan card render (price/duration), filter
+ * pills, search box, RBAC (ADMIN/MANAGER vs USER), FAB-driven new-plan
+ * form, validation (name required + at least one entitlement),
+ * entitlement add/remove, and edit + soft-delete flows via the
+ * three-dot menu.
  *
- * Test cases (12):
- *   1. Heading "Memberships" + sub-copy render.
- *   2. Loading state: "Loading membership plans…" renders while initial
- *      fetch is in-flight (per CLAUDE.md tick #108 cron-learning).
- *   3. ADMIN mount fires three parallel GETs:
- *        /api/wellness/membership-plans?includeInactive=1
- *        /api/wellness/services
- *        /api/wellness/memberships/dashboard
- *   4. USER role does NOT GET /api/wellness/memberships/dashboard
- *      (gated behind isAdmin in the SUT's load()).
- *   5. Admin chrome — Export CSV + Import CSV + "New plan" buttons render
- *      for ADMIN role.
- *   6. USER role HIDES mutation CTAs (no New-plan button, no Export CSV,
- *      no dashboard cards).
- *   7. Empty-state copy "No membership plans yet." renders when the plans
- *      GET resolves to [].
- *   8. Plan card renders name + formatted price + duration + Includes
- *      heading + entitlement line items (serviceName × quantity).
- *   9. Inactive plan renders the "Inactive" badge (and the SUT's
- *      isActive=false path).
- *  10. Dashboard summary cards render with ADMIN + dashboard payload
- *      (Active, Expiring this week, Expired counts).
- *  11. Clicking "New plan" opens the form (Name input + Save plan
- *      button render); clicking Cancel closes it.
- *  12. Submit-validation: empty name → notify.error("Plan name is
- *      required") and no POST. With name set + zero entitlements →
- *      notify.error("At least one entitlement is required").
- *
- * Mocking discipline (per CLAUDE.md RTL standing rules):
- *   - fetchApi + getAuthToken mocked at ../utils/api.
- *   - notifyObj is STABLE module-level — Wave 11 cfb5789 / Wave 12 f59e91d
- *     standing rule (fresh-per-call objects flap useCallback / useEffect
- *     dep identity).
- *   - AuthContext provided via the real Provider from App (SUT consumes
- *     it for `user.role` isAdmin gating).
- *   - formatMoney is NOT mocked — the SUT calls it directly with the
- *     plan's `currency` field ("INR"), so assertions use locale-tolerant
- *     numeric substring matches (price digits with optional grouping).
- *   - Data-dependent assertions use await findBy / waitFor.
- *
- * Drift pinned (prompt vs. actual SUT):
- *   - Prompt anticipated "fetch endpoints — likely /api/memberships OR
- *     /api/wellness/memberships". REALITY: SUT uses
- *     /api/wellness/membership-plans (with ?includeInactive=1 on mount)
- *     for the catalog, /api/wellness/services for service names, and
- *     /api/wellness/memberships/dashboard for admin KPI tiles. Three
- *     distinct endpoints, not one.
- *   - Prompt anticipated "tier name, price, included-services, duration"
- *     form. REALITY: SUT uses {name, description, durationDays, price,
- *     currency, entitlements:[{serviceId, quantity}]}. Entitlements are
- *     row-add via "Add row" button + per-row service<select> + quantity
- *     <input>, NOT a multi-select.
- *   - Prompt anticipated "active-inactive badge per tier". REALITY: only
- *     the INACTIVE badge renders; active plans have no badge (active is
- *     the default state and renders without chrome).
- *   - Prompt anticipated "subscriber count display per tier". REALITY:
- *     SUT does NOT render a subscriber count on plan cards. Active /
- *     expiring / expired counts are an ADMIN dashboard summary only,
- *     not per-tier counts. Omitted from tests.
- *   - Prompt anticipated "delete confirmation + active-subscriber check".
- *     REALITY: SUT calls window.confirm() with a soft-delete message
- *     ("Existing patient memberships keep working until expiry; only new
- *     sales are blocked") then DELETEs /api/wellness/membership-plans/:id.
- *     Backend handles active-member gating. Test covers the open/close
- *     form pattern, not the delete-confirmation flow (deferred — covered
- *     by api-level spec).
- *
- * Path: flat __tests__/Memberships.test.jsx — distinct from any wellness/
- * subdir convention; matches the prompt's path mandate.
+ * Drift note vs older draft:
+ *   - SUT fetches /api/wellness/membership-plans + /api/wellness/services
+ *     on mount; it does NOT call /api/wellness/memberships/dashboard.
+ *   - There is no Export/Import CSV button on this page.
+ *   - "New plan" trigger is a floating "+" FAB (aria-label="New membership
+ *     plan"), not a labeled "New plan" button.
+ *   - Edit/Deactivate/Delete live behind the three-dot menu per card
+ *     (aria-label="Plan actions"), NOT inline on the card.
+ *   - Filter pills: All / Active / Expired / Inactive (default = Active).
+ *   - Sub-copy reads "Offer membership plans with exclusive benefits for
+ *     returning clients." (not "Time-bound packages of services").
+ *   - Empty state copy: "No active membership plans yet." when the default
+ *     "Active" filter is in play.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
-const getAuthTokenMock = vi.fn(() => 'test-token');
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
-  getAuthToken: (...args) => getAuthTokenMock(...args),
 }));
 
-// Stable notify object — RTL standing rule (Wave 11 cfb5789, Wave 12 f59e91d).
+// Stable notify object — RTL standing rule (fresh objects per call cause
+// infinite useCallback dep loops).
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyObj = {
   error: notifyError,
   info: notifyInfo,
   success: notifySuccess,
-  confirm: () => Promise.resolve(true),
+  confirm: notifyConfirm,
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -118,6 +63,12 @@ const REGULAR_USER = {
   name: 'Front Desk',
   email: 'desk@enhancedwellness.in',
   role: 'USER',
+};
+const MANAGER_USER = {
+  userId: 50,
+  name: 'Wellness Manager',
+  email: 'manager@enhancedwellness.in',
+  role: 'MANAGER',
 };
 
 const SERVICES = [
@@ -147,16 +98,9 @@ const INACTIVE_PLAN = {
   entitlements: JSON.stringify([{ serviceId: 12, quantity: 5 }]),
 };
 
-const DASHBOARD_PAYLOAD = {
-  active: { count: 23, deferredRevenue: 200000 },
-  expiringThisWeek: { count: 4 },
-  expired: { count: 11 },
-};
-
 function installFetchMock({
   plans = [ACTIVE_PLAN, INACTIVE_PLAN],
   services = SERVICES,
-  dashboard = DASHBOARD_PAYLOAD,
   plansPromise = null,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
@@ -166,10 +110,7 @@ function installFetchMock({
       return Promise.resolve(plans);
     }
     if (url === '/api/wellness/services') return Promise.resolve(services);
-    if (url === '/api/wellness/memberships/dashboard') {
-      return Promise.resolve(dashboard);
-    }
-    // POST/PUT/DELETE catchall — resolve so submit() succeeds.
+    // POST/PUT/DELETE catchall.
     return Promise.resolve({ ok: true });
   });
 }
@@ -186,11 +127,11 @@ function renderPage({ user = ADMIN_USER } = {}) {
 
 beforeEach(() => {
   fetchApiMock.mockReset();
-  getAuthTokenMock.mockReset();
-  getAuthTokenMock.mockReturnValue('test-token');
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
+  notifyConfirm.mockReset();
+  notifyConfirm.mockResolvedValue(true);
 });
 
 describe('<Memberships /> — page chrome', () => {
@@ -200,13 +141,13 @@ describe('<Memberships /> — page chrome', () => {
     expect(
       screen.getByRole('heading', { name: /Memberships/i }),
     ).toBeInTheDocument();
+    // Real sub-copy in the SUT.
     expect(
-      screen.getByText(/Time-bound packages of services/i),
+      screen.getByText(/Offer membership plans with exclusive benefits/i),
     ).toBeInTheDocument();
   });
 
   it('shows "Loading membership plans…" before the initial fetch resolves', async () => {
-    // Block the plans fetch indefinitely to pin the loading branch.
     installFetchMock({ plansPromise: new Promise(() => {}) });
     renderPage();
     expect(
@@ -216,7 +157,7 @@ describe('<Memberships /> — page chrome', () => {
 });
 
 describe('<Memberships /> — mount fetches', () => {
-  it('ADMIN mount fires plans + services + dashboard GETs in parallel', async () => {
+  it('mount fires plans + services GETs', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
@@ -225,116 +166,116 @@ describe('<Memberships /> — mount fetches', () => {
       );
     });
     expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/services');
-    expect(fetchApiMock).toHaveBeenCalledWith(
-      '/api/wellness/memberships/dashboard',
-    );
-  });
-
-  it('USER role does NOT fetch the admin dashboard endpoint', async () => {
-    installFetchMock();
-    renderPage({ user: REGULAR_USER });
-    await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith(
-        '/api/wellness/membership-plans?includeInactive=1',
-      );
-    });
-    const dashboardCall = fetchApiMock.mock.calls.find(
-      ([u]) => u === '/api/wellness/memberships/dashboard',
-    );
-    expect(dashboardCall).toBeUndefined();
   });
 });
 
 describe('<Memberships /> — RBAC chrome', () => {
-  it('ADMIN sees Export CSV + Import CSV + "New plan" buttons', async () => {
+  it('ADMIN sees the floating "+" New-plan FAB', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
     });
-    expect(screen.getByRole('button', { name: /Export CSV/i })).toBeInTheDocument();
-    expect(screen.getByText(/Import CSV/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /New plan/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /New membership plan/i })).toBeInTheDocument();
   });
 
-  it('USER role hides mutation CTAs + dashboard cards', async () => {
+  it('USER role HIDES the New-plan FAB + the per-card three-dot menu', async () => {
     installFetchMock();
     renderPage({ user: REGULAR_USER });
     await waitFor(() => {
       expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
     });
-    expect(screen.queryByRole('button', { name: /New plan/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Export CSV/i })).toBeNull();
-    expect(screen.queryByTestId('memberships-dashboard-cards')).toBeNull();
+    expect(screen.queryByRole('button', { name: /New membership plan/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Plan actions/i })).toBeNull();
+  });
+
+  it('MANAGER role gets ADMIN treatment — sees CTA + per-card menu', async () => {
+    installFetchMock();
+    renderPage({ user: MANAGER_USER });
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /New membership plan/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Plan actions/i }).length).toBeGreaterThanOrEqual(1);
   });
 });
 
 describe('<Memberships /> — plan list', () => {
   it('renders the empty-state copy when no plans exist', async () => {
-    installFetchMock({ plans: [], dashboard: null });
+    installFetchMock({ plans: [] });
     renderPage();
     expect(
-      await screen.findByText(/No membership plans yet\./i),
+      await screen.findByText(/No active membership plans yet/i),
     ).toBeInTheDocument();
   });
 
-  it('renders a plan card with name + price + duration + entitlements list', async () => {
+  it('renders a plan card with name + duration label', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
     });
-    // Price digits — locale-tolerant: "15,000" or "15000" depending on Intl.
+    // The 180-day plan renders as "6 Months plan" via durationLabel.
     expect(
       screen.getAllByText((_t, el) =>
-        /(?:^|[^\d])15[,. ]?000(?:[^\d]|$)/.test(el?.textContent || ''),
-      ).length,
-    ).toBeGreaterThanOrEqual(1);
-    // Duration footer.
-    expect(screen.getByText(/180 days/i)).toBeInTheDocument();
-    // Entitlements section + service-name row.
-    expect(screen.getAllByText(/Includes:/i).length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getAllByText((_t, el) =>
-        /Hydrafacial.*×.*10/.test(el?.textContent || ''),
+        /6 Months plan/i.test(el?.textContent || ''),
       ).length,
     ).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders the "Inactive" badge on inactive plans', async () => {
+  it('filter pill defaults to Active and switching to All shows inactive plans too', async () => {
     installFetchMock();
     renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    // Default "Active" filter hides inactive plan.
+    expect(screen.queryByText('Legacy Bronze')).toBeNull();
+    // Click "All" pill to show all.
+    const allPill = screen.getByRole('button', { name: /^\s*All\b/i });
+    fireEvent.click(allPill);
     await waitFor(() => {
       expect(screen.getByText('Legacy Bronze')).toBeInTheDocument();
     });
-    expect(screen.getByText(/^Inactive$/)).toBeInTheDocument();
   });
-});
 
-describe('<Memberships /> — dashboard summary cards (admin)', () => {
-  it('renders Active / Expiring / Expired tiles with payload counts', async () => {
+  it('clicking "Inactive" filter shows only inactive plans', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId('memberships-dashboard-cards')).toBeInTheDocument();
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
     });
-    expect(screen.getByText(/^ ?ACTIVE MEMBERSHIPS$/i)).toBeInTheDocument();
-    expect(screen.getByText(/EXPIRING THIS WEEK/i)).toBeInTheDocument();
-    expect(screen.getByText(/^EXPIRED$/i)).toBeInTheDocument();
-    expect(screen.getByText('23')).toBeInTheDocument();
-    expect(screen.getByText('4')).toBeInTheDocument();
-    expect(screen.getByText('11')).toBeInTheDocument();
+    const inactivePill = screen.getByRole('button', { name: /Inactive/i });
+    fireEvent.click(inactivePill);
+    await waitFor(() => {
+      expect(screen.queryByText('Gold Facial Pack 10x')).toBeNull();
+      expect(screen.getByText('Legacy Bronze')).toBeInTheDocument();
+    });
+  });
+
+  it('search box filters plans by name', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    const search = screen.getByPlaceholderText(/Search memberships/i);
+    fireEvent.change(search, { target: { value: 'nothing-matches' } });
+    await waitFor(() => {
+      expect(screen.queryByText('Gold Facial Pack 10x')).toBeNull();
+      expect(screen.getByText(/No plans match the current filter/i)).toBeInTheDocument();
+    });
   });
 });
 
 describe('<Memberships /> — New-plan form open/close + validation', () => {
-  it('clicking "New plan" opens the form; Cancel closes it', async () => {
+  it('clicking the FAB opens the form; Cancel closes it', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: /New plan/i }));
+    fireEvent.click(screen.getByRole('button', { name: /New membership plan/i }));
     expect(
       screen.getByRole('heading', { name: /New membership plan/i }),
     ).toBeInTheDocument();
@@ -344,10 +285,7 @@ describe('<Memberships /> — New-plan form open/close + validation', () => {
     expect(
       screen.getByRole('button', { name: /Save plan/i }),
     ).toBeInTheDocument();
-    // Two buttons match /^Cancel$/ when the form is open: the header toggle
-    // ("New plan" -> "Cancel") AND the form's own Cancel button. Either closes
-    // the form; click the LAST one (the form's), which mirrors a user clicking
-    // inside the form rather than scrolling back to the header.
+    // Cancel button in the form footer.
     const cancelBtns = screen.getAllByRole('button', { name: /^Cancel$/ });
     fireEvent.click(cancelBtns[cancelBtns.length - 1]);
     expect(
@@ -355,13 +293,13 @@ describe('<Memberships /> — New-plan form open/close + validation', () => {
     ).toBeNull();
   });
 
-  it('submit with empty name → error toast, no POST; with name but no entitlements → entitlement error', async () => {
+  it('submit with empty name → notify.error; with name but no entitlements → second guard', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: /New plan/i }));
+    fireEvent.click(screen.getByRole('button', { name: /New membership plan/i }));
     // Submit empty form — name is required first.
     fireEvent.submit(
       screen.getByRole('button', { name: /Save plan/i }).closest('form'),
@@ -371,7 +309,6 @@ describe('<Memberships /> — New-plan form open/close + validation', () => {
         expect.stringMatching(/Plan name is required/i),
       );
     });
-    // No POST fired.
     const postCall = fetchApiMock.mock.calls.find(
       ([, opts]) => opts?.method === 'POST',
     );
@@ -382,9 +319,6 @@ describe('<Memberships /> — New-plan form open/close + validation', () => {
       screen.getByPlaceholderText(/Gold Facial Pack 10x/i),
       { target: { value: 'Trial Pack' } },
     );
-    // Price is also required by the SUT's parseFloat path, but the
-    // entitlements guard fires BEFORE saving (name+entitlements both
-    // checked client-side prior to POST).
     fireEvent.submit(
       screen.getByRole('button', { name: /Save plan/i }).closest('form'),
     );
@@ -397,5 +331,174 @@ describe('<Memberships /> — New-plan form open/close + validation', () => {
       ([, opts]) => opts?.method === 'POST',
     );
     expect(postCall2).toBeUndefined();
+  });
+
+  it('submit happy-path: valid name + price + entitlement → POST fires with expected body', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New membership plan/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Gold Facial Pack 10x/i), {
+      target: { value: 'Silver Pack 5x' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('15000'), {
+      target: { value: '7500' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add row/i }));
+    fireEvent.submit(
+      screen.getByRole('button', { name: /Save plan/i }).closest('form'),
+    );
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([u, opts]) =>
+          u === '/api/wellness/membership-plans' && opts?.method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.name).toBe('Silver Pack 5x');
+      expect(body.price).toBe(7500);
+      expect(body.currency).toBe('INR');
+      expect(Array.isArray(body.entitlements)).toBe(true);
+      expect(body.entitlements.length).toBe(1);
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/Created "Silver Pack 5x"/i),
+    );
+  });
+
+  it('addEntitlement happy-path: clicks Add row → entitlement table appears', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New membership plan/i }));
+    expect(
+      screen.getByText(/Add at least one service \+ quantity/i),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Add row/i }));
+    expect(
+      screen.queryByText(/Add at least one service \+ quantity/i),
+    ).toBeNull();
+    expect(screen.getByRole('columnheader', { name: /Service/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Quantity/i })).toBeInTheDocument();
+  });
+
+  it('addEntitlement when all active services already used → notify.error fires', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New membership plan/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add row/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add row/i }));
+    // Third click — no available service left.
+    fireEvent.click(screen.getByRole('button', { name: /Add row/i }));
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.stringMatching(/No more services to add/i),
+    );
+  });
+});
+
+describe('<Memberships /> — three-dot menu actions', () => {
+  it('clicking the three-dot menu opens the Edit/Delete/Deactivate menu', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    const menuBtns = screen.getAllByRole('button', { name: /Plan actions/i });
+    fireEvent.click(menuBtns[0]);
+    expect(screen.getByRole('menuitem', { name: /Edit/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Delete/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Deactivate/i })).toBeInTheDocument();
+  });
+
+  it('clicking Edit in the menu opens the prefilled form (heading "Edit membership plan")', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    const menuBtns = screen.getAllByRole('button', { name: /Plan actions/i });
+    fireEvent.click(menuBtns[0]);
+    fireEvent.click(screen.getByRole('menuitem', { name: /Edit/i }));
+    expect(
+      screen.getByRole('heading', { name: /Edit membership plan/i }),
+    ).toBeInTheDocument();
+    const nameInput = screen.getByPlaceholderText(/Gold Facial Pack 10x/i);
+    expect(nameInput.value).toBe('Gold Facial Pack 10x');
+  });
+
+  it('submit from Edit fires a PUT (not POST) to /api/wellness/membership-plans/:id', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    const menuBtns = screen.getAllByRole('button', { name: /Plan actions/i });
+    fireEvent.click(menuBtns[0]);
+    fireEvent.click(screen.getByRole('menuitem', { name: /Edit/i }));
+    fireEvent.submit(
+      screen.getByRole('button', { name: /Save plan/i }).closest('form'),
+    );
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([u, opts]) =>
+          u === '/api/wellness/membership-plans/201' && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/Updated "Gold Facial Pack 10x"/i),
+    );
+  });
+
+  it('Delete: notify.confirm true → DELETE fires + success toast', async () => {
+    installFetchMock();
+    notifyConfirm.mockResolvedValue(true);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    const menuBtns = screen.getAllByRole('button', { name: /Plan actions/i });
+    fireEvent.click(menuBtns[0]);
+    fireEvent.click(screen.getByRole('menuitem', { name: /Delete/i }));
+    expect(notifyConfirm).toHaveBeenCalled();
+    await waitFor(() => {
+      const deleteCall = fetchApiMock.mock.calls.find(
+        ([u, opts]) =>
+          u === '/api/wellness/membership-plans/201' && opts?.method === 'DELETE',
+      );
+      expect(deleteCall).toBeDefined();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/Deleted "Gold Facial Pack 10x"/i),
+    );
+  });
+
+  it('Delete: notify.confirm false → no DELETE, no toast', async () => {
+    installFetchMock();
+    notifyConfirm.mockResolvedValue(false);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Gold Facial Pack 10x')).toBeInTheDocument();
+    });
+    const menuBtns = screen.getAllByRole('button', { name: /Plan actions/i });
+    fireEvent.click(menuBtns[0]);
+    fireEvent.click(screen.getByRole('menuitem', { name: /Delete/i }));
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled());
+    // Microtask settle.
+    await new Promise((r) => setTimeout(r, 30));
+    const deleteCall = fetchApiMock.mock.calls.find(
+      ([, opts]) => opts?.method === 'DELETE',
+    );
+    expect(deleteCall).toBeUndefined();
+    expect(notifySuccess).not.toHaveBeenCalledWith(
+      expect.stringMatching(/Deleted/i),
+    );
   });
 });

@@ -146,29 +146,47 @@ describe('<Visits /> — broad contract', () => {
     expect(within(rohitRow).getByText('—')).toBeInTheDocument();
   });
 
-  it('changing the from-date input triggers a new fetch with that startDate', async () => {
+  it('changing the date-range preset triggers a new fetch with refreshed startDate/endDate window', async () => {
     fetchApi.mockResolvedValue(listPayload());
     renderVisits();
     await waitFor(() => expect(screen.getByText('Asha Patel')).toBeInTheDocument());
 
-    const inputs = document.querySelectorAll('input[type="date"]');
-    expect(inputs.length).toBe(2);
+    // SUT moved from raw `<input type="date">` controls to a preset-driven
+    // DateRangeFilter. Drive the preset <select> instead — the per-page
+    // <select> is the second; the date-range filter <select> is the first.
+    const selects = document.querySelectorAll('select');
+    const presetSelect = selects[0];
+    expect(presetSelect).toBeTruthy();
 
-    fireEvent.change(inputs[0], { target: { value: '2026-01-01' } });
+    const callsBefore = fetchApi.mock.calls.length;
+    fireEvent.change(presetSelect, { target: { value: 'today' } });
+
     await waitFor(() => {
-      const calls = fetchApi.mock.calls.map((c) => c[0]);
-      expect(calls.some((u) => u.includes('startDate=2026-01-01'))).toBe(true);
+      // Re-fetch fires with a startDate parameter in the URL — exact day
+      // depends on the runtime clock, so anchor on the parameter shape.
+      const calls = fetchApi.mock.calls.slice(callsBefore).map((c) => c[0]);
+      expect(calls.some((u) => /\bstartDate=\d{4}-\d{2}-\d{2}\b/.test(u))).toBe(true);
     });
   });
+
+  // The per-page select is the SECOND <select> in DOM order — the first is
+  // the DateRangeFilter preset select. Use a helper to disambiguate.
+  const getPerPageSelect = () => {
+    const selects = document.querySelectorAll('select');
+    // Default options on the per-page select: 10 / 20 / 50 / custom.
+    return Array.from(selects).find((s) =>
+      Array.from(s.options).some((o) => o.value === 'custom') &&
+      Array.from(s.options).some((o) => o.value === '10')
+    );
+  };
 
   it('changing the per-page select dispatches a new fetch with that limit', async () => {
     fetchApi.mockResolvedValue(listPayload());
     renderVisits();
     await waitFor(() => expect(screen.getByText('Asha Patel')).toBeInTheDocument());
 
-    const selects = document.querySelectorAll('select');
-    expect(selects.length).toBeGreaterThanOrEqual(1);
-    const perPage = selects[0];
+    const perPage = getPerPageSelect();
+    expect(perPage).toBeTruthy();
 
     fireEvent.change(perPage, { target: { value: '20' } });
 
@@ -183,8 +201,7 @@ describe('<Visits /> — broad contract', () => {
     renderVisits();
     await waitFor(() => expect(screen.getByText('Asha Patel')).toBeInTheDocument());
 
-    const perPage = document.querySelectorAll('select')[0];
-    fireEvent.change(perPage, { target: { value: 'custom' } });
+    fireEvent.change(getPerPageSelect(), { target: { value: 'custom' } });
 
     const customInput = await screen.findByPlaceholderText(/Enter 1-50/i);
     expect(customInput).toBeInTheDocument();
@@ -196,8 +213,7 @@ describe('<Visits /> — broad contract', () => {
     renderVisits();
     await waitFor(() => expect(screen.getByText('Asha Patel')).toBeInTheDocument());
 
-    const perPage = document.querySelectorAll('select')[0];
-    fireEvent.change(perPage, { target: { value: 'custom' } });
+    fireEvent.change(getPerPageSelect(), { target: { value: 'custom' } });
 
     const customInput = await screen.findByPlaceholderText(/Enter 1-50/i);
     fireEvent.change(customInput, { target: { value: '999' } });

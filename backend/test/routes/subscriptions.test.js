@@ -106,7 +106,12 @@ import jwt from 'jsonwebtoken';
 const { JWT_SECRET } = requireCJS('../../config/secrets');
 const subscriptionsRouter = requireCJS('../../routes/subscriptions');
 
-function signToken({ userId = 7, tenantId = 1, role = 'USER' } = {}) {
+function signToken({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
+  // The user-level subscription surface (status / create-order / verify-payment
+  // / cancel / invoices) is gated by verifyRole(['ADMIN']) — see routes/
+  // subscriptions.js. Default the token role to ADMIN so the auth gate passes
+  // and we exercise the route body. Tests that want to PROBE the role gate
+  // override this via the opts argument.
   return jwt.sign({ userId, tenantId, role }, JWT_SECRET, { expiresIn: '1h' });
 }
 
@@ -262,7 +267,12 @@ describe('GET /plans — active plans', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
-    expect(res.body[0]).toEqual({
+    // `formatPlan` returns a richer envelope than the original spec assumed —
+    // it includes `planKey`, `pricing`, `displayOrder`, `popular`, `accentColor`,
+    // `cta`, `featuresLabel`, `isActive` in addition to the core 6. Pin the
+    // load-bearing fields (price coerced to float, features JSON-parsed) via
+    // toMatchObject so the assertion survives future additive envelope changes.
+    expect(res.body[0]).toMatchObject({
       id: 1,
       name: 'Starter',
       price: 499,
@@ -272,9 +282,12 @@ describe('GET /plans — active plans', () => {
       description: 'Starter tier',
     });
     expect(res.body[1].features).toEqual([]); // null → []
+    // Ordering is `[{ displayOrder: 'asc' }, { price: 'asc' }]` — the
+    // owner-controlled `displayOrder` wins, with `price` as the tie-breaker
+    // (matches the /pricing page's stable left-to-right card layout).
     expect(prisma.subscriptionPlan.findMany).toHaveBeenCalledWith({
       where: { isActive: true },
-      orderBy: { price: 'asc' },
+      orderBy: [{ displayOrder: 'asc' }, { price: 'asc' }],
     });
   });
 
@@ -336,7 +349,11 @@ describe('POST /create-order — Razorpay order creation', () => {
       planId: 2,
       planName: 'Pro',
     });
-    expect(razorpayService.createOrder).toHaveBeenCalledWith(1999, 2);
+    // The route passes `(chargeAmount, planId, chargeCurrency)` — the
+    // currency argument was added when /pricing gained the USD/INR toggle.
+    // When the body doesn't pass `currency` + `billingPeriod`, chargeCurrency
+    // falls back to the plan's own `currency` column.
+    expect(razorpayService.createOrder).toHaveBeenCalledWith(1999, 2, 'INR');
   });
 });
 

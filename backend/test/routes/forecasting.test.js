@@ -234,3 +234,145 @@ describe('forecasting/bucketDealMetrics — #573 arithmetic-blowup defence', () 
     expect(m.committed).toBe(125000);
   });
 });
+
+// ─── Extended coverage: under-pinned helper edges (+10 cases) ──────────────
+// Forecasting.js is 476 LOC with 22 existing cases — biggest absolute SUT-to-
+// test gap in routes/. These cases pin contracts that hadn't been asserted:
+// stage-casing normalisation, missing-stage default in bucketDealMetrics
+// (note: differs from /pipeline's "lead" default — bucketDealMetrics treats
+// missing stage as OPEN because OPEN_STAGES returns true unless lowercased
+// stage is "won"|"lost"), decimal rounding to 2dp, the won+probability≥90
+// double-count contract, scaling across many deals, and helper purity.
+
+describe('forecasting/bucketDealMetrics — stage casing & defaults', () => {
+  test('stage casing is normalised (WON / Won / won all count as closed)', () => {
+    const m = bucketDealMetrics([
+      { amount: 10000, probability: 100, stage: 'WON' },
+      { amount: 20000, probability: 100, stage: 'Won' },
+      { amount: 30000, probability: 100, stage: 'won' },
+    ]);
+    expect(m.closed).toBe(60000);
+    expect(m.committed).toBe(60000);
+    expect(m.bestCase).toBe(0); // none open
+    expect(m.expected).toBe(0);
+  });
+
+  test('LOST in any casing contributes nothing', () => {
+    const m = bucketDealMetrics([
+      { amount: 50000, probability: 80, stage: 'LOST' },
+      { amount: 75000, probability: 50, stage: 'Lost' },
+    ]);
+    expect(m).toEqual({ expected: 0, committed: 0, bestCase: 0, closed: 0 });
+  });
+
+  test('missing/undefined stage is treated as OPEN (not won/lost → contributes to expected & bestCase)', () => {
+    // OPEN_STAGES returns true for any stage that isn't won/lost — including
+    // undefined/null/'' (since "".toLowerCase() === "" which is neither).
+    const m = bucketDealMetrics([
+      { amount: 100000, probability: 40 }, // no stage at all
+      { amount: 50000, probability: 60, stage: null },
+      { amount: 25000, probability: 20, stage: '' },
+    ]);
+    // expected = 100000*0.4 + 50000*0.6 + 25000*0.2 = 40000 + 30000 + 5000 = 75000
+    expect(m.expected).toBe(75000);
+    // bestCase = 100000 + 50000 + 25000 = 175000
+    expect(m.bestCase).toBe(175000);
+    expect(m.closed).toBe(0);
+  });
+});
+
+describe('forecasting/bucketDealMetrics — committed bucket nuances', () => {
+  test('won deal with probability=0 still counts toward committed (won is unconditional)', () => {
+    // committed = won OR probability >= 90 — so a probability=0 won deal
+    // (e.g. owner forgot to update probability when marking won) still lands
+    // in committed by virtue of the won-stage clause.
+    const m = bucketDealMetrics([
+      { amount: 80000, probability: 0, stage: 'won' },
+    ]);
+    expect(m.committed).toBe(80000);
+    expect(m.closed).toBe(80000);
+  });
+
+  test('open deal exactly at 90% is committed (boundary inclusive)', () => {
+    const m = bucketDealMetrics([
+      { amount: 60000, probability: 89, stage: 'proposal' },
+      { amount: 40000, probability: 90, stage: 'proposal' },
+    ]);
+    // Only the 90% deal hits the >= 90 threshold.
+    expect(m.committed).toBe(40000);
+    // Both contribute to bestCase + expected (both open).
+    expect(m.bestCase).toBe(100000);
+    // expected = 60000*0.89 + 40000*0.90 = 53400 + 36000 = 89400
+    expect(m.expected).toBe(89400);
+  });
+
+  test('a won deal is counted ONCE in committed even though both clauses match', () => {
+    // committed = sum(amount) where stage==won OR probability>=90. The two
+    // clauses overlap on a won-deal-at-100%; the code does a single-pass add
+    // inside an `if (... || ...)` so committed sums each deal at most once.
+    const m = bucketDealMetrics([
+      { amount: 100000, probability: 100, stage: 'won' },
+    ]);
+    expect(m.committed).toBe(100000); // not 200000
+    expect(m.closed).toBe(100000);
+  });
+});
+
+describe('forecasting/bucketDealMetrics — rounding & scaling', () => {
+  test('expected is rounded to 2 decimal places (no floating-point garbage in API output)', () => {
+    // Pick a probability that produces a value with >2dp before rounding.
+    // 33333 * 0.07 = 2333.31 (exact); use a less round combo:
+    // 99999 * 0.07 = 6999.93 — still clean.
+    // Force a known irrational-looking product: 100/3 isn't representable,
+    // but the route only multiplies probability/100 (always exact for int %).
+    // Probability=33, amount=100.01 → 100.01 * 0.33 = 33.0033 → rounds to 33.
+    const m = bucketDealMetrics([
+      { amount: 100.01, probability: 33, stage: 'proposal' },
+    ]);
+    expect(m.expected).toBe(33);
+    expect(m.bestCase).toBe(100.01);
+  });
+
+  test('aggregating 1000 small deals scales linearly and stays within Expected≤BestCase', () => {
+    // Defensive cap should be a no-op; expected ≤ bestCase by construction.
+    const deals = [];
+    for (let i = 0; i < 1000; i++) {
+      deals.push({ amount: 1000, probability: 50, stage: 'proposal' });
+    }
+    const m = bucketDealMetrics(deals);
+    // expected = 1000 * 1000 * 0.5 = 500000
+    expect(m.expected).toBe(500000);
+    // bestCase = 1000 * 1000 = 1000000
+    expect(m.bestCase).toBe(1000000);
+    expect(m.expected).toBeLessThanOrEqual(m.bestCase);
+  });
+
+  test('helpers are pure — calling bucketDealMetrics twice with the same input yields the same output', () => {
+    const deals = [
+      { amount: 150000, probability: 80, stage: 'proposal' },
+      { amount: 75000, probability: 100, stage: 'won' },
+    ];
+    const m1 = bucketDealMetrics(deals);
+    const m2 = bucketDealMetrics(deals);
+    expect(m1).toEqual(m2);
+    // Input list is not mutated.
+    expect(deals).toEqual([
+      { amount: 150000, probability: 80, stage: 'proposal' },
+      { amount: 75000, probability: 100, stage: 'won' },
+    ]);
+  });
+
+  test('string-numeric amounts inside a deal list are coerced through sanitizeAmount', () => {
+    // bucketDealMetrics passes deal.amount through sanitizeAmount, which
+    // does Number() coercion — so a CSV-imported deal with amount='42000'
+    // still aggregates correctly.
+    const m = bucketDealMetrics([
+      { amount: '42000', probability: 50, stage: 'proposal' },
+      { amount: '8000', probability: 100, stage: 'won' },
+    ]);
+    expect(m.expected).toBe(21000); // 42000 * 0.5
+    expect(m.bestCase).toBe(42000);
+    expect(m.closed).toBe(8000);
+    expect(m.committed).toBe(8000);
+  });
+});

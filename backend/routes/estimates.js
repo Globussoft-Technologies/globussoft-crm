@@ -3,7 +3,7 @@ const router = express.Router();
 const crypto = require("crypto");
 const PDFDocument = require("pdfkit");
 const prisma = require("../lib/prisma");
-const { verifyRole } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { httpFromPrismaError } = require("../lib/validators");
 
@@ -82,6 +82,18 @@ function validateEstimateInput(body, { isUpdate = false } = {}) {
 
 // GET /api/estimates — list with optional status filter
 // #167: soft-deleted rows hidden by default; opt in with ?includeDeleted=true.
+// #920 slice 13: ?fields=summary slim-shape opt-in. Mirrors slice 1
+// (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
+// badc9cca), slice 4 (tasks eec7d856), slice 5 (projects 257771a0),
+// slice 6 (expenses e81e6cb5), slice 7 (notifications a3487518),
+// slice 8 (surveys e71594d9), slice 9 (email-templates 0d4a63f9),
+// slice 10 (knowledge-base 21ad3290), slice 11 (playbooks),
+// slice 12 (sequences). When the caller passes ?fields=summary we drop
+// the heavy `lineItems` / `contact` / `deal` includes and `notes`
+// (`String? @db.Text`) — those can be many KB per row when an estimate
+// has 100+ line items each with long descriptions. Opt-in additive —
+// existing callers (no ?fields, or any non-exact value) get the full
+// row shape unchanged.
 router.get("/", async (req, res) => {
   try {
     const { status } = req.query;
@@ -92,15 +104,137 @@ router.get("/", async (req, res) => {
     // #172: pagination
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset) || 0);
-    const estimates = await prisma.estimate.findMany({
+
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where, take: limit, skip: offset,
-      include: { contact: true, deal: true, lineItems: true },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        estimateNum: true,
+        title: true,
+        status: true,
+        totalAmount: true,
+        validUntil: true,
+        createdAt: true,
+        contactId: true,
+        dealId: true,
+        tenantId: true,
+      };
+    } else {
+      findManyArgs.include = { contact: true, deal: true, lineItems: true };
+    }
+
+    const estimates = await prisma.estimate.findMany(findManyArgs);
     res.json(estimates);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch estimates" });
+  }
+});
+
+// GET /api/estimates/stats — tenant-wide aggregate KPI surface.
+//
+// CRM polish — first /stats endpoint for the Estimate (quote) CRUD route.
+// Mirrors deals/stats + travel-suppliers/stats posture. Read-only meta
+// surface; powers the sales dashboard's Estimates KPI tile (total count
+// + byStatus breakdown + total/accepted value + acceptanceRate +
+// expiredCount + lastCreatedAt). Without this, the frontend has to
+// fire {list, count-by-status×6, sum-totalAmount, filter+sum-accepted,
+// /expired} — N+1 round-trips for a single visual surface.
+//
+// Behaviour:
+//   - Tenant-scoped via req.user.tenantId.
+//   - ?from / ?to (optional ISO date bounds on createdAt); invalid → 400 INVALID_DATE.
+//   - byStatus: groupBy status across the Estimate enum
+//     (Draft / Sent / Accepted / Rejected / Expired / Converted).
+//   - totalValue: sum of totalAmount across all rows (half-up 2dp).
+//   - acceptedValue: sum of totalAmount where status='Accepted' (half-up 2dp).
+//   - acceptanceRate: acceptedCount / (acceptedCount + rejectedCount);
+//     null when denominator is 0 (no terminal decisions yet).
+//   - expiredCount: rows where status IN (Draft, Sent) AND validUntil < now.
+//     (Accepted/Rejected/Converted estimates are NOT counted as expired even
+//     if their validUntil window has lapsed — terminal states win.)
+//   - lastCreatedAt: max(createdAt) ISO, or null.
+//   - NO audit row written — anodyne aggregate.
+//
+// Express route ordering: literal /stats MUST be declared BEFORE the /:id
+// family or `:id="stats"` would parseInt → NaN and 400 INVALID_ID before
+// reaching this handler.
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId, deletedAt: null };
+
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "from must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "to must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    const rows = await prisma.estimate.findMany({
+      where,
+      select: { status: true, totalAmount: true, validUntil: true, createdAt: true },
+    });
+
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const now = new Date();
+
+    const byStatus = {};
+    let totalValue = 0;
+    let acceptedValue = 0;
+    let acceptedCount = 0;
+    let rejectedCount = 0;
+    let expiredCount = 0;
+    let lastCreatedAt = null;
+
+    for (const r of rows) {
+      const st = r.status || "Draft";
+      byStatus[st] = (byStatus[st] || 0) + 1;
+      const amt = Number(r.totalAmount) || 0;
+      totalValue += amt;
+      if (st === "Accepted") {
+        acceptedValue += amt;
+        acceptedCount += 1;
+      } else if (st === "Rejected") {
+        rejectedCount += 1;
+      }
+      if ((st === "Draft" || st === "Sent") && r.validUntil && new Date(r.validUntil) < now) {
+        expiredCount += 1;
+      }
+      if (r.createdAt) {
+        const ca = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+        if (!lastCreatedAt || ca > lastCreatedAt) lastCreatedAt = ca;
+      }
+    }
+
+    const decisions = acceptedCount + rejectedCount;
+    const acceptanceRate = decisions === 0 ? null : round2(acceptedCount / decisions);
+
+    res.json({
+      total: rows.length,
+      byStatus,
+      totalValue: round2(totalValue),
+      acceptedValue: round2(acceptedValue),
+      acceptanceRate,
+      expiredCount,
+      lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[estimates] stats error:", err.message);
+    res.status(500).json({ error: "Failed to compute estimate stats" });
   }
 });
 

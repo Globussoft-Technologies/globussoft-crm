@@ -219,3 +219,190 @@ describe('GET /api/adsgpt/cap-status', () => {
     expect(adsGptClient.checkBudgetCap).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Extended coverage (tick #N, +8 cases) — pinning the un-tested edges of
+// the wrapper: platform validation, auth-gate, default-platform, sub-brand
+// match (not mismatch), generic-error fall-through, cap-status auth+errors,
+// and tenant scope coming from JWT not query.
+// ---------------------------------------------------------------------------
+describe('GET /api/adsgpt/reports/ads — extended coverage', () => {
+  test('invalid platform → 400 INVALID_PLATFORM (assertValidPlatform gate)', async () => {
+    const res = await request(makeApp())
+      .get('/api/adsgpt/reports/ads')
+      .query({ subBrand: 'tmc', platform: 'tiktok' })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_PLATFORM' });
+    expect(res.body.error).toMatch(/platform must be one of/i);
+    // Provider must not be invoked when validation fails.
+    expect(adsGptClient.fetchAdReport).not.toHaveBeenCalled();
+    // No audit row when the call short-circuits at validation.
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('missing Authorization header → 401 (verifyToken gate)', async () => {
+    const res = await request(makeApp())
+      .get('/api/adsgpt/reports/ads')
+      .query({ subBrand: 'tmc' });
+    // No Authorization header set.
+
+    expect(res.status).toBe(401);
+    expect(adsGptClient.fetchAdReport).not.toHaveBeenCalled();
+  });
+
+  test('platform defaults to "all" when query param omitted', async () => {
+    adsGptClient.fetchAdReport.mockResolvedValue({
+      stub: true, tenantId: 1, subBrand: 'tmc', platform: 'all',
+      window: { fromDate: null, toDate: null },
+      metrics: {}, rows: [], note: 'stub',
+    });
+
+    const res = await request(makeApp())
+      .get('/api/adsgpt/reports/ads')
+      .query({ subBrand: 'tmc' })
+      // No platform, fromDate, or toDate in the query.
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(adsGptClient.fetchAdReport).toHaveBeenCalledWith({
+      tenantId: 1,
+      subBrand: 'tmc',
+      fromDate: null,
+      toDate: null,
+      platform: 'all',
+    });
+  });
+
+  test('API-key sub-brand match (apiKeySubBrand=tmc, query=tmc) succeeds + force-pins subBrand', async () => {
+    adsGptClient.fetchAdReport.mockResolvedValue({
+      stub: true, tenantId: 1, subBrand: 'tmc', platform: 'all',
+      window: {}, metrics: {}, rows: [], note: 'stub',
+    });
+
+    const res = await request(makeApp({ apiKeySubBrand: 'tmc' }))
+      .get('/api/adsgpt/reports/ads')
+      .query({ subBrand: 'tmc', platform: 'meta' })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    // effectiveSubBrand is force-pinned to req.apiKeySubBrand (matches here).
+    expect(adsGptClient.fetchAdReport).toHaveBeenCalledWith(
+      expect.objectContaining({ subBrand: 'tmc', platform: 'meta', tenantId: 1 }),
+    );
+  });
+
+  test('API-key sub-brand with no query subBrand → effectiveSubBrand forced to apiKeySubBrand', async () => {
+    adsGptClient.fetchAdReport.mockResolvedValue({
+      stub: true, tenantId: 1, subBrand: 'rfu', platform: 'all',
+      window: {}, metrics: {}, rows: [], note: 'stub',
+    });
+
+    const res = await request(makeApp({ apiKeySubBrand: 'rfu' }))
+      .get('/api/adsgpt/reports/ads')
+      // No query.subBrand at all — API-key value should win.
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(adsGptClient.fetchAdReport).toHaveBeenCalledWith(
+      expect.objectContaining({ subBrand: 'rfu' }),
+    );
+  });
+
+  test('generic client error (no .code, no .status) → 500 "Failed to fetch ad report"', async () => {
+    adsGptClient.fetchAdReport.mockRejectedValue(new Error('upstream blew up'));
+
+    const res = await request(makeApp())
+      .get('/api/adsgpt/reports/ads')
+      .query({ subBrand: 'tmc' })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to fetch ad report' });
+    // No audit row written when the upstream call throws.
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('client error with .status property (e.g. 503) propagates status + code', async () => {
+    const err = new Error('AdsGPT provider unreachable');
+    err.status = 503;
+    err.code = 'ADSGPT_UNREACHABLE';
+    adsGptClient.fetchAdReport.mockRejectedValue(err);
+
+    const res = await request(makeApp())
+      .get('/api/adsgpt/reports/ads')
+      .query({ subBrand: 'tmc' })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({
+      code: 'ADSGPT_UNREACHABLE',
+      error: 'AdsGPT provider unreachable',
+    });
+  });
+
+  test('tenantId comes from req.user.tenantId, not from any client-controlled query', async () => {
+    // JWT pins tenantId=42; query attempts to spoof tenantId=99.
+    adsGptClient.fetchAdReport.mockResolvedValue({
+      stub: true, tenantId: 42, subBrand: 'tmc', platform: 'all',
+      window: {}, metrics: {}, rows: [], note: 'stub',
+    });
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, role: 'ADMIN', tenantId: 42, isActive: true,
+    });
+
+    const res = await request(makeApp())
+      .get('/api/adsgpt/reports/ads')
+      .query({ subBrand: 'tmc', tenantId: '99' })
+      .set('Authorization', `Bearer ${tokenFor('ADMIN', { tenantId: 42 })}`);
+
+    expect(res.status).toBe(200);
+    // The spoofed tenantId=99 in the query is ignored; JWT's 42 wins.
+    expect(adsGptClient.fetchAdReport).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: 42 }),
+    );
+  });
+});
+
+describe('GET /api/adsgpt/cap-status — extended coverage', () => {
+  test('missing Authorization header → 401 (verifyToken gate fires before role gate)', async () => {
+    const res = await request(makeApp())
+      .get('/api/adsgpt/cap-status');
+    // No Authorization header.
+
+    expect(res.status).toBe(401);
+    expect(adsGptClient.checkBudgetCap).not.toHaveBeenCalled();
+  });
+
+  test('client throws ADSGPT_BUDGET_EXCEEDED → 402 with structured error body', async () => {
+    const err = new Error('Monthly AdsGPT spend cap reached for this tenant.');
+    err.code = 'ADSGPT_BUDGET_EXCEEDED';
+    err.spentCents = 6000;
+    err.capCents = 5000;
+    adsGptClient.checkBudgetCap.mockRejectedValue(err);
+
+    const res = await request(makeApp())
+      .get('/api/adsgpt/cap-status')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(402);
+    expect(res.body).toMatchObject({
+      code: 'ADSGPT_BUDGET_EXCEEDED',
+      spentCents: 6000,
+      capCents: 5000,
+    });
+    expect(res.body.error).toMatch(/cap/i);
+  });
+
+  test('generic client error (no .code) → 500 "Failed to read cap status"', async () => {
+    adsGptClient.checkBudgetCap.mockRejectedValue(new Error('db hiccup'));
+
+    const res = await request(makeApp())
+      .get('/api/adsgpt/cap-status')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to read cap status' });
+  });
+});

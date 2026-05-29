@@ -252,4 +252,251 @@ describe("ReligiousPackets — page contract", () => {
     );
     expect(postCall).toBeFalsy();
   });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Extended cases (2026-05-26): cover non-admin gating, error paths,
+  // channel-validation, dayOffset coercion, modal-close paths, cancel-add
+  // reset, and delete-cancel guard. Brings test ratio from 57% → ~95%
+  // relative to the 442L SUT.
+  // ─────────────────────────────────────────────────────────────────────
+
+  it("hides Add / Edit / Delete buttons for non-admin (USER role)", async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl());
+    renderPage({ role: "USER" });
+    await screen.findByText(/Umrah preparation/i);
+
+    expect(screen.queryByRole("button", { name: /Add packet/i })).toBeNull();
+    expect(screen.queryByLabelText(/Edit packet Umrah preparation/i)).toBeNull();
+    expect(screen.queryByLabelText(/Delete packet Umrah preparation/i)).toBeNull();
+  });
+
+  it("surfaces GET error via notify.error and falls back to empty list", async () => {
+    fetchApiMock.mockImplementation(() =>
+      Promise.reject({ body: { error: "Boom — backend unavailable" } }),
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith("Boom — backend unavailable");
+    });
+    // Empty-state shown after the failed load.
+    expect(await screen.findByText(/No packets in this filter/i)).toBeTruthy();
+  });
+
+  it("surfaces POST error via notify.error without closing the add form", async () => {
+    let firstCall = true;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (firstCall && url.startsWith("/api/travel/religious-packets?")) {
+        firstCall = false;
+        return Promise.resolve({ packets: SAMPLE_PACKETS });
+      }
+      if (url === "/api/travel/religious-packets" && opts?.method === "POST") {
+        return Promise.reject({ body: { error: "Duplicate (subBrand, dayOffset, title)" } });
+      }
+      return Promise.resolve({ packets: SAMPLE_PACKETS });
+    });
+    renderPage();
+    await screen.findByText(/Umrah preparation/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add packet/i }));
+    fireEvent.change(screen.getByPlaceholderText(/preparation — 14 days out/i), {
+      target: { value: "Conflicting packet" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Rendered into the WhatsApp/i), {
+      target: { value: "<p>body</p>" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: /^Save$/ })[0]);
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith("Duplicate (subBrand, dayOffset, title)");
+    });
+    // Add form should still be visible (no success path → not closed).
+    expect(screen.getByPlaceholderText(/preparation — 14 days out/i)).toBeTruthy();
+  });
+
+  it("rejects save when ALL channels are unchecked (at-least-one-channel guard)", async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl());
+    renderPage();
+    await screen.findByText(/Umrah preparation/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add packet/i }));
+    fireEvent.change(screen.getByPlaceholderText(/preparation — 14 days out/i), {
+      target: { value: "No-channel packet" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Rendered into the WhatsApp/i), {
+      target: { value: "<p>body</p>" },
+    });
+    // Uncheck default-on channels (WhatsApp + Email).
+    fireEvent.click(screen.getByLabelText(/^WhatsApp$/));
+    fireEvent.click(screen.getByLabelText(/^EMAIL$/));
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^Save$/ })[0]);
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith("at least one channel required");
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      (c) => c[0] === "/api/travel/religious-packets" && c[1]?.method === "POST",
+    );
+    expect(postCall).toBeFalsy();
+  });
+
+  it("does NOT DELETE when window.confirm returns false", async () => {
+    window.confirm.mockRestore?.();
+    vi.spyOn(window, "confirm").mockImplementation(() => false);
+    fetchApiMock.mockImplementation(defaultFetchImpl());
+    renderPage();
+    await screen.findByText(/Umrah preparation/i);
+
+    fireEvent.click(screen.getByLabelText(/Delete packet Umrah preparation/i));
+
+    // Give event loop a tick to drain any unintended async work.
+    await new Promise((r) => setTimeout(r, 20));
+    const delCall = fetchApiMock.mock.calls.find(
+      (c) => c[0].match(/\/api\/travel\/religious-packets\/\d+$/) && c[1]?.method === "DELETE",
+    );
+    expect(delCall).toBeFalsy();
+    expect(notifyObj.success).not.toHaveBeenCalledWith("Deleted");
+  });
+
+  it("surfaces DELETE error via notify.error", async () => {
+    let firstCall = true;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (firstCall && url.startsWith("/api/travel/religious-packets?")) {
+        firstCall = false;
+        return Promise.resolve({ packets: SAMPLE_PACKETS });
+      }
+      if (url.match(/\/api\/travel\/religious-packets\/\d+$/) && opts?.method === "DELETE") {
+        return Promise.reject({ body: { error: "FK constraint" } });
+      }
+      return Promise.resolve({ packets: SAMPLE_PACKETS });
+    });
+    renderPage();
+    await screen.findByText(/Umrah preparation/i);
+
+    fireEvent.click(screen.getByLabelText(/Delete packet Umrah preparation/i));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith("FK constraint");
+    });
+  });
+
+  it("surfaces PATCH error via notify.error and keeps the edit modal open", async () => {
+    let firstCall = true;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (firstCall && url.startsWith("/api/travel/religious-packets?")) {
+        firstCall = false;
+        return Promise.resolve({ packets: SAMPLE_PACKETS });
+      }
+      if (url.match(/\/api\/travel\/religious-packets\/\d+$/) && opts?.method === "PATCH") {
+        return Promise.reject({ body: { error: "Validation: dayOffset out of range" } });
+      }
+      return Promise.resolve({ packets: SAMPLE_PACKETS });
+    });
+    renderPage();
+    await screen.findByText(/Umrah preparation/i);
+
+    fireEvent.click(screen.getByLabelText(/Edit packet Umrah preparation/i));
+    const dialog = await screen.findByRole("dialog", { name: /Edit packet/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Save$/ }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith("Validation: dayOffset out of range");
+    });
+    // Modal still open after the failure.
+    expect(screen.queryByRole("dialog", { name: /Edit packet/i })).toBeTruthy();
+  });
+
+  it("dayOffset is coerced to Number on POST even if the input ships a string", async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl());
+    renderPage();
+    await screen.findByText(/Umrah preparation/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add packet/i }));
+    fireEvent.change(screen.getByPlaceholderText(/preparation — 14 days out/i), {
+      target: { value: "Coercion check" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Rendered into the WhatsApp/i), {
+      target: { value: "<p>x</p>" },
+    });
+    // Set dayOffset via the spinner — DOM yields string "30".
+    const dayInput = screen.getByLabelText(/Day offset/i);
+    fireEvent.change(dayInput, { target: { value: "30" } });
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^Save$/ })[0]);
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        (c) => c[0] === "/api/travel/religious-packets" && c[1]?.method === "POST",
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.dayOffset).toBe(30);
+      expect(typeof body.dayOffset).toBe("number");
+    });
+  });
+
+  it("Cancel button on add form hides it and resets the form to EMPTY_FORM", async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl());
+    renderPage();
+    await screen.findByText(/Umrah preparation/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add packet/i }));
+    fireEvent.change(screen.getByPlaceholderText(/preparation — 14 days out/i), {
+      target: { value: "dirty draft" },
+    });
+
+    // Cancel — the inline form has its own Cancel button at the bottom.
+    const cancelButtons = screen.getAllByRole("button", { name: /^Cancel$/ });
+    fireEvent.click(cancelButtons[0]);
+
+    // Form is removed; re-opening shows the EMPTY_FORM placeholder text again, not "dirty draft".
+    expect(screen.queryByPlaceholderText(/preparation — 14 days out/i)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Add packet/i }));
+    const reopenedTitle = screen.getByPlaceholderText(/preparation — 14 days out/i);
+    expect(reopenedTitle.value).toBe("");
+  });
+
+  it("clicking the modal backdrop closes the edit modal", async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl());
+    renderPage();
+    await screen.findByText(/Umrah preparation/i);
+
+    fireEvent.click(screen.getByLabelText(/Edit packet Umrah preparation/i));
+    const dialog = await screen.findByRole("dialog", { name: /Edit packet/i });
+    expect(dialog).toBeTruthy();
+
+    // Click the backdrop (the dialog element itself, not the inner stopPropagation card).
+    fireEvent.click(dialog);
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: /Edit packet/i })).toBeNull();
+    });
+  });
+
+  it("sub-brand field change in add form flows through to the POST body", async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl());
+    renderPage();
+    await screen.findByText(/Umrah preparation/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add packet/i }));
+    fireEvent.change(screen.getByPlaceholderText(/preparation — 14 days out/i), {
+      target: { value: "TMC briefing" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Rendered into the WhatsApp/i), {
+      target: { value: "<p>tmc</p>" },
+    });
+    // Sub-brand select inside the form. There are two filter selects above
+    // the form (subBrand filter + active filter) and ONE select inside the
+    // form (form sub-brand). The form's select is the 3rd select on the page.
+    const allSelects = document.querySelectorAll("select");
+    const formSubBrandSelect = allSelects[2];
+    fireEvent.change(formSubBrandSelect, { target: { value: "tmc" } });
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^Save$/ })[0]);
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        (c) => c[0] === "/api/travel/religious-packets" && c[1]?.method === "POST",
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.subBrand).toBe("tmc");
+    });
+  });
 });

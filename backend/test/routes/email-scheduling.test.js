@@ -430,3 +430,121 @@ describe('POST /:id/send-now — #524 stable-code contract', () => {
     expect(updateCall[0].data.errorMessage).toMatch(/no_api_key/);
   });
 });
+
+// ─── GET / ?fields=summary slim-shape opt-in (#920 slice 44) ────────
+//
+// Mirrors slices 1-42. The slim shape drops the two heavy text columns
+// (`body` @db.Text — signature-appended email body that can also carry
+// the tracking-pixel injection on send-now; `errorMessage` @db.Text — up
+// to ~64KB of SendGrid rejection envelope per #524 follow-up widening)
+// plus the implicit `tenantId`. Existing callers without ?fields, or with
+// any non-exact value, MUST keep receiving the full row shape — the
+// optionality is the contract.
+describe('GET / — ?fields=summary slim-shape (#920 slice 44)', () => {
+  test('omits select when ?fields is absent (full-row shape preserved)', async () => {
+    const res = await request(makeApp()).get('/api/email-scheduling?all=1');
+    expect(res.status).toBe(200);
+    const args = prisma.scheduledEmail.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // Other findMany args (where, orderBy, take) still intact.
+    expect(args.where.tenantId).toBe(1);
+    expect(args.orderBy).toEqual({ scheduledFor: 'asc' });
+    expect(args.take).toBe(200);
+  });
+
+  test('?fields=summary passes a slim select that drops body + errorMessage', async () => {
+    const res = await request(makeApp()).get(
+      '/api/email-scheduling?fields=summary&all=1'
+    );
+    expect(res.status).toBe(200);
+    const args = prisma.scheduledEmail.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    // Slim-shape keys we expect.
+    expect(args.select).toMatchObject({
+      id: true,
+      to: true,
+      subject: true,
+      scheduledFor: true,
+      status: true,
+      sentAt: true,
+      contactId: true,
+      userId: true,
+      createdAt: true,
+    });
+    // Heavy text columns explicitly NOT in the slim select.
+    expect(args.select.body).toBeUndefined();
+    expect(args.select.errorMessage).toBeUndefined();
+    // tenantId not selected either — already implicit in the scoped query.
+    expect(args.select.tenantId).toBeUndefined();
+  });
+
+  test('non-exact ?fields value falls back to full-row shape', async () => {
+    const res = await request(makeApp()).get(
+      '/api/email-scheduling?fields=SUMMARY&all=1'
+    );
+    expect(res.status).toBe(200);
+    const args = prisma.scheduledEmail.findMany.mock.calls[0][0];
+    // Strict-equality check ("summary" lowercase only); 'SUMMARY' must not opt in.
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=summary composes cleanly with ?status filter', async () => {
+    const res = await request(makeApp()).get(
+      '/api/email-scheduling?fields=summary&status=sent&all=1'
+    );
+    expect(res.status).toBe(200);
+    const args = prisma.scheduledEmail.findMany.mock.calls[0][0];
+    // Slim-shape kicked in.
+    expect(args.select).toBeDefined();
+    expect(args.select.body).toBeUndefined();
+    // status filter still uppercased + applied.
+    expect(args.where.status).toBe('SENT');
+    // Tenant scope intact.
+    expect(args.where.tenantId).toBe(1);
+  });
+
+  test('?fields=summary composes cleanly with the default 7-day window', async () => {
+    const res = await request(makeApp()).get(
+      '/api/email-scheduling?fields=summary'
+    );
+    expect(res.status).toBe(200);
+    const args = prisma.scheduledEmail.findMany.mock.calls[0][0];
+    // Slim select.
+    expect(args.select).toBeDefined();
+    // 7-day default window still applied (no ?all).
+    expect(args.where.scheduledFor).toBeDefined();
+    expect(args.where.scheduledFor.gte).toBeInstanceOf(Date);
+    expect(args.where.scheduledFor.lte).toBeInstanceOf(Date);
+    const windowMs =
+      args.where.scheduledFor.lte.getTime() - args.where.scheduledFor.gte.getTime();
+    expect(windowMs).toBeGreaterThan(6.9 * 24 * 60 * 60 * 1000);
+    expect(windowMs).toBeLessThan(7.1 * 24 * 60 * 60 * 1000);
+  });
+
+  test('returns whatever Prisma yields (slim-shape rows pass through unchanged)', async () => {
+    const slimRows = [
+      {
+        id: 11,
+        to: 'a@b.com',
+        subject: 'Hi',
+        scheduledFor: new Date().toISOString(),
+        status: 'PENDING',
+        sentAt: null,
+        contactId: null,
+        userId: 7,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    prisma.scheduledEmail.findMany.mockResolvedValueOnce(slimRows);
+    const res = await request(makeApp()).get(
+      '/api/email-scheduling?fields=summary&all=1'
+    );
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    // Body + errorMessage absent in the response (the route doesn't add them).
+    expect(res.body[0].body).toBeUndefined();
+    expect(res.body[0].errorMessage).toBeUndefined();
+    expect(res.body[0].id).toBe(11);
+  });
+});

@@ -370,4 +370,353 @@ describe('<LandingPageBuilder /> — page surface', () => {
     expect(screen.getByLabelText('Desktop preview')).toBeInTheDocument();
     expect(screen.getByLabelText('Mobile preview')).toBeInTheDocument();
   });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // EXTENSION cases — added 2026-05-26 to cover block library variety,
+  // property-editor mutation, remove / reorder block controls, save-state
+  // transitions, body-shape edge cases, and form-block routing rules.
+  // ─────────────────────────────────────────────────────────────────────
+
+  it('adds a Button block from the palette and renders its default text on the canvas', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    const buttonPaletteBtn = screen.getAllByText('Button')[0].closest('button');
+    await user.click(buttonPaletteBtn);
+
+    // The Button block's defaultProps.text === 'Click Here'.
+    await waitFor(() => expect(screen.getByText('Click Here')).toBeInTheDocument());
+
+    // Page section count reflects 1 component now.
+    const countLine = screen.getByText(/Components:/);
+    expect(countLine.parentElement.textContent).toMatch(/Components:\s*1\s*$/);
+  });
+
+  it('adds a Form block and surfaces its default fields on the canvas', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    const formPaletteBtn = screen.getAllByText('Form')[0].closest('button');
+    await user.click(formPaletteBtn);
+
+    // Form defaultProps.fields contains Name + Email field labels and
+    // defaultProps.submitText === 'Submit'.
+    await waitFor(() => expect(screen.getByText('Submit')).toBeInTheDocument());
+    // Name + Email labels appear as form field labels on the canvas.
+    expect(screen.getByText(/^Name/)).toBeInTheDocument();
+    expect(screen.getByText(/^Email/)).toBeInTheDocument();
+  });
+
+  it('selecting a block surfaces the type-specific property editor in the right rail', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // Add a heading and then click it on the canvas to select it.
+    const headingBtn = screen.getAllByText('Heading')[0].closest('button');
+    await user.click(headingBtn);
+    const canvasHeading = await screen.findByText('Your Headline Here');
+    await user.click(canvasHeading);
+
+    // Right rail header reads "Component · heading" once selected.
+    await waitFor(() =>
+      expect(screen.getByText(/Component · heading/i)).toBeInTheDocument(),
+    );
+
+    // Heading property editor surfaces "Text" + "Level" + "Align" + "Color"
+    // label markers in the right rail. "Text" appears multiple times (also
+    // a palette label), so use getAllByText. "Level" + "Align" are unique
+    // to the property editor.
+    expect(screen.getAllByText(/^Text$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/^Level$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Align$/)).toBeInTheDocument();
+  });
+
+  it('editing a block prop via the property editor updates the live canvas preview', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // Add + select a Heading.
+    const headingBtn = screen.getAllByText('Heading')[0].closest('button');
+    await user.click(headingBtn);
+    const canvasHeading = await screen.findByText('Your Headline Here');
+    await user.click(canvasHeading);
+
+    // The Heading property-editor "Text" field starts populated with the
+    // default. There are multiple "Text" elements (palette button label
+    // also has the text "Text"); the property-editor label is the one
+    // whose parent has an <input> sibling with the current text value.
+    const textLabels = screen.getAllByText(/^Text$/);
+    let textInput = null;
+    for (const label of textLabels) {
+      const candidate = label.parentElement && label.parentElement.querySelector('input, textarea');
+      if (candidate && candidate.value === 'Your Headline Here') {
+        textInput = candidate;
+        break;
+      }
+    }
+    expect(textInput).toBeTruthy();
+    await user.clear(textInput);
+    await user.type(textInput, 'New Headline');
+
+    // The canvas updates in real time (the SUT dispatches SET on every
+    // prop edit so canvas re-renders immediately even before the 500ms
+    // history-commit debounce fires).
+    await waitFor(() =>
+      expect(screen.getByText('New Headline')).toBeInTheDocument(),
+    );
+  });
+
+  it('selecting a block shows the in-canvas Move Up / Move Down / Trash row controls', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // Add two heading blocks so there's something to reorder.
+    const headingPaletteBtn = screen.getAllByText('Heading')[0].closest('button');
+    await user.click(headingPaletteBtn);
+    await user.click(headingPaletteBtn);
+
+    // Two "Your Headline Here" instances on the canvas.
+    await waitFor(() =>
+      expect(screen.getAllByText('Your Headline Here').length).toBe(2),
+    );
+
+    // Click the first heading to select it.
+    const headings = screen.getAllByText('Your Headline Here');
+    await user.click(headings[0]);
+
+    // Once selected, the row's overlay surface 3 icon buttons (ChevronUp,
+    // ChevronDown, Trash2). They are unlabelled <button> elements under
+    // the selection overlay. There's no aria-label on them in the SUT, so
+    // we count the rendered svg icons next to the selected heading.
+    const selectedRow = headings[0].closest('div'); // ComponentPreview wrapper
+    // The overlay buttons live in a sibling div, not inside the heading
+    // text. Walk up to the cursor wrapper that has the overlay child.
+    const wrapper = selectedRow.parentElement;
+    // The overlay div contains 3 <button> elements; locate via querySelector.
+    const overlayButtons = wrapper.querySelectorAll('button');
+    expect(overlayButtons.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('removing a block via the canvas trash icon shrinks the component count', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // Add one Spacer block (no visible text label on the canvas — it just
+    // adds a div with height). Use Components count to assert state.
+    const spacerPaletteBtn = screen.getAllByText('Spacer')[0].closest('button');
+    await user.click(spacerPaletteBtn);
+
+    // Count is 1.
+    await waitFor(() => {
+      const line = screen.getByText(/Components:/);
+      expect(line.parentElement.textContent).toMatch(/Components:\s*1\s*$/);
+    });
+
+    // Now ALSO add a Heading so we have a visible thing to click → select.
+    const headingPaletteBtn = screen.getAllByText('Heading')[0].closest('button');
+    await user.click(headingPaletteBtn);
+    const canvasHeading = await screen.findByText('Your Headline Here');
+
+    // Click to select the Heading.
+    await user.click(canvasHeading);
+
+    // The selection overlay shows 3 buttons; the LAST is the Trash button
+    // (per SUT order: ChevronUp, ChevronDown, Trash2).
+    const wrapper = canvasHeading.parentElement.parentElement; // overlay sibling
+    const overlayButtons = wrapper.querySelectorAll('button');
+    expect(overlayButtons.length).toBeGreaterThanOrEqual(3);
+    const trashBtn = overlayButtons[overlayButtons.length - 1];
+    await user.click(trashBtn);
+
+    // Heading is gone; only Spacer remains → count is 1.
+    await waitFor(() => {
+      expect(screen.queryByText('Your Headline Here')).not.toBeInTheDocument();
+      const line = screen.getByText(/Components:/);
+      expect(line.parentElement.textContent).toMatch(/Components:\s*1\s*$/);
+    });
+  });
+
+  it('Save POST body has the right shape — title + content (JSON) + slug — for a populated canvas', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // Add a Heading + a Spacer.
+    await user.click(screen.getAllByText('Heading')[0].closest('button'));
+    await user.click(screen.getAllByText('Spacer')[0].closest('button'));
+    await waitFor(() => expect(screen.getByText('Your Headline Here')).toBeInTheDocument());
+
+    // Now save.
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(defaultFetch);
+
+    // Dirty marker means the accessible name is "Save •" not just "Save",
+    // so use a permissive matcher.
+    const saveBtn = screen.getByRole('button', { name: /Save/ });
+    await user.click(saveBtn);
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url.startsWith('/api/landing-pages/42') && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      // title carried.
+      expect(body.title).toBe('Spring Launch');
+      // slug carried.
+      expect(body.slug).toBe('spring-launch');
+      // content is a JSON-encoded array with the 2 blocks we added.
+      const parsed = JSON.parse(body.content);
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed.length).toBe(2);
+      expect(parsed[0].type).toBe('heading');
+      expect(parsed[1].type).toBe('spacer');
+      // Each block has an id (Date.now() string) + props.
+      parsed.forEach((b) => {
+        expect(typeof b.id).toBe('string');
+        expect(typeof b.props).toBe('object');
+      });
+    });
+  });
+
+  it('Save failure surfaces notify.error("Save failed") for a generic backend error', async () => {
+    const user = userEvent.setup();
+
+    // First, normal load — then on PUT, return a non-409 error.
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages/42' && method === 'GET') return Promise.resolve(samplePageDraft);
+      if (url === '/api/lead-routing' && method === 'GET') return Promise.resolve(sampleRules);
+      if (url.startsWith('/api/landing-pages/') && method === 'PUT') {
+        return Promise.reject(Object.assign(new Error('Bang'), { status: 500 }));
+      }
+      return Promise.resolve([]);
+    });
+
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    const saveBtn = screen.getByRole('button', { name: /^Save$/ });
+    await user.click(saveBtn);
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Save failed');
+    });
+  });
+
+  it('form-block property editor populates the Lead Routing dropdown from /api/lead-routing', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // Add + select a Form block.
+    const formPaletteBtn = screen.getAllByText('Form')[0].closest('button');
+    await user.click(formPaletteBtn);
+    // Canvas form's submit button shows.
+    const canvasSubmit = await screen.findByText('Submit');
+    // Click the form block (closest container) to select it.
+    await user.click(canvasSubmit);
+
+    // Right rail header reads "Component · form".
+    await waitFor(() =>
+      expect(screen.getByText(/Component · form/i)).toBeInTheDocument(),
+    );
+
+    // Two rule names from sampleRules appear in the dropdown options.
+    await waitFor(() => {
+      expect(screen.getByText(/Hot Lead Router/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Cold Drop/)).toBeInTheDocument();
+
+    // The "tenant-level routing" fallback option also renders.
+    expect(screen.getByText(/Use tenant-level routing/i)).toBeInTheDocument();
+  });
+
+  it('the "↻" derive-slug button derives a slug from the current title', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // Change the title.
+    const titleInput = screen.getByLabelText('Page title');
+    await user.clear(titleInput);
+    await user.type(titleInput, 'Holiday Promo 2027');
+
+    // Click the derive button (↻ glyph).
+    const deriveBtn = screen.getByTitle(/Derive slug from current page title/i);
+    await user.click(deriveBtn);
+
+    // Slug input now reads the derived value: "holiday-promo-2027".
+    const slugInput = screen.getByLabelText('Page URL slug');
+    expect(slugInput.value).toBe('holiday-promo-2027');
+  });
+
+  it('deriving a slug from an empty title surfaces notify.error', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // Clear title.
+    const titleInput = screen.getByLabelText('Page title');
+    await user.clear(titleInput);
+
+    // Click derive — should error.
+    const deriveBtn = screen.getByTitle(/Derive slug from current page title/i);
+    await user.click(deriveBtn);
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Set a title first/),
+      );
+    });
+  });
+
+  it('typing in the title input flips the Save button into the dirty state (• marker)', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // Initially the save button has no • marker — its text is just "Save".
+    const saveBtnInitial = screen.getByRole('button', { name: /^Save$/ });
+    expect(saveBtnInitial.textContent).not.toMatch(/•/);
+
+    // Type a change into the title.
+    const titleInput = screen.getByLabelText('Page title');
+    await user.type(titleInput, ' (Edited)');
+
+    // The • marker now appears.
+    await waitFor(() => {
+      const saveBtnDirty = screen.getByRole('button', { name: /Save/ });
+      expect(saveBtnDirty.textContent).toMatch(/•/);
+    });
+  });
+
+  it('clicking the Mobile preview toggle switches the active state away from Desktop', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    const desktop = screen.getByLabelText('Desktop preview');
+    const mobile = screen.getByLabelText('Mobile preview');
+
+    // Desktop starts with accent background — the SUT sets background:
+    // 'var(--accent-color)' when previewMode === 'desktop'. We can't read
+    // resolved CSS reliably, but we can read inline style.
+    expect(desktop.getAttribute('style')).toMatch(/var\(--accent-color\)/);
+    expect(mobile.getAttribute('style')).not.toMatch(/var\(--accent-color\)/);
+
+    await user.click(mobile);
+
+    // After click — mobile is the accented one.
+    await waitFor(() => {
+      expect(mobile.getAttribute('style')).toMatch(/var\(--accent-color\)/);
+      expect(desktop.getAttribute('style')).not.toMatch(/var\(--accent-color\)/);
+    });
+  });
 });

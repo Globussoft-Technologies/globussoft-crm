@@ -97,4 +97,128 @@ describe('apiKeyAuth — installSubBrandHelpers', () => {
     expect(req.requireSubBrandMatchOrSend('rfu', res)).toBe(true);
     expect(res.status).not.toHaveBeenCalled();
   });
+
+  // ---- Extension: additional surface coverage (test-cron tick) ----
+
+  test('apiKey.subBrand="" (empty string) coerces to null (tenant-wide via || fallback)', () => {
+    const req = {};
+    installSubBrandHelpers(req, { subBrand: '' });
+    expect(req.apiKeySubBrand).toBeNull();
+    // Empty-string scope should behave identically to null — accept any target.
+    expect(req.requireSubBrandMatch('tmc')).toBe(true);
+    expect(req.requireSubBrandMatch('anything')).toBe(true);
+  });
+
+  test('apiKey.subBrand=0 (numeric falsy) coerces to null', () => {
+    const req = {};
+    installSubBrandHelpers(req, { subBrand: 0 });
+    expect(req.apiKeySubBrand).toBeNull();
+    expect(req.requireSubBrandMatch('tmc')).toBe(true);
+  });
+
+  test('reinstall on same req overwrites apiKeySubBrand and the helper closures', () => {
+    const req = {};
+    installSubBrandHelpers(req, { subBrand: 'tmc' });
+    expect(req.apiKeySubBrand).toBe('tmc');
+    // First install: matching 'tmc' returns true, 'rfu' throws.
+    expect(req.requireSubBrandMatch('tmc')).toBe(true);
+    expect(() => req.requireSubBrandMatch('rfu')).toThrow(/SUB_BRAND_MISMATCH|sub-brand/);
+
+    // Reinstall with different scope.
+    installSubBrandHelpers(req, { subBrand: 'rfu' });
+    expect(req.apiKeySubBrand).toBe('rfu');
+    // After reinstall the new closure pins the new scope — 'rfu' now matches, 'tmc' throws.
+    expect(req.requireSubBrandMatch('rfu')).toBe(true);
+    let caught;
+    try {
+      req.requireSubBrandMatch('tmc');
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught.code).toBe('SUB_BRAND_MISMATCH');
+    expect(caught.expected).toBe('rfu');
+    expect(caught.actual).toBe('tmc');
+  });
+
+  test('requireSubBrandMatch(target=null) when key is scoped throws SUB_BRAND_MISMATCH with actual=null', () => {
+    const req = {};
+    installSubBrandHelpers(req, { subBrand: 'tmc' });
+    let caught;
+    try {
+      req.requireSubBrandMatch(null);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught.code).toBe('SUB_BRAND_MISMATCH');
+    expect(caught.status).toBe(403);
+    expect(caught.expected).toBe('tmc');
+    expect(caught.actual).toBeNull();
+  });
+
+  test('requireSubBrandMatch(target=undefined) when key is scoped throws SUB_BRAND_MISMATCH with actual=undefined', () => {
+    const req = {};
+    installSubBrandHelpers(req, { subBrand: 'tmc' });
+    let caught;
+    try {
+      req.requireSubBrandMatch(undefined);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught.code).toBe('SUB_BRAND_MISMATCH');
+    expect(caught.status).toBe(403);
+    expect(caught.expected).toBe('tmc');
+    expect(caught.actual).toBeUndefined();
+  });
+
+  test('match is case-sensitive: "tmc" vs "TMC" throws SUB_BRAND_MISMATCH', () => {
+    const req = {};
+    installSubBrandHelpers(req, { subBrand: 'tmc' });
+    let caught;
+    try {
+      req.requireSubBrandMatch('TMC');
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught.code).toBe('SUB_BRAND_MISMATCH');
+    expect(caught.expected).toBe('tmc');
+    expect(caught.actual).toBe('TMC');
+  });
+
+  test('requireSubBrandMatchOrSend on mismatch returns boolean false (not undefined)', () => {
+    const req = {};
+    installSubBrandHelpers(req, { subBrand: 'tmc' });
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const result = req.requireSubBrandMatchOrSend('rfu', res);
+    // Strict identity check: must be the literal `false`, not falsy-undefined.
+    expect(result).toBe(false);
+    expect(result).not.toBeUndefined();
+    expect(typeof result).toBe('boolean');
+  });
+
+  test('requireSubBrandMatchOrSend mismatch path: res.status(403) called BEFORE res.json (chain order)', () => {
+    const req = {};
+    installSubBrandHelpers(req, { subBrand: 'tmc' });
+    const callOrder = [];
+    const res = {
+      status: vi.fn(function (code) {
+        callOrder.push(`status:${code}`);
+        return this;
+      }),
+      json: vi.fn(function (body) {
+        callOrder.push(`json:${body.code}`);
+        return this;
+      }),
+    };
+    req.requireSubBrandMatchOrSend('rfu', res);
+    // Verify the chain order: status first, then json — required because
+    // status() returns `this` and json() is called on the chained return.
+    expect(callOrder).toEqual(['status:403', 'json:SUB_BRAND_MISMATCH']);
+    // Belt-and-suspenders: vi's invocationCallOrder timestamps the calls.
+    expect(res.status.mock.invocationCallOrder[0])
+      .toBeLessThan(res.json.mock.invocationCallOrder[0]);
+  });
 });

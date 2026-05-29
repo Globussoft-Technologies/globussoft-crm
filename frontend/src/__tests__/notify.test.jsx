@@ -189,3 +189,275 @@ describe('useNotify — inside <NotifyProvider>', () => {
     expect(toasts.length).toBe(1);
   });
 });
+
+/**
+ * Extended cases — toast TTL split (#540), manual dismiss, info variant,
+ * multi-toast stacking, confirm custom labels, prompt default + empty + queue,
+ * provider re-render preservation.
+ *
+ * The existing block above pins basic toast/success/error rendering and
+ * confirm/prompt happy paths. These extensions cover the timing rule
+ * (8000ms error / 4500ms non-error per inline #540 comment), the
+ * close-button manual dismiss path, and the modal queue order (single
+ * slot + queueRef overflow per openModal() at line 63-74).
+ */
+
+describe('useNotify — toast TTL (#540) and stacking', () => {
+  it('error toast lives 8000ms; non-error toast lives 4500ms (fake-timer split)', async () => {
+    vi.useFakeTimers();
+    try {
+      const apiRef = { current: null };
+      render(
+        <NotifyProvider>
+          <Consumer apiRef={apiRef} />
+        </NotifyProvider>,
+      );
+
+      act(() => {
+        apiRef.current.error('Boom');
+        apiRef.current.success('Yay');
+      });
+
+      // Both visible right after firing.
+      expect(screen.getByText('Boom')).toBeInTheDocument();
+      expect(screen.getByText('Yay')).toBeInTheDocument();
+
+      // Advance past success TTL (4500ms) but not error TTL (8000ms).
+      // 5000ms → success should have been pruned, error still there.
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(screen.queryByText('Yay')).not.toBeInTheDocument();
+      expect(screen.getByText('Boom')).toBeInTheDocument();
+
+      // Advance past the error TTL too (total 8500ms).
+      act(() => {
+        vi.advanceTimersByTime(3500);
+      });
+      expect(screen.queryByText('Boom')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('multiple distinct toasts stack and each renders in DOM', async () => {
+    const apiRef = { current: null };
+    render(
+      <NotifyProvider>
+        <Consumer apiRef={apiRef} />
+      </NotifyProvider>,
+    );
+
+    act(() => {
+      apiRef.current.success('First');
+      apiRef.current.error('Second');
+      apiRef.current.info('Third');
+    });
+
+    // Three distinct toasts are rendered — dedupe only kicks in for
+    // identical (kind, message) pairs within 1.5s; these are all distinct.
+    await screen.findByText('First');
+    await screen.findByText('Second');
+    await screen.findByText('Third');
+
+    const all = document.querySelectorAll('[data-notify-toast]');
+    expect(all.length).toBe(3);
+  });
+
+  it('manual dismiss via close button removes the toast immediately', async () => {
+    const user = userEvent.setup();
+    const apiRef = { current: null };
+    render(
+      <NotifyProvider>
+        <Consumer apiRef={apiRef} />
+      </NotifyProvider>,
+    );
+
+    act(() => apiRef.current.info('Dismiss me'));
+
+    const toast = await screen.findByText('Dismiss me');
+    expect(toast).toBeInTheDocument();
+
+    // Each toast has an aria-labelled close button at line 219-220 of SUT.
+    const closeBtn = screen.getByRole('button', { name: 'Dismiss notification' });
+    await user.click(closeBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Dismiss me')).not.toBeInTheDocument();
+    });
+  });
+
+  it('notify.info renders with role="status" and data-notify-toast="info"', async () => {
+    const apiRef = { current: null };
+    render(
+      <NotifyProvider>
+        <Consumer apiRef={apiRef} />
+      </NotifyProvider>,
+    );
+
+    act(() => apiRef.current.info('Heads up'));
+
+    const toast = await screen.findByText('Heads up');
+    const wrapper = toast.closest('[data-notify-toast]');
+    expect(wrapper).toHaveAttribute('data-notify-toast', 'info');
+    expect(wrapper).toHaveAttribute('role', 'status');
+  });
+});
+
+describe('useNotify — confirm() custom labels + options-object form', () => {
+  it('confirm({ title, confirmText, cancelText }) renders custom labels', async () => {
+    const user = userEvent.setup();
+    const apiRef = { current: null };
+    render(
+      <NotifyProvider>
+        <Consumer apiRef={apiRef} />
+      </NotifyProvider>,
+    );
+
+    let resolved;
+    act(() => {
+      apiRef.current
+        .confirm({
+          title: 'Delete patient record?',
+          message: 'This cannot be undone.',
+          confirmText: 'Delete',
+          cancelText: 'Keep',
+          destructive: true,
+        })
+        .then((v) => {
+          resolved = v;
+        });
+    });
+
+    // Title + message + custom button copy all render.
+    await screen.findByText('Delete patient record?');
+    expect(screen.getByText('This cannot be undone.')).toBeInTheDocument();
+    const deleteBtn = screen.getByRole('button', { name: 'Delete' });
+    expect(screen.getByRole('button', { name: 'Keep' })).toBeInTheDocument();
+    expect(deleteBtn).toHaveAttribute('data-notify-action', 'confirm');
+
+    await user.click(deleteBtn);
+    await waitFor(() => expect(resolved).toBe(true));
+  });
+});
+
+describe('useNotify — prompt() default value + empty + queue', () => {
+  it('prompt() with default value pre-fills the input and returns default on immediate OK', async () => {
+    const user = userEvent.setup();
+    const apiRef = { current: null };
+    render(
+      <NotifyProvider>
+        <Consumer apiRef={apiRef} />
+      </NotifyProvider>,
+    );
+
+    let resolved;
+    act(() => {
+      apiRef.current.prompt('Folder name', 'Untitled').then((v) => {
+        resolved = v;
+      });
+    });
+
+    await screen.findByText('Folder name');
+    const input = screen.getByRole('textbox');
+    expect(input).toHaveValue('Untitled');
+
+    // Click OK without editing — returns the default.
+    await user.click(screen.getByRole('button', { name: 'OK' }));
+    await waitFor(() => expect(resolved).toBe('Untitled'));
+  });
+
+  it('prompt() with empty input resolves to empty string on OK (not null)', async () => {
+    // Per SUT line 261: confirmValue for prompt = current input value.
+    // Empty input → resolves to empty string (caller must validate themselves).
+    const user = userEvent.setup();
+    const apiRef = { current: null };
+    render(
+      <NotifyProvider>
+        <Consumer apiRef={apiRef} />
+      </NotifyProvider>,
+    );
+
+    let resolved;
+    act(() => {
+      apiRef.current.prompt('Optional note').then((v) => {
+        resolved = v;
+      });
+    });
+
+    await screen.findByText('Optional note');
+    await user.click(screen.getByRole('button', { name: 'OK' }));
+
+    await waitFor(() => expect(resolved).toBe(''));
+    // Explicitly NOT null — only cancel returns null per SUT line 260.
+    expect(resolved).not.toBeNull();
+  });
+
+  it('two confirm() calls queue: second presents only after first resolves', async () => {
+    const user = userEvent.setup();
+    const apiRef = { current: null };
+    render(
+      <NotifyProvider>
+        <Consumer apiRef={apiRef} />
+      </NotifyProvider>,
+    );
+
+    const order = [];
+    act(() => {
+      apiRef.current.confirm('First question?').then((v) => {
+        order.push(['first', v]);
+      });
+      apiRef.current.confirm('Second question?').then((v) => {
+        order.push(['second', v]);
+      });
+    });
+
+    // Only the first is visible — second is queued (modalQueueRef.current).
+    await screen.findByText('First question?');
+    expect(screen.queryByText('Second question?')).not.toBeInTheDocument();
+
+    // Resolve first → second pops from queue.
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    await screen.findByText('Second question?');
+    expect(screen.queryByText('First question?')).not.toBeInTheDocument();
+
+    // Resolve second.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(order.length).toBe(2));
+    // Order preserved.
+    expect(order[0]).toEqual(['first', true]);
+    expect(order[1]).toEqual(['second', false]);
+  });
+});
+
+describe('useNotify — provider re-render preserves in-flight toasts', () => {
+  it('parent re-rendering does not blow away an active toast', async () => {
+    const apiRef = { current: null };
+    function Parent({ flag }) {
+      // `flag` toggle forces a re-render of NotifyProvider's parent,
+      // which triggers a re-render of the provider itself.
+      return (
+        <div data-flag={flag ? 'on' : 'off'}>
+          <NotifyProvider>
+            <Consumer apiRef={apiRef} />
+          </NotifyProvider>
+        </div>
+      );
+    }
+
+    const { rerender } = render(<Parent flag={false} />);
+
+    act(() => apiRef.current.success('Sticky toast'));
+    await screen.findByText('Sticky toast');
+
+    // Re-render parent with different prop — provider's internal state
+    // (toasts array) must survive because the component instance is the
+    // same (key stable). If the toast disappears after a re-render, the
+    // toast-stack state is wrongly being reset on every parent update.
+    rerender(<Parent flag={true} />);
+
+    // Still there.
+    expect(screen.getByText('Sticky toast')).toBeInTheDocument();
+  });
+});

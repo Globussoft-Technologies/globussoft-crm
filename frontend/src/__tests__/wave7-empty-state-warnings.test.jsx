@@ -249,6 +249,9 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
 
+    // #893: open the drawer to mount the datetime-local input.
+    openTaskDrawer();
+
     const past = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const pad = (n) => String(n).padStart(2, '0');
     const localStr =
@@ -285,6 +288,9 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
     );
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+
+    // #893: open the drawer to mount the datetime-local input.
+    openTaskDrawer();
 
     const pad = (n) => String(n).padStart(2, '0');
     const dateInput = document.querySelector('input[type="datetime-local"]');

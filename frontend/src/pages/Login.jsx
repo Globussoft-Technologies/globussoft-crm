@@ -2,6 +2,11 @@ import React, { useState, useContext, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Mail, Square } from "lucide-react";
 import { AuthContext } from "../App";
+import PasswordInput from "../components/PasswordInput";
+
+// SSO providers (Google / Microsoft) hidden for now — pending tenant-level
+// SSO config + provider credentials. Flip to true to re-enable.
+const SHOW_SSO = false;
 
 const Login = () => {
   const [email, setEmail] = useState("admin@globussoft.com");
@@ -105,7 +110,11 @@ const Login = () => {
             window.location.pathname,
           );
           const destination =
-            parsedTenant?.vertical === "wellness" ? "/wellness" : "/dashboard";
+            parsedTenant?.vertical === "wellness"
+              ? "/wellness"
+              : parsedTenant?.vertical === "travel"
+              ? "/travel"
+              : "/dashboard";
           navigate(destination);
         });
     }
@@ -167,14 +176,38 @@ const Login = () => {
   //      the previous /home generic-fallback so vertical tenants land on
   //      their correct surface even in degraded-fetch scenarios.
   const resolveLandingPath = async (data) => {
-    // Self-service customers (userType=CUSTOMER) don't belong in the staff
-    // CRM — the enterprise dashboard makes no sense for them and the staff
-    // APIs (incl. /api/pages/me) 403 via the blockCustomers middleware. Send
-    // them straight to the customer portal instead.
-    if (data.user?.userType === 'CUSTOMER') return '/portal';
+    // CUSTOMER users (self-service registered via /customer/register) only
+    // have access to /portal in the page catalog, which currently renders
+    // the legacy "Support & Knowledge Base" page — not a customer
+    // dashboard. Route them to /home (the role-aware widget dashboard)
+    // which is always accessible and shows their permitted widgets +
+    // quick actions instead.
+    if (data.user?.role === 'CUSTOMER') {
+      return '/home';
+    }
     const configuredLanding =
       data.user?.landingPath || data.user?.primaryRole?.landingPath || null;
     const verticalDefault = verticalDefaultLanding(data.tenant?.vertical);
+    const vertical = data.tenant?.vertical || "generic";
+    // "/dashboard" is the system-wide ADMIN default and the implicit
+    // fallback for any role without an explicit landingPath. For non-
+    // generic tenants (wellness, travel) it's the wrong surface — those
+    // verticals have their own home page. Treat the generic default as
+    // "not really configured" so the vertical-default wins; any
+    // explicitly-customised non-default path (e.g. /wellness/calendar,
+    // /travel/leads) still beats the vertical fallback below.
+    const isGenericDefault =
+      !configuredLanding || configuredLanding === "/dashboard";
+    const effectiveConfigured = isGenericDefault ? null : configuredLanding;
+    // Short-circuit: on non-generic verticals with the generic default,
+    // route to the vertical landing unconditionally. /api/pages/me is a
+    // page-catalog read; vertical landings (/wellness, /travel) aren't
+    // catalogued there (they're hardcoded SPA routes), so gating the
+    // redirect on accessiblePaths.has(verticalDefault) would always
+    // miss and fall through to /dashboard via firstUseful.
+    if (isGenericDefault && vertical !== "generic") {
+      return verticalDefault;
+    }
     try {
       const res = await fetch("/api/pages/me", {
         headers: { Authorization: `Bearer ${data.token}` },
@@ -183,8 +216,8 @@ const Login = () => {
         const body = await res.json();
         const pages = Array.isArray(body?.pages) ? body.pages : [];
         const accessiblePaths = new Set(pages.map((p) => p.path));
-        if (configuredLanding && accessiblePaths.has(configuredLanding)) {
-          return configuredLanding;
+        if (effectiveConfigured && accessiblePaths.has(effectiveConfigured)) {
+          return effectiveConfigured;
         }
         const firstUseful = pages.find((p) => p.path !== "/home");
         return firstUseful?.path || verticalDefault;
@@ -193,7 +226,7 @@ const Login = () => {
       // Network failure during resolution — fall through to the safer of
       // (configured landing) or the vertical-aware default below.
     }
-    return configuredLanding || verticalDefault;
+    return effectiveConfigured || verticalDefault;
   };
 
   const finalizeLogin = async (data) => {
@@ -459,12 +492,11 @@ const Login = () => {
                 >
                   Password
                 </label>
-                <input
-                  type="password"
-                  className="input-field"
+                <PasswordInput
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
                 />
               </div>
               <label
@@ -498,6 +530,8 @@ const Login = () => {
               </button>
             </form>
 
+            {SHOW_SSO && (
+            <>
             <div
               style={{
                 display: "flex",
@@ -588,6 +622,8 @@ const Login = () => {
                 <span>Sign in with Microsoft</span>
               </button>
             </div>
+            </>
+            )}
 
             <div style={{ marginTop: "1rem", textAlign: "center" }}>
               <button

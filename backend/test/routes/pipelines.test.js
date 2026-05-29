@@ -220,6 +220,113 @@ describe('GET / — list pipelines', () => {
   });
 });
 
+// ── GET /?fields=summary — slim-shape opt-in (#920 slice 23) ────────────
+
+describe('GET /?fields=summary — slim-shape opt-in', () => {
+  test('passes a slim select { id, name, isDefault } to prisma.pipeline.findMany when ?fields=summary', async () => {
+    prisma.pipeline.findMany.mockResolvedValue([
+      { id: 11, name: 'Default Sales', isDefault: true },
+      { id: 12, name: 'Renewals', isDefault: false },
+    ]);
+    prisma.deal.groupBy.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/pipelines?fields=summary')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(prisma.pipeline.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      select: { id: true, name: true, isDefault: true },
+    });
+  });
+
+  test('does NOT pass select when ?fields is absent (back-compat full-shape default)', async () => {
+    prisma.pipeline.findMany.mockResolvedValue([
+      { id: 11, name: 'Default Sales', isDefault: true, description: 'desc', tenantId: 1 },
+    ]);
+    prisma.deal.groupBy.mockResolvedValue([{ pipelineId: 11, _count: { _all: 3 } }]);
+
+    const res = await request(makeApp())
+      .get('/api/pipelines')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    const call = prisma.pipeline.findMany.mock.calls[0][0];
+    expect(call.select).toBeUndefined();
+    expect(call).toEqual({
+      where: { tenantId: 1 },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    });
+  });
+
+  test('non-exact ?fields values (e.g. ?fields=summary,foo, ?fields=full) do NOT trip the slim branch', async () => {
+    prisma.pipeline.findMany.mockResolvedValue([]);
+    prisma.deal.groupBy.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/pipelines?fields=summary,foo')
+      .set('Authorization', makeBearer())
+      .expect(200);
+    expect(prisma.pipeline.findMany.mock.calls[0][0].select).toBeUndefined();
+
+    prisma.pipeline.findMany.mockClear();
+
+    await request(makeApp())
+      .get('/api/pipelines?fields=full')
+      .set('Authorization', makeBearer())
+      .expect(200);
+    expect(prisma.pipeline.findMany.mock.calls[0][0].select).toBeUndefined();
+  });
+
+  test('slim response still attaches dealCount per pipeline (KPI preserved)', async () => {
+    prisma.pipeline.findMany.mockResolvedValue([
+      { id: 11, name: 'Default Sales', isDefault: true },
+      { id: 12, name: 'Renewals', isDefault: false },
+    ]);
+    prisma.deal.groupBy.mockResolvedValue([
+      { pipelineId: 11, _count: { _all: 5 } },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/pipelines?fields=summary')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body[0]).toEqual(expect.objectContaining({ id: 11, name: 'Default Sales', dealCount: 5 }));
+    expect(res.body[1]).toEqual(expect.objectContaining({ id: 12, name: 'Renewals', dealCount: 0 }));
+    // Slim rows should NOT carry description / tenantId / createdAt / updatedAt
+    expect(res.body[0]).not.toHaveProperty('description');
+    expect(res.body[0]).not.toHaveProperty('tenantId');
+    expect(res.body[0]).not.toHaveProperty('createdAt');
+    expect(res.body[0]).not.toHaveProperty('updatedAt');
+  });
+
+  test('slim-shape branch keeps tenant scope + orderBy isolation guarantees', async () => {
+    prisma.pipeline.findMany.mockResolvedValue([]);
+    prisma.deal.groupBy.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/pipelines?fields=summary')
+      .set('Authorization', makeBearer({ userId: 7, tenantId: 42, role: 'USER' }))
+      .expect(200);
+
+    expect(prisma.pipeline.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId: 42 },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+        select: { id: true, name: true, isDefault: true },
+      }),
+    );
+    // Deal-count aggregation also stayed tenant-scoped
+    expect(prisma.deal.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ tenantId: 42 }) }),
+    );
+  });
+});
+
 // ── POST / — create pipeline (admin-only, #527) ─────────────────────────
 
 describe('POST / — create pipeline', () => {

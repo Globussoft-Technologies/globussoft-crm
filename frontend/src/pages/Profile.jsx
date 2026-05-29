@@ -4,6 +4,7 @@ import { fetchApi, getAuthToken } from '../utils/api';
 import { AuthContext } from '../App';
 import { useNotify } from '../utils/notify';
 import { formatDateLong } from '../utils/date';
+import PasswordInput from '../components/PasswordInput';
 
 // #641 — practitioner-specific profile sections (specialty, license, etc.)
 // must ONLY render for users whose wellnessRole identifies them as a
@@ -474,36 +475,33 @@ const Profile = () => {
             <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               Current Password
             </label>
-            <input
-              type="password"
-              className="input-field"
+            <PasswordInput
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
               placeholder="Enter current password"
+              autoComplete="current-password"
             />
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               New Password
             </label>
-            <input
-              type="password"
-              className="input-field"
+            <PasswordInput
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder="Enter new password"
+              autoComplete="new-password"
             />
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               Confirm New Password
             </label>
-            <input
-              type="password"
-              className="input-field"
+            <PasswordInput
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="Confirm new password"
+              autoComplete="new-password"
             />
           </div>
 

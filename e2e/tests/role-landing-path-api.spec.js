@@ -243,16 +243,16 @@ test.describe('PUT /api/roles/:id — landingPath update', () => {
     const created = await create.json();
     createdRoleIds.add(created.id);
 
-    // Grant appointments.read + appointments.write so /wellness/calendar
-    // becomes accessible. The landingPath-validate-against-perms
-    // contract (introduced after the page-catalog work) now rejects
-    // setting a landingPath the role can't actually access. Calendar is
-    // gated on appointments.write specifically (practitioner-only) so a
-    // Nurse-shape permission set (read + update, no write) wouldn't pass.
+    // Grant calendar.read so /wellness/calendar becomes accessible. The
+    // landingPath-validate-against-perms contract rejects setting a
+    // landingPath the role can't access. Calendar is gated on a DEDICATED
+    // `calendar` module (pageCatalog.js) — separated from appointments so
+    // view-only Calendar access can be granted without the Appointments list.
     const grant = await put(request, token, `/api/roles/${created.id}/permissions`, {
       permissions: [
         { module: 'appointments', action: 'read' },
         { module: 'appointments', action: 'write' },
+        { module: 'calendar', action: 'read' },
       ],
     });
     expect(grant.status()).toBe(200);

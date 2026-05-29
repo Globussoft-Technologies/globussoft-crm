@@ -144,14 +144,40 @@ async function pickAssigneeForRule(rule, contact, tenantId) {
 // ─── Routes ─────────────────────────────────────────────────────────
 
 // GET / — list rules ordered by priority asc
+// Supports ?fields=summary opt-in slim shape that drops the heavy
+// `conditions` JSON string column (often hundreds of bytes per rule) to
+// lighten admin list-view payloads and reduce PII surface on the wire.
+// Mirrors prior slices of #920.
 router.get("/", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const rules = await prisma.leadRoutingRule.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findArgs = {
       where: { tenantId },
       orderBy: [{ priority: "asc" }, { id: "asc" }],
-    });
-    res.json(rules.map(r => ({ ...r, conditions: safeJson(r.conditions, {}) })));
+    };
+    if (isSummary) {
+      findArgs.select = {
+        id: true,
+        name: true,
+        assignType: true,
+        assignTo: true,
+        priority: true,
+        isActive: true,
+        tenantId: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
+    const rules = await prisma.leadRoutingRule.findMany(findArgs);
+    // Full shape parses the JSON-string `conditions` column back to an object
+    // for the wire. Summary mode dropped that column so the post-process is a
+    // no-op spread — the slim rows go through as-is.
+    res.json(
+      isSummary
+        ? rules
+        : rules.map(r => ({ ...r, conditions: safeJson(r.conditions, {}) }))
+    );
   } catch (err) {
     console.error("lead_routing GET / error:", err);
     res.status(500).json({ error: "Failed to load lead routing rules" });

@@ -83,14 +83,18 @@ describe('isKnownPage / getPage', () => {
 });
 
 describe('canAccessPath', () => {
-  // Doctor permission set: includes appointments.write so the
-  // practitioner-only pages (Calendar, My appointments, Book Appointment)
-  // are accessible. Nurse-shaped permission sets (read+update only) are
-  // exercised separately in the Nurse-narrowing test below.
+  // Doctor permission set: tenant-wide list (`appointments.read+write`)
+  // plus the per-page modules a doctor actually uses post-split
+  // (`my_appointments.read` for the practitioner's own-slot view,
+  // `waitlist.read` to peek at the queue). Mirrors DOCTOR_PERMISSIONS
+  // in ensureRbacOnBoot.js. Nurse-shaped permission sets (read+update
+  // only, no my-appointments) are exercised separately below.
   const docPerms = new Set([
     'patients.read',
     'appointments.read',
     'appointments.write',
+    'my_appointments.read',
+    'waitlist.read',
     // `calendar` is a separate permission module from `appointments` —
     // doctors get both so the day-grid view + booking flows work
     // end-to-end. Mirrors DOCTOR_PERMISSIONS in ensureRbacOnBoot.js.
@@ -138,6 +142,11 @@ describe('canAccessPath', () => {
       'patients.update',
       'appointments.read',
       'appointments.update',
+      // Nurse peeks at the waitlist queue (read only — promote /
+      // disposition is gated on waitlist.write which she doesn't get).
+      // No my_appointments.read or book_appointment.write — nurses
+      // don't own slots or book on behalf of patients.
+      'waitlist.read',
       // Nurse views the Calendar day-grid for context; doesn't write to
       // it (booking / rescheduling is Doctor / Receptionist work).
       // Mirrors NURSE_PERMISSIONS in ensureRbacOnBoot.js.
@@ -185,6 +194,7 @@ describe('getAccessiblePages', () => {
       'patients.read',
       'appointments.read',
       'appointments.write',
+      'my_appointments.read',
       'calendar.read',
       'calendar.write',
       'prescriptions.read',
@@ -205,6 +215,9 @@ describe('getAccessiblePages', () => {
     const perms = new Set([
       'patients.read', 'patients.write', 'patients.update',
       'appointments.read', 'appointments.write', 'appointments.update',
+      // Post-split per-page modules (v3.8.x).
+      'my_appointments.read',
+      'waitlist.read',
       'calendar.read', 'calendar.write',
       'visits.read', 'visits.write', 'visits.update',
       'prescriptions.read', 'prescriptions.write', 'prescriptions.update',
@@ -218,7 +231,7 @@ describe('getAccessiblePages', () => {
     expect(categories.has('Clinical')).toBe(true);
     // No Finance / Sales without those perms.
     expect(categories.has('Finance')).toBe(false);
-    // Doctor (with appointments.write) keeps the practitioner pages.
+    // Doctor (with my_appointments.read) keeps the practitioner pages.
     const paths = pages.map((p) => p.path);
     expect(paths).toContain('/wellness/calendar');
     expect(paths).toContain('/wellness/my-appointments');

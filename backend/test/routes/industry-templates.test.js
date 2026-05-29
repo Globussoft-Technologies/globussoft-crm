@@ -252,6 +252,112 @@ describe('GET / — list templates (DB + built-ins fallback)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920 slice 43)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('GET /?fields=summary — slim-shape opt-in (#920 slice 43)', () => {
+  test('empty DB + ?fields=summary → built-ins without config field', async () => {
+    prisma.industryTemplate.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/industry-templates?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(5);
+    // Heavy config JSON is stripped.
+    for (const t of res.body) {
+      expect(t).toEqual(expect.objectContaining({
+        id: expect.any(String),
+        industry: expect.any(String),
+        name: expect.any(String),
+      }));
+      expect(t.config).toBeUndefined();
+    }
+  });
+
+  test('?fields=summary passes slim select to prisma.findMany (no heavy config column)', async () => {
+    prisma.industryTemplate.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/industry-templates?fields=summary');
+
+    expect(prisma.industryTemplate.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({
+        id: true,
+        industry: true,
+        name: true,
+        description: true,
+        createdAt: true,
+      }),
+    }));
+    // `config` is NOT in the select map → Prisma drops the heavy column.
+    const args = prisma.industryTemplate.findMany.mock.calls[0][0];
+    expect(args.select.config).toBeUndefined();
+  });
+
+  test('default (no ?fields) keeps full config field intact — back-compat', async () => {
+    prisma.industryTemplate.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/industry-templates');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(5);
+    // Default shape STILL ships heavy config — opt-in flag is purely additive.
+    for (const t of res.body) {
+      expect(t.config).toEqual(expect.objectContaining({
+        pipelines: expect.any(Array),
+      }));
+    }
+    // And findMany was called WITHOUT a select map (full row).
+    const args = prisma.industryTemplate.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=summary with DB rows → merge drops config from both DB rows AND built-in tails', async () => {
+    prisma.industryTemplate.findMany.mockResolvedValue([
+      {
+        id: 77,
+        industry: 'saas',
+        name: 'Custom SaaS',
+        description: 'tenant-customised',
+        createdAt: new Date('2026-05-01'),
+        // config intentionally absent — Prisma slim select would not return it.
+      },
+    ]);
+
+    const res = await request(makeApp()).get('/api/industry-templates?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(5);
+    // Every entry — DB row AND built-in tail — lacks config.
+    for (const t of res.body) {
+      expect(t.config).toBeUndefined();
+    }
+    const saasEntry = res.body.find((t) => t.industry === 'saas');
+    expect(saasEntry).toMatchObject({ id: 77, name: 'Custom SaaS' });
+    // Built-in tail (e.g. real-estate) is still present, slim-shaped.
+    const realEstateEntry = res.body.find((t) => t.industry === 'real-estate');
+    expect(realEstateEntry).toBeDefined();
+    expect(realEstateEntry.config).toBeUndefined();
+    expect(realEstateEntry.name).toBe('Real Estate CRM');
+  });
+
+  test('?fields=anything-else is ignored → falls back to full default shape', async () => {
+    prisma.industryTemplate.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/industry-templates?fields=bogus');
+
+    expect(res.status).toBe(200);
+    // Bogus value isn't "summary" → full built-in shape returned.
+    for (const t of res.body) {
+      expect(t.config).toEqual(expect.objectContaining({
+        pipelines: expect.any(Array),
+      }));
+    }
+    const args = prisma.industryTemplate.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // POST /apply/:industry — orchestration
 // ─────────────────────────────────────────────────────────────────────────
 

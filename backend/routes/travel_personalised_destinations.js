@@ -41,6 +41,8 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requireTravelTenant } = require("../middleware/travelGuards");
+const prisma = require("../lib/prisma");
 const llmRouter = require("../lib/llmRouter");
 
 // Defensive budget cap so a typo / malicious caller can't trigger
@@ -227,6 +229,350 @@ router.post(
       return res.status(502).json({
         error: "LLM router unavailable",
         code: "LLM_ERROR",
+      });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel-personalised-destinations/stats
+//
+// PRD_TRAVEL §4.7 + §9.1 — first rollup endpoint for the admin-curated
+// tailored-destinations domain. Mirrors the /suppliers/stats +
+// /religious-packets/stats + /flyer-templates/global-stats posture across
+// the travel rollup family.
+//
+// IMPORTANT — DATA SOURCE NOTE
+// ----------------------------
+// The personalised-destinations domain has NO Prisma model of its own —
+// it is a pure LLM consumer. The persisted footprint is the LlmCallLog
+// rows written by lib/llmRouter.js with surface="personalised-destinations"
+// (see POST /recommend above; the router stamps __surface into the row).
+// This rollup aggregates LlmCallLog where (tenantId, surface) match.
+//
+// Sub-brand scope: LlmCallLog has NO subBrand column — the rollup is
+// tenant-wide and the response envelope omits `bySubBrand`. If a future
+// schema migration adds subBrand (likely if Travel Stall ever splits
+// personalised-destinations per sub-brand), this handler should grow a
+// bySubBrand bucket then. Today the model is tenant-wide-only, per the
+// "If the model is tenant-wide-only: skip subBrand narrowing" guidance.
+//
+// USER-readable: anodyne aggregate (count + last activity timestamp);
+// safe. No audit row written — read-only meta surface, mirrors sibling
+// /stats endpoints across the rollup family.
+//
+// Behaviour:
+//   - tenantId-scoped (via requireTravelTenant + req.travelTenant.id)
+//   - surface="personalised-destinations" narrows to THIS domain's calls
+//   - ?from / ?to (ISO date bounds) filter LlmCallLog.createdAt; invalid
+//     → 400 INVALID_DATE
+//   - Response envelope:
+//       total: number              — count of matching LlmCallLog rows
+//       byTask: { <task>: count }  — task taxonomy bucket
+//       byModel: { <model>: count } — which LLM model handled it
+//       stubCount: number          — rows with stub=true
+//       liveCount: number          — rows with stub=false
+//       lastCreatedAt: ISO | null  — most-recent createdAt (skips null)
+//
+// Express route ordering: literal-path /stats is declared BEFORE the
+// export so any future :id family added between this and module.exports
+// wouldn't shadow the /stats matcher.
+// ============================================================================
+const PERSONALISED_DESTINATIONS_SURFACE = "personalised-destinations";
+
+router.get(
+  "/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const where = {
+        tenantId,
+        surface: PERSONALISED_DESTINATIONS_SURFACE,
+      };
+
+      // Optional ISO date bounds on LlmCallLog.createdAt — same shape as
+      // the sibling /suppliers/stats + /religious-packets/stats endpoints.
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+      }
+
+      const rows = await prisma.llmCallLog.findMany({
+        where,
+        select: {
+          id: true,
+          task: true,
+          model: true,
+          stub: true,
+          createdAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+      });
+
+      // Empty short-circuit — return zeroed shape with stable bucket maps.
+      if (rows.length === 0) {
+        return res.json({
+          total: 0,
+          byTask: {},
+          byModel: {},
+          stubCount: 0,
+          liveCount: 0,
+          lastCreatedAt: null,
+        });
+      }
+
+      let stubCount = 0;
+      let liveCount = 0;
+      let lastCreatedAt = null;
+      const byTask = {};
+      const byModel = {};
+
+      for (const r of rows) {
+        if (r.stub) stubCount += 1;
+        else liveCount += 1;
+
+        // Defensive: createdAt rows with null/invalid timestamps still
+        // contribute to `total` but are skipped for the lastCreatedAt
+        // max — same posture as sibling stats endpoints.
+        if (r.createdAt != null) {
+          const ts = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(ts.getTime())) {
+            if (!lastCreatedAt || ts > lastCreatedAt) lastCreatedAt = ts;
+          }
+        }
+
+        const taskKey = r.task ? String(r.task) : "_unknown";
+        if (!byTask[taskKey]) byTask[taskKey] = { count: 0 };
+        byTask[taskKey].count += 1;
+
+        const modelKey = r.model ? String(r.model) : "_unknown";
+        if (!byModel[modelKey]) byModel[modelKey] = { count: 0 };
+        byModel[modelKey].count += 1;
+      }
+
+      return res.json({
+        total: rows.length,
+        byTask,
+        byModel,
+        stubCount,
+        liveCount,
+        lastCreatedAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
+      });
+    } catch (e) {
+      console.error("[travel-personalised-destinations] /stats error:", e.message);
+      return res.status(500).json({
+        error: "Failed to compute personalised-destinations stats",
+        code: "STATS_ERROR",
+      });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel-personalised-destinations/by-month
+//
+// PRD_TRAVEL §4.7 + §9.1 — sibling to /stats. USER-readable, anodyne monthly
+// rollup over the same LlmCallLog data source (surface="personalised-
+// destinations"). Mirrors the broader by-month family (/suppliers/by-month,
+// /flyer-templates/by-month, /quotes/by-month, /invoices/by-month) at the
+// LLM-consumer layer.
+//
+// IMPORTANT — DATA SOURCE NOTE
+// ----------------------------
+// Same as /stats: personalised-destinations has NO Prisma model of its own.
+// The aggregate is over LlmCallLog where (tenantId, surface) match. Sub-brand
+// scope: LlmCallLog has NO subBrand column — rollup is tenant-wide-only;
+// envelope omits `bySubBrand`. If a future schema migration adds subBrand,
+// extend this handler to narrow + bucket.
+//
+// USER-readable: anodyne aggregate. No audit row written — read-only meta
+// surface, mirrors sibling /by-month endpoints across the rollup family.
+//
+// Behaviour:
+//   - tenantId-scoped via requireTravelTenant + req.travelTenant.id
+//   - surface="personalised-destinations" narrows to this domain's calls
+//   - ?from / ?to (optional inclusive YYYY-MM bounds) filter the bucket
+//     array AFTER aggregation; invalid → 400 INVALID_MONTH_FORMAT
+//   - ?orderBy default `month:asc`; accepts `month:{asc|desc}` and
+//     `count:{asc|desc}`
+//   - ?limit default 12, capped at 60; ?offset default 0
+//   - JS-side aggregation into Map<"YYYY-MM", { month, count, byTask,
+//     byModel, stubCount, liveCount }> keyed on UTC year+month from
+//     createdAt. Null / invalid createdAt → "unknown" bucket; excluded
+//     when either ?from or ?to is set
+//   - Pagination AFTER aggregation + sort + bucket filter
+//
+// Response envelope:
+//   { total: <pre-pagination bucket count>,
+//     rows: [{ month, count, byTask, byModel, stubCount, liveCount }, ...] }
+//
+// Express route ordering: literal-path /by-month declared BEFORE any future
+// /:id family so `:id="by-month"` cannot shadow this matcher.
+// ============================================================================
+const PERSONALISED_DEST_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+router.get(
+  "/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // YYYY-MM validation — mirrors /suppliers/by-month + /flyer-templates/by-month.
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !PERSONALISED_DEST_MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !PERSONALISED_DEST_MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "month:asc";
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      const where = {
+        tenantId,
+        surface: PERSONALISED_DESTINATIONS_SURFACE,
+      };
+
+      const rows = await prisma.llmCallLog.findMany({
+        where,
+        select: {
+          id: true,
+          task: true,
+          model: true,
+          stub: true,
+          createdAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { month, count, byTask,
+      // byModel, stubCount, liveCount }. Null/invalid createdAt rows land
+      // in the "unknown" bucket.
+      const byMonth = new Map();
+      for (const r of rows) {
+        let monthKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            month: monthKey,
+            count: 0,
+            byTask: {},
+            byModel: {},
+            stubCount: 0,
+            liveCount: 0,
+          };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.stub) bucket.stubCount += 1;
+        else bucket.liveCount += 1;
+
+        const taskKey = r.task ? String(r.task) : "_unknown";
+        bucket.byTask[taskKey] = (bucket.byTask[taskKey] || 0) + 1;
+
+        const modelKey = r.model ? String(r.model) : "_unknown";
+        bucket.byModel[modelKey] = (bucket.byModel[modelKey] || 0) + 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // ?from / ?to bucket filter. "unknown" excluded when either bound is
+      // set (no comparable token); preserved otherwise so the count surface
+      // stays complete. Mirrors slice 24 /suppliers/by-month posture.
+      if (fromRaw !== null) {
+        months = months.filter(
+          (r) => r.month !== "unknown" && r.month >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        months = months.filter(
+          (r) => r.month !== "unknown" && r.month <= toRaw,
+        );
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
+      // "unknown" sorts last in asc / first in desc (lexicographically >
+      // "9999-12") — acceptable for a defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const total = months.length;
+      // Pagination AFTER aggregation + sort + filter, same as slice 24.
+      const paged = months.slice(skip, skip + take);
+
+      return res.json({
+        total,
+        rows: paged,
+      });
+    } catch (e) {
+      console.error(
+        "[travel-personalised-destinations] /by-month error:",
+        e.message,
+      );
+      return res.status(500).json({
+        error: "Failed to compute personalised-destinations monthly rollup",
+        code: "BY_MONTH_ERROR",
       });
     }
   },

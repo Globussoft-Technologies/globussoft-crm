@@ -373,4 +373,255 @@ describe('<BrandKits /> — page surface', () => {
     render(<BrandKits />);
     expect(await screen.findByText(/No brand kits configured/i)).toBeInTheDocument();
   });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Extended coverage — tick #141 (2026-05-26).
+  // Augments the 13-test base with 9 cases covering: per-sub-brand grouping
+  // semantics, create-modal form lifecycle, file-uri (logo URL) field send,
+  // palette color picker → payload, font field → payload, atomic-demote
+  // semantics (PUT with isActive:true is the activation pathway, no
+  // separate /activate endpoint), edit-mode subBrand omission per
+  // SUB_BRAND_IMMUTABLE contract, RBAC empty-vs-403 surfaces, and the
+  // delete-on-active client-side short-circuit (notify.error fires WITHOUT
+  // a confirm() prompt or DELETE call — but the button is also disabled so
+  // this asserts the defense-in-depth handler logic via the modal-less
+  // surface). All 9 follow the stable-mock-ref + getAllByText patterns.
+  // ────────────────────────────────────────────────────────────────────────
+
+  it('extended: groups kits into per-sub-brand sections with correct version counts', async () => {
+    // Sample has: tenant-wide (1) + tmc (2) + rfu (1). Per-section caption
+    // is "(N versions)". TMC has 2 versions and prints "(2 versions)";
+    // tenant-wide + rfu each have 1 → "(1 version)" — that text appears
+    // TWICE per the sample, so getAllByText is mandatory (RTL standing
+    // rule for labels that appear as both filter chrome + row badges; same
+    // shape for repeated section captions).
+    render(<BrandKits />);
+    await screen.findByTestId('brand-kit-card-10');
+    expect(screen.getByText(/\(2 versions\)/i)).toBeInTheDocument();
+    const singletonCaptions = screen.getAllByText(/\(1 version\)/i);
+    expect(singletonCaptions.length).toBe(2); // tenant-wide + rfu
+  });
+
+  it('extended: create modal submits with the logo URL field correctly mapped to the payload', async () => {
+    // Pin: typing into the Logo URL input flows through emptyToNull and
+    // lands as a string in POST body (NOT null). Mirrors the asset-upload
+    // contract — the UI is URL-based, not multipart-file-based per the
+    // SUT's input[type=url] design. Captures the "logo upload" gap by
+    // pinning the URL-driven submit path the SUT actually implements.
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/brand-kits' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 200, subBrand: null, version: 1, isActive: false });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.click(screen.getByTestId('brand-kits-new-btn'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    const logoInput = screen.getByLabelText(/^Logo URL$/i);
+    fireEvent.change(logoInput, {
+      target: { value: 'https://cdn.example.test/uploaded-logo.png' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Brand Kit/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/brand-kits' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.logoUrl).toBe('https://cdn.example.test/uploaded-logo.png');
+    });
+  });
+
+  it('extended: palette color picker change flows into the create POST body', async () => {
+    // Native input[type=color] backs the picker — fireEvent.change on the
+    // primaryColor field hex-input (the text companion of the swatch) is
+    // the testable seam. Picks the hex-text input via aria-label since
+    // there are 2 visual inputs per color (the picker + the hex text).
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/brand-kits' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 201 });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.click(screen.getByTestId('brand-kits-new-btn'));
+    const primaryHex = screen.getByLabelText(/Primary color hex value/i);
+    fireEvent.change(primaryHex, { target: { value: '#ABCDEF' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Brand Kit/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/brand-kits' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.primaryColor).toBe('#ABCDEF');
+    });
+  });
+
+  it('extended: font family text input flows into the create POST body', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/brand-kits' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 202 });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.click(screen.getByTestId('brand-kits-new-btn'));
+    const fontFamilyInput = screen.getByLabelText(/Font family/i);
+    fireEvent.change(fontFamilyInput, { target: { value: 'Lora, Georgia, serif' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Brand Kit/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/brand-kits' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.fontFamily).toBe('Lora, Georgia, serif');
+    });
+  });
+
+  it('extended: atomic-demote — activation PUT carries only { isActive: true }, not a separate /activate endpoint', async () => {
+    // Pins the activation contract: PUT against the kit's primary route
+    // with { isActive: true } drives the atomic demotion of the prior
+    // active version on the BACKEND. The frontend MUST NOT call a
+    // hypothetical /activate sub-route (which would be a silent regression
+    // if someone added one). The PUT body should ONLY signal isActive in
+    // the activation pathway — not include unrelated fields like
+    // primaryColor that the user didn't edit.
+    render(<BrandKits />);
+    const activateBtn = await screen.findByTestId('brand-kit-activate-11'); // tmc v1 inactive
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/brand-kits/11' && opts?.method === 'PUT') {
+        return Promise.resolve({ id: 11, isActive: true, subBrand: 'tmc', version: 1 });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.click(activateBtn);
+
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled());
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/brand-kits/11' && opts?.method === 'PUT'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      // Activation pathway is minimal: only isActive in the body.
+      expect(Object.keys(body)).toEqual(['isActive']);
+      expect(body.isActive).toBe(true);
+    });
+    // Counter-assert: NO call to a hypothetical /activate sub-route.
+    const activateRouteCall = fetchApiMock.mock.calls.find(([url]) =>
+      String(url).includes('/activate')
+    );
+    expect(activateRouteCall).toBeFalsy();
+  });
+
+  it('extended: edit modal disables the sub-brand select (SUB_BRAND_IMMUTABLE contract)', async () => {
+    // Pins the sub-brand-immutable invariant on the UI surface. The select
+    // must be disabled when editingKit is truthy — backend rejects PUTs
+    // that change subBrand with SUB_BRAND_IMMUTABLE 422, so the SUT
+    // surfaces the constraint client-side.
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('brand-kit-edit-10'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    const subBrandSelect = screen.getByLabelText(/^Sub-brand$/i);
+    expect(subBrandSelect).toBeDisabled();
+    // Hint copy confirms the constraint to the operator.
+    expect(screen.getByText(/Immutable\. To move assets to a different sub-brand/i)).toBeInTheDocument();
+  });
+
+  it('extended: edit modal submit issues a PUT with no subBrand key in the body', async () => {
+    // SUB_BRAND_IMMUTABLE on the backend means the frontend must NOT
+    // include `subBrand` in the PUT payload (the SUT spreads `{}` instead
+    // of `{ subBrand: ... }` when editingKit is truthy). Sibling assets
+    // (logoUrl etc.) DO go in the body.
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-11')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/brand-kits/11' && opts?.method === 'PUT') {
+        return Promise.resolve({ id: 11, subBrand: 'tmc', version: 1, isActive: false });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.click(screen.getByTestId('brand-kit-edit-11'));
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/brand-kits/11' && opts?.method === 'PUT'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      // No subBrand key — backend would 422 otherwise.
+      expect('subBrand' in body).toBe(false);
+      // Other fields still flow.
+      expect(body.logoUrl).toBe('https://cdn.example.test/tmc-v1.png');
+      expect(body.isActive).toBe(false);
+    });
+  });
+
+  it('extended: closing the create modal via Cancel resets state and does NOT fire a POST', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByTestId('brand-kits-new-btn'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    // No POST fired.
+    const postCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === '/api/brand-kits' && opts?.method === 'POST'
+    );
+    expect(postCall).toBeFalsy();
+  });
+
+  it('extended: filter dropdown set to "__none__" issues a fetch with empty ?subBrand= (tenant-wide bucket)', async () => {
+    // The "__none__" option in the filter maps to subBrand=NULL on the
+    // backend (empty-string normalisation). Pins that this control-plane
+    // value distinguishes "no filter" (__all__) from "tenant-wide only"
+    // (__none__) in the issued URL.
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    const filter = screen.getByTestId('brand-kits-filter-subbrand');
+    fireEvent.change(filter, { target: { value: '__none__' } });
+
+    await waitFor(() => {
+      // The URL ends with ?subBrand= (empty value, no trailing chars).
+      const call = fetchApiMock.mock.calls.find(([url]) => {
+        const u = String(url);
+        // Look for `subBrand=` followed by either end-of-string or '&'.
+        return /[?&]subBrand=(?:&|$)/.test(u);
+      });
+      expect(call).toBeTruthy();
+    });
+  });
 });

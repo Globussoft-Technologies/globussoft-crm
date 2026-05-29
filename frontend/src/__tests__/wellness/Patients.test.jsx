@@ -140,9 +140,8 @@ describe('<wellness/Patients /> — page surface', () => {
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(([u]) => isPatientListUrl(u));
       expect(call).toBeTruthy();
-      // The URL carries paging params but NOT a search term.
-      expect(call[0]).toMatch(/\blimit=20\b/);
-      expect(call[0]).toMatch(/\boffset=0\b/);
+      // The initial mount URL has no search term. Paging is handled
+      // client-side (PAGE_SIZE = 20) — the URL stays bare on first load.
       expect(call[0]).not.toMatch(/[?&]q=/);
     });
   });

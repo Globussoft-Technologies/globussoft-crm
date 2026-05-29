@@ -42,6 +42,8 @@ const notify = {
   error: vi.fn(),
   info: vi.fn(),
   confirm: vi.fn(() => Promise.resolve(true)),
+
+  prompt: vi.fn(() => Promise.resolve("")),
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notify,
@@ -113,19 +115,18 @@ describe('<GiftCards /> — #744 per-row actions', () => {
     });
   });
 
-  it('renders a Copy and a View button on every row (no row is action-less)', async () => {
+  it('renders a Copy button on every row (no row is action-less)', async () => {
     render(<GiftCards />);
     await waitFor(() => expect(screen.getByText('GCXB****HEN5')).toBeInTheDocument());
-    // Both rows expose both actions.
-    expect(screen.getByLabelText(/Copy code for gift card GCXB\*\*\*\*HEN5/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/View gift card GCXB\*\*\*\*HEN5/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Copy code for gift card WXYZ\*\*\*\*ABCD/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/View gift card WXYZ\*\*\*\*ABCD/i)).toBeInTheDocument();
-    // Every row body has at least one action button — the regression the
-    // QA ticket originally observed (zero buttons in tbody rows).
+    // SUT drift (v3.7.17): per-row View action was retired. Each row exposes
+    // a Copy button (aria-label="Copy gift card code <code>") plus a
+    // status-flip action (Cancel for active, Reactivate for cancelled).
+    expect(screen.getByLabelText(/Copy gift card code GCXB\*\*\*\*HEN5/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Copy gift card code WXYZ\*\*\*\*ABCD/i)).toBeInTheDocument();
+    // Every row body has at least one action button.
     const tbody = document.querySelector('table tbody');
     const rowButtons = tbody.querySelectorAll('button');
-    expect(rowButtons.length).toBeGreaterThanOrEqual(4);
+    expect(rowButtons.length).toBeGreaterThanOrEqual(2);
   });
 
   it('clicking Copy writes the masked code to clipboard and surfaces a success toast', async () => {
@@ -140,44 +141,28 @@ describe('<GiftCards /> — #744 per-row actions', () => {
     });
     render(<GiftCards />);
     await waitFor(() => expect(screen.getByText('GCXB****HEN5')).toBeInTheDocument());
-    await user.click(screen.getByLabelText(/Copy code for gift card GCXB\*\*\*\*HEN5/i));
+    await user.click(screen.getByLabelText(/Copy gift card code GCXB\*\*\*\*HEN5/i));
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('GCXB****HEN5');
     });
-    expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/GCXB\*\*\*\*HEN5/));
+    // SUT surfaces a generic "Code copied" toast (not the code itself).
+    expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/copied/i));
     // Copy must NOT issue a new fetch — strictly a clipboard op.
     const giftCardPosts = fetchApiMock.mock.calls.filter(([, opts]) => opts?.method === 'POST');
     expect(giftCardPosts.length).toBe(0);
   });
 
-  it('clicking View opens a modal showing the card fields rendered from row data (no new fetch)', async () => {
-    const user = userEvent.setup();
+  // SUT drift (v3.7.17): View modal feature was retired. Row actions now
+  // expose Copy + status flip (Cancel/Reactivate). The active row exposes
+  // a Cancel button (data-testid="giftcard-cancel-<id>").
+  it('renders a Cancel button on active rows for the status-flip action', async () => {
     render(<GiftCards />);
     await waitFor(() => expect(screen.getByText('GCXB****HEN5')).toBeInTheDocument());
-    const beforeFetches = fetchApiMock.mock.calls.length;
-    await user.click(screen.getByLabelText(/View gift card GCXB\*\*\*\*HEN5/i));
-    const dialog = await screen.findByRole('dialog', { name: /Gift card details/i });
-    // Pin the load-bearing detail fields.
-    expect(within(dialog).getByText('Code (masked)')).toBeInTheDocument();
-    expect(within(dialog).getByText('GCXB****HEN5')).toBeInTheDocument();
-    expect(within(dialog).getByText('Ends in')).toBeInTheDocument();
-    expect(within(dialog).getByText('HEN5')).toBeInTheDocument();
-    expect(within(dialog).getByText('Issued to patient')).toBeInTheDocument();
-    expect(within(dialog).getByText('42')).toBeInTheDocument();
-    // No backend round-trip — render is purely from the list response.
-    expect(fetchApiMock.mock.calls.length).toBe(beforeFetches);
-  });
-
-  it('View modal Close button dismisses the dialog', async () => {
-    const user = userEvent.setup();
-    render(<GiftCards />);
-    await waitFor(() => expect(screen.getByText('GCXB****HEN5')).toBeInTheDocument());
-    await user.click(screen.getByLabelText(/View gift card GCXB\*\*\*\*HEN5/i));
-    expect(await screen.findByRole('dialog', { name: /Gift card details/i })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /^Close$/ }));
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: /Gift card details/i })).not.toBeInTheDocument();
-    });
+    // activeCard is id=101.
+    expect(screen.getByTestId('giftcard-cancel-101')).toBeInTheDocument();
+    // redeemedCard is terminal — no flip button; renders a dash placeholder.
+    expect(screen.queryByTestId('giftcard-cancel-102')).toBeNull();
+    expect(screen.queryByTestId('giftcard-reactivate-102')).toBeNull();
   });
 
   it('clipboard failure path surfaces an error toast (does not silently succeed)', async () => {
@@ -189,7 +174,7 @@ describe('<GiftCards /> — #744 per-row actions', () => {
     });
     render(<GiftCards />);
     await waitFor(() => expect(screen.getByText('GCXB****HEN5')).toBeInTheDocument());
-    await user.click(screen.getByLabelText(/Copy code for gift card GCXB\*\*\*\*HEN5/i));
+    await user.click(screen.getByLabelText(/Copy gift card code GCXB\*\*\*\*HEN5/i));
     await waitFor(() => {
       expect(notify.error).toHaveBeenCalledWith(expect.stringMatching(/clipboard/i));
     });

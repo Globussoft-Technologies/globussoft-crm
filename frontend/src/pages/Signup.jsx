@@ -1,6 +1,7 @@
 import React, { useState, useContext } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { AuthContext } from '../App';
+import PasswordInput from '../components/PasswordInput';
 
 const Signup = () => {
   const [name, setName] = useState('');
@@ -130,14 +131,13 @@ const Signup = () => {
           </div>
           <div style={{ marginBottom: '1.5rem' }}>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Secure Password</label>
-            <input
-              type="password"
-              className="input-field"
+            <PasswordInput
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={6}
+              autoComplete="new-password"
             />
           </div>
           <button type="submit" className="btn-primary" style={{ width: '100%' }} disabled={loading}>

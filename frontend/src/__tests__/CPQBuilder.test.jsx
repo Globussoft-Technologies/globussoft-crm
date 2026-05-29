@@ -111,4 +111,182 @@ describe('CPQBuilder', () => {
     expect(await screen.findByText(/Enterprise SLA/)).toBeInTheDocument();
     expect(screen.getByText(/\$1,000/)).toBeInTheDocument(); // MRR
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Extended coverage — pins behaviours uncovered by the original 7 cases:
+  // line-item add/remove math, quantity/price input updates, isRecurring
+  // select toggle, Abort Schema cancel, non-array API response handling,
+  // builder reset-after-save, multi-line-item aggregation, MRR-only header
+  // (no one-time row), and load-error swallowing.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  it('removeLine actually deletes the row from the DOM', async () => {
+    fetchApiMock.mockResolvedValue([]);
+    render(<CPQBuilder dealId={1} />);
+    fireEvent.click(await screen.findByText(/Mint SaaS Quote/i));
+    // Add two rows
+    fireEvent.click(screen.getByText(/Append Contract Line Object/i));
+    fireEvent.click(screen.getByText(/Append Contract Line Object/i));
+    expect(screen.getAllByPlaceholderText(/Custom Configuration/i)).toHaveLength(2);
+    // Remove first row: the trash button is the last child of each row; grab the first one.
+    const rows = screen.getAllByPlaceholderText(/Custom Configuration/i);
+    const firstRow = rows[0].closest('div');
+    const trashBtn = firstRow.querySelector('button');
+    fireEvent.click(trashBtn);
+    expect(screen.getAllByPlaceholderText(/Custom Configuration/i)).toHaveLength(1);
+  });
+
+  it('updating quantity + unitPrice on a line item persists in the input value', async () => {
+    fetchApiMock.mockResolvedValue([]);
+    render(<CPQBuilder dealId={1} />);
+    fireEvent.click(await screen.findByText(/Mint SaaS Quote/i));
+    fireEvent.click(screen.getByText(/Append Contract Line Object/i));
+    const productInput = screen.getByPlaceholderText(/Custom Configuration/i);
+    fireEvent.change(productInput, { target: { value: 'Premium Seats' } });
+    expect(productInput.value).toBe('Premium Seats');
+
+    // Quantity input is the number input adjacent to the product input within the row
+    const row = productInput.closest('div');
+    const numberInputs = row.querySelectorAll('input[type="number"]');
+    // numberInputs[0] = quantity, [1] = unitPrice
+    fireEvent.change(numberInputs[0], { target: { value: '5' } });
+    expect(numberInputs[0].value).toBe('5');
+    fireEvent.change(numberInputs[1], { target: { value: '249.99' } });
+    expect(numberInputs[1].value).toBe('249.99');
+  });
+
+  it('isRecurring select toggles between Monthly (MRR) and One-Time Payload', async () => {
+    fetchApiMock.mockResolvedValue([]);
+    render(<CPQBuilder dealId={1} />);
+    fireEvent.click(await screen.findByText(/Mint SaaS Quote/i));
+    fireEvent.click(screen.getByText(/Append Contract Line Object/i));
+    const selects = document.querySelectorAll('select');
+    expect(selects).toHaveLength(1);
+    // Default is true (MRR)
+    expect(selects[0].value).toBe('true');
+    fireEvent.change(selects[0], { target: { value: 'false' } });
+    expect(selects[0].value).toBe('false');
+    // Flip back
+    fireEvent.change(selects[0], { target: { value: 'true' } });
+    expect(selects[0].value).toBe('true');
+  });
+
+  it('"Abort Schema" closes the builder without POSTing', async () => {
+    fetchApiMock.mockResolvedValue([]);
+    render(<CPQBuilder dealId={1} />);
+    fireEvent.click(await screen.findByText(/Mint SaaS Quote/i));
+    expect(screen.getByPlaceholderText(/Quote Contract Title/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Abort Schema/i));
+    // Builder form disappears; Mint button comes back
+    expect(screen.queryByPlaceholderText(/Quote Contract Title/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Mint SaaS Quote/i)).toBeInTheDocument();
+    // No POST issued
+    const postCalls = fetchApiMock.mock.calls.filter(([, opts]) => opts?.method === 'POST');
+    expect(postCalls).toHaveLength(0);
+  });
+
+  it('handles non-array API responses gracefully (defaults to empty quotes)', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      // Backend returns an object envelope instead of array — SUT must not crash
+      if (url.startsWith('/api/cpq/quotes/')) return Promise.resolve({ error: 'malformed' });
+      if (url === '/api/cpq/products') return Promise.resolve(null);
+      return Promise.resolve([]);
+    });
+    render(<CPQBuilder dealId={42} />);
+    // Empty-state copy still renders even when API returned a non-array
+    expect(await screen.findByText(/No Configure, Price, Quote schemas/i)).toBeInTheDocument();
+  });
+
+  it('successful save resets the builder form + reloads quotes', async () => {
+    let getCalls = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (opts?.method === 'POST') return Promise.resolve({ id: 1 });
+      if (url.startsWith('/api/cpq/quotes/')) {
+        getCalls += 1;
+        return Promise.resolve([]);
+      }
+      return Promise.resolve([]);
+    });
+    render(<CPQBuilder dealId={7} />);
+    await waitFor(() => expect(getCalls).toBeGreaterThanOrEqual(1));
+    const initialGets = getCalls;
+    fireEvent.click(await screen.findByText(/Mint SaaS Quote/i));
+    fireEvent.change(screen.getByPlaceholderText(/Quote Contract Title/), { target: { value: 'Reset Test' } });
+    fireEvent.click(screen.getByText(/Commit Active CPQ Engine/i));
+    // Form closes, Mint button returns, quotes reload fired
+    await waitFor(() => expect(screen.queryByPlaceholderText(/Quote Contract Title/)).not.toBeInTheDocument());
+    expect(screen.getByText(/Mint SaaS Quote/i)).toBeInTheDocument();
+    expect(getCalls).toBeGreaterThan(initialGets);
+  });
+
+  it('aggregates a quote card with multiple line items including one-time payload row', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/cpq/quotes/')) {
+        return Promise.resolve([
+          {
+            id: 9,
+            title: 'Multi-Item Quote',
+            status: 'sent',
+            createdAt: new Date('2026-01-15T00:00:00Z').toISOString(),
+            mrr: 2500,
+            totalAmount: 1500,
+            lineItems: [
+              { id: 1, quantity: 10, productName: 'API Calls', unitPrice: 100, isRecurring: true },
+              { id: 2, quantity: 5, productName: 'Storage GB', unitPrice: 300, isRecurring: true },
+              { id: 3, quantity: 1, productName: 'Onboarding', unitPrice: 1500, isRecurring: false },
+            ],
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    render(<CPQBuilder dealId={9} />);
+    expect(await screen.findByText(/Multi-Item Quote/)).toBeInTheDocument();
+    // Each line item renders qty + productName
+    expect(screen.getByText(/10x API Calls/)).toBeInTheDocument();
+    expect(screen.getByText(/5x Storage GB/)).toBeInTheDocument();
+    expect(screen.getByText(/1x Onboarding/)).toBeInTheDocument();
+    // One-time payload section visible (totalAmount > 0)
+    expect(screen.getByText(/One-time payload/i)).toBeInTheDocument();
+    // Status shown
+    expect(screen.getByText(/State: sent/)).toBeInTheDocument();
+  });
+
+  it('omits the one-time-payload row when totalAmount is 0 (MRR-only quote)', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/cpq/quotes/')) {
+        return Promise.resolve([
+          {
+            id: 10,
+            title: 'Pure SaaS',
+            status: 'draft',
+            createdAt: new Date().toISOString(),
+            mrr: 999,
+            totalAmount: 0,
+            lineItems: [
+              { id: 1, quantity: 1, productName: 'Subscription', unitPrice: 999, isRecurring: true },
+            ],
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    render(<CPQBuilder dealId={10} />);
+    expect(await screen.findByText(/Pure SaaS/)).toBeInTheDocument();
+    expect(screen.queryByText(/One-time payload/i)).not.toBeInTheDocument();
+  });
+
+  it('swallows load errors silently (no notify, no crash)', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/cpq/quotes/')) return Promise.reject(new Error('network down'));
+      if (url === '/api/cpq/products') return Promise.reject(new Error('network down'));
+      return Promise.resolve([]);
+    });
+    render(<CPQBuilder dealId={555} />);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/cpq/quotes/555'));
+    // Empty state still shows (quotes defaulted to [])
+    expect(await screen.findByText(/No Configure, Price, Quote schemas/i)).toBeInTheDocument();
+    // No error notification fired (load errors are deliberately swallowed)
+    expect(notifyMock.error).not.toHaveBeenCalled();
+  });
 });

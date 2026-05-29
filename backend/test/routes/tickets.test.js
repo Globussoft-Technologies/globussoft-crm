@@ -497,3 +497,176 @@ describe('DELETE /:id — delete ticket', () => {
     expect(prisma.ticket.delete).not.toHaveBeenCalled();
   });
 });
+
+// ── GET /api/tickets?fields=summary — slim-shape opt-in (#920 slice 3) ──────
+//
+// Mirrors slice 1 contacts (f7790241) + slice 2 deals (6786c2da). When the
+// caller passes ?fields=summary, the route swaps the nested-include shape for
+// a slim Prisma `select` over a fixed allowlist of columns. Existing callers
+// (no ?fields, or any other value) keep the full shape unchanged.
+//
+// Pinned contract:
+//   - Opt-in is EXACT-match on the literal string "summary" — other values
+//     (empty, "anything", "SUMMARY" uppercased, "full") fall through to the
+//     full-shape branch.
+//   - The slim allowlist is {id, subject, status, priority, assigneeId,
+//     tenantId, createdAt} — drops description, slaResponseDue, slaResolveDue,
+//     firstResponseAt, resolvedAt, breached, breachedAt, updatedAt, and the
+//     entire `assignee` nested object.
+//   - Prisma is called with `select` (not `include`) on the slim branch so
+//     the unselected columns never come back from the DB.
+//   - Tenant scope is preserved on BOTH branches (where.tenantId).
+describe('GET / ?fields=summary — slim-shape opt-in (#920 slice 3)', () => {
+  test('?fields=summary → response rows expose ONLY the slim allowlist; no heavy/nested fields', async () => {
+    // The route requests `select`, so the mocked findMany returns only the
+    // slim columns — heavy columns + assignee are absent on the wire.
+    prisma.ticket.findMany.mockResolvedValue([
+      {
+        id: 11, subject: 'Login broken', status: 'Open', priority: 'High',
+        assigneeId: 7, tenantId: 1, createdAt: new Date('2026-05-20'),
+      },
+      {
+        id: 12, subject: 'Slow page', status: 'Pending', priority: 'Medium',
+        assigneeId: null, tenantId: 1, createdAt: new Date('2026-05-19'),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/tickets?fields=summary')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+
+    // Each row exposes EXACTLY the slim allowlist (no description, no SLA
+    // dates, no firstResponseAt, no breached*, no updatedAt, no assignee).
+    const SLIM_KEYS = ['id', 'subject', 'status', 'priority', 'assigneeId', 'tenantId', 'createdAt'];
+    for (const row of res.body) {
+      expect(Object.keys(row).sort()).toEqual([...SLIM_KEYS].sort());
+      expect(row).not.toHaveProperty('description');
+      expect(row).not.toHaveProperty('slaResponseDue');
+      expect(row).not.toHaveProperty('slaResolveDue');
+      expect(row).not.toHaveProperty('firstResponseAt');
+      expect(row).not.toHaveProperty('resolvedAt');
+      expect(row).not.toHaveProperty('breached');
+      expect(row).not.toHaveProperty('breachedAt');
+      expect(row).not.toHaveProperty('updatedAt');
+      expect(row).not.toHaveProperty('assignee');
+    }
+  });
+
+  test('?fields=summary → prisma.ticket.findMany called with `select` (slim) NOT `include` (nested)', async () => {
+    prisma.ticket.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/tickets?fields=summary')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(prisma.ticket.findMany).toHaveBeenCalledTimes(1);
+    const args = prisma.ticket.findMany.mock.calls[0][0];
+
+    // Slim branch — select shape pinned to the exact allowlist
+    expect(args.select).toEqual({
+      id: true,
+      subject: true,
+      status: true,
+      priority: true,
+      assigneeId: true,
+      tenantId: true,
+      createdAt: true,
+    });
+    // include MUST NOT also be set (Prisma rejects `select` + `include` together)
+    expect(args.include).toBeUndefined();
+    // Tenant scope preserved on the slim branch
+    expect(args.where).toEqual({ tenantId: 1 });
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields= (empty) → falls through to FULL shape with nested assignee include', async () => {
+    prisma.ticket.findMany.mockResolvedValue([
+      {
+        id: 21, subject: 'Bug', status: 'Open', priority: 'Low', tenantId: 1,
+        createdAt: new Date(), description: 'desc here', firstResponseAt: null,
+        assignee: { id: 7, name: 'Owner', email: 'o@example.com' },
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/tickets?fields=')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toHaveProperty('description', 'desc here');
+    expect(res.body[0].assignee).toEqual(expect.objectContaining({ id: 7, name: 'Owner' }));
+
+    const args = prisma.ticket.findMany.mock.calls[0][0];
+    // Full branch — include set, select unset
+    expect(args.include).toEqual({
+      assignee: { select: { id: true, name: true, email: true } },
+    });
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=anything-else → falls through to FULL shape (opt-in only on EXACT "summary")', async () => {
+    prisma.ticket.findMany.mockResolvedValue([
+      {
+        id: 22, subject: 'Bug', status: 'Open', priority: 'Low', tenantId: 1,
+        createdAt: new Date(), description: 'still here', assignee: null,
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/tickets?fields=SUMMARY') // uppercased — must NOT trigger slim
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    // Full shape preserved — description present
+    expect(res.body[0]).toHaveProperty('description', 'still here');
+
+    const args = prisma.ticket.findMany.mock.calls[0][0];
+    expect(args.include).toEqual({
+      assignee: { select: { id: true, name: true, email: true } },
+    });
+    expect(args.select).toBeUndefined();
+  });
+
+  test('?fields=summary → tenant-isolation preserved (no foreign-tenant leak)', async () => {
+    prisma.ticket.findMany.mockResolvedValue([]);
+
+    // Caller is tenantId=2 — slim branch must still scope where.tenantId
+    const res = await request(makeApp())
+      .get('/api/tickets?fields=summary')
+      .set('Authorization', makeBearer({ userId: 9, tenantId: 2, role: 'USER' }));
+
+    expect(res.status).toBe(200);
+    const args = prisma.ticket.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 2 });
+    // Confirm slim-select still active (proves the branch is taken before
+    // the where clause is built — not bypassed by tenant change)
+    expect(args.select).toBeDefined();
+    expect(args.select.subject).toBe(true);
+    expect(args.include).toBeUndefined();
+  });
+
+  test('?fields=summary preserves orderBy + tenant where alongside slim select', async () => {
+    prisma.ticket.findMany.mockResolvedValue([
+      { id: 31, subject: 'A', status: 'Open', priority: 'High', assigneeId: 7, tenantId: 1, createdAt: new Date('2026-05-25') },
+      { id: 30, subject: 'B', status: 'Open', priority: 'High', assigneeId: 7, tenantId: 1, createdAt: new Date('2026-05-24') },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/tickets?fields=summary')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    const args = prisma.ticket.findMany.mock.calls[0][0];
+    // Pagination shape unchanged (tickets has no take/skip today — pin that
+    // slim opt-in didn't accidentally inject new pagination semantics).
+    expect(args.take).toBeUndefined();
+    expect(args.skip).toBeUndefined();
+    // orderBy + where survive the slim branch
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.where).toEqual({ tenantId: 1 });
+  });
+});

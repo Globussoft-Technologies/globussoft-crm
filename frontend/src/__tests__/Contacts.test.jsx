@@ -370,4 +370,449 @@ describe('Contacts.jsx — top-level page contract', () => {
     // Notify.error should NOT have fired — the dup modal is the surface, not a toast.
     expect(notifyObj.error).not.toHaveBeenCalled();
   });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Extended cases (cron tick — second-pass coverage)
+  //
+  // These pin behaviour the first 14 cases didn't already touch — phone
+  // dash fallback, score-tier badges, status filter via the "Showing X of Y"
+  // counter, modal-close affordances on Add / Import, error paths for
+  // create + import, the #607 inline email-error block, and the "Create
+  // anyway" retry path through the duplicate-contact modal (force=true).
+  // ────────────────────────────────────────────────────────────────────────
+
+  it('renders an em-dash placeholder when contact.phone is null', async () => {
+    renderContacts();
+    // Priya Iyer.phone = null (per fixture). The cell should render "—" not "null".
+    await waitFor(() => expect(screen.getByText('Priya Iyer')).toBeInTheDocument());
+    const priyaRow = screen.getByText('Priya Iyer').closest('tr');
+    // Aarav + Rohan have populated phones; the dash should only appear in Priya's row.
+    expect(within(priyaRow).getByText('—')).toBeInTheDocument();
+  });
+
+  it('renders distinct lead-score badges for high / mid / low aiScore tiers', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+    // 82/100 (>75, success tier), 55/100 (>40, warning tier), 28/100 (<=40, danger tier)
+    expect(screen.getByText('82/100')).toBeInTheDocument();
+    expect(screen.getByText('55/100')).toBeInTheDocument();
+    expect(screen.getByText('28/100')).toBeInTheDocument();
+  });
+
+  it('hides the "Showing X of Y" counter when neither search nor status filter is active', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+    // Initial render: searchTerm='' + statusFilter='All' → counter hidden.
+    expect(screen.queryByText(/Showing .* of .*/i)).not.toBeInTheDocument();
+  });
+
+  it('shows "Showing X of Y" counter when status filter is changed', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+    const statusSelect = screen.getByDisplayValue('All Statuses');
+    fireEvent.change(statusSelect, { target: { value: 'Lead' } });
+    await waitFor(() => {
+      // 2 Leads (Aarav + Rohan) of 3 total.
+      expect(screen.getByText(/Showing 2 of 3/i)).toBeInTheDocument();
+    });
+  });
+
+  it('Cancel button in Add Contact modal closes the modal without firing a POST', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
+    expect(screen.getByText(/Add New Contact/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+    await waitFor(() => expect(screen.queryByText(/Add New Contact/i)).not.toBeInTheDocument());
+
+    // No POST to /api/contacts beyond the initial GETs.
+    const postCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts' && opts?.method === 'POST');
+    expect(postCall).toBeFalsy();
+  });
+
+  it('#607: surfaces inline email-error and BLOCKS submit when the email is invalid', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
+    fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Tara Kapoor' } });
+    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Kapoor Co' } });
+
+    // Use an email that's syntactically passable to <input type="email"> but
+    // fails the SUT's EMAIL_RE check (no TLD). Submit via the form directly so
+    // the browser's built-in `required` / `type=email` validation doesn't gate.
+    fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'tara@bad' } });
+    const form = screen.getByPlaceholderText('Email').closest('form');
+    fireEvent.submit(form);
+
+    // Inline error should appear with role=alert.
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/Please enter a valid email address/i);
+    });
+    // No POST to /api/contacts fired.
+    const postCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts' && opts?.method === 'POST');
+    expect(postCall).toBeFalsy();
+  });
+
+  it('non-409 POST failure surfaces notify.error instead of opening the dup modal', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
+    fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Nikhil Rao' } });
+    fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'nikhil@example.com' } });
+    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Rao & Co' } });
+
+    // Stub the POST to reject with a generic 400 (no DUPLICATE_CONTACT code).
+    const genericErr = Object.assign(new Error('bad'), {
+      body: { error: 'Some validation problem' },
+    });
+    fetchApiMock.mockImplementationOnce(() => Promise.reject(genericErr));
+
+    fireEvent.submit(screen.getByPlaceholderText('Email').closest('form'));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('Some validation problem');
+    });
+    // No dup-modal fallback on a non-409.
+    expect(screen.queryByTestId('dup-modal')).not.toBeInTheDocument();
+  });
+
+  it('"Create anyway" in the dup modal retries POST with ?force=true and closes the modal on success', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
+    fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Anjali Sen' } });
+    fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'anjali@example.com' } });
+    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Sen Holdings' } });
+
+    // First POST → 409 dup; second POST (force=true) → success.
+    const dupErr = Object.assign(new Error('dup'), {
+      body: { code: 'DUPLICATE_CONTACT', existingContactId: 777, matchedBy: 'email', contact: { id: 777, name: 'Anjali S', email: 'anjali@example.com' } },
+    });
+    fetchApiMock.mockImplementationOnce(() => Promise.reject(dupErr));
+    fireEvent.submit(screen.getByPlaceholderText('Email').closest('form'));
+    await waitFor(() => expect(screen.getByTestId('dup-modal')).toBeInTheDocument());
+
+    // Now stub the next POST as a success and click "Create anyway".
+    fetchApiMock.mockImplementationOnce(() => Promise.resolve({ id: 888 }));
+    fireEvent.click(within(screen.getByTestId('dup-modal')).getByText(/Create anyway/i));
+
+    await waitFor(() => {
+      const forceCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts?force=true' && opts?.method === 'POST',
+      );
+      expect(forceCall).toBeTruthy();
+      const body = JSON.parse(forceCall[1].body);
+      expect(body).toMatchObject({ name: 'Anjali Sen', email: 'anjali@example.com' });
+    });
+    // Dup modal closes; Add modal closes too.
+    await waitFor(() => expect(screen.queryByTestId('dup-modal')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/Add New Contact/i)).not.toBeInTheDocument());
+  });
+
+  it('Import CSV modal Close (X) button dismisses the modal', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Import CSV/i }));
+    expect(screen.getByText(/Click to select a .csv file/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Close import dialog/i }));
+    await waitFor(() => {
+      expect(screen.queryByText(/Click to select a .csv file/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('Import CSV: a failing POST surfaces the Import-Failed error card', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Import CSV/i }));
+
+    const csvText = 'name,email,company,title,status\nIra Dev,ira@example.com,Dev Studios,Designer,Lead\n';
+    const file = new File([csvText], 'one.csv', { type: 'text/csv' });
+    const fileInput = document.querySelector('input[type="file"]');
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => expect(screen.getByText('Ira Dev')).toBeInTheDocument());
+
+    // Stub the import POST to reject — the SUT catches and sets importResult.error.
+    fetchApiMock.mockImplementationOnce(() => Promise.reject(new Error('boom')));
+    fireEvent.click(screen.getByRole('button', { name: /Import 1 valid Contact/i }));
+
+    await waitFor(() => {
+      // The error-state card uses different copy from the success card.
+      // SUT renders: "Import Failed" + the importResult.error string ("Import failed").
+      const failedHeadings = screen.getAllByText(/Import Failed/i);
+      expect(failedHeadings.length).toBeGreaterThanOrEqual(1);
+    });
+    // The success card should NOT appear.
+    expect(screen.queryByText(/Import Complete/i)).not.toBeInTheDocument();
+  });
+
+  it('Find Duplicates with zero groups renders the "database is clean" empty state', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/No duplicate contacts found/i)).toBeInTheDocument();
+    });
+    // The dialog heading + count should read "0 groups".
+    expect(screen.getByText(/Duplicate Contacts \(0 groups\)/i)).toBeInTheDocument();
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Extended cases (cron tick 2 — merge / dismiss / inline email / staff)
+  //
+  // The prior 28 cases pinned CRUD + filter + CSV + add-modal happy/sad path
+  // plus the #592 dup-modal trigger. These pin the remaining duplicate-group
+  // surface (Merge confirm + POST + cancel + failure; Dismiss confirm + POST
+  // + cancel + failure), the on-blur email validator, the staff-fetch
+  // absorption, and the duplicates group rendering with real data — all
+  // currently uncovered branches in Contacts.jsx.
+  // ────────────────────────────────────────────────────────────────────────
+
+  const DUP_GROUP = {
+    reason: 'email',
+    primary: { id: 1, name: 'Aarav Sharma', email: 'aarav@acme.in', company: 'Acme', aiScore: 82 },
+    duplicates: [
+      { id: 91, name: 'Aarav S', email: 'aarav@acme.in', company: 'Acme Logistics', aiScore: 71 },
+    ],
+  };
+
+  it('Find Duplicates renders Primary + Dup rows + Match reason for each group', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Duplicate Contacts \(1 groups\)/i)).toBeInTheDocument();
+    });
+    // Both PRIMARY badge and DUP badge labels render once per group.
+    expect(screen.getByText(/^Primary$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Dup$/i)).toBeInTheDocument();
+    // Match-reason chip carries the server's `reason` token verbatim.
+    expect(screen.getByText(/Match: email/i)).toBeInTheDocument();
+    // Score line for the primary row reads "Score: <aiScore>".
+    expect(screen.getByText(/Score: 82/i)).toBeInTheDocument();
+    // Duplicate row's score also rendered.
+    expect(screen.getByText(/Score: 71/i)).toBeInTheDocument();
+  });
+
+  it('#592: Merge confirm + POST /api/contacts/merge fires with {primaryId, secondaryIds}', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => expect(screen.getByText(/Match: email/i)).toBeInTheDocument());
+
+    // Stub the merge POST.
+    fetchApiMock.mockImplementationOnce(() => Promise.resolve({ merged: true }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge into Primary/i }));
+
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalled());
+    expect(notifyObj.confirm.mock.calls[0][0]).toMatchObject({ destructive: true, confirmText: 'Merge' });
+
+    await waitFor(() => {
+      const mergeCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/merge' && opts?.method === 'POST',
+      );
+      expect(mergeCall).toBeTruthy();
+      expect(JSON.parse(mergeCall[1].body)).toEqual({ primaryId: 1, secondaryIds: [91] });
+    });
+  });
+
+  it('#592: Merge cancel via notify.confirm=false suppresses the POST', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    notifyObj.confirm.mockResolvedValueOnce(false);
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => expect(screen.getByText(/Match: email/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Merge into Primary/i }));
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalled());
+
+    // Brief settle — no POST.
+    await new Promise(r => setTimeout(r, 20));
+    const mergeCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === '/api/contacts/merge' && opts?.method === 'POST',
+    );
+    expect(mergeCall).toBeFalsy();
+  });
+
+  it('#592: Merge failure surfaces notify.error("Merge failed")', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => expect(screen.getByText(/Match: email/i)).toBeInTheDocument());
+
+    fetchApiMock.mockImplementationOnce(() => Promise.reject(new Error('500')));
+    fireEvent.click(screen.getByRole('button', { name: /Merge into Primary/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('Merge failed');
+    });
+  });
+
+  it('#592: Dismiss confirm + POST /api/contacts/duplicates/dismiss fires with primaryId + secondaryIds', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => expect(screen.getByText(/Match: email/i)).toBeInTheDocument());
+
+    fetchApiMock.mockImplementationOnce(() => Promise.resolve({ dismissed: true }));
+    fireEvent.click(screen.getByRole('button', { name: /Dismiss duplicate group/i }));
+
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalled());
+    expect(notifyObj.confirm.mock.calls[0][0]).toMatchObject({ confirmText: 'Dismiss' });
+
+    await waitFor(() => {
+      const dismissCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/duplicates/dismiss' && opts?.method === 'POST',
+      );
+      expect(dismissCall).toBeTruthy();
+      expect(JSON.parse(dismissCall[1].body)).toEqual({ primaryId: 1, secondaryIds: [91] });
+    });
+  });
+
+  it('#592: Dismiss failure surfaces notify.error("Dismiss failed")', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    await waitFor(() => expect(screen.getByText(/Match: email/i)).toBeInTheDocument());
+
+    fetchApiMock.mockImplementationOnce(() => Promise.reject(new Error('403')));
+    fireEvent.click(screen.getByRole('button', { name: /Dismiss duplicate group/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('Dismiss failed');
+    });
+  });
+
+  it('Find Duplicates: GET /api/contacts/duplicates/find failure is silently absorbed (no toast, no dialog)', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      if (url === '/api/contacts/duplicates/find') return Promise.reject(new Error('500'));
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
+    // Brief settle. The catch fires `setDupes([])` only — `setShowDupes(true)`
+    // sits INSIDE the try block, so the dialog does NOT open on failure.
+    await new Promise(r => setTimeout(r, 30));
+    expect(screen.queryByText(/Duplicate Contacts/i)).not.toBeInTheDocument();
+    // notify.error should NOT have fired — the catch is silent.
+    expect(notifyObj.error).not.toHaveBeenCalled();
+    // Verify the GET actually happened (so we know the click wired through).
+    const findCall = fetchApiMock.mock.calls.find(([url]) => url === '/api/contacts/duplicates/find');
+    expect(findCall).toBeTruthy();
+  });
+
+  it('#607: on-blur email validator surfaces inline error without submitting', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
+    const emailInput = screen.getByPlaceholderText('Email');
+
+    fireEvent.change(emailInput, { target: { value: 'not-a-valid-email' } });
+    fireEvent.blur(emailInput);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/Please enter a valid email address/i);
+    });
+    // aria-invalid flips to true on the input.
+    expect(emailInput.getAttribute('aria-invalid')).toBe('true');
+
+    // Typing again clears the error (per onChange branch that resets emailError when set).
+    fireEvent.change(emailInput, { target: { value: 'fixed@example.com' } });
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
+  it('#607: on-blur with an empty email field does NOT set the inline error', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
+    const emailInput = screen.getByPlaceholderText('Email');
+    // Blur with an empty value — the validator only fires when v is non-empty.
+    fireEvent.blur(emailInput);
+
+    // No inline alert; aria-invalid stays false.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(emailInput.getAttribute('aria-invalid')).toBe('false');
+  });
+
+  it('absorbs a /api/staff fetch failure without breaking the page render', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (url === '/api/staff') return Promise.reject(new Error('staff 500'));
+      return Promise.resolve(null);
+    });
+    renderContacts();
+
+    // Rows still render; the assigned-to dropdowns just have no staff options.
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+    const row = screen.getByText('Aarav Sharma').closest('tr');
+    const select = within(row).getByRole('combobox');
+    // Only the 'Unassigned' option present (staff list empty).
+    expect(select.querySelectorAll('option').length).toBe(1);
+    expect(select.querySelector('option').textContent).toMatch(/Unassigned/i);
+  });
 });

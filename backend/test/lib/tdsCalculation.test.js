@@ -147,4 +147,111 @@ describe('computeTdsFromLines — pure TDS withholding sum', () => {
     expect(r.totalTds).toBe(777);
     expect(r.perLineTds).toEqual([{ lineId: 70, amount: 777 }]);
   });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Coverage extensions — pin under-covered branches in the SUT contract.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  test('zero TDS amount is INCLUDED (only null/undefined skipped, not 0)', () => {
+    // The SUT only skips when raw === null || raw === undefined.
+    // amount: 0 is finite → goes through round2 → included with amount: 0.
+    const lines = [
+      { id: 80, lineType: 'tds', amount: 0 },
+      { id: 81, lineType: 'tds', amount: '100.00' },
+    ];
+    const r = computeTdsFromLines(lines);
+    expect(r.totalTds).toBe(100);
+    expect(r.perLineTds).toEqual([
+      { lineId: 80, amount: 0 },
+      { lineId: 81, amount: 100 },
+    ]);
+  });
+
+  test('negative TDS amount is summed verbatim (no clamp at 0)', () => {
+    // Number(-500) is finite → included; total goes negative. The helper
+    // is intentionally side-effect-free + clamp-free — if upstream needs a
+    // floor, that's a call-site concern.
+    const lines = [
+      { id: 90, lineType: 'tds', amount: -500 },
+      { id: 91, lineType: 'tds', amount: '200' },
+    ];
+    const r = computeTdsFromLines(lines);
+    expect(r.totalTds).toBe(-300);
+    expect(r.perLineTds).toEqual([
+      { lineId: 90, amount: -500 },
+      { lineId: 91, amount: 200 },
+    ]);
+  });
+
+  test('round2 boundary: 0.004 → 0.00 (NOT 0.01) — confirms half-up only kicks in at .005', () => {
+    const lines = [
+      { id: 100, lineType: 'tds', amount: 0.004 },
+    ];
+    const r = computeTdsFromLines(lines);
+    expect(r.totalTds).toBe(0);
+    expect(r.perLineTds).toEqual([{ lineId: 100, amount: 0 }]);
+  });
+
+  test('round2 boundary: 0.006 → 0.01 — confirms direction of half-up', () => {
+    const lines = [
+      { id: 110, lineType: 'tds', amount: 0.006 },
+    ];
+    const r = computeTdsFromLines(lines);
+    expect(r.totalTds).toBe(0.01);
+    expect(r.perLineTds).toEqual([{ lineId: 110, amount: 0.01 }]);
+  });
+
+  test('per-line round2 BEFORE running-sum: [0.005, 0.005] → 0.02 (not 0.01)', () => {
+    // Two half-pennies each round up to 0.01 INDIVIDUALLY before summing.
+    // If the SUT ever regresses to sum-then-round, this would be 0.01.
+    const lines = [
+      { id: 120, lineType: 'tds', amount: 0.005 },
+      { id: 121, lineType: 'tds', amount: 0.005 },
+    ];
+    const r = computeTdsFromLines(lines);
+    expect(r.totalTds).toBe(0.02);
+    expect(r.perLineTds).toEqual([
+      { lineId: 120, amount: 0.01 },
+      { lineId: 121, amount: 0.01 },
+    ]);
+  });
+
+  test('TDS_LINE_TYPE is case-sensitive: lineType "TDS" (uppercase) is EXCLUDED', () => {
+    // The check is strict-equality === 'tds'. Pin so a future refactor to
+    // .toLowerCase() doesn't silently change the contract.
+    const lines = [
+      { id: 130, lineType: 'TDS', amount: '1000' },
+      { id: 131, lineType: 'Tds', amount: '500' },
+      { id: 132, lineType: 'tds', amount: '250' }, // only this one
+    ];
+    const r = computeTdsFromLines(lines);
+    expect(r.totalTds).toBe(250);
+    expect(r.perLineTds).toEqual([{ lineId: 132, amount: 250 }]);
+  });
+
+  test('missing lineType key entirely → excluded (undefined !== "tds")', () => {
+    const lines = [
+      { id: 140, amount: '1000' }, // no lineType
+      { id: 141, lineType: 'tds', amount: '300' },
+    ];
+    const r = computeTdsFromLines(lines);
+    expect(r.totalTds).toBe(300);
+    expect(r.perLineTds).toEqual([{ lineId: 141, amount: 300 }]);
+  });
+
+  test('string id is coerced to null via Number.isFinite strict check', () => {
+    // Number.isFinite is the strict variant — it does NOT coerce its arg.
+    // So `Number.isFinite('42')` is false → lineId becomes null even
+    // though the string is parseable. Float ids like 1.5 ARE finite.
+    const lines = [
+      { id: '42', lineType: 'tds', amount: '100' },
+      { id: 1.5, lineType: 'tds', amount: '200' },
+    ];
+    const r = computeTdsFromLines(lines);
+    expect(r.totalTds).toBe(300);
+    expect(r.perLineTds).toEqual([
+      { lineId: null, amount: 100 }, // string id → null
+      { lineId: 1.5, amount: 200 }, // float id → preserved
+    ]);
+  });
 });

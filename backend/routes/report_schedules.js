@@ -27,16 +27,48 @@ function validateRecipients(recipients) {
 }
 
 // List report schedules in current tenant (admins see all in tenant, others see own)
+// GET /api/report-schedules?fields=summary
 router.get("/", async (req, res) => {
   try {
+    // #920 slice 47: ?fields=summary slim-shape opt-in. Mirrors slices 1-46.
+    // ReportSchedule.metrics + ReportSchedule.recipients are both
+    // `String? @db.Text` storing JSON arrays (metrics ids list +
+    // recipient email list); for tenants with many schedules these can
+    // bloat the list payload meaningfully when the admin list UI only
+    // needs name / reportType / frequency / enabled / lastRunAt to
+    // render. When ?fields=summary is passed, drop the heavy JSON
+    // columns AND the `user` include (the list renderer doesn't show
+    // the owner's full profile — userId is enough to badge "yours" vs
+    // "others"). Opt-in additive — existing callers (no ?fields, or
+    // any non-exact value) get the full row shape unchanged.
+    const isSummary = req.query.fields === "summary";
     const where = req.user.role === 'ADMIN'
       ? { tenantId: req.user.tenantId }
       : { tenantId: req.user.tenantId, userId: req.user.userId };
-    const schedules = await prisma.reportSchedule.findMany({
+    const findManyArgs = {
       where,
-      include: { user: { select: { id: true, name: true, email: true } } },
-      orderBy: { createdAt: 'desc' }
-    });
+      orderBy: { createdAt: 'desc' },
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        reportType: true,
+        groupBy: true,
+        frequency: true,
+        cronExpression: true,
+        format: true,
+        enabled: true,
+        lastRunAt: true,
+        createdAt: true,
+        updatedAt: true,
+        tenantId: true,
+        userId: true,
+      };
+    } else {
+      findManyArgs.include = { user: { select: { id: true, name: true, email: true } } };
+    }
+    const schedules = await prisma.reportSchedule.findMany(findManyArgs);
     res.json(schedules);
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch report schedules" });

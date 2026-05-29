@@ -30,6 +30,7 @@ import prisma from "../../lib/prisma.js";
 
 import {
   runReligiousGuidanceForTenant,
+  runReligiousGuidanceForAllTravelTenants,
   daysToDeparture,
   ELIGIBLE_STATUSES,
   MAX_LOOKAHEAD_DAYS,
@@ -42,7 +43,7 @@ beforeAll(() => {
   // subBrandConfig resolver pull — Q9 cut-over plumbing reads tenant
   // .subBrandConfigJson once per pass. Default mock returns null
   // config; resolver yields {} downstream.
-  prisma.tenant = { findUnique: vi.fn() };
+  prisma.tenant = { findUnique: vi.fn(), findMany: vi.fn() };
 });
 
 beforeEach(() => {
@@ -51,12 +52,14 @@ beforeEach(() => {
   prisma.notification.findFirst.mockReset();
   prisma.notification.create.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.tenant.findMany.mockReset();
 
   prisma.religiousGuidancePacket.findMany.mockResolvedValue([]);
   prisma.itinerary.findMany.mockResolvedValue([]);
   prisma.notification.findFirst.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
   prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
+  prisma.tenant.findMany.mockResolvedValue([]);
 });
 
 describe("cron/religiousGuidanceEngine — daysToDeparture (pure)", () => {
@@ -254,5 +257,195 @@ describe("cron/religiousGuidanceEngine — runReligiousGuidanceForTenant", () =>
     await runReligiousGuidanceForTenant(123);
     const pktArg = prisma.religiousGuidancePacket.findMany.mock.calls[0][0];
     expect(pktArg.where.tenantId).toBe(123);
+  });
+
+  // ---------------------------------------------------------------------
+  // +8 new cases (tick #N of the test-writing cron).
+  // Covers: lookahead-boundary T-14d hit, multi-channel WA+email+SMS
+  // dispatch, isActive=false packet exclusion via where-clause shape,
+  // sub-brand RFU-narrowing in packet + itinerary queries, dedup tag
+  // year-tagging, contentHtml→snippet plain-text strip with 280-char
+  // truncation, idempotency on a second pass with the same already-
+  // dispatched packet, and the Q9 wabaId log line indicating which WABA
+  // would route once Wati creds land.
+  // ---------------------------------------------------------------------
+
+  test("boundary T-14d hit: packet at dayOffset=14 fires for itinerary exactly 14 days out", async () => {
+    // +14d + 60s headroom so floor() lands on 14, not 13.
+    const startDate = new Date(Date.now() + 14 * 86_400_000 + 60_000);
+    prisma.religiousGuidancePacket.findMany.mockResolvedValue([
+      { id: 22, dayOffset: 14, title: "Two weeks out", contentHtml: "<p>Y</p>", channels: "wa" },
+    ]);
+    prisma.itinerary.findMany.mockResolvedValue([
+      { id: 600, contactId: 1, destination: "Madinah", startDate },
+    ]);
+
+    const result = await runReligiousGuidanceForTenant(42);
+    expect(result.fired).toBe(1);
+    expect(prisma.notification.create).toHaveBeenCalledTimes(1);
+    const arg = prisma.notification.create.mock.calls[0][0];
+    expect(arg.data.message).toContain("T-14d");
+  });
+
+  test("multi-channel dispatch: wa+email+sms packet emits all three stub log lines on a single fire", async () => {
+    const startDate = new Date(Date.now() + 1 * 86_400_000 + 60_000);
+    prisma.religiousGuidancePacket.findMany.mockResolvedValue([
+      { id: 33, dayOffset: 1, title: "T-1d final reminder", contentHtml: "<p>Ready?</p>", channels: "wa,email,sms" },
+    ]);
+    prisma.itinerary.findMany.mockResolvedValue([
+      { id: 700, contactId: 7, destination: "Makkah", startDate },
+    ]);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await runReligiousGuidanceForTenant(42);
+    const out = logSpy.mock.calls.flat().join("\n");
+
+    expect(result.fired).toBe(1);
+    expect(out).toMatch(/\[wati-stub\] would send religious-guidance packet 33/);
+    expect(out).toMatch(/\[religious-guidance\] email channel — TODO wire scheduledEmail/);
+    expect(out).toMatch(/\[religious-guidance\] sms channel — TODO/);
+    logSpy.mockRestore();
+  });
+
+  test("packet where-clause includes isActive=true (inactive packets are excluded at the query layer)", async () => {
+    await runReligiousGuidanceForTenant(42);
+    const pktArg = prisma.religiousGuidancePacket.findMany.mock.calls[0][0];
+    expect(pktArg.where.isActive).toBe(true);
+    // confirm the engine does not accidentally pull all packets and filter client-side
+    expect(pktArg.where.subBrand).toBe("rfu");
+  });
+
+  test("sub-brand RFU narrowing: both packet query AND itinerary query pin subBrand='rfu'", async () => {
+    prisma.religiousGuidancePacket.findMany.mockResolvedValue([
+      { id: 11, dayOffset: 7, title: "x", contentHtml: "<p>X</p>", channels: "wa" },
+    ]);
+    await runReligiousGuidanceForTenant(42);
+
+    const pktArg = prisma.religiousGuidancePacket.findMany.mock.calls[0][0];
+    const itinArg = prisma.itinerary.findMany.mock.calls[0][0];
+    expect(pktArg.where.subBrand).toBe("rfu");
+    expect(itinArg.where.subBrand).toBe("rfu");
+  });
+
+  test("dedup tag includes current year as belt-and-braces (per-year tag prevents cross-year false-positive matches)", async () => {
+    const startDate = new Date(Date.now() + 7 * 86_400_000 + 60_000);
+    prisma.religiousGuidancePacket.findMany.mockResolvedValue([
+      { id: 11, dayOffset: 7, title: "T-7d", contentHtml: "<p>X</p>", channels: "wa" },
+    ]);
+    prisma.itinerary.findMany.mockResolvedValue([
+      { id: 500, contactId: 99, destination: "Makkah", startDate },
+    ]);
+
+    await runReligiousGuidanceForTenant(42);
+    const findArg = prisma.notification.findFirst.mock.calls[0][0];
+    const yr = String(new Date().getFullYear());
+    // tag passed to findFirst is `[religious-guidance-{packetId}-itin-{itinId}-{year}]`
+    expect(findArg.where.title.contains).toBe(`[religious-guidance-11-itin-500-${yr}]`);
+    expect(findArg.where.entityType).toBe("Itinerary");
+    expect(findArg.where.entityId).toBe(500);
+    expect(findArg.where.tenantId).toBe(42);
+  });
+
+  test("contentHtml → plain-text snippet: HTML stripped, whitespace collapsed, capped at 280 chars in message body", async () => {
+    const longHtml = "<p>" + "Pack your ihram garments and Quran. ".repeat(40) + "</p>";
+    const startDate = new Date(Date.now() + 7 * 86_400_000 + 60_000);
+    prisma.religiousGuidancePacket.findMany.mockResolvedValue([
+      { id: 11, dayOffset: 7, title: "T-7d", contentHtml: longHtml, channels: "wa" },
+    ]);
+    prisma.itinerary.findMany.mockResolvedValue([
+      { id: 500, contactId: 99, destination: "Makkah + Madinah", startDate },
+    ]);
+
+    await runReligiousGuidanceForTenant(42);
+    const arg = prisma.notification.create.mock.calls[0][0];
+    // strip tag check: no '<' or '>' from the original HTML
+    expect(arg.data.message).not.toMatch(/<p>|<\/p>/);
+    // the 280-char snippet head appears before the parenthetical itinerary line
+    const head = arg.data.message.split(" (Itinerary ")[0];
+    expect(head.length).toBeLessThanOrEqual(280);
+    // and the message includes the destination + advisor link tail
+    expect(arg.data.message).toContain("Makkah + Madinah");
+    expect(arg.data.message).toContain("Advisor link:");
+  });
+
+  test("idempotent second pass: second invocation with same already-dispatched packet skips, does not double-create", async () => {
+    const startDate = new Date(Date.now() + 7 * 86_400_000 + 60_000);
+    prisma.religiousGuidancePacket.findMany.mockResolvedValue([
+      { id: 11, dayOffset: 7, title: "T-7d", contentHtml: "<p>X</p>", channels: "wa" },
+    ]);
+    prisma.itinerary.findMany.mockResolvedValue([
+      { id: 500, contactId: 99, destination: "Makkah", startDate },
+    ]);
+
+    // First pass: no existing notification → fires
+    prisma.notification.findFirst.mockResolvedValueOnce(null);
+    const r1 = await runReligiousGuidanceForTenant(42);
+    expect(r1.fired).toBe(1);
+
+    // Second pass: notification now exists → skip (no second create call)
+    prisma.notification.findFirst.mockResolvedValueOnce({ id: 12345 });
+    const r2 = await runReligiousGuidanceForTenant(42);
+    expect(r2.fired).toBe(0);
+    expect(r2.skipped).toBe(1);
+    // only ONE create call across both passes
+    expect(prisma.notification.create).toHaveBeenCalledTimes(1);
+  });
+
+  test("Q9 cut-over plumbing: WA stub log line includes resolved wabaId from tenant.subBrandConfigJson when configured", async () => {
+    const startDate = new Date(Date.now() + 7 * 86_400_000 + 60_000);
+    prisma.religiousGuidancePacket.findMany.mockResolvedValue([
+      { id: 11, dayOffset: 7, title: "T-7d", contentHtml: "<p>X</p>", channels: "wa" },
+    ]);
+    prisma.itinerary.findMany.mockResolvedValue([
+      { id: 500, contactId: 99, destination: "Makkah", startDate },
+    ]);
+    // configured wabaId for RFU sub-brand
+    prisma.tenant.findUnique.mockResolvedValue({
+      subBrandConfigJson: JSON.stringify({ rfu: { wabaId: "WABA_RFU_123" } }),
+    });
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runReligiousGuidanceForTenant(42);
+    const out = logSpy.mock.calls.flat().join("\n");
+    expect(out).toMatch(/wabaId=WABA_RFU_123/);
+    expect(out).toMatch(/subBrand=rfu/);
+    logSpy.mockRestore();
+  });
+});
+
+describe("cron/religiousGuidanceEngine — runReligiousGuidanceForAllTravelTenants (multi-tenant fanout)", () => {
+  test("scopes tenant lookup to vertical=travel + isActive=true and continues past per-tenant errors", async () => {
+    // 3 travel tenants. Middle tenant's packet fetch throws — outer loop
+    // should log the error and continue with the next tenant rather
+    // than aborting the whole fanout.
+    prisma.tenant.findMany.mockResolvedValue([
+      { id: 1, slug: "good-1" },
+      { id: 2, slug: "bad-mid" },
+      { id: 3, slug: "good-3" },
+    ]);
+
+    let call = 0;
+    prisma.religiousGuidancePacket.findMany.mockImplementation(async ({ where }) => {
+      call++;
+      if (where.tenantId === 2) throw new Error("simulated tenant-2 prisma fail");
+      return []; // good tenants → empty packets → fast-path {0,0}
+    });
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await runReligiousGuidanceForAllTravelTenants();
+
+    // tenant query shape
+    const tArg = prisma.tenant.findMany.mock.calls[0][0];
+    expect(tArg.where.vertical).toBe("travel");
+    expect(tArg.where.isActive).toBe(true);
+
+    // all 3 tenants were attempted (packet-findMany called 3×)
+    expect(call).toBe(3);
+    // the middle tenant error was logged but did not crash the fanout
+    expect(errSpy).toHaveBeenCalled();
+    // overall return is the sum of survivors → 0/0 (both survivors had no packets)
+    expect(result).toEqual({ fired: 0, skipped: 0 });
+
+    errSpy.mockRestore();
   });
 });

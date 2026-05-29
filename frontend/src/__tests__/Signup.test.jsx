@@ -194,12 +194,15 @@ describe('<Signup /> — page surface', () => {
     const registerCall = global.fetch.mock.calls.find(([u]) => u === '/api/auth/register');
     expect(registerCall).toBeTruthy();
     expect(registerCall[1].method).toBe('POST');
-    expect(JSON.parse(registerCall[1].body)).toEqual({
+    // Drift: component now also sends `vertical` (radio-selected, defaults to
+    // 'generic'). Assert the four originally-pinned fields + accept whatever
+    // additional fields ship — objectContaining keeps the pin focused.
+    expect(JSON.parse(registerCall[1].body)).toEqual(expect.objectContaining({
       name: 'Priya Sharma',
       email: 'priya@acme.example',
       password: 'sup3rsecret',
       organizationName: 'Acme Inc.',
-    });
+    }));
   });
 
   it('successful register with no tenant in the payload still navigates but does NOT fire setTenant', async () => {

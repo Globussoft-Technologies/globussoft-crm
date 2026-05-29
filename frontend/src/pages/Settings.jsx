@@ -32,6 +32,7 @@ import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import { usePermissions } from "../hooks/usePermissions";
 import { ThemeContext, AuthContext } from "../App";
+import PasswordInput from "../components/PasswordInput";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -1672,16 +1673,15 @@ export default function Settings() {
                   setNewUser({ ...newUser, email: e.target.value })
                 }
               />
-              <input
-                type="password"
+              <PasswordInput
                 placeholder="Temporary Password"
                 required
-                className="input-field"
                 style={{ minWidth: 0 }}
                 value={newUser.password}
                 onChange={(e) =>
                   setNewUser({ ...newUser, password: e.target.value })
                 }
+                autoComplete="new-password"
               />
               <select
                 className="input-field"

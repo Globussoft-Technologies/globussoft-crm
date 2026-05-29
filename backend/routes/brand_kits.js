@@ -87,8 +87,9 @@ function pickAssetFields(body) {
 }
 
 // GET /api/brand-kits
-// Honors ?subBrand=tmc (filter — empty string / "null" means tenant-wide)
-// and ?isActive=true (filter). Default order: subBrand asc, version desc.
+// Honors ?subBrand=tmc (filter — empty string / "null" means tenant-wide),
+// ?isActive=true (filter), and ?fields=summary (slim-shape opt-in).
+// Default order: subBrand asc, version desc.
 router.get("/", verifyToken, async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
@@ -118,11 +119,35 @@ router.get("/", verifyToken, async (req, res) => {
       }
     }
 
+    // #920 slice 37: ?fields=summary slim-shape opt-in. Mirrors slices 1-36.
+    // BrandKit has heavy visual-asset columns — logoUrl / logoDarkUrl /
+    // faviconUrl (URL strings up to 500 chars each), five color columns
+    // (primary/secondary/accent/bg/text), fontFamily + fontUrl, and
+    // tagline. List/picker UI (e.g. BrandKits.jsx version-history table,
+    // BookingExpediaSearch sub-brand picker) only needs chrome columns:
+    // id + subBrand + version + isActive + updatedAt. When the caller
+    // passes ?fields=summary we forward a slim `select` so the wire payload
+    // (and the DB read) stays narrow. Opt-in additive — existing callers
+    // (no ?fields, or any non-exact value) get the full row shape unchanged
+    // so BrandKits.jsx editor + the /active/:subBrand resolver continue to
+    // receive every asset field.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
+      where,
+      orderBy: [{ subBrand: "asc" }, { version: "desc" }],
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        subBrand: true,
+        version: true,
+        isActive: true,
+        updatedAt: true,
+      };
+    }
+
     const [brandKits, total] = await Promise.all([
-      prisma.brandKit.findMany({
-        where,
-        orderBy: [{ subBrand: "asc" }, { version: "desc" }],
-      }),
+      prisma.brandKit.findMany(findManyArgs),
       prisma.brandKit.count({ where }),
     ]);
     res.json({ brandKits, total });

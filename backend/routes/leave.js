@@ -93,6 +93,140 @@ async function getOrCreateBalance(tx, tenantId, userId, policy) {
 }
 
 // ==============================================================
+// Stats — tenant-wide aggregate KPI surface
+// ==============================================================
+//
+// GET /api/leave/stats — HRMS polish.
+//
+// First /stats endpoint on the LeaveRequest route. Read-only KPI surface
+// for the HR dashboard. Mirrors the canonical /stats posture established
+// by travel_suppliers.js's /suppliers/stats (#903 slice 23): tenant-scoped,
+// admin/manager-gated, no audit row written, ISO date bounds with 400
+// INVALID_DATE on invalid input, half-up 2dp rounding for sums.
+//
+// Aggregates:
+//   total              -- count of all LeaveRequest rows (in window)
+//   byStatus           -- { PENDING, APPROVED, REJECTED, CANCELLED } counts
+//   byType             -- counts grouped by joined LeavePolicy.leaveType
+//                         (CASUAL/SICK/EARNED/UNPAID/MATERNITY/PATERNITY/COMP_OFF)
+//   totalDaysApproved  -- sum of LeaveRequest.days where status='APPROVED'
+//   totalDaysPending   -- sum of LeaveRequest.days where status='PENDING'
+//   pendingCount       -- count where status='PENDING'
+//   lastRequestedAt    -- max submittedAt ISO string or null
+//
+// Notes on schema fidelity:
+//   - LeaveRequest.status enum is PENDING / APPROVED / REJECTED / CANCELLED
+//     (set in routes/leave.js, no DRAFT/SUBMITTED — PENDING is the "freshly
+//     submitted, awaiting decision" bucket). totalDaysPending / pendingCount
+//     pin against PENDING.
+//   - Date window applies to LeaveRequest.submittedAt (the canonical
+//     request-creation timestamp). lastRequestedAt mirrors that.
+//   - LeaveRequest.days is Int in schema; we still half-up round to 2dp on
+//     the response sums for forward-compat with a potential half-day
+//     migration (HALF_DAY_NOT_SUPPORTED is enforced at /requests POST).
+//   - leaveType lives on the joined LeavePolicy, not on LeaveRequest
+//     directly. We fetch with include:{policy:{select:{leaveType:true}}}
+//     and bucket in-process. groupBy on Prisma can't follow a relation, so
+//     in-process bucketing is the cleanest path.
+//
+// Auth: verifyToken + verifyRole(['ADMIN','MANAGER']) -- aggregate KPIs
+// across all users in the tenant are not USER-readable. Matches
+// attendance.js's /summary gate.
+//
+// Express route ordering: literal-path /stats declared at top of file so
+// /policies/:id and /balances/:userId family parses don't see "stats" as
+// an :id value.
+// ==============================================================
+router.get("/stats", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+
+    // Optional ISO date bounds on submittedAt
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.submittedAt = Object.assign(where.submittedAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.submittedAt = Object.assign(where.submittedAt || {}, { lte: d });
+    }
+
+    const rows = await prisma.leaveRequest.findMany({
+      where,
+      select: {
+        status: true,
+        days: true,
+        submittedAt: true,
+        policy: { select: { leaveType: true } },
+      },
+    });
+
+    // Half-up round to 2dp -- matches sibling stats endpoints.
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    const byStatus = {};
+    const byType = {};
+    let totalDaysApproved = 0;
+    let totalDaysPending = 0;
+    let pendingCount = 0;
+    let lastRequestedAt = null;
+
+    for (const r of rows) {
+      const status = r.status || "PENDING";
+      byStatus[status] = (byStatus[status] || 0) + 1;
+
+      const leaveType = (r.policy && r.policy.leaveType) || "UNKNOWN";
+      byType[leaveType] = (byType[leaveType] || 0) + 1;
+
+      const days = Number(r.days);
+      if (Number.isFinite(days)) {
+        if (status === "APPROVED") totalDaysApproved += days;
+        if (status === "PENDING") {
+          totalDaysPending += days;
+          pendingCount += 1;
+        }
+      } else if (status === "PENDING") {
+        pendingCount += 1;
+      }
+
+      if (r.submittedAt) {
+        const ts = r.submittedAt instanceof Date ? r.submittedAt : new Date(r.submittedAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastRequestedAt || ts > lastRequestedAt) lastRequestedAt = ts;
+        }
+      }
+    }
+
+    res.json({
+      total: rows.length,
+      byStatus,
+      byType,
+      totalDaysApproved: round2(totalDaysApproved),
+      totalDaysPending: round2(totalDaysPending),
+      pendingCount,
+      lastRequestedAt: lastRequestedAt ? lastRequestedAt.toISOString() : null,
+    });
+  } catch (e) {
+    console.error("[leave] stats error:", e.message);
+    res.status(500).json({ error: "Failed to summarise leave requests" });
+  }
+});
+
+// ==============================================================
 // Policies
 // ==============================================================
 

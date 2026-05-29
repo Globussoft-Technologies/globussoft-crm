@@ -84,6 +84,7 @@ async function createExpense(request, overrides = {}) {
     title: `${RUN_TAG} ${overrides.title || 'expense'}`,
     amount: overrides.amount ?? 100.5,
     category: overrides.category,
+    description: overrides.description,
     notes: overrides.notes,
     expenseDate: overrides.expenseDate,
     contactId: overrides.contactId,

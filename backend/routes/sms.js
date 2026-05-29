@@ -265,6 +265,118 @@ router.post("/send-bulk", verifyToken, async (req, res) => {
   }
 });
 
+// ─── SMS Stats (tenant-wide aggregate) ──────────────────────────────────────
+//
+// Communications polish — first /stats endpoint for the SMS route. Powers
+// the Inbox / Channels header summary strip ("42 messages · 30 delivered ·
+// 8 inbound · last sent 3h ago"). Without this, the frontend has to fire
+// {list, count×status×4, count direction×2, max createdAt} — N+1
+// round-trips for a single visual surface.
+//
+// Behaviour
+// ─────────
+//   - Tenant-scoped (where.tenantId = req.user.tenantId).
+//   - Auth: mirrors GET /messages (verifyToken only — no role gate).
+//   - ?from / ?to (ISO date bounds on createdAt) optional; invalid -> 400
+//     INVALID_DATE (independent validation, no findMany call leaks out).
+//   - Aggregates over prisma.smsMessage.findMany (select=tight to avoid
+//     pulling SmsMessage.body LongText into memory):
+//       total              — count of selected rows
+//       byDirection        — { INBOUND, OUTBOUND } (zero-buckets included)
+//       byStatus           — keyed by SmsMessage.status; empty buckets
+//                            omitted (no QUEUED:0 noise)
+//       deliveredCount     — count where status='DELIVERED'
+//       failedCount        — count where status='FAILED'
+//       inboundCount       — count where direction='INBOUND'
+//       lastMessageAt      — max(createdAt) ISO; null if empty
+//   - Read-only meta surface. NO audit row written (matches
+//     document_templates /stats + travel /stats family posture across the
+//     CRM polish wave).
+//
+// Schema notes (verified against prisma/schema.prisma:1454-1479)
+//   - SmsMessage.status default 'QUEUED'; observed values: QUEUED, SENT,
+//     DELIVERED, FAILED, RECEIVED (RECEIVED set on INBOUND webhook).
+//   - SmsMessage.direction default 'OUTBOUND'; INBOUND | OUTBOUND.
+//   - SmsMessage.body is @db.Text — DO NOT select it for an aggregate
+//     surface; would pull every message body into memory.
+//
+// Express route ordering: literal-path /stats declared BEFORE downstream
+// routes that might pattern-match (none today, but mirrors the canonical
+// posture used by document_templates / travel_suppliers).
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "from must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: "to must be a valid ISO date", code: "INVALID_DATE" });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Tight select: never pull SmsMessage.body (LongText) into memory for
+    // an aggregate surface.
+    const rows = await prisma.smsMessage.findMany({
+      where,
+      select: { direction: true, status: true, createdAt: true },
+    });
+
+    // Pre-seed direction buckets so zero-counts appear (UI can render the
+    // tile shape unconditionally).
+    const byDirection = { INBOUND: 0, OUTBOUND: 0 };
+    const byStatus = {};
+    let deliveredCount = 0;
+    let failedCount = 0;
+    let inboundCount = 0;
+    let lastMessageAt = null;
+
+    for (const r of rows) {
+      const dir = r.direction || "OUTBOUND";
+      if (dir === "INBOUND") {
+        byDirection.INBOUND += 1;
+        inboundCount += 1;
+      } else {
+        byDirection.OUTBOUND += 1;
+      }
+
+      const st = r.status || "QUEUED";
+      byStatus[st] = (byStatus[st] || 0) + 1;
+      if (st === "DELIVERED") deliveredCount += 1;
+      if (st === "FAILED") failedCount += 1;
+
+      if (r.createdAt) {
+        const ca = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
+        if (!Number.isNaN(ca.getTime())) {
+          if (!lastMessageAt || ca > lastMessageAt) lastMessageAt = ca;
+        }
+      }
+    }
+
+    res.json({
+      total: rows.length,
+      byDirection,
+      byStatus,
+      deliveredCount,
+      failedCount,
+      inboundCount,
+      lastMessageAt: lastMessageAt ? lastMessageAt.toISOString() : null,
+    });
+  } catch (err) {
+    console.error("[SMS][stats]", err);
+    res.status(500).json({ error: "Failed to compute SMS stats" });
+  }
+});
+
 // ─── List SMS Messages ───────────────────────────────────────────────────────
 // #254 / #269: OTP / verification SMSes must NOT be visible to staff. The
 // initial fix redacted the digit group, but #269 confirmed the full exploit

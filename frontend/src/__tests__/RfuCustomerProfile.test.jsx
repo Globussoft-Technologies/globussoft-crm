@@ -387,3 +387,262 @@ describe('RfuCustomerProfile — edit flow', () => {
     });
   });
 });
+
+// ─── Extended coverage — create flow / form propagation / read-view
+// placeholders / chrome links / degraded contact display / default
+// error copy. These exercise branches not hit by the existing suite
+// above. Mock-object refs (notifyObj / navigateMock / fetchApiMock)
+// stay stable per CLAUDE.md feedback rule.
+
+describe('RfuCustomerProfile — create flow (no existing profile)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') {
+        return Promise.reject({ status: 404, body: { error: 'Not found' } });
+      }
+      if (url === '/api/travel/rfu-profiles' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 99, contactId: 100 });
+      }
+      return Promise.resolve(null);
+    });
+  });
+
+  it('Clicking "Create profile" reveals the form + Save defaults to POST', async () => {
+    renderPage();
+    const createBtn = await screen.findByRole('button', { name: /Create profile/i });
+    fireEvent.click(createBtn);
+    const saveBtn = await screen.findByRole('button', { name: /Save profile/i });
+    fireEvent.click(saveBtn);
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        (c) => c[0] === '/api/travel/rfu-profiles' && c[1]?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      // POST body must include contactId from the route param.
+      const parsed = JSON.parse(postCall[1].body);
+      expect(parsed.contactId).toBe(100);
+    });
+    await waitFor(() => {
+      expect(notifyObj.success).toHaveBeenCalledWith('Profile created');
+    });
+  });
+
+  it('empty-state copy directs the operator to the Create profile CTA per PRD §4.5', async () => {
+    renderPage();
+    await screen.findByText(/No RFU profile yet/i);
+    // The CTA inside the empty-state callout names the action explicitly.
+    expect(screen.getByText(/Click/)).toBeTruthy();
+    expect(screen.getByText(/add the full RFU detail per PRD/i)).toBeTruthy();
+  });
+});
+
+describe('RfuCustomerProfile — form propagation + body shape', () => {
+  beforeEach(() => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') return Promise.resolve(PROFILE);
+      return Promise.resolve(null);
+    });
+  });
+
+  it('typing into seat-pref / meal-pref inputs propagates into the PATCH body', async () => {
+    let patchBody = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') return Promise.resolve(PROFILE);
+      if (url === '/api/travel/rfu-profiles/42' && opts?.method === 'PATCH') {
+        patchBody = JSON.parse(opts.body);
+        return Promise.resolve({ ...PROFILE });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit profile/i }));
+    const seatInput = await screen.findByPlaceholderText(/window \| aisle/i);
+    fireEvent.change(seatInput, { target: { value: 'exit-row' } });
+    const mealInput = screen.getByPlaceholderText(/veg \| halal/i);
+    fireEvent.change(mealInput, { target: { value: 'gluten-free' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save profile/i }));
+    await waitFor(() => {
+      expect(patchBody).toBeTruthy();
+      expect(patchBody.seatPref).toBe('exit-row');
+      expect(patchBody.mealPref).toBe('gluten-free');
+    });
+  });
+
+  it('budgetMin/budgetMax flow through as Number (not String) in PATCH body', async () => {
+    let patchBody = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') return Promise.resolve(PROFILE);
+      if (url === '/api/travel/rfu-profiles/42' && opts?.method === 'PATCH') {
+        patchBody = JSON.parse(opts.body);
+        return Promise.resolve({ ...PROFILE });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit profile/i }));
+    // Find the Budget inputs by their numeric type + existing values.
+    const numberInputs = document.querySelectorAll('input[type="number"]');
+    expect(numberInputs.length).toBeGreaterThanOrEqual(2);
+    fireEvent.change(numberInputs[0], { target: { value: '200000' } });
+    fireEvent.change(numberInputs[1], { target: { value: '500000' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save profile/i }));
+    await waitFor(() => {
+      expect(patchBody).toBeTruthy();
+      expect(patchBody.budgetMin).toBe(200000);
+      expect(patchBody.budgetMax).toBe(500000);
+      // Critical: not the string forms.
+      expect(typeof patchBody.budgetMin).toBe('number');
+      expect(typeof patchBody.budgetMax).toBe('number');
+    });
+  });
+
+  it('empty budgetMin/budgetMax serialize to null (not empty string, not 0)', async () => {
+    // Profile loaded with both budget fields populated; clearing them
+    // back to empty must produce null in the body, not "" or 0.
+    let patchBody = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') return Promise.resolve(PROFILE);
+      if (url === '/api/travel/rfu-profiles/42' && opts?.method === 'PATCH') {
+        patchBody = JSON.parse(opts.body);
+        return Promise.resolve({ ...PROFILE });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit profile/i }));
+    const numberInputs = document.querySelectorAll('input[type="number"]');
+    fireEvent.change(numberInputs[0], { target: { value: '' } });
+    fireEvent.change(numberInputs[1], { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save profile/i }));
+    await waitFor(() => {
+      expect(patchBody).toBeTruthy();
+      expect(patchBody.budgetMin).toBeNull();
+      expect(patchBody.budgetMax).toBeNull();
+    });
+  });
+
+  it('product-tier select changes propagate into the PATCH body', async () => {
+    let patchBody = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') return Promise.resolve(PROFILE);
+      if (url === '/api/travel/rfu-profiles/42' && opts?.method === 'PATCH') {
+        patchBody = JSON.parse(opts.body);
+        return Promise.resolve({ ...PROFILE });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit profile/i }));
+    // Find the select by looking for the one with the product-tier options.
+    const selects = document.querySelectorAll('select');
+    expect(selects.length).toBeGreaterThan(0);
+    const tierSelect = Array.from(selects).find((s) =>
+      Array.from(s.options).some((o) => o.value === 'entry'),
+    );
+    expect(tierSelect).toBeTruthy();
+    fireEvent.change(tierSelect, { target: { value: 'entry' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save profile/i }));
+    await waitFor(() => {
+      expect(patchBody).toBeTruthy();
+      expect(patchBody.productTier).toBe('entry');
+    });
+  });
+});
+
+describe('RfuCustomerProfile — read view placeholders + chrome', () => {
+  it('renders the placeholder copy for empty frequent-flyer + past-complaints JSON', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') return Promise.resolve(PROFILE);
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText(/Frequent-flyer \(JSON\)/i);
+    // PROFILE has frequentFlyerJson:'' and pastComplaintsJson:'' — both
+    // should surface their placeholder copy via the Pre component.
+    expect(screen.getByText(/No frequent-flyer numbers captured/i)).toBeTruthy();
+    expect(screen.getByText(/No past complaints logged/i)).toBeTruthy();
+  });
+
+  it('renders the "Back to leads" navigation link in the page chrome', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') return Promise.resolve(PROFILE);
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const link = await screen.findByRole('link', { name: /Back to leads/i });
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/travel/leads');
+  });
+
+  it('degrades gracefully when contact has no email/phone (renders just the name)', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/100') {
+        return Promise.resolve({ id: 100, name: 'Solo Pilgrim', email: '', phone: '' });
+      }
+      if (url === '/api/travel/rfu-profiles/by-contact/100') return Promise.resolve(PROFILE);
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText(/Solo Pilgrim/);
+    // The middle-dot separator + email/phone runs are only rendered
+    // when those fields are truthy — so the bare name renders alone.
+    expect(screen.queryByText(/aisha@example/i)).toBeNull();
+  });
+
+  it('formats passportExpiry via toLocaleDateString in the read view', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') return Promise.resolve(PROFILE);
+      return Promise.resolve(null);
+    });
+    renderPage();
+    // The exact format depends on locale; we only assert that the year
+    // from PROFILE.passportExpiry (2030) appears somewhere in the
+    // Identity card. Avoids ICU-build-specific assertion (per
+    // CLAUDE.md cron-learning on TZ-label portability).
+    await screen.findByText(/Identity & travel docs/i);
+    expect(screen.getAllByText(/2030/).length).toBeGreaterThan(0);
+  });
+});
+
+describe('RfuCustomerProfile — default error copy fallback', () => {
+  it('falls back to "Failed to load profile" when error has no body.error', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') {
+        // status:500 but no body.error — the SUT's `||` fallback kicks in.
+        return Promise.reject({ status: 500, body: {} });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('Failed to load profile');
+    });
+  });
+
+  it('falls back to "Failed to save profile" on PATCH error with no body.error', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/100') return Promise.resolve(CONTACT);
+      if (url === '/api/travel/rfu-profiles/by-contact/100') return Promise.resolve(PROFILE);
+      if (url === '/api/travel/rfu-profiles/42' && opts?.method === 'PATCH') {
+        return Promise.reject({ status: 500, body: {} });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit profile/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Save profile/i }));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('Failed to save profile');
+    });
+  });
+});

@@ -319,6 +319,132 @@ router.get("/messages", verifyToken, async (req, res) => {
   }
 });
 
+// ─── WhatsApp Stats — tenant-wide aggregate ────────────────────────────────
+//
+// GET /api/whatsapp/stats — first /stats endpoint on the WhatsApp route.
+// Mirrors the canonical /stats template (travel_suppliers.js slice 23): a
+// read-only meta surface that returns an anodyne aggregate over the
+// tenant's WhatsAppMessage rows. Powers the Inbox/Channels page header
+// strip without N+1 round-trips (count + groupBy(direction) +
+// groupBy(status) + filtered counts + max(createdAt)).
+//
+// Auth: verifyToken only — mirrors GET /messages (USER-readable; counts +
+// timestamps are anodyne, no PII surfaced).
+//
+// Query params:
+//   ?from — optional ISO date bound on createdAt (gte). Invalid → 400 INVALID_DATE.
+//   ?to   — optional ISO date bound on createdAt (lte). Invalid → 400 INVALID_DATE.
+//
+// Tenant-scoped via req.user.tenantId. NO audit row written (read-only
+// meta surface, mirrors /commission-profiles/stats + /suppliers/stats).
+//
+// Response shape:
+//   {
+//     total: <int>,
+//     byDirection: { INBOUND: <int>, OUTBOUND: <int> },
+//     byStatus:    { QUEUED: <int>, SENT: <int>, DELIVERED: <int>,
+//                    READ: <int>, FAILED: <int>, ... },
+//     deliveredCount: <int>,   // status IN ('DELIVERED', 'READ')
+//     failedCount:    <int>,   // status = 'FAILED'
+//     inboundCount:   <int>,   // direction = 'INBOUND'
+//     lastMessageAt:  <ISO|null>,
+//   }
+router.get("/stats", verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+
+    // Optional ISO date bounds on createdAt.
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    const [
+      total,
+      directionGroups,
+      statusGroups,
+      deliveredCount,
+      failedCount,
+      inboundCount,
+      latestRow,
+    ] = await Promise.all([
+      prisma.whatsAppMessage.count({ where }),
+      prisma.whatsAppMessage.groupBy({
+        by: ["direction"],
+        where,
+        _count: { _all: true },
+      }),
+      prisma.whatsAppMessage.groupBy({
+        by: ["status"],
+        where,
+        _count: { _all: true },
+      }),
+      prisma.whatsAppMessage.count({
+        where: { ...where, status: { in: ["DELIVERED", "READ"] } },
+      }),
+      prisma.whatsAppMessage.count({
+        where: { ...where, status: "FAILED" },
+      }),
+      prisma.whatsAppMessage.count({
+        where: { ...where, direction: "INBOUND" },
+      }),
+      prisma.whatsAppMessage.findFirst({
+        where,
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      }),
+    ]);
+
+    // Bucket directionGroups → { INBOUND, OUTBOUND }. Default both to 0
+    // so the frontend's destructuring never sees `undefined`.
+    const byDirection = { INBOUND: 0, OUTBOUND: 0 };
+    for (const g of directionGroups || []) {
+      if (!g || !g.direction) continue;
+      byDirection[g.direction] = g._count?._all || 0;
+    }
+
+    // Bucket statusGroups → { <status>: <count> } object map.
+    const byStatus = {};
+    for (const g of statusGroups || []) {
+      if (!g || !g.status) continue;
+      byStatus[g.status] = g._count?._all || 0;
+    }
+
+    res.json({
+      total,
+      byDirection,
+      byStatus,
+      deliveredCount,
+      failedCount,
+      inboundCount,
+      lastMessageAt: latestRow?.createdAt
+        ? latestRow.createdAt.toISOString()
+        : null,
+    });
+  } catch (err) {
+    console.error("WhatsApp stats error:", err);
+    res.status(500).json({ error: "Failed to compute stats" });
+  }
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // Threads (Wave 2 Agent KK)
 // ────────────────────────────────────────────────────────────────────────────

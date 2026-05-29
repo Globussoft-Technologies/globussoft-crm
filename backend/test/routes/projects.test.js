@@ -394,3 +394,112 @@ describe('DELETE /:id — delete project', () => {
     expect(prisma.project.findFirst).not.toHaveBeenCalled();
   });
 });
+
+// ─── GET /?fields=summary — slim-shape PII reduction (#920 slice 5) ─
+
+/**
+ * #920 slice 5 — opt-in slim Prisma `select` to drop heavy nested includes
+ * (owner + contact + deal + tasks) and sensitive flat columns (description,
+ * budget) from list responses. Mirrors the contacts/deals/tickets/tasks shape
+ * shipped in slices 1-4. ADDITIVE only; any non-`summary` value (or absent
+ * param) leaves the existing full-shape include path untouched. Pins:
+ *   1. response rows carry only the slim keys (no nested objects on the wire).
+ *   2. prisma.project.findMany called with `select` (not `include`) on slim path.
+ *   3. ?fields= absent → existing full-shape include path preserved.
+ *   4. ?fields=anything-else → full-shape include path (exact-string match).
+ *   5. tenant scoping is preserved on the slim path.
+ */
+describe('GET /api/projects?fields=summary — slim-shape opt-in (#920 slice 5)', () => {
+  test('?fields=summary: response rows carry only slim keys (no nested objects)', async () => {
+    prisma.project.findMany.mockResolvedValue([
+      {
+        id: 1, name: 'Atrium Refresh', status: 'Active', priority: 'High',
+        startDate: new Date('2026-06-01'), endDate: new Date('2026-12-31'),
+        ownerId: 7, tenantId: 1, createdAt: new Date('2026-01-01'),
+      },
+      {
+        id: 2, name: 'Lobby Lighting', status: 'Planning', priority: 'Medium',
+        startDate: null, endDate: null,
+        ownerId: 7, tenantId: 1, createdAt: new Date('2026-01-02'),
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/projects?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    // No nested includes leaked into the response.
+    expect(res.body[0].owner).toBeUndefined();
+    expect(res.body[0].contact).toBeUndefined();
+    expect(res.body[0].deal).toBeUndefined();
+    expect(res.body[0].tasks).toBeUndefined();
+    // Slim keys present.
+    expect(res.body[0]).toHaveProperty('id');
+    expect(res.body[0]).toHaveProperty('name');
+    expect(res.body[0]).toHaveProperty('status');
+    expect(res.body[0]).toHaveProperty('priority');
+    expect(res.body[0]).toHaveProperty('ownerId');
+    expect(res.body[0]).toHaveProperty('tenantId');
+    expect(res.body[0]).toHaveProperty('createdAt');
+  });
+
+  test('?fields=summary: prisma.project.findMany called with select (not include)', async () => {
+    prisma.project.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 })).get('/api/projects?fields=summary');
+
+    const findArgs = prisma.project.findMany.mock.calls[0][0];
+    // Slim path: select is set, include is absent.
+    expect(findArgs.select).toBeDefined();
+    expect(findArgs.include).toBeUndefined();
+    // The slim select contains exactly the documented field set.
+    expect(findArgs.select).toEqual({
+      id: true,
+      name: true,
+      status: true,
+      priority: true,
+      startDate: true,
+      endDate: true,
+      ownerId: true,
+      tenantId: true,
+      createdAt: true,
+    });
+  });
+
+  test('?fields= (absent): existing full-shape include path is preserved', async () => {
+    prisma.project.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 })).get('/api/projects');
+
+    const findArgs = prisma.project.findMany.mock.calls[0][0];
+    // Full-shape path: include is set, select is absent.
+    expect(findArgs.include).toEqual(FULL_INCLUDE);
+    expect(findArgs.select).toBeUndefined();
+  });
+
+  test('?fields=anything-else: opt-in is exact-string only, NOT a prefix match', async () => {
+    prisma.project.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 })).get('/api/projects?fields=summaryfoo');
+
+    const findArgs = prisma.project.findMany.mock.calls[0][0];
+    // Any non-exact 'summary' value falls through to the full-shape include.
+    expect(findArgs.include).toEqual(FULL_INCLUDE);
+    expect(findArgs.select).toBeUndefined();
+  });
+
+  test('?fields=summary: tenant scoping + status filter preserved on slim path', async () => {
+    prisma.project.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 42 })).get('/api/projects?fields=summary&status=Active');
+
+    const findArgs = prisma.project.findMany.mock.calls[0][0];
+    // Tenant isolation must survive the shape swap.
+    expect(findArgs.where.tenantId).toBe(42);
+    // Status filter must still apply on the slim path.
+    expect(findArgs.where.status).toBe('Active');
+    // Slim path was taken.
+    expect(findArgs.select).toBeDefined();
+    expect(findArgs.include).toBeUndefined();
+  });
+});

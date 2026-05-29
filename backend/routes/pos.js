@@ -1202,49 +1202,66 @@ router.post("/sales", cashierGate, async (req, res) => {
 
     // Transactional create — invoiceNumber + Sale + SaleLineItem rows +
     // Product.currentStock decrements (PRODUCT lines only).
-    const sale = await prisma.$transaction(async (tx) => {
-      const invoiceNumber = await generateInvoiceNumber(tx, req.user.tenantId);
-      const created = await tx.sale.create({
-        data: {
-          tenantId: req.user.tenantId,
-          registerId: shift.registerId,
-          shiftId: shift.id,
-          cashierId: req.user.userId,
-          patientId: resolvedPatientId,
-          invoiceNumber,
-          subtotal,
-          taxTotal: tax,
-          discountTotal: totalDiscount,
-          total,
-          paidAmount: paid,
-          status: "COMPLETED",
-          paymentMethod: pm,
-          paymentBreakdownJson:
-            pm === "COMBINED" && typeof paymentBreakdownJson === "string"
-              ? paymentBreakdownJson.slice(0, 4000)
-              : null,
-          lineItems: {
-            create: normalisedLines.map((l) => ({
+    // invoiceNumber is sequential (generateInvoiceNumber reads the current
+    // max + 1), so two concurrent sales in the SAME tenant can compute the
+    // same value → P2002 unique-violation on the invoiceNumber column → 500.
+    // Retry the whole transaction (which recomputes the number against the
+    // now-committed sibling sale) up to 5 attempts. Prod-relevant: concurrent
+    // POS lanes in one tenant otherwise intermittently 500 on a colliding
+    // invoice number (surfaced as flaky CI under 2 parallel test workers).
+    let sale = null;
+    for (let _attempt = 0; sale === null; _attempt++) {
+      try {
+        sale = await prisma.$transaction(async (tx) => {
+          const invoiceNumber = await generateInvoiceNumber(tx, req.user.tenantId);
+          const created = await tx.sale.create({
+            data: {
               tenantId: req.user.tenantId,
-              ...l,
-            })),
-          },
-        },
-        include: { lineItems: true },
-      });
-      // Decrement Product.currentStock for each PRODUCT line. Tenant-scoped
-      // updateMany so a wrong tenantId can't decrement a sibling tenant's
-      // stock (Prisma update by-id alone wouldn't tenant-gate). Negative
-      // stock is permitted by design — backorder flow needs visibility into
-      // oversells; the LowStock alert engine surfaces sub-threshold counts.
-      for (const line of productLines) {
-        await tx.product.updateMany({
-          where: { id: line.refId, tenantId: req.user.tenantId },
-          data: { currentStock: { decrement: line.quantity } },
+              registerId: shift.registerId,
+              shiftId: shift.id,
+              cashierId: req.user.userId,
+              patientId: resolvedPatientId,
+              invoiceNumber,
+              subtotal,
+              taxTotal: tax,
+              discountTotal: totalDiscount,
+              total,
+              paidAmount: paid,
+              status: "COMPLETED",
+              paymentMethod: pm,
+              paymentBreakdownJson:
+                pm === "COMBINED" && typeof paymentBreakdownJson === "string"
+                  ? paymentBreakdownJson.slice(0, 4000)
+                  : null,
+              lineItems: {
+                create: normalisedLines.map((l) => ({
+                  tenantId: req.user.tenantId,
+                  ...l,
+                })),
+              },
+            },
+            include: { lineItems: true },
+          });
+          // Decrement Product.currentStock for each PRODUCT line. Tenant-scoped
+          // updateMany so a wrong tenantId can't decrement a sibling tenant's
+          // stock (Prisma update by-id alone wouldn't tenant-gate). Negative
+          // stock is permitted by design — backorder flow needs visibility into
+          // oversells; the LowStock alert engine surfaces sub-threshold counts.
+          for (const line of productLines) {
+            await tx.product.updateMany({
+              where: { id: line.refId, tenantId: req.user.tenantId },
+              data: { currentStock: { decrement: line.quantity } },
+            });
+          }
+          return created;
         });
+      } catch (_txErr) {
+        // P2002 = unique-constraint violation — the invoiceNumber race.
+        // Recompute + retry; rethrow anything else (or after 5 attempts).
+        if (_txErr && _txErr.code === "P2002" && _attempt < 4) continue;
+        throw _txErr;
       }
-      return created;
-    });
+    }
 
     await writeAudit(
       "Sale",
@@ -1337,6 +1354,319 @@ router.get("/sales", cashierGate, async (req, res) => {
   } catch (e) {
     console.error("[pos] list sales error:", e.message);
     res.status(500).json({ error: "Failed to list sales" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// GET /api/pos/sales/stats — tenant-wide POS sale aggregate
+// (D17 POS polish slice — PRD_POS_NEW_SALE).
+//
+// First tenant-wide aggregate endpoint on /api/pos. The 30+ existing
+// endpoints are per-sale / per-shift / per-register; this one rolls up
+// the entire tenant's Sale population for the owner-dashboard POS tile.
+//
+// Mirrors /api/wallet/stats (D16) + /api/travel/suppliers/stats (#903
+// slice 23) + /api/travel/commission-profiles/stats — same KPI-surface
+// posture, same half-up 2dp rounding, same ?from/?to date-window
+// narrowing, same NO-audit-row read-only meta contract.
+//
+// Auth: adminGate (verifyWellnessRole(['admin', 'manager'])) — tighter
+// than cashierGate. Tenant-wide aggregate is an owner-dashboard surface,
+// minimise PII exposure. Clinical staff (doctor/professional/telecaller/
+// helper) intentionally NOT allowed (matches the wallet-stats RBAC
+// posture).
+//
+// Query params:
+//   ?from / ?to  optional ISO date bounds on Sale.createdAt; invalid → 400 INVALID_DATE
+//
+// Response envelope:
+//   {
+//     total: N,
+//     totalRevenue: N.NN,              // sum of Sale.total across COMPLETED rows
+//     byStatus: { COMPLETED: N, VOIDED: M, REFUNDED: K, PARTIALLY_REFUNDED: J, DRAFT: I },
+//     refundCount: N,                  // status='REFUNDED' OR 'PARTIALLY_REFUNDED'
+//     voidCount: N,                    // status='VOIDED'
+//     averageSaleValue: N.NN,          // totalRevenue / count(status='COMPLETED'); 0 if no completed
+//     lastSaleAt: ISO | null,
+//   }
+//
+// Sale status enum (schema.prisma:4028 + routes/pos.js void/refund handlers):
+//   DRAFT | COMPLETED | VOIDED | REFUNDED | PARTIALLY_REFUNDED
+//
+// Why divide by COMPLETED count (not total count) for averageSaleValue:
+//   drafts + voids + refunds are not "completed economic events" so
+//   including them in the denominator would skew the per-sale average
+//   downward / produce a misleading figure.
+//
+// NO audit row written (read-only meta surface, mirrors all sibling /stats).
+//
+// Express route ordering: literal-path /sales/stats MUST be declared
+// BEFORE the /sales/:id family below or `:id="stats"` would 400
+// INVALID_ID via parseInt before reaching this handler.
+// ─────────────────────────────────────────────────────────────────────
+router.get("/sales/stats", adminGate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // Optional ISO date bounds on Sale.createdAt.
+    const where = { tenantId };
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "from must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          error: "to must be a valid ISO date",
+          code: "INVALID_DATE",
+        });
+      }
+      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
+    }
+
+    // Half-up round to 2dp — matches sibling /stats endpoints.
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Bounded fetch — Sale rows are small, but cap to keep memory
+    // bounded for unusually large tenant windows.
+    const sales = await prisma.sale.findMany({
+      where,
+      select: { total: true, status: true, createdAt: true },
+    });
+
+    // Empty short-circuit — return zeroed shape.
+    if (sales.length === 0) {
+      return res.json({
+        total: 0,
+        totalRevenue: 0,
+        byStatus: {},
+        refundCount: 0,
+        voidCount: 0,
+        averageSaleValue: 0,
+        lastSaleAt: null,
+      });
+    }
+
+    let totalRevenue = 0;
+    let completedCount = 0;
+    let refundCount = 0;
+    let voidCount = 0;
+    let lastSaleAt = null;
+    const byStatus = {};
+
+    for (const s of sales) {
+      const status = s.status || "UNKNOWN";
+      byStatus[status] = (byStatus[status] || 0) + 1;
+
+      if (status === "COMPLETED") {
+        totalRevenue += Number(s.total) || 0;
+        completedCount += 1;
+      }
+      if (status === "VOIDED") voidCount += 1;
+      if (status === "REFUNDED" || status === "PARTIALLY_REFUNDED") {
+        refundCount += 1;
+      }
+
+      const ts = s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt);
+      if (!Number.isNaN(ts.getTime())) {
+        if (!lastSaleAt || ts > lastSaleAt) lastSaleAt = ts;
+      }
+    }
+
+    const averageSaleValue = completedCount > 0
+      ? round2(totalRevenue / completedCount)
+      : 0;
+
+    return res.json({
+      total: sales.length,
+      totalRevenue: round2(totalRevenue),
+      byStatus,
+      refundCount,
+      voidCount,
+      averageSaleValue,
+      lastSaleAt: lastSaleAt ? lastSaleAt.toISOString() : null,
+    });
+  } catch (e) {
+    console.error("[pos] sales/stats error:", e.message);
+    return res.status(500).json({ error: "Failed to summarise sales stats" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// GET /api/pos/sales/by-month — tenant-wide POS sale monthly rollup
+// (D17 POS polish slice — PRD_POS_NEW_SALE).
+//
+// Sibling of /sales/stats. Where /stats returns a single tenant-wide
+// KPI envelope, /by-month returns a per-UTC-month time series for the
+// owner-dashboard POS trend chart. Mirrors /api/travel/suppliers/by-month
+// (slice 24) + /api/travel/quotes/by-month + /api/travel/flyer-templates/
+// by-month — same UTC YYYY-MM bucketing, JS-side aggregation, same
+// orderBy / limit / offset / from / to surface, same NO-audit-row
+// read-only meta contract.
+//
+// Auth: adminGate (verifyWellnessRole(['admin', 'manager'])) — same
+// posture as /sales/stats; tenant-wide aggregate is an owner-dashboard
+// surface, minimise PII exposure. Wellness-vertical-gated (NOT
+// verifyRole).
+//
+// Query params:
+//   ?from / ?to   optional inclusive YYYY-MM bounds; invalid → 400 INVALID_MONTH_FORMAT
+//   ?orderBy      default 'month:asc'; accepts month:{asc|desc}, count:{asc|desc}
+//   ?limit        default 12, capped at 60
+//   ?offset       default 0
+//
+// Aggregation:
+//   - Map<string, {month, count, byStatus, totalRevenue}> keyed on UTC
+//     'YYYY-MM' from Sale.createdAt
+//   - 'unknown' bucket for null/invalid createdAt (excluded when ?from/?to set)
+//   - byStatus: { DRAFT, COMPLETED, VOIDED, REFUNDED, PARTIALLY_REFUNDED }
+//   - totalRevenue: sum of Sale.total where status='COMPLETED' (half-up 2dp)
+//   - Pagination applied AFTER aggregation + sort + bucket filter
+//
+// Response envelope:
+//   {
+//     total: <pre-pagination bucket count>,
+//     rows: [{ month, count, byStatus, totalRevenue }, ...]
+//   }
+//
+// Sale status enum (schema.prisma + routes/pos.js void/refund handlers):
+//   DRAFT | COMPLETED | VOIDED | REFUNDED | PARTIALLY_REFUNDED
+// Revenue column = Sale.total (Float, default 0).
+//
+// NO audit row written (read-only meta surface, mirrors all sibling
+// /by-month + /stats endpoints).
+//
+// Express route ordering: literal-path /sales/by-month MUST be declared
+// BEFORE the /sales/:id family below or `:id="by-month"` would 400
+// INVALID_ID via parseInt before reaching this handler. Same convention
+// as /sales/stats above.
+// ─────────────────────────────────────────────────────────────────────
+router.get("/sales/by-month", adminGate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // YYYY-MM validation — mirrors /suppliers/by-month + /quotes/by-month.
+    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const fromRaw = req.query.from ? String(req.query.from) : null;
+    const toRaw = req.query.to ? String(req.query.to) : null;
+    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+      return res.status(400).json({
+        error: "from must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+      return res.status(400).json({
+        error: "to must be in YYYY-MM format",
+        code: "INVALID_MONTH_FORMAT",
+      });
+    }
+
+    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+    const skip = parseInt(req.query.offset, 10) || 0;
+    const orderByRaw = req.query.orderBy
+      ? String(req.query.orderBy)
+      : "month:asc";
+
+    const VALID_ORDER_BY = new Set([
+      "month:asc",
+      "month:desc",
+      "count:asc",
+      "count:desc",
+    ]);
+    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+    // Half-up round to 2dp — matches /sales/stats sibling.
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Light projection — total + status + createdAt is all we need.
+    const sales = await prisma.sale.findMany({
+      where: { tenantId },
+      select: { total: true, status: true, createdAt: true },
+    });
+
+    // Aggregate per-UTC-month. Map "YYYY-MM" → bucket. Null/invalid
+    // createdAt rows land in "unknown".
+    const byMonth = new Map();
+    for (const s of sales) {
+      let monthKey = "unknown";
+      if (s.createdAt) {
+        const dt = s.createdAt instanceof Date
+          ? s.createdAt
+          : new Date(s.createdAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const yyyy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+          monthKey = `${yyyy}-${mm}`;
+        }
+      }
+
+      let bucket = byMonth.get(monthKey);
+      if (!bucket) {
+        bucket = {
+          month: monthKey,
+          count: 0,
+          byStatus: {},
+          totalRevenue: 0,
+        };
+        byMonth.set(monthKey, bucket);
+      }
+      bucket.count += 1;
+      const status = s.status || "UNKNOWN";
+      bucket.byStatus[status] = (bucket.byStatus[status] || 0) + 1;
+      if (status === "COMPLETED") {
+        bucket.totalRevenue += Number(s.total) || 0;
+      }
+    }
+
+    // Round totalRevenue per bucket (half-up 2dp) once aggregation is done.
+    let months = [...byMonth.values()].map((b) => ({
+      ...b,
+      totalRevenue: round2(b.totalRevenue),
+    }));
+
+    // Apply ?from / ?to bucket filter. "unknown" excluded when either
+    // bound is set (no comparable token); kept otherwise so the rollup
+    // surface remains complete.
+    if (fromRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+    }
+    if (toRaw !== null) {
+      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+    }
+
+    // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
+    // "unknown" sorts last in asc / first in desc (lexicographically >
+    // "9999-12") — acceptable for a defensive fallback bucket.
+    const [field, dir] = orderBy.split(":");
+    const mult = dir === "asc" ? 1 : -1;
+    months.sort((a, b) => {
+      if (field === "month") {
+        if (a.month < b.month) return -1 * mult;
+        if (a.month > b.month) return 1 * mult;
+        return 0;
+      }
+      return ((a[field] || 0) - (b[field] || 0)) * mult;
+    });
+
+    const total = months.length;
+
+    // Pagination AFTER aggregation + sort + filter.
+    const rows = months.slice(skip, skip + take);
+
+    return res.json({ total, rows });
+  } catch (e) {
+    console.error("[pos] sales/by-month error:", e.message);
+    return res.status(500).json({ error: "Failed to compute monthly rollup" });
   }
 });
 

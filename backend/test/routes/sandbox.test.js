@@ -28,7 +28,14 @@
  *   - id parsing    — every /:id endpoint rejects non-numeric ids with 400
  *                      BEFORE touching prisma. parseInt('foo') is NaN.
  *
- * What this file pins (15 cases across 8 describe blocks)
+ * What this file pins (30 cases across 14 describe blocks — extended
+ * 2026-05-25 from 15 → 30 to lift c8 coverage from 11.72% lines on the
+ * 452-LOC route. New cases hit: 500 error envelopes on every endpoint,
+ * non-numeric / not-found edge cases on download + delete + restore,
+ * RBAC enforcement on restore + reset, legacy blob shape fallback
+ * (data || blob), safeStripIds on quote/estimate line items, full-scope
+ * restore wiring across all 13 models, sizes-aggregate fallback when
+ * the raw query returns a partial map.)
  * ───────────────────────────────────────────────────────
  *   1. GET /            — tenant-scoped list with sizeBytes attached per row.
  *   2. GET /            — empty-list short-circuits the raw-query and
@@ -536,5 +543,424 @@ describe('POST /reset — destructive tenant wipe', () => {
     expect(prisma.contact.deleteMany).toHaveBeenCalledWith({ where: { tenantId: 1 } });
     expect(prisma.pipelineStage.deleteMany).toHaveBeenCalledWith({ where: { tenantId: 1 } });
     expect(prisma.pipeline.deleteMany).toHaveBeenCalledWith({ where: { tenantId: 1 } });
+  });
+
+  test('non-ADMIN role is rejected with 403 — no wipe runs (#527)', async () => {
+    const res = await request(makeApp())
+      .post('/api/sandbox/reset')
+      .set('Authorization', makeBearer({ role: 'MANAGER' }))
+      .send({ confirm: 'DELETE_EVERYTHING' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('RBAC_DENIED');
+    // No model wipe should have run when the role check rejects.
+    expect(prisma.contact.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.pipeline.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('500 envelope when wipe throws — reset error path', async () => {
+    prisma.activity.deleteMany.mockRejectedValueOnce(new Error('FK violation on Activity'));
+    const res = await request(makeApp())
+      .post('/api/sandbox/reset')
+      .set('Authorization', makeBearer())
+      .send({ confirm: 'DELETE_EVERYTHING' });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Reset failed/);
+    expect(res.body.error).toMatch(/FK violation on Activity/);
+  });
+});
+
+// ── Extended coverage: error envelopes + RBAC + deep restore paths ───
+
+describe('GET / — list error envelope (500 branch)', () => {
+  test('returns 500 with "Failed to list snapshots" when findMany throws', async () => {
+    prisma.sandboxSnapshot.findMany.mockRejectedValueOnce(new Error('DB unreachable'));
+    const res = await request(makeApp())
+      .get('/api/sandbox')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Failed to list snapshots/);
+  });
+
+  test('rows missing from size aggregate map fall back to sizeBytes=0', async () => {
+    // findMany returns 3 rows, but the OCTET_LENGTH aggregate only returns 1.
+    prisma.sandboxSnapshot.findMany.mockResolvedValue([
+      { id: 21, name: 'A', description: null, userId: 7, createdAt: new Date() },
+      { id: 22, name: 'B', description: null, userId: 7, createdAt: new Date() },
+      { id: 23, name: 'C', description: null, userId: 7, createdAt: new Date() },
+    ]);
+    prisma.$queryRaw.mockResolvedValue([
+      { id: 22, size: 1024 },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/sandbox')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(3);
+    // Map sets sizes[r.id]; rows without an entry fall through to sizes[s.id] || 0
+    expect(res.body.find((r) => r.id === 21).sizeBytes).toBe(0);
+    expect(res.body.find((r) => r.id === 22).sizeBytes).toBe(1024);
+    expect(res.body.find((r) => r.id === 23).sizeBytes).toBe(0);
+  });
+});
+
+describe('POST / — create error envelope (500 branch)', () => {
+  test('returns 500 with "Failed to create snapshot" when persist throws', async () => {
+    prisma.sandboxSnapshot.create.mockRejectedValueOnce(new Error('Disk full'));
+    const res = await request(makeApp())
+      .post('/api/sandbox')
+      .set('Authorization', makeBearer())
+      .send({ name: 'OK Snap' });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Failed to create snapshot/);
+  });
+
+  test('description omitted → persists with description=null (not undefined)', async () => {
+    prisma.sandboxSnapshot.create.mockResolvedValue({
+      id: 101,
+      name: 'NoDesc',
+      createdAt: new Date(),
+    });
+    const res = await request(makeApp())
+      .post('/api/sandbox')
+      .set('Authorization', makeBearer())
+      .send({ name: 'NoDesc' });
+
+    expect(res.status).toBe(201);
+    const createArg = prisma.sandboxSnapshot.create.mock.calls[0][0];
+    // `description: description || null` short-circuits undefined to null.
+    expect(createArg.data.description).toBeNull();
+  });
+});
+
+describe('GET /:id — error + edge envelopes', () => {
+  test('returns 500 with "Failed to fetch snapshot" when findFirst throws', async () => {
+    prisma.sandboxSnapshot.findFirst.mockRejectedValueOnce(new Error('Connection lost'));
+    const res = await request(makeApp())
+      .get('/api/sandbox/12')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Failed to fetch snapshot/);
+  });
+
+  test('empty raw rows result → sizeBytes defaults to 0', async () => {
+    prisma.sandboxSnapshot.findFirst.mockResolvedValue({
+      id: 44,
+      name: 'Zero-size',
+      description: null,
+      userId: 7,
+      createdAt: new Date(),
+    });
+    prisma.$queryRaw.mockResolvedValue([]); // no rows back from OCTET_LENGTH
+
+    const res = await request(makeApp())
+      .get('/api/sandbox/44')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body.sizeBytes).toBe(0);
+  });
+});
+
+describe('GET /:id/download — error + 404 + edge envelopes', () => {
+  test('non-numeric id returns 400 without touching prisma', async () => {
+    const res = await request(makeApp())
+      .get('/api/sandbox/abc/download')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid snapshot id/);
+    expect(prisma.sandboxSnapshot.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 when the snapshot is not found (cross-tenant or absent)', async () => {
+    prisma.sandboxSnapshot.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get('/api/sandbox/9999/download')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/Snapshot not found/);
+  });
+
+  test('null name falls back to "snapshot-<id>" in Content-Disposition filename', async () => {
+    prisma.sandboxSnapshot.findFirst.mockResolvedValue({
+      id: 71,
+      name: null, // exercises the `snap.name || ...` fallback
+      description: null,
+      userId: 7,
+      createdAt: new Date(),
+      tenantId: 1,
+      data: '{}',
+    });
+
+    const res = await request(makeApp())
+      .get('/api/sandbox/71/download')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    // safeName = (null || `snapshot-71`).replace(...)
+    expect(res.headers['content-disposition']).toMatch(/sandbox_snapshot-71_71\.json/);
+  });
+
+  test('returns 500 with "Failed to download snapshot" when findFirst throws', async () => {
+    prisma.sandboxSnapshot.findFirst.mockRejectedValueOnce(new Error('Boom'));
+    const res = await request(makeApp())
+      .get('/api/sandbox/5/download')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Failed to download snapshot/);
+  });
+});
+
+describe('DELETE /:id — edge + error envelopes', () => {
+  test('non-numeric id returns 400 without touching prisma', async () => {
+    const res = await request(makeApp())
+      .delete('/api/sandbox/not-an-id')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid snapshot id/);
+    expect(prisma.sandboxSnapshot.findFirst).not.toHaveBeenCalled();
+    expect(prisma.sandboxSnapshot.delete).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 when the snapshot is not found (tenant-isolation read)', async () => {
+    prisma.sandboxSnapshot.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .delete('/api/sandbox/9999')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/Snapshot not found/);
+    expect(prisma.sandboxSnapshot.delete).not.toHaveBeenCalled();
+  });
+
+  test('returns 500 with "Failed to delete snapshot" when delete throws', async () => {
+    prisma.sandboxSnapshot.findFirst.mockResolvedValue({ id: 77, tenantId: 1 });
+    prisma.sandboxSnapshot.delete.mockRejectedValueOnce(new Error('FK constraint'));
+
+    const res = await request(makeApp())
+      .delete('/api/sandbox/77')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Failed to delete snapshot/);
+  });
+});
+
+describe('POST /:id/restore — RBAC + edge + deep paths', () => {
+  test('non-ADMIN role is rejected with 403 — no findFirst / wipe runs (#527)', async () => {
+    const res = await request(makeApp())
+      .post('/api/sandbox/12/restore')
+      .set('Authorization', makeBearer({ role: 'MANAGER' }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('RBAC_DENIED');
+    expect(prisma.sandboxSnapshot.findFirst).not.toHaveBeenCalled();
+    expect(prisma.contact.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('non-numeric id returns 400 — guard fires before tenant lookup', async () => {
+    const res = await request(makeApp())
+      .post('/api/sandbox/foo/restore')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid snapshot id/);
+    expect(prisma.sandboxSnapshot.findFirst).not.toHaveBeenCalled();
+    expect(prisma.contact.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 when snapshot not found — no wipe runs on missing source', async () => {
+    prisma.sandboxSnapshot.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/sandbox/9999/restore')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/Snapshot not found/);
+    // Critically — wipe MUST NOT run when the source snapshot doesn't exist.
+    expect(prisma.contact.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.pipeline.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('legacy blob shape with top-level data fields (no nested data:{}) — fallback "data || blob"', async () => {
+    // Some snapshots may have been written without the { data: { ... } } wrapper.
+    // The route's `const data = blob.data || blob;` handles both shapes.
+    const legacyBlob = {
+      version: 1,
+      tenantId: 1,
+      // Top-level arrays, not nested under data:
+      contacts: [{ id: 5, name: 'Legacy', tenantId: 1 }],
+      pipelines: [],
+    };
+    prisma.sandboxSnapshot.findFirst.mockResolvedValue({
+      id: 200,
+      tenantId: 1,
+      data: JSON.stringify(legacyBlob),
+    });
+    prisma.contact.createMany.mockResolvedValue({ count: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/sandbox/200/restore')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body.restored.contacts).toBe(1);
+    expect(prisma.contact.createMany).toHaveBeenCalledWith({
+      data: [{ id: 5, name: 'Legacy', tenantId: 1 }],
+      skipDuplicates: true,
+    });
+  });
+
+  test('quoteLineItems + estimateLineItems use safeStripIds (id removed, FK ids preserved)', async () => {
+    const blob = {
+      version: 1,
+      tenantId: 1,
+      data: {
+        estimateLineItems: [
+          { id: 901, estimateId: 50, description: 'Widget', quantity: 2, unitPrice: 10 },
+          { id: 902, estimateId: 51, description: 'Gadget', quantity: 1, unitPrice: 25 },
+        ],
+        quoteLineItems: [
+          { id: 701, quoteId: 30, description: 'Service', quantity: 3, unitPrice: 100 },
+        ],
+      },
+    };
+    prisma.sandboxSnapshot.findFirst.mockResolvedValue({
+      id: 250,
+      tenantId: 1,
+      data: JSON.stringify(blob),
+    });
+    prisma.estimateLineItem.createMany.mockResolvedValue({ count: 2 });
+    prisma.quoteLineItem.createMany.mockResolvedValue({ count: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/sandbox/250/restore')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body.restored.estimateLineItems).toBe(2);
+    expect(res.body.restored.quoteLineItems).toBe(1);
+
+    // safeStripIds removes `id` but PRESERVES estimateId / quoteId (FK relations).
+    const estimateCall = prisma.estimateLineItem.createMany.mock.calls[0][0];
+    expect(estimateCall.data).toEqual([
+      { estimateId: 50, description: 'Widget', quantity: 2, unitPrice: 10 },
+      { estimateId: 51, description: 'Gadget', quantity: 1, unitPrice: 25 },
+    ]);
+    // Critically — `id` is stripped (would otherwise collide with auto-increment).
+    for (const row of estimateCall.data) {
+      expect(row.id).toBeUndefined();
+    }
+
+    const quoteCall = prisma.quoteLineItem.createMany.mock.calls[0][0];
+    expect(quoteCall.data).toEqual([
+      { quoteId: 30, description: 'Service', quantity: 3, unitPrice: 100 },
+    ]);
+    expect(quoteCall.data[0].id).toBeUndefined();
+  });
+
+  test('full-scope restore wires all 13 model createMany calls + ordering — emailMessages, activities, tasks, etc.', async () => {
+    const blob = {
+      version: 1,
+      tenantId: 1,
+      data: {
+        pipelines: [{ id: 1, name: 'Sales', tenantId: 1 }],
+        pipelineStages: [{ id: 1, name: 'Lead', pipelineId: 1, tenantId: 1 }],
+        contacts: [{ id: 1, name: 'A', tenantId: 1 }],
+        deals: [{ id: 1, title: 'D1', contactId: 1, tenantId: 1 }],
+        activities: [{ id: 1, type: 'note', contactId: 1, tenantId: 1 }],
+        tasks: [{ id: 1, title: 'T1', tenantId: 1 }],
+        invoices: [{ id: 1, contactId: 1, amount: 100, tenantId: 1 }],
+        estimates: [{ id: 1, contactId: 1, tenantId: 1 }],
+        contracts: [{ id: 1, contactId: 1, tenantId: 1 }],
+        quotes: [{ id: 1, dealId: 1, tenantId: 1 }],
+        emailMessages: [
+          { id: 1, subject: 'Hi', from: 'a@x.com', tenantId: 1 },
+          { id: 2, subject: 'Re: Hi', from: 'b@x.com', tenantId: 1 },
+        ],
+      },
+    };
+    prisma.sandboxSnapshot.findFirst.mockResolvedValue({
+      id: 300, tenantId: 1, data: JSON.stringify(blob),
+    });
+    // Each createMany returns the row count for its slice.
+    prisma.pipeline.createMany.mockResolvedValue({ count: 1 });
+    prisma.pipelineStage.createMany.mockResolvedValue({ count: 1 });
+    prisma.contact.createMany.mockResolvedValue({ count: 1 });
+    prisma.deal.createMany.mockResolvedValue({ count: 1 });
+    prisma.activity.createMany.mockResolvedValue({ count: 1 });
+    prisma.task.createMany.mockResolvedValue({ count: 1 });
+    prisma.invoice.createMany.mockResolvedValue({ count: 1 });
+    prisma.estimate.createMany.mockResolvedValue({ count: 1 });
+    prisma.contract.createMany.mockResolvedValue({ count: 1 });
+    prisma.quote.createMany.mockResolvedValue({ count: 1 });
+    prisma.emailMessage.createMany.mockResolvedValue({ count: 2 });
+
+    const res = await request(makeApp())
+      .post('/api/sandbox/300/restore')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body.code).toBe('SNAPSHOT_RESTORED');
+    expect(res.body.restored).toEqual({
+      contacts: 1,
+      deals: 1,
+      activities: 1,
+      tasks: 1,
+      invoices: 1,
+      estimates: 1,
+      estimateLineItems: 0,
+      contracts: 1,
+      quotes: 1,
+      quoteLineItems: 0,
+      pipelines: 1,
+      pipelineStages: 1,
+      emailMessages: 2,
+    });
+    // Every model's createMany was invoked exactly once.
+    expect(prisma.emailMessage.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.activity.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.task.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.contract.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.deal.createMany).toHaveBeenCalledTimes(1);
+    // Invoices + estimates use skipDuplicates (handles unique-constraint collisions).
+    expect(prisma.invoice.createMany).toHaveBeenCalledWith(expect.objectContaining({
+      skipDuplicates: true,
+    }));
+    expect(prisma.estimate.createMany).toHaveBeenCalledWith(expect.objectContaining({
+      skipDuplicates: true,
+    }));
+  });
+
+  test('returns 500 with "Restore failed: <msg>" when createMany throws mid-flight', async () => {
+    const blob = {
+      version: 1,
+      tenantId: 1,
+      data: {
+        contacts: [{ id: 1, name: 'A', tenantId: 1 }],
+      },
+    };
+    prisma.sandboxSnapshot.findFirst.mockResolvedValue({
+      id: 400, tenantId: 1, data: JSON.stringify(blob),
+    });
+    prisma.contact.createMany.mockRejectedValueOnce(new Error('Unique violation on email'));
+
+    const res = await request(makeApp())
+      .post('/api/sandbox/400/restore')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Restore failed/);
+    expect(res.body.error).toMatch(/Unique violation on email/);
   });
 });

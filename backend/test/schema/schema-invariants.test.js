@@ -130,6 +130,13 @@ const NON_TENANT_MODELS = new Set([
   // platform-level OWNER role). All RBAC query paths join through Role.
   'UserRole',
   'RolePermission',
+  // PR #925 — per-role widget layout persistence. RoleWidget bridges
+  // Role↔(widgetKey, position) for the role-aware /home dashboard.
+  // Same junction-table rationale as UserRole/RolePermission above:
+  // tenant scope flows through Role (Role.tenantId is tenant-scoped or
+  // null for platform-level roles). A redundant RoleWidget.tenantId
+  // would risk drift.
+  'RoleWidget',
   // Globally-shared templates (real-estate, healthcare, education, legal,
   // saas) — seeded once, read by all tenants when they pick an industry.
   // Read-only from a tenant's perspective; no tenant data lives here.

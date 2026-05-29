@@ -100,4 +100,132 @@ describe('CommandPalette', () => {
     openPalette(); // toggle
     await waitFor(() => expect(screen.queryByPlaceholderText(/Search deals, contacts/i)).not.toBeInTheDocument());
   });
+
+  // ─── Extended cases (test-cron) ─────────────────────────────────────────────
+  // SUT surface still uncovered after the initial 8: Cmd+K (metaKey) accelerator,
+  // contact filtering, deal-by-company filtering, case-insensitive matching,
+  // clicking deal/contact results to navigate, overlay-backdrop-closes,
+  // inner-card-stopPropagation, query-clear-on-close, footer hints render,
+  // deal-card stage badge + formatted money, ESC pseudo-button visible.
+
+  it('opens on Cmd+K (metaKey) just like Ctrl+K', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    expect(await screen.findByPlaceholderText(/Search deals, contacts/i)).toBeInTheDocument();
+  });
+
+  it('typing filters fetched contacts by name', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    fireEvent.change(input, { target: { value: 'Alice' } });
+    expect(await screen.findByText('Alice')).toBeInTheDocument();
+    expect(screen.queryByText('Bob')).not.toBeInTheDocument();
+  });
+
+  it('typing filters fetched contacts by email substring', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    fireEvent.change(input, { target: { value: 'globus.test' } });
+    // Bob's email matches, Alice's does not — and Globus deal title also matches
+    expect(await screen.findByText('Bob')).toBeInTheDocument();
+    expect(screen.queryByText('Alice')).not.toBeInTheDocument();
+  });
+
+  it('typing filters fetched deals by company name', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    // 'Acme' matches both deal.title ("Acme renewal") AND deal.company ("Acme")
+    // 'globus' (lowercase) tests case-insensitive company match exclusively
+    fireEvent.change(input, { target: { value: 'globus' } });
+    expect(await screen.findByText(/Globus pilot/)).toBeInTheDocument();
+    expect(screen.queryByText(/Acme renewal/)).not.toBeInTheDocument();
+  });
+
+  it('filtering is case-insensitive on both fields', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    fireEvent.change(input, { target: { value: 'ACME' } });
+    expect(await screen.findByText(/Acme renewal/)).toBeInTheDocument();
+  });
+
+  it('clicking a filtered deal result navigates to /pipeline and closes', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    fireEvent.change(input, { target: { value: 'Acme' } });
+    const dealRow = await screen.findByText(/Acme renewal/);
+    fireEvent.click(dealRow);
+    expect(navigateMock).toHaveBeenCalledWith('/pipeline');
+    await waitFor(() => expect(screen.queryByPlaceholderText(/Search deals, contacts/i)).not.toBeInTheDocument());
+  });
+
+  it('clicking a filtered contact result navigates to /contacts', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    fireEvent.change(input, { target: { value: 'Alice' } });
+    const contactRow = await screen.findByText('Alice');
+    fireEvent.click(contactRow);
+    expect(navigateMock).toHaveBeenCalledWith('/contacts');
+  });
+
+  it('clicking the overlay backdrop closes the palette', async () => {
+    const { container } = render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    await screen.findByPlaceholderText(/Search deals, contacts/i);
+    // Outermost div in palette overlay has the onClick={() => setIsOpen(false)} handler
+    const overlay = container.querySelector('div[style*="position: fixed"]');
+    expect(overlay).toBeTruthy();
+    fireEvent.click(overlay);
+    await waitFor(() => expect(screen.queryByPlaceholderText(/Search deals, contacts/i)).not.toBeInTheDocument());
+  });
+
+  it('clicking the inner card does NOT close (stopPropagation)', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    // Click the input itself — it's inside the card whose onClick calls stopPropagation
+    fireEvent.click(input);
+    // Palette must still be visible (input still in document)
+    expect(screen.getByPlaceholderText(/Search deals, contacts/i)).toBeInTheDocument();
+  });
+
+  it('query clears when the palette is closed and reopened', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    let input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    fireEvent.change(input, { target: { value: 'Acme' } });
+    expect(input.value).toBe('Acme');
+    // Close via Escape
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByPlaceholderText(/Search deals, contacts/i)).not.toBeInTheDocument());
+    // Reopen — query should be cleared by the effect (setQuery(''))
+    openPalette();
+    input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    expect(input.value).toBe('');
+  });
+
+  it('renders the footer hints (navigation + selection)', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    await screen.findByPlaceholderText(/Search deals, contacts/i);
+    expect(screen.getByText(/to navigate/i)).toBeInTheDocument();
+    expect(screen.getByText(/to select/i)).toBeInTheDocument();
+    // ESC button in the search bar
+    expect(screen.getByText('ESC')).toBeInTheDocument();
+  });
+
+  it('renders the deal stage badge alongside title', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    fireEvent.change(input, { target: { value: 'Acme' } });
+    expect(await screen.findByText(/Acme renewal/)).toBeInTheDocument();
+    // Stage rendered as visible badge text
+    expect(screen.getByText('proposal')).toBeInTheDocument();
+  });
 });

@@ -113,12 +113,15 @@ prisma.user = {
 };
 
 // Pin env vars so /connect doesn't 500 in tests that exercise the
-// happy path. Tests that need to flip these clear/restore them locally.
-process.env.MS_CLIENT_ID = process.env.MS_CLIENT_ID || 'test-ms-client-id';
-process.env.MS_CLIENT_SECRET = process.env.MS_CLIENT_SECRET || 'test-ms-client-secret';
-process.env.MS_REDIRECT_URI =
-  process.env.MS_REDIRECT_URI || 'http://localhost:5000/api/calendar/outlook/callback';
-process.env.FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+// happy path. Force-override (not `||`) — Prisma's client constructor
+// auto-loads backend/.env on import (the `import prisma` above), which
+// would inject the real MS_CLIENT_ID and break the `client_id=test-ms-client-id`
+// assertion. The route reads these into module-level consts at require time,
+// so the override MUST happen BEFORE the requireCJS() call below.
+process.env.MS_CLIENT_ID = 'test-ms-client-id';
+process.env.MS_CLIENT_SECRET = 'test-ms-client-secret';
+process.env.MS_REDIRECT_URI = 'http://localhost:5000/api/calendar/outlook/callback';
+process.env.FRONTEND_URL = 'http://localhost:5173';
 
 import express from 'express';
 import request from 'supertest';

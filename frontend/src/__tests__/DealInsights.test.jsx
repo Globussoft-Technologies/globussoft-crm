@@ -1,7 +1,8 @@
 /**
- * DealInsights.test.jsx — vitest coverage pinning the #593 rebrand.
+ * DealInsights.test.jsx — vitest coverage pinning the #593 rebrand
+ * AND extended coverage of the 648-LOC DealInsights page.
  *
- * #593: the page's backend (backend/routes/deal_insights.js +
+ * The rebrand pin (#593): the page's backend (backend/routes/deal_insights.js +
  * backend/cron/dealInsightsEngine.js) is rules-based — runHeuristicRules
  * generates deterministic threshold-driven insights ("No activity in N days",
  * "Deal is X day(s) past expected close date and still in 'stage' stage",
@@ -11,21 +12,36 @@
  * Not planned"). Branding the page as "AI Predictive Insights" / "AI Deal
  * Insights" was therefore misleading.
  *
- * This spec pins the rebrand:
+ * The rebrand spec pins:
  *   - Page heading is "Deal Insights" (not "AI Deal Insights" / "AI Predictive Insights").
  *   - Tagline explicitly says "Rules-based" (truth-in-labelling).
  *   - The page does NOT render the misleading branding strings anywhere
  *     in the user-visible DOM.
  *
- * If a future commit re-wires the genuine Gemini backend (per #563 option 1)
- * and re-introduces "AI" branding, that's fine — but it should only happen
- * when the AI path is actually mounted by default. Re-evaluate this spec at
- * that point; until then it guards against accidental marketing-vs-truth
- * regression.
+ * Extended coverage adds ≥8 cases for:
+ *   - KPI tile values (open / critical / warnings / resolved aggregation).
+ *   - Loaded insights list rendering with severity badges + type labels.
+ *   - Filter tabs (All / RISK / OPPORTUNITY / NEXT_BEST_ACTION / OPEN_DEALS) and showResolved.
+ *   - Empty state copy + CTA based on open-deal presence.
+ *   - "Generate Insights (N open)" button uses /api/deals/stats openCount,
+ *     and is disabled when there are zero open deals.
+ *   - Resolve button calls POST /api/deal-insights/:id/resolve and flips
+ *     local state.
+ *   - generateForAll iterates POST /api/deal-insights/generate/:dealId for
+ *     each open deal (capped at 50) and re-runs loadAll().
+ *   - OPEN_DEALS view renders deal cards with hasInsight / not-scanned chip.
+ *   - Loading state visible during initial fetch.
+ *   - Error fallback: fetchApi rejection → page settles to empty without
+ *     crash (per .catch(() => []) guards in loadAll).
+ *
+ * Stable mock-object pattern (2026-05-23 standing rule): fetchApi is a single
+ * vi.fn() shared across the run — re-set in beforeEach but identity-stable.
+ *
+ * Pure pin — no source changes.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Mock fetchApi BEFORE importing the component
@@ -70,6 +86,83 @@ function mockEmpty() {
   });
 }
 
+// Three-insight + three-deal fixture covering all severity levels + all
+// insight types. Designed so KPI tiles + filter tabs + grouped rendering
+// all have something to display.
+function makeFixture() {
+  const now = new Date();
+  const tenMinAgo = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+
+  const insights = [
+    {
+      id: 101,
+      dealId: 1,
+      type: 'RISK',
+      severity: 'CRITICAL',
+      insight: 'No activity in 45 days — deal may be stalling.',
+      isResolved: false,
+      generatedAt: tenMinAgo,
+      dealContext: { id: 1, title: 'Acme Corp Renewal', stage: 'proposal', amount: 25000, currency: 'USD', contact: { name: 'Lina Patel', company: 'Acme' } },
+    },
+    {
+      id: 102,
+      dealId: 1,
+      type: 'NEXT_BEST_ACTION',
+      severity: 'WARNING',
+      insight: 'Schedule a check-in call within the next 5 days.',
+      isResolved: false,
+      generatedAt: oneHourAgo,
+      dealContext: { id: 1, title: 'Acme Corp Renewal', stage: 'proposal', amount: 25000, currency: 'USD', contact: { name: 'Lina Patel', company: 'Acme' } },
+    },
+    {
+      id: 103,
+      dealId: 2,
+      type: 'OPPORTUNITY',
+      severity: 'INFO',
+      insight: 'High engagement detected — consider upsell add-on.',
+      isResolved: true,
+      generatedAt: oneHourAgo,
+      dealContext: { id: 2, title: 'Beta Ltd Expansion', stage: 'contacted', amount: 12500, currency: 'USD', contact: { name: 'Hiro Tanaka', company: 'Beta' } },
+    },
+  ];
+
+  const openDeals = [
+    { id: 1, title: 'Acme Corp Renewal', stage: 'proposal', amount: 25000, currency: 'USD', contact: { name: 'Lina Patel', company: 'Acme' } },
+    { id: 2, title: 'Beta Ltd Expansion', stage: 'contacted', amount: 12500, currency: 'USD', contact: { name: 'Hiro Tanaka', company: 'Beta' } },
+    { id: 3, title: 'Gamma Inc Pilot', stage: 'lead', amount: 8000, currency: 'USD', contact: { name: 'Mira Costa', company: 'Gamma' } },
+  ];
+
+  const stats = {
+    totalDeals: 5,
+    byStage: [
+      { stage: 'lead', count: 1, value: 8000 },
+      { stage: 'contacted', count: 1, value: 12500 },
+      { stage: 'proposal', count: 1, value: 25000 },
+      { stage: 'won', count: 1, value: 50000 },
+      { stage: 'lost', count: 1, value: 0 },
+    ],
+  };
+
+  return { insights, openDeals, stats };
+}
+
+function mockLoaded(fx = makeFixture()) {
+  fetchApi.mockImplementation((url, opts) => {
+    if (url === '/api/deal-insights') return Promise.resolve(fx.insights);
+    if (url === '/api/deals/stats') return Promise.resolve(fx.stats);
+    if (url.startsWith('/api/deals?')) return Promise.resolve(fx.openDeals);
+    if (url.startsWith('/api/deal-insights/') && url.endsWith('/resolve') && opts?.method === 'POST') {
+      return Promise.resolve({ ok: true });
+    }
+    if (url.startsWith('/api/deal-insights/generate/') && opts?.method === 'POST') {
+      return Promise.resolve({ generated: 2 });
+    }
+    return Promise.resolve([]);
+  });
+  return fx;
+}
+
 describe('<DealInsights /> — #593 rebrand pin', () => {
   it('renders the page heading as "Deal Insights" (no "AI" prefix)', async () => {
     mockEmpty();
@@ -110,5 +203,475 @@ describe('<DealInsights /> — #593 rebrand pin', () => {
     expect(text).not.toMatch(/AI Deal Insights/i);
     expect(text).not.toMatch(/Gemini Insights/i);
     expect(text).not.toMatch(/AI-powered insight/i);
+  });
+});
+
+describe('<DealInsights /> — loading + empty + error states', () => {
+  it('shows the "Loading..." placeholder before the initial fetch resolves', async () => {
+    // Defer all resolutions so the page sits in loading state.
+    let resolveIns;
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/deal-insights') {
+        return new Promise((res) => { resolveIns = res; });
+      }
+      if (url === '/api/deals/stats') return Promise.resolve({ byStage: [] });
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    renderPage();
+
+    // While the insights promise is pending, the loading card is visible.
+    expect(await screen.findByText(/Loading\.\.\./i)).toBeInTheDocument();
+
+    // Resolve so afterEach doesn't leak a pending promise.
+    resolveIns([]);
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading\.\.\./i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows the "No insights yet" empty state when zero insights exist', async () => {
+    // Empty insights, but at least one open deal (so the CTA copy
+    // points the user at "Generate Insights" rather than "Go to Pipeline").
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/deal-insights') return Promise.resolve([]);
+      if (url === '/api/deals/stats') {
+        return Promise.resolve({ byStage: [{ stage: 'lead', count: 1, value: 1000 }] });
+      }
+      if (url.startsWith('/api/deals?')) {
+        return Promise.resolve([{ id: 9, title: 'Solo open deal', stage: 'lead', amount: 1000, currency: 'USD' }]);
+      }
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/No insights yet/i)).toBeInTheDocument();
+    });
+    // CTA copy points to generate (not Go to Pipeline) because openDeals > 0.
+    // "Generate Insights" appears both in the header button AND the empty-state
+    // CTA copy, so use getAllByText.
+    expect(screen.getAllByText(/Generate Insights/i).length).toBeGreaterThanOrEqual(1);
+    // "Go to Pipeline" must NOT appear (it only renders when openDeals.length === 0).
+    expect(screen.queryByText(/Go to Pipeline/i)).not.toBeInTheDocument();
+  });
+
+  it('survives fetchApi rejection without crashing (loadAll .catch fallback)', async () => {
+    // Every endpoint rejects; loadAll wraps each in .catch(() => []) /
+    // .catch(() => null) so the page should still render the empty state.
+    fetchApi.mockRejectedValue(new Error('Network down'));
+    renderPage();
+
+    // Header stays rendered.
+    const heading = await screen.findByRole('heading', { level: 1 });
+    expect(heading.textContent).toContain('Deal Insights');
+
+    // Loading clears even though every request rejected.
+    await waitFor(() => {
+      expect(screen.queryByText(/^Loading\.\.\.$/)).not.toBeInTheDocument();
+    });
+
+    // No insights yet card appears (filter !== OPEN_DEALS, grouped === {}).
+    expect(screen.getByText(/No insights yet/i)).toBeInTheDocument();
+  });
+});
+
+describe('<DealInsights /> — KPI tiles', () => {
+  it('aggregates open / critical / warnings / resolved counts from the insights list', async () => {
+    mockLoaded();
+    renderPage();
+
+    // Wait for any KPI label to appear, then probe each tile's value.
+    await screen.findByText('Open Insights');
+
+    // KPI block uses uppercase labels. Each tile's value lives in the same
+    // `.card` ancestor.
+    const openTile = screen.getByText('Open Insights').closest('.card');
+    expect(openTile).not.toBeNull();
+    expect(within(openTile).getByText('2')).toBeInTheDocument();
+
+    const criticalTile = screen.getByText('Critical').closest('.card');
+    expect(within(criticalTile).getByText('1')).toBeInTheDocument();
+
+    const warningsTile = screen.getByText('Warnings').closest('.card');
+    expect(within(warningsTile).getByText('1')).toBeInTheDocument();
+
+    const resolvedTile = screen.getByText('Resolved').closest('.card');
+    expect(within(resolvedTile).getByText('1')).toBeInTheDocument();
+  });
+});
+
+describe('<DealInsights /> — loaded insights list', () => {
+  it('renders one card per dealId grouping with the insight bodies', async () => {
+    mockLoaded();
+    renderPage();
+
+    // Acme deal has 2 unresolved insights, both visible.
+    expect(await screen.findByText(/No activity in 45 days/i)).toBeInTheDocument();
+    expect(screen.getByText(/Schedule a check-in call/i)).toBeInTheDocument();
+
+    // Acme's deal title appears in the grouped-list header (deal #1 has 2 insights).
+    expect(screen.getByText(/Acme Corp Renewal/i)).toBeInTheDocument();
+
+    // The "2 insights" deal-count chip is rendered on the Acme card.
+    expect(screen.getByText(/2 insights/i)).toBeInTheDocument();
+  });
+
+  it('renders severity badges + type labels for each insight', async () => {
+    mockLoaded();
+    renderPage();
+
+    await screen.findByText(/No activity in 45 days/i);
+
+    // Severity chips are rendered uppercase: CRITICAL + WARNING.
+    expect(screen.getByText('CRITICAL')).toBeInTheDocument();
+    expect(screen.getByText('WARNING')).toBeInTheDocument();
+
+    // 'RISK' appears as both a filter-tab button AND the insight's type label
+    // (the .replace(/_/g, ' ') leaves single-word types unchanged). Use
+    // getAllByText to accept the duplicate.
+    expect(screen.getAllByText('RISK').length).toBeGreaterThanOrEqual(1);
+    // 'NEXT BEST ACTION' renders with underscores stripped — only inside the
+    // insight type label (the filter tab shows the same text but is fine to
+    // match via getAllByText for symmetry).
+    expect(screen.getAllByText('NEXT BEST ACTION').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Resolve button calls POST /api/deal-insights/:id/resolve and removes the insight from the unresolved list', async () => {
+    mockLoaded();
+    renderPage();
+
+    await screen.findByText(/No activity in 45 days/i);
+
+    // Two unresolved insights → two Resolve buttons.
+    const resolveButtons = screen.getAllByRole('button', { name: /Resolve/i });
+    expect(resolveButtons.length).toBeGreaterThanOrEqual(2);
+
+    fireEvent.click(resolveButtons[0]);
+
+    await waitFor(() => {
+      const resolveCall = fetchApi.mock.calls.find(([url, opts]) =>
+        typeof url === 'string' && /^\/api\/deal-insights\/\d+\/resolve$/.test(url) && opts?.method === 'POST'
+      );
+      expect(resolveCall).toBeTruthy();
+    });
+
+    // Insight 101 is the first generated (most recent); after resolve, the
+    // critical KPI count drops from 1 to 0.
+    await waitFor(() => {
+      const criticalTile = screen.getByText('Critical').closest('.card');
+      expect(within(criticalTile).getByText('0')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('<DealInsights /> — filter tabs + showResolved', () => {
+  it('filtering by RISK hides non-RISK insights', async () => {
+    mockLoaded();
+    renderPage();
+
+    await screen.findByText(/No activity in 45 days/i);
+    // NEXT_BEST_ACTION insight visible BEFORE filter.
+    expect(screen.getByText(/Schedule a check-in call/i)).toBeInTheDocument();
+
+    // Click the RISK tab.
+    fireEvent.click(screen.getByRole('button', { name: 'RISK' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Schedule a check-in call/i)).not.toBeInTheDocument();
+    });
+    // RISK insight still visible.
+    expect(screen.getByText(/No activity in 45 days/i)).toBeInTheDocument();
+  });
+
+  it('Show resolved checkbox surfaces resolved insights', async () => {
+    mockLoaded();
+    renderPage();
+
+    await screen.findByText(/No activity in 45 days/i);
+
+    // Resolved OPPORTUNITY insight hidden by default.
+    expect(screen.queryByText(/High engagement detected/i)).not.toBeInTheDocument();
+
+    const resolvedToggle = screen.getByLabelText(/Show resolved/i);
+    fireEvent.click(resolvedToggle);
+
+    await waitFor(() => {
+      expect(screen.getByText(/High engagement detected/i)).toBeInTheDocument();
+    });
+  });
+});
+
+describe('<DealInsights /> — OPEN_DEALS view', () => {
+  it('renders one card per open deal with title + amount + stage + contact', async () => {
+    mockLoaded();
+    renderPage();
+
+    // Click the OPEN_DEALS tab — uses the label text "OPEN DEALS"
+    // (underscores stripped by the .replace in the JSX).
+    await screen.findByRole('button', { name: /OPEN DEALS/i });
+    fireEvent.click(screen.getByRole('button', { name: /OPEN DEALS/i }));
+
+    // Three open-deal cards should be visible.
+    await waitFor(() => {
+      // Each deal title appears in the cards view.
+      expect(screen.getAllByText(/Acme Corp Renewal/i).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText(/Beta Ltd Expansion/i)).toBeInTheDocument();
+      expect(screen.getByText(/Gamma Inc Pilot/i)).toBeInTheDocument();
+    });
+
+    // Stages render verbatim in the deal-card metadata block.
+    expect(screen.getAllByText(/proposal/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/contacted/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/lead/i).length).toBeGreaterThanOrEqual(1);
+
+    // "See Insights" / "View Pipeline" buttons exist on each deal card.
+    expect(screen.getAllByText(/See Insights/i).length).toBe(3);
+    expect(screen.getAllByText(/View Pipeline/i).length).toBe(3);
+  });
+});
+
+describe('<DealInsights /> — Generate Insights button', () => {
+  it('renders count from /api/deals/stats byStage (excludes won/lost)', async () => {
+    mockLoaded();
+    renderPage();
+
+    // byStage sums lead+contacted+proposal = 3; won+lost excluded.
+    // Button label: "Generate Insights (3 open)".
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Generate Insights \(3 open\)/i })).toBeInTheDocument();
+    });
+  });
+
+  it('disabled when there are zero open deals', async () => {
+    // openDeals == [] (no /api/deals? result), but stats has 0 byStage.
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/deal-insights') return Promise.resolve([]);
+      if (url === '/api/deals/stats') return Promise.resolve({ byStage: [] });
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    const btn = await screen.findByRole('button', { name: /Generate Insights \(0 open\)/i });
+    expect(btn).toBeDisabled();
+  });
+
+  it('clicking Generate fires POST /api/deal-insights/generate/:dealId for each open deal then re-loads', async () => {
+    const fx = mockLoaded();
+    renderPage();
+
+    const btn = await screen.findByRole('button', { name: /Generate Insights \(3 open\)/i });
+    fireEvent.click(btn);
+
+    // Expect one POST per open deal.
+    await waitFor(() => {
+      for (const d of fx.openDeals) {
+        const found = fetchApi.mock.calls.some(([url, opts]) =>
+          url === `/api/deal-insights/generate/${d.id}` && opts?.method === 'POST'
+        );
+        expect(found).toBe(true);
+      }
+    });
+
+    // After the POST loop, loadAll re-runs — /api/deal-insights is hit
+    // a second time (initial mount + post-generate refresh).
+    await waitFor(() => {
+      const insightFetches = fetchApi.mock.calls.filter(([url]) => url === '/api/deal-insights');
+      expect(insightFetches.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Extended coverage block — 2026-05-26 follow-up. Existing suite covered the
+// rebrand pin + load/empty/error + KPIs + filters + Generate button. This
+// block fills gaps surfaced from a fresh read of DealInsights.jsx:648:
+//   - Detail modal: open / close (✕) / backdrop / scanned-vs-not-scanned chip /
+//     in-modal resolve / empty in-modal state.
+//   - OPEN_DEALS view: empty state with "Go to Pipeline" CTA + the deal-card
+//     "Not Scanned" chip vs the "✓ N" chip when insights exist.
+//   - Empty-state CTA when openDeals.length === 0 (the prior "No insights
+//     yet" pin only exercised the openDeals > 0 branch).
+//   - OPPORTUNITY filter (the only filter type the earlier block didn't hit).
+//   - "Generating..." spinner state during generateForAll's POST loop.
+//   - Header click on a grouped deal navigates to /pipeline?dealId=X.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('<DealInsights /> — detail modal (See Insights)', () => {
+  it('clicking "See Insights" on an open-deal card opens the modal with that deal\'s insights', async () => {
+    mockLoaded();
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+    const seeButtons = await screen.findAllByText(/See Insights/i);
+    expect(seeButtons.length).toBe(3);
+
+    // Click Acme's See Insights — Acme has 2 insights (RISK + NEXT_BEST_ACTION).
+    fireEvent.click(seeButtons[0]);
+
+    // Modal exposes the "✓ Scanned" chip for a deal that has insights.
+    await waitFor(() => {
+      expect(screen.getByText(/✓ Scanned/i)).toBeInTheDocument();
+    });
+    // Both Acme insight bodies appear inside the modal.
+    expect(screen.getByText(/No activity in 45 days/i)).toBeInTheDocument();
+    expect(screen.getByText(/Schedule a check-in call/i)).toBeInTheDocument();
+  });
+
+  it('clicking the modal ✕ close button hides the modal', async () => {
+    mockLoaded();
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+    const seeButtons = await screen.findAllByText(/See Insights/i);
+    fireEvent.click(seeButtons[0]);
+
+    await screen.findByText(/✓ Scanned/i);
+
+    // ✕ is rendered as the literal close character inside a <button>.
+    const closeBtn = screen.getByText('✕');
+    fireEvent.click(closeBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/✓ Scanned/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('opening the modal for a deal with NO insights renders the in-modal empty state', async () => {
+    // Acme has 2 insights, but Gamma (id=3) has none → "Not Scanned" deal.
+    mockLoaded();
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+    const seeButtons = await screen.findAllByText(/See Insights/i);
+    // Gamma is the 3rd open-deal card.
+    fireEvent.click(seeButtons[2]);
+
+    // Modal shows the "○ Not Scanned" chip and the empty-state copy.
+    await waitFor(() => {
+      expect(screen.getByText(/○ Not Scanned/i)).toBeInTheDocument();
+    });
+    // Modal-specific empty copy.
+    expect(screen.getByText(/Generate insights from the main view to see analysis\./i)).toBeInTheDocument();
+  });
+});
+
+describe('<DealInsights /> — OPEN_DEALS empty state + scanned chips', () => {
+  it('OPEN_DEALS with zero open deals renders the "No open deals" empty state and a "Go to Pipeline" CTA', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/deal-insights') return Promise.resolve([]);
+      if (url === '/api/deals/stats') return Promise.resolve({ byStage: [] });
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/No open deals/i)).toBeInTheDocument();
+    });
+    // CTA copy + button visible.
+    expect(screen.getByText(/Create deals in Pipeline to get started/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Go to Pipeline/i })).toBeInTheDocument();
+  });
+
+  it('renders "✓ N" chip on deals that already have insights and "Not Scanned" otherwise', async () => {
+    mockLoaded();
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+
+    // Acme (id=1) has 2 unresolved insights → "✓ 2" chip.
+    // Beta (id=2) has 1 RESOLVED insight; when showResolved=false the allGrouped
+    // groupping for id=2 is empty → "Not Scanned".
+    // Gamma (id=3) has zero insights → "Not Scanned".
+    await waitFor(() => {
+      // Acme card's chip.
+      expect(screen.getByText(/^✓ 2$/)).toBeInTheDocument();
+    });
+    // Two cards (Beta + Gamma) render "Not Scanned".
+    expect(screen.getAllByText(/Not Scanned/i).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('<DealInsights /> — empty insights with no open deals', () => {
+  it('empty-state CTA points at "Go to Pipeline" when openDeals.length === 0', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/deal-insights') return Promise.resolve([]);
+      if (url === '/api/deals/stats') return Promise.resolve({ byStage: [] });
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/No insights yet/i)).toBeInTheDocument();
+    });
+    // No-open-deals branch copy.
+    expect(screen.getByText(/Create deals in Pipeline first, then generate insights\./i)).toBeInTheDocument();
+    // CTA button rendered (only when openDeals.length === 0).
+    expect(screen.getByRole('button', { name: /Go to Pipeline/i })).toBeInTheDocument();
+  });
+});
+
+describe('<DealInsights /> — OPPORTUNITY filter + showResolved interplay', () => {
+  it('filtering by OPPORTUNITY with showResolved=true reveals only the OPPORTUNITY insight', async () => {
+    mockLoaded();
+    renderPage();
+
+    await screen.findByText(/No activity in 45 days/i);
+
+    // OPPORTUNITY insight is resolved by default → invisible without showResolved.
+    expect(screen.queryByText(/High engagement detected/i)).not.toBeInTheDocument();
+
+    // Toggle showResolved first so the OPPORTUNITY (resolved) insight enters the
+    // pool.
+    fireEvent.click(screen.getByLabelText(/Show resolved/i));
+
+    // Then click the OPPORTUNITY tab.
+    fireEvent.click(screen.getByRole('button', { name: 'OPPORTUNITY' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/High engagement detected/i)).toBeInTheDocument();
+    });
+    // RISK + NEXT_BEST_ACTION are filtered out.
+    expect(screen.queryByText(/No activity in 45 days/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Schedule a check-in call/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('<DealInsights /> — Generate button transient state', () => {
+  it('shows "Generating..." label while the POST loop is in flight', async () => {
+    const fx = makeFixture();
+    // Defer the generate POSTs so the button stays in the "Generating..." state.
+    let unblock;
+    const blockedGenerate = new Promise((res) => { unblock = res; });
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/deal-insights') return Promise.resolve(fx.insights);
+      if (url === '/api/deals/stats') return Promise.resolve(fx.stats);
+      if (url.startsWith('/api/deals?')) return Promise.resolve(fx.openDeals);
+      if (url.startsWith('/api/deal-insights/generate/') && opts?.method === 'POST') {
+        return blockedGenerate.then(() => ({ generated: 0 }));
+      }
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    const btn = await screen.findByRole('button', { name: /Generate Insights \(3 open\)/i });
+    fireEvent.click(btn);
+
+    // While blockedGenerate is pending, the button label flips to "Generating...".
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Generating\.\.\./i })).toBeInTheDocument();
+    });
+
+    // Release so the test doesn't leak a pending promise.
+    unblock();
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Generating\.\.\./i })).not.toBeInTheDocument();
+    });
   });
 });

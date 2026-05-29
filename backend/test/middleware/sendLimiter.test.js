@@ -182,3 +182,108 @@ describe('rate limiting kicks in past cap', () => {
     void aReject;
   });
 });
+
+describe('per-limiter cap values', () => {
+  test('smsSendLimiter rejects after 50 requests for same user (cap=50)', async () => {
+    const userId = 'sms-burst-' + Math.random().toString(36).slice(2);
+    for (let i = 0; i < 50; i++) {
+      const { req, res } = makeReqRes({ user: { userId } });
+      const outcome = await runLimiter(smsSendLimiter, req, res);
+      expect(outcome).toBe('allowed');
+    }
+    // 51st rejected
+    const { req, res } = makeReqRes({ user: { userId } });
+    const outcome = await runLimiter(smsSendLimiter, req, res);
+    expect(outcome).toBe('rejected');
+    expect(res.statusCode).toBe(429);
+  });
+
+  test('whatsappSendLimiter rejects after 50 and surfaces the WhatsApp-specific error message', async () => {
+    const userId = 'wa-burst-' + Math.random().toString(36).slice(2);
+    for (let i = 0; i < 50; i++) {
+      const { req, res } = makeReqRes({ user: { userId } });
+      expect(await runLimiter(whatsappSendLimiter, req, res)).toBe('allowed');
+    }
+    const { req, res } = makeReqRes({ user: { userId } });
+    const outcome = await runLimiter(whatsappSendLimiter, req, res);
+    expect(outcome).toBe('rejected');
+    expect(res.statusCode).toBe(429);
+    // The configured message body should surface in the JSON response.
+    expect(res.body).toBeDefined();
+    expect(res.body.error).toBe('WhatsApp rate limit exceeded.');
+  });
+});
+
+describe('429 response shape and rate-limit headers', () => {
+  test('standardHeaders: true → RateLimit-* headers set on allowed responses', async () => {
+    const userId = 'headers-user-' + Math.random().toString(36).slice(2);
+    const { req, res } = makeReqRes({ user: { userId } });
+    const outcome = await runLimiter(emailSendLimiter, req, res);
+    expect(outcome).toBe('allowed');
+    // express-rate-limit v7 with standardHeaders:true writes the IETF draft
+    // headers (RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset / Policy).
+    // Different versions use slightly different casing; assert that at least
+    // one RateLimit-* header was emitted via setHeader/set.
+    const allCalls = [
+      ...res.setHeader.mock.calls,
+      ...res.set.mock.calls,
+    ];
+    const rateLimitHeaderSeen = allCalls.some(([name]) =>
+      typeof name === 'string' && /^ratelimit/i.test(name)
+    );
+    expect(rateLimitHeaderSeen).toBe(true);
+  });
+
+  test('email 429 body uses the configured error string (not a generic message)', async () => {
+    const userId = 'email-msg-' + Math.random().toString(36).slice(2);
+    // Burn the email bucket (cap=100).
+    for (let i = 0; i < 100; i++) {
+      const { req, res } = makeReqRes({ user: { userId } });
+      expect(await runLimiter(emailSendLimiter, req, res)).toBe('allowed');
+    }
+    const { req, res } = makeReqRes({ user: { userId } });
+    const outcome = await runLimiter(emailSendLimiter, req, res);
+    expect(outcome).toBe('rejected');
+    expect(res.statusCode).toBe(429);
+    expect(res.body).toBeDefined();
+    expect(res.body.error).toBe('Too many emails sent, please slow down.');
+  });
+});
+
+describe('key-generator contract', () => {
+  test('numeric userId is coerced via toString() — buckets the same as the string form', async () => {
+    // Pick a numeric id; the string-form and number-form must hash to the
+    // same bucket because userKey does `.toString()`. Burn the bucket via
+    // the numeric form, then assert the string form is also rejected.
+    const numericId = Math.floor(Math.random() * 1e9) + 1;
+    const stringId = numericId.toString();
+    for (let i = 0; i < 20; i++) {
+      const { req, res } = makeReqRes({ user: { userId: numericId } });
+      expect(await runLimiter(pushSendLimiter, req, res)).toBe('allowed');
+    }
+    // 21st via the *string* form must also reject (shared bucket).
+    const { req, res } = makeReqRes({ user: { userId: stringId } });
+    const outcome = await runLimiter(pushSendLimiter, req, res);
+    expect(outcome).toBe('rejected');
+    expect(res.statusCode).toBe(429);
+  });
+
+  test('cross-limiter independence: exhausting pushSendLimiter does not affect smsSendLimiter for the same user', async () => {
+    const userId = 'cross-' + Math.random().toString(36).slice(2);
+    // Burn push (cap=20) to the limit.
+    for (let i = 0; i < 20; i++) {
+      const { req, res } = makeReqRes({ user: { userId } });
+      await runLimiter(pushSendLimiter, req, res);
+    }
+    // Push 21st is rejected.
+    const pushTry = makeReqRes({ user: { userId } });
+    expect(await runLimiter(pushSendLimiter, pushTry.req, pushTry.res)).toBe(
+      'rejected'
+    );
+    // But sms first request for the same user is allowed (separate bucket).
+    const smsTry = makeReqRes({ user: { userId } });
+    expect(await runLimiter(smsSendLimiter, smsTry.req, smsTry.res)).toBe(
+      'allowed'
+    );
+  });
+});

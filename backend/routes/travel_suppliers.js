@@ -856,6 +856,864 @@ router.get(
 );
 
 // ============================================================================
+// GET /api/travel/suppliers/stats — tenant-wide supplier rollup
+// (PRD_TRAVEL_SUPPLIER_MASTER §3 #903 slice 23).
+//
+// Mirrors #905 slice 18 /commission-profiles/stats + #908 slice 19
+// /flyer-templates/global-stats. USER-readable anodyne aggregate. Powers
+// the Supplier Master library page's header summary strip ("42 suppliers
+// · 35 active · 7 archived · 18 hotels · 12 flights ... · ₹4.2L payables ·
+// last activity 3h ago"). Without this, the frontend has to fire {list,
+// count by category×5, count by subBrand×4, /payables count + sum} —
+// N+1 round-trips for a single visual surface.
+//
+// Distinct from /:id/payables/{month,quarter,year} (per-supplier time
+// series), /suppliers/exposure (per-supplier credit-utilization), and
+// /:id/scorecard (per-supplier KPI page). This is the tenant-wide rollup
+// across BOTH the supplier-count summary (status + category + sub-brand)
+// AND the payable-derived activity (count + sum + paid-sum + lastActivityAt).
+//
+// PRD anchors:
+//   - §3 — operator-facing supplier dashboard surfaces "how many
+//          suppliers do I have, of what shape, with what payable burden" —
+//          this endpoint feeds those KPI tiles
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' suppliers in the counts. Same gate as
+//     the /suppliers list endpoint. TravelSupplier.subBrand is
+//     non-nullable in the schema, but the bucketing code defensively
+//     coalesces null/empty → '_tenant' for forward-compat (and to match
+//     the sibling /commission-profiles/stats shape, where subBrand IS
+//     nullable).
+//   - Supplier-count rollup (from prisma.travelSupplier.findMany):
+//       total, active, archived             — overall + by isActive
+//       bySubBrand: { <sb|_tenant>: { count } }
+//       byCategory: { <cat>: { count } }    — using TravelSupplier.supplierCategory
+//   - Payable-derived activity (from prisma.travelSupplierPayable findMany over
+//     supplierId IN visibleSet):
+//       totalPayables                       — count of all payable rows
+//       totalPayableAmount                  — sum of amount (defensive null→0)
+//       paidPayableAmount                   — sum where paidAt non-null
+//       lastActivityAt                      — max(updatedAt) across all
+//                                             matching suppliers
+//   - ?from / ?to (ISO date bounds) filter supplier.createdAt before aggregation.
+//
+// Safety cap: process at most 2000 suppliers per call; if matching total >
+// 2000, return counts but mark aggregateExceedsCap=true (payable sums
+// would be incomplete past the cap).
+//
+// USER-readable: anodyne aggregate (counts + sums + timestamps); safe.
+// No audit row: read-only meta surface, mirrors /commission-profiles/stats.
+//
+// Express route ordering: literal-path /stats MUST be declared BEFORE the
+// /:id family or `:id="stats"` would 400 INVALID_ID before reaching this
+// handler.
+// ============================================================================
+const SUPPLIERS_STATS_CAP = 2000;
+
+router.get(
+  "/suppliers/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+
+      // Optional ISO date bounds on supplier.createdAt
+      const supplierWhere = { tenantId };
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        supplierWhere.createdAt = Object.assign(
+          supplierWhere.createdAt || {},
+          { gte: d },
+        );
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        supplierWhere.createdAt = Object.assign(
+          supplierWhere.createdAt || {},
+          { lte: d },
+        );
+      }
+
+      // Sub-brand narrowing — same gate as the /suppliers list endpoint.
+      // MANAGER subBrandAccess restricts the visible-set BEFORE counting.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          supplierWhere.subBrand = { in: [...allowed] };
+        } else {
+          // Empty allowed set = deny everything; force-empty query.
+          supplierWhere.subBrand = "__none__";
+        }
+      }
+
+      // Bounded fetch to keep in-process aggregation safe.
+      const suppliers = await prisma.travelSupplier.findMany({
+        where: supplierWhere,
+        select: {
+          id: true,
+          subBrand: true,
+          supplierCategory: true,
+          isActive: true,
+          updatedAt: true,
+        },
+        orderBy: [{ id: "asc" }],
+        take: SUPPLIERS_STATS_CAP,
+      });
+
+      // Get the true total so callers know if aggregation is bounded.
+      const totalMatching = await prisma.travelSupplier.count({
+        where: supplierWhere,
+      });
+      const aggregateExceedsCap = totalMatching > SUPPLIERS_STATS_CAP;
+
+      // Empty short-circuit — return zeroed shape.
+      if (suppliers.length === 0) {
+        return res.json({
+          total: 0,
+          active: 0,
+          archived: 0,
+          bySubBrand: {},
+          byCategory: {},
+          totalPayables: 0,
+          totalPayableAmount: 0,
+          paidPayableAmount: 0,
+          lastActivityAt: null,
+          aggregateExceedsCap: false,
+        });
+      }
+
+      // Counts overall + per-bucket pre-seeding (so categories/sub-brands
+      // with zero payables still appear with count populated).
+      let active = 0;
+      let archived = 0;
+      let lastActivityAt = null;
+      const bySubBrand = {};
+      const byCategory = {};
+
+      for (const s of suppliers) {
+        if (s.isActive) active += 1;
+        else archived += 1;
+
+        const ts = s.updatedAt instanceof Date ? s.updatedAt : new Date(s.updatedAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastActivityAt || ts > lastActivityAt) lastActivityAt = ts;
+        }
+
+        // TravelSupplier.subBrand is non-nullable in schema, but defensively
+        // coalesce falsy → '_tenant' to match the sibling stats endpoint
+        // shape and forward-compat with any future nullable migration.
+        const sbKey = s.subBrand ? String(s.subBrand) : "_tenant";
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+        bySubBrand[sbKey].count += 1;
+
+        const catKey = s.supplierCategory || "other";
+        if (!byCategory[catKey]) byCategory[catKey] = { count: 0 };
+        byCategory[catKey].count += 1;
+      }
+
+      // Payable-derived aggregation. groupBy isn't ideal here — we just
+      // need the sum + paid-subset-sum + count across ALL payables for the
+      // visible supplier set, plus we want the per-row paidAt check.
+      // findMany keeps the math straightforward.
+      const supplierIds = suppliers.map((s) => s.id);
+      const payables = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId,
+          supplierId: { in: supplierIds },
+        },
+        select: { id: true, amount: true, paidAt: true },
+      });
+
+      // Half-up round to 2dp — matches sibling stats endpoints.
+      const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+      let totalPayableAmount = 0;
+      let paidPayableAmount = 0;
+      for (const p of payables) {
+        const amt = Number(p.amount);
+        if (!Number.isFinite(amt)) continue; // defensive null/invalid → 0
+        totalPayableAmount += amt;
+        if (p.paidAt != null) paidPayableAmount += amt;
+      }
+
+      res.json({
+        total: suppliers.length,
+        active,
+        archived,
+        bySubBrand,
+        byCategory,
+        totalPayables: payables.length,
+        totalPayableAmount: round2(totalPayableAmount),
+        paidPayableAmount: round2(paidPayableAmount),
+        lastActivityAt: lastActivityAt ? lastActivityAt.toISOString() : null,
+        aggregateExceedsCap,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise suppliers" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/suppliers/by-month — tenant-wide supplier monthly rollup
+// (PRD_TRAVEL_SUPPLIER_MASTER §3 #903 slice 24).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-MM bucket for
+// the tenant-scoped (and sub-brand-narrowed) supplier population. Each row
+// carries count + activeCount + archivedCount so the operator dashboard
+// can render a "suppliers onboarded over time" trend chart without N
+// round-trips per month.
+//
+// Mirrors #908 slice 21 (/flyer-templates/by-month) + #900 slice 16
+// (/quotes/by-month) + #901 slice 29 (/invoices/by-month) — same UTC
+// YYYY-MM bucketing template, same defensive math (null/invalid
+// createdAt → "unknown" bucket; excluded when ?from / ?to is set, kept
+// otherwise so count surface stays accurate), same orderBy semantics. The
+// activeCount/archivedCount split is the supplier-master analogue of the
+// flyer-templates active-vs-archived breakdown — suppliers flip between
+// active and archived via the soft-delete handler and the activate/
+// deactivate endpoints, and the rollup makes the "lifetime population vs.
+// currently-active" delta visible at a glance.
+//
+// Distinct from /suppliers/stats (slice 23): /stats is a single
+// point-in-time KPI tile (total / active / archived / bySubBrand /
+// byCategory / payable sums); /by-month is the per-month time series
+// across the same population. The two endpoints powering the same
+// Supplier Master library page header — /stats for the KPI strip,
+// /by-month for the trend chart.
+//
+// PRD anchors:
+//   - §3 — tenant-wide supplier analytics (trend chart for the
+//          supplier-master dashboard; per-month drill-down picker)
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//                     400 INVALID_MONTH_FORMAT
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//                     count:{asc|desc}, activeCount:{asc|desc};
+//                     unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' suppliers in the rollup. Same gate as
+//     /suppliers/stats — TravelSupplier.subBrand is NON-nullable in the
+//     schema, so we do NOT add a `{ subBrand: null }` OR clause (which
+//     #908 slice 21 does for flyer-templates whose subBrand IS nullable).
+//     Empty access set → forces `subBrand: "__none__"` so the query
+//     returns the zero-rollup envelope (not 403) and the dashboard tile
+//     renders cleanly for not-yet-onboarded operators.
+//   - JS-side aggregation over a light findMany projection
+//     ({ isActive, createdAt }) — the population is bounded by tenant
+//     scale (low thousands), and the mock-friendly JS aggregation matches
+//     the rationale on /flyer-templates/by-month + /quotes/by-month +
+//     /suppliers/stats. No groupBy for marginal efficiency.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so the
+//     count surface stays accurate. Excluded when ?from / ?to is set
+//     (no comparable month token); included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter — same
+//     posture as /flyer-templates/by-month slice 21.
+//
+// No audit row written — read-only meta surface; matches /suppliers/stats
+// and /flyer-templates/by-month posture. USER-readable: anodyne (counts +
+// month-string tokens).
+//
+// Express route ordering: literal-path /by-month MUST be declared BEFORE
+// the /:id family or `:id="by-month"` would 400 INVALID_ID before
+// reaching this handler. Same convention as /suppliers/search,
+// /suppliers/exposure, /suppliers/stats.
+// ============================================================================
+router.get(
+  "/suppliers/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+
+      // YYYY-MM validation — mirrors slice 21 /flyer-templates/by-month.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+        "activeCount:asc",
+        "activeCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors /suppliers/stats
+      // slice 23: subBrand-restricted callers see only their allowed
+      // sub-brands' suppliers; admins (allowed=null) see all. Empty
+      // allowed set returns the zero-rollup envelope (not 403).
+      //
+      // Note: TravelSupplier.subBrand is NON-nullable, so we do NOT mix
+      // in a `{ subBrand: null }` OR clause (that's the flyer-templates
+      // pattern, where subBrand IS nullable). The narrowing is a pure
+      // `subBrand: { in: [...allowed] }`.
+      const where = { tenantId: req.travelTenant.id };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          where.subBrand = { in: [...allowed] };
+        } else {
+          // Empty allowed set = deny everything; force-empty query so
+          // the response stays a clean zero-rollup envelope.
+          where.subBrand = "__none__";
+        }
+      }
+
+      // Light projection — isActive + createdAt is enough for the bucket
+      // totals. No JSON columns pulled.
+      const rows = await prisma.travelSupplier.findMany({
+        where,
+        select: { isActive: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { count, activeCount,
+      // archivedCount }. Null/invalid createdAt rows land in "unknown".
+      const byMonth = new Map();
+      for (const r of rows) {
+        let monthKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let bucket = byMonth.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            month: monthKey,
+            count: 0,
+            activeCount: 0,
+            archivedCount: 0,
+          };
+          byMonth.set(monthKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.isActive) bucket.activeCount += 1;
+        else bucket.archivedCount += 1;
+      }
+
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. Mirrors slice 21 /flyer-templates/by-month.
+      if (fromRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+      }
+      if (toRaw !== null) {
+        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM (also
+      // chronological). "unknown" sorts last in asc / first in desc
+      // (lexicographically > "9999-12") — acceptable for a defensive
+      // fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandCount = months.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+      const grandActiveCount = months.reduce(
+        (acc, r) => acc + (Number(r.activeCount) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as slice 21.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        months: paged,
+        totalMonths,
+        grandCount,
+        grandActiveCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/suppliers/by-quarter — tenant-wide supplier quarterly rollup
+// (PRD_TRAVEL_SUPPLIER_MASTER §3 #903 slice 25).
+//
+// USER-readable meta endpoint. Returns one row per UTC YYYY-Qn bucket for
+// the tenant-scoped (and sub-brand-narrowed) supplier population. Each row
+// carries count + activeCount + archivedCount so the operator dashboard
+// can render a "suppliers onboarded by quarter" trend tile at lower
+// resolution than the /by-month time series (slice 24).
+//
+// Mirrors slice 24 (/suppliers/by-month) at quarter resolution and the
+// #901 slice 30 (/invoices/by-quarter) + #900 slice 17 (/quotes/by-quarter)
+// + #908 slice 22 (/flyer-templates/by-quarter) pattern for YYYY-Qn
+// bucketing. Calendar quarter is `Math.floor(month/3)+1` (Q1=Jan-Mar,
+// Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec). Same defensive math (null/invalid
+// createdAt → "unknown" bucket; excluded when ?from / ?to is set, kept
+// otherwise so the count surface stays accurate), same orderBy semantics,
+// same active-vs-archived split as the by-month aggregator.
+//
+// Distinct from /suppliers/stats (slice 23): /stats is a point-in-time
+// KPI tile; /by-month is the high-resolution time series; /by-quarter is
+// the low-resolution rollup ideal for sparse / multi-year overview tiles.
+//
+// PRD anchors:
+//   - §3 — tenant-wide supplier analytics (quarterly trend tile for the
+//          supplier-master dashboard; coarse-grained period picker)
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY-Qn bounds; invalid →
+//                     400 INVALID_QUARTER_FORMAT
+//   - ?orderBy      — default quarter:asc; accepts quarter:{asc|desc},
+//                     count:{asc|desc}, activeCount:{asc|desc};
+//                     unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 12 / 0; limit caps at 40 (quarters
+//                       are sparser than months, so a smaller cap suffices)
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' suppliers in the rollup. Same gate as
+//     /suppliers/by-month — TravelSupplier.subBrand is NON-nullable in
+//     the schema, so we do NOT add a `{ subBrand: null }` OR clause
+//     (which #908 slice 22 does for flyer-templates whose subBrand IS
+//     nullable). Empty access set → forces `subBrand: "__none__"` so the
+//     response stays a clean zero-rollup envelope.
+//   - JS-side aggregation over a light findMany projection
+//     ({ isActive, createdAt }) — same rationale as the by-month sibling.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so the
+//     count surface stays accurate. Excluded when ?from / ?to is set
+//     (no comparable quarter token); included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter — same
+//     posture as the by-month sibling.
+//
+// No audit row written — read-only meta surface; matches /suppliers/stats
+// and /suppliers/by-month posture. USER-readable: anodyne (counts +
+// quarter-string tokens).
+//
+// Express route ordering: literal-path /by-quarter MUST be declared BEFORE
+// the /:id family or `:id="by-quarter"` would 400 INVALID_ID before
+// reaching this handler. Same convention as /suppliers/by-month,
+// /suppliers/stats, /suppliers/search.
+// ============================================================================
+router.get(
+  "/suppliers/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+
+      // YYYY-Qn validation — mirrors slice 30 /invoices/by-quarter.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "count:asc",
+        "count:desc",
+        "activeCount:asc",
+        "activeCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors slice 24
+      // /suppliers/by-month posture. TravelSupplier.subBrand is
+      // NON-nullable, so we use a single `subBrand: { in: [...] }`
+      // (no `{ subBrand: null }` OR clause). Empty allowed set returns
+      // the zero-rollup envelope.
+      const where = { tenantId: req.travelTenant.id };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          where.subBrand = { in: [...allowed] };
+        } else {
+          where.subBrand = "__none__";
+        }
+      }
+
+      // Light projection — isActive + createdAt is enough for the bucket
+      // totals.
+      const rows = await prisma.travelSupplier.findMany({
+        where,
+        select: { isActive: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { count, activeCount,
+      // archivedCount }. Null/invalid createdAt rows land in "unknown".
+      // Calendar quarter: Math.floor(month/3)+1 where month is 0-indexed.
+      const byQuarter = new Map();
+      for (const r of rows) {
+        let quarterKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const qn = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${qn}`;
+          }
+        }
+
+        let bucket = byQuarter.get(quarterKey);
+        if (!bucket) {
+          bucket = {
+            quarter: quarterKey,
+            count: 0,
+            activeCount: 0,
+            archivedCount: 0,
+          };
+          byQuarter.set(quarterKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.isActive) bucket.activeCount += 1;
+        else bucket.archivedCount += 1;
+      }
+
+      let quarters = [...byQuarter.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. YYYY-Qn sorts lexicographically the
+      // same as chronologically (since "Q1" < "Q2" < "Q3" < "Q4" and
+      // year-prefix dominates).
+      if (fromRaw !== null) {
+        quarters = quarters.filter(
+          (r) => r.quarter !== "unknown" && r.quarter >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter(
+          (r) => r.quarter !== "unknown" && r.quarter <= toRaw,
+        );
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Qn (also
+      // chronological). "unknown" sorts last in asc / first in desc
+      // (lexicographically > "9999-Q4") — acceptable for a defensive
+      // fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalQuarters = quarters.length;
+      const grandCount = quarters.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
+      const grandActiveCount = quarters.reduce(
+        (acc, r) => acc + (Number(r.activeCount) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as slice 24.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        quarters: paged,
+        totalQuarters,
+        grandCount,
+        grandActiveCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/suppliers/by-year — tenant-wide supplier annual rollup
+// (PRD_TRAVEL_SUPPLIER_MASTER §3 #903 slice 26).
+//
+// USER-readable meta endpoint. Returns one row per UTC calendar year for
+// the tenant-scoped (and sub-brand-narrowed) supplier population. Each
+// row carries count + activeCount + archivedCount so the operator
+// dashboard can render a multi-year "suppliers onboarded by year" trend
+// tile at the coarsest resolution alongside the /by-month (slice 24)
+// and /by-quarter (slice 25) siblings.
+//
+// Completes the by-month / by-quarter / by-year triplet. Calendar year
+// via `getUTCFullYear()`. Same defensive math (null/invalid createdAt
+// → "unknown" bucket; excluded when ?from / ?to is set, kept otherwise
+// so the count surface stays accurate), same orderBy semantics, same
+// active-vs-archived split as the by-month + by-quarter aggregators.
+//
+// Distinct from /suppliers/:id/payables/yearly (slice 22) which is the
+// per-supplier yearly payables rollup keyed by paidAt. THIS surface is
+// tenant-wide onboarded-count keyed by TravelSupplier.createdAt.
+//
+// PRD anchors:
+//   - §3 — tenant-wide supplier analytics (annual trend tile for the
+//          supplier-master dashboard; multi-year overview picker)
+//
+// Query params:
+//   - ?from / ?to   — optional inclusive YYYY bounds; invalid →
+//                     400 INVALID_YEAR_FORMAT
+//   - ?orderBy      — default year:asc; accepts year:{asc|desc},
+//                     count:{asc|desc}, activeCount:{asc|desc};
+//                     unknown tokens degrade silently to the default
+//   - ?limit / ?offset — default 10 / 0; limit caps at 30 (years are
+//                       coarser than quarters, so a smaller cap suffices)
+//
+// Behaviour:
+//   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
+//     their allowed sub-brands' suppliers in the rollup. Same gate as
+//     /suppliers/by-month + /suppliers/by-quarter — TravelSupplier
+//     .subBrand is NON-nullable in the schema, so we do NOT add a
+//     `{ subBrand: null }` OR clause. Empty access set → forces
+//     `subBrand: "__none__"` so the response stays a clean zero-rollup
+//     envelope.
+//   - JS-side aggregation over a light findMany projection
+//     ({ isActive, createdAt }) — same rationale as the siblings.
+//   - "unknown" bucket: rows with null/invalid createdAt land here so
+//     the count surface stays accurate. Excluded when ?from / ?to is
+//     set (no comparable year token); included otherwise.
+//   - Pagination applied AFTER aggregation + sort + bucket filter —
+//     same posture as the siblings.
+//
+// No audit row written — read-only meta surface; matches /suppliers/stats
+// + /suppliers/by-month + /suppliers/by-quarter posture. USER-readable:
+// anodyne (counts + year tokens).
+//
+// Express route ordering: literal-path /by-year MUST be declared BEFORE
+// the /:id family or `:id="by-year"` would 400 INVALID_ID before
+// reaching this handler. Same convention as /suppliers/by-quarter,
+// /suppliers/by-month, /suppliers/stats, /suppliers/search.
+// ============================================================================
+router.get(
+  "/suppliers/by-year",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+
+      // YYYY validation. Match exactly 4 digits.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "count:asc",
+        "count:desc",
+        "activeCount:asc",
+        "activeCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      // Tenant-scoped where + sub-brand narrowing. Mirrors slice 24
+      // /suppliers/by-month + slice 25 /suppliers/by-quarter posture.
+      // TravelSupplier.subBrand is NON-nullable, so we use a single
+      // `subBrand: { in: [...] }` (no `{ subBrand: null }` OR clause).
+      // Empty allowed set returns the zero-rollup envelope.
+      const where = { tenantId: req.travelTenant.id };
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (allowed.size > 0) {
+          where.subBrand = { in: [...allowed] };
+        } else {
+          where.subBrand = "__none__";
+        }
+      }
+
+      // Light projection — isActive + createdAt is enough for the bucket
+      // totals.
+      const rows = await prisma.travelSupplier.findMany({
+        where,
+        select: { isActive: true, createdAt: true },
+      });
+
+      // Aggregate per-UTC-year. Map "YYYY" → { count, activeCount,
+      // archivedCount }. Null/invalid createdAt rows land in "unknown".
+      const byYear = new Map();
+      for (const r of rows) {
+        let yearKey = "unknown";
+        if (r.createdAt) {
+          const dt = r.createdAt instanceof Date
+            ? r.createdAt
+            : new Date(r.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let bucket = byYear.get(yearKey);
+        if (!bucket) {
+          bucket = {
+            year: yearKey,
+            count: 0,
+            activeCount: 0,
+            archivedCount: 0,
+          };
+          byYear.set(yearKey, bucket);
+        }
+        bucket.count += 1;
+        if (r.isActive) bucket.activeCount += 1;
+        else bucket.archivedCount += 1;
+      }
+
+      let years = [...byYear.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" excluded when either
+      // bound is set (no comparable token); kept otherwise so the count
+      // surface remains complete. YYYY sorts lexicographically the same
+      // as chronologically (4-digit zero-padded).
+      if (fromRaw !== null) {
+        years = years.filter(
+          (r) => r.year !== "unknown" && r.year >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        years = years.filter(
+          (r) => r.year !== "unknown" && r.year <= toRaw,
+        );
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY (also chronological
+      // since 4-digit zero-padded). "unknown" sorts last in asc / first
+      // in desc (lexicographically > "9999") — acceptable for a defensive
+      // fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalYears = years.length;
+      const grandCount = years.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
+      const grandActiveCount = years.reduce(
+        (acc, r) => acc + (Number(r.activeCount) || 0),
+        0,
+      );
+
+      // Pagination AFTER aggregation + sort + filter, same as siblings.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        years: paged,
+        totalYears,
+        grandCount,
+        grandActiveCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute yearly rollup" });
+    }
+  },
+);
+
+// ============================================================================
 // GET /api/travel/suppliers/:id/credentials — per-supplier portal-logins view
 // (Arc 2 #903 slice 13 — PRD_TRAVEL_SUPPLIER_MASTER AC-6.8 "Supplier Portal
 // Logins" sub-tab under the SupplierMaster detail page).
@@ -1620,6 +2478,531 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/compare — multi-supplier side-by-side scorecard
+//                                      (Arc 2 #903 slice 19)
+//
+// PRD §3.7.b sortable suppliers index + §3.7.a per-supplier dashboard +
+// OQ-9.5 quality-score: operators picking between two or three suppliers
+// for the same route/category need a compact "Hilton Mumbai vs Marriott
+// Mumbai vs Taj Mumbai" comparison. Same metrics as slice-16 scorecard
+// (bookingVolume, onTimeDeliveryRate, cancelRate, totalAmountPaid, paid /
+// pending / scheduled / cancelled counts), computed in one batched query
+// per supplier window, then the response also picks a "best" / "worst"
+// summary across the requested set.
+//
+// MUST be registered BEFORE `GET /suppliers/:id` — the literal "compare"
+// token would otherwise be consumed by the :id param (yielding 400
+// INVALID_ID since parseInt("compare") is NaN). Same hazard as slice-10
+// search + slice-11 exposure.
+//
+// Query params:
+//   ids   required, comma-separated supplier ids  — 2..10 items
+//   from  optional ISO date / parseable date string (default: now - 365d)
+//   to    optional ISO date / parseable date string (default: now)
+//
+// Response shape:
+//   {
+//     window: { from, to },
+//     suppliers: [
+//       {
+//         id, name, supplierCategory, subBrand,
+//         metrics: {
+//           bookingVolume, paidCount, cancelledCount, pendingCount,
+//           scheduledCount, onTimeCount, lateCount, onTimeDeliveryRate,
+//           cancelRate, totalAmountPaid,
+//         },
+//       },
+//       ...
+//     ],
+//     summary: {
+//       bestOnTimeSupplierId,    // null if all rates null
+//       worstOnTimeSupplierId,   // null if all rates null
+//       lowestCancelSupplierId,  // null if all rates null
+//       highestVolumeSupplierId, // null if all 0 volume
+//     },
+//   }
+//
+// Decisions:
+//   - 2..10 ids: 1 id makes no sense (use scorecard); >10 is operator
+//     fat-finger / loop sink. Hard cap at 10 keeps the response payload
+//     small (UI table is the realistic consumer; 10 rows fits a viewport
+//     before scrolling).
+//   - Each supplier's metrics are computed via the same shape as slice-16
+//     scorecard so the front-end can re-use that renderer. Reuses
+//     round4Scorecard + round2Scorecard helpers + SCORECARD_DEFAULT_WINDOW_MS
+//     + SCORECARD_MAX_ROWS already declared above.
+//   - Sub-brand access: ALL ids must be in the operator's allowed set. If
+//     ANY id is denied, the whole request returns 403 SUB_BRAND_DENIED with
+//     the offending supplierId — partial responses would create confusing
+//     UX where an operator sees scorecard rows for some suppliers and not
+//     others without knowing why.
+//   - 404: if ANY id is missing, return 404 NOT_FOUND with missingIds[].
+//     Same all-or-nothing principle as sub-brand denial above.
+//   - One batched groupBy across the ids covers payable aggregation cheaply
+//     in the common case (≤10 suppliers, ≤500 payables each). For on-time
+//     metrics we still need the slim row projection (status + dueDate +
+//     paidAt + amount) — done via a single findMany scoped to all ids.
+//   - Error codes: INVALID_IDS, TOO_FEW_IDS, TOO_MANY_IDS, INVALID_ID,
+//     INVALID_DATE, INVALID_DATE_RANGE, NOT_FOUND, SUB_BRAND_DENIED.
+// ============================================================================
+
+const COMPARE_MIN_IDS = 2;
+const COMPARE_MAX_IDS = 10;
+
+function parseCompareIdsOrThrow(input) {
+  if (input == null || String(input).trim() === "") {
+    const err = new Error(
+      "ids query param is required (comma-separated supplier ids)",
+    );
+    err.status = 400;
+    err.code = "INVALID_IDS";
+    throw err;
+  }
+  const parts = String(input)
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+  if (parts.length < COMPARE_MIN_IDS) {
+    const err = new Error(
+      `ids must contain at least ${COMPARE_MIN_IDS} supplier ids`,
+    );
+    err.status = 400;
+    err.code = "TOO_FEW_IDS";
+    throw err;
+  }
+  if (parts.length > COMPARE_MAX_IDS) {
+    const err = new Error(
+      `ids must contain at most ${COMPARE_MAX_IDS} supplier ids`,
+    );
+    err.status = 400;
+    err.code = "TOO_MANY_IDS";
+    throw err;
+  }
+  const ids = [];
+  const seen = new Set();
+  for (const p of parts) {
+    const n = parseInt(p, 10);
+    if (!Number.isFinite(n) || String(n) !== p) {
+      const err = new Error(`ids must all be numeric (offender: "${p}")`);
+      err.status = 400;
+      err.code = "INVALID_ID";
+      throw err;
+    }
+    if (!seen.has(n)) {
+      seen.add(n);
+      ids.push(n);
+    }
+  }
+  if (ids.length < COMPARE_MIN_IDS) {
+    const err = new Error(
+      `ids must contain at least ${COMPARE_MIN_IDS} distinct supplier ids`,
+    );
+    err.status = 400;
+    err.code = "TOO_FEW_IDS";
+    throw err;
+  }
+  return ids;
+}
+
+router.get(
+  "/suppliers/compare",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const ids = parseCompareIdsOrThrow(req.query.ids);
+
+      // Window parsing — mirrors scorecard (same default + same error codes).
+      const now = new Date();
+      let from = null;
+      let to = null;
+      if (req.query.from != null && req.query.from !== "") {
+        const dt = new Date(String(req.query.from));
+        if (Number.isNaN(dt.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date / parseable date string",
+            code: "INVALID_DATE",
+          });
+        }
+        from = dt;
+      }
+      if (req.query.to != null && req.query.to !== "") {
+        const dt = new Date(String(req.query.to));
+        if (Number.isNaN(dt.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date / parseable date string",
+            code: "INVALID_DATE",
+          });
+        }
+        to = dt;
+      }
+      if (from && to && from.getTime() > to.getTime()) {
+        return res.status(400).json({
+          error: "from must not be after to",
+          code: "INVALID_DATE_RANGE",
+        });
+      }
+      if (!from && !to) {
+        to = now;
+        from = new Date(now.getTime() - SCORECARD_DEFAULT_WINDOW_MS);
+      } else if (!from) {
+        from = new Date(to.getTime() - SCORECARD_DEFAULT_WINDOW_MS);
+      } else if (!to) {
+        to = now;
+      }
+
+      const suppliers = await prisma.travelSupplier.findMany({
+        where: { id: { in: ids }, tenantId: req.travelTenant.id },
+        select: { id: true, name: true, supplierCategory: true, subBrand: true },
+      });
+
+      // 404 if ANY requested id is missing — all-or-nothing semantics.
+      if (suppliers.length !== ids.length) {
+        const foundIds = new Set(suppliers.map((s) => s.id));
+        const missingIds = ids.filter((id) => !foundIds.has(id));
+        return res.status(404).json({
+          error: "One or more suppliers not found",
+          code: "NOT_FOUND",
+          missingIds,
+        });
+      }
+
+      // Sub-brand gate: if ANY supplier's subBrand is denied, 403.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const deniedIds = [];
+      for (const s of suppliers) {
+        if (!canAccessSubBrand(allowed, s.subBrand)) deniedIds.push(s.id);
+      }
+      if (deniedIds.length > 0) {
+        return res.status(403).json({
+          error: "Sub-brand access denied for one or more suppliers",
+          code: "SUB_BRAND_DENIED",
+          deniedIds,
+        });
+      }
+
+      const rows = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierId: { in: ids },
+          createdAt: { gte: from, lte: to },
+        },
+        select: {
+          supplierId: true,
+          status: true,
+          dueDate: true,
+          paidAt: true,
+          amount: true,
+        },
+        take: SCORECARD_MAX_ROWS,
+      });
+
+      // Group rows by supplierId, then run the same metric reducer used by
+      // scorecard (slice 16). Each supplier's reducer state stored in a Map
+      // so we can iterate the supplier list in input order at the end.
+      const stateById = new Map();
+      for (const id of ids) {
+        stateById.set(id, {
+          bookingVolume: 0,
+          paidCount: 0,
+          cancelledCount: 0,
+          pendingCount: 0,
+          scheduledCount: 0,
+          onTimeCount: 0,
+          lateCount: 0,
+          totalAmountPaid: 0,
+        });
+      }
+      for (const r of rows) {
+        const st = stateById.get(r.supplierId);
+        if (!st) continue;
+        st.bookingVolume++;
+        if (r.status === "paid") {
+          st.paidCount++;
+          st.totalAmountPaid += Number(r.amount || 0);
+          if (r.dueDate && r.paidAt) {
+            const due = r.dueDate instanceof Date
+              ? r.dueDate.getTime()
+              : new Date(r.dueDate).getTime();
+            const paid = r.paidAt instanceof Date
+              ? r.paidAt.getTime()
+              : new Date(r.paidAt).getTime();
+            if (Number.isFinite(due) && Number.isFinite(paid)) {
+              if (paid <= due) st.onTimeCount++;
+              else st.lateCount++;
+            }
+          }
+        } else if (r.status === "cancelled") {
+          st.cancelledCount++;
+        } else if (r.status === "pending") {
+          st.pendingCount++;
+        } else if (r.status === "scheduled") {
+          st.scheduledCount++;
+        }
+      }
+
+      // Build the suppliers[] array in the ORDER requested by the operator
+      // so the comparison columns line up with their query.
+      const supplierById = new Map(suppliers.map((s) => [s.id, s]));
+      const resultSuppliers = ids.map((id) => {
+        const s = supplierById.get(id);
+        const st = stateById.get(id);
+        const onTimeDenom = st.onTimeCount + st.lateCount;
+        const onTimeDeliveryRate = onTimeDenom > 0
+          ? round4Scorecard(st.onTimeCount / onTimeDenom)
+          : null;
+        const cancelRate = st.bookingVolume > 0
+          ? round4Scorecard(st.cancelledCount / st.bookingVolume)
+          : null;
+        return {
+          id: s.id,
+          name: s.name,
+          supplierCategory: s.supplierCategory,
+          subBrand: s.subBrand,
+          metrics: {
+            bookingVolume: st.bookingVolume,
+            paidCount: st.paidCount,
+            cancelledCount: st.cancelledCount,
+            pendingCount: st.pendingCount,
+            scheduledCount: st.scheduledCount,
+            onTimeCount: st.onTimeCount,
+            lateCount: st.lateCount,
+            onTimeDeliveryRate,
+            cancelRate,
+            totalAmountPaid: round2Scorecard(st.totalAmountPaid),
+          },
+        };
+      });
+
+      // Cross-supplier summary — pick best/worst across the comparison set.
+      // Nulls are excluded from best/worst picks; if every supplier has a
+      // null rate (no on-time-eligible rows), the corresponding pick is null.
+      let bestOnTimeSupplierId = null;
+      let worstOnTimeSupplierId = null;
+      let lowestCancelSupplierId = null;
+      let highestVolumeSupplierId = null;
+      let bestOnTimeVal = -Infinity;
+      let worstOnTimeVal = Infinity;
+      let lowestCancelVal = Infinity;
+      let highestVolumeVal = -Infinity;
+      for (const r of resultSuppliers) {
+        if (r.metrics.onTimeDeliveryRate != null) {
+          if (r.metrics.onTimeDeliveryRate > bestOnTimeVal) {
+            bestOnTimeVal = r.metrics.onTimeDeliveryRate;
+            bestOnTimeSupplierId = r.id;
+          }
+          if (r.metrics.onTimeDeliveryRate < worstOnTimeVal) {
+            worstOnTimeVal = r.metrics.onTimeDeliveryRate;
+            worstOnTimeSupplierId = r.id;
+          }
+        }
+        if (r.metrics.cancelRate != null) {
+          if (r.metrics.cancelRate < lowestCancelVal) {
+            lowestCancelVal = r.metrics.cancelRate;
+            lowestCancelSupplierId = r.id;
+          }
+        }
+        if (r.metrics.bookingVolume > 0 && r.metrics.bookingVolume > highestVolumeVal) {
+          highestVolumeVal = r.metrics.bookingVolume;
+          highestVolumeSupplierId = r.id;
+        }
+      }
+
+      res.json({
+        window: { from: from.toISOString(), to: to.toISOString() },
+        suppliers: resultSuppliers,
+        summary: {
+          bestOnTimeSupplierId,
+          worstOnTimeSupplierId,
+          lowestCancelSupplierId,
+          highestVolumeSupplierId,
+        },
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] compare error:", e.message);
+      res.status(500).json({ error: "Failed to compare suppliers" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/suppliers/:id/timeline — unified supplier-event feed
+// (Arc 2 #903 slice 21 — PRD_TRAVEL_SUPPLIER_MASTER §3.7.a per-supplier
+// dashboard "activity stream"; sibling to §3.1.g dispute-history surface).
+//
+// Composes events from existing data sources (NO schema edit):
+//   - SUPPLIER_CREATED / SUPPLIER_UPDATED (from TravelSupplier.createdAt /
+//     updatedAt, with a 1s delta guard so the auto-stamped same-txn mirror
+//     doesn't appear as a phantom update).
+//   - PAYABLE_CREATED / PAYABLE_PAID / PAYABLE_CANCELLED (from
+//     TravelSupplierPayable rows — paidAt fires the PAID event; status=
+//     cancelled with updatedAt fires the CANCELLED event since there's no
+//     dedicated cancelledAt column).
+//   - CREDENTIAL_CREATED (from SupplierCredential rows joined by
+//     name-match against supplier.name within tenant — same join used by
+//     slice 13 /credentials and slice 15 /access-trail).
+//   - CREDENTIAL_<ACTION> (from SupplierCredentialAccessLog rows: ROTATED,
+//     VIEWED, USED_IN_CHECKIN, DELETED, ...).
+//
+// Merge + sort done in the pure backend/lib/supplierTimeline.js helper so
+// the route stays IO-only. Helper handles `?since=<ISODate>` and
+// `?limit=<N>` (default 100, capped at 500).
+//
+// Auth: any verified token; tenant + sub-brand access enforced via
+// loadParentSupplier (returns SUPPLIER_NOT_FOUND / SUB_BRAND_DENIED).
+//
+// Query params (all optional):
+//   ?limit=N           — max events returned (default 100, cap 500;
+//                        invalid → silent fallback to 100, mirroring
+//                        access-trail's parseAccessTrailLimit defensive shape).
+//   ?since=<ISODate>   — only events strictly later than this. Invalid
+//                        parseable date → 400 INVALID_SINCE.
+//
+// Response shape:
+//   {
+//     supplier: { id, name, supplierCategory, subBrand },
+//     events: [ { kind, at, id, ...payload }, ... ],   // newest-first
+//     count: <events.length>,
+//     limit: <effectiveLimit>
+//   }
+//
+// Decisions:
+//   - Reuse loadParentSupplier so the 400/404/403 contract for the parent
+//     supplier matches sibling /payables, /scorecard, /access-trail routes.
+//   - Per-source findMany takes 500 each (matches MAX_LIMIT) so a high-
+//     traffic supplier with many recent payables doesn't starve the
+//     credential/access-log streams. Total event payload bounded by limit.
+//   - Helper returns events with payload fields (amount/currency/poNumber
+//     for payables; category for credentials; userId/credentialId for
+//     access-log) so the timeline UI can render meaningful entries without
+//     a follow-up lookup per event.
+//   - Route ordering: registered BEFORE /suppliers/:id (sub-paths-before-:id
+//     standing rule) so `timeline` cannot be captured as an `id`.
+// ============================================================================
+
+const {
+  composeSupplierTimeline,
+  TIMELINE_DEFAULT_LIMIT,
+  TIMELINE_MAX_LIMIT,
+} = require("../lib/supplierTimeline");
+const TIMELINE_PER_SOURCE_TAKE = TIMELINE_MAX_LIMIT;
+
+router.get(
+  "/suppliers/:id/timeline",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // Parse limit defensively — invalid values fall back to default
+      // rather than 400 (mirrors access-trail parseAccessTrailOffset shape
+      // for non-numeric / negative inputs).
+      let limit = TIMELINE_DEFAULT_LIMIT;
+      if (req.query.limit != null && req.query.limit !== "") {
+        const v = Number(req.query.limit);
+        if (Number.isInteger(v) && v >= 1) {
+          limit = Math.min(v, TIMELINE_MAX_LIMIT);
+        }
+      }
+
+      // ?since parsing — surface INVALID_SINCE (distinct from INVALID_DATE
+      // used by scorecard so the caller can distinguish a cursor parse
+      // failure from a window-bound parse failure).
+      let since = null;
+      if (req.query.since != null && req.query.since !== "") {
+        const parsed = new Date(String(req.query.since));
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "since must be a valid ISO date / parseable date string",
+            code: "INVALID_SINCE",
+          });
+        }
+        since = parsed;
+      }
+
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const [payables, credentials] = await Promise.all([
+        prisma.travelSupplierPayable.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            supplierId: supplier.id,
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            updatedAt: true,
+            paidAt: true,
+            status: true,
+            amount: true,
+            currency: true,
+            poNumber: true,
+          },
+          orderBy: { createdAt: "desc" },
+          take: TIMELINE_PER_SOURCE_TAKE,
+        }),
+        prisma.supplierCredential.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            supplierName: supplier.name,
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            category: true,
+          },
+          take: TIMELINE_PER_SOURCE_TAKE,
+        }),
+      ]);
+
+      // Access log is keyed by credentialId — short-circuit if no creds.
+      let accessLog = [];
+      if (credentials.length > 0) {
+        const credIds = credentials.map((c) => c.id);
+        accessLog = await prisma.supplierCredentialAccessLog.findMany({
+          where: { credentialId: { in: credIds } },
+          select: {
+            id: true,
+            credentialId: true,
+            userId: true,
+            action: true,
+            at: true,
+          },
+          orderBy: { at: "desc" },
+          take: TIMELINE_PER_SOURCE_TAKE,
+        });
+      }
+
+      const events = composeSupplierTimeline(
+        { supplier, payables, credentials, accessLog },
+        { limit, since },
+      );
+
+      res.json({
+        supplier: {
+          id: supplier.id,
+          name: supplier.name,
+          supplierCategory: supplier.supplierCategory,
+          subBrand: supplier.subBrand,
+        },
+        events,
+        count: events.length,
+        limit,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] timeline error:", e.message);
+      res.status(500).json({ error: "Failed to build supplier timeline" });
+    }
+  },
+);
+
 // GET /api/travel/suppliers/:id
 router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {
@@ -2237,6 +3620,143 @@ router.get(
   },
 );
 
+// ============================================================================
+// GET /api/travel/suppliers/:id/payables/quarterly — Arc 2 #903 slice 20 —
+// per-supplier quarterly payable rollup (PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.d
+// + §3.5.b "commission ledger per FY" precursor — FY-wide rollup composes
+// from quarterly which composes from monthly).
+//
+// Sibling to slice 18's /:id/payables/monthly — same parent-supplier guard
+// (loadParentSupplier) + same hard cap on payable rows fetched
+// (QUARTERLY_MAX_ROWS = 10_000) + same lib-pure aggregation
+// (computeQuarterlyRollup in payableAging.js, which composes from
+// computeMonthlyRollup so the per-status break is identical).
+//
+// Operator use-case: per-supplier detail page shows a "next 4 quarters
+// payable schedule" widget. Quarters are calendar-based
+// (Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec). Each quarter
+// displays total owed split by status — pending vs scheduled vs paid
+// vs cancelled — so finance can plan cash-flow by quarter rather than
+// scanning 12 monthly buckets at once.
+//
+// Optional ?from + ?to query bounds the result quarters (inclusive,
+// YYYY-Qn lexical compare works because Q1 < Q2 < Q3 < Q4). When
+// omitted, the route returns every quarter the supplier has a payable
+// scheduled for. Bounds are dates (YYYY-MM-DD form) — same parser as
+// the monthly route — that get mapped to their enclosing quarter.
+//
+// Route ordering: must register BEFORE /:id/payables/:payableId
+//   (PUT/DELETE) so "quarterly" cannot be captured as a payableId — same
+//   sub-paths-before-:id discipline used by slices 13-18.
+// ============================================================================
+
+const { computeQuarterlyRollup } = require("../lib/payableAging");
+const QUARTERLY_MAX_ROWS = 10_000;
+
+function dateToQuarterKey(d) {
+  const y = d.getUTCFullYear();
+  const q = Math.floor(d.getUTCMonth() / 3) + 1;
+  return `${y}-Q${q}`;
+}
+
+router.get(
+  "/suppliers/:id/payables/quarterly",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // Optional from / to bounds — applied at quarter-level after rollup.
+      // Parsing happens BEFORE loadParentSupplier so an invalid date
+      // surfaces 400 INVALID_FROM / INVALID_TO without a DB round-trip.
+      let fromQuarterKey = null;
+      let toQuarterKey = null;
+      if (req.query.from != null && req.query.from !== "") {
+        const parsed = new Date(String(req.query.from));
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date / parseable date string",
+            code: "INVALID_FROM",
+          });
+        }
+        fromQuarterKey = dateToQuarterKey(parsed);
+      }
+      if (req.query.to != null && req.query.to !== "") {
+        const parsed = new Date(String(req.query.to));
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date / parseable date string",
+            code: "INVALID_TO",
+          });
+        }
+        toQuarterKey = dateToQuarterKey(parsed);
+      }
+
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const rows = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+        },
+        select: {
+          id: true,
+          dueDate: true,
+          status: true,
+          amount: true,
+        },
+        take: QUARTERLY_MAX_ROWS,
+      });
+
+      const rollup = computeQuarterlyRollup(rows);
+
+      // Apply from / to bounds (inclusive, YYYY-Qn lexical compare —
+      // works because Q1 < Q2 < Q3 < Q4 sort lexically within a year
+      // and years are zero-padded year-first).
+      let quarters = rollup.quarters;
+      if (fromQuarterKey) {
+        quarters = quarters.filter((q) => q.quarter >= fromQuarterKey);
+      }
+      if (toQuarterKey) {
+        quarters = quarters.filter((q) => q.quarter <= toQuarterKey);
+      }
+
+      // Recompute grandTotal + totalCount over the filtered window so the
+      // caller's "this window's owed amount" matches the quarters array.
+      let windowGrandTotal = 0;
+      let windowTotalCount = 0;
+      for (const q of quarters) {
+        windowGrandTotal =
+          Math.round((windowGrandTotal + q.totalAmount + Number.EPSILON) * 100) /
+          100;
+        windowTotalCount += q.totalCount;
+      }
+
+      res.json({
+        supplier: {
+          id: supplier.id,
+          name: supplier.name,
+          supplierCategory: supplier.supplierCategory,
+          subBrand: supplier.subBrand,
+        },
+        from: fromQuarterKey,
+        to: toQuarterKey,
+        quarters,
+        grandTotal: windowGrandTotal,
+        totalCount: windowTotalCount,
+        excludedCount: rollup.excludedCount,
+        excludedReasons: rollup.excludedReasons,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] per-supplier quarterly rollup error:", e.message);
+      res.status(500).json({ error: "Failed to build per-supplier quarterly rollup" });
+    }
+  },
+);
+
 // POST /api/travel/suppliers/:id/payables — ADMIN/MANAGER only.
 // Required: description, amount. Optional: poNumber, currency, dueDate, notes, status.
 router.post(
@@ -2837,6 +4357,256 @@ router.get(
       }
       console.error("[travel-sup] aged payables error:", e.message);
       res.status(500).json({ error: "Failed to build aged-payable report" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/suppliers/:id/payables/yearly — Arc 2 #903 slice 22 —
+// per-supplier annual payable rollup (PRD_TRAVEL_SUPPLIER_MASTER §3.7).
+//
+// Completes the time-series triplet alongside slice 18's
+// /:id/payables/monthly and slice 20's /:id/payables/quarterly. Returns
+// calendar-year buckets (YYYY, UTC) so a per-supplier dashboard can show
+// "what did we owe / pay this supplier each year" for the standard
+// 10-year decade lookback widget.
+//
+// Same parent-supplier guard (loadParentSupplier) — same 400 INVALID_ID /
+// 404 SUPPLIER_NOT_FOUND / 403 SUB_BRAND_DENIED contract.
+//
+// Aggregation differs intentionally from monthly/quarterly:
+//   - Bucket key is `createdAt` UTC year (when the payable was BOOKED),
+//     not `dueDate`. Yearly rollups are the historical "supplier spend
+//     report" surface; finance teams care when the obligation was
+//     INCURRED for that year's budget reconciliation, not when it was
+//     due. Monthly/quarterly use dueDate because they feed cash-flow
+//     planning ("what's owed THIS month" vs "what was booked LAST
+//     year").
+//   - Paid-vs-open split via `paidAt non-null` rather than a 4-way
+//     status break. Matches the timeline event (slice 21) + payable
+//     PATCH (slice 6) conventions: status=paid implies paidAt=now() if
+//     unset, so paidAt is the canonical paid signal.
+//   - `unknown` bucket for null/invalid createdAt — defensive against
+//     rows where the createdAt column was stripped by an old import.
+//     Sorted lexicographically; "unknown" sorts after numeric years
+//     when ASC.
+//
+// Query surface (all optional):
+//   ?from=YYYY / ?to=YYYY   — inclusive year bounds (regex /^\d{4}$/).
+//                             Unparseable → 400 INVALID_YEAR_FORMAT
+//                             (supplier lookup NOT attempted).
+//   ?orderBy=<field>:<dir>  — default year:asc. Valid fields:
+//                             year, totalAmount, payableCount.
+//                             Valid dirs: asc, desc. Unknown token
+//                             silently degrades to default.
+//   ?limit=N                — default 10 (a decade), max 30.
+//   ?offset=N               — default 0.
+//
+// Response shape:
+//   {
+//     supplierId, supplierName,
+//     years: [ { year, payableCount, totalAmount, paidAmount, openAmount } ],
+//     totalYears,             // count BEFORE limit/offset, AFTER from/to
+//     grandTotalAmount,       // sum across windowed years
+//     grandPaidAmount,
+//     grandOpenAmount,
+//     limit, offset,
+//   }
+//
+// Defensive math: null/NaN/non-finite `amount` → 0 contribution. Sort is
+// AFTER aggregate + from/to filter; pagination is the final step.
+//
+// Route ordering: placed at end-of-file is safe because the colliding
+// candidate /:id/payables/:payableId is PUT/DELETE-only (no GET shape).
+// ============================================================================
+
+const YEARLY_MAX_ROWS = 10_000;
+const YEARLY_DEFAULT_LIMIT = 10;
+const YEARLY_MAX_LIMIT = 30;
+const YEARLY_VALID_ORDER_FIELDS = new Set(["year", "totalAmount", "payableCount"]);
+const YEARLY_VALID_ORDER_DIRS = new Set(["asc", "desc"]);
+const YEARLY_DEFAULT_ORDER_FIELD = "year";
+const YEARLY_DEFAULT_ORDER_DIR = "asc";
+const YEAR_FORMAT_RE = /^\d{4}$/;
+
+function parseYearlyOrderBy(input) {
+  if (input == null || String(input).trim() === "") {
+    return { field: YEARLY_DEFAULT_ORDER_FIELD, dir: YEARLY_DEFAULT_ORDER_DIR };
+  }
+  const raw = String(input).trim();
+  const parts = raw.split(":");
+  if (parts.length !== 2) {
+    return { field: YEARLY_DEFAULT_ORDER_FIELD, dir: YEARLY_DEFAULT_ORDER_DIR };
+  }
+  const [field, dir] = parts;
+  if (!YEARLY_VALID_ORDER_FIELDS.has(field) || !YEARLY_VALID_ORDER_DIRS.has(dir)) {
+    return { field: YEARLY_DEFAULT_ORDER_FIELD, dir: YEARLY_DEFAULT_ORDER_DIR };
+  }
+  return { field, dir };
+}
+
+function safeAmount(v) {
+  if (v == null) return 0;
+  // Prisma Decimal serializes to string in some configurations; Number()
+  // handles both number + numeric-string inputs.
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return n;
+}
+
+function yearKeyOf(createdAt) {
+  if (createdAt == null) return "unknown";
+  const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  if (Number.isNaN(d.getTime())) return "unknown";
+  return String(d.getUTCFullYear());
+}
+
+router.get(
+  "/suppliers/:id/payables/yearly",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // Year-format validation runs BEFORE loadParentSupplier so invalid
+      // bounds surface 400 without a DB round-trip.
+      let fromYear = null;
+      let toYear = null;
+      if (req.query.from != null && req.query.from !== "") {
+        const raw = String(req.query.from).trim();
+        if (!YEAR_FORMAT_RE.test(raw)) {
+          return res.status(400).json({
+            error: "from must be a 4-digit year (YYYY)",
+            code: "INVALID_YEAR_FORMAT",
+          });
+        }
+        fromYear = raw;
+      }
+      if (req.query.to != null && req.query.to !== "") {
+        const raw = String(req.query.to).trim();
+        if (!YEAR_FORMAT_RE.test(raw)) {
+          return res.status(400).json({
+            error: "to must be a 4-digit year (YYYY)",
+            code: "INVALID_YEAR_FORMAT",
+          });
+        }
+        toYear = raw;
+      }
+
+      const { field: orderField, dir: orderDir } = parseYearlyOrderBy(req.query.orderBy);
+
+      let limit = YEARLY_DEFAULT_LIMIT;
+      if (req.query.limit != null && req.query.limit !== "") {
+        const v = Number(req.query.limit);
+        if (Number.isInteger(v) && v >= 1) {
+          limit = Math.min(v, YEARLY_MAX_LIMIT);
+        }
+      }
+      let offset = 0;
+      if (req.query.offset != null && req.query.offset !== "") {
+        const v = Number(req.query.offset);
+        if (Number.isInteger(v) && v >= 0) {
+          offset = v;
+        }
+      }
+
+      const supplier = await loadParentSupplier(req, res);
+      if (!supplier) return;
+
+      const rows = await prisma.travelSupplierPayable.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+        },
+        select: {
+          id: true,
+          createdAt: true,
+          paidAt: true,
+          amount: true,
+        },
+        take: YEARLY_MAX_ROWS,
+      });
+
+      // Aggregate per year.
+      const byYear = new Map();
+      for (const r of rows) {
+        const yk = yearKeyOf(r.createdAt);
+        if (!byYear.has(yk)) {
+          byYear.set(yk, {
+            year: yk,
+            payableCount: 0,
+            totalAmount: 0,
+            paidAmount: 0,
+            openAmount: 0,
+          });
+        }
+        const bucket = byYear.get(yk);
+        const amt = safeAmount(r.amount);
+        bucket.payableCount += 1;
+        bucket.totalAmount = Math.round((bucket.totalAmount + amt + Number.EPSILON) * 100) / 100;
+        if (r.paidAt != null) {
+          bucket.paidAmount = Math.round((bucket.paidAmount + amt + Number.EPSILON) * 100) / 100;
+        } else {
+          bucket.openAmount = Math.round((bucket.openAmount + amt + Number.EPSILON) * 100) / 100;
+        }
+      }
+
+      // Apply from/to filter (string compare — "2026" >= "2024" is correct
+      // for YYYY zero-padded strings; "unknown" is excluded from any
+      // bounded window since it doesn't satisfy /^\d{4}$/).
+      let years = Array.from(byYear.values());
+      if (fromYear) years = years.filter((y) => y.year !== "unknown" && y.year >= fromYear);
+      if (toYear) years = years.filter((y) => y.year !== "unknown" && y.year <= toYear);
+
+      // Sort AFTER filter, BEFORE pagination. Lexicographic for `year`
+      // (numeric YYYY sorts correctly as strings; "unknown" sorts after
+      // numeric in ASC, before in DESC).
+      years.sort((a, b) => {
+        let cmp;
+        if (orderField === "year") {
+          cmp = a.year < b.year ? -1 : a.year > b.year ? 1 : 0;
+        } else {
+          // numeric fields
+          const av = a[orderField];
+          const bv = b[orderField];
+          cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        }
+        return orderDir === "desc" ? -cmp : cmp;
+      });
+
+      const totalYears = years.length;
+
+      // Compute grand totals over the filtered window (BEFORE pagination
+      // so the grand totals reflect the full filtered set, not just the
+      // current page).
+      let grandTotalAmount = 0;
+      let grandPaidAmount = 0;
+      let grandOpenAmount = 0;
+      for (const y of years) {
+        grandTotalAmount = Math.round((grandTotalAmount + y.totalAmount + Number.EPSILON) * 100) / 100;
+        grandPaidAmount = Math.round((grandPaidAmount + y.paidAmount + Number.EPSILON) * 100) / 100;
+        grandOpenAmount = Math.round((grandOpenAmount + y.openAmount + Number.EPSILON) * 100) / 100;
+      }
+
+      // Paginate.
+      const paged = years.slice(offset, offset + limit);
+
+      res.json({
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        years: paged,
+        totalYears,
+        grandTotalAmount,
+        grandPaidAmount,
+        grandOpenAmount,
+        limit,
+        offset,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-sup] per-supplier yearly rollup error:", e.message);
+      res.status(500).json({ error: "Failed to build per-supplier yearly rollup" });
     }
   },
 );

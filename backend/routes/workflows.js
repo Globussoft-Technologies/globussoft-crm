@@ -121,9 +121,30 @@ router.get("/history", async (req, res) => {
 // GET / — list all automation rules for tenant
 router.get("/", async (req, res) => {
   try {
-    const rules = await prisma.automationRule.findMany({
-      where: { tenantId: req.user.tenantId },
-    });
+    // #920 slice 17 — payload reduction via opt-in slim shape. When the caller
+    // passes ?fields=summary, GET /api/workflows returns only the columns
+    // needed for list / picker / dashboard-counter UIs (id, name, triggerType,
+    // actionType, isActive, tenantId). The slim branch drops the heavy
+    // `targetState` and `condition` text fields — both are `@db.Text` JSON
+    // blobs that can run tens of KB per row for complex rules (multi-clause
+    // conditions, templated email bodies, webhook URLs + headers, etc.) and
+    // are never needed by the directory view in Workflows.jsx (it only
+    // renders name + trigger + action + active-toggle). ADDITIVE: when
+    // ?fields is absent or any other value, the prior full-row shape is
+    // preserved (no `select`), so the existing builder UI + the workflow
+    // engine's own findMany walks keep getting the full payload.
+    const isSummary = req.query.fields === "summary";
+    const slimSelect = {
+      id: true,
+      name: true,
+      triggerType: true,
+      actionType: true,
+      isActive: true,
+      tenantId: true,
+    };
+    const findArgs = { where: { tenantId: req.user.tenantId } };
+    if (isSummary) findArgs.select = slimSelect;
+    const rules = await prisma.automationRule.findMany(findArgs);
     res.json(rules);
   } catch (_error) {
     res.status(500).json({ error: "Failed to fetch workflows" });

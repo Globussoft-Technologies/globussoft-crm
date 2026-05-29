@@ -450,4 +450,215 @@ describe('cron/backupEngine — retention pruning', () => {
 
     expect(fs.existsSync(oldPath)).toBe(true);
   });
+
+  test('pruning leaves non-matching files (only touches backup-*.sql.gz)', async () => {
+    // Files NOT matching the strict `backup-*.sql.gz` glob must survive
+    // pruning even when older than the cutoff — pruneOldBackups intentionally
+    // narrow-filters on the prefix+suffix so ad-hoc archives, README files,
+    // and other artefacts in BACKUP_DIR are never touched. Pins the
+    // filter contract at lib line 526.
+    const oldArchive = path.join(tmpDir, 'archive-2020.tar.gz');
+    const oldReadme = path.join(tmpDir, 'README.md');
+    const oldOtherSql = path.join(tmpDir, 'snapshot-2020.sql.gz'); // no 'backup-' prefix
+    fs.writeFileSync(oldArchive, 'archive');
+    fs.writeFileSync(oldReadme, 'readme');
+    fs.writeFileSync(oldOtherSql, 'snapshot');
+    const ancient = new Date('2020-01-01');
+    fs.utimesSync(oldArchive, ancient, ancient);
+    fs.utimesSync(oldReadme, ancient, ancient);
+    fs.utimesSync(oldOtherSql, ancient, ancient);
+
+    const dump = makeFakeProcess();
+    const gz = makeFakeProcess({ captureFileStream: true });
+    setupSpawnSequence([dump, gz]);
+    driveSuccess(dump, gz);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await backupEngine.runBackup({ filename: 'prune-filter.sql.gz' });
+    logSpy.mockRestore();
+
+    expect(result.success).toBe(true);
+    expect(fs.existsSync(oldArchive)).toBe(true);
+    expect(fs.existsSync(oldReadme)).toBe(true);
+    expect(fs.existsSync(oldOtherSql)).toBe(true);
+  });
+
+  test('BACKUP_RETENTION_DAYS falls back to default 30 when set to a non-positive value', async () => {
+    // The parse helper coerces to 30 when the parsed int is NaN, zero, or
+    // negative (lib line 75-76). A file 25 days old must SURVIVE — older
+    // than the bogus '0' override would imply, but younger than the
+    // fallback 30-day default.
+    process.env.BACKUP_RETENTION_DAYS = '0';
+    const recentish = path.join(tmpDir, 'backup-25d.sql.gz');
+    fs.writeFileSync(recentish, 'middle');
+    const twentyFiveDaysAgo = new Date(Date.now() - 25 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(recentish, twentyFiveDaysAgo, twentyFiveDaysAgo);
+
+    const dump = makeFakeProcess();
+    const gz = makeFakeProcess({ captureFileStream: true });
+    setupSpawnSequence([dump, gz]);
+    driveSuccess(dump, gz);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await backupEngine.runBackup({ filename: 'retain-default.sql.gz' });
+    logSpy.mockRestore();
+
+    expect(fs.existsSync(recentish)).toBe(true);
+  });
+});
+
+describe('cron/backupEngine — auto filename + dir creation + envelope shape', () => {
+  beforeEach(() => {
+    process.env.DATABASE_URL = 'mysql://gbsuser:gbspass@127.0.0.1:3306/gbscrm';
+  });
+
+  test('auto-generated filename when opts.filename omitted matches `backup-<iso-ish>.sql.gz`', async () => {
+    // When opts.filename is not provided, the engine generates
+    //   `backup-<ISO with [:.] replaced by '-' and sliced to 19 chars>.sql.gz`
+    // (lib line 437-438). Pin the shape so a future "let's add fractional
+    // seconds" tweak doesn't silently break the rotation glob.
+    const dump = makeFakeProcess();
+    const gz = makeFakeProcess({ captureFileStream: true });
+    setupSpawnSequence([dump, gz]);
+    driveSuccess(dump, gz);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await backupEngine.runBackup();
+    logSpy.mockRestore();
+
+    expect(result.success).toBe(true);
+    // YYYY-MM-DDTHH-MM-SS (19 chars; T separator preserved; ':' → '-').
+    expect(result.file).toMatch(/^backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.sql\.gz$/);
+  });
+
+  test('runBackup auto-creates BACKUP_DIR when missing (mkdirSync recursive)', async () => {
+    // Remove the tmp dir BEFORE invoking runBackup; engine must
+    // recreate it at line 434. Without this, fs.createWriteStream would
+    // throw ENOENT and the run would surface WRITE_FAILED — silent
+    // regression risk if someone deletes the `fs.mkdirSync` call.
+    fs.rmdirSync(tmpDir);
+    expect(fs.existsSync(tmpDir)).toBe(false);
+
+    const dump = makeFakeProcess();
+    const gz = makeFakeProcess({ captureFileStream: true });
+    setupSpawnSequence([dump, gz]);
+    driveSuccess(dump, gz);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await backupEngine.runBackup({ filename: 'mkdir-test.sql.gz' });
+    logSpy.mockRestore();
+
+    expect(result.success).toBe(true);
+    expect(fs.existsSync(tmpDir)).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'mkdir-test.sql.gz'))).toBe(true);
+  });
+
+  test('envelope includes durationMs as a non-negative number on every path', async () => {
+    // Pins that the envelope shape is consistent across success + failure
+    // — `durationMs` must always be present and numeric so the
+    // /api/admin/backup/run route can surface it in its response without
+    // a `?? 0` fallback.
+    process.env.DATABASE_URL = 'not-parseable';
+    const r1 = await backupEngine.runBackup();
+    expect(r1.success).toBe(false);
+    expect(typeof r1.durationMs).toBe('number');
+    expect(r1.durationMs).toBeGreaterThanOrEqual(0);
+
+    process.env.DATABASE_URL = 'mysql://gbsuser:gbspass@127.0.0.1:3306/gbscrm';
+    const dump = makeFakeProcess();
+    const gz = makeFakeProcess({ captureFileStream: true });
+    setupSpawnSequence([dump, gz]);
+    driveSuccess(dump, gz);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const r2 = await backupEngine.runBackup({ filename: 'duration.sql.gz' });
+    logSpy.mockRestore();
+    expect(r2.success).toBe(true);
+    expect(typeof r2.durationMs).toBe('number');
+    expect(r2.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test('PATH mode args include -h <host>, -P <port> from DATABASE_URL (no shell metachars exposed)', async () => {
+    // Defence-in-depth check: each arg is a discrete element passed via
+    // spawn (no shell). The host + port must come straight through from
+    // the parsed URL, in the right positions.
+    process.env.DATABASE_URL = 'mysql://gbsuser:gbspass@db.internal:3307/customdb';
+    const dump = makeFakeProcess();
+    const gz = makeFakeProcess({ captureFileStream: true });
+    setupSpawnSequence([dump, gz]);
+    driveSuccess(dump, gz);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await backupEngine.runBackup({ filename: 'args-shape.sql.gz' });
+    logSpy.mockRestore();
+
+    const [bin, args] = spawnMock.mock.calls[0];
+    expect(bin).toBe('mysqldump');
+    const hIdx = args.indexOf('-h');
+    expect(hIdx).toBeGreaterThan(-1);
+    expect(args[hIdx + 1]).toBe('db.internal');
+    const pIdx = args.indexOf('-P');
+    expect(pIdx).toBeGreaterThan(-1);
+    expect(args[pIdx + 1]).toBe('3307');
+    // Password glued to -p with NO space (mysqldump quirk).
+    expect(args).toContain('-pgbspass');
+    expect(args).toContain('customdb');
+    // The flag block.
+    expect(args).toContain('--quick');
+    expect(args).toContain('--no-tablespaces');
+  });
+
+  test('DATABASE_URL with ?query suffix parses dbname correctly (strips query)', async () => {
+    // Prisma-style URLs sometimes append `?ssl=true&connection_limit=N`;
+    // the parser at lib line 81 must NOT include the query string in
+    // dbName. Pin via observing what gets passed as the final mysqldump
+    // positional arg.
+    process.env.DATABASE_URL = 'mysql://gbsuser:gbspass@127.0.0.1:3306/gbscrm?ssl=true&pool=5';
+    const dump = makeFakeProcess();
+    const gz = makeFakeProcess({ captureFileStream: true });
+    setupSpawnSequence([dump, gz]);
+    driveSuccess(dump, gz);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await backupEngine.runBackup({ filename: 'query-suffix.sql.gz' });
+    logSpy.mockRestore();
+
+    const [, args] = spawnMock.mock.calls[0];
+    // Strict equality, not toContain — there should be NO 'gbscrm?ssl=true...'.
+    expect(args).toContain('gbscrm');
+    expect(args.some((a) => typeof a === 'string' && a.includes('?'))).toBe(false);
+  });
+});
+
+describe('cron/backupEngine — listBackups option bounds', () => {
+  test('listBackups returns [] when backup dir does not exist', () => {
+    // Set BACKUP_DIR to a path that does not exist on disk — the helper
+    // must return [] not throw (lib line 541). The /api/admin/backup/list
+    // route relies on this gracefully-empty behaviour to render an empty
+    // table instead of 500ing a fresh-install instance.
+    const nonexistent = path.join(tmpDir, 'does-not-exist-subdir');
+    process.env.BACKUP_DIR = nonexistent;
+    expect(backupEngine.listBackups()).toEqual([]);
+  });
+
+  test('listBackups caps limit at 100 (silently clamps absurd asks)', () => {
+    // Defensive cap at lib line 552: Math.max(0, Math.min(100, limit | 0)).
+    // A caller asking for limit=999 receives at most 100 entries —
+    // protects the route from accidentally streaming a huge directory
+    // listing as JSON.
+    for (let i = 0; i < 150; i++) {
+      fs.writeFileSync(path.join(tmpDir, `backup-${String(i).padStart(3, '0')}.sql.gz`), 'x');
+    }
+    const list = backupEngine.listBackups({ limit: 999 });
+    expect(list.length).toBeLessThanOrEqual(100);
+    expect(list.length).toBe(100);
+  });
+
+  test('listBackups returns [] when limit is negative or zero', () => {
+    fs.writeFileSync(path.join(tmpDir, 'backup-a.sql.gz'), 'a');
+    fs.writeFileSync(path.join(tmpDir, 'backup-b.sql.gz'), 'b');
+    // limit=0 → slice(0, 0) → []
+    expect(backupEngine.listBackups({ limit: 0 })).toEqual([]);
+    // limit=-5 → Math.max(0, Math.min(100, -5|0)) = Math.max(0, -5) = 0 → []
+    expect(backupEngine.listBackups({ limit: -5 })).toEqual([]);
+  });
 });

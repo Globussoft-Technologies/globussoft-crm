@@ -368,3 +368,103 @@ describe('DELETE /api/contracts/:id — delete (#550: 204 No Content)', () => {
     expect(prisma.contract.delete).not.toHaveBeenCalled();
   });
 });
+
+// ─── GET /?fields=summary — slim-shape opt-in (#920 slice 14) ──────
+//
+// Mirrors prior 12 slices (contacts f7790241 / deals 6786c2da / tickets
+// badc9cca / tasks eec7d856 / projects 257771a0 / expenses e81e6cb5 /
+// notifications a3487518 / surveys e71594d9 / email-templates 0d4a63f9 /
+// knowledge-base 21ad3290 / sequences). When ?fields=summary, the route
+// switches from include:{contact,deal} (relation joins) + default-select-
+// all (which pulls the heavy `terms` String? @db.Text column) to an
+// explicit Prisma `select` listing only the columns the list renderer
+// actually needs. Opt-in additive — non-matching ?fields values fall
+// through to the default include-shape.
+describe('GET /api/contracts?fields=summary — slim-shape opt-in (#920)', () => {
+  test('?fields=summary forwards a Prisma `select` (not include) — drops heavy terms + relations', async () => {
+    prisma.contract.findMany.mockResolvedValue([]);
+    const app = makeApp({ tenantId: 1 });
+    await request(app).get('/api/contracts?fields=summary');
+    const findArgs = prisma.contract.findMany.mock.calls[0][0];
+    // The opt-in MUST flip to a select — include would still pull the
+    // heavy fields by default. Pin the exact shape so accidental drift
+    // is loud.
+    expect(findArgs.select).toBeDefined();
+    expect(findArgs.include).toBeUndefined();
+    expect(findArgs.select).toEqual({
+      id: true,
+      title: true,
+      status: true,
+      startDate: true,
+      endDate: true,
+      value: true,
+      tenantId: true,
+      contactId: true,
+      dealId: true,
+      createdAt: true,
+      updatedAt: true,
+    });
+    // The heavy fields MUST be absent from the select keyset.
+    expect(findArgs.select.terms).toBeUndefined();
+    expect(findArgs.select.contact).toBeUndefined();
+    expect(findArgs.select.deal).toBeUndefined();
+  });
+
+  test('?fields=summary preserves tenant scoping + orderBy createdAt desc', async () => {
+    prisma.contract.findMany.mockResolvedValue([]);
+    const app = makeApp({ tenantId: 42 });
+    await request(app).get('/api/contracts?fields=summary');
+    const findArgs = prisma.contract.findMany.mock.calls[0][0];
+    expect(findArgs.where).toEqual({ tenantId: 42 });
+    expect(findArgs.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=summary&status=Active layers the status filter on top of the slim shape', async () => {
+    prisma.contract.findMany.mockResolvedValue([]);
+    const app = makeApp({ tenantId: 1 });
+    await request(app).get('/api/contracts?fields=summary&status=Active');
+    const findArgs = prisma.contract.findMany.mock.calls[0][0];
+    expect(findArgs.where).toEqual({ tenantId: 1, status: 'Active' });
+    expect(findArgs.select).toBeDefined();
+    expect(findArgs.include).toBeUndefined();
+  });
+
+  test('no ?fields query param → default shape unchanged (include:{contact,deal}, no select)', async () => {
+    prisma.contract.findMany.mockResolvedValue([]);
+    const app = makeApp({ tenantId: 1 });
+    await request(app).get('/api/contracts');
+    const findArgs = prisma.contract.findMany.mock.calls[0][0];
+    expect(findArgs.include).toEqual({ contact: true, deal: true });
+    expect(findArgs.select).toBeUndefined();
+  });
+
+  test('?fields=other (non-exact value) → default shape (opt-in is exact-match "summary" only)', async () => {
+    prisma.contract.findMany.mockResolvedValue([]);
+    const app = makeApp({ tenantId: 1 });
+    await request(app).get('/api/contracts?fields=full');
+    const findArgs = prisma.contract.findMany.mock.calls[0][0];
+    // Anything other than the exact string "summary" must fall through to
+    // the default include-shape — no partial-match / case-insensitive /
+    // substring opt-in. Existing callers passing arbitrary ?fields values
+    // must NOT be silently slim-shaped.
+    expect(findArgs.include).toEqual({ contact: true, deal: true });
+    expect(findArgs.select).toBeUndefined();
+  });
+
+  test('slim-shape response body passes through Prisma rows verbatim (no extra envelope)', async () => {
+    prisma.contract.findMany.mockResolvedValue([
+      { id: 1, title: 'MSA — Acme', status: 'Active', value: 125000, tenantId: 1, contactId: 11, dealId: null },
+      { id: 2, title: 'SOW — Beta', status: 'Draft', value: 48000, tenantId: 1, contactId: null, dealId: 41 },
+    ]);
+    const app = makeApp({ tenantId: 1 });
+    const res = await request(app).get('/api/contracts?fields=summary');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(2);
+    // Bare array, not { data: [...] } or { contracts: [...] } — same
+    // envelope shape as the default list response so the frontend can
+    // swap to ?fields=summary without changing its decode path.
+    expect(res.body[0].title).toBe('MSA — Acme');
+    expect(res.body[1].title).toBe('SOW — Beta');
+  });
+});

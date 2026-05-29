@@ -19,13 +19,20 @@
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
 
-import { runDiagnosticAlertsForTenant } from '../../cron/travelDiagnosticAdvisorAlerts.js';
+import {
+  runDiagnosticAlertsForTenant,
+  runDiagnosticAlertsForAllTravelTenants,
+} from '../../cron/travelDiagnosticAdvisorAlerts.js';
 
 beforeAll(() => {
   prisma.travelDiagnostic = { findMany: vi.fn() };
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
   prisma.activity = { findFirst: vi.fn() };
   prisma.task = { findFirst: vi.fn() };
+  // Notification.userId is non-nullable, so the cron resolves an
+  // ADMIN/MANAGER/any-user recipient via prisma.user.findFirst before
+  // creating the alert. Mock here so the resolver doesn't hit the real DB.
+  prisma.user = { findFirst: vi.fn() };
   // subBrandConfig resolver pull — Q9 cut-over plumbing reads tenant
   // .subBrandConfigJson once per pass to compute the would-route wabaId
   // logged at escalation time.
@@ -38,6 +45,7 @@ beforeEach(() => {
   prisma.notification.create.mockReset();
   prisma.activity.findFirst.mockReset();
   prisma.task.findFirst.mockReset();
+  prisma.user.findFirst.mockReset();
   prisma.tenant.findUnique.mockReset();
 
   prisma.travelDiagnostic.findMany.mockResolvedValue([]);
@@ -45,6 +53,11 @@ beforeEach(() => {
   prisma.notification.create.mockResolvedValue({ id: 1 });
   prisma.activity.findFirst.mockResolvedValue(null);
   prisma.task.findFirst.mockResolvedValue(null);
+  // Default recipient lookup — first ADMIN match found. The cron
+  // short-circuits on the first non-null result so a single default is
+  // enough for all the happy-path tests; tests that need to vary by
+  // role (e.g. "no users seeded") can override below.
+  prisma.user.findFirst.mockResolvedValue({ id: 1 });
   prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
 });
 
@@ -143,5 +156,169 @@ describe('cron/travelDiagnosticAdvisorAlerts — runDiagnosticAlertsForTenant', 
       .mockResolvedValueOnce({ id: 5 });
     const result = await runDiagnosticAlertsForTenant(1);
     expect(result.alerted).toBe(1);
+  });
+
+  // ---- Extended coverage (tick #N: +8 cases) ----
+
+  test('findMany query caps batch at take=500 (anti-runaway guard)', async () => {
+    await runDiagnosticAlertsForTenant(7);
+    const arg = prisma.travelDiagnostic.findMany.mock.calls[0][0];
+    expect(arg.take).toBe(500);
+    // Also pin select fields — schema-drift sentinel.
+    expect(arg.select).toMatchObject({
+      id: true, subBrand: true, contactId: true,
+      classificationLabel: true, recommendedTier: true, createdAt: true,
+    });
+  });
+
+  test('subBrand uppercased in title; tier-fallback when both labels null', async () => {
+    const halfHourAgo = new Date(Date.now() - 35 * 60 * 1000);
+    prisma.travelDiagnostic.findMany.mockResolvedValue([
+      {
+        id: 300, subBrand: 'visasure', contactId: 400,
+        classificationLabel: null, recommendedTier: null,
+        createdAt: halfHourAgo,
+      },
+    ]);
+    const result = await runDiagnosticAlertsForTenant(1);
+    expect(result.alerted).toBe(1);
+    const createArg = prisma.notification.create.mock.calls[0][0];
+    // subBrand must be uppercased in the title
+    expect(createArg.data.title).toMatch(/VISASURE/);
+    // Both label fields null → fallback string literal "tier"
+    expect(createArg.data.title).toMatch(/\btier\b/);
+    // The lowercase subBrand should NOT appear standalone in the title segment
+    expect(createArg.data.title).not.toMatch(/^Diagnostic stalled: visasure/);
+  });
+
+  test('message body includes diag id, subBrand, contactId, elapsed minutes, and portal URL', async () => {
+    const fortyMinAgo = new Date(Date.now() - 40 * 60 * 1000);
+    prisma.travelDiagnostic.findMany.mockResolvedValue([
+      {
+        id: 555, subBrand: 'tmc', contactId: 777,
+        classificationLabel: 'Confident', recommendedTier: 'primary',
+        createdAt: fortyMinAgo,
+      },
+    ]);
+    await runDiagnosticAlertsForTenant(1);
+    const msg = prisma.notification.create.mock.calls[0][0].data.message;
+    expect(msg).toMatch(/Diagnostic #555/);
+    expect(msg).toMatch(/\(tmc\)/);
+    expect(msg).toMatch(/contact 777/);
+    // elapsed min ~40 (between 39 and 41 to absorb test wall-clock slop)
+    expect(msg).toMatch(/\b(39|40|41)m ago\b/);
+    expect(msg).toMatch(/Tier: primary/);
+    // Portal URL — env-overridable, defaults to crm.globusdemos.com
+    expect(msg).toMatch(/\/travel\/diagnostics/);
+  });
+
+  test('mixed batch: dedup-skip + outreach-skip + escalate counted independently', async () => {
+    const halfHourAgo = new Date(Date.now() - 35 * 60 * 1000);
+    prisma.travelDiagnostic.findMany.mockResolvedValue([
+      { id: 1, subBrand: 'rfu', contactId: 10, classificationLabel: 'A', recommendedTier: 'entry', createdAt: halfHourAgo },
+      { id: 2, subBrand: 'tmc', contactId: 20, classificationLabel: 'B', recommendedTier: 'primary', createdAt: halfHourAgo },
+      { id: 3, subBrand: 'travelstall', contactId: 30, classificationLabel: 'C', recommendedTier: 'premium', createdAt: halfHourAgo },
+    ]);
+    // diag 1: already has notification → dedup-skip
+    // diag 2: activity outreach exists → outreach-skip
+    // diag 3: clean → escalate
+    prisma.notification.findFirst
+      .mockResolvedValueOnce({ id: 99 })   // diag 1
+      .mockResolvedValueOnce(null)         // diag 2
+      .mockResolvedValueOnce(null);        // diag 3
+    prisma.activity.findFirst
+      .mockResolvedValueOnce({ id: 42 })   // diag 2 has outreach
+      .mockResolvedValueOnce(null);        // diag 3 no outreach
+    prisma.task.findFirst.mockResolvedValue(null);
+
+    const result = await runDiagnosticAlertsForTenant(1);
+    expect(result).toEqual({ alerted: 1, skipped: 2 });
+    expect(prisma.notification.create).toHaveBeenCalledTimes(1);
+    // Only diag 3 escalated
+    expect(prisma.notification.create.mock.calls[0][0].data.entityId).toBe(3);
+  });
+
+  test('tenant.findUnique fired exactly once per pass (not per diagnostic)', async () => {
+    const halfHourAgo = new Date(Date.now() - 35 * 60 * 1000);
+    prisma.travelDiagnostic.findMany.mockResolvedValue([
+      { id: 1, subBrand: 'rfu', contactId: 10, classificationLabel: 'A', recommendedTier: 'entry', createdAt: halfHourAgo },
+      { id: 2, subBrand: 'tmc', contactId: 20, classificationLabel: 'B', recommendedTier: 'primary', createdAt: halfHourAgo },
+      { id: 3, subBrand: 'rfu', contactId: 30, classificationLabel: 'C', recommendedTier: 'premium', createdAt: halfHourAgo },
+    ]);
+    await runDiagnosticAlertsForTenant(99);
+    // 3 diagnostics processed, but tenant lookup is hoisted once
+    expect(prisma.tenant.findUnique).toHaveBeenCalledTimes(1);
+    const arg = prisma.tenant.findUnique.mock.calls[0][0];
+    expect(arg.where).toEqual({ id: 99 });
+    expect(arg.select).toEqual({ subBrandConfigJson: true });
+  });
+
+  test('Task outreach query scopes to tenantId + contactId + createdAt > diagnostic.createdAt', async () => {
+    // The Task model in this codebase exposes only a direct contactId FK
+    // (no relatedToId / relatedToType polymorphic columns) — see the
+    // comment in cron/travelDiagnosticAdvisorAlerts.js. The query is a
+    // plain { tenantId, contactId, createdAt: { gt } } shape.
+    const halfHourAgo = new Date(Date.now() - 35 * 60 * 1000);
+    prisma.travelDiagnostic.findMany.mockResolvedValue([
+      { id: 100, subBrand: 'rfu', contactId: 250, classificationLabel: 'X', recommendedTier: 'entry', createdAt: halfHourAgo },
+    ]);
+    prisma.activity.findFirst.mockResolvedValue(null);
+    // Force Task lookup (Activity returned no hit)
+    await runDiagnosticAlertsForTenant(1);
+    expect(prisma.task.findFirst).toHaveBeenCalledTimes(1);
+    const where = prisma.task.findFirst.mock.calls[0][0].where;
+    expect(where.tenantId).toBe(1);
+    expect(where.contactId).toBe(250);
+    // Window guard: createdAt strictly AFTER the diagnostic timestamp
+    expect(where.createdAt).toHaveProperty('gt');
+  });
+
+  test('Task model unreachable (throws) AND Activity none → still escalates (defensive no-outreach)', async () => {
+    const halfHourAgo = new Date(Date.now() - 35 * 60 * 1000);
+    prisma.travelDiagnostic.findMany.mockResolvedValue([
+      { id: 100, subBrand: 'rfu', contactId: 200, classificationLabel: 'X', recommendedTier: 'entry', createdAt: halfHourAgo },
+    ]);
+    prisma.activity.findFirst.mockResolvedValue(null);
+    prisma.task.findFirst.mockRejectedValue(new Error('Task model missing'));
+    const result = await runDiagnosticAlertsForTenant(1);
+    // When BOTH models are unreachable (Task throws, Activity returned null),
+    // outreachExists stays false → escalate.
+    expect(result).toEqual({ alerted: 1, skipped: 0 });
+    expect(prisma.notification.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('cron/travelDiagnosticAdvisorAlerts — runDiagnosticAlertsForAllTravelTenants', () => {
+  test('queries vertical=travel + isActive=true; sums alerted across tenants; tolerates per-tenant errors', async () => {
+    prisma.tenant.findMany = vi.fn().mockResolvedValue([
+      { id: 1, slug: 'tenant-a' },
+      { id: 2, slug: 'tenant-b' },
+      { id: 3, slug: 'tenant-c' },
+    ]);
+    prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
+
+    const halfHourAgo = new Date(Date.now() - 35 * 60 * 1000);
+    // Tenant 1 has 1 escalation-ready diagnostic; tenant 2 throws on the findMany;
+    // tenant 3 has 1 dedup-skip diagnostic (no alert).
+    prisma.travelDiagnostic.findMany
+      .mockResolvedValueOnce([
+        { id: 1, subBrand: 'rfu', contactId: 10, classificationLabel: 'A', recommendedTier: 'entry', createdAt: halfHourAgo },
+      ])
+      .mockRejectedValueOnce(new Error('tenant 2 db unreachable'))
+      .mockResolvedValueOnce([
+        { id: 2, subBrand: 'tmc', contactId: 20, classificationLabel: 'B', recommendedTier: 'primary', createdAt: halfHourAgo },
+      ]);
+    // tenant 3's diagnostic is already deduped
+    prisma.notification.findFirst
+      .mockResolvedValueOnce(null)        // tenant 1 diag 1 — no existing notif
+      .mockResolvedValueOnce({ id: 88 }); // tenant 3 diag 2 — dedup-skip
+
+    const total = await runDiagnosticAlertsForAllTravelTenants();
+    // Tenant 1 → 1 alert; tenant 2 → error (caught); tenant 3 → 0 alerts.
+    expect(total).toBe(1);
+    // The findMany query must scope to vertical=travel AND isActive=true
+    const tenantQuery = prisma.tenant.findMany.mock.calls[0][0];
+    expect(tenantQuery.where).toEqual({ vertical: 'travel', isActive: true });
+    expect(tenantQuery.select).toEqual({ id: true, slug: true });
   });
 });

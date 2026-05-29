@@ -31,7 +31,6 @@ import { formatDate } from "../../utils/date";
 import { DateRangeFilter, resolveDateRangeYmd, EMPTY_DATE_FILTER } from "../../components/wellness/DateRangeFilter";
 import CsvImportExportToolbar from "../../components/wellness/CsvImportExportToolbar";
 
-const PAGE_SIZE = 20;
 const SOURCE_OPTIONS = [
   { value: "walk-in", label: "Walk-in" },
   { value: "indiamart", label: "IndiaMART" },
@@ -123,7 +122,12 @@ export default function Patients() {
   // + ?offset and returns { patients, total }. `pageSize` stays local
   // (not in URL) so the dropdown choice persists per-tab without polluting
   // shareable links. `page` itself lives in the URL via setPage below.
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(20);
+  // Custom-rows entry mode for the PatientPager dropdown. When the user
+  // picks "Custom" from the rows-per-page select, the dropdown swaps to a
+  // numeric input bounded to [1, 200] (the backend's hard limit cap).
+  const [isCustomPageSize, setIsCustomPageSize] = useState(false);
+  const [customPageSize, setCustomPageSize] = useState('');
   // #331-bug fix: form-create flag added so handleCreate can request a refresh
   // without re-introducing a stale-state read. The previous direct `load()`
   // call inside handleCreate re-fetched with whatever `q` the closure had
@@ -164,12 +168,17 @@ export default function Patients() {
   const reqIdRef = useRef(0);
   const didMountRef = useRef(false);
 
-  const load = (currentQ) => {
+  const load = (currentQ, currentPage = page, currentPageSize = pageSize) => {
     const myReqId = ++reqIdRef.current;
     setLoading(true);
-    const url = currentQ
-      ? `/api/wellness/patients?q=${encodeURIComponent(currentQ)}`
-      : "/api/wellness/patients";
+    // Backend at /api/wellness/patients accepts ?limit (cap 200) + ?offset and
+    // returns { patients, total }. Wire the URL to the current page-size
+    // selection so changing the dropdown actually re-fetches a sliced window.
+    const params = new URLSearchParams();
+    if (currentQ) params.set("q", currentQ);
+    params.set("limit", String(currentPageSize));
+    params.set("offset", String(Math.max(0, (currentPage - 1) * currentPageSize)));
+    const url = `/api/wellness/patients?${params.toString()}`;
     fetchApi(url)
       .then((d) => {
         if (myReqId !== reqIdRef.current) return;
@@ -205,15 +214,15 @@ export default function Patients() {
   useEffect(() => {
     if (!didMountRef.current) {
       didMountRef.current = true;
-      load("");
+      load("", page, pageSize);
       return;
     }
     // #548: standardised on SEARCH_DEBOUNCE_MS (300ms) — was 250ms; pen-test
     // flagged drift between Patients (250) and Omnibar (300). One source of
     // truth in utils/timing.js.
-    const t = setTimeout(() => load(qRef.current), SEARCH_DEBOUNCE_MS);
+    const t = setTimeout(() => load(qRef.current, page, pageSize), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [q, reloadTick]);
+  }, [q, reloadTick, page, pageSize]);
 
   useEffect(() => {
     fetchApi("/api/wellness/locations").then(setLocations).catch(() => setLocations([]));
@@ -347,10 +356,6 @@ export default function Patients() {
       notify.error(`Export failed: ${e.message}`);
     }
   };
-
-  // ── Pagination math ──────────────────────────────────────────────
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
 
   // ── Filters object passed to CsvImportExportToolbar (so its export
   //    + import always respects the active filters + search). ──────
@@ -793,21 +798,11 @@ export default function Patients() {
             pageSize={pageSize}
             onPageChange={setPage}
             onPageSizeChange={setPageSize}
+            isCustomPageSize={isCustomPageSize}
+            setIsCustomPageSize={setIsCustomPageSize}
+            customPageSize={customPageSize}
+            setCustomPageSize={setCustomPageSize}
           />
-        </div>
-      )}
-
-      {!loading && total > PAGE_SIZE && (
-        <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center", marginTop: "1rem", alignItems: "center", flexWrap: "wrap" }}>
-          <button disabled={safePage <= 1} onClick={() => setPage(Math.max(1, safePage - 1))} style={paginationBtn(safePage <= 1)}>
-            <ChevronLeft size={14} /> Previous
-          </button>
-          <span style={{ padding: "0.5rem 1rem", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-            Page {safePage} of {totalPages} · {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, total)} of {total.toLocaleString()}
-          </span>
-          <button disabled={safePage >= totalPages} onClick={() => setPage(Math.min(totalPages, safePage + 1))} style={paginationBtn(safePage >= totalPages)}>
-            Next <ChevronRight size={14} />
-          </button>
         </div>
       )}
 
@@ -851,9 +846,27 @@ export default function Patients() {
 // Pagination footer — Prev / numbered pages (windowed) / Next + items-per-
 // page selector. Rendered below the table so it's always reachable even
 // with a tall list. Hides itself when total fits within a single page.
-function PatientPager({ total, page, pageSize, onPageChange, onPageSizeChange }) {
+function PatientPager({ total, page, pageSize, onPageChange, onPageSizeChange, isCustomPageSize, setIsCustomPageSize, customPageSize, setCustomPageSize }) {
   const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
   const safePage = Math.min(page, pageCount);
+  // Custom dropdown for the page-size selector — matches the Export
+  // Selected menu shape (button + absolute popup) so the surface looks
+  // theme-consistent across both verticals. Native <select> rendered the
+  // <option> popup with the OS palette regardless of how the trigger was
+  // styled, which clashed with the dark wellness theme.
+  const [pageSizeMenuOpen, setPageSizeMenuOpen] = useState(false);
+  const pageSizeMenuRef = useRef(null);
+  const [hoveredOption, setHoveredOption] = useState(null);
+  useEffect(() => {
+    if (!pageSizeMenuOpen) return undefined;
+    const onDocClick = (e) => {
+      if (pageSizeMenuRef.current && !pageSizeMenuRef.current.contains(e.target)) {
+        setPageSizeMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [pageSizeMenuOpen]);
   const pages = useMemo(() => {
     // Compact window: always show 1, the current page ±2, and pageCount,
     // with ellipses where there's a gap. Keeps the bar narrow on long
@@ -892,14 +905,119 @@ function PatientPager({ total, page, pageSize, onPageChange, onPageSizeChange })
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
         <label style={{ color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
-          Rows
-          <select
-            value={pageSize}
-            onChange={(e) => onPageSizeChange(parseInt(e.target.value, 10))}
-            style={{ padding: "0.3rem 0.5rem", borderRadius: 6, border: "1px solid var(--border-color, rgba(255,255,255,0.18))", background: "var(--surface-color, rgba(255,255,255,0.04))", color: "var(--text-primary)" }}
-          >
-            {[25, 50, 100, 200].map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
+          Per page:
+          {isCustomPageSize ? (
+            <>
+              <input
+                type="number"
+                min="1"
+                max="200"
+                value={customPageSize}
+                onChange={(e) => {
+                  // Backend caps ?limit at 200; clamp the input to the same
+                  // range so a typo can't fire a request that gets silently
+                  // truncated server-side.
+                  const raw = parseInt(e.target.value, 10);
+                  const val = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 200) : '';
+                  setCustomPageSize(val);
+                  if (val) onPageSizeChange(val);
+                }}
+                placeholder="1-200"
+                autoFocus
+                title="Enter a number between 1 and 200"
+                style={{ width: 80, padding: "0.3rem 0.5rem", borderRadius: 6, border: "1px solid var(--border-color, rgba(255,255,255,0.18))", background: "var(--surface-color, rgba(255,255,255,0.04))", color: "var(--text-primary)" }}
+              />
+              <button
+                type="button"
+                onClick={() => { setIsCustomPageSize(false); setCustomPageSize(''); }}
+                style={{ padding: "0.3rem 0.55rem", borderRadius: 6, border: "1px solid var(--border-color, rgba(255,255,255,0.18))", background: "var(--surface-color, rgba(255,255,255,0.04))", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.85rem" }}
+              >
+                Back
+              </button>
+            </>
+          ) : (
+            <div ref={pageSizeMenuRef} style={{ position: "relative" }}>
+              <button
+                type="button"
+                onClick={() => setPageSizeMenuOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={pageSizeMenuOpen}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  padding: "0.3rem 0.55rem",
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color, rgba(255,255,255,0.18))",
+                  background: "var(--surface-color, rgba(255,255,255,0.04))",
+                  color: "var(--text-primary)",
+                  fontSize: "0.85rem",
+                  cursor: "pointer",
+                  minWidth: 70,
+                }}
+              >
+                <span>{[10, 20, 50].includes(pageSize) ? pageSize : 'Custom'}</span>
+                <ChevronDown size={12} style={{ opacity: 0.7 }} />
+              </button>
+              {pageSizeMenuOpen && (
+                <div
+                  role="menu"
+                  style={{
+                    ...dropdownMenuStyle,
+                    // Pager lives at the bottom of the table, so open the menu
+                    // upward to avoid clipping below the viewport. Anchored to
+                    // the trigger button's left edge.
+                    top: "auto",
+                    bottom: "calc(100% + 4px)",
+                    right: "auto",
+                    left: 0,
+                    minWidth: 110,
+                  }}
+                >
+                  {[10, 20, 50].map((n) => {
+                    const active = pageSize === n;
+                    const hovered = hoveredOption === String(n);
+                    return (
+                      <button
+                        key={n}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => { onPageSizeChange(n); setPageSizeMenuOpen(false); }}
+                        onMouseEnter={() => setHoveredOption(String(n))}
+                        onMouseLeave={() => setHoveredOption(null)}
+                        style={{
+                          ...dropdownItemStyle,
+                          background: active
+                            ? "var(--primary-color, var(--accent-color))"
+                            : hovered
+                              ? "var(--surface-color, rgba(255,255,255,0.06))"
+                              : "transparent",
+                          color: active ? "#fff" : "var(--text-primary, inherit)",
+                        }}
+                      >
+                        {n}
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => { setIsCustomPageSize(true); setCustomPageSize(''); setPageSizeMenuOpen(false); }}
+                    onMouseEnter={() => setHoveredOption('custom')}
+                    onMouseLeave={() => setHoveredOption(null)}
+                    style={{
+                      ...dropdownItemStyle,
+                      background: hoveredOption === 'custom'
+                        ? "var(--surface-color, rgba(255,255,255,0.06))"
+                        : "transparent",
+                    }}
+                  >
+                    Custom
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </label>
         <button
           type="button"

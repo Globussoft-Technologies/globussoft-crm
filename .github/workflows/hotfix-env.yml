@@ -5,29 +5,20 @@ jobs:
   patch-env:
     runs-on: ubuntu-latest
     steps:
-      - name: Query QUEUED WhatsApp messages
+      - name: Check WaOutboundJob table
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          command_timeout: 3m
+          command_timeout: 2m
           script: |
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
             cd /home/empcloud-development/globussoft-crm/backend
-            node -e "
-            const p = new (require('@prisma/client').PrismaClient)();
-            p.\$queryRaw\`
-              SELECT m.id, m.status AS msgStatus, m.tenantId, m.createdAt,
-                     LEFT(m.errorMessage, 80) AS msgErr,
-                     j.id AS jobId, j.status AS jobStatus, j.attempts,
-                     LEFT(j.lastError, 120) AS jobErr,
-                     j.runAt, j.lockedAt
-              FROM WhatsAppMessage m
-              LEFT JOIN WaOutboundJob j ON j.messageId = m.id
-              WHERE m.direction = 'OUTBOUND' AND m.status = 'QUEUED'
-              ORDER BY m.id DESC LIMIT 10
-            \`.then(r => { console.log(JSON.stringify(r, null, 2)); process.exit(0); })
-             .catch(e => { console.error(e.message); process.exit(1); });
-            "
+            DB_URL=$(grep DATABASE_URL .env | cut -d'=' -f2-)
+            DB_PASS=$(echo "$DB_URL" | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|')
+            DB_USER=$(echo "$DB_URL" | sed 's|.*://\([^:]*\):.*|\1|')
+            DB_HOST=$(echo "$DB_URL" | sed 's|.*@\([^:/]*\)[:/].*|\1|')
+            DB_NAME=$(echo "$DB_URL" | sed 's|.*/\([^?]*\).*|\1|')
+            mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "SHOW TABLES LIKE 'WaOutboundJob';" 2>/dev/null

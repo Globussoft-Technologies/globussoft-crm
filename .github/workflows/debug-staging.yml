@@ -5,47 +5,13 @@ jobs:
   debug:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy staging_crm to crm-staging
+      - name: Check DISABLE_CRONS in staging env
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          command_timeout: 10m
+          command_timeout: 1m
           script: |
-            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            cd /home/empcloud-development/globussoft-crm
-
-            echo "=== current branch ==="
-            git branch --show-current
-
-            echo "=== git fetch + checkout staging_crm ==="
-            git fetch origin
-            git checkout staging_crm
-            git reset --hard origin/staging_crm
-            echo "=== latest commit ==="
-            git log --oneline -3
-
-            echo "=== backend: npm ci + prisma generate ==="
-            cd backend
-            npm ci --prefer-offline 2>&1 | tail -5
-            npx prisma generate 2>&1 | tail -3
-            npx prisma db push --accept-data-loss 2>&1 | tail -5
-
-            echo "=== pm2 restart ==="
-            pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -5
-
-            echo "=== frontend: npm ci + vite build ==="
-            cd ../frontend
-            npm ci --prefer-offline 2>&1 | tail -5
-            npx vite build --logLevel=error 2>&1 | tail -5
-
-            echo "=== deploy frontend ==="
-            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S rsync -a --delete dist/ /var/www/crm-staging.globusdemos.com/ 2>&1 | tail -3
-            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S chown -R www-data:www-data /var/www/crm-staging.globusdemos.com/ 2>&1 | tail -2
-
-            echo "=== health check ==="
-            curl -s http://localhost:5000/api/health | head -c 200
-            echo ""
-            echo "DONE"
+            grep DISABLE_CRONS /home/empcloud-development/globussoft-crm/backend/.env

@@ -85,16 +85,19 @@ function renderPage() {
 }
 
 // Minimal smoke coverage against the CURRENT component contract so the
-// file isn't entirely skipped. Pins: initial fetch URL is the bare
-// `/api/wellness/patients` (no params on first load), and a row Name
-// link points at `/wellness/patients/:id`.
+// file isn't entirely skipped. Pins: initial fetch hits
+// `/api/wellness/patients?limit=N&offset=0` (server-side pagination is now
+// always-on; see Patients.jsx:171-197), and a row Name link points at
+// `/wellness/patients/:id`.
 describe('<Patients /> — current contract smoke', () => {
   beforeEach(() => {
     fetchApi.mockReset();
     notifyObj.success.mockReset();
     notifyObj.error.mockReset();
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/patients') {
+      // Patients.jsx's load() always appends limit + offset, so the URL is
+      // never the bare endpoint. Match the prefix instead.
+      if (url.startsWith('/api/wellness/patients?')) {
         return Promise.resolve({
           patients: [
             { id: 555, name: 'Smoke Patient', phone: '+919800000555', email: 's@t.in', gender: 'F', source: 'walk-in', createdAt: '2026-05-20T10:00:00Z' },
@@ -112,8 +115,9 @@ describe('<Patients /> — current contract smoke', () => {
     renderPage();
     const link = await screen.findByRole('link', { name: 'Smoke Patient' });
     expect(link).toHaveAttribute('href', '/wellness/patients/555');
-    // Confirm the initial fetch URL is the bare endpoint.
-    const initial = fetchApi.mock.calls.find(([u]) => u === '/api/wellness/patients');
+    // Confirm the initial fetch hit the patients endpoint (with the always-on
+    // limit/offset query string).
+    const initial = fetchApi.mock.calls.find(([u]) => u.startsWith('/api/wellness/patients?'));
     expect(initial).toBeTruthy();
   });
 });

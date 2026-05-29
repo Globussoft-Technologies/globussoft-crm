@@ -174,11 +174,10 @@ describe('<Login /> — page surface', () => {
     expect(screen.getByText(/RFU Advisor/i)).toBeInTheDocument();
   });
 
-  it('renders SSO buttons for Google and Microsoft', () => {
-    renderLogin();
-    expect(screen.getByRole('button', { name: /Sign in with Google/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Sign in with Microsoft/i })).toBeInTheDocument();
-  });
+  // SSO buttons are gated behind `SHOW_SSO = false` in Login.jsx:9 — feature
+  // is hidden until tenant-level SSO config + provider credentials land. Flip
+  // the SHOW_SSO const + un-skip these three tests together when re-enabling.
+  it.skip('renders SSO buttons for Google and Microsoft — gated behind SHOW_SSO', () => {});
 
   it('successful login POSTs /api/auth/login and navigates to /dashboard for generic tenant', async () => {
     global.fetch.mockImplementation((url) => {
@@ -398,17 +397,10 @@ describe('<Login /> — page surface', () => {
     });
   });
 
-  it('SSO Google button redirects window.location to /api/sso/google/start', () => {
-    renderLogin();
-    fireEvent.click(screen.getByRole('button', { name: /Sign in with Google/i }));
-    expect(window.location.href).toBe('/api/sso/google/start');
-  });
+  // See SHOW_SSO note above.
+  it.skip('SSO Google button redirects window.location to /api/sso/google/start — gated behind SHOW_SSO', () => {});
 
-  it('SSO Microsoft button redirects window.location to /api/sso/microsoft/start', () => {
-    renderLogin();
-    fireEvent.click(screen.getByRole('button', { name: /Sign in with Microsoft/i }));
-    expect(window.location.href).toBe('/api/sso/microsoft/start');
-  });
+  it.skip('SSO Microsoft button redirects window.location to /api/sso/microsoft/start — gated behind SHOW_SSO', () => {});
 
   it('Forgot Password toggle opens the reset-token form; empty submit surfaces the inline validation', async () => {
     renderLogin();

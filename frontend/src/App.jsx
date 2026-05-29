@@ -7,6 +7,7 @@ import React, {
   useCallback,
   Suspense,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   BrowserRouter,
   Routes,
@@ -461,6 +462,22 @@ function TravelOnly({ children }) {
   return children;
 }
 
+// /home is the role-aware widget dashboard for non-admin users. Admins
+// already have their tenant's primary dashboard (Owner Dashboard at
+// /wellness on wellness tenants, Enterprise Overview at /dashboard on
+// generic) which covers the same ground — so bounce admins away rather
+// than rendering a near-duplicate landing page. The sidebar already hides
+// the Home link for admins; this guard handles direct-URL / bookmarked
+// visits.
+function HomeForNonAdmin({ children }) {
+  const { user, tenant } = useContext(AuthContext);
+  if (user?.role === 'ADMIN') {
+    const target = tenant?.vertical === 'wellness' ? '/wellness' : '/dashboard';
+    return <Navigate to={target} replace />;
+  }
+  return children;
+}
+
 // #303: bare /calendar used to render a blank <main> because the route table
 // had no entry for it. Wellness tenants are bounced to their themed calendar
 // (/wellness/calendar); generic tenants land on /calendar-sync which is the
@@ -596,7 +613,6 @@ export default function App() {
         ? "dark"
         : "light";
     }
-    console.log('[Theme] Applying theme:', { selectedTheme: theme, effectiveTheme });
     document.documentElement.setAttribute("data-theme", effectiveTheme);
     localStorage.setItem("theme", theme);
   }, [theme]);
@@ -619,12 +635,32 @@ export default function App() {
     document.body.setAttribute("data-vertical", v);
   }, [tenant]);
 
-  const toggleTheme = () =>
-    setTheme((t) => {
-      if (t === "light") return "dark";
-      if (t === "dark") return "system";
-      return "light";
-    });
+  // Theme toggle. Uses the View Transitions API in browsers that support it
+  // (Chrome/Edge 111+, Safari 18+) so the swap is a GPU-composited crossfade
+  // instead of a sharp snap. The browser captures the page as a screenshot,
+  // applies the new theme synchronously inside the callback, then fades the
+  // old screenshot out over the new state — entirely on the compositor, no
+  // main-thread work. flushSync forces React to commit the setState before
+  // the callback returns, otherwise the API would crossfade the OLD state
+  // with itself (the React update would land after the screenshot was
+  // taken). Browsers without the API fall through to a plain setState,
+  // which is now an instant snap (no desync since body's stranded
+  // transition was removed in index.css).
+  const toggleTheme = () => {
+    const advance = () =>
+      setTheme((t) => {
+        if (t === "light") return "dark";
+        if (t === "dark") return "system";
+        return "light";
+      });
+    if (typeof document.startViewTransition === "function") {
+      document.startViewTransition(() => {
+        flushSync(advance);
+      });
+    } else {
+      advance();
+    }
+  };
 
   // #529 / #530: stable callback reference. Prior shape created a new fn
   // on every App render, which (combined with the inline AuthContext
@@ -755,7 +791,7 @@ export default function App() {
                   />
                   <Route
                     path="/customer/register"
-                    element={!token ? <CustomerRegister /> : <Navigate to="/portal" />}
+                    element={!token ? <CustomerRegister /> : <Navigate to="/home" />}
                   />
                   <Route path="/sso/return" element={<SsoReturn />} />
                   <Route path="/pricing" element={<Pricing />} />
@@ -831,10 +867,19 @@ export default function App() {
                         </GenericOnly>
                       }
                     />
-                    {/* /home — role-aware widget dashboard. Open to any
-                        logged-in user; the widgets themselves filter by
-                        permission server-side via /api/widgets/me. */}
-                    <Route path="home" element={<Home />} />
+                    {/* /home — role-aware widget dashboard for non-admin
+                        roles. Admins are bounced to /wellness (wellness
+                        tenants) or /dashboard (generic) since the Owner
+                        Dashboard covers the same ground. Widgets filter
+                        by permission server-side via /api/widgets/me. */}
+                    <Route
+                      path="home"
+                      element={
+                        <HomeForNonAdmin>
+                          <Home />
+                        </HomeForNonAdmin>
+                      }
+                    />
                     <Route path="contacts" element={<Contacts />} />
                     <Route path="contacts/:id" element={<ContactDetail />} />
                     <Route

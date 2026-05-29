@@ -80,7 +80,11 @@ const WIDGET_CATALOG = [
     title: 'Waitlist + walk-ins',
     description: 'Patients waiting for an open slot or to be allocated.',
     category: 'Front desk',
-    requiredPermissions: [{ module: 'appointments', action: 'read' }],
+    // Post-split (v3.8.x): retargeted to the dedicated `waitlist`
+    // module so the widget appears for any role with waitlist access,
+    // not just roles that happen to also have the tenant-wide
+    // appointments-list permission.
+    requiredPermissions: [{ module: 'waitlist', action: 'read' }],
     defaultRoleKeys: ['RECEPTIONIST'],
   },
   {

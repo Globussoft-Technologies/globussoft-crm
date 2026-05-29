@@ -51,6 +51,11 @@ const MANAGER_PERMISSIONS = [
   // rules so they can keep what's billable in sync with what's actually
   // delivered. (Inventory ledger ops are still admin-only by default.)
   'products.read', 'products.write', 'products.update',
+  // Staff self-service — Manager clocks in/out, submits their own leave,
+  // and has manage-tier on both surfaces (view other staff's attendance,
+  // approve/reject leave requests).
+  'attendance.read', 'attendance.write', 'attendance.manage',
+  'leave.read', 'leave.write', 'leave.manage',
 ];
 
 const CUSTOMER_PERMISSIONS = [
@@ -81,6 +86,11 @@ const USER_PERMISSIONS = [
   'documents.read',
   'contracts.read',
   'estimates.read',
+  // Staff self-service — every staff USER needs to clock in and request
+  // leave for themselves. Approval-tier (`.manage`) stays with manager/
+  // admin via verifyRole in routes/leave.js + routes/attendance.js.
+  'attendance.read', 'attendance.write',
+  'leave.read', 'leave.write',
 ];
 
 // Wellness vertical-specific custom roles. Each one carries the
@@ -93,6 +103,16 @@ const USER_PERMISSIONS = [
 const DOCTOR_PERMISSIONS = [
   'patients.read', 'patients.write', 'patients.update',
   'appointments.read', 'appointments.write', 'appointments.update',
+  // `appointments` was split into per-page modules in v3.8.x —
+  // `my_appointments` for the practitioner's own-slot view (the page
+  // doctors actually use day-to-day) and `waitlist` for the open-slot
+  // queue. Doctors get both .read grants since they were implied by the
+  // pre-split contract. `book_appointment` is intentionally omitted —
+  // doctors don't book on behalf of patients (that's receptionist /
+  // telecaller work); admins can grant it later if a clinic flips that
+  // convention.
+  'my_appointments.read',
+  'waitlist.read',
   // `calendar` is a sibling-permission to `appointments` — separated so
   // admins can grant view-only Calendar access independently of the
   // Appointments list / Book Appointment form. Doctors get both since
@@ -108,11 +128,21 @@ const DOCTOR_PERMISSIONS = [
   'products.read',
   'inventory.read',
   'documents.read', 'documents.write',
+  // Staff self-service — doctor clocks in/out + manages their own leave.
+  // Approval is manager-tier and stays with verifyRole(ADMIN/MANAGER).
+  'attendance.read', 'attendance.write',
+  'leave.read', 'leave.write',
 ];
 
 const NURSE_PERMISSIONS = [
   'patients.read', 'patients.update',
   'appointments.read', 'appointments.update',
+  // Post-split (v3.8.x): nurse keeps waitlist visibility (queue is a
+  // viewing surface — promote / disposition is gated separately on
+  // `waitlist.write` which nurse doesn't get). No `my_appointments` or
+  // `book_appointment` — nurses don't own slots or book on behalf of
+  // patients.
+  'waitlist.read',
   // Nurse views the Calendar day-grid for context but doesn't book or
   // reschedule (that's Doctor / Receptionist work). Read-only on calendar.
   'calendar.read',
@@ -125,11 +155,21 @@ const NURSE_PERMISSIONS = [
   'inventory.read', 'inventory.write', 'inventory.update',
   'services.read',
   'consents.read',
+  // Staff self-service.
+  'attendance.read', 'attendance.write',
+  'leave.read', 'leave.write',
 ];
 
 const RECEPTIONIST_PERMISSIONS = [
   'patients.read', 'patients.write',
   'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete',
+  // Post-split (v3.8.x): receptionist runs the booking workflow end-to-
+  // end. `book_appointment.write` for the booking form, `waitlist.*` for
+  // queue management (promote / disposition), `my_appointments.read` for
+  // their own follow-ups when listed as the assigned point-of-contact.
+  'book_appointment.write',
+  'waitlist.read', 'waitlist.write',
+  'my_appointments.read',
   // Receptionist is THE primary calendar user — books slots, reschedules,
   // cancels via drag-to-reschedule and right-click-cancel.
   'calendar.read', 'calendar.write',
@@ -145,12 +185,24 @@ const RECEPTIONIST_PERMISSIONS = [
   'email.read', 'email.write',
   'sms.read', 'sms.write',
   'whatsapp.read', 'whatsapp.write',
+  // Staff self-service.
+  'attendance.read', 'attendance.write',
+  'leave.read', 'leave.write',
 ];
 
 const TELECALLER_PERMISSIONS = [
   'leads.read', 'leads.write', 'leads.update',
   'contacts.read', 'contacts.write',
   'appointments.read', 'appointments.write',
+  // Post-split (v3.8.x): telecaller books from outbound calls and works
+  // the waitlist queue. `book_appointment.write` for the booking form,
+  // `waitlist.*` for queue dispositioning (their primary surface).
+  // `my_appointments.read` preserves the pre-split practical access —
+  // telecallers occasionally show up as the assigned contact and want
+  // to see those follow-ups.
+  'book_appointment.write',
+  'waitlist.read', 'waitlist.write',
+  'my_appointments.read',
   // Telecaller books appointments from outbound calls — they need
   // calendar read+write to pick a slot during the call.
   'calendar.read', 'calendar.write',
@@ -159,6 +211,9 @@ const TELECALLER_PERMISSIONS = [
   'whatsapp.read', 'whatsapp.write',
   'email.read', 'email.write',
   'reports.read',
+  // Staff self-service.
+  'attendance.read', 'attendance.write',
+  'leave.read', 'leave.write',
 ];
 
 async function ensureRole(stats, { tenantId, key, name, description, isSystem, userType, landingPath }) {

@@ -55,6 +55,11 @@ const PAGE_CATALOG = [
     description: 'Role-aware widget dashboard',
     category: 'Core',
     requiredPermissions: [],
+    // Admin/owner-tier users already have the Owner Dashboard (/wellness
+    // for wellness tenants, /dashboard for generic) which covers the same
+    // ground as /home. Hide the duplicate from their sidebar; the App.jsx
+    // route guard bounces direct-URL visits to the appropriate dashboard.
+    hideForAdminTier: true,
   },
 
   // ── Manager surfaces (top of wellness sidebar, no section header) ─
@@ -99,12 +104,12 @@ const PAGE_CATALOG = [
     label: 'My appointments',
     description: 'Appointments where you are the assigned practitioner',
     category: 'Clinical',
-    // .write — "My" appointments only makes sense for practitioners
-    // who CAN be assigned an appointment in the first place (Doctor,
-    // Receptionist, Telecaller, Manager — anyone with appointments.write).
-    // Nurse / clinical-assist roles never own appointments themselves;
-    // they use the tenant-wide list at /wellness/appointments instead.
-    requiredPermissions: [{ module: 'appointments', action: 'write' }],
+    // Dedicated `my_appointments` module — split out from `appointments`
+    // so a doctor can be granted their own-slot view without also seeing
+    // the tenant-wide Appointments list, and an admin can be granted the
+    // tenant-wide list without polluting their nav with a "My Appointments"
+    // page (they have no assigned slots themselves).
+    requiredPermissions: [{ module: 'my_appointments', action: 'read' }],
   },
   {
     path: '/wellness/patients',
@@ -118,10 +123,12 @@ const PAGE_CATALOG = [
     label: 'Waitlist',
     description: 'Patients waiting for an open slot',
     category: 'Clinical',
-    // .read — viewing the queue is a read action. Promoting / dispositioning
-    // a waitlist entry is gated separately on appointments.write at the
-    // page action level.
-    requiredPermissions: [{ module: 'appointments', action: 'read' }],
+    // Dedicated `waitlist` module — split out from `appointments` so a
+    // telecaller can be granted waitlist management without also getting
+    // the tenant-wide Appointments list. `waitlist.read` views the queue;
+    // promoting / dispositioning gates on `waitlist.write` at the page
+    // action level.
+    requiredPermissions: [{ module: 'waitlist', action: 'read' }],
   },
   {
     path: '/wellness/prescriptions',
@@ -222,25 +229,24 @@ const PAGE_CATALOG = [
   },
 
   // ── Staff self-service (attendance / leave) ───────────────────────
-  // Empty requiredPermissions — every staff member needs to clock in
-  // and request leave regardless of clinical / finance permission shape.
-  // The wellness sidebar is not rendered for CUSTOMER role users (they
-  // land on /portal), so the absence of a permission gate here only
-  // surfaces these pages to logged-in staff. If a future custom role
-  // should be excluded, gate this on a module/action they don't have.
+  // Gated on dedicated `attendance` / `leave` modules so non-staff roles
+  // (e.g. CUSTOMER) are excluded from the sidebar even if the wellness
+  // sidebar ever renders for them. Read-tier gates the sidebar entry;
+  // higher tiers (write = clock-in / submit-request, manage = approve /
+  // policies) are enforced at the route handler.
   {
     path: '/wellness/attendance',
     label: 'Attendance',
     description: 'Clock in / clock out + your timesheet',
     category: 'Staff',
-    requiredPermissions: [],
+    requiredPermissions: [{ module: 'attendance', action: 'read' }],
   },
   {
     path: '/wellness/leave',
     label: 'Leave',
     description: 'Request leave + view your balance',
     category: 'Staff',
-    requiredPermissions: [],
+    requiredPermissions: [{ module: 'leave', action: 'read' }],
   },
 
   // ── Leads & Revenue (inbox / WhatsApp / leads / tasks) ────────────
@@ -479,10 +485,12 @@ const PAGE_CATALOG = [
     label: 'Book Appointment',
     description: 'Staff/patient appointment booking form',
     category: 'Appointments',
-    // .write — only roles that CREATE appointments (Telecaller,
-    // Receptionist, Manager, CUSTOMER self-booking flow). Excludes Nurse
-    // + other clinical-assist roles who never book on behalf of patients.
-    requiredPermissions: [{ module: 'appointments', action: 'write' }],
+    // Dedicated `book_appointment` module — split out from `appointments`
+    // so the booking surface is independently grantable. Telecallers /
+    // receptionists who book on behalf of patients get this; doctors
+    // (slots already assigned to them) and admins (don't book themselves)
+    // typically don't.
+    requiredPermissions: [{ module: 'book_appointment', action: 'write' }],
   },
 
   // ── Patient portal (CUSTOMER role — not in wellness sidebar) ─────

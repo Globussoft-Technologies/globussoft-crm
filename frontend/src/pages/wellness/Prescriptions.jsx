@@ -6,6 +6,8 @@ import {
   Loader2,
   X,
   RefreshCw,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatDate } from '../../utils/date';
@@ -57,9 +59,15 @@ export default function Prescriptions() {
         : '/api/wellness/patients?limit=15';
       fetchApi(url, { silent: true })
         .then((res) => {
-          // Endpoint returns either an array or { items: [...] } depending
-          // on the wellness vs generic route; normalise here.
-          const list = Array.isArray(res) ? res : Array.isArray(res?.items) ? res.items : [];
+          // GET /api/wellness/patients returns { patients, total }; older
+          // generic shapes returned a bare array or { items: [...] }.
+          const list = Array.isArray(res)
+            ? res
+            : Array.isArray(res?.patients)
+              ? res.patients
+              : Array.isArray(res?.items)
+                ? res.items
+                : [];
           setPatientOptions(list);
         })
         .catch(() => setPatientOptions([]))
@@ -70,9 +78,11 @@ export default function Prescriptions() {
 
   // ── Prescription list ───────────────────────────────────────────
   const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [limit, setLimit] = useState(50);
+  const [skip, setSkip] = useState(0);
   const [downloadingId, setDownloadingId] = useState(null);
 
   const loadPrescriptions = () => {
@@ -80,19 +90,33 @@ export default function Prescriptions() {
     setError(null);
     const params = new URLSearchParams();
     params.set('limit', String(limit));
+    params.set('skip', String(skip));
     if (selectedPatient?.id) params.set('patientId', String(selectedPatient.id));
     fetchApi(`/api/wellness/prescriptions?${params.toString()}`, { silent: true })
       .then((res) => {
-        setItems(Array.isArray(res) ? res : []);
+        // Envelope: { items, total }. Older deploys returned a bare array;
+        // fall back so the page stays usable during a deploy roll.
+        if (Array.isArray(res)) {
+          setItems(res);
+          setTotal(res.length);
+        } else {
+          setItems(Array.isArray(res?.items) ? res.items : []);
+          setTotal(Number.isFinite(res?.total) ? res.total : 0);
+        }
       })
       .catch((err) => {
         setError(err?.message || 'Failed to load prescriptions');
         setItems([]);
+        setTotal(0);
       })
       .finally(() => setLoading(false));
   };
 
-  useEffect(loadPrescriptions, [selectedPatient?.id, limit]);
+  useEffect(loadPrescriptions, [selectedPatient?.id, limit, skip]);
+
+  // Reset to page 1 whenever the filter or page-size changes so we don't
+  // strand the user on a page that no longer exists in the new window.
+  useEffect(() => { setSkip(0); }, [selectedPatient?.id, limit]);
 
   // ── Per-row PDF download ────────────────────────────────────────
   const downloadPdf = async (rx) => {
@@ -133,7 +157,10 @@ export default function Prescriptions() {
     return more > 0 ? `${head.join(', ')} + ${more} more` : head.join(', ');
   };
 
-  const total = items.length;
+  const pageStart = total === 0 ? 0 : skip + 1;
+  const pageEnd = Math.min(skip + items.length, total);
+  const canPrev = skip > 0 && !loading;
+  const canNext = skip + limit < total && !loading;
   const headingSuffix = useMemo(
     () => (selectedPatient ? ` for ${selectedPatient.name}` : ''),
     [selectedPatient],
@@ -264,10 +291,10 @@ export default function Prescriptions() {
                 right: 0,
                 maxHeight: 260,
                 overflowY: 'auto',
-                background: 'var(--card-bg, #1a1d29)',
+                background: 'var(--bg-color, #fff)',
                 border: '1px solid var(--border-color)',
                 borderRadius: 8,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                boxShadow: 'var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.25))',
                 zIndex: 20,
               }}
             >
@@ -471,20 +498,60 @@ export default function Prescriptions() {
       {!loading && !error && total > 0 && (
         <div
           style={{
-            marginTop: '0.75rem',
-            fontSize: '0.8rem',
+            marginTop: '0.85rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.75rem',
+            flexWrap: 'wrap',
+            fontSize: '0.82rem',
             color: 'var(--text-secondary)',
           }}
         >
-          Showing {total} prescription{total === 1 ? '' : 's'}
-          {selectedPatient ? ` for ${selectedPatient.name}` : ''}.
-          {total === limit &&
-            ' Increase the page size if you expect more.'}
+          <div>
+            Showing {pageStart}–{pageEnd} of {total} prescription
+            {total === 1 ? '' : 's'}
+            {selectedPatient ? ` for ${selectedPatient.name}` : ''}.
+          </div>
+          {total > limit && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <button
+                type="button"
+                onClick={() => setSkip((s) => Math.max(0, s - limit))}
+                disabled={!canPrev}
+                style={pagerButton(!canPrev)}
+              >
+                <ChevronLeft size={14} /> Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => setSkip((s) => s + limit)}
+                disabled={!canNext}
+                style={pagerButton(!canNext)}
+              >
+                Next <ChevronRight size={14} />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
+
+const pagerButton = (disabled) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '0.25rem',
+  padding: '0.4rem 0.75rem',
+  borderRadius: 8,
+  border: '1px solid var(--border-color)',
+  background: disabled ? 'transparent' : 'var(--subtle-bg-2)',
+  color: 'inherit',
+  cursor: disabled ? 'not-allowed' : 'pointer',
+  opacity: disabled ? 0.5 : 1,
+  fontSize: '0.82rem',
+});
 
 const thStyle = {
   textAlign: 'left',

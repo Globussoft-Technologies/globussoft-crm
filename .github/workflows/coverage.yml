@@ -303,6 +303,7 @@ jobs:
             tests/marketplace-leads-api.spec.js \
             tests/approvals-api.spec.js \
             tests/sso-api.spec.js \
+            tests/auth-profile-picture-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

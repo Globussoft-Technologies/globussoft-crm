@@ -597,6 +597,23 @@ function scrubZyluSource(v) {
   return v;
 }
 
+// Parse a Visit.photosBefore / photosAfter column. Schema stores them as
+// `String? @db.Text` containing a JSON array of URLs; tolerate null,
+// already-decoded arrays, and malformed JSON without throwing.
+function parsePhotoUrls(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter((u) => typeof u === 'string' && u.length);
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((u) => typeof u === 'string' && u.length) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 async function renderPatientSummaryPdf({
   patient,
   tenant,
@@ -605,6 +622,7 @@ async function renderPatientSummaryPdf({
   walletTransactions,
   memberships,
   logoBuffer,
+  photoBuffers,
 }) {
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
@@ -668,59 +686,87 @@ async function renderPatientSummaryPdf({
   const transactions = walletTransactions || [];
   const hasWalletActivity = wallet && (Number(wallet.balance) !== 0 || transactions.length > 0);
 
-  // ── Cover / header: logo banner on top, company-name box below ────
-  // Tenant.name is the company brand (e.g. "Enhanced Wellness Clinic").
-  // Clinic (Location) gives the branch address / phone / email beneath.
+  // ── Cover / header: logo tile in the corner, org name + address beside it ──
+  // Tenant.name is the company brand (e.g. "Dr. Haror's Wellness").
+  // Clinic (Location) gives the branch address / phone / email beside it.
   const companyName = tenant?.name || clinic?.name || "Clinic";
   const c = safeClinic(clinic);
 
-  // Logo banner: spans the full usable page width so it actually fills
-  // the header area (the bundled globussoft-logo.png is a ~3.3:1 banner,
-  // so width-only sizing preserves the aspect ratio and renders at
-  // roughly the page-width × 150pt tall). `width` (not `fit`) lets
-  // PDFKit scale by aspect — `fit: [W, W]` would have letterboxed the
-  // banner inside a square box and left huge whitespace.
-  let logoHeight = 0;
+  const headerY = 50;
+  const logoTileSize = 78;
+  const headerH = logoTileSize;
+  const textBlockX = leftX + logoTileSize + 18;
+  const textBlockW = usableW - logoTileSize - 18;
+
+  // Logo tile: top-left corner, fixed square slot. The source image is
+  // scaled by HEIGHT to the slot size then clipped to a square anchored
+  // to the left edge — this extracts only the icon portion of combined
+  // "icon + wordmark" brand assets (e.g. the bundled GlobusCRM logo)
+  // while passing icon-only square uploads through unchanged. The clip
+  // rectangle is also rounded to match the visual rhythm of the rest
+  // of the page.
   if (logoBuffer) {
     try {
-      const logoTop = 50;
-      doc.image(logoBuffer, leftX, logoTop, { width: usableW });
-      // Approximate rendered height — pdfkit doesn't expose the post-
-      // image cursor reliably, so we compute from the cached source
-      // dimensions (assumed banner aspect ~3.3:1). Caps at 160pt so a
-      // square logo upload doesn't push the rest of the header off
-      // the page.
-      logoHeight = Math.min(160, Math.round(usableW / 3.3));
+      doc.save();
+      doc.roundedRect(leftX, headerY, logoTileSize, logoTileSize, 6).clip();
+      // height: logoTileSize → image is scaled so its rendered height
+      // equals the slot height; any excess width on the right is
+      // clipped away by the rect above. A square source ends up exactly
+      // filling the slot; a wide source surfaces only its left square.
+      doc.image(logoBuffer, leftX, headerY, { height: logoTileSize });
+      doc.restore();
     } catch (_e) {
-      logoHeight = 0;
+      doc.restore(); // ensure clip is unwound even on render failure
     }
   }
-  const afterLogoY = logoBuffer ? 50 + logoHeight + 12 : 50;
 
-  // Company-name box: light fill + thin border, holds tenant name (bold,
-  // centered) and the address / contact subline beneath it.
-  const addrJoined = [c.addressLine, [c.city, c.state, c.pincode].filter(Boolean).join(", ")]
-    .filter(Boolean).join(" • ");
-  const contactJoined = [c.phone, c.email].filter(Boolean).join(" • ");
-  const subline = [addrJoined, contactJoined].filter(Boolean).join("   ·   ");
-  const boxY = afterLogoY;
-  const boxH = subline ? 56 : 38;
-  doc.save();
-  doc.rect(leftX, boxY, usableW, boxH).fillColor("#f8f9fa").fill();
-  doc.rect(leftX, boxY, usableW, boxH).lineWidth(0.7).strokeColor("#d1d5db").stroke();
-  doc.restore();
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#111")
-    .text(companyName, leftX, boxY + 8, { width: usableW, align: "center" });
-  if (subline) {
-    doc.font("Helvetica").fontSize(9).fillColor("#555")
-      .text(subline, leftX, boxY + 34, { width: usableW, align: "center" });
+  // Org name + address block, vertically centred against the logo tile.
+  const addressLine = [
+    c.addressLine,
+    [c.city, c.state, c.pincode].filter(Boolean).join(", "),
+  ].filter(Boolean).join(", ");
+  const contactLine = [c.phone, c.email].filter(Boolean).join("  ·  ");
+
+  doc.font("Helvetica-Bold").fontSize(17);
+  const nameH = doc.heightOfString(companyName, { width: textBlockW });
+  doc.font("Helvetica").fontSize(10);
+  const addrH = addressLine ? doc.heightOfString(addressLine, { width: textBlockW }) : 0;
+  const contactH = contactLine ? doc.heightOfString(contactLine, { width: textBlockW }) : 0;
+  const textBlockH = nameH + (addrH ? addrH + 4 : 0) + (contactH ? contactH + 2 : 0);
+  let cursorY = headerY + Math.max(0, (headerH - textBlockH) / 2);
+
+  doc.font("Helvetica-Bold").fontSize(17).fillColor("#111")
+    .text(companyName, textBlockX, cursorY, { width: textBlockW });
+  cursorY = doc.y + 2;
+  if (addressLine) {
+    doc.font("Helvetica").fontSize(10).fillColor("#444")
+      .text(addressLine, textBlockX, cursorY, { width: textBlockW });
+    cursorY = doc.y;
+  }
+  if (contactLine) {
+    doc.font("Helvetica").fontSize(10).fillColor("#666")
+      .text(contactLine, textBlockX, cursorY, { width: textBlockW });
   }
 
-  doc.y = boxY + boxH + 16;
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#111").text("Patient Summary", leftX, doc.y);
-  doc.font("Helvetica").fontSize(10).fillColor("#666")
-    .text(`Generated: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`, leftX, doc.y);
-  doc.moveDown(0.8);
+  // Thin divider between header band and the document body.
+  const dividerY = headerY + headerH + 14;
+  doc.moveTo(leftX, dividerY).lineTo(pageRight, dividerY)
+    .lineWidth(0.6).strokeColor("#d1d5db").stroke();
+
+  // Title row — "Patient Summary" on the left, generated timestamp on
+  // the right, both sitting on a single baseline so the page opens with
+  // a clean horizontal rule above and a clean title row below.
+  const titleY = dividerY + 14;
+  doc.font("Helvetica-Bold").fontSize(20).fillColor("#111")
+    .text("Patient Summary", leftX, titleY);
+  doc.font("Helvetica").fontSize(9.5).fillColor("#666")
+    .text(
+      `Generated ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`,
+      leftX,
+      titleY,
+      { width: usableW, align: "right" },
+    );
+  doc.y = titleY + 28;
 
   // ── Profile (always rendered) ─────────────────────────────────────
   sectionTitle("Profile");
@@ -847,6 +893,82 @@ async function renderPatientSummaryPdf({
       for (const [k, val] of rows) {
         if (val == null || val === "") continue;
         kv(k, val);
+      }
+
+      // Before / After photos — rendered as a two-column thumbnail strip
+      // when the visit has any photos uploaded. Up to 3 thumbnails per
+      // side at 90x90pt; a "+N more" caption surfaces overflow. Photos
+      // PDFKit can't decode (webp/gif/svg) render as a labelled
+      // placeholder box rather than failing the whole page.
+      const beforeUrls = parsePhotoUrls(v.photosBefore);
+      const afterUrls = parsePhotoUrls(v.photosAfter);
+      if (photoBuffers && (beforeUrls.length || afterUrls.length)) {
+        const thumbSize = 90;
+        const thumbGap = 6;
+        const MAX_PER_SIDE = 3;
+        const colGap = 18;
+        const colW = (usableW - colGap) / 2;
+        const beforeColX = leftX;
+        const afterColX = leftX + colW + colGap;
+
+        // Reserve vertical space for label row + thumbnail row + "+N
+        // more" caption. Triggers a page break upfront if the strip
+        // would otherwise be split across pages.
+        ensureSpace(thumbSize + 36);
+        doc.moveDown(0.3);
+
+        const labelY = doc.y;
+        doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#6b7280")
+          .text(`BEFORE (${beforeUrls.length})`, beforeColX, labelY, { width: colW });
+        doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#6b7280")
+          .text(`AFTER (${afterUrls.length})`, afterColX, labelY, { width: colW });
+        const thumbY = labelY + 14;
+
+        const drawThumbStrip = (urls, xStart) => {
+          let x = xStart;
+          const shown = urls.slice(0, MAX_PER_SIDE);
+          for (const url of shown) {
+            const buf = photoBuffers.get(url);
+            let rendered = false;
+            if (buf) {
+              try {
+                doc.image(buf, x, thumbY, {
+                  fit: [thumbSize, thumbSize],
+                  align: "center",
+                  valign: "center",
+                });
+                rendered = true;
+              } catch (_e) {
+                rendered = false;
+              }
+            }
+            if (!rendered) {
+              // Placeholder for missing / undecodable images.
+              doc.save();
+              doc.rect(x, thumbY, thumbSize, thumbSize).fillColor("#f3f4f6").fill();
+              doc.restore();
+              doc.font("Helvetica").fontSize(7.5).fillColor("#9ca3af")
+                .text("(image)", x, thumbY + thumbSize / 2 - 4, { width: thumbSize, align: "center" });
+            }
+            doc.lineWidth(0.4).strokeColor("#d1d5db")
+              .rect(x, thumbY, thumbSize, thumbSize).stroke();
+            x += thumbSize + thumbGap;
+          }
+          const extras = urls.length - shown.length;
+          if (extras > 0) {
+            doc.font("Helvetica").fontSize(8).fillColor("#6b7280")
+              .text(`+${extras} more`, xStart, thumbY + thumbSize + 3, { width: colW });
+          }
+        };
+
+        drawThumbStrip(beforeUrls, beforeColX);
+        drawThumbStrip(afterUrls, afterColX);
+
+        // Account for the "+N more" caption when present so the next
+        // visit's separator doesn't overlap.
+        const captionPad = (beforeUrls.length > MAX_PER_SIDE || afterUrls.length > MAX_PER_SIDE) ? 14 : 0;
+        doc.y = thumbY + thumbSize + 10 + captionPad;
+        doc.x = leftX;
       }
 
       // Thin separator between consecutive visits (skipped for last row).
@@ -2301,6 +2423,8 @@ module.exports = {
   // Exported for vitest coverage of the customer-facing zylu mask.
   scrubZyluText,
   scrubZyluSource,
+  // Exported so route + tests can share the same visit-photo URL parser.
+  parsePhotoUrls,
   // Travel CRM exports — ported from main worktree to satisfy
   // travel_invoices / travel_quotes route handlers and the
   // slice-2/8/13/18 gate specs (#900/#901/#902).

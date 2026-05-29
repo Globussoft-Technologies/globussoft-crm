@@ -197,11 +197,15 @@ export default function BookAppointment() {
               >
                 <option value="">— Select a Doctor —</option>
                 {doctors.map(doc => {
-                  const name = doc.name.trim();
-                  const displayName = /^(dr\.?|doctor)\s/i.test(name) ? name : `Dr. ${name}`;
+                  const name = (doc.name || '').trim();
+                  const isDoctor = (doc.wellnessRole || '').toLowerCase() === 'doctor';
+                  const displayName = /^(dr\.?|doctor)\s/i.test(name)
+                    ? name
+                    : (isDoctor ? `Dr. ${name}` : name);
+                  const specialty = doc.specialty ? ` — ${doc.specialty}` : '';
                   return (
                     <option key={doc.id} value={doc.id} disabled={!doc.available}>
-                      {displayName} {!doc.available ? '(On Leave)' : ''}
+                      {displayName}{specialty} {!doc.available ? '(On Leave)' : ''}
                     </option>
                   );
                 })}

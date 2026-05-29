@@ -186,7 +186,7 @@ export default function ProductCategories() {
             alignItems: "center",
             gap: "0.5rem",
             padding: "0.6rem 1.25rem",
-            background: "var(--accent-color)",
+            background: "var(--primary-color, var(--accent-color))",
             color: "#fff",
             border: "none",
             borderRadius: 8,
@@ -196,6 +196,35 @@ export default function ProductCategories() {
         >
           <Plus size={16} /> Add Category
         </button>
+      </div>
+
+      <div style={{ position: "relative", marginBottom: "1rem", maxWidth: 400 }}>
+        <Search
+          size={16}
+          style={{
+            position: "absolute",
+            left: "0.75rem",
+            top: "50%",
+            transform: "translateY(-50%)",
+            color: "var(--text-secondary)",
+            pointerEvents: "none",
+          }}
+        />
+        <input
+          type="text"
+          placeholder="Search categories…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{
+            width: "100%",
+            padding: "0.55rem 0.75rem 0.55rem 2.25rem",
+            borderRadius: 8,
+            border: "1px solid var(--border-color)",
+            background: "var(--subtle-bg-2)",
+            color: "inherit",
+            fontSize: "0.9rem",
+          }}
+        />
       </div>
 
       {loading ? (
@@ -223,9 +252,20 @@ export default function ProductCategories() {
           />
           No categories yet. Create one to organize your products.
         </div>
+      ) : filteredCategories.length === 0 ? (
+        <div
+          className="glass"
+          style={{
+            padding: "2rem",
+            textAlign: "center",
+            color: "var(--text-secondary)",
+          }}
+        >
+          No categories match &ldquo;{search}&rdquo;.
+        </div>
       ) : (
         <div style={{ display: "grid", gap: "1rem" }}>
-          {categories.map((cat) => (
+          {filteredCategories.map((cat) => (
             <div
               key={cat.id}
               className="glass"
@@ -485,7 +525,7 @@ export default function ProductCategories() {
                 onClick={handleSave}
                 style={{
                   padding: "0.6rem 1.25rem",
-                  background: "var(--accent-color)",
+                  background: "var(--primary-color, var(--accent-color))",
                   color: "#fff",
                   border: "none",
                   borderRadius: 6,

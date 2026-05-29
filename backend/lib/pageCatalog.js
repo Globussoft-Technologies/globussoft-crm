@@ -404,6 +404,16 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'billing', action: 'read' }],
   },
   {
+    path: '/wellness/buy-giftcards',
+    label: 'Buy Gift Cards',
+    description: 'Customer-facing gift card storefront — purchase via Razorpay, value lands on the chosen patient\'s wallet',
+    category: 'Finance',
+    // No required permissions — any authenticated tenant user can browse
+    // + buy. Backend route is auth-only too. Mirrors the open-to-all-users
+    // shape used by /home + other low-privilege storefront surfaces.
+    requiredPermissions: [],
+  },
+  {
     path: '/wellness/coupons',
     label: 'Coupons',
     description: 'Promotional discount codes',

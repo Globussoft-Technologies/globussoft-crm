@@ -236,6 +236,40 @@ export default function Patients() {
     setEditingPatient(patient);
   };
 
+  // Tracks the in-flight row id for the delete button so we can disable +
+  // visually mute that single row's trash icon while the DELETE
+  // round-trips, without locking the rest of the table.
+  const [deletingId, setDeletingId] = useState(null);
+  // Soft-delete a single patient via DELETE /api/wellness/patients/:id.
+  // ADMIN-only on the backend (others get a 403 toast); we still show the
+  // button to everyone because role isn't surfaced into this page and a
+  // 403 toast is acceptable feedback. The endpoint returns 409 if the
+  // patient is already soft-deleted, which we surface verbatim.
+  const deletePatient = async (patient) => {
+    const ok = await notify.confirm(
+      `Delete customer "${patient.name}"? Their visits and history will be hidden but kept for audit.`
+    );
+    if (!ok) return;
+    setDeletingId(patient.id);
+    try {
+      await fetchApi(`/api/wellness/patients/${patient.id}`, { method: 'DELETE' });
+      notify.success(`Customer "${patient.name}" deleted`);
+      // Drop the deleted row from the current selection set so bulk
+      // actions can't target an id that no longer exists in the list.
+      setSelected((prev) => {
+        if (!prev.has(patient.id)) return prev;
+        const next = new Set(prev);
+        next.delete(patient.id);
+        return next;
+      });
+      setReloadTick((t) => t + 1);
+    } catch (e) {
+      notify.error(e?.data?.error || e?.message || 'Failed to delete customer');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   // ── Filter mutators (URL-driven) ─────────────────────────────────
   // The filter modal batches all filter changes into a single
   // updateParams call via its `onApply` hook, so per-field setters are
@@ -765,21 +799,43 @@ export default function Patients() {
                     {formatDate(p.createdAt)}
                   </td>
                   <td style={{ ...tdStyle, textAlign: "center" }}>
-                    <button
-                      onClick={() => startEdit(p)}
-                      title="Edit patient"
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "var(--accent-color)",
-                        cursor: "pointer",
-                        padding: "0.25rem",
-                        display: "inline-flex",
-                        alignItems: "center",
-                      }}
-                    >
-                      <Pencil size={16} />
-                    </button>
+                    <div style={{ display: "inline-flex", gap: "0.25rem", alignItems: "center" }}>
+                      <button
+                        onClick={() => startEdit(p)}
+                        title="Edit patient"
+                        aria-label={`Edit ${p.name}`}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "var(--accent-color)",
+                          cursor: "pointer",
+                          padding: "0.25rem",
+                          display: "inline-flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        <Pencil size={16} />
+                      </button>
+                      <button
+                        onClick={() => deletePatient(p)}
+                        disabled={deletingId === p.id}
+                        title="Delete patient"
+                        aria-label={`Delete ${p.name}`}
+                        data-testid={`patient-delete-${p.id}`}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "var(--danger-color, #ef4444)",
+                          cursor: deletingId === p.id ? "not-allowed" : "pointer",
+                          opacity: deletingId === p.id ? 0.5 : 1,
+                          padding: "0.25rem",
+                          display: "inline-flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

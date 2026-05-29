@@ -35,6 +35,7 @@ const { writeAudit, diffFields } = require("../lib/audit");
 const { requirePermission } = require("../middleware/requirePermission");
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const { generateReceiptNumber } = require("../lib/inventoryReceiptNumber");
+const { ALLOWED_UNITS, isAllowedUnit, isConvertible } = require("../lib/consumptionUnits");
 // #665: shared inverted-date-range guard — see lib/validateDateRange.js.
 const { validateDateRange } = require("../lib/validateDateRange");
 const multer = require("multer");
@@ -1211,7 +1212,7 @@ router.get("/auto-consumption-rules", canReadProducts, async (req, res) => {
       orderBy: [{ serviceId: "asc" }, { productId: "asc" }],
       include: {
         service: { select: { id: true, name: true } },
-        product: { select: { id: true, name: true, sku: true, currentStock: true } },
+        product: { select: { id: true, name: true, sku: true, currentStock: true, unit: true } },
       },
     });
     res.json(items);
@@ -1223,7 +1224,7 @@ router.get("/auto-consumption-rules", canReadProducts, async (req, res) => {
 
 router.post("/auto-consumption-rules", canManageProducts, async (req, res) => {
   try {
-    const { serviceId, productId, quantityPerVisit, isActive } = req.body;
+    const { serviceId, productId, quantityPerVisit, unit, isActive } = req.body;
     if (!serviceId) return res.status(400).json({ error: "serviceId is required", code: "SERVICE_REQUIRED" });
     if (!productId) return res.status(400).json({ error: "productId is required", code: "PRODUCT_REQUIRED" });
     if (quantityPerVisit == null || Number(quantityPerVisit) <= 0) {
@@ -1235,12 +1236,34 @@ router.post("/auto-consumption-rules", canManageProducts, async (req, res) => {
     const product = await prisma.product.findFirst({ where: tenantWhere(req, { id: parseInt(productId) }) });
     if (!product) return res.status(400).json({ error: "product not found in this tenant", code: "PRODUCT_NOT_FOUND" });
 
+    // Validate optional unit. If supplied, it must be from the allowed enum
+    // AND convertible to the product's base unit (so the applier can
+    // deterministically deduct stock). If the product has no base unit set,
+    // we accept any allowed unit and treat them as equivalent.
+    let normalisedUnit = null;
+    if (unit !== undefined && unit !== null && unit !== "") {
+      if (!isAllowedUnit(unit)) {
+        return res.status(400).json({
+          error: `unit must be one of: ${ALLOWED_UNITS.join(", ")}`,
+          code: "UNIT_INVALID",
+        });
+      }
+      if (product.unit && !isConvertible(unit, product.unit)) {
+        return res.status(400).json({
+          error: `unit '${unit}' is not convertible to product unit '${product.unit}'`,
+          code: "UNIT_INCOMPATIBLE",
+        });
+      }
+      normalisedUnit = unit;
+    }
+
     try {
       const rule = await prisma.autoConsumptionRule.create({
         data: {
           serviceId: parseInt(serviceId),
           productId: parseInt(productId),
           quantityPerVisit: Number(quantityPerVisit),
+          unit: normalisedUnit,
           isActive: isActive !== false,
           tenantId: req.user.tenantId,
         },
@@ -1249,6 +1272,7 @@ router.post("/auto-consumption-rules", canManageProducts, async (req, res) => {
         serviceId: rule.serviceId,
         productId: rule.productId,
         quantityPerVisit: rule.quantityPerVisit,
+        unit: rule.unit,
       });
       res.status(201).json(rule);
     } catch (createErr) {
@@ -1277,6 +1301,29 @@ router.put("/auto-consumption-rules/:id", canManageProducts, async (req, res) =>
       const q = Number(req.body.quantityPerVisit);
       if (q <= 0) return res.status(400).json({ error: "quantityPerVisit must be a positive number", code: "QUANTITY_INVALID" });
       data.quantityPerVisit = q;
+    }
+    if (req.body.unit !== undefined) {
+      if (req.body.unit === null || req.body.unit === "") {
+        data.unit = null;
+      } else {
+        if (!isAllowedUnit(req.body.unit)) {
+          return res.status(400).json({
+            error: `unit must be one of: ${ALLOWED_UNITS.join(", ")}`,
+            code: "UNIT_INVALID",
+          });
+        }
+        const product = await prisma.product.findFirst({
+          where: tenantWhere(req, { id: existing.productId }),
+          select: { unit: true },
+        });
+        if (product && product.unit && !isConvertible(req.body.unit, product.unit)) {
+          return res.status(400).json({
+            error: `unit '${req.body.unit}' is not convertible to product unit '${product.unit}'`,
+            code: "UNIT_INCOMPATIBLE",
+          });
+        }
+        data.unit = req.body.unit;
+      }
     }
     if (req.body.isActive !== undefined) data.isActive = !!req.body.isActive;
 

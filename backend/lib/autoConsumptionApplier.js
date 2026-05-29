@@ -31,6 +31,7 @@
 
 const prisma = require("./prisma");
 const { bus } = require("./eventBus");
+const { isConvertible, convertQuantity } = require("./consumptionUnits");
 
 /**
  * Apply all auto-consumption rules for a visit. Exposed for unit testing
@@ -59,9 +60,49 @@ async function applyAutoConsumptionForVisit(visit, _opts = {}) {
   console.log(`[autoConsumption] visit ${visit.id} serviceId=${visit.serviceId}: found ${rules.length} rules`);
   if (rules.length === 0) return out;
 
+  // Idempotency: if any ServiceConsumption rows already exist for this visit
+  // (from an earlier `visit.completed` fire — duplicate event, re-entrant
+  // PUT, manual replay), skip rules whose product is already deducted. The
+  // unique signal is (visitId, productId) — a single rule maps one product
+  // per service+visit, so this exact match is sufficient.
+  const alreadyDeducted = new Set();
+  try {
+    const prior = await prisma.serviceConsumption.findMany({
+      where: { visitId: visit.id, tenantId: visit.tenantId },
+      select: { productId: true },
+    });
+    for (const row of prior) {
+      if (row.productId) alreadyDeducted.add(row.productId);
+    }
+    if (alreadyDeducted.size > 0) {
+      console.log(
+        `[autoConsumption] visit ${visit.id}: ${alreadyDeducted.size} product(s) already deducted — skipping to avoid double-deduction`
+      );
+    }
+  } catch (_e) {
+    // If the dedupe lookup fails, we'd rather skip the dedupe than block the
+    // deduction — the existing audit trail surfaces any double-deduction.
+  }
+
   for (const rule of rules) {
     try {
-      const consumedMl = Number(rule.quantityPerVisit);
+      if (alreadyDeducted.has(rule.productId)) {
+        out.skipped.push({ ruleId: rule.id, reason: "ALREADY_APPLIED" });
+        continue;
+      }
+      // Convert rule quantity (in rule.unit, or the product's unit if not
+      // specified) into the product's base unit so the partialMlUsed
+      // accumulator stays in one consistent scale.
+      const productUnit = rule.product.unit || null;
+      const ruleUnit = rule.unit || productUnit;
+      let consumedMl = Number(rule.quantityPerVisit);
+      if (ruleUnit && productUnit && ruleUnit !== productUnit) {
+        if (!isConvertible(ruleUnit, productUnit)) {
+          out.skipped.push({ ruleId: rule.id, reason: `UNIT_INCOMPATIBLE ${ruleUnit}→${productUnit}` });
+          continue;
+        }
+        consumedMl = convertQuantity(consumedMl, ruleUnit, productUnit);
+      }
       const volume = rule.product.volume || 1;
       let newPartialMlUsed = (rule.product.partialMlUsed || 0) + consumedMl;
       let unitsToDeduct = 0;

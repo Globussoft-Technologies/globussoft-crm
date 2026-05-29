@@ -7,7 +7,8 @@ import { Recycle, Plus, Pencil, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 
-const EMPTY = { serviceId: '', productId: '', quantityPerVisit: '', isActive: true };
+const UNIT_OPTIONS = ['ml', 'gm', 'kg', 'piece', 'unit', 'bottle', 'tube', 'pack', 'ltr'];
+const EMPTY = { serviceId: '', productId: '', quantityPerVisit: '', unit: '', isActive: true };
 
 export default function AutoConsumptionRules() {
   const notify = useNotify();
@@ -41,10 +42,13 @@ export default function AutoConsumptionRules() {
       serviceId: String(r.serviceId),
       productId: String(r.productId),
       quantityPerVisit: String(r.quantityPerVisit),
+      unit: r.unit || '',
       isActive: r.isActive !== false,
     });
     setShowForm(true);
   };
+
+  const productForId = (id) => products.find((p) => String(p.id) === String(id));
 
   const submit = async (e) => {
     e.preventDefault();
@@ -54,14 +58,19 @@ export default function AutoConsumptionRules() {
         serviceId: parseInt(form.serviceId),
         productId: parseInt(form.productId),
         quantityPerVisit: parseFloat(form.quantityPerVisit),
+        unit: form.unit || null,
         isActive: form.isActive,
       };
       if (editingId) {
-        // Only quantityPerVisit + isActive are updatable; svc + product
+        // Only quantityPerVisit + unit + isActive are updatable; svc + product
         // changes require delete + recreate.
         await fetchApi(`/api/wellness/auto-consumption-rules/${editingId}`, {
           method: 'PUT',
-          body: JSON.stringify({ quantityPerVisit: payload.quantityPerVisit, isActive: payload.isActive }),
+          body: JSON.stringify({
+            quantityPerVisit: payload.quantityPerVisit,
+            unit: payload.unit,
+            isActive: payload.isActive,
+          }),
         });
         notify.success('Rule updated.');
       } else {
@@ -117,8 +126,19 @@ export default function AutoConsumptionRules() {
             {products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
           </select>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-            <input type="number" min="0.01" step="0.01" required placeholder="e.g., 50 (for 50ml)" value={form.quantityPerVisit} onChange={(e) => setForm({ ...form, quantityPerVisit: e.target.value })} style={inputStyle} title="Quantity consumed per treatment in the product's unit (usually ml)" />
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Amount in product's unit (ml, units, etc.)</span>
+            <input type="number" min="0.01" step="0.01" required placeholder="e.g., 15" value={form.quantityPerVisit} onChange={(e) => setForm({ ...form, quantityPerVisit: e.target.value })} style={inputStyle} title="Quantity consumed per completed treatment" />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Consumed per completed treatment</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            <select value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} style={inputStyle} title="Unit the quantity above is expressed in">
+              <option value="">Unit (default: product&apos;s){productForId(form.productId)?.unit ? ` — ${productForId(form.productId).unit}` : ''}</option>
+              {UNIT_OPTIONS.map((u) => (<option key={u} value={u}>{u}</option>))}
+            </select>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              {productForId(form.productId)?.unit
+                ? `Product stocked in ${productForId(form.productId).unit}. ml↔ltr and gm↔kg auto-convert.`
+                : 'ml, gm, kg, piece, bottle, etc.'}
+            </span>
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9rem' }}>
             <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
@@ -141,7 +161,8 @@ export default function AutoConsumptionRules() {
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
                 <th style={cellStyle}>Service</th>
                 <th style={cellStyle}>Product</th>
-                <th style={cellStyle} title="Quantity in product's unit (ml, units, etc.)">Qty / visit</th>
+                <th style={cellStyle} title="Quantity consumed per completed visit">Qty / visit</th>
+                <th style={cellStyle}>Unit</th>
                 <th style={cellStyle}>Stock</th>
                 <th style={cellStyle}>Status</th>
                 <th style={cellStyle}></th>
@@ -153,6 +174,7 @@ export default function AutoConsumptionRules() {
                   <td style={cellStyle}>{r.service?.name || `#${r.serviceId}`}</td>
                   <td style={cellStyle}>{r.product?.name || `#${r.productId}`}</td>
                   <td style={cellStyle}>{r.quantityPerVisit}</td>
+                  <td style={cellStyle}>{r.unit || r.product?.unit || '—'}</td>
                   <td style={cellStyle}>{r.product?.currentStock ?? '—'}</td>
                   <td style={cellStyle}>{r.isActive ? 'Active' : 'Inactive'}</td>
                   <td style={{ ...cellStyle, textAlign: 'right' }}>

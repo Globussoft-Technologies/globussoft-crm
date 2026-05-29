@@ -198,7 +198,6 @@ router.post("/send-email", async (req, res) => {
     const ccPersist = ccDeliverable.length > 0 ? ccDeliverable.join(', ') : null;
     const bccPersist = bccDeliverable.length > 0 ? bccDeliverable.join(', ') : null;
 
-    const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
     const results = [];
 
     // #611: tenant emailRetention toggle. Default true (industry-norm Sent

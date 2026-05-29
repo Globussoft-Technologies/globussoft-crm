@@ -133,10 +133,8 @@ const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.c
 // origin; in local dev we default to the Vite dev server on :5173 so
 // the email-link → form flow works without any env setup.
 //
-// `BASE_URL` is kept for back-compat with any caller still constructing
-// API URLs against it — but the respond link uses FRONTEND_URL.
+// The respond link uses FRONTEND_URL.
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
-const BASE_URL = process.env.BASE_URL || "https://crm.globusdemos.com";
 
 async function sendSurveyEmail(to, subject, textBody, htmlBody) {
   if (!SENDGRID_API_KEY) {

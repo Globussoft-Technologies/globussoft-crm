@@ -580,7 +580,7 @@ router.get("/microsites/public/:publicUuid/full", async (req, res) => {
     let claims;
     try {
       claims = jwt.verify(String(token), JWT_SECRET);
-    } catch (jwtErr) {
+    } catch (_jwtErr) {
       return res.status(401).json({ error: "Access token invalid or expired", code: "TOKEN_INVALID" });
     }
     if (!claims || claims.kind !== "microsite-otp") {

@@ -207,7 +207,7 @@ router.get("/:id/download", verifyToken, async (req, res) => {
     });
     if (!snap) return res.status(404).json({ error: "Snapshot not found" });
 
-    const safeName = (snap.name || `snapshot-${id}`).replace(/[^a-z0-9_\-]/gi, "_");
+    const safeName = (snap.name || `snapshot-${id}`).replace(/[^a-z0-9_-]/gi, "_");
     res.setHeader("Content-Type", "application/json");
     res.setHeader(
       "Content-Disposition",

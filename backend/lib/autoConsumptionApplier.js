@@ -31,7 +31,6 @@
 
 const prisma = require("./prisma");
 const { bus } = require("./eventBus");
-const { writeAudit } = require("./audit");
 
 /**
  * Apply all auto-consumption rules for a visit. Exposed for unit testing
@@ -40,10 +39,10 @@ const { writeAudit } = require("./audit");
  * visit lands as completed in a single create — same outcome).
  *
  * @param {object} visit       — the Visit row (must have id, serviceId, tenantId)
- * @param {object} [opts]      — { skipAuditLog: bool }
+ * @param {object} [_opts]     — reserved (skipAuditLog: bool); not yet used
  * @returns {Promise<{ rules: number, applied: Array, skipped: Array }>}
  */
-async function applyAutoConsumptionForVisit(visit, opts = {}) {
+async function applyAutoConsumptionForVisit(visit, _opts = {}) {
   const out = { rules: 0, applied: [], skipped: [] };
   if (!visit || !visit.id || !visit.serviceId) return out;
   if (visit.status && visit.status !== "completed") return out;

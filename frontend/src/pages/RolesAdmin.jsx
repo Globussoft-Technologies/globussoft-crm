@@ -132,6 +132,59 @@ const MODULE_DESCRIPTIONS = {
   developer:      'Developer tools, API keys, and platform diagnostics.',
 };
 
+// SPEC §6a (CRM Role Preset Specification) — client mirror of
+// backend/lib/sensitivePermissions.js. Keep these two lists in lockstep:
+// any addition here must also land server-side (the backend audit is
+// what bills as the canonical record; this set just drives the
+// pre-save confirmation modal). A drift between client and server is
+// safe (server is authoritative), it would just mean the client either
+// over- or under-warns relative to what gets audited. Reviewer note:
+// if you add a sensitive perm to one file, grep the other.
+const SENSITIVE_PERMISSIONS_CLIENT = new Set([
+  // ROLES write — can change other people's access
+  'roles.manage',
+  // STAFF mutate-tier — can add / remove / modify staff
+  'staff.write', 'staff.update', 'staff.delete', 'staff.manage',
+  // SETTINGS / DEVELOPER / INTEGRATIONS write-tier
+  'settings.manage',
+  'developer.manage',
+  'integrations.write', 'integrations.update', 'integrations.delete', 'integrations.manage',
+  // BILLING / ACCOUNTING mutate-tier — financial exposure
+  'billing.write', 'billing.update', 'billing.delete', 'billing.manage',
+  'accounting.write',
+  // Clinical PII destruction
+  'patients.delete',
+  'prescriptions.delete',
+  'consents.delete',
+]);
+
+// Friendly per-grant explanation shown in the confirmation modal. Helps
+// the admin understand WHY the grant matters before they click Confirm.
+// Falls back to a generic "Powerful permission" string if a grant is in
+// SENSITIVE_PERMISSIONS_CLIENT but missing from this map — defence
+// against the map silently drifting behind the catalog.
+const SENSITIVE_PERMISSION_REASONS = {
+  'roles.manage': 'Can change every other role’s permissions and assign roles to staff.',
+  'staff.write': 'Can create new staff accounts in this tenant.',
+  'staff.update': 'Can modify staff records (name, contact, role assignments).',
+  'staff.delete': 'Can deactivate or remove staff accounts.',
+  'staff.manage': 'Full staff administration (add, remove, configure).',
+  'settings.manage': 'Can reconfigure tenant-wide settings (defaults, channels, branding).',
+  'developer.manage': 'Can manage API keys, webhooks, and platform diagnostics.',
+  'integrations.write': 'Can connect new third-party integrations.',
+  'integrations.update': 'Can edit existing integration configurations.',
+  'integrations.delete': 'Can disconnect third-party integrations.',
+  'integrations.manage': 'Full integration administration.',
+  'billing.write': 'Can create invoices and billing records.',
+  'billing.update': 'Can modify invoices and billing records.',
+  'billing.delete': 'Can void or remove invoices.',
+  'billing.manage': 'Full billing administration.',
+  'accounting.write': 'Can post to the accounting ledger / sync.',
+  'patients.delete': 'Can permanently remove patient records (clinical PHI destruction).',
+  'prescriptions.delete': 'Can permanently remove prescription records.',
+  'consents.delete': 'Can permanently remove signed consent forms (compliance risk).',
+};
+
 // One-line description per action verb, surfaced as the hover tooltip on
 // each checkbox. Generic across modules — "read on patients" and "read on
 // deals" both grant the same shape of access, so a single canonical
@@ -891,6 +944,11 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
   const [selected, setSelected] = useState(initial);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  // SPEC §6a — when the admin clicks Save and the selection adds NET-
+  // NEW sensitive grants, we stash them here and surface a confirmation
+  // modal. Save only fires when the admin clicks Confirm. Cancel returns
+  // to the matrix with selection intact so they can pare back.
+  const [pendingSensitiveGrants, setPendingSensitiveGrants] = useState(null);
   // Page catalog so we can show admins which pages each permission
   // unlocks. Without this, admins look for a "calendar" module in the
   // picker, don't find it (calendar is gated by appointments.read), and
@@ -952,7 +1010,10 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
     setSelected(next);
   };
 
-  const save = async () => {
+  // The actual persist step. Split out from `requestSave` so the
+  // SensitiveGrantsConfirmModal's Confirm button can call it directly,
+  // bypassing the sensitive-grant gate (the admin has just confirmed).
+  const persistSave = async () => {
     setError('');
     setIsLoading(true);
     try {
@@ -965,6 +1026,7 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
         body: JSON.stringify({ permissions: body }),
       });
       notify.success?.(`Permissions updated for "${role.name}"`);
+      setPendingSensitiveGrants(null);
       onSaved();
     } catch (err) {
       setError(err.message || 'Could not save permissions');
@@ -972,6 +1034,25 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
       setIsLoading(false);
     }
   };
+
+  // SPEC §6a — entry point from the Save button. Detect NET-NEW
+  // sensitive grants (in selected but not in initial) and surface a
+  // confirmation modal before persisting. If none, fall through to
+  // persistSave directly.
+  const requestSave = () => {
+    const newlySensitive = [];
+    for (const key of selected) {
+      if (initial.has(key)) continue;
+      if (SENSITIVE_PERMISSIONS_CLIENT.has(key)) newlySensitive.push(key);
+    }
+    if (newlySensitive.length > 0) {
+      setPendingSensitiveGrants(newlySensitive);
+      return;
+    }
+    persistSave();
+  };
+
+  const save = requestSave;
 
   return (
     <ModalShell
@@ -1217,6 +1298,88 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
             {isLoading ? 'Saving…' : 'Save permissions'}
           </button>
         )}
+      </ModalActions>
+
+      {/* SPEC §6a — sensitive-grant confirmation. Rendered on top of the
+          permissions matrix so the admin's selection is preserved
+          underneath if they cancel. Confirm fires persistSave directly,
+          which bypasses the gate (already confirmed). */}
+      {pendingSensitiveGrants && pendingSensitiveGrants.length > 0 && (
+        <SensitiveGrantsConfirmModal
+          roleName={role.name}
+          grants={pendingSensitiveGrants}
+          isLoading={isLoading}
+          onCancel={() => setPendingSensitiveGrants(null)}
+          onConfirm={persistSave}
+        />
+      )}
+    </ModalShell>
+  );
+}
+
+// SPEC §6a — confirmation modal shown when the admin's permission save
+// would add NET-NEW sensitive grants (see SENSITIVE_PERMISSIONS_CLIENT).
+// Lists each grant + a one-line reason and requires explicit Confirm to
+// proceed. Mirrors the backend audit metadata captured by the PUT
+// /api/roles/:id/permissions endpoint.
+function SensitiveGrantsConfirmModal({ roleName, grants, isLoading, onCancel, onConfirm }) {
+  return (
+    <ModalShell
+      title="Confirm sensitive permission grant"
+      subtitle={`You are about to grant ${grants.length} powerful permission${grants.length === 1 ? '' : 's'} to "${roleName}".`}
+      onClose={onCancel}
+      width={560}
+    >
+      <div
+        style={{
+          marginBottom: '0.75rem',
+          padding: '0.65rem 0.8rem',
+          borderRadius: 8,
+          background: 'var(--subtle-bg-2)',
+          border: '1px solid var(--border-color)',
+          fontSize: '0.85rem',
+          color: 'var(--text-secondary)',
+        }}
+      >
+        These permissions can change other people&apos;s access, expose financial
+        data, or destroy clinical records. Confirm only if you intend the
+        role&apos;s holders to perform these actions.
+      </div>
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        {grants.map((key) => (
+          <li
+            key={key}
+            style={{
+              padding: '0.55rem 0.75rem',
+              marginBottom: '0.4rem',
+              borderRadius: 6,
+              border: '1px solid var(--border-color)',
+              background: 'var(--subtle-bg-1)',
+            }}
+          >
+            <div
+              style={{
+                fontFamily: 'monospace',
+                fontSize: '0.85rem',
+                fontWeight: 700,
+                color: 'var(--text-primary)',
+              }}
+            >
+              {key}
+            </div>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+              {SENSITIVE_PERMISSION_REASONS[key] || 'Powerful permission — review carefully.'}
+            </div>
+          </li>
+        ))}
+      </ul>
+      <ModalActions>
+        <button type="button" onClick={onCancel} className="btn-secondary" disabled={isLoading}>
+          Cancel
+        </button>
+        <button type="button" onClick={onConfirm} className="btn-primary" disabled={isLoading}>
+          {isLoading ? 'Saving…' : 'Confirm and save'}
+        </button>
       </ModalActions>
     </ModalShell>
   );

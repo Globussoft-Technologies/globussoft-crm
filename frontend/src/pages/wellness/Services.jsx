@@ -168,22 +168,10 @@ export default function Services() {
             </button>
           </div>
         )}
-        {/* #365: Packages tab needs its own primary CTA. The package builder is
-            already rendered inline below, so this just scrolls to the form
-            anchor — no modal needed. */}
         {tab === 'packages' && (
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             {/* Issue #816: packages CSV. */}
             <CsvImportExportToolbar entity="packages" label="Packages" formats={['csv', 'xlsx']} />
-            <button
-              onClick={() => {
-                const el = document.getElementById('package-builder-anchor');
-                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
-            >
-              <Plus size={16} /> Create Package
-            </button>
           </div>
         )}
       </header>
@@ -511,7 +499,13 @@ function ServiceCard({ service, onChanged, onOpen, editRequested, onEditConsumed
       onKeyDown={(ev) => { if (onOpen && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); onOpen(service); } }}
       title="Click to view details"
     >
-      <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem', zIndex: 2 }} onClick={(e) => e.stopPropagation()}>
+      <div
+        style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem', zIndex: 3 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span style={{ background: tierColor[service.ticketTier], color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', textTransform: 'uppercase', fontWeight: 600, lineHeight: 1.4 }}>
+          {service.ticketTier}
+        </span>
         <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} aria-label={`Edit service ${service.name}`} title="Edit" style={iconBtn}><Pencil size={12} /></button>
         <button onClick={(e) => { e.stopPropagation(); remove(); }} aria-label={`Deactivate service ${service.name}`} title="Deactivate" style={{ ...iconBtn, color: 'var(--danger-color)' }}><Trash2 size={12} /></button>
       </div>
@@ -523,14 +517,9 @@ function ServiceCard({ service, onChanged, onOpen, editRequested, onEditConsumed
           onError={(e) => { e.currentTarget.style.display = 'none'; }}
         />
       )}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', paddingRight: '3rem' }}>
-        <div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{service.category}</div>
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '0.15rem' }}>{service.name}</h3>
-        </div>
-        <span style={{ background: tierColor[service.ticketTier], color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', textTransform: 'uppercase', fontWeight: 600 }}>
-          {service.ticketTier}
-        </span>
+      <div style={{ marginBottom: '0.5rem', paddingRight: '6.5rem' }}>
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{service.category}</div>
+        <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '0.15rem' }}>{service.name}</h3>
       </div>
       <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
         <span><IndianRupee size={12} style={{ verticalAlign: 'middle' }} /> {service.basePrice.toLocaleString('en-IN')}</span>

@@ -35,7 +35,11 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
-const { sendTemplate, sendText, submitTemplateToMeta } = require("../services/whatsappProvider");
+const {
+  sendTemplate,
+  sendText,
+  submitTemplateToMeta,
+} = require("../services/whatsappProvider");
 const { toE164 } = require("../utils/deduplication");
 const { writeAudit } = require("../lib/audit");
 const {
@@ -98,7 +102,9 @@ router.post("/send", verifyToken, async (req, res) => {
       return res.status(400).json({ error: "to is required" });
     }
     if (!body && !templateName) {
-      return res.status(400).json({ error: "body or templateName is required" });
+      return res
+        .status(400)
+        .json({ error: "body or templateName is required" });
     }
 
     // Wave 2 Agent KK: opt-out gate. Reject before hitting Meta to keep
@@ -109,7 +115,12 @@ router.post("/send", verifyToken, async (req, res) => {
     const normalizedTo = normalizeToE164(to);
     if (normalizedTo) {
       const optOut = await prisma.whatsAppOptOut.findUnique({
-        where: { tenantId_contactPhone: { tenantId: req.user.tenantId, contactPhone: normalizedTo } },
+        where: {
+          tenantId_contactPhone: {
+            tenantId: req.user.tenantId,
+            contactPhone: normalizedTo,
+          },
+        },
       });
       if (optOut) {
         return res.status(422).json({
@@ -136,12 +147,20 @@ router.post("/send", verifyToken, async (req, res) => {
     // the gate also requires a template — first-touch must be opt-in-shaped.
     const TWENTY_FOUR_HOURS_MS = 24 * 3600 * 1000;
     if (!templateName && normalizedTo) {
-      const lastInbound = await prisma.whatsAppMessage.findFirst({
-        where: { tenantId: req.user.tenantId, direction: "INBOUND", from: { contains: normalizedTo.replace(/^\+/, "") } },
-        orderBy: { createdAt: "desc" },
-        select: { createdAt: true },
-      }).catch(() => null);
-      const sinceMs = lastInbound ? Date.now() - new Date(lastInbound.createdAt).getTime() : Infinity;
+      const lastInbound = await prisma.whatsAppMessage
+        .findFirst({
+          where: {
+            tenantId: req.user.tenantId,
+            direction: "INBOUND",
+            from: { contains: normalizedTo.replace(/^\+/, "") },
+          },
+          orderBy: { createdAt: "desc" },
+          select: { createdAt: true },
+        })
+        .catch(() => null);
+      const sinceMs = lastInbound
+        ? Date.now() - new Date(lastInbound.createdAt).getTime()
+        : Infinity;
       if (sinceMs > TWENTY_FOUR_HOURS_MS) {
         return res.status(422).json({
           error:
@@ -154,9 +173,13 @@ router.post("/send", verifyToken, async (req, res) => {
     }
 
     // Get active config for this tenant
-    const config = await prisma.whatsAppConfig.findFirst({ where: { isActive: true, tenantId: req.user.tenantId } });
+    const config = await prisma.whatsAppConfig.findFirst({
+      where: { isActive: true, tenantId: req.user.tenantId },
+    });
     if (!config) {
-      return res.status(400).json({ error: "No active WhatsApp provider configured" });
+      return res
+        .status(400)
+        .json({ error: "No active WhatsApp provider configured" });
     }
 
     // Wave 2 Agent KK: upsert thread for the recipient phone so outbound
@@ -165,7 +188,12 @@ router.post("/send", verifyToken, async (req, res) => {
     let thread = null;
     if (normalizedTo) {
       thread = await prisma.whatsAppThread.upsert({
-        where: { tenantId_contactPhone: { tenantId: req.user.tenantId, contactPhone: normalizedTo } },
+        where: {
+          tenantId_contactPhone: {
+            tenantId: req.user.tenantId,
+            contactPhone: normalizedTo,
+          },
+        },
         create: {
           tenantId: req.user.tenantId,
           contactPhone: normalizedTo,
@@ -176,7 +204,7 @@ router.post("/send", verifyToken, async (req, res) => {
         update: {
           lastMessageAt: new Date(),
           // Reopen a CLOSED thread when the operator sends a new message.
-          ...(undefined /* keep status as-is unless CLOSED */),
+          ...undefined /* keep status as-is unless CLOSED */,
         },
       });
       // Re-open closed threads when an operator sends a new outbound.
@@ -204,10 +232,12 @@ router.post("/send", verifyToken, async (req, res) => {
     // substituted so the chat shows what was actually sent to the customer.
     let storedBody = body || null;
     if (!storedBody && templateName) {
-      const tpl = await prisma.whatsAppTemplate.findFirst({
-        where: { tenantId: req.user.tenantId, name: templateName },
-        select: { body: true },
-      }).catch(() => null);
+      const tpl = await prisma.whatsAppTemplate
+        .findFirst({
+          where: { tenantId: req.user.tenantId, name: templateName },
+          select: { body: true },
+        })
+        .catch(() => null);
       const params = Array.isArray(parameters) ? parameters : [];
       if (tpl?.body) {
         storedBody = tpl.body.replace(/\{\{(\d+)\}\}/g, (match, n) => {
@@ -229,6 +259,13 @@ router.post("/send", verifyToken, async (req, res) => {
         direction: "OUTBOUND",
         status: "QUEUED",
         templateName: templateName || null,
+        // Persist template parameters so the outbound cron can pass them to
+        // Meta. Without this it sent parameters:[] → Meta #132000 "Number of
+        // parameters does not match" for templates with {{n}} placeholders.
+        interactiveJson:
+          templateName && Array.isArray(parameters) && parameters.length
+            ? JSON.stringify({ parameters })
+            : null,
         contactId: contactId || null,
         userId: req.user.userId,
         tenantId: req.user.tenantId,
@@ -248,10 +285,15 @@ router.post("/send", verifyToken, async (req, res) => {
       });
     } catch (enqueueErr) {
       console.error("[whatsapp /send] enqueue failed:", enqueueErr);
-      await prisma.whatsAppMessage.update({
-        where: { id: message.id },
-        data: { status: "FAILED", errorMessage: `enqueue failed: ${enqueueErr.message}` },
-      }).catch(() => {});
+      await prisma.whatsAppMessage
+        .update({
+          where: { id: message.id },
+          data: {
+            status: "FAILED",
+            errorMessage: `enqueue failed: ${enqueueErr.message}`,
+          },
+        })
+        .catch(() => {});
       return res.status(500).json({
         success: false,
         messageId: message.id,
@@ -261,7 +303,11 @@ router.post("/send", verifyToken, async (req, res) => {
     }
 
     if (req.io) {
-      req.io.emit("whatsapp:queued", { messageId: message.id, to, threadId: thread?.id || null });
+      req.io.emit("whatsapp:queued", {
+        messageId: message.id,
+        to,
+        threadId: thread?.id || null,
+      });
     }
 
     // 202 Accepted — the message is QUEUED. Caller polls /api/whatsapp/messages
@@ -274,7 +320,9 @@ router.post("/send", verifyToken, async (req, res) => {
       threadId: thread?.id || null,
     });
     // unused legacy reference — kept to satisfy a require() warning silencer
-    void sendText; void sendTemplate; void decryptCredential;
+    void sendText;
+    void sendTemplate;
+    void decryptCredential;
   } catch (err) {
     console.error("WhatsApp send error:", err);
     res.status(500).json({ error: "Failed to send WhatsApp message" });
@@ -503,7 +551,9 @@ router.get("/threads", verifyToken, async (req, res) => {
         skip,
         take,
         include: {
-          contact: { select: { id: true, name: true, phone: true, email: true } },
+          contact: {
+            select: { id: true, name: true, phone: true, email: true },
+          },
           patient: { select: { id: true, name: true, phone: true } },
           assignedTo: { select: { id: true, name: true, email: true } },
         },
@@ -545,9 +595,16 @@ router.get("/threads", verifyToken, async (req, res) => {
         req.user.userId,
         req.user.tenantId,
         auditDisclosureDetails(req, "whatsapp_threads", threads, {
-          fields: ["contactPhone", "contact.name", "contact.phone", "contact.email"],
+          fields: [
+            "contactPhone",
+            "contact.name",
+            "contact.phone",
+            "contact.email",
+          ],
         }),
-      ).catch((e) => console.warn("[whatsapp] audit PII_DISCLOSED failed:", e.message));
+      ).catch((e) =>
+        console.warn("[whatsapp] audit PII_DISCLOSED failed:", e.message),
+      );
     }
 
     res.json({
@@ -569,7 +626,8 @@ router.get("/threads", verifyToken, async (req, res) => {
 router.get("/threads/:id", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    if (!Number.isFinite(id))
+      return res.status(400).json({ error: "invalid id" });
 
     const thread = await prisma.whatsAppThread.findFirst({
       where: { id, tenantId: req.user.tenantId },
@@ -584,14 +642,23 @@ router.get("/threads/:id", verifyToken, async (req, res) => {
     const messages = await prisma.whatsAppMessage.findMany({
       // Exclude soft-deleted messages from the operator's chat view.
       // The rows stay in the DB for audit/compliance — only hidden from UI.
-      where: { threadId: thread.id, tenantId: req.user.tenantId, deletedAt: null },
+      where: {
+        threadId: thread.id,
+        tenantId: req.user.tenantId,
+        deletedAt: null,
+      },
       orderBy: { createdAt: "desc" },
       take: 50,
     });
 
     // Check for opt-out so the frontend can disable the reply box.
     const optOut = await prisma.whatsAppOptOut.findUnique({
-      where: { tenantId_contactPhone: { tenantId: req.user.tenantId, contactPhone: thread.contactPhone } },
+      where: {
+        tenantId_contactPhone: {
+          tenantId: req.user.tenantId,
+          contactPhone: thread.contactPhone,
+        },
+      },
     });
 
     res.json({
@@ -601,7 +668,12 @@ router.get("/threads/:id", verifyToken, async (req, res) => {
       // (the Unblock action). Without the id the frontend would have to do
       // a second lookup just to find the row to delete.
       optedOut: optOut
-        ? { id: optOut.id, capturedAt: optOut.capturedAt, reason: optOut.reason, notes: optOut.notes || null }
+        ? {
+            id: optOut.id,
+            capturedAt: optOut.capturedAt,
+            reason: optOut.reason,
+            notes: optOut.notes || null,
+          }
         : null,
     });
   } catch (err) {
@@ -625,19 +697,30 @@ router.get("/threads/:id", verifyToken, async (req, res) => {
 router.post("/threads/:id/assign", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    if (!Number.isFinite(id))
+      return res.status(400).json({ error: "invalid id" });
 
     const { targetUserId } = req.body;
     let targetId;
     if (targetUserId === null || targetUserId === undefined) {
       targetId = null;
-    } else if (typeof targetUserId === "number" && Number.isFinite(targetUserId) && Number.isInteger(targetUserId)) {
+    } else if (
+      typeof targetUserId === "number" &&
+      Number.isFinite(targetUserId) &&
+      Number.isInteger(targetUserId)
+    ) {
       targetId = targetUserId;
-    } else if (typeof targetUserId === "string" && /^\d+$/.test(targetUserId.trim())) {
+    } else if (
+      typeof targetUserId === "string" &&
+      /^\d+$/.test(targetUserId.trim())
+    ) {
       targetId = parseInt(targetUserId, 10);
     } else {
       // Reject 'not-a-number', booleans, objects, fractional, etc.
-      return res.status(400).json({ error: "targetUserId must be a number or null", code: "INVALID_USER_ID" });
+      return res.status(400).json({
+        error: "targetUserId must be a number or null",
+        code: "INVALID_USER_ID",
+      });
     }
 
     // RBAC: cross-assign requires manager; self-assign / unassign open to all.
@@ -645,7 +728,9 @@ router.post("/threads/:id/assign", verifyToken, async (req, res) => {
     const isUnassign = targetId === null;
     const isManager = req.user.role === "ADMIN" || req.user.role === "MANAGER";
     if (!isSelf && !isUnassign && !isManager) {
-      return res.status(403).json({ error: "Only managers can assign threads to other users" });
+      return res
+        .status(403)
+        .json({ error: "Only managers can assign threads to other users" });
     }
 
     const thread = await prisma.whatsAppThread.findFirst({
@@ -658,18 +743,31 @@ router.post("/threads/:id/assign", verifyToken, async (req, res) => {
       const target = await prisma.user.findFirst({
         where: { id: targetId, tenantId: req.user.tenantId },
       });
-      if (!target) return res.status(404).json({ error: "Target user not found in tenant" });
+      if (!target)
+        return res
+          .status(404)
+          .json({ error: "Target user not found in tenant" });
     }
 
     const updated = await prisma.whatsAppThread.update({
       where: { id: thread.id },
-      data: { assignedToId: targetId, status: targetId ? "OPEN" : thread.status },
+      data: {
+        assignedToId: targetId,
+        status: targetId ? "OPEN" : thread.status,
+      },
     });
 
-    await writeAudit("WhatsAppThread", "ASSIGN", thread.id, req.user.userId, req.user.tenantId, {
-      previousAssignedToId: thread.assignedToId,
-      newAssignedToId: targetId,
-    });
+    await writeAudit(
+      "WhatsAppThread",
+      "ASSIGN",
+      thread.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        previousAssignedToId: thread.assignedToId,
+        newAssignedToId: targetId,
+      },
+    );
 
     res.json(updated);
   } catch (err) {
@@ -684,124 +782,174 @@ router.post("/threads/:id/assign", verifyToken, async (req, res) => {
 // + `to` (phone) + optional `caption`. Auto-detects type from the
 // MIME type. Returns the created WhatsAppMessage row.
 const multer = require("multer");
-const _waUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } }); // 16 MB Meta limit
-const s3Service = (() => { try { return require("../services/s3Service"); } catch { return null; } })();
-
-router.post("/send-media", verifyToken, _waUpload.single("file"), async (req, res) => {
+const _waUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 16 * 1024 * 1024 },
+}); // 16 MB Meta limit
+const s3Service = (() => {
   try {
-    if (!req.file) return res.status(400).json({ error: "file is required" });
-    const to = String(req.body?.to || "").trim();
-    const caption = String(req.body?.caption || "").trim() || null;
-    if (!to) return res.status(400).json({ error: "to is required" });
-    if (!s3Service) return res.status(500).json({ error: "S3 service unavailable" });
-
-    const cfg = await prisma.whatsAppConfig.findFirst({
-      where: { isActive: true, tenantId: req.user.tenantId },
-    });
-    if (!cfg) return res.status(400).json({ error: "No active WhatsApp provider configured" });
-    const accessToken = decryptCredential(cfg.accessToken);
-
-    // Detect media category from MIME type
-    const mime = req.file.mimetype || "application/octet-stream";
-    let waType = "document";
-    if (mime.startsWith("image/")) waType = "image";
-    else if (mime.startsWith("video/")) waType = "video";
-    else if (mime.startsWith("audio/")) waType = "audio";
-
-    // Upload to S3 under whatsapp/<tenantId>/outbound/<timestamp>-<file>
-    const s3Url = await s3Service.uploadFile(
-      req.file.buffer,
-      req.file.originalname || `wa-${Date.now()}.${mime.split("/")[1] || "bin"}`,
-      mime,
-      `whatsapp/${req.user.tenantId}/outbound`,
-    );
-
-    // POST to Meta — type-specific shape. We pass `link` since Meta can
-    // pull from a public URL (no need to upload to Meta's media bucket).
-    const mediaObj = { link: s3Url };
-    if (caption && (waType === "image" || waType === "video" || waType === "document")) {
-      mediaObj.caption = caption;
-    }
-    if (waType === "document") {
-      mediaObj.filename = req.file.originalname || "attachment";
-    }
-    const payload = {
-      messaging_product: "whatsapp",
-      to,
-      type: waType,
-      [waType]: mediaObj,
-    };
-
-    const result = await new Promise((resolve) => {
-      const https = require("https");
-      const body = JSON.stringify(payload);
-      const r = https.request({
-        hostname: "graph.facebook.com",
-        path: `/${process.env.META_GRAPH_VERSION || "v22.0"}/${cfg.phoneNumberId}/messages`,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Length": Buffer.byteLength(body),
-        },
-      }, (resp) => {
-        let buf = "";
-        resp.on("data", (c) => (buf += c));
-        resp.on("end", () => {
-          let parsed = null;
-          try { parsed = JSON.parse(buf); } catch { /* keep null */ }
-          if (resp.statusCode < 300 && parsed?.messages?.[0]?.id) {
-            resolve({ ok: true, providerMsgId: parsed.messages[0].id });
-          } else {
-            resolve({ ok: false, error: parsed?.error?.message || buf || `HTTP ${resp.statusCode}` });
-          }
-        });
-      });
-      r.on("error", (e) => resolve({ ok: false, error: e.message }));
-      r.write(body);
-      r.end();
-    });
-
-    if (!result.ok) {
-      // Best-effort: delete the orphaned S3 object since Meta rejected the send
-      try {
-        const key = s3Url.replace(`${process.env.AWS_S3_URL || ""}/`, "");
-        await s3Service.deleteFile(key);
-      } catch { /* swallow */ }
-      return res.status(502).json({ error: result.error || "Meta send-media failed", code: "META_MEDIA_FAILED" });
-    }
-
-    // Find or create thread + save the message with S3 URL
-    const normalizedTo = (require("../utils/deduplication").toE164(to)) || to;
-    const thread = await prisma.whatsAppThread.upsert({
-      where: { tenantId_contactPhone: { tenantId: req.user.tenantId, contactPhone: normalizedTo } },
-      create: { tenantId: req.user.tenantId, contactPhone: normalizedTo, status: "OPEN", lastMessageAt: new Date() },
-      update: { lastMessageAt: new Date(), status: "OPEN" },
-    });
-
-    const created = await prisma.whatsAppMessage.create({
-      data: {
-        to: normalizedTo,
-        from: cfg.phoneNumberId,
-        body: caption,
-        mediaUrl: s3Url,
-        mediaType: mime,
-        metaType: waType,
-        direction: "OUTBOUND",
-        status: "SENT",
-        providerMsgId: result.providerMsgId,
-        tenantId: req.user.tenantId,
-        threadId: thread.id,
-        userId: req.user.userId,
-      },
-    });
-
-    res.status(201).json({ success: true, message: created, thread });
-  } catch (err) {
-    console.error("WhatsApp send-media error:", err);
-    res.status(500).json({ error: "Failed to send media", detail: err.message });
+    return require("../services/s3Service");
+  } catch {
+    return null;
   }
-});
+})();
+
+router.post(
+  "/send-media",
+  verifyToken,
+  _waUpload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "file is required" });
+      const to = String(req.body?.to || "").trim();
+      const caption = String(req.body?.caption || "").trim() || null;
+      if (!to) return res.status(400).json({ error: "to is required" });
+      if (!s3Service)
+        return res.status(500).json({ error: "S3 service unavailable" });
+
+      const cfg = await prisma.whatsAppConfig.findFirst({
+        where: { isActive: true, tenantId: req.user.tenantId },
+      });
+      if (!cfg)
+        return res
+          .status(400)
+          .json({ error: "No active WhatsApp provider configured" });
+      const accessToken = decryptCredential(cfg.accessToken);
+
+      // Detect media category from MIME type
+      const mime = req.file.mimetype || "application/octet-stream";
+      let waType = "document";
+      if (mime.startsWith("image/")) waType = "image";
+      else if (mime.startsWith("video/")) waType = "video";
+      else if (mime.startsWith("audio/")) waType = "audio";
+
+      // Upload to S3 under whatsapp/<tenantId>/outbound/<timestamp>-<file>
+      const s3Url = await s3Service.uploadFile(
+        req.file.buffer,
+        req.file.originalname ||
+          `wa-${Date.now()}.${mime.split("/")[1] || "bin"}`,
+        mime,
+        `whatsapp/${req.user.tenantId}/outbound`,
+      );
+
+      // POST to Meta — type-specific shape. We pass `link` since Meta can
+      // pull from a public URL (no need to upload to Meta's media bucket).
+      const mediaObj = { link: s3Url };
+      if (
+        caption &&
+        (waType === "image" || waType === "video" || waType === "document")
+      ) {
+        mediaObj.caption = caption;
+      }
+      if (waType === "document") {
+        mediaObj.filename = req.file.originalname || "attachment";
+      }
+      const payload = {
+        messaging_product: "whatsapp",
+        to,
+        type: waType,
+        [waType]: mediaObj,
+      };
+
+      const result = await new Promise((resolve) => {
+        const https = require("https");
+        const body = JSON.stringify(payload);
+        const r = https.request(
+          {
+            hostname: "graph.facebook.com",
+            path: `/${process.env.META_GRAPH_VERSION || "v22.0"}/${cfg.phoneNumberId}/messages`,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Length": Buffer.byteLength(body),
+            },
+          },
+          (resp) => {
+            let buf = "";
+            resp.on("data", (c) => (buf += c));
+            resp.on("end", () => {
+              let parsed = null;
+              try {
+                parsed = JSON.parse(buf);
+              } catch {
+                /* keep null */
+              }
+              if (resp.statusCode < 300 && parsed?.messages?.[0]?.id) {
+                resolve({ ok: true, providerMsgId: parsed.messages[0].id });
+              } else {
+                resolve({
+                  ok: false,
+                  error:
+                    parsed?.error?.message || buf || `HTTP ${resp.statusCode}`,
+                });
+              }
+            });
+          },
+        );
+        r.on("error", (e) => resolve({ ok: false, error: e.message }));
+        r.write(body);
+        r.end();
+      });
+
+      if (!result.ok) {
+        // Best-effort: delete the orphaned S3 object since Meta rejected the send
+        try {
+          const key = s3Url.replace(`${process.env.AWS_S3_URL || ""}/`, "");
+          await s3Service.deleteFile(key);
+        } catch {
+          /* swallow */
+        }
+        return res.status(502).json({
+          error: result.error || "Meta send-media failed",
+          code: "META_MEDIA_FAILED",
+        });
+      }
+
+      // Find or create thread + save the message with S3 URL
+      const normalizedTo = require("../utils/deduplication").toE164(to) || to;
+      const thread = await prisma.whatsAppThread.upsert({
+        where: {
+          tenantId_contactPhone: {
+            tenantId: req.user.tenantId,
+            contactPhone: normalizedTo,
+          },
+        },
+        create: {
+          tenantId: req.user.tenantId,
+          contactPhone: normalizedTo,
+          status: "OPEN",
+          lastMessageAt: new Date(),
+        },
+        update: { lastMessageAt: new Date(), status: "OPEN" },
+      });
+
+      const created = await prisma.whatsAppMessage.create({
+        data: {
+          to: normalizedTo,
+          from: cfg.phoneNumberId,
+          body: caption,
+          mediaUrl: s3Url,
+          mediaType: mime,
+          metaType: waType,
+          direction: "OUTBOUND",
+          status: "SENT",
+          providerMsgId: result.providerMsgId,
+          tenantId: req.user.tenantId,
+          threadId: thread.id,
+          userId: req.user.userId,
+        },
+      });
+
+      res.status(201).json({ success: true, message: created, thread });
+    } catch (err) {
+      console.error("WhatsApp send-media error:", err);
+      res
+        .status(500)
+        .json({ error: "Failed to send media", detail: err.message });
+    }
+  },
+);
 
 // POST /messages/:id/react — send an emoji reaction via Meta Cloud API.
 //
@@ -815,23 +963,37 @@ router.post("/send-media", verifyToken, _waUpload.single("file"), async (req, re
 router.post("/messages/:id/react", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    if (!Number.isFinite(id))
+      return res.status(400).json({ error: "invalid id" });
     const emoji = String(req.body?.emoji || "").trim();
     if (!emoji) return res.status(400).json({ error: "emoji is required" });
 
     const msg = await prisma.whatsAppMessage.findFirst({
       where: { id, tenantId: req.user.tenantId },
-      select: { id: true, providerMsgId: true, from: true, to: true, direction: true, threadId: true },
+      select: {
+        id: true,
+        providerMsgId: true,
+        from: true,
+        to: true,
+        direction: true,
+        threadId: true,
+      },
     });
     if (!msg) return res.status(404).json({ error: "Message not found" });
     if (!msg.providerMsgId) {
-      return res.status(422).json({ error: "Message has no Meta providerMsgId — cannot react", code: "NO_PROVIDER_MSG_ID" });
+      return res.status(422).json({
+        error: "Message has no Meta providerMsgId — cannot react",
+        code: "NO_PROVIDER_MSG_ID",
+      });
     }
 
     const cfg = await prisma.whatsAppConfig.findFirst({
       where: { isActive: true, tenantId: req.user.tenantId },
     });
-    if (!cfg) return res.status(400).json({ error: "No active WhatsApp provider configured" });
+    if (!cfg)
+      return res
+        .status(400)
+        .json({ error: "No active WhatsApp provider configured" });
     const accessToken = decryptCredential(cfg.accessToken);
 
     // Recipient is the other side of the conversation. For INBOUND
@@ -841,10 +1003,12 @@ router.post("/messages/:id/react", verifyToken, async (req, res) => {
     const thread = msg.threadId
       ? await prisma.whatsAppThread.findUnique({ where: { id: msg.threadId } })
       : null;
-    const recipient = thread?.contactPhone
-      || (msg.direction === "INBOUND" ? msg.from : msg.to);
+    const recipient =
+      thread?.contactPhone || (msg.direction === "INBOUND" ? msg.from : msg.to);
     if (!recipient) {
-      return res.status(422).json({ error: "Cannot resolve recipient phone for reaction" });
+      return res
+        .status(422)
+        .json({ error: "Cannot resolve recipient phone for reaction" });
     }
 
     // Direct call to Meta Cloud API. The provider helper doesn't have a
@@ -857,35 +1021,49 @@ router.post("/messages/:id/react", verifyToken, async (req, res) => {
         type: "reaction",
         reaction: { message_id: msg.providerMsgId, emoji },
       });
-      const r = https.request({
-        hostname: "graph.facebook.com",
-        path: `/${process.env.META_GRAPH_VERSION || "v22.0"}/${cfg.phoneNumberId}/messages`,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Length": Buffer.byteLength(payload),
+      const r = https.request(
+        {
+          hostname: "graph.facebook.com",
+          path: `/${process.env.META_GRAPH_VERSION || "v22.0"}/${cfg.phoneNumberId}/messages`,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Length": Buffer.byteLength(payload),
+          },
         },
-      }, (resp) => {
-        let body = "";
-        resp.on("data", (c) => (body += c));
-        resp.on("end", () => {
-          let parsed = null;
-          try { parsed = JSON.parse(body); } catch { /* keep null */ }
-          if (resp.statusCode < 300 && parsed?.messages?.[0]?.id) {
-            resolve({ ok: true, providerReactionId: parsed.messages[0].id });
-          } else {
-            resolve({ ok: false, error: parsed?.error?.message || body || `HTTP ${resp.statusCode}` });
-          }
-        });
-      });
+        (resp) => {
+          let body = "";
+          resp.on("data", (c) => (body += c));
+          resp.on("end", () => {
+            let parsed = null;
+            try {
+              parsed = JSON.parse(body);
+            } catch {
+              /* keep null */
+            }
+            if (resp.statusCode < 300 && parsed?.messages?.[0]?.id) {
+              resolve({ ok: true, providerReactionId: parsed.messages[0].id });
+            } else {
+              resolve({
+                ok: false,
+                error:
+                  parsed?.error?.message || body || `HTTP ${resp.statusCode}`,
+              });
+            }
+          });
+        },
+      );
       r.on("error", (err) => resolve({ ok: false, error: err.message }));
       r.write(payload);
       r.end();
     });
 
     if (!result.ok) {
-      return res.status(502).json({ error: result.error || "Meta reaction send failed", code: "META_REACTION_FAILED" });
+      return res.status(502).json({
+        error: result.error || "Meta reaction send failed",
+        code: "META_REACTION_FAILED",
+      });
     }
 
     // Mirror the reaction on the local message so the UI shows it
@@ -897,10 +1075,19 @@ router.post("/messages/:id/react", verifyToken, async (req, res) => {
         select: { reactionsJson: true },
       });
       let arr = [];
-      try { arr = JSON.parse(current?.reactionsJson || "[]"); if (!Array.isArray(arr)) arr = []; } catch { arr = []; }
+      try {
+        arr = JSON.parse(current?.reactionsJson || "[]");
+        if (!Array.isArray(arr)) arr = [];
+      } catch {
+        arr = [];
+      }
       // Mark "self" by userId so the UI can label it
       arr = arr.filter((r) => r.byUserId !== req.user.userId);
-      arr.push({ emoji, byUserId: req.user.userId, addedAt: new Date().toISOString() });
+      arr.push({
+        emoji,
+        byUserId: req.user.userId,
+        addedAt: new Date().toISOString(),
+      });
       await prisma.whatsAppMessage.update({
         where: { id: msg.id },
         data: { reactionsJson: JSON.stringify(arr) },
@@ -909,15 +1096,26 @@ router.post("/messages/:id/react", verifyToken, async (req, res) => {
       console.warn("[whatsapp] failed to mirror local reaction:", e.message);
     }
 
-    await writeAudit("WhatsAppMessage", "REACT", msg.id, req.user.userId, req.user.tenantId, {
-      emoji,
-      providerReactionId: result.providerReactionId,
-    }).catch(() => { /* best-effort */ });
+    await writeAudit(
+      "WhatsAppMessage",
+      "REACT",
+      msg.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        emoji,
+        providerReactionId: result.providerReactionId,
+      },
+    ).catch(() => {
+      /* best-effort */
+    });
 
     res.json({ success: true, providerReactionId: result.providerReactionId });
   } catch (err) {
     console.error("WhatsApp reaction error:", err);
-    res.status(500).json({ error: "Failed to send reaction", detail: err.message });
+    res
+      .status(500)
+      .json({ error: "Failed to send reaction", detail: err.message });
   }
 });
 
@@ -933,7 +1131,8 @@ router.post("/messages/:id/react", verifyToken, async (req, res) => {
 router.delete("/messages/:id", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    if (!Number.isFinite(id))
+      return res.status(400).json({ error: "invalid id" });
 
     const msg = await prisma.whatsAppMessage.findFirst({
       where: { id, tenantId: req.user.tenantId },
@@ -942,7 +1141,9 @@ router.delete("/messages/:id", verifyToken, async (req, res) => {
     if (!msg) return res.status(404).json({ error: "Message not found" });
     if (msg.deletedAt) return res.json({ success: true, alreadyDeleted: true });
 
-    console.log(`[whatsapp:delete] msg ${msg.id} mediaUrl=${msg.mediaUrl || "(none)"}`);
+    console.log(
+      `[whatsapp:delete] msg ${msg.id} mediaUrl=${msg.mediaUrl || "(none)"}`,
+    );
 
     await prisma.whatsAppMessage.update({
       where: { id: msg.id },
@@ -977,14 +1178,18 @@ router.delete("/messages/:id", verifyToken, async (req, res) => {
         try {
           const u = new URL(msg.mediaUrl);
           key = u.pathname.replace(/^\//, "");
-        } catch { /* invalid url */ }
+        } catch {
+          /* invalid url */
+        }
       } else if (bucket && msg.mediaUrl.includes(`/${bucket}/`)) {
         // path-style: https://s3.region.amazonaws.com/<bucket>/<key>
         try {
           const u = new URL(msg.mediaUrl);
           const stripped = u.pathname.replace(new RegExp(`^/${bucket}/`), "");
           if (stripped && stripped !== u.pathname) key = stripped;
-        } catch { /* invalid url */ }
+        } catch {
+          /* invalid url */
+        }
       }
       if (!key) {
         s3Reason = `url_doesnt_match_bucket (bucket=${bucket}, envBase=${envBase}, url=${msg.mediaUrl.slice(0, 80)}…)`;
@@ -995,11 +1200,18 @@ router.delete("/messages/:id", verifyToken, async (req, res) => {
           s3Reason = `deleted key=${key}`;
         } catch (e) {
           s3Reason = `s3_delete_threw: ${e.message}`;
-          console.warn("[whatsapp:delete] S3 delete failed for message", msg.id, ":", e.message);
+          console.warn(
+            "[whatsapp:delete] S3 delete failed for message",
+            msg.id,
+            ":",
+            e.message,
+          );
         }
       }
     }
-    console.log(`[whatsapp:delete] msg ${msg.id} s3Removed=${s3Removed} reason=${s3Reason}`);
+    console.log(
+      `[whatsapp:delete] msg ${msg.id} s3Removed=${s3Removed} reason=${s3Reason}`,
+    );
 
     await writeAudit(
       "WhatsAppMessage",
@@ -1008,12 +1220,16 @@ router.delete("/messages/:id", verifyToken, async (req, res) => {
       req.user.userId,
       req.user.tenantId,
       { mode: "delete_for_me", threadId: msg.threadId, s3Removed },
-    ).catch(() => { /* best-effort */ });
+    ).catch(() => {
+      /* best-effort */
+    });
 
     res.json({ success: true, s3Removed });
   } catch (err) {
     console.error("WhatsApp message delete error:", err);
-    res.status(500).json({ error: "Failed to delete message", detail: err.message });
+    res
+      .status(500)
+      .json({ error: "Failed to delete message", detail: err.message });
   }
 });
 
@@ -1031,10 +1247,12 @@ router.delete("/messages/:id", verifyToken, async (req, res) => {
 router.post("/threads/:id/rename-contact", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    if (!Number.isFinite(id))
+      return res.status(400).json({ error: "invalid id" });
     const name = String(req.body?.name || "").trim();
     if (!name) return res.status(400).json({ error: "name is required" });
-    if (name.length > 120) return res.status(400).json({ error: "name too long (max 120)" });
+    if (name.length > 120)
+      return res.status(400).json({ error: "name too long (max 120)" });
 
     const thread = await prisma.whatsAppThread.findFirst({
       where: { id, tenantId: req.user.tenantId },
@@ -1066,7 +1284,7 @@ router.post("/threads/:id/rename-contact", verifyToken, async (req, res) => {
         // schema happy AND avoids collisions when multiple WhatsApp-only
         // contacts get created for the same tenant. Users can edit the
         // email later via the standard Contact page.
-        const placeholderEmail = `wa-${thread.contactPhone.replace(/[^0-9]/g, '')}@whatsapp.local`;
+        const placeholderEmail = `wa-${thread.contactPhone.replace(/[^0-9]/g, "")}@whatsapp.local`;
         contact = await prisma.contact.create({
           data: {
             tenantId: req.user.tenantId,
@@ -1085,22 +1303,34 @@ router.post("/threads/:id/rename-contact", verifyToken, async (req, res) => {
       });
     }
 
-    await writeAudit("WhatsAppThread", "RENAME_CONTACT", thread.id, req.user.userId, req.user.tenantId, {
-      contactId: contact.id,
-      newName: name,
-    }).catch(() => { /* best-effort */ });
+    await writeAudit(
+      "WhatsAppThread",
+      "RENAME_CONTACT",
+      thread.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        contactId: contact.id,
+        newName: name,
+      },
+    ).catch(() => {
+      /* best-effort */
+    });
 
     res.json({ success: true, contact });
   } catch (err) {
     console.error("WhatsApp thread rename-contact error:", err);
-    res.status(500).json({ error: "Failed to rename contact", detail: err.message });
+    res
+      .status(500)
+      .json({ error: "Failed to rename contact", detail: err.message });
   }
 });
 
 router.post("/threads/:id/close", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    if (!Number.isFinite(id))
+      return res.status(400).json({ error: "invalid id" });
 
     const thread = await prisma.whatsAppThread.findFirst({
       where: { id, tenantId: req.user.tenantId },
@@ -1112,9 +1342,16 @@ router.post("/threads/:id/close", verifyToken, async (req, res) => {
       data: { status: "CLOSED", snoozedUntil: null },
     });
 
-    await writeAudit("WhatsAppThread", "CLOSE", thread.id, req.user.userId, req.user.tenantId, {
-      previousStatus: thread.status,
-    });
+    await writeAudit(
+      "WhatsAppThread",
+      "CLOSE",
+      thread.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        previousStatus: thread.status,
+      },
+    );
 
     res.json(updated);
   } catch (err) {
@@ -1127,13 +1364,16 @@ router.post("/threads/:id/close", verifyToken, async (req, res) => {
 router.post("/threads/:id/snooze", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    if (!Number.isFinite(id))
+      return res.status(400).json({ error: "invalid id" });
 
     const { until } = req.body;
     if (!until) return res.status(400).json({ error: "until is required" });
     const snoozeDate = new Date(until);
     if (Number.isNaN(snoozeDate.getTime())) {
-      return res.status(400).json({ error: "until must be a valid ISO datetime" });
+      return res
+        .status(400)
+        .json({ error: "until must be a valid ISO datetime" });
     }
     if (snoozeDate <= new Date()) {
       return res.status(400).json({ error: "until must be in the future" });
@@ -1149,9 +1389,16 @@ router.post("/threads/:id/snooze", verifyToken, async (req, res) => {
       data: { status: "SNOOZED", snoozedUntil: snoozeDate },
     });
 
-    await writeAudit("WhatsAppThread", "SNOOZE", thread.id, req.user.userId, req.user.tenantId, {
-      until: snoozeDate.toISOString(),
-    });
+    await writeAudit(
+      "WhatsAppThread",
+      "SNOOZE",
+      thread.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        until: snoozeDate.toISOString(),
+      },
+    );
 
     res.json(updated);
   } catch (err) {
@@ -1164,7 +1411,8 @@ router.post("/threads/:id/snooze", verifyToken, async (req, res) => {
 router.post("/threads/:id/mark-read", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    if (!Number.isFinite(id))
+      return res.status(400).json({ error: "invalid id" });
 
     const thread = await prisma.whatsAppThread.findFirst({
       where: { id, tenantId: req.user.tenantId },
@@ -1192,35 +1440,48 @@ router.post("/threads/:id/mark-read", verifyToken, async (req, res) => {
 // can't leave a thread with no messages or vice-versa. Contact / opt-out /
 // patient links are untouched — only the conversation is removed. Meta can't
 // delete messages off the recipient's phone, so this is a CRM-side delete.
-router.delete("/threads/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+router.delete(
+  "/threads/:id",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!Number.isFinite(id))
+        return res.status(400).json({ error: "invalid id" });
 
-    const thread = await prisma.whatsAppThread.findFirst({
-      where: { id, tenantId: req.user.tenantId },
-      select: { id: true, contactPhone: true },
-    });
-    if (!thread) return res.status(404).json({ error: "Thread not found" });
+      const thread = await prisma.whatsAppThread.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+        select: { id: true, contactPhone: true },
+      });
+      if (!thread) return res.status(404).json({ error: "Thread not found" });
 
-    const [{ count }] = await prisma.$transaction([
-      prisma.whatsAppMessage.deleteMany({
-        where: { threadId: thread.id, tenantId: req.user.tenantId },
-      }),
-      prisma.whatsAppThread.delete({ where: { id: thread.id } }),
-    ]);
+      const [{ count }] = await prisma.$transaction([
+        prisma.whatsAppMessage.deleteMany({
+          where: { threadId: thread.id, tenantId: req.user.tenantId },
+        }),
+        prisma.whatsAppThread.delete({ where: { id: thread.id } }),
+      ]);
 
-    await writeAudit("WhatsAppThread", "DELETE", thread.id, req.user.userId, req.user.tenantId, {
-      contactPhone: thread.contactPhone,
-      deletedMessages: count,
-    });
+      await writeAudit(
+        "WhatsAppThread",
+        "DELETE",
+        thread.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          contactPhone: thread.contactPhone,
+          deletedMessages: count,
+        },
+      );
 
-    res.json({ success: true, deletedMessages: count });
-  } catch (err) {
-    console.error("WhatsApp thread delete error:", err);
-    res.status(500).json({ error: "Failed to delete thread" });
-  }
-});
+      res.json({ success: true, deletedMessages: count });
+    } catch (err) {
+      console.error("WhatsApp thread delete error:", err);
+      res.status(500).json({ error: "Failed to delete thread" });
+    }
+  },
+);
 
 // ────────────────────────────────────────────────────────────────────────────
 // Opt-outs (Wave 2 Agent KK)
@@ -1230,44 +1491,70 @@ router.delete("/threads/:id", verifyToken, verifyRole(["ADMIN"]), async (req, re
 //
 // Manager-only. Phone is normalised to E.164 before insert so the upsert
 // matches the format the /send and webhook handlers use as the lookup key.
-router.post("/opt-outs", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
-  try {
-    const { contactPhone, reason, notes } = req.body;
-    if (!contactPhone) return res.status(400).json({ error: "contactPhone is required" });
+router.post(
+  "/opt-outs",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const { contactPhone, reason, notes } = req.body;
+      if (!contactPhone)
+        return res.status(400).json({ error: "contactPhone is required" });
 
-    const normalized = normalizeToE164(contactPhone);
-    if (!normalized) {
-      return res.status(400).json({ error: "contactPhone must be a valid E.164 number" });
+      const normalized = normalizeToE164(contactPhone);
+      if (!normalized) {
+        return res
+          .status(400)
+          .json({ error: "contactPhone must be a valid E.164 number" });
+      }
+
+      const validReasons = [
+        "USER_REQUESTED",
+        "STOP_KEYWORD",
+        "COMPLAINT",
+        "UNSUBSCRIBE_LINK",
+      ];
+      const finalReason =
+        reason && validReasons.includes(reason) ? reason : "USER_REQUESTED";
+
+      const optOut = await prisma.whatsAppOptOut.upsert({
+        where: {
+          tenantId_contactPhone: {
+            tenantId: req.user.tenantId,
+            contactPhone: normalized,
+          },
+        },
+        create: {
+          tenantId: req.user.tenantId,
+          contactPhone: normalized,
+          reason: finalReason,
+          notes: notes || null,
+        },
+        update: {
+          reason: finalReason,
+          notes: notes || null,
+        },
+      });
+
+      await writeAudit(
+        "WhatsAppOptOut",
+        "CREATE",
+        optOut.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          contactPhone: normalized,
+          reason: finalReason,
+        },
+      );
+
+      res.status(201).json(optOut);
+    } catch (err) {
+      console.error("WhatsApp opt-out create error:", err);
+      res.status(500).json({ error: "Failed to record opt-out" });
     }
-
-    const validReasons = ["USER_REQUESTED", "STOP_KEYWORD", "COMPLAINT", "UNSUBSCRIBE_LINK"];
-    const finalReason = reason && validReasons.includes(reason) ? reason : "USER_REQUESTED";
-
-    const optOut = await prisma.whatsAppOptOut.upsert({
-      where: { tenantId_contactPhone: { tenantId: req.user.tenantId, contactPhone: normalized } },
-      create: {
-        tenantId: req.user.tenantId,
-        contactPhone: normalized,
-        reason: finalReason,
-        notes: notes || null,
-      },
-      update: {
-        reason: finalReason,
-        notes: notes || null,
-      },
-    });
-
-    await writeAudit("WhatsAppOptOut", "CREATE", optOut.id, req.user.userId, req.user.tenantId, {
-      contactPhone: normalized,
-      reason: finalReason,
-    });
-
-    res.status(201).json(optOut);
-  } catch (err) {
-    console.error("WhatsApp opt-out create error:", err);
-    res.status(500).json({ error: "Failed to record opt-out" });
-  }
-});
+  },
+);
 
 // GET /opt-outs?phone=<E.164 prefix>
 router.get("/opt-outs", verifyToken, async (req, res) => {
@@ -1291,7 +1578,12 @@ router.get("/opt-outs", verifyToken, async (req, res) => {
 
     res.json({
       optOuts,
-      pagination: { total, page: parseInt(page), limit: take, pages: Math.ceil(total / take) },
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: take,
+        pages: Math.ceil(total / take),
+      },
     });
   } catch (err) {
     console.error("WhatsApp opt-outs list error:", err);
@@ -1318,40 +1610,56 @@ router.get("/opt-outs", verifyToken, async (req, res) => {
 //                  scanning every WhatsAppOptOut DELETE row.
 //   - details      includes actor='admin', the supplied reason, and the prior
 //                  opt-out row's reason / capturedAt for a self-contained log.
-router.delete("/opt-outs/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+router.delete(
+  "/opt-outs/:id",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!Number.isFinite(id))
+        return res.status(400).json({ error: "invalid id" });
 
-    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
-    if (reason.length < 10) {
-      return res.status(400).json({
-        error: "reason is required (min 10 chars) — DPDP §11 audit requirement",
-        code: "REASON_REQUIRED",
+      const reason =
+        typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (reason.length < 10) {
+        return res.status(400).json({
+          error:
+            "reason is required (min 10 chars) — DPDP §11 audit requirement",
+          code: "REASON_REQUIRED",
+        });
+      }
+
+      const existing = await prisma.whatsAppOptOut.findFirst({
+        where: { id, tenantId: req.user.tenantId },
       });
+      if (!existing)
+        return res.status(404).json({ error: "Opt-out not found" });
+
+      await prisma.whatsAppOptOut.delete({ where: { id: existing.id } });
+      await writeAudit(
+        "WhatsAppOptOut",
+        "WHATSAPP_OPT_IN_RESET",
+        existing.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          actor: "admin",
+          reasonRequired: true,
+          reason,
+          contactPhone: existing.contactPhone,
+          priorReason: existing.reason,
+          priorCapturedAt: existing.capturedAt,
+        },
+      );
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error("WhatsApp opt-out delete error:", err);
+      res.status(500).json({ error: "Failed to delete opt-out" });
     }
-
-    const existing = await prisma.whatsAppOptOut.findFirst({
-      where: { id, tenantId: req.user.tenantId },
-    });
-    if (!existing) return res.status(404).json({ error: "Opt-out not found" });
-
-    await prisma.whatsAppOptOut.delete({ where: { id: existing.id } });
-    await writeAudit("WhatsAppOptOut", "WHATSAPP_OPT_IN_RESET", existing.id, req.user.userId, req.user.tenantId, {
-      actor: "admin",
-      reasonRequired: true,
-      reason,
-      contactPhone: existing.contactPhone,
-      priorReason: existing.reason,
-      priorCapturedAt: existing.capturedAt,
-    });
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("WhatsApp opt-out delete error:", err);
-    res.status(500).json({ error: "Failed to delete opt-out" });
-  }
-});
+  },
+);
 
 // ─── List WhatsApp Templates ───────────────────────────────────────────────
 router.get("/templates", verifyToken, async (req, res) => {
@@ -1370,7 +1678,16 @@ router.get("/templates", verifyToken, async (req, res) => {
 // ─── Create WhatsApp Template ──────────────────────────────────────────────
 router.post("/templates", verifyToken, async (req, res) => {
   try {
-    const { name, language, category, body, headerType, headerContent, footer, buttons } = req.body;
+    const {
+      name,
+      language,
+      category,
+      body,
+      headerType,
+      headerContent,
+      footer,
+      buttons,
+    } = req.body;
 
     if (!name || !body) {
       return res.status(400).json({ error: "name and body are required" });
@@ -1380,7 +1697,8 @@ router.post("/templates", verifyToken, async (req, res) => {
     // round-trip by normalising client-side AND validating here.
     if (!/^[a-z0-9_]{1,512}$/.test(name)) {
       return res.status(400).json({
-        error: "Template name must contain only lowercase letters, digits, and underscores (no spaces).",
+        error:
+          "Template name must contain only lowercase letters, digits, and underscores (no spaces).",
         code: "INVALID_NAME",
       });
     }
@@ -1390,11 +1708,16 @@ router.post("/templates", verifyToken, async (req, res) => {
     // error to the operator immediately instead of leaving a phantom
     // PENDING row that never resolves.
     const cfg = await prisma.whatsAppConfig.findFirst({
-      where: { tenantId: req.user.tenantId, provider: "meta_cloud", isActive: true },
+      where: {
+        tenantId: req.user.tenantId,
+        provider: "meta_cloud",
+        isActive: true,
+      },
     });
     if (!cfg || !cfg.businessAccountId || !cfg.accessToken) {
       return res.status(400).json({
-        error: "WhatsApp is not connected for this tenant. Connect WhatsApp Business before creating templates.",
+        error:
+          "WhatsApp is not connected for this tenant. Connect WhatsApp Business before creating templates.",
         code: "NOT_CONNECTED",
       });
     }
@@ -1451,8 +1774,13 @@ router.post("/templates", verifyToken, async (req, res) => {
     res.status(201).json(template);
   } catch (err) {
     console.error("WhatsApp template create error:", err);
-    if (err.code === "P2002") return res.status(409).json({ error: "Template name already exists for this tenant" });
-    res.status(500).json({ error: "Failed to create template", detail: err.message });
+    if (err.code === "P2002")
+      return res
+        .status(409)
+        .json({ error: "Template name already exists for this tenant" });
+    res
+      .status(500)
+      .json({ error: "Failed to create template", detail: err.message });
   }
 });
 
@@ -1460,9 +1788,20 @@ router.post("/templates", verifyToken, async (req, res) => {
 router.put("/templates/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, language, category, body, headerType, headerContent, footer, buttons } = req.body;
+    const {
+      name,
+      language,
+      category,
+      body,
+      headerType,
+      headerContent,
+      footer,
+      buttons,
+    } = req.body;
 
-    const existing = await prisma.whatsAppTemplate.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
+    const existing = await prisma.whatsAppTemplate.findFirst({
+      where: { id: parseInt(id), tenantId: req.user.tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Template not found" });
 
     const template = await prisma.whatsAppTemplate.update({
@@ -1475,15 +1814,19 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
         ...(headerType !== undefined && { headerType }),
         ...(headerContent !== undefined && { headerContent }),
         ...(footer !== undefined && { footer }),
-        ...(buttons !== undefined && { buttons: buttons ? JSON.stringify(buttons) : null }),
+        ...(buttons !== undefined && {
+          buttons: buttons ? JSON.stringify(buttons) : null,
+        }),
       },
     });
 
     res.json(template);
   } catch (err) {
     console.error("WhatsApp template update error:", err);
-    if (err.code === "P2025") return res.status(404).json({ error: "Template not found" });
-    if (err.code === "P2002") return res.status(409).json({ error: "Template name already exists" });
+    if (err.code === "P2025")
+      return res.status(404).json({ error: "Template not found" });
+    if (err.code === "P2002")
+      return res.status(409).json({ error: "Template name already exists" });
     res.status(500).json({ error: "Failed to update template" });
   }
 });
@@ -1492,13 +1835,16 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
 router.delete("/templates/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = await prisma.whatsAppTemplate.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
+    const existing = await prisma.whatsAppTemplate.findFirst({
+      where: { id: parseInt(id), tenantId: req.user.tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Template not found" });
     await prisma.whatsAppTemplate.delete({ where: { id: existing.id } });
     res.json({ success: true, message: "Template deleted" });
   } catch (err) {
     console.error("WhatsApp template delete error:", err);
-    if (err.code === "P2025") return res.status(404).json({ error: "Template not found" });
+    if (err.code === "P2025")
+      return res.status(404).json({ error: "Template not found" });
     res.status(500).json({ error: "Failed to delete template" });
   }
 });
@@ -1507,30 +1853,47 @@ router.delete("/templates/:id", verifyToken, async (req, res) => {
 //
 // Pulls every template for this tenant's WABA and upserts. Manual trigger
 // for the same routine the daily whatsappTemplateSyncEngine cron runs.
-router.post("/templates/sync", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
-  try {
-    const { syncTemplatesForTenant } = require("../cron/whatsappTemplateSyncEngine");
-    const r = await syncTemplatesForTenant(req.user.tenantId);
-    if (!r.ok) {
-      const status = r.code === "NOT_CONNECTED" ? 404 : r.code === "GRAPH_ERROR" ? 502 : 400;
-      return res.status(status).json({ error: r.code, detail: r.error });
+router.post(
+  "/templates/sync",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const {
+        syncTemplatesForTenant,
+      } = require("../cron/whatsappTemplateSyncEngine");
+      const r = await syncTemplatesForTenant(req.user.tenantId);
+      if (!r.ok) {
+        const status =
+          r.code === "NOT_CONNECTED"
+            ? 404
+            : r.code === "GRAPH_ERROR"
+              ? 502
+              : 400;
+        return res.status(status).json({ error: r.code, detail: r.error });
+      }
+      res.json({ success: true, synced: r.synced, total: r.total });
+    } catch (err) {
+      console.error("WhatsApp templates bulk sync error:", err);
+      res.status(500).json({ error: "Failed to sync templates" });
     }
-    res.json({ success: true, synced: r.synced, total: r.total });
-  } catch (err) {
-    console.error("WhatsApp templates bulk sync error:", err);
-    res.status(500).json({ error: "Failed to sync templates" });
-  }
-});
+  },
+);
 
 // ─── Sync Single Template Status from Meta ─────────────────────────────────
 router.post("/templates/:id/sync", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const template = await prisma.whatsAppTemplate.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
+    const template = await prisma.whatsAppTemplate.findFirst({
+      where: { id: parseInt(id), tenantId: req.user.tenantId },
+    });
     if (!template) return res.status(404).json({ error: "Template not found" });
 
-    const config = await prisma.whatsAppConfig.findFirst({ where: { isActive: true, tenantId: req.user.tenantId } });
-    if (!config) return res.status(400).json({ error: "No active WhatsApp config" });
+    const config = await prisma.whatsAppConfig.findFirst({
+      where: { isActive: true, tenantId: req.user.tenantId },
+    });
+    if (!config)
+      return res.status(400).json({ error: "No active WhatsApp config" });
 
     const https = require("https");
     const result = await new Promise((resolve) => {
@@ -1539,7 +1902,9 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
         path: `/v18.0/${config.businessAccountId}/message_templates?name=${encodeURIComponent(template.name)}`,
         method: "GET",
         // #651 — decrypt on-read for the Meta API call.
-        headers: { Authorization: `Bearer ${decryptCredential(config.accessToken)}` },
+        headers: {
+          Authorization: `Bearer ${decryptCredential(config.accessToken)}`,
+        },
       };
 
       const req2 = https.request(options, (res2) => {
@@ -1559,7 +1924,11 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
 
     if (result.data && result.data.length > 0) {
       const metaTemplate = result.data[0];
-      const statusMap = { APPROVED: "APPROVED", REJECTED: "REJECTED", PENDING: "PENDING" };
+      const statusMap = {
+        APPROVED: "APPROVED",
+        REJECTED: "REJECTED",
+        PENDING: "PENDING",
+      };
 
       const updated = await prisma.whatsAppTemplate.update({
         where: { id: template.id },
@@ -1571,7 +1940,11 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
 
       res.json({ success: true, template: updated });
     } else {
-      res.json({ success: false, message: "Template not found on Meta", error: result.error?.message });
+      res.json({
+        success: false,
+        message: "Template not found on Meta",
+        error: result.error?.message,
+      });
     }
   } catch (err) {
     console.error("WhatsApp template sync error:", err);
@@ -1604,86 +1977,116 @@ router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 // #651 — see routes/sms.js PUT /config doc-comment. Masked sentinels are
 // dropped before reaching prisma; any genuine rotation stamps
 // lastRotatedAt + emits a ProviderConfig.ROTATE audit row.
-router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
-  try {
-    const { provider } = req.params;
-    const { phoneNumberId, businessAccountId, isActive, settings } = req.body;
+router.put(
+  "/config/:provider",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const { provider } = req.params;
+      const { phoneNumberId, businessAccountId, isActive, settings } = req.body;
 
-    const rotatedFields = [];
-    const cleanSecrets = {};
-    for (const f of WA_SECRET_FIELDS) {
-      const v = req.body[f];
-      if (v === undefined) continue;
-      if (v === null || v === "") {
-        cleanSecrets[f] = null;
+      const rotatedFields = [];
+      const cleanSecrets = {};
+      for (const f of WA_SECRET_FIELDS) {
+        const v = req.body[f];
+        if (v === undefined) continue;
+        if (v === null || v === "") {
+          cleanSecrets[f] = null;
+          rotatedFields.push(f);
+          continue;
+        }
+        if (typeof v === "object") continue; // GET shape echoed back
+        if (typeof v !== "string") continue;
+        if (looksLikeMaskedSentinel(v)) continue;
+        cleanSecrets[f] = encryptCredential(v);
         rotatedFields.push(f);
-        continue;
       }
-      if (typeof v === "object") continue; // GET shape echoed back
-      if (typeof v !== "string") continue;
-      if (looksLikeMaskedSentinel(v)) continue;
-      cleanSecrets[f] = encryptCredential(v);
-      rotatedFields.push(f);
-    }
 
-    const stampRotation = rotatedFields.length > 0;
+      const stampRotation = rotatedFields.length > 0;
 
-    // P1: `phoneNumberId` is the multi-tenant webhook routing key + carries
-    // a UNIQUE constraint at the DB layer. Empty-string values collide with
-    // each other once that constraint applies, so we coerce to NULL here on
-    // the write path. Same applies to the update path below — an empty
-    // request body field becomes NULL, not "".
-    const normalizedPhoneNumberId =
-      typeof phoneNumberId === "string" && phoneNumberId.trim() === ""
-        ? null
-        : phoneNumberId;
+      // P1: `phoneNumberId` is the multi-tenant webhook routing key + carries
+      // a UNIQUE constraint at the DB layer. Empty-string values collide with
+      // each other once that constraint applies, so we coerce to NULL here on
+      // the write path. Same applies to the update path below — an empty
+      // request body field becomes NULL, not "".
+      const normalizedPhoneNumberId =
+        typeof phoneNumberId === "string" && phoneNumberId.trim() === ""
+          ? null
+          : phoneNumberId;
 
-    const config = await prisma.whatsAppConfig.upsert({
-      where: { tenantId_provider: { tenantId: req.user.tenantId, provider } },
-      create: {
-        provider,
-        phoneNumberId: normalizedPhoneNumberId ?? null,
-        businessAccountId: businessAccountId || null,
-        accessToken: cleanSecrets.accessToken !== undefined ? cleanSecrets.accessToken : "",
-        webhookVerifyToken: cleanSecrets.webhookVerifyToken !== undefined ? cleanSecrets.webhookVerifyToken : null,
-        isActive: isActive !== undefined ? isActive : true,
-        settings: settings || null,
-        tenantId: req.user.tenantId,
-        ...(stampRotation && { lastRotatedAt: new Date() }),
-      },
-      update: {
-        ...(phoneNumberId !== undefined && { phoneNumberId: normalizedPhoneNumberId }),
-        ...(businessAccountId !== undefined && { businessAccountId }),
-        ...cleanSecrets,
-        ...(isActive !== undefined && { isActive }),
-        ...(settings !== undefined && { settings }),
-        ...(stampRotation && { lastRotatedAt: new Date() }),
-      },
-    });
-
-    if (isActive) {
-      await prisma.whatsAppConfig.updateMany({
-        where: { provider: { not: provider }, tenantId: req.user.tenantId },
-        data: { isActive: false },
+      const config = await prisma.whatsAppConfig.upsert({
+        where: { tenantId_provider: { tenantId: req.user.tenantId, provider } },
+        create: {
+          provider,
+          phoneNumberId: normalizedPhoneNumberId ?? null,
+          businessAccountId: businessAccountId || null,
+          accessToken:
+            cleanSecrets.accessToken !== undefined
+              ? cleanSecrets.accessToken
+              : "",
+          webhookVerifyToken:
+            cleanSecrets.webhookVerifyToken !== undefined
+              ? cleanSecrets.webhookVerifyToken
+              : null,
+          isActive: isActive !== undefined ? isActive : true,
+          settings: settings || null,
+          tenantId: req.user.tenantId,
+          ...(stampRotation && { lastRotatedAt: new Date() }),
+        },
+        update: {
+          ...(phoneNumberId !== undefined && {
+            phoneNumberId: normalizedPhoneNumberId,
+          }),
+          ...(businessAccountId !== undefined && { businessAccountId }),
+          ...cleanSecrets,
+          ...(isActive !== undefined && { isActive }),
+          ...(settings !== undefined && { settings }),
+          ...(stampRotation && { lastRotatedAt: new Date() }),
+        },
       });
-    }
 
-    if (stampRotation) {
-      await writeAudit("ProviderConfig", "ROTATE", config.id, req.user.userId, req.user.tenantId, {
-        provider: `whatsapp:${provider}`,
-        rotatedFields,
+      if (isActive) {
+        await prisma.whatsAppConfig.updateMany({
+          where: { provider: { not: provider }, tenantId: req.user.tenantId },
+          data: { isActive: false },
+        });
+      }
+
+      if (stampRotation) {
+        await writeAudit(
+          "ProviderConfig",
+          "ROTATE",
+          config.id,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            provider: `whatsapp:${provider}`,
+            rotatedFields,
+          },
+        );
+      }
+
+      res.json({
+        success: true,
+        config: maskConfigRow(config, WA_SECRET_FIELDS),
       });
+    } catch (err) {
+      console.error("WhatsApp config upsert error:", err);
+      // P2002 on WhatsAppConfig_phoneNumberId_key = another config (often in a
+      // different tenant) already claims this phone number ID. It's the
+      // multi-tenant webhook routing key, so it has to be globally unique.
+      if (err && err.code === "P2002") {
+        return res.status(409).json({
+          error:
+            "That phone number ID is already in use by another WhatsApp configuration. Please use a different phone number ID.",
+          code: "PHONE_NUMBER_ID_TAKEN",
+        });
+      }
+      res.status(500).json({ error: "Failed to update config" });
     }
-
-    res.json({
-      success: true,
-      config: maskConfigRow(config, WA_SECRET_FIELDS),
-    });
-  } catch (err) {
-    console.error("WhatsApp config upsert error:", err);
-    res.status(500).json({ error: "Failed to update config" });
-  }
-});
+  },
+);
 
 // ─── Meta Webhook (TOMBSTONE) ──────────────────────────────────────────────
 //
@@ -1706,8 +2109,8 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
 router.get("/webhook", async (req, res) => {
   console.error(
     "[whatsapp routes/whatsapp.js] LEGACY GET /webhook reached — " +
-    "mount order is wrong; routes/whatsapp_webhook.js must be mounted " +
-    "BEFORE express.json() in server.js.",
+      "mount order is wrong; routes/whatsapp_webhook.js must be mounted " +
+      "BEFORE express.json() in server.js.",
   );
   res.status(503).json({
     error: "Webhook routing misconfigured — operator action required",
@@ -1720,8 +2123,8 @@ router.get("/webhook", async (req, res) => {
 router.post("/webhook", async (req, res) => {
   console.error(
     "[whatsapp routes/whatsapp.js] LEGACY POST /webhook reached — " +
-    "mount order is wrong; routes/whatsapp_webhook.js must be mounted " +
-    "BEFORE express.json() in server.js.",
+      "mount order is wrong; routes/whatsapp_webhook.js must be mounted " +
+      "BEFORE express.json() in server.js.",
   );
   res.status(503).json({
     error: "Webhook routing misconfigured — operator action required",
@@ -1756,7 +2159,8 @@ async function _legacyPostWebhookDeadCode(req, res) {
         for (const msg of messages) {
           const from = msg.from;
           const body = msg.text?.body || msg.caption || "";
-          const mediaUrl = msg.image?.id || msg.video?.id || msg.document?.id || null;
+          const mediaUrl =
+            msg.image?.id || msg.video?.id || msg.document?.id || null;
           const mediaType = msg.type !== "text" ? msg.type : null;
 
           const contact = await prisma.contact.findFirst({
@@ -1769,7 +2173,12 @@ async function _legacyPostWebhookDeadCode(req, res) {
           let thread = null;
           if (normalizedFrom) {
             thread = await prisma.whatsAppThread.upsert({
-              where: { tenantId_contactPhone: { tenantId, contactPhone: normalizedFrom } },
+              where: {
+                tenantId_contactPhone: {
+                  tenantId,
+                  contactPhone: normalizedFrom,
+                },
+              },
               create: {
                 tenantId,
                 contactPhone: normalizedFrom,
@@ -1789,10 +2198,16 @@ async function _legacyPostWebhookDeadCode(req, res) {
             });
             // Two-step status reconciliation: re-fetch and apply OPEN if was CLOSED,
             // increment unreadCount if no assignee.
-            const fresh = await prisma.whatsAppThread.findUnique({ where: { id: thread.id } });
-            const updates = { lastMessageAt: new Date(), lastInboundAt: new Date() };
+            const fresh = await prisma.whatsAppThread.findUnique({
+              where: { id: thread.id },
+            });
+            const updates = {
+              lastMessageAt: new Date(),
+              lastInboundAt: new Date(),
+            };
             if (fresh.status === "CLOSED") updates.status = "OPEN";
-            if (!fresh.assignedToId) updates.unreadCount = (fresh.unreadCount || 0) + 1;
+            if (!fresh.assignedToId)
+              updates.unreadCount = (fresh.unreadCount || 0) + 1;
             thread = await prisma.whatsAppThread.update({
               where: { id: thread.id },
               data: updates,
@@ -1801,7 +2216,8 @@ async function _legacyPostWebhookDeadCode(req, res) {
 
           await prisma.whatsAppMessage.create({
             data: {
-              to: metadata.display_phone_number || metadata.phone_number_id || "",
+              to:
+                metadata.display_phone_number || metadata.phone_number_id || "",
               from,
               body,
               mediaUrl: mediaUrl || null,
@@ -1822,7 +2238,12 @@ async function _legacyPostWebhookDeadCode(req, res) {
           if (isStopKeyword(body) && normalizedFrom) {
             try {
               await prisma.whatsAppOptOut.upsert({
-                where: { tenantId_contactPhone: { tenantId, contactPhone: normalizedFrom } },
+                where: {
+                  tenantId_contactPhone: {
+                    tenantId,
+                    contactPhone: normalizedFrom,
+                  },
+                },
                 create: {
                   tenantId,
                   contactPhone: normalizedFrom,
@@ -1867,7 +2288,10 @@ async function _legacyPostWebhookDeadCode(req, res) {
                   });
                 } catch (sendErr) {
                   // Log + continue — opt-out itself is the load-bearing record.
-                  console.warn("STOP-keyword confirmation send failed:", sendErr?.message);
+                  console.warn(
+                    "STOP-keyword confirmation send failed:",
+                    sendErr?.message,
+                  );
                 }
               }
             } catch (optErr) {
@@ -1902,7 +2326,9 @@ async function _legacyPostWebhookDeadCode(req, res) {
               data: {
                 status: newStatus,
                 ...(newStatus === "READ" && { read: true }),
-                ...(newStatus === "FAILED" && { errorMessage: status.errors?.[0]?.title || "Delivery failed" }),
+                ...(newStatus === "FAILED" && {
+                  errorMessage: status.errors?.[0]?.title || "Delivery failed",
+                }),
               },
             });
 

@@ -1092,9 +1092,11 @@ export default function App() {
                     <Route
                       path="admin/brand-kits"
                       element={
-                        <RoleGuard allow={["ADMIN"]} message="Brand Kits requires admin access.">
-                          <BrandKits />
-                        </RoleGuard>
+                        <TravelOnly>
+                          <RoleGuard allow={["ADMIN"]} message="Brand Kits requires admin access.">
+                            <BrandKits />
+                          </RoleGuard>
+                        </TravelOnly>
                       }
                     />
                     {/* AdsGPT Reports admin UI. ADMIN + MANAGER (analytics —
@@ -1121,9 +1123,11 @@ export default function App() {
                     <Route
                       path="admin/ratehawk-search"
                       element={
-                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="RateHawk Search requires admin or manager access.">
-                          <RateHawkSearch />
-                        </RoleGuard>
+                        <TravelOnly>
+                          <RoleGuard allow={["ADMIN", "MANAGER"]} message="RateHawk Search requires admin or manager access.">
+                            <RateHawkSearch />
+                          </RoleGuard>
+                        </TravelOnly>
                       }
                     />
                     {/* Callified AI Calls admin UI. ADMIN + MANAGER (outbound
@@ -1159,9 +1163,11 @@ export default function App() {
                     <Route
                       path="admin/booking-expedia-search"
                       element={
-                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Booking/Expedia Search requires admin or manager access.">
-                          <BookingExpediaSearch />
-                        </RoleGuard>
+                        <TravelOnly>
+                          <RoleGuard allow={["ADMIN", "MANAGER"]} message="Booking/Expedia Search requires admin or manager access.">
+                            <BookingExpediaSearch />
+                          </RoleGuard>
+                        </TravelOnly>
                       }
                     />
                     {/* Wallet bonus rule CRUD admin UI. ADMIN-only mirrors the

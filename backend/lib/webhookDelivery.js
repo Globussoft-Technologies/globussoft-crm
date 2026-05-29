@@ -88,13 +88,16 @@ async function deliverSingle(url, event, payload, tenantId) {
   }
 
   try {
-    // Use a single epoch-second timestamp so the signature and the body
-    // timestamp are perfectly consistent — a receiver can reconstruct the
-    // signed string as "<t>.<body>" without re-parsing or re-serialising.
-    const tSec = Math.floor(Date.now() / 1000);
+    // Capture one instant and derive both values from it: the epoch-second
+    // used in the HMAC signature (t=) and the ISO body timestamp. The body
+    // keeps millisecond precision — receivers verify the signature over the
+    // raw body bytes + the header's t=, so the body timestamp itself doesn't
+    // need to be floored — while t= stays second-granular (Stripe-style).
+    const nowMs = Date.now();
+    const tSec = Math.floor(nowMs / 1000);
     const bodyStr = JSON.stringify({
       event,
-      timestamp: new Date(tSec * 1000).toISOString(),
+      timestamp: new Date(nowMs).toISOString(),
       data: payload,
     });
 

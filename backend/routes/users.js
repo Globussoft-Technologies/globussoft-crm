@@ -107,4 +107,23 @@ router.get(
   },
 );
 
+// SPEC §C3 — POST /api/users/:id/roles. Canonical URL alias of
+// `POST /api/roles/users/:userId/roles` (defined in routes/roles.js).
+// The canonical handler lives there so the RBAC code stays contiguous;
+// this alias just forwards. Both URLs land on the same handler chain
+// (same verifyToken + same requirePermission + same audit + same
+// last-admin guard), so external callers using either URL get
+// identical behaviour.
+router.post(
+  '/:userId/roles',
+  (req, res, next) => {
+    // Forward by re-emitting the request at the canonical URL. The
+    // `roles` sub-router is mounted at /api/roles, so the canonical
+    // path under that mount is /users/:userId/roles. req.params is
+    // re-derived by the inner router from the rewritten URL.
+    req.url = `/users/${encodeURIComponent(req.params.userId)}/roles`;
+    return require('./roles')(req, res, next);
+  },
+);
+
 module.exports = router;

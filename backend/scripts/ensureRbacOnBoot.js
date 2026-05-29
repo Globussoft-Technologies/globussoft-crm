@@ -38,15 +38,27 @@ const MANAGER_PERMISSIONS = [
   'analytics.read', 'analytics.export',
   'billing.read',
   'staff.read',
+  // Roles read-only — Manager can SEE the role matrix (audit trail / who
+  // has what) but cannot grant or revoke (manage stays with Admin).
+  'roles.read',
   'communications.read', 'communications.write',
   'email.read', 'email.write',
   'sms.read', 'sms.write',
+  'whatsapp.read', 'whatsapp.write',
   'marketing.read', 'marketing.write', 'marketing.update',
   'tickets.read', 'tickets.write', 'tickets.update',
   'surveys.read', 'surveys.write', 'surveys.update',
   'documents.read', 'documents.write', 'documents.update',
   'contracts.read', 'contracts.write', 'contracts.update',
   'estimates.read', 'estimates.write', 'estimates.update', 'estimates.export',
+  // Wellness oversight surfaces — Manager needs READ on clinical / inventory
+  // / POS to triage and report, but no clinical-mutation rights (that's
+  // Doctor / Nurse / Receptionist). Spec §2 MANAGER row.
+  'patients.read',
+  'appointments.read',
+  'services.read',
+  'inventory.read',
+  'pos.read',
   // Wellness master catalog — Manager curates products + auto-consumption
   // rules so they can keep what's billable in sync with what's actually
   // delivered. (Inventory ledger ops are still admin-only by default.)
@@ -59,12 +71,19 @@ const MANAGER_PERMISSIONS = [
 ];
 
 const CUSTOMER_PERMISSIONS = [
+  // Spec §2 CUSTOMER row — patient/customer portal access. LEADS-read so a
+  // customer can view their own enquiry record. VISITS + PAYMENTS read so
+  // they can see prior visits and what they've paid. CONSENTS write is the
+  // sign-on-canvas action — needed for the patient-portal consent flow.
+  'leads.read',
   'appointments.read',
   'services.read',
   'billing.read',
+  'payments.read',
   'documents.read',
   'prescriptions.read',
-  'consents.read',
+  'consents.read', 'consents.write',
+  'visits.read',
 ];
 
 const USER_PERMISSIONS = [
@@ -86,6 +105,10 @@ const USER_PERMISSIONS = [
   'documents.read',
   'contracts.read',
   'estimates.read',
+  // Spec §2 USER row — base staff member needs to view + create their own
+  // appointments. Roles.read is intentionally omitted (spec asks to remove
+  // it from USER); was never granted here anyway, so this stays clean.
+  'appointments.read', 'appointments.write',
   // Staff self-service — every staff USER needs to clock in and request
   // leave for themselves. Approval-tier (`.manage`) stays with manager/
   // admin via verifyRole in routes/leave.js + routes/attendance.js.
@@ -101,8 +124,12 @@ const USER_PERMISSIONS = [
 // create-if-missing.
 
 const DOCTOR_PERMISSIONS = [
-  'patients.read', 'patients.write', 'patients.update',
-  'appointments.read', 'appointments.write', 'appointments.update',
+  // Spec §2 DOCTOR row — clinical owner. R/W/U/D on patients +
+  // appointments + visits + prescriptions so the doctor can fully manage
+  // their patient records. Delete is intentional: a doctor may need to
+  // void an erroneous prescription / cancel a visit they own.
+  'patients.read', 'patients.write', 'patients.update', 'patients.delete',
+  'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete',
   // `appointments` was split into per-page modules in v3.8.x —
   // `my_appointments` for the practitioner's own-slot view (the page
   // doctors actually use day-to-day) and `waitlist` for the open-slot
@@ -118,8 +145,8 @@ const DOCTOR_PERMISSIONS = [
   // Appointments list / Book Appointment form. Doctors get both since
   // they live in the Calendar day-grid view.
   'calendar.read', 'calendar.write',
-  'visits.read', 'visits.write', 'visits.update',
-  'prescriptions.read', 'prescriptions.write', 'prescriptions.update',
+  'visits.read', 'visits.write', 'visits.update', 'visits.delete',
+  'prescriptions.read', 'prescriptions.write', 'prescriptions.update', 'prescriptions.delete',
   'consents.read', 'consents.write',
   'services.read',
   // Doctor sees the product catalog (to know what's available to order)
@@ -128,6 +155,11 @@ const DOCTOR_PERMISSIONS = [
   'products.read',
   'inventory.read',
   'documents.read', 'documents.write',
+  // Spec §2 DOCTOR row — read-only access to reports / dashboards /
+  // contacts. No reports.write/delete (those stay with manager-tier).
+  'reports.read',
+  'dashboards.read',
+  'contacts.read',
   // Staff self-service — doctor clocks in/out + manages their own leave.
   // Approval is manager-tier and stays with verifyRole(ADMIN/MANAGER).
   'attendance.read', 'attendance.write',
@@ -154,7 +186,11 @@ const NURSE_PERMISSIONS = [
   'products.read', 'products.write', 'products.update',
   'inventory.read', 'inventory.write', 'inventory.update',
   'services.read',
-  'consents.read',
+  // Spec §2 NURSE row — nurse witnesses and helps obtain consent
+  // signatures during procedures, and needs prescription read so they
+  // can prep medication ordered by the doctor.
+  'consents.read', 'consents.write',
+  'prescriptions.read',
   // Staff self-service.
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
@@ -178,6 +214,10 @@ const RECEPTIONIST_PERMISSIONS = [
   // sales but doesn't edit it; no stock-ledger access.
   'products.read',
   'billing.read', 'billing.write',
+  // Spec §2 RECEPTIONIST row — payments visibility for "pending payments
+  // at POS" widget + reconciliation. Payments catalog only has read +
+  // export (no .write), so .read is the full grant available.
+  'payments.read',
   'pos.read', 'pos.write', 'pos.manage',
   'contacts.read', 'contacts.write',
   'leads.read', 'leads.write',
@@ -211,6 +251,9 @@ const TELECALLER_PERMISSIONS = [
   'whatsapp.read', 'whatsapp.write',
   'email.read', 'email.write',
   'reports.read',
+  // Spec §2 TELECALLER row — tasks read/write so the telecaller can log
+  // and pick up follow-up tasks tied to each lead they're working.
+  'tasks.read', 'tasks.write',
   // Staff self-service.
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
@@ -333,6 +376,67 @@ async function ensureRbacOnBoot() {
 
   for (const t of tenants) {
     const isWellness = wellnessTenantIds.has(t.id);
+    await provisionTenantRbacInternal(stats, t.id, isWellness);
+  }
+
+  return stats;
+}
+
+/**
+ * Provision the canonical role set for a single tenant.
+ *
+ *   - ADMIN  (all permissions)
+ *   - MANAGER, CUSTOMER, USER (preset permission lists)
+ *   - if wellness: DOCTOR, NURSE, RECEPTIONIST, TELECALLER + default widgets
+ *
+ * Idempotent — uses ensureRole / ensureRolePermission find-first-then-create
+ * semantics. After this returns, every staff/customer user assigned to
+ * the tenant gets a UserRole row matching their legacy User.role string
+ * (so existing users immediately resolve to the right grant set).
+ *
+ * Exposed so the /api/auth/register + /api/auth/signup endpoints can
+ * provision a new tenant's RBAC inline at signup time — without this,
+ * the boot script's per-tenant loop only fires on server start, leaving
+ * brand-new signup admins with ZERO permissions until the next reboot.
+ * That was the canonical "I created an admin account and the sidebar is
+ * almost empty" symptom — the user holds User.role='ADMIN' (so the
+ * legacy isAdmin gate passes for hardcoded items) but the resolver
+ * returns an empty Set (so /api/pages/me returns nothing and the
+ * catalog-driven sidebar collapses).
+ *
+ * Returns the stats object (created counts) so callers can log.
+ */
+async function provisionTenantRbac(tenantId, opts = {}) {
+  const stats = {
+    rolesCreated: 0,
+    rolesExisting: 0,
+    permsCreated: 0,
+    permsExisting: 0,
+    assignmentsCreated: 0,
+    assignmentsExisting: 0,
+    usersSkipped: 0,
+  };
+
+  let isWellness = opts.isWellness;
+  if (typeof isWellness !== 'boolean') {
+    const t = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+    isWellness = t?.vertical === 'wellness';
+  }
+
+  await provisionTenantRbacInternal(stats, tenantId, isWellness);
+  return stats;
+}
+
+/**
+ * Inner provisioning routine — shared by the boot loop and the inline
+ * signup path. Mutates the passed-in `stats` accumulator so the boot
+ * script can report aggregate counts.
+ */
+async function provisionTenantRbacInternal(stats, tenantId, isWellness) {
+  {
     const adminLanding = isWellness ? '/wellness' : '/dashboard';
     const managerLanding = isWellness ? '/wellness' : '/dashboard';
 
@@ -347,7 +451,7 @@ async function ensureRbacOnBoot() {
     // for the demo seed; this script handles tenants that pre-date the
     // RBAC migration by creating the role then backfilling perms once.
     const { role: adminRole, wasCreated: adminCreated } = await ensureRole(stats, {
-      tenantId: t.id,
+      tenantId,
       key: 'ADMIN',
       name: 'Admin',
       description: 'Full access to all features within the organization',
@@ -358,7 +462,7 @@ async function ensureRbacOnBoot() {
     if (adminCreated) await grantAllPermissions(stats, adminRole.id);
 
     const { role: managerRole, wasCreated: managerCreated } = await ensureRole(stats, {
-      tenantId: t.id,
+      tenantId,
       key: 'MANAGER',
       name: 'Manager',
       description: 'Manager role with broad staff access',
@@ -369,7 +473,7 @@ async function ensureRbacOnBoot() {
     if (managerCreated) await grantPermissionList(stats, managerRole.id, MANAGER_PERMISSIONS);
 
     const { role: customerRole, wasCreated: customerCreated } = await ensureRole(stats, {
-      tenantId: t.id,
+      tenantId,
       key: 'CUSTOMER',
       name: 'Customer',
       description: 'Customer access to booking and appointments only',
@@ -380,7 +484,7 @@ async function ensureRbacOnBoot() {
     if (customerCreated) await grantPermissionList(stats, customerRole.id, CUSTOMER_PERMISSIONS);
 
     const { role: userRole, wasCreated: userCreated } = await ensureRole(stats, {
-      tenantId: t.id,
+      tenantId,
       key: 'USER',
       name: 'User',
       description: 'Basic user role with limited CRM access',
@@ -396,7 +500,7 @@ async function ensureRbacOnBoot() {
     // still create them manually via the UI.
     if (isWellness) {
       const { role: doctorRole, wasCreated: doctorCreated } = await ensureRole(stats, {
-        tenantId: t.id,
+        tenantId,
         key: 'DOCTOR',
         name: 'Doctor',
         description: 'Clinical practitioner — patients, prescriptions, consents, visits',
@@ -407,7 +511,7 @@ async function ensureRbacOnBoot() {
       if (doctorCreated) await grantPermissionList(stats, doctorRole.id, DOCTOR_PERMISSIONS);
 
       const { role: nurseRole, wasCreated: nurseCreated } = await ensureRole(stats, {
-        tenantId: t.id,
+        tenantId,
         key: 'NURSE',
         name: 'Nurse',
         description: 'Clinical assistant — patient prep, procedures, inventory',
@@ -418,7 +522,7 @@ async function ensureRbacOnBoot() {
       if (nurseCreated) await grantPermissionList(stats, nurseRole.id, NURSE_PERMISSIONS);
 
       const { role: receptionistRole, wasCreated: receptionistCreated } = await ensureRole(stats, {
-        tenantId: t.id,
+        tenantId,
         key: 'RECEPTIONIST',
         name: 'Receptionist',
         description: 'Front desk — calendar, walk-ins, POS, birthdays',
@@ -429,7 +533,7 @@ async function ensureRbacOnBoot() {
       if (receptionistCreated) await grantPermissionList(stats, receptionistRole.id, RECEPTIONIST_PERMISSIONS);
 
       const { role: telecallerRole, wasCreated: telecallerCreated } = await ensureRole(stats, {
-        tenantId: t.id,
+        tenantId,
         key: 'TELECALLER',
         name: 'Telecaller',
         description: 'Outbound calls + lead conversion',
@@ -491,7 +595,7 @@ async function ensureRbacOnBoot() {
       }
     }
 
-    const users = await prisma.user.findMany({ where: { tenantId: t.id } });
+    const users = await prisma.user.findMany({ where: { tenantId } });
     for (const u of users) {
       if (u.userType === 'OWNER') continue;
       const legacy = String(u.role || '').toUpperCase();
@@ -507,8 +611,6 @@ async function ensureRbacOnBoot() {
       await ensureUserRole(stats, u.id, target.id);
     }
   }
-
-  return stats;
 }
 
-module.exports = { ensureRbacOnBoot };
+module.exports = { ensureRbacOnBoot, provisionTenantRbac };

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, useContext } from 'react';
-import { Link } from 'react-router-dom';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, User as UserIcon, Stethoscope, Plus, X, Building2, Home, Video, Phone, Car } from 'lucide-react';
+import { useEffect, useMemo, useState, useContext, useRef } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Calendar as CalendarIcon, User as UserIcon, Stethoscope, Plus, X, Building2, Home, Video, Phone, Car } from 'lucide-react';
 import React from 'react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -80,6 +80,33 @@ const isoDay = (d) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(
 const fmtHour = (h) => `${String(h).padStart(2, '0')}:00`;
 const UNASSIGNED_KEY = '__unassigned__';
 
+// Local-calendar helpers shared with the From/To inputs. `<input type="date">`
+// reads/writes YYYY-MM-DD in the user's local TZ; the existing isoDay() helper
+// is IST-anchored (so the visit fetch window aligns with the backend's IST
+// startOfDay/endOfDay). Keep both: yyyy-mm-dd for the inputs, Date for the
+// grid + the IST-aware visit fetch.
+function todayLocalDate() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+function parseLocalDate(yyyymmdd) {
+  if (!yyyymmdd || typeof yyyymmdd !== 'string') return new Date();
+  const [y, m, d] = yyyymmdd.split('-').map(Number);
+  if (!y || !m || !d) return new Date();
+  return new Date(y, m - 1, d, 12, 0, 0, 0);
+}
+function isoLocalDate(input) {
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return '';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 // #615: dynamic hour range — start with the default 9..19, then expand to
 // include the earliest and latest actual visit on the loaded day. Without
 // this every visit at 7 AM clamped to 9 AM and every visit at 8 PM clamped
@@ -138,7 +165,21 @@ export default function CalendarGrid() {
   const { user } = useContext(AuthContext) || {};
   // Only regular users (patients) can book appointments, not staff/admins/doctors
   const canBookAppointment = user?.role === 'USER';
-  const [date, setDate] = useState(() => new Date());
+  // Appointments + MyAppointments link here as `?focus=<visitId>&date=<yyyy-mm-dd>`.
+  // `date` lets us snap the from/to filter without an extra round-trip; `focus`
+  // is the chip we highlight + scroll into view once visits load.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusId = searchParams.get('focus');
+  const focusDateParam = searchParams.get('date');
+  // From / To filter inputs — mirror the Appointments page's date range so the
+  // two surfaces are interchangeable. Default both to today (single-day view).
+  const initialDateStr = focusDateParam || todayLocalDate();
+  const [from, setFrom] = useState(initialDateStr);
+  const [to, setTo] = useState(initialDateStr);
+  // The day-grid renders ONE day at a time. `date` is that day; it lives
+  // inside [from, to] and can be moved with the day-chip navigator below.
+  const [date, setDate] = useState(() => parseLocalDate(initialDateStr));
+  const focusedRef = useRef(null);
   const [visits, setVisits] = useState([]);
   const [allStaff, setAllStaff] = useState([]);
   const [services, setServices] = useState([]);
@@ -392,8 +433,46 @@ export default function CalendarGrid() {
     return out;
   }, [visits, columns]);
 
-  const shift = (days) => {
-    const next = new Date(date); next.setDate(next.getDate() + days); setDate(next);
+  // The grid renders the From date. Keep `date` (the Date object the rest of
+  // the component reads) synced to whatever the From input holds. To stays as
+  // a filter upper-bound + drives the CSV export window below.
+  useEffect(() => {
+    if (!from) return;
+    const next = parseLocalDate(from);
+    if (isoLocalDate(date) !== from) setDate(next);
+  }, [from]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Focus-from-Appointments handshake. When the URL carries `?focus=<id>` AND
+  // no `date=` was provided alongside it (legacy callers), fetch the visit so
+  // we can snap to its day. New callers pass both params and skip the fetch.
+  useEffect(() => {
+    if (!focusId || focusDateParam) return;
+    let cancelled = false;
+    fetchApi(`/api/wellness/visits/${focusId}`)
+      .then((v) => {
+        if (cancelled || !v?.visitDate) return;
+        const dStr = isoLocalDate(new Date(v.visitDate));
+        if (!dStr) return;
+        setFrom(dStr);
+        setTo(dStr);
+        setDate(new Date(v.visitDate));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [focusId, focusDateParam]);
+
+  // After visits load, scroll the focused chip into view + briefly outline it.
+  useEffect(() => {
+    if (!focusId || !focusedRef.current) return;
+    focusedRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [focusId, visits, date]);
+
+  const clearFocus = () => {
+    if (!searchParams.has('focus')) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('focus');
+    next.delete('date');
+    setSearchParams(next, { replace: true });
   };
 
   // #262 sub-counts for the header chip. Option B: counts honour the
@@ -473,17 +552,55 @@ export default function CalendarGrid() {
                 : `${visiblePractitionerCount} of ${totalPractitionerCount} ${selectedRoleLabel}`}
             </button>
           )}
-          <button onClick={() => shift(-1)} className="glass" style={navBtn}><ChevronLeft size={16} /></button>
-          <button onClick={() => setDate(new Date())} className="glass" style={{ ...navBtn, padding: '0.4rem 0.9rem', fontSize: '0.85rem', width: 'auto' }}>Today</button>
-          <button onClick={() => shift(1)} className="glass" style={navBtn}><ChevronRight size={16} /></button>
+          {/* From/To date inputs — inline label + input pills, baseline-aligned
+              with the other header controls. From picks which day the grid
+              renders; To bounds the CSV-export range below. */}
+          <div style={dateField}>
+            <span style={dateFieldLabel}>From</span>
+            <input
+              type="date"
+              value={from}
+              max={to || undefined}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                setFrom(v);
+                // Keep To >= From so the range never goes empty.
+                if (to && v > to) setTo(v);
+                clearFocus();
+              }}
+              aria-label="From date"
+              className="glass"
+              style={dateInput}
+            />
+          </div>
+          <div style={dateField}>
+            <span style={dateFieldLabel}>To</span>
+            <input
+              type="date"
+              value={to}
+              min={from || undefined}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                setTo(v);
+                if (from && v < from) setFrom(v);
+                clearFocus();
+              }}
+              aria-label="To date"
+              className="glass"
+              style={dateInput}
+            />
+          </div>
           {/* Issue #816: CSV Import / Export of bookings. Export reflects the
-              currently-visible day window (server filters on `from`/`to`). */}
+              full From..To range so users can scope exports without leaving
+              the page. */}
           <CsvImportExportToolbar
             entity="bookings"
             label="Bookings"
             filters={{
-              from: `${isoDay(date)}T00:00:00+05:30`,
-              to: `${isoDay(date)}T23:59:59+05:30`,
+              from: `${from}T00:00:00+05:30`,
+              to: `${to}T23:59:59+05:30`,
             }}
             formats={['csv', 'xlsx']}
             onImported={load}
@@ -520,7 +637,22 @@ export default function CalendarGrid() {
       )}
 
       {!loading && columns.length > 0 && (
-        <div className="glass calendar-scroll" style={{ padding: '1rem', overflow: 'auto' }}>
+        <div
+          className="glass calendar-scroll"
+          style={{
+            padding: '1rem',
+            // Clamp width to the viewport so the inner grid's minWidth
+            // (~120px per practitioner × N columns) triggers horizontal
+            // scroll inside this wrapper instead of pushing the page wider.
+            // scrollbar-color forces the thumb to be visible on Windows
+            // overlay-scrollbar setups where the default is invisible.
+            maxWidth: '100%',
+            overflowX: 'auto',
+            overflowY: 'auto',
+            scrollbarWidth: 'thin',
+            scrollbarColor: 'rgba(255,255,255,0.3) transparent',
+          }}
+        >
           {/* #615: use minmax(0, 1fr) per the CLAUDE.md ellipsis-on-grid-children
               standing rule. Hard 120px floor at the minmax min would have
               prevented columns from collapsing past 120px and forced the
@@ -574,10 +706,14 @@ export default function CalendarGrid() {
                       onMouseEnter={isCreatable ? (e) => { e.currentTarget.querySelector('[data-empty-affordance]')?.style.setProperty('opacity', '0.8'); } : undefined}
                       onMouseLeave={isCreatable ? (e) => { e.currentTarget.querySelector('[data-empty-affordance]')?.style.setProperty('opacity', '0'); } : undefined}
                     >
-                      {cell.map((v) => (
+                      {cell.map((v) => {
+                        const isFocused = focusId && String(v.id) === String(focusId);
+                        return (
                         <Link
                           to={`/wellness/patients/${v.patient?.id || v.patientId}`}
                           key={v.id}
+                          ref={isFocused ? focusedRef : undefined}
+                          data-testid={isFocused ? 'focused-visit' : undefined}
                           style={{
                             textDecoration: 'none', color: 'var(--text-primary)',
                             background: STATUS_COLOR[v.status] || 'rgba(255,255,255,0.05)',
@@ -588,6 +724,12 @@ export default function CalendarGrid() {
                             // so long patient names + service titles ellipsis-truncate
                             // instead of overflowing into the next practitioner column.
                             minWidth: 0, maxWidth: '100%', overflow: 'hidden',
+                            // Focus halo: the chip the user opened from the
+                            // Appointments page gets a pulsing outline + raised
+                            // shadow so they don't lose it in a busy grid.
+                            outline: isFocused ? '2px solid var(--primary-color, var(--accent-color, #6366f1))' : undefined,
+                            outlineOffset: isFocused ? '2px' : undefined,
+                            boxShadow: isFocused ? '0 0 0 4px rgba(99,102,241,0.18), 0 6px 18px rgba(0,0,0,0.25)' : undefined,
                           }}
                           title={`${new Date(v.visitDate).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })} IST · ${v.patient?.name || `#${v.patientId}`}${v.service?.name ? ` — ${v.service.name}` : ''}`}
                           onClick={(e) => e.stopPropagation()}
@@ -632,7 +774,8 @@ export default function CalendarGrid() {
                             );
                           })()}
                         </Link>
-                      ))}
+                        );
+                      })}
                       {isCreatable && (
                         <span
                           data-empty-affordance
@@ -1100,7 +1243,11 @@ function NewVisitModal({ column, hour, date, patients, services, waitlist, resou
   );
 }
 
-const navBtn = { width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer', background: 'transparent', color: 'var(--text-primary)' };
+// Inline label+input pill — matches the height of the All-staff dropdown +
+// All-practitioners pill so the header row sits on one baseline.
+const dateField = { display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.35rem 0.65rem', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent' };
+const dateFieldLabel = { fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600, color: 'var(--text-secondary)' };
+const dateInput = { padding: 0, fontSize: '0.8rem', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', colorScheme: 'inherit', outline: 'none', font: 'inherit' };
 const colHead = { padding: '0.5rem 0.75rem', fontWeight: 600, fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)', color: 'var(--text-primary)' };
 const hourLabel = { padding: '0.5rem', fontSize: '0.7rem', color: 'var(--text-secondary)', textAlign: 'right', borderRight: '1px solid rgba(255,255,255,0.05)' };
 const hourCell = { padding: '0.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', minHeight: '60px', borderBottom: '1px solid rgba(255,255,255,0.04)' };

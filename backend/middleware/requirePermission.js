@@ -17,10 +17,110 @@
 const prisma = require('../lib/prisma');
 const { isValidPermission } = require('../lib/permissionCatalog');
 
+// REVERTED v3.8.x ADMIN runtime shortcut. Earlier work added a
+// short-circuit that returned the entire catalogue whenever the user
+// held the ADMIN role, regardless of what was checked in the
+// RolePermission rows. That made the Roles & Permissions matrix UI
+// silently non-authoritative — an admin could uncheck `my_appointments.read`
+// on the ADMIN role, save, and STILL see /wellness/my-appointments in
+// the sidebar because the resolver ignored the row state. The screenshot
+// at https://… surfaced the gap. Restored behaviour: ADMIN is treated
+// like every other role — its effective permission set is exactly the
+// union of RolePermission rows that grant `module.action` keys to it.
+//
+// The original "even admins denied roles.read" symptom is now addressed
+// at the seed layer instead of the resolver layer:
+//   - New tenants: ensureRbacOnBoot's `grantAllPermissions` step rolls
+//     every catalogue key onto the ADMIN role row at first creation.
+//   - Existing tenants: `node backend/scripts/backfill-role-preset-perms.js
+//     --apply` adds any catalogue keys the row was missing (additive,
+//     never removes — preserves admin matrix customisations).
+// Net effect: admins see-and-control exactly what the matrix shows.
+
 // Per-user permission cache: Map<`${tenantId}::${userId}` → Set<"module.action">>
 // Each entry has a timestamp; entries older than 30s are refreshed.
 const PERMISSION_CACHE = new Map();
 const CACHE_TTL_MS = 30_000; // 30 seconds
+
+/**
+ * Heal a legacy-ADMIN user whose tenant has no RBAC rows (a pre-fix
+ * signup). See loadUserPermissions for the full failure mode. Returns
+ * the healed permission Set on success, or null if no heal was needed
+ * (the user isn't a legacy admin, the user-type is OWNER, the tenant
+ * lookup fails, etc.). Wrapped in try/catch internally so the caller
+ * can treat null as a no-op and fall through to the normal empty-set
+ * return path.
+ */
+async function maybeSelfHealAdminPermissions(tenantId, userId) {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true, userType: true, tenantId: true },
+    });
+    if (!user) return null;
+    if (user.userType === 'OWNER') return null;
+    if (String(user.role || '').toUpperCase() !== 'ADMIN') return null;
+    if (!user.tenantId || user.tenantId !== tenantId) return null;
+
+    // Lazy-require to avoid a require cycle (scripts/ensureRbacOnBoot ->
+    // lib/prisma -> ... -> middleware/requirePermission would otherwise
+    // load this module before the export is finalised).
+    const { provisionTenantRbac } = require('../scripts/ensureRbacOnBoot');
+    const tenantRow = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+    await provisionTenantRbac(tenantId, {
+      isWellness: tenantRow?.vertical === 'wellness',
+    });
+
+    // Explicit ADMIN assignment in case the provisioner's user-iteration
+    // loop missed this user (rare race: the user was created AFTER the
+    // provisioner started but BEFORE its findMany returned).
+    const adminRole = await prisma.role.findFirst({
+      where: { tenantId, key: 'ADMIN' },
+      select: { id: true },
+    });
+    if (adminRole) {
+      const existing = await prisma.userRole.findUnique({
+        where: { userId_roleId: { userId, roleId: adminRole.id } },
+      });
+      if (!existing) {
+        await prisma.userRole.create({
+          data: { userId, roleId: adminRole.id },
+        });
+      }
+    }
+
+    // Re-load and return the healed grants. Same query shape as the
+    // primary path so the result is shaped consistently.
+    const userRoles = await prisma.userRole.findMany({
+      where: {
+        userId,
+        role: { OR: [{ tenantId }, { tenantId: null }] },
+      },
+      include: { role: { include: { permissions: true } } },
+    });
+    const healed = new Set();
+    for (const { role } of userRoles) {
+      for (const perm of role.permissions) {
+        healed.add(`${perm.module}.${perm.action}`);
+      }
+    }
+    if (healed.size > 0) {
+      console.log(
+        `[requirePermission] self-healed legacy-ADMIN user ${userId} on tenant ${tenantId} — granted ${healed.size} permission(s)`,
+      );
+    }
+    return healed.size > 0 ? healed : null;
+  } catch (err) {
+    console.warn(
+      '[requirePermission] self-heal failed (non-fatal):',
+      err && err.message ? err.message : err,
+    );
+    return null;
+  }
+}
 
 /**
  * Load the user's effective permissions from the database.
@@ -58,12 +158,41 @@ async function loadUserPermissions(tenantId, userId) {
       },
     });
 
-    // Collect all permissions from all assigned roles
+    // Collect all permissions from all assigned roles. UNION across
+    // every UserRole.role.permissions row — multi-role users get the
+    // additive merged set. ADMIN is no longer special-cased here; the
+    // matrix is authoritative (see header comment for why).
     const permSet = new Set();
     for (const { role } of userRoles) {
       for (const perm of role.permissions) {
         permSet.add(`${perm.module}.${perm.action}`);
       }
+    }
+
+    // Self-heal path for legacy-ADMIN users whose tenant pre-dates the
+    // signup-time RBAC provisioning fix. Symptom: a user signed up via
+    // /api/auth/register or /api/auth/signup BEFORE provisionRbacForFreshTenant
+    // was wired in — the User row has role='ADMIN' but the tenant has no
+    // ADMIN Role row and no UserRole assignment, so the loop above
+    // returned permSet.size === 0. The middleware would then 403 every
+    // single request and the sidebar would render empty. Healed here
+    // by provisioning the canonical role set + assigning this user to
+    // ADMIN, then re-reading the merged grants. After the first call,
+    // the cache holds the healed set and subsequent calls are free.
+    //
+    // Guard rails:
+    //   - Only fires when permSet is empty (don't override an admin who
+    //     genuinely revoked everything from themselves — matrix is
+    //     authoritative for non-empty grant sets).
+    //   - Only fires when the User has legacy role='ADMIN' (other roles
+    //     with empty grants stay denied, which is the correct outcome).
+    //   - OWNER user-type short-circuits at the middleware level so
+    //     they never reach this branch.
+    //   - Any failure is logged + returns the empty set so the caller
+    //     fails-closed naturally; the heal never blocks a legit request.
+    if (permSet.size === 0) {
+      const healed = await maybeSelfHealAdminPermissions(tenantId, userId);
+      if (healed) return healed;
     }
 
     return permSet;

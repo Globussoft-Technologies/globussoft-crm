@@ -8071,11 +8071,12 @@ function sanitizeUtmInput(utm, referrer) {
     referrer: null,
   };
   if (utm && typeof utm === "object") {
-    // eslint-disable-next-line no-control-regex
+     
     const trim = (v) =>
       v == null
         ? null
         : String(v)
+          // eslint-disable-next-line no-control-regex
           .replace(/[\x00-\x1f\x7f]/g, "")
           .slice(0, 191)
           .trim() || null;
@@ -8086,9 +8087,10 @@ function sanitizeUtmInput(utm, referrer) {
     out.utmContent = trim(utm.utmContent ?? utm.content);
   }
   if (referrer != null) {
-    // eslint-disable-next-line no-control-regex
+     
     out.referrer =
       String(referrer)
+        // eslint-disable-next-line no-control-regex
         .replace(/[\x00-\x1f\x7f]/g, "")
         .slice(0, 2000)
         .trim() || null;
@@ -12087,7 +12089,7 @@ router.get(
   // Allows any authenticated user to book an appointment
   router.post("/appointments/book", verifyToken, async (req, res) => {
     try {
-      const { doctorId, serviceId, appointmentDate, appointmentTime, duration } =
+      const { doctorId, serviceId, appointmentDate, appointmentTime } =
         req.body;
       const { userId, tenantId } = req.user;
 

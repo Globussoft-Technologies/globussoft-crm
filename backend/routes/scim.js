@@ -108,7 +108,7 @@ async function scimAuth(req, res, next) {
     const tokens = await prisma.scimToken.findMany({});
     let match = null;
     for (const t of tokens) {
-      // eslint-disable-next-line no-await-in-loop
+       
       if (await bcrypt.compare(presented, t.token)) {
         match = t;
         break;

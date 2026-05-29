@@ -286,7 +286,7 @@ router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
     });
     if (!cfg) return res.json(null);
     res.json(maskConfigRow(cfg, WA_SECRET_FIELDS));
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "failed to fetch config" });
   }
 });

@@ -19,7 +19,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { decryptCredential } = require("../lib/credentialMasking");
-const { sendText, verifyWebhook } = require("../services/whatsappProvider");
+const { sendText } = require("../services/whatsappProvider");
 const {
   captureRawBody,
   verifySignature,
@@ -187,7 +187,7 @@ router.post(
   routeToTenant,
   ensureIdempotency,
   respondImmediately,
-  async (req, res) => {
+  async (req, _res) => {
     // Response was already sent by respondImmediately. We process async.
     try {
       whLog("✓ webhook accepted (signature + tenant routing passed)", {

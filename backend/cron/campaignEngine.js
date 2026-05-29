@@ -42,7 +42,7 @@ async function processDueCampaigns(options = {}) {
   // engine indirectly via server.js bootstrap).
   const sendCampaign =
     options.sendCampaignFn ||
-    // eslint-disable-next-line global-require
+     
     require("../routes/marketing").sendCampaign;
 
   // Query DB-backed schedule metadata. Match scheduleStatus='PENDING' so

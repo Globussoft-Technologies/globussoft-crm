@@ -35,7 +35,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
-const { sendTemplate, sendText, verifyWebhook, submitTemplateToMeta } = require("../services/whatsappProvider");
+const { sendTemplate, sendText, submitTemplateToMeta } = require("../services/whatsappProvider");
 const { toE164 } = require("../utils/deduplication");
 const { writeAudit } = require("../lib/audit");
 const {
@@ -1734,6 +1734,7 @@ router.post("/webhook", async (req, res) => {
 // every behavior the old code had. Once the new handler has run a full
 // release cycle without regression, this block can be deleted.
 async function _legacyPostWebhookDeadCode(req, res) {
+  // eslint-disable-next-line no-constant-condition
   if (false) {
     const { object, entry } = req.body;
 

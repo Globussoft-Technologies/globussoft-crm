@@ -5,20 +5,47 @@ jobs:
   patch-env:
     runs-on: ubuntu-latest
     steps:
-      - name: Check whatsapp send route
+      - name: Debug POS wallet finalize
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          command_timeout: 2m
+          command_timeout: 5m
           script: |
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            APP=$(pm2 info globussoft-crm-backend 2>/dev/null | grep -oP "script path\s*[│|]\s*\K[^\s│|]+" | head -1)
-            BACKEND=$(dirname "$APP")
-            echo "deployed file: $BACKEND/routes/whatsapp.js"
-            echo "---"
-            grep -nc "enqueueSend" "$BACKEND/routes/whatsapp.js"
-            echo "--- /send handler region:"
-            sed -n '250,325p' "$BACKEND/routes/whatsapp.js"
+            BASE="https://crm-staging.globusdemos.com"
+
+            echo "=== LOGIN ==="
+            TOKEN=$(curl -s "$BASE/api/auth/login" \
+              -H 'Content-Type: application/json' \
+              -d '{"email":"admin@wellness.demo","password":"password123"}' | jq -r .token)
+            echo "token_length: ${#TOKEN}"
+
+            echo "=== CREATE PATIENT ==="
+            PID=$(curl -s "$BASE/api/wellness/patients" \
+              -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d '{"name":"DEBUG-POS-Wallet","phone":"+919876500099","source":"debug"}' | jq -r .id)
+            echo "patient_id: $PID"
+
+            echo "=== TOPUP ==="
+            curl -s "$BASE/api/wallet/$PID/topup" \
+              -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d '{"amountCents":100000,"paymentMethod":"cash"}' | jq .
+
+            echo "=== FINALIZE (wallet+cash split) ==="
+            curl -s -w "
+HTTP_STATUS:%{http_code}
+" \
+              "$BASE/api/pos/sales/finalize" \
+              -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d "{\"patientId\":$PID,\"items\":[{\"type\":\"service\",\"refId\":1,\"name\":\"Massage\",\"qty\":1,\"unitPriceCents\":100000}],\"payments\":[{\"method\":\"wallet\",\"amountCents\":50000},{\"method\":\"cash\",\"amountCents\":50000}]}"
+
+            echo ""
+            echo "=== BACKEND LOG (last 60 lines, pos/wallet errors) ==="
+            pm2 logs globussoft-crm-backend --lines 60 --nostream 2>&1 | grep -iE "pos.*error|sale finalize|wallet.*error|SALE_FINALIZE|Error:|stack:" -A5 || echo "NO MATCHING LOG LINES"
+
+            echo "=== SCHEMA: model Sale ==="
+            cd /home/empcloud-development/globussoft-crm/backend
+            npx prisma db pull --print 2>&1 | grep -A30 "model Sale " || echo "schema pull failed"

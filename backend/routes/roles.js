@@ -22,6 +22,24 @@ const {
   getAccessiblePages,
   canAccessPath,
 } = require("../lib/pageCatalog");
+const {
+  getNewlyGrantedSensitive,
+} = require("../lib/sensitivePermissions");
+
+// Count how many users currently hold the ADMIN role within a tenant.
+// Used by the last-admin guards on assign / unassign / permission-strip.
+// Implemented as a fresh COUNT so a concurrent re-assign by a peer admin
+// can't race past the guard with a stale local read. Returns 0 if no
+// ADMIN role exists for the tenant (shouldn't happen post-bootstrap, but
+// don't fault — bail early instead).
+async function countAdminUsersForTenant(tenantId) {
+  const adminRole = await prisma.role.findFirst({
+    where: { tenantId, key: "ADMIN" },
+    select: { id: true },
+  });
+  if (!adminRole) return 0;
+  return prisma.userRole.count({ where: { roleId: adminRole.id } });
+}
 
 // Build the Set<"module.action"> a role currently holds. Re-used by the
 // accessible-pages endpoint + the landingPath validator + the auto-clear
@@ -286,6 +304,20 @@ router.delete(
         return res.status(403).json({ error: "Access denied" });
       }
 
+      // SPEC §C3 + §F — system roles (ADMIN, CUSTOMER, OWNER) are
+      // immutable. Their key and is_system flag never change; they
+      // cannot be deleted. Admins can still tune their grants / widgets
+      // / landingPath via the OTHER endpoints — only the row itself is
+      // protected. Block 409 with a code the frontend can switch on to
+      // show "this role is built-in and cannot be removed."
+      if (role.isSystem) {
+        return res.status(409).json({
+          error: `Cannot delete the system role "${role.key}". System roles (ADMIN, CUSTOMER, OWNER) are immutable — their permissions can be tuned, but the role itself stays.`,
+          code: "SYSTEM_ROLE_PROTECTED",
+          roleKey: role.key,
+        });
+      }
+
       // Cannot delete role with assigned users
       if (role._count.userRoles > 0) {
         return res.status(409).json({
@@ -499,7 +531,10 @@ router.put(
         normalized.push({ roleId, module, action });
       }
 
-      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      const role = await prisma.role.findUnique({
+        where: { id: roleId },
+        include: { permissions: true },
+      });
       if (!role) {
         return res.status(404).json({ error: "Role not found" });
       }
@@ -508,6 +543,34 @@ router.put(
       if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
         return res.status(403).json({ error: "Access denied" });
       }
+
+      // SPEC §3 — Last-Admin protection. If we're modifying the ADMIN
+      // role itself, block any submission that would drop `roles.manage`
+      // — that's the bottom-of-the-stack permission required for any
+      // role-management work. Without this guard an admin can lock
+      // themselves (and every other admin) out of the role matrix in
+      // one click. Note this protects the role-level permission set;
+      // user-level last-admin protection lives on the assign endpoints.
+      if (role.key === "ADMIN") {
+        const hasRolesManage = normalized.some(
+          (p) => p.module === "roles" && p.action === "manage",
+        );
+        if (!hasRolesManage) {
+          return res.status(409).json({
+            error:
+              "Cannot remove roles.manage from the ADMIN role — at least one role must retain the ability to manage roles.",
+            code: "LAST_ADMIN_PROTECTION",
+            requiredPermission: "roles.manage",
+          });
+        }
+      }
+
+      // SPEC §6a — detect newly-granted sensitive permissions so the
+      // audit log records WHICH grants the admin signed off on. The
+      // frontend PermissionsModal shows a confirmation modal listing
+      // these BEFORE invoking save; the audit metadata captures what
+      // they confirmed.
+      const newlySensitive = getNewlyGrantedSensitive(role.permissions, normalized);
 
       // Atomic replace. If the bulk insert fails for any reason
       // (connection pool, unique-constraint race, transient lock),
@@ -557,9 +620,21 @@ router.put(
         permissionCount: newPermissions.length,
         landingPathCleared,
         previousLandingPath: landingPathCleared ? role.landingPath : null,
+        // SPEC §6a — record the sensitive grants admin confirmed in this
+        // save so an auditor can trace WHO granted WHAT WHEN. Empty
+        // array if no new sensitive grants were added.
+        newlyGrantedSensitive: newlySensitive,
       });
 
-      res.json({ roleId, permissions: newPermissions, landingPathCleared });
+      res.json({
+        roleId,
+        permissions: newPermissions,
+        landingPathCleared,
+        // Returned to the frontend so the success toast can mention how
+        // many sensitive grants just landed — supplementary signal; the
+        // pre-save confirmation modal is the load-bearing gate.
+        newlyGrantedSensitive: newlySensitive,
+      });
     } catch (err) {
       console.error("[roles] bulk update permissions error:", err);
       res.status(500).json({ error: "Failed to update permissions" });
@@ -661,6 +736,35 @@ router.post(
         return res.status(409).json({ error: "User already has this role" });
       }
 
+      // SPEC §3 — Last-Admin protection. Assigning a non-ADMIN role to
+      // a user who is currently the only ADMIN in their tenant would
+      // demote the last admin — block it. Skip when the user is being
+      // assigned the ADMIN role itself (no demotion happens) and when
+      // the user already has multiple role rows that include ADMIN
+      // (defensive — the contract says single-role-per-user but the
+      // schema-level invariant isn't enforced yet).
+      if (role.tenantId && role.key !== "ADMIN") {
+        const adminRoleHere = await prisma.role.findFirst({
+          where: { tenantId: role.tenantId, key: "ADMIN" },
+          select: { id: true },
+        });
+        if (adminRoleHere) {
+          const userHoldsAdmin = previousAssignments.some(
+            (a) => a.roleId === adminRoleHere.id,
+          );
+          if (userHoldsAdmin) {
+            const adminUserCount = await countAdminUsersForTenant(role.tenantId);
+            if (adminUserCount <= 1) {
+              return res.status(409).json({
+                error:
+                  "Cannot demote the only ADMIN — assign ADMIN to another user first, then change this user's role.",
+                code: "LAST_ADMIN_PROTECTION",
+              });
+            }
+          }
+        }
+      }
+
       const userRole = await prisma.$transaction(async (tx) => {
         if (previousAssignments.length > 0) {
           await tx.userRole.deleteMany({ where: { userId } });
@@ -724,6 +828,21 @@ router.delete(
         select: { email: true }
       });
 
+      // SPEC §3 — Last-Admin protection. Don't let an admin revoke the
+      // ADMIN role from the only admin in their tenant — that bricks
+      // the tenant's role-management surface entirely. The tenant-scoped
+      // check is intentional: the platform OWNER role is unaffected.
+      if (role.tenantId && role.key === "ADMIN") {
+        const adminUserCount = await countAdminUsersForTenant(role.tenantId);
+        if (adminUserCount <= 1) {
+          return res.status(409).json({
+            error:
+              "Cannot remove the only ADMIN — assign ADMIN to another user first, then revoke this one.",
+            code: "LAST_ADMIN_PROTECTION",
+          });
+        }
+      }
+
       await prisma.userRole.delete({
         where: {
           userId_roleId: { userId, roleId }
@@ -744,6 +863,162 @@ router.delete(
     } catch (err) {
       console.error("[roles] unassign error:", err);
       res.status(500).json({ error: "Failed to remove role from user" });
+    }
+  }
+);
+
+// ─────────── User-centric multi-role assignment (SPEC §C3) ───────────
+// POST /api/roles/users/:userId/roles — replace a user's role set with
+// the supplied roleIds array. Multi-role-aware: the resolver UNIONs
+// permissions across all assigned roles (SPEC §B3), so admins can
+// compose access from multiple roles instead of being forced into the
+// single-role delete-then-create flow of POST /:id/assign/:userId.
+//
+// The pre-existing single-role endpoint stays live so the role-editor
+// UI and any external callers using it continue to work unchanged.
+//
+// Body: { roleIds: number[] }   — list of role IDs to assign. Empty
+//                                 array unassigns all roles (subject
+//                                 to last-admin protection).
+//
+// Mounted under /api/roles/users/:userId/roles instead of
+// /api/users/:userId/roles so this file stays the canonical RBAC
+// surface. The SPEC-named path /api/users/:id/roles can be added in
+// routes/users.js as a thin forwarder if call-sites need the exact
+// SPEC URL.
+router.post(
+  "/users/:userId/roles",
+  verifyToken,
+  requirePermission("roles", "manage"),
+  async (req, res) => {
+    try {
+      const userId = parseInt(req.params.userId);
+      const { roleIds } = req.body || {};
+
+      if (!Array.isArray(roleIds)) {
+        return res.status(400).json({
+          error: "roleIds must be an array of role IDs",
+        });
+      }
+      // De-dup + validate ID shape. We accept an empty array (unassign
+      // all) — the last-admin guard below catches the dangerous edge.
+      const targetRoleIds = Array.from(
+        new Set(roleIds.map((r) => parseInt(r, 10)).filter((n) => Number.isFinite(n))),
+      );
+
+      const targetUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, email: true, tenantId: true, userType: true },
+      });
+      if (!targetUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      if (!req.user.isOwner && targetUser.tenantId !== req.user.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      // Resolve target roles + tenant-scope check. OWNER may assign
+      // any role; STAFF admins may only assign roles within their
+      // tenant. Platform-level (tenantId=null) roles (e.g. OWNER)
+      // cannot be assigned via this endpoint — block them defensively.
+      let targetRoles = [];
+      if (targetRoleIds.length > 0) {
+        targetRoles = await prisma.role.findMany({
+          where: { id: { in: targetRoleIds } },
+          select: { id: true, key: true, tenantId: true, isActive: true },
+        });
+        if (targetRoles.length !== targetRoleIds.length) {
+          return res.status(400).json({ error: "One or more role IDs not found" });
+        }
+        for (const r of targetRoles) {
+          if (!req.user.isOwner && r.tenantId !== req.user.tenantId) {
+            return res.status(403).json({
+              error: `Cannot assign role ${r.key} — outside your tenant`,
+            });
+          }
+          if (r.tenantId === null && r.key === "OWNER") {
+            return res.status(403).json({
+              error: "OWNER is a platform-level role and cannot be assigned via this endpoint",
+              code: "OWNER_ROLE_PROTECTED",
+            });
+          }
+        }
+      }
+
+      // SPEC §3 — Last-Admin protection. If the target user currently
+      // holds ADMIN AND the new role set doesn't include ADMIN AND the
+      // user is the only admin in their tenant → block.
+      const previous = await prisma.userRole.findMany({
+        where: { userId },
+        include: { role: { select: { id: true, key: true, tenantId: true } } },
+      });
+      const previousAdminRole = previous.find(
+        (a) => a.role && a.role.key === "ADMIN" && a.role.tenantId === targetUser.tenantId,
+      );
+      const newSetIncludesAdmin = targetRoles.some(
+        (r) => r.key === "ADMIN" && r.tenantId === targetUser.tenantId,
+      );
+      if (previousAdminRole && !newSetIncludesAdmin && targetUser.tenantId) {
+        const adminUserCount = await countAdminUsersForTenant(targetUser.tenantId);
+        if (adminUserCount <= 1) {
+          return res.status(409).json({
+            error:
+              "Cannot demote the only ADMIN — assign ADMIN to another user first, then change this user's role set.",
+            code: "LAST_ADMIN_PROTECTION",
+          });
+        }
+      }
+
+      // Atomic replace. deleteMany + createMany inside a transaction so
+      // a failed insert rolls back the delete and the user keeps their
+      // prior role set.
+      const newAssignments = await prisma.$transaction(async (tx) => {
+        await tx.userRole.deleteMany({ where: { userId } });
+        if (targetRoleIds.length === 0) return [];
+        await tx.userRole.createMany({
+          data: targetRoleIds.map((roleId) => ({
+            userId,
+            roleId,
+            assignedById: req.user.userId,
+          })),
+          // Schema has @@unique([userId, roleId]) so a duplicated row
+          // would fail; the dedup above already prevents that.
+          skipDuplicates: true,
+        });
+        return tx.userRole.findMany({
+          where: { userId },
+          include: {
+            role: { select: { id: true, key: true, name: true, landingPath: true } },
+          },
+        });
+      });
+
+      // Bust the cache so the next requirePermission read pulls the new
+      // grant set immediately (avoids the 30s stale window).
+      clearUserCache(userId, targetUser.tenantId);
+
+      await writeAudit("Role", "REPLACE_USER_ROLES", req.user.userId, req.user.userId, req.user.tenantId, {
+        targetUserId: userId,
+        targetEmail: targetUser.email,
+        previousRoleIds: previous.map((a) => a.roleId),
+        newRoleIds: targetRoleIds,
+        previousRoleKeys: previous.map((a) => a.role && a.role.key).filter(Boolean),
+        newRoleKeys: targetRoles.map((r) => r.key),
+      });
+
+      res.json({
+        userId,
+        roles: newAssignments.map((a) => ({
+          roleId: a.roleId,
+          key: a.role && a.role.key,
+          name: a.role && a.role.name,
+          landingPath: a.role && a.role.landingPath,
+          assignedAt: a.assignedAt,
+        })),
+      });
+    } catch (err) {
+      console.error("[roles] replace user roles error:", err);
+      res.status(500).json({ error: "Failed to replace user roles" });
     }
   }
 );

@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -74,9 +74,9 @@ function setupFetch({ visits = [], waitlist = [], holidays = [] } = {}) {
   });
 }
 
-function renderCalendar() {
+function renderCalendar({ initialEntries } = {}) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries || ['/wellness/calendar']}>
       <Calendar />
     </MemoryRouter>
   );
@@ -354,7 +354,7 @@ describe('<Calendar /> — #807 Holiday UI', () => {
 // duplication), and screen.findByText for the async-fetch-driven first paint.
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('<Calendar /> — day-grid navigation', () => {
+describe('<Calendar /> — From/To date range + day-chip navigation', () => {
   beforeEach(() => { fetchApi.mockReset(); });
 
   it('renders the day-view header with today\'s date', async () => {
@@ -366,9 +366,20 @@ describe('<Calendar /> — day-grid navigation', () => {
     expect(await screen.findByText(/Day view by practitioner/i)).toBeInTheDocument();
   });
 
-  it('clicking the next-day chevron triggers a refetch with the next day window', async () => {
+  it('renders From and To date inputs instead of today/chevron buttons', async () => {
     setupFetch({ visits: [] });
-    const user = userEvent.setup();
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+    // The two new inputs are aria-labelled From date / To date.
+    expect(screen.getByLabelText(/From date/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/To date/i)).toBeInTheDocument();
+    // The legacy "Today" button + the chevron buttons are gone — only the
+    // practitioner-filter toggle remains alongside the inputs.
+    expect(screen.queryByRole('button', { name: 'Today' })).toBeNull();
+  });
+
+  it('changing the From date re-issues a /visits fetch for the new day', async () => {
+    setupFetch({ visits: [] });
     renderCalendar();
     await screen.findByText('Dr. Anjali Mukherjee');
 
@@ -376,15 +387,9 @@ describe('<Calendar /> — day-grid navigation', () => {
       (c) => typeof c[0] === 'string' && c[0].startsWith('/api/wellness/visits?')
     );
 
-    // The next-day chevron is the only ChevronRight in the header — it is the
-    // last button in the nav cluster (after Today). The Today button has
-    // visible text "Today"; the chevrons are icon-only.
-    const buttons = screen.getAllByRole('button');
-    const todayBtn = screen.getByRole('button', { name: 'Today' });
-    const todayIdx = buttons.indexOf(todayBtn);
-    const nextBtn = buttons[todayIdx + 1];
-    expect(nextBtn).toBeTruthy();
-    await user.click(nextBtn);
+    // jsdom doesn't simulate keyboard input into `<input type="date">`
+    // cleanly — fireEvent.change is the canonical write path.
+    fireEvent.change(screen.getByLabelText(/From date/i), { target: { value: '2030-01-15' } });
 
     await waitFor(() => {
       const visitsCallsAfter = fetchApi.mock.calls.filter(
@@ -394,36 +399,19 @@ describe('<Calendar /> — day-grid navigation', () => {
     });
   });
 
-  it('clicking Today re-issues a fetch (re-anchors the date)', async () => {
+  it('From input drives the rendered day (header subtitle + visits fetch)', async () => {
     setupFetch({ visits: [] });
-    const user = userEvent.setup();
     renderCalendar();
     await screen.findByText('Dr. Anjali Mukherjee');
 
-    const before = fetchApi.mock.calls.length;
-    await user.click(screen.getByRole('button', { name: 'Today' }));
-    // setDate(new Date()) re-fires the effect → another fetch wave.
-    await waitFor(() => {
-      expect(fetchApi.mock.calls.length).toBeGreaterThan(before);
-    });
-  });
+    // Set From to a stable future day; To auto-widens to match.
+    fireEvent.change(screen.getByLabelText(/From date/i), { target: { value: '2030-04-17' } });
 
-  it('clicking the prev-day chevron triggers a refetch', async () => {
-    setupFetch({ visits: [] });
-    const user = userEvent.setup();
-    renderCalendar();
-    await screen.findByText('Dr. Anjali Mukherjee');
-
-    const before = fetchApi.mock.calls.length;
-    const buttons = screen.getAllByRole('button');
-    const todayBtn = screen.getByRole('button', { name: 'Today' });
-    const todayIdx = buttons.indexOf(todayBtn);
-    const prevBtn = buttons[todayIdx - 1];
-    expect(prevBtn).toBeTruthy();
-    await user.click(prevBtn);
+    // Header subtitle reflects the new day; visits fetch fires.
     await waitFor(() => {
-      expect(fetchApi.mock.calls.length).toBeGreaterThan(before);
+      expect(screen.getByText(/Day view by practitioner/i).textContent).toMatch(/2030/);
     });
+    expect(screen.getByLabelText(/To date/i).value).toBe('2030-04-17');
   });
 });
 
@@ -974,3 +962,74 @@ describe('<Calendar /> — full status-border colour table', () => {
     });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Focus-from-Appointments handshake — pins that deep-linking from the
+// Appointments page (Open in calendar →) lands on the visit's day AND
+// surfaces the focused chip with a halo + scrollIntoView call.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('<Calendar /> — focus query-param handshake', () => {
+  let scrollSpy;
+  beforeEach(() => {
+    fetchApi.mockReset();
+    // The global vitest setup polyfills scrollIntoView with a noop; spy on
+    // it here so the focus-handshake test can assert it was invoked.
+    scrollSpy = vi.spyOn(window.Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+  });
+
+  it('with ?focus=<id>&date=<yyyy-mm-dd>, seeds From/To to the date and surfaces the focused chip', async () => {
+    // Pick a date string for the URL; build a Date with the same wall-clock
+    // hour the visit uses so the chip lands at a stable hour in the grid.
+    const target = '2030-01-15';
+    const visitDate = new Date(2030, 0, 15, 14, 0, 0, 0);
+    setupFetch({
+      visits: [{
+        id: 555, doctorId: 5, patientId: 200,
+        patient: { id: 200, name: 'Ananya Singh' },
+        service: { id: 100, name: 'Hair Transplant' },
+        visitDate: visitDate.toISOString(), status: 'booked',
+      }],
+    });
+    renderCalendar({ initialEntries: [`/wellness/calendar?focus=555&date=${target}`] });
+
+    // From/To inputs should be pinned to the target date.
+    const fromInput = await screen.findByLabelText(/From date/i);
+    expect(fromInput.value).toBe(target);
+    expect(screen.getByLabelText(/To date/i).value).toBe(target);
+
+    // The focused chip carries the data-testid="focused-visit" marker AND a
+    // ref-driven scrollIntoView call has been made on it.
+    const focused = await screen.findByTestId('focused-visit');
+    expect(focused).toBeInTheDocument();
+    expect(scrollSpy).toHaveBeenCalled();
+  });
+
+  it('without ?date, fetches /visits/<id> to learn the day, then snaps the range to it', async () => {
+    const visitDate = new Date(2030, 5, 20, 11, 0, 0, 0);
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/staff') return Promise.resolve(staff);
+      if (url.startsWith('/api/wellness/visits?')) return Promise.resolve([{
+        id: 777, doctorId: 5, patientId: 200,
+        patient: { id: 200, name: 'Ananya Singh' },
+        visitDate: visitDate.toISOString(), status: 'booked',
+      }]);
+      if (url === '/api/wellness/visits/777') return Promise.resolve({
+        id: 777, visitDate: visitDate.toISOString(),
+      });
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/patients') return Promise.resolve(patientsList);
+      if (url.startsWith('/api/wellness/waitlist')) return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/holidays')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    renderCalendar({ initialEntries: ['/wellness/calendar?focus=777'] });
+
+    // Eventually From/To snap to 2030-06-20 driven by the /visits/777 fetch.
+    await waitFor(() => {
+      expect(screen.getByLabelText(/From date/i).value).toBe('2030-06-20');
+    });
+    expect(screen.getByLabelText(/To date/i).value).toBe('2030-06-20');
+  });
+});
+

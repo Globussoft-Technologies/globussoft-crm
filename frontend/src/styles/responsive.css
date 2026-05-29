@@ -24,6 +24,28 @@
   transition: transform 240ms cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
+/* Calendar day-grid scrollbar — always visible (not just mobile). With
+   30+ practitioners the inner grid forces horizontal scroll; on Windows
+   the default overlay scrollbar is invisible until the user mouses over,
+   so receptionists couldn't tell they could scroll. The webkit rules
+   give the bar a 10px height + visible thumb; Firefox is handled by the
+   inline `scrollbarColor` on Calendar.jsx. */
+.calendar-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+.calendar-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 5px;
+}
+.calendar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 5px;
+}
+.calendar-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
 .sidebar-backdrop {
   display: none;
   position: fixed;

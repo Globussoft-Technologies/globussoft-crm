@@ -9,6 +9,52 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 const { resolvePrimaryRole } = require("../lib/roleResolution");
+const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
+
+// After a fresh tenant is created via /register or /signup, ensure the
+// canonical RBAC role set exists for that tenant AND the freshly-created
+// admin user is assigned to the ADMIN role. Without this, the new admin
+// holds User.role='ADMIN' (legacy string makes the sidebar's isAdmin
+// gate true) but has zero RolePermission grants, so /api/pages/me
+// returns nothing and the catalog-driven sidebar sections all collapse —
+// the canonical "I created my account and the sidebar is almost empty"
+// symptom. Idempotent; safe to call even if a prior call partially
+// succeeded.
+async function provisionRbacForFreshTenant(tenantId, isWellness, adminUserId) {
+  try {
+    await provisionTenantRbac(tenantId, { isWellness });
+    // Assign the new admin user to the tenant's ADMIN role row. The
+    // provisioner's user-iteration loop ALSO does this when it sees a
+    // User.role='ADMIN' row for the tenant, but the loop is best-effort
+    // (skips on conflict). Doing it explicitly here too makes the wire-
+    // up failure-mode visible (any error bubbles up to the caller).
+    if (adminUserId) {
+      const adminRole = await prisma.role.findFirst({
+        where: { tenantId, key: 'ADMIN' },
+        select: { id: true },
+      });
+      if (adminRole) {
+        const existing = await prisma.userRole.findUnique({
+          where: { userId_roleId: { userId: adminUserId, roleId: adminRole.id } },
+        });
+        if (!existing) {
+          await prisma.userRole.create({
+            data: { userId: adminUserId, roleId: adminRole.id },
+          });
+        }
+      }
+    }
+  } catch (err) {
+    // Failure here is non-fatal for the signup flow itself — the user
+    // and tenant rows have already been persisted, and the next server
+    // boot's ensureRbacOnBoot will pick up the gap. Log so an operator
+    // can diagnose if the inline call repeatedly fails.
+    console.error(
+      `[auth] provisionRbacForFreshTenant failed for tenant ${tenantId}:`,
+      err && err.message ? err.message : err,
+    );
+  }
+}
 const { JWT_SECRET } = require("../config/secrets");
 // #914 slice 1 — additive HttpOnly cookie set alongside the JWT body. The
 // middleware does NOT yet read this cookie (slice 2) and the frontend does
@@ -166,6 +212,13 @@ router.post("/register", async (req, res) => {
       }
     });
 
+    // Provision the canonical RBAC role set for the fresh tenant + assign
+    // the new admin user to the ADMIN role row. Without this, the new
+    // admin has no RolePermission grants and the catalog-driven sidebar
+    // sections collapse on first login (the "sidebar is almost empty"
+    // signup bug). Awaited so the user lands on a fully-RBAC'd session.
+    await provisionRbacForFreshTenant(tenant.id, selectedVertical === 'wellness', user.id);
+
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
     const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic" });
@@ -223,6 +276,11 @@ router.post("/signup", async (req, res) => {
         subscriptionStatus: "TRIAL"
       }
     });
+
+    // Provision the canonical RBAC role set for the fresh tenant + assign
+    // the new admin user to the ADMIN role row. See /register for the
+    // longer comment — same bug, same fix.
+    await provisionRbacForFreshTenant(tenant.id, selectedVertical === 'wellness', user.id);
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
@@ -407,6 +465,34 @@ router.post("/login", async (req, res) => {
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
     const tenantId = user.tenantId || 1;
+
+    // Self-heal for signups created BEFORE provisionRbacForFreshTenant
+    // was wired into /register + /signup. Those flows persisted the
+    // tenant + user but never created the canonical Role rows or
+    // RolePermission grants — the user holds User.role='ADMIN' (so the
+    // legacy sidebar isAdmin gate passes) yet the resolver returns an
+    // empty Set, collapsing every catalog-driven nav section. Detect
+    // and repair here: if the user's tenant has no ADMIN role row, OR
+    // if this admin user has no UserRole assignment at all, run the
+    // provisioner before issuing the JWT. The provisioner is idempotent
+    // (find-first-then-create) so a healthy session does a single
+    // userRole.count and exits early. Wrapped so a failure during
+    // self-heal can never block a legitimate login.
+    if (user.userType !== 'OWNER' && user.tenantId) {
+      try {
+        const isLegacyAdmin = String(user.role || '').toUpperCase() === 'ADMIN';
+        const userRoleCount = await prisma.userRole.count({ where: { userId: user.id } });
+        if (isLegacyAdmin && userRoleCount === 0) {
+          const isWellness = user.tenant?.vertical === 'wellness';
+          await provisionRbacForFreshTenant(user.tenantId, isWellness, user.id);
+        }
+      } catch (healErr) {
+        console.warn(
+          '[auth/login] RBAC self-heal failed (non-fatal):',
+          healErr && healErr.message ? healErr.message : healErr,
+        );
+      }
+    }
 
     // If 2FA is enabled, return short-lived temp token instead of final JWT.
     // Frontend must POST /api/auth/2fa/verify with { tempToken, code } to complete login.

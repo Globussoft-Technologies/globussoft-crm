@@ -635,6 +635,11 @@ app.param("id", validateNumericId);
 // Map API Endpoints
 app.use("/api/auth", authRoutes);
 app.use("/api/roles", rolesRoutes);
+// SPEC §C3 — unified /api/me + /api/permissions endpoints. Both come
+// from the same module so the SPEC-named endpoint surface is contiguous.
+const { meRouter, permissionsRouter } = require("./routes/me");
+app.use("/api/me", meRouter);
+app.use("/api/permissions", permissionsRouter);
 app.use("/api/widgets", widgetsRoutes);
 app.use("/api/pages", pagesRoutes);
 app.use("/api/users", usersRoutes);

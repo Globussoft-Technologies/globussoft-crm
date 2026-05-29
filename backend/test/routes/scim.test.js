@@ -130,6 +130,11 @@ beforeEach(() => {
   prisma.user.update.mockReset();
   prisma.user.delete.mockReset();
   prisma.user.count.mockReset();
+  // Schema-drift compat: SCIM route uses findFirst for email dup-checks
+  // because User.email is composite-unique with tenantId. Existing tests
+  // mock findUnique; delegate so per-test mockResolvedValue calls cover
+  // both code paths.
+  prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
 });
 
 // Helper: build a ScimToken row whose `token` column is a real bcrypt

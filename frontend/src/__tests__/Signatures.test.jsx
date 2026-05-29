@@ -117,12 +117,20 @@ const sampleContracts = [
   { id: 43, title: 'SOW — Beta Industries' },
 ];
 
+// SUT's docLabel reads `d.title || d.estimateNum || `Estimate #${d.id}``
+// — give the estimate fixture a recognizable title so the option-name
+// assertions below survive the Contract→Estimate default switch.
+const sampleEstimates = [
+  { id: 42, title: 'MSA — Acme Corp', estimateNum: 'EST-042' },
+  { id: 43, title: 'SOW — Beta Industries', estimateNum: 'EST-043' },
+];
+
 function defaultFetchMock(url, opts) {
   if (url === '/api/signatures' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(sampleRequests);
   }
   if (url === '/api/contracts') return Promise.resolve(sampleContracts);
-  if (url === '/api/estimates') return Promise.resolve([]);
+  if (url === '/api/estimates') return Promise.resolve(sampleEstimates);
   if (url === '/api/quotes') return Promise.resolve([]);
   // GET /api/signatures/<id> — detail endpoint hit by view().
   if (/^\/api\/signatures\/\d+$/.test(url) && (!opts || !opts.method || opts.method === 'GET')) {
@@ -165,15 +173,17 @@ describe('<Signatures /> — page surface', () => {
     ).toBeInTheDocument();
   });
 
-  it('initial mount fetches /api/signatures AND /api/contracts (default documentType=Contract)', async () => {
+  it('initial mount fetches /api/signatures AND /api/estimates (default documentType=Estimate)', async () => {
+    // Drift: the SUT's default documentType moved from Contract → Estimate
+    // and ENDPOINT_FOR_TYPE only carries Estimate now (Signatures.jsx:28+36).
     renderSignatures();
     await waitFor(() => {
       const sigCall = fetchApiMock.mock.calls.find(([u]) => u === '/api/signatures');
       expect(sigCall).toBeTruthy();
     });
     await waitFor(() => {
-      const contractsCall = fetchApiMock.mock.calls.find(([u]) => u === '/api/contracts');
-      expect(contractsCall).toBeTruthy();
+      const docCall = fetchApiMock.mock.calls.find(([u]) => u === '/api/estimates');
+      expect(docCall).toBeTruthy();
     });
   });
 
@@ -292,20 +302,16 @@ describe('<Signatures /> — page surface', () => {
   });
 
   it('clicking "Request Signature" opens the Create modal with the expected form fields', async () => {
+    // Drift: the documentType select was removed when ENDPOINT_FOR_TYPE
+    // narrowed to Estimate-only (Signatures.jsx:35). Modal now exposes
+    // a single document <select> + signer inputs + submit.
     renderSignatures();
     await screen.findByText('Anita Sharma');
 
     fireEvent.click(screen.getByRole('button', { name: /Request Signature/i }));
 
-    // Modal opens with TWO comboboxes (Document Type + Document) — pin via
-    // the count rather than a name-based lookup since the Field labels
-    // aren't wired to the selects via htmlFor/id.
     const selects = await screen.findAllByRole('combobox');
-    expect(selects.length).toBeGreaterThanOrEqual(2);
-    // Contract / Estimate / Quote options render in the first (type) select.
-    expect(screen.getByRole('option', { name: 'Contract' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Estimate' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Quote' })).toBeInTheDocument();
+    expect(selects.length).toBeGreaterThanOrEqual(1);
     // Signer Name + Signer Email inputs render with the placeholder hints.
     expect(screen.getByPlaceholderText(/Jane Doe/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/jane@example\.com/i)).toBeInTheDocument();
@@ -358,20 +364,17 @@ describe('<Signatures /> — page surface', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Request Signature/i }));
 
-    // Wait for the contracts list to populate the document <select> (the
-    // page-mount + form-mount both fire loadDocOptions; we need the option
-    // for #42 to be present before selecting it).
+    // Wait for the estimate options to populate the document <select>
+    // (page-mount loadDocOptions targets /api/estimates by default).
     await waitFor(() => {
-      // The option label is "MSA — Acme Corp" (from sampleContracts[0].title).
       expect(screen.getByText('MSA — Acme Corp')).toBeInTheDocument();
     });
 
-    // The Document select is the second <select> in the form (Document Type
-    // is the first). Use getAllByRole and pick by index — exposes the
-    // load-bearing assumption explicitly.
+    // Document type select was removed (Estimate-only world); only the
+    // documentId select remains in the form now.
     const selects = screen.getAllByRole('combobox');
-    expect(selects.length).toBeGreaterThanOrEqual(2);
-    const docSelect = selects[1]; // form.documentId select.
+    expect(selects.length).toBeGreaterThanOrEqual(1);
+    const docSelect = selects[0];
     fireEvent.change(docSelect, { target: { value: '42' } });
 
     fireEvent.change(screen.getByPlaceholderText(/Jane Doe/i), {
@@ -382,11 +385,6 @@ describe('<Signatures /> — page surface', () => {
     });
 
     fetchApiMock.mockClear();
-    // Use fireEvent.submit on the form rather than a click on the submit
-    // button: jsdom's constraint validation on `required` selects/inputs
-    // can short-circuit click-driven submits even after the user "picks"
-    // a value via fireEvent.change. fireEvent.submit dispatches the event
-    // directly and exercises the page's runtime submitCreate handler.
     const submitBtn = screen.getByRole('button', {
       name: /Send Signature Request/i,
     });
@@ -399,9 +397,9 @@ describe('<Signatures /> — page surface', () => {
       );
       expect(postCall).toBeTruthy();
       const body = JSON.parse(postCall[1].body);
-      // Pinned shape: documentId/expiresInDays are parsed to int; defaults
-      // documentType=Contract + expiresInDays=7.
-      expect(body.documentType).toBe('Contract');
+      // Pinned shape: documentId/expiresInDays parsed to int; default
+      // documentType=Estimate (Signatures.jsx:28).
+      expect(body.documentType).toBe('Estimate');
       expect(body.documentId).toBe(42);
       expect(typeof body.documentId).toBe('number');
       expect(body.signerName).toBe('Test Signer');

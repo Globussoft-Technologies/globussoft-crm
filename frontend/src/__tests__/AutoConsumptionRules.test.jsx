@@ -254,10 +254,16 @@ describe('<AutoConsumptionRules /> — mount fetch + list render', () => {
     expect(screen.getByText('2')).toBeInTheDocument();
     expect(screen.getByText('1.5')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
-    // Stock values for joined rows; orphan row falls back to em-dash.
+    // Stock values for joined rows; orphan row + Unit columns (when the
+    // joined product has no `unit`) fall back to em-dash. The orphan row
+    // contributes an em-dash for BOTH Stock and Unit, plus the two
+    // joined rows' Unit cells render em-dash because the test fixtures
+    // for PRODUCT_TUBE / PRODUCT_GEL don't carry a `unit` field. So
+    // we expect ≥1 em-dash on the page (the orphan-stock fallback is
+    // the load-bearing assertion).
     expect(screen.getByText('42')).toBeInTheDocument();
     expect(screen.getByText('7')).toBeInTheDocument();
-    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
     // `#<id>` fallback for orphan row's missing service + product joins.
     expect(screen.getByText('#999')).toBeInTheDocument();
     expect(screen.getByText('#888')).toBeInTheDocument();
@@ -339,11 +345,14 @@ describe('<AutoConsumptionRules /> — create POST', () => {
       expect(postCall).toBeTruthy();
       const body = JSON.parse(postCall[1].body);
       // serviceId + productId coerced via parseInt; quantityPerVisit via
-      // parseFloat (SUT lines 54-57).
+      // parseFloat (SUT lines 58-60). `unit` is included in the payload
+      // and resolves to null when the form's unit select is left at its
+      // empty default (SUT line 61 — `form.unit || null`).
       expect(body).toEqual({
         serviceId: 502,
         productId: 902,
         quantityPerVisit: 2.5,
+        unit: null,
         isActive: true,
       });
       expect(typeof body.serviceId).toBe('number');
@@ -399,9 +408,12 @@ describe('<AutoConsumptionRules /> — edit prefill + PUT (qty + isActive only)'
       );
       expect(putCall).toBeTruthy();
       const body = JSON.parse(putCall[1].body);
-      // Only qty + isActive in PUT body — svc + product change requires
-      // delete+recreate per SUT line 60-61 comment.
-      expect(body).toEqual({ quantityPerVisit: 4, isActive: false });
+      // Only qty + unit + isActive in PUT body — svc + product change
+      // requires delete+recreate per SUT line 65-66 comment. RULE_PRP
+      // fixture carries no `unit` field so the form's pre-fill resolves
+      // to '' (SUT line 45) and the submit payload's `form.unit || null`
+      // (SUT line 71) lands as null.
+      expect(body).toEqual({ quantityPerVisit: 4, unit: null, isActive: false });
       expect(body).not.toHaveProperty('serviceId');
       expect(body).not.toHaveProperty('productId');
     });

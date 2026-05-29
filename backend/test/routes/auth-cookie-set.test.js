@@ -33,6 +33,10 @@ import prisma from '../../lib/prisma.js';
 // ── prisma singleton patch (BEFORE the routers are required) ─────────
 prisma.user = {
   findUnique: vi.fn(),
+  // Schema drift: User.email composite-unique with tenantId means login
+  // now uses findFirst. Delegate to findUnique so existing per-test
+  // mockResolvedValue calls cover both paths.
+  findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
 };
@@ -84,6 +88,7 @@ function findAuthCookie(res) {
 
 beforeEach(() => {
   prisma.user.findUnique.mockReset();
+  prisma.user.findFirst.mockReset();
   prisma.user.create.mockReset();
   prisma.user.update.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue(null);
@@ -91,6 +96,9 @@ beforeEach(() => {
   prisma.auditLog.create.mockReset().mockResolvedValue({});
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.revokedToken.upsert.mockReset().mockResolvedValue({});
+  // After reset: findFirst delegates to findUnique so per-test
+  // findUnique.mockResolvedValue calls cover the login code path too.
+  prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
   // Default NODE_ENV to non-production so secure=false in cookie assertions.
   delete process.env.NODE_ENV;
 });

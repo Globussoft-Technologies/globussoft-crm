@@ -827,7 +827,14 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
 
     const filename = `${invoice.invoiceNum || "INV-" + invoice.id}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    // If PDFKit emits an error mid-stream we can't send a JSON envelope (headers
+    // are flushed on first chunk), but we MUST detach the pipe and end the
+    // response cleanly so the browser doesn't hang on a half-written body.
+    doc.on("error", (err) => {
+      console.error("[PDF Generation Error] (stream):", err);
+      try { res.end(); } catch (_) { /* already destroyed */ }
+    });
     doc.pipe(res);
 
     // Header
@@ -880,7 +887,11 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
     doc.end();
   } catch (err) {
     console.error("[PDF Generation Error]:", err);
-    res.status(500).json({ error: "Failed to generate invoice PDF" });
+    if (res.headersSent) {
+      try { res.end(); } catch (_) { /* already destroyed */ }
+    } else {
+      res.status(500).json({ error: err?.message || "Failed to generate invoice PDF" });
+    }
   }
 });
 

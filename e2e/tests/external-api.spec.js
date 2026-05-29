@@ -155,6 +155,9 @@ async function post(request, path, body, key = apiKey) {
 async function patch(request, path, body, key = apiKey) {
   return request.patch(`${BASE_URL}${path}`, { headers: authHeaders(key), data: body ?? {}, timeout: REQUEST_TIMEOUT });
 }
+async function del(request, path, key = apiKey) {
+  return request.delete(`${BASE_URL}${path}`, { headers: authHeaders(key), timeout: REQUEST_TIMEOUT });
+}
 
 // ── Cleanup ────────────────────────────────────────────────────────
 // Created rows are tagged `${RUN_TAG}` and harvested by global-teardown.
@@ -236,6 +239,9 @@ test.describe('External API — auth gate', () => {
     ['GET',   '/api/v1/external/locations'],
     ['GET',   '/api/v1/external/appointments'],
     ['POST',  '/api/v1/external/appointments'],
+    ['PATCH', '/api/v1/external/leads/1/stage'],
+    ['POST',  '/api/v1/external/webhooks'],
+    ['GET',   '/api/v1/external/webhooks'],
   ];
 
   for (const [method, path] of protectedPaths) {
@@ -886,5 +892,212 @@ test.describe('External API — /appointments', () => {
     expect(body.patientId).toBe(patientId);
     expect(body.status).toBe('booked');
     expect(new Date(body.visitDate).toISOString()).toBe(new Date(slotStart).toISOString());
+  });
+});
+
+// ── /leads/:id/stage — GP stage → CRM status (Task 9, GP-CRM integration) ──
+// Accepts GP stage vocab (NEW/CONTACTED/QUALIFIED/WON/LOST/DNC/DO_NOT_CALL) or
+// a direct CRM status (Lead/Prospect/Customer/Churned/Junk). Uses a fresh lead
+// so it doesn't disturb createdLeadId that earlier describes rely on.
+
+test.describe('External API — PATCH /leads/:id/stage (GP-CRM)', () => {
+  let stageLeadId = null;
+
+  test('setup: create a fresh lead to drive stage transitions', async ({ request }) => {
+    const key = await requireKey(request);
+    const res = await post(request, '/api/v1/external/leads', {
+      name: `${RUN_TAG} Stage Lead`,
+      phone: '9876500123',
+      email: `stage.${RUN_TAG}@example.in`,
+      source: 'globus-phone',
+    }, key);
+    expect(res.status(), `stage lead create: ${await res.text()}`).toBe(201);
+    stageLeadId = (await res.json()).id;
+  });
+
+  test('400 MISSING_STAGE when neither stage nor status', async ({ request }) => {
+    const key = await requireKey(request);
+    if (!stageLeadId) test.skip(true, 'no stage lead');
+    const res = await patch(request, `/api/v1/external/leads/${stageLeadId}/stage`, { foo: 'bar' }, key);
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('MISSING_STAGE');
+  });
+
+  test('400 INVALID_STAGE on unknown GP stage', async ({ request }) => {
+    const key = await requireKey(request);
+    if (!stageLeadId) test.skip(true, 'no stage lead');
+    const res = await patch(request, `/api/v1/external/leads/${stageLeadId}/stage`, { stage: 'MAYBE' }, key);
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_STAGE');
+  });
+
+  test('400 INVALID_STATUS on unknown direct status', async ({ request }) => {
+    const key = await requireKey(request);
+    if (!stageLeadId) test.skip(true, 'no stage lead');
+    const res = await patch(request, `/api/v1/external/leads/${stageLeadId}/stage`, { status: 'Unknown' }, key);
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_STATUS');
+  });
+
+  test('404 on unknown lead id', async ({ request }) => {
+    const key = await requireKey(request);
+    const res = await patch(request, '/api/v1/external/leads/99999999/stage', { stage: 'QUALIFIED' }, key);
+    expect(res.status()).toBe(404);
+  });
+
+  test('400 INVALID_ID on non-numeric id', async ({ request }) => {
+    const key = await requireKey(request);
+    const res = await patch(request, '/api/v1/external/leads/not-a-number/stage', { stage: 'QUALIFIED' }, key);
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_ID');
+  });
+
+  test('200 GP stage QUALIFIED → CRM status Prospect (case-insensitive)', async ({ request }) => {
+    const key = await requireKey(request);
+    if (!stageLeadId) test.skip(true, 'no stage lead');
+    const res = await patch(request, `/api/v1/external/leads/${stageLeadId}/stage`, { stage: 'qualified' }, key);
+    expect(res.status(), `stage update: ${await res.text()}`).toBe(200);
+    expect((await res.json()).status).toBe('Prospect');
+  });
+
+  test('200 GP stage WON → CRM status Customer', async ({ request }) => {
+    const key = await requireKey(request);
+    if (!stageLeadId) test.skip(true, 'no stage lead');
+    const res = await patch(request, `/api/v1/external/leads/${stageLeadId}/stage`, { stage: 'WON' }, key);
+    expect(res.status()).toBe(200);
+    expect((await res.json()).status).toBe('Customer');
+  });
+
+  test('200 direct CRM status Churned accepted via status field', async ({ request }) => {
+    const key = await requireKey(request);
+    if (!stageLeadId) test.skip(true, 'no stage lead');
+    const res = await patch(request, `/api/v1/external/leads/${stageLeadId}/stage`, { status: 'Churned' }, key);
+    expect(res.status()).toBe(200);
+    expect((await res.json()).status).toBe('Churned');
+  });
+});
+
+// ── POST /leads externalId dedup (Task 12, GP-CRM integration) ─────────────
+// GlobusPhone sends its lead ULID as externalId; an outbox retry re-POSTs the
+// same externalId, so the CRM must reuse the existing contact (idempotent).
+
+test.describe('External API — POST /leads externalId dedup (GP-CRM)', () => {
+  test('same externalId twice → second returns 200 _deduped with same id', async ({ request }) => {
+    const key = await requireKey(request);
+    const extId = `gp_${RUN_TAG}_ulid`;
+    const first = await post(request, '/api/v1/external/leads', {
+      name: `${RUN_TAG} ExtId Lead`,
+      phone: '9876500999',
+      externalId: extId,
+      source: 'globus-phone',
+    }, key);
+    expect(first.status(), `extId first: ${await first.text()}`).toBe(201);
+    const firstId = (await first.json()).id;
+
+    // Retry with the same externalId but different phone/name — must reuse row.
+    const second = await post(request, '/api/v1/external/leads', {
+      name: `${RUN_TAG} ExtId Lead retry`,
+      phone: '9876500888',
+      externalId: extId,
+      source: 'globus-phone',
+    }, key);
+    expect(second.status()).toBe(200);
+    const secondBody = await second.json();
+    expect(secondBody._deduped).toBe(true);
+    expect(secondBody.id).toBe(firstId);
+  });
+});
+
+// ── /webhooks self-serve subscription (Task 11, GP-CRM integration) ────────
+// Partners register a callback URL + event pattern(s). One Webhook row per
+// pattern; DELETE soft-deactivates (isActive=false).
+
+test.describe('External API — /webhooks subscription (GP-CRM)', () => {
+  const createdWebhookIds = [];
+
+  test('400 MISSING_URL when url absent', async ({ request }) => {
+    const key = await requireKey(request);
+    const res = await post(request, '/api/v1/external/webhooks', { event: 'lead.*' }, key);
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('MISSING_URL');
+  });
+
+  test('400 INVALID_URL on malformed url', async ({ request }) => {
+    const key = await requireKey(request);
+    const res = await post(request, '/api/v1/external/webhooks', { url: 'not-a-url', event: 'lead.*' }, key);
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_URL');
+  });
+
+  test('400 MISSING_EVENT when no event/events', async ({ request }) => {
+    const key = await requireKey(request);
+    const res = await post(request, '/api/v1/external/webhooks', { url: 'https://gp.example/webhooks/crm' }, key);
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('MISSING_EVENT');
+  });
+
+  test('201 single event → { created: [webhook] }', async ({ request }) => {
+    const key = await requireKey(request);
+    const res = await post(request, '/api/v1/external/webhooks', {
+      url: 'https://gp.example/webhooks/crm',
+      event: 'lead.*',
+    }, key);
+    expect(res.status(), `webhook create: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(Array.isArray(body.created)).toBe(true);
+    expect(body.created.length).toBe(1);
+    expect(body.created[0].event).toBe('lead.*');
+    expect(body.created[0].targetUrl).toBe('https://gp.example/webhooks/crm');
+    createdWebhookIds.push(body.created[0].id);
+  });
+
+  test('201 events array → one row per pattern', async ({ request }) => {
+    const key = await requireKey(request);
+    const res = await post(request, '/api/v1/external/webhooks', {
+      url: 'https://gp.example/webhooks/crm',
+      events: ['contact.*', 'deal.*'],
+    }, key);
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(body.created.length).toBe(2);
+    body.created.forEach((w) => createdWebhookIds.push(w.id));
+  });
+
+  test('GET /webhooks 200 returns { data, total } including our subscriptions', async ({ request }) => {
+    const key = await requireKey(request);
+    const res = await get(request, '/api/v1/external/webhooks', key);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(typeof body.total).toBe('number');
+    const ours = body.data.filter((w) => createdWebhookIds.includes(w.id));
+    expect(ours.length).toBe(createdWebhookIds.length);
+  });
+
+  test('DELETE /webhooks/:id 200 { deactivated: true } + drops out of GET list', async ({ request }) => {
+    const key = await requireKey(request);
+    if (!createdWebhookIds.length) test.skip(true, 'no webhook created upstream');
+    const id = createdWebhookIds[0];
+    const res = await del(request, `/api/v1/external/webhooks/${id}`, key);
+    expect(res.status()).toBe(200);
+    expect((await res.json()).deactivated).toBe(true);
+
+    const list = await get(request, '/api/v1/external/webhooks', key);
+    const stillThere = (await list.json()).data.some((w) => w.id === id);
+    expect(stillThere).toBe(false);
+  });
+
+  test('DELETE /webhooks/:id 404 on unknown id', async ({ request }) => {
+    const key = await requireKey(request);
+    const res = await del(request, '/api/v1/external/webhooks/99999999', key);
+    expect(res.status()).toBe(404);
+  });
+
+  test.afterAll(async ({ request }) => {
+    // Best-effort: deactivate any webhooks we created and didn't already remove.
+    if (!apiKey) return;
+    for (const id of createdWebhookIds) {
+      await del(request, `/api/v1/external/webhooks/${id}`, apiKey).catch(() => {});
+    }
   });
 });

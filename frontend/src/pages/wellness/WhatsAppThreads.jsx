@@ -49,6 +49,10 @@ const STATUS_OPTIONS = [
   { value: 'PENDING_AGENT', label: 'Pending agent' },
   { value: 'SNOOZED', label: 'Snoozed' },
   { value: 'CLOSED', label: 'Closed' },
+  // Not a thread status — selecting this lists blocked numbers (opt-outs)
+  // from /api/whatsapp/opt-outs instead of filtering threads. Handled
+  // specially in loadList + the row renderer.
+  { value: 'BLOCKED', label: 'Blocked' },
 ];
 
 function timeAgo(isoOrDate) {
@@ -183,6 +187,7 @@ function StatusPill({ status }) {
     PENDING_AGENT: { bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b', label: 'Pending' },
     SNOOZED: { bg: 'rgba(99,102,241,0.15)', fg: '#6366f1', label: 'Snoozed' },
     CLOSED: { bg: 'rgba(107,114,128,0.15)', fg: '#6b7280', label: 'Closed' },
+    BLOCKED: { bg: 'rgba(239,68,68,0.15)', fg: '#dc2626', label: 'Blocked' },
   };
   const cfg = map[status] || map.OPEN;
   return (
@@ -278,6 +283,27 @@ export default function WhatsAppThreads() {
   const loadList = async () => {
     setLoadingList(true);
     try {
+      // "Blocked" isn't a thread status — it lists the tenant's opt-out
+      // (blocked) numbers. Fetch from /opt-outs and map each row into the
+      // thread-shaped object the left rail already knows how to render. The
+      // `_blocked` marker drives the red pill + click-to-open behaviour.
+      if (statusFilter === 'BLOCKED') {
+        const params = new URLSearchParams({ limit: '100' });
+        if (q.trim()) params.set('phone', q.trim());
+        const data = await fetchApi(`/api/whatsapp/opt-outs?${params.toString()}`);
+        const optOuts = Array.isArray(data?.optOuts) ? data.optOuts : [];
+        setThreads(optOuts.map((o) => ({
+          id: `optout-${o.id}`,
+          contactPhone: o.contactPhone,
+          status: 'BLOCKED',
+          lastMessageAt: o.capturedAt,
+          unreadCount: 0,
+          _blocked: o,
+        })));
+        setLoadingList(false);
+        return;
+      }
+
       const params = new URLSearchParams({ limit: '50' });
       if (statusFilter) params.set('status', statusFilter);
       if (unreadOnly) params.set('unread', 'true');
@@ -310,6 +336,22 @@ export default function WhatsAppThreads() {
       setThreads([]);
     }
     setLoadingList(false);
+  };
+
+  // Open the conversation behind a blocked number (rows in the Blocked list
+  // are opt-out records, not threads, so their id can't be loaded directly).
+  // Look the thread up by phone and select it if one exists — that opens the
+  // right pane where an admin can Unblock. If the number was blocked without
+  // ever messaging, there's no thread to show.
+  const openBlockedThread = async (phone) => {
+    try {
+      const data = await fetchApi(`/api/whatsapp/threads?q=${encodeURIComponent(phone)}&limit=1`);
+      const t = Array.isArray(data?.threads) ? data.threads[0] : null;
+      if (t) setSelectedId(t.id);
+      else notify.info('No conversation thread exists for this blocked number.');
+    } catch (err) {
+      notify.error(err.message || 'Failed to open thread.');
+    }
   };
 
   useEffect(() => {
@@ -835,6 +877,26 @@ export default function WhatsAppThreads() {
     }
   };
 
+  // Delete the whole conversation (thread + all messages). Irreversible —
+  // backend is ADMIN-only. After delete we drop the selection so the right
+  // pane returns to the empty-state and refresh the list.
+  const deleteThread = async () => {
+    if (!detail?.thread) return;
+    const who = detail.thread.contact?.name || detail.thread.patient?.name || detail.thread.contactPhone;
+    if (!await notify.confirm(
+      `Delete the entire conversation with ${who}? This permanently removes all messages from your CRM and cannot be undone. It does not delete messages on the recipient's phone.`
+    )) return;
+    try {
+      await fetchApi(`/api/whatsapp/threads/${detail.thread.id}`, { method: 'DELETE' });
+      notify.info('Conversation deleted.');
+      setSelectedId(null);
+      setDetail(null);
+      loadList();
+    } catch (err) {
+      notify.error(err.message || 'Failed to delete conversation.');
+    }
+  };
+
   const snoozeThread = async () => {
     if (!detail?.thread) return;
     const hours = await notify.prompt?.('Snooze for how many hours?', '4') || '4';
@@ -1056,7 +1118,13 @@ export default function WhatsAppThreads() {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
-      height: 'calc(100vh - var(--top-nav-height, 0px))',
+      // Fill the Layout's scrollable <main> exactly (its height is already
+      // 100vh minus the top nav / footer / banners). Using 100vh here made
+      // the page taller than its parent, so Layout's <main> scrolled the
+      // whole page — dragging the composer out of view. height:100% keeps
+      // the page bounded so only the inner messages list scrolls and the
+      // reply bar stays pinned to the bottom.
+      height: '100%', minHeight: 0,
       animation: 'fadeIn 0.4s ease-out',
     }}>
       {/* P2: WhatsApp connection panel — embedded above the threads grid.
@@ -1179,7 +1247,7 @@ export default function WhatsAppThreads() {
               return (
                 <div
                   key={t.id}
-                  onClick={() => setSelectedId(t.id)}
+                  onClick={() => (t._blocked ? openBlockedThread(t.contactPhone) : setSelectedId(t.id))}
                   style={{
                     padding: '0.85rem 1rem',
                     borderBottom: '1px solid var(--border-color)',
@@ -1211,7 +1279,11 @@ export default function WhatsAppThreads() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
                     <StatusPill status={t.status} />
-                    {t.assignedTo && (
+                    {t._blocked ? (
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 3 }}>
+                        <Ban size={11} /> {t._blocked.reason || 'Blocked'}
+                      </span>
+                    ) : t.assignedTo && (
                       <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 3 }}>
                         <UserCheck size={11} /> {t.assignedTo.name || t.assignedTo.email}
                       </span>
@@ -1389,6 +1461,16 @@ export default function WhatsAppThreads() {
                     style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4, color: '#16a34a' }}
                   >
                     <CheckCheck size={14} /> Unblock
+                  </button>
+                )}
+                {isAdmin && (
+                  <button
+                    onClick={deleteThread}
+                    className="btn-secondary"
+                    title="Delete this conversation (removes all messages from the CRM)"
+                    style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4, color: '#dc2626' }}
+                  >
+                    <Trash2 size={14} /> Delete chat
                   </button>
                 )}
               </div>
@@ -2119,7 +2201,18 @@ export default function WhatsAppThreads() {
               </button>
               <button
                 onClick={sendNewMessage}
-                disabled={newSending || !newPhone.trim() || !newBody.trim()}
+                disabled={
+                  newSending ||
+                  !newPhone.trim() ||
+                  // Template mode validates the picked template + every
+                  // {{n}} variable; free-form mode validates the body. Mirrors
+                  // the same checks in sendNewMessage. The old condition always
+                  // required newBody, so template sends (body empty by design)
+                  // left the button permanently disabled.
+                  (useTemplate
+                    ? (!selectedTemplateName || templateParams.some((p) => !p.trim()))
+                    : !newBody.trim())
+                }
                 style={{
                   padding: '0.5rem 1rem', fontSize: '0.85rem',
                   background: 'var(--primary-color, #25D366)', color: '#fff',

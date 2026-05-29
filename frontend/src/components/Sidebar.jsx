@@ -883,6 +883,7 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/working-hours": Clock,
   // Staff self-service
   "/wellness/attendance": Clock,
+  "/wellness/attendance-dashboard": ClipboardList,
   "/wellness/leave": Calendar,
   // Leads & Revenue
   "/inbox": InboxIcon,

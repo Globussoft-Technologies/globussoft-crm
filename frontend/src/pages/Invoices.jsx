@@ -205,11 +205,22 @@ export default function Invoices() {
 
   const downloadPdf = (id, invoiceNum) => {
     const token = getAuthToken();
-    const baseUrl = import.meta.env.VITE_API_URL || '';
-    const url = `${baseUrl}/api/billing/${id}/pdf`;
+    // Use a relative path so the request stays same-origin and goes through
+    // Vite's /api proxy (same as fetchApi). Prefixing with VITE_API_URL turns
+    // this into a cross-origin call → triggers a CORS preflight → backend's
+    // global auth guard 401s the unauthenticated OPTIONS → browser blocks
+    // the GET as a CORS error.
+    const url = `/api/billing/${id}/pdf`;
     fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-      .then(res => {
-        if (!res.ok) throw new Error('PDF generation failed');
+      .then(async res => {
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const body = await res.json();
+            if (body?.error) detail = body.error;
+          } catch { /* response wasn't JSON — keep the HTTP status */ }
+          throw new Error(detail);
+        }
         return res.blob();
       })
       .then(blob => {
@@ -219,7 +230,7 @@ export default function Invoices() {
         link.click();
         URL.revokeObjectURL(link.href);
       })
-      .catch(() => notify.error('Failed to download PDF'));
+      .catch(err => notify.error(`Failed to download PDF: ${err.message}`));
   };
 
   const voidInvoice = async (inv) => {

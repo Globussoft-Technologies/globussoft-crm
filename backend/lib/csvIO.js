@@ -202,7 +202,7 @@ function parseCsv(text) {
 let _xlsxLib = null;
 function loadXlsx() {
   if (_xlsxLib) return _xlsxLib;
-  // eslint-disable-next-line global-require
+   
   _xlsxLib = require("xlsx");
   return _xlsxLib;
 }

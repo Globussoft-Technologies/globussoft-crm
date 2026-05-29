@@ -102,7 +102,13 @@ async function initiateSession({ subjectId, subjectType, participantId, redirect
 
 // `code` is unused by the stub; the real impl POSTs it to DigiLocker's
 // token endpoint and then fetches the signed Aadhaar XML.
-async function exchangeCallback({ state, code }) {
+//
+// `redirectUri` (optional) overrides DIGILOCKER_REDIRECT_URI for the
+// token exchange. OAuth requires the redirect_uri at /token to match the
+// one used at /authorize exactly; callers that stored the authorize-time
+// value on their session (e.g. the public-microsite flow) pass it here so
+// the two always agree even if the env var later changes.
+async function exchangeCallback({ state, code, redirectUri }) {
   if (!state) {
     throw new Error("exchangeCallback: state required");
   }
@@ -141,7 +147,7 @@ async function exchangeCallback({ state, code }) {
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code,
-      redirect_uri: process.env.DIGILOCKER_REDIRECT_URI || "",
+      redirect_uri: redirectUri || process.env.DIGILOCKER_REDIRECT_URI || "",
     }).toString(),
   });
   if (!tokenRes.ok) {

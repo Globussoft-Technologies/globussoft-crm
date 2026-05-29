@@ -12,7 +12,6 @@ const { ensureEmail, ensureStringLength } = require("../lib/validators");
 // to non-admin viewers. Helpers gate the role check + mask the row shape.
 const {
   shouldMaskForViewer,
-  maskRows,
   maskUserId,
   auditDisclosureDetails,
 } = require("../lib/piiMask");

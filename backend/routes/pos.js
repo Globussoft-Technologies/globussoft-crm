@@ -716,8 +716,6 @@ router.get("/shifts/:id", cashierGate, async (req, res) => {
 // at close, not silently rejected (the cashier may need to record an IOU
 // that pays back tomorrow).
 
-const VALID_PETTY_TYPES = new Set(["DEPOSIT", "WITHDRAWAL"]);
-
 async function recordPettyCashEntry(req, res, type) {
   try {
     const id = parseInt(req.params.id);

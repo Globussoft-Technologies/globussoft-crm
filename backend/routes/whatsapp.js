@@ -35,7 +35,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
-const { sendTemplate, sendText, verifyWebhook, submitTemplateToMeta } = require("../services/whatsappProvider");
+const { sendTemplate, sendText, submitTemplateToMeta } = require("../services/whatsappProvider");
 const { toE164 } = require("../utils/deduplication");
 const { writeAudit } = require("../lib/audit");
 const {
@@ -198,11 +198,34 @@ router.post("/send", verifyToken, async (req, res) => {
     // not. Internal callers needing direct-send still call the provider
     // helpers (`sendText`, `sendTemplate`) directly — only this route
     // (the operator-facing surface) goes async.
+    // Template sends carry `templateName` + `parameters` but no free-form
+    // `body`, so the stored message would render as "(empty)" in the operator
+    // inbox. Render the approved template's text with the {{n}} parameters
+    // substituted so the chat shows what was actually sent to the customer.
+    let storedBody = body || null;
+    if (!storedBody && templateName) {
+      const tpl = await prisma.whatsAppTemplate.findFirst({
+        where: { tenantId: req.user.tenantId, name: templateName },
+        select: { body: true },
+      }).catch(() => null);
+      const params = Array.isArray(parameters) ? parameters : [];
+      if (tpl?.body) {
+        storedBody = tpl.body.replace(/\{\{(\d+)\}\}/g, (match, n) => {
+          const val = params[parseInt(n, 10) - 1];
+          return val != null && val !== "" ? String(val) : match;
+        });
+      } else {
+        // Template text not found locally — at least label the bubble with
+        // the template name instead of leaving it "(empty)".
+        storedBody = `[template: ${templateName}]`;
+      }
+    }
+
     const message = await prisma.whatsAppMessage.create({
       data: {
         to,
         from: config.phoneNumberId || "",
-        body: body || null,
+        body: storedBody,
         direction: "OUTBOUND",
         status: "QUEUED",
         templateName: templateName || null,
@@ -1160,6 +1183,45 @@ router.post("/threads/:id/mark-read", verifyToken, async (req, res) => {
   }
 });
 
+// DELETE /threads/:id — permanently delete a conversation (the thread + all
+// its messages). ADMIN-only, matching the other irreversible WhatsApp action
+// (DELETE /opt-outs). The thread→message relation is onDelete: SetNull, so we
+// delete the message rows explicitly first (otherwise they'd be orphaned with
+// a null threadId rather than removed); child WaOutboundJob / WaMediaJob rows
+// cascade from that. Both steps run in one transaction so a partial delete
+// can't leave a thread with no messages or vice-versa. Contact / opt-out /
+// patient links are untouched — only the conversation is removed. Meta can't
+// delete messages off the recipient's phone, so this is a CRM-side delete.
+router.delete("/threads/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const thread = await prisma.whatsAppThread.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      select: { id: true, contactPhone: true },
+    });
+    if (!thread) return res.status(404).json({ error: "Thread not found" });
+
+    const [{ count }] = await prisma.$transaction([
+      prisma.whatsAppMessage.deleteMany({
+        where: { threadId: thread.id, tenantId: req.user.tenantId },
+      }),
+      prisma.whatsAppThread.delete({ where: { id: thread.id } }),
+    ]);
+
+    await writeAudit("WhatsAppThread", "DELETE", thread.id, req.user.userId, req.user.tenantId, {
+      contactPhone: thread.contactPhone,
+      deletedMessages: count,
+    });
+
+    res.json({ success: true, deletedMessages: count });
+  } catch (err) {
+    console.error("WhatsApp thread delete error:", err);
+    res.status(500).json({ error: "Failed to delete thread" });
+  }
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // Opt-outs (Wave 2 Agent KK)
 // ────────────────────────────────────────────────────────────────────────────
@@ -1323,53 +1385,52 @@ router.post("/templates", verifyToken, async (req, res) => {
       });
     }
 
-    // When WhatsApp IS connected (Meta creds present) we submit to Meta for
-    // review BEFORE persisting, so a rejection (duplicate name, banned word,
-    // format issue) surfaces to the operator immediately. When NOT connected
-    // (tenant hasn't linked WhatsApp yet, or any env without a Meta sandbox)
-    // we persist a local PENDING draft instead — it is pushed to Meta later
-    // via POST /templates/:id/sync once the connection lands. This keeps
-    // template authoring usable before connection and removes the hard Meta
-    // dependency from the create path (no live Meta call required to draft).
+    // Submit to Meta for review before we persist a DB row. If Meta
+    // rejects (duplicate name, banned word, format issue) we surface the
+    // error to the operator immediately instead of leaving a phantom
+    // PENDING row that never resolves.
     const cfg = await prisma.whatsAppConfig.findFirst({
       where: { tenantId: req.user.tenantId, provider: "meta_cloud", isActive: true },
     });
-    const connected = !!(cfg && cfg.businessAccountId && cfg.accessToken);
-
-    let metaTemplateId = null;
-    let metaStatus = "PENDING";
-
-    if (connected) {
-      const accessToken = decryptCredential(cfg.accessToken);
-      const metaResp = await submitTemplateToMeta({
-        wabaId: cfg.businessAccountId,
-        accessToken,
-        name,
-        language: language || "en_US",
-        category: category || "MARKETING",
-        body,
-        header: headerType === "TEXT" ? headerContent : null,
-        footer: footer || null,
+    if (!cfg || !cfg.businessAccountId || !cfg.accessToken) {
+      return res.status(400).json({
+        error: "WhatsApp is not connected for this tenant. Connect WhatsApp Business before creating templates.",
+        code: "NOT_CONNECTED",
       });
-
-      if (!metaResp.ok) {
-        // `metaResp.error` carries the SPECIFIC Meta reason (error_user_msg /
-        // error_data.details), surfaced directly to the operator modal.
-        const friendly = metaResp.userTitle
-          ? `${metaResp.userTitle}: ${metaResp.error}`
-          : metaResp.error;
-        return res.status(422).json({
-          error: friendly || "Meta rejected the template submission.",
-          code: "META_REJECTED",
-          metaCode: metaResp.code || null,
-          metaSubcode: metaResp.subcode || null,
-          details: metaResp.details || null,
-        });
-      }
-
-      metaTemplateId = metaResp.data?.id || null;
-      metaStatus = metaResp.data?.status || "PENDING";
     }
+    const accessToken = decryptCredential(cfg.accessToken);
+
+    const metaResp = await submitTemplateToMeta({
+      wabaId: cfg.businessAccountId,
+      accessToken,
+      name,
+      language: language || "en_US",
+      category: category || "MARKETING",
+      body,
+      header: headerType === "TEXT" ? headerContent : null,
+      footer: footer || null,
+    });
+
+    if (!metaResp.ok) {
+      // The `metaResp.error` now contains the SPECIFIC reason Meta
+      // returned (error_user_msg / error_data.details) — not the generic
+      // "Invalid parameter". The operator-facing message in the modal
+      // surfaces this directly, plus the user-friendly title if Meta
+      // provided one.
+      const friendly = metaResp.userTitle
+        ? `${metaResp.userTitle}: ${metaResp.error}`
+        : metaResp.error;
+      return res.status(422).json({
+        error: friendly || "Meta rejected the template submission.",
+        code: "META_REJECTED",
+        metaCode: metaResp.code || null,
+        metaSubcode: metaResp.subcode || null,
+        details: metaResp.details || null,
+      });
+    }
+
+    const metaTemplateId = metaResp.data?.id || null;
+    const metaStatus = metaResp.data?.status || "PENDING";
 
     const template = await prisma.whatsAppTemplate.create({
       data: {
@@ -1673,6 +1734,7 @@ router.post("/webhook", async (req, res) => {
 // every behavior the old code had. Once the new handler has run a full
 // release cycle without regression, this block can be deleted.
 async function _legacyPostWebhookDeadCode(req, res) {
+  // eslint-disable-next-line no-constant-condition
   if (false) {
     const { object, entry } = req.body;
 

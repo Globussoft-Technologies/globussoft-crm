@@ -5,7 +5,7 @@ jobs:
   patch-env:
     runs-on: ubuntu-latest
     steps:
-      - name: Check WaOutboundJob table
+      - name: Check whatsapp send route
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -15,10 +15,10 @@ jobs:
           command_timeout: 2m
           script: |
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            cd /home/empcloud-development/globussoft-crm/backend
-            node -e "
-            const p = new (require('@prisma/client').PrismaClient)();
-            p.\$queryRaw\`SHOW TABLES LIKE 'WaOutboundJob'\`
-              .then(r => { console.log('RESULT:', JSON.stringify(r)); process.exit(0); })
-              .catch(e => { console.error('ERROR:', e.message); process.exit(1); });
-            "
+            APP=$(pm2 info globussoft-crm-backend 2>/dev/null | grep -oP "script path\s*[│|]\s*\K[^\s│|]+" | head -1)
+            BACKEND=$(dirname "$APP")
+            echo "deployed file: $BACKEND/routes/whatsapp.js"
+            echo "---"
+            grep -nc "enqueueSend" "$BACKEND/routes/whatsapp.js"
+            echo "--- /send handler region:"
+            sed -n '250,325p' "$BACKEND/routes/whatsapp.js"

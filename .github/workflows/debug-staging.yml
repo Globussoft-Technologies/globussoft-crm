@@ -1,0 +1,45 @@
+name: Debug staging (one-shot)
+on:
+  workflow_dispatch:
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug POS wallet finalize on staging
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 5m
+          script: |
+            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+            BASE="https://crm-staging.globusdemos.com"
+            echo "=== LOGIN ==="
+            TOKEN=$(curl -s "$BASE/api/auth/login" \
+              -H 'Content-Type: application/json' \
+              -d '{"email":"admin@wellness.demo","password":"password123"}' | jq -r .token)
+            echo "token_ok: ${#TOKEN}"
+            echo "=== CREATE PATIENT ==="
+            PRESP=$(curl -s "$BASE/api/wellness/patients" \
+              -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d '{"name":"DEBUG-POS-Wallet","phone":"+919876500099","source":"debug"}')
+            echo "$PRESP" | jq .
+            PID=$(echo "$PRESP" | jq -r '.id // .patient.id // empty')
+            echo "patient_id: $PID"
+            echo "=== TOPUP ==="
+            curl -s "$BASE/api/wallet/$PID/topup" \
+              -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d '{"amountCents":100000,"paymentMethod":"cash"}' | jq .
+            echo "=== FINALIZE (wallet+cash split) ==="
+            curl -s -w "\nHTTP_STATUS:%{http_code}\n" \
+              "$BASE/api/pos/sales/finalize" \
+              -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d "{\"patientId\":$PID,\"items\":[{\"type\":\"service\",\"refId\":1,\"name\":\"Massage\",\"qty\":1,\"unitPriceCents\":100000}],\"payments\":[{\"method\":\"wallet\",\"amountCents\":50000},{\"method\":\"cash\",\"amountCents\":50000}]}"
+            echo ""
+            echo "=== BACKEND LOG (pos/wallet errors) ==="
+            pm2 logs globussoft-crm-backend --lines 80 --nostream 2>&1 | grep -iE "pos.*finalize|sale.*error|wallet.*error|SALE_FINALIZE|prisma.*error" -A8 || echo "NO MATCHING LOG LINES"
+            echo "=== SCHEMA: model Sale ==="
+            cd /home/empcloud-development/globussoft-crm/backend
+            npx prisma db pull --print 2>&1 | grep -A30 "model Sale " | head -35 || echo "schema pull failed"

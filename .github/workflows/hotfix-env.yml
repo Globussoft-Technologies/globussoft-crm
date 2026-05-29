@@ -1,0 +1,29 @@
+name: Hotfix — patch staging env (one-shot)
+on:
+  workflow_dispatch:
+jobs:
+  patch-env:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set DISABLE_CRONS=0 and restart PM2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 3m
+          script: |
+            set -euo pipefail
+            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+            ENV_FILE=~/globussoft-crm/backend/.env
+            if grep -q "DISABLE_CRONS" "$ENV_FILE"; then
+              sed -i 's/^DISABLE_CRONS=.*/DISABLE_CRONS=0/' "$ENV_FILE"
+              echo "Updated DISABLE_CRONS to 0"
+            else
+              echo "DISABLE_CRONS=0" >> "$ENV_FILE"
+              echo "Appended DISABLE_CRONS=0"
+            fi
+            grep DISABLE_CRONS "$ENV_FILE"
+            pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -5
+            echo "Done — crons will now run"

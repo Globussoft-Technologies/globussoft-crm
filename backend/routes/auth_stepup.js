@@ -53,7 +53,7 @@ const prisma = require('../lib/prisma');
 // codebase (see writeAudit usage in auth_2fa.js).
 let writeAudit;
 try {
-  // eslint-disable-next-line global-require
+   
   writeAudit = require('../lib/audit').writeAudit;
 } catch (_e) {
   writeAudit = async () => {}; // best-effort fallback

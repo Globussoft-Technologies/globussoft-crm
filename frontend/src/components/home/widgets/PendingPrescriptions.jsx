@@ -8,9 +8,11 @@ export default function PendingPrescriptions({ meta }) {
   );
   const list = Array.isArray(data)
     ? data
-    : Array.isArray(data?.prescriptions)
-      ? data.prescriptions
-      : [];
+    : Array.isArray(data?.items)
+      ? data.items
+      : Array.isArray(data?.prescriptions)
+        ? data.prescriptions
+        : [];
 
   return (
     <WidgetCard

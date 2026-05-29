@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { User, Mail, Key, Save, Stethoscope, Download, FileText } from 'lucide-react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
+import { User, Mail, Key, Save, Stethoscope, Download, FileText, Camera, Trash2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { AuthContext } from '../App';
 import { useNotify } from '../utils/notify';
@@ -39,6 +39,8 @@ const Profile = () => {
   const [invoices, setInvoices] = useState([]);
   const [invoicesLoaded, setInvoicesLoaded] = useState(false);
   const [downloadingId, setDownloadingId] = useState(null);
+  const [uploadingPicture, setUploadingPicture] = useState(false);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     loadProfile();
@@ -135,6 +137,68 @@ const Profile = () => {
       setProfileMsg({ text: err.message || 'Failed to update profile', type: 'error' });
     }
     setSaving(false);
+  };
+
+  const handlePickPicture = () => {
+    if (fileInputRef.current) fileInputRef.current.click();
+  };
+
+  const handlePictureSelected = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (!/^image\//.test(file.type)) {
+      notify.error('Please choose an image file (JPEG, PNG, GIF, or WebP).');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      notify.error('Image must be 5 MB or smaller.');
+      return;
+    }
+
+    setUploadingPicture(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const token = getAuthToken();
+      const baseUrl = import.meta.env.VITE_API_URL || '';
+      const res = await fetch(`${baseUrl}/api/auth/me/profile-picture`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+      setProfile((prev) => ({ ...(prev || {}), profilePicture: data.profilePicture }));
+      if (setAuthUser && authUser) {
+        setAuthUser({ ...authUser, profilePicture: data.profilePicture });
+      }
+      notify.success('Profile picture updated');
+    } catch (err) {
+      notify.error(err.message || 'Failed to upload profile picture');
+    } finally {
+      setUploadingPicture(false);
+    }
+  };
+
+  const handleRemovePicture = async () => {
+    if (!profile?.profilePicture) return;
+    if (!window.confirm('Remove your profile picture?')) return;
+
+    setUploadingPicture(true);
+    try {
+      const updated = await fetchApi('/api/auth/me/profile-picture', { method: 'DELETE' });
+      setProfile((prev) => ({ ...(prev || {}), profilePicture: updated.profilePicture }));
+      if (setAuthUser && authUser) {
+        setAuthUser({ ...authUser, profilePicture: updated.profilePicture });
+      }
+      notify.success('Profile picture removed');
+    } catch (err) {
+      notify.error(err.message || 'Failed to remove profile picture');
+    } finally {
+      setUploadingPicture(false);
+    }
   };
 
   const handleChangePassword = async (e) => {
@@ -325,13 +389,53 @@ const Profile = () => {
       {/* Profile Info Card */}
       <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
-          <div style={{
-            width: 56, height: 56, borderRadius: '50%',
-            background: 'linear-gradient(135deg, var(--accent-color), var(--primary-color))',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '1.25rem', fontWeight: 'bold', color: '#fff'
-          }}>
-            {(profile?.name || '?').charAt(0).toUpperCase()}
+          <div style={{ position: 'relative', width: 80, height: 80, flexShrink: 0 }}>
+            {profile?.profilePicture ? (
+              <img
+                src={profile.profilePicture}
+                alt={profile?.name || 'Profile'}
+                style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  objectFit: 'cover', display: 'block',
+                  border: '2px solid var(--border-color, rgba(255,255,255,0.15))',
+                }}
+              />
+            ) : (
+              <div style={{
+                width: 80, height: 80, borderRadius: '50%',
+                background: 'linear-gradient(135deg, var(--accent-color), var(--primary-color))',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '1.75rem', fontWeight: 'bold', color: '#fff',
+              }}>
+                {(profile?.name || '?').charAt(0).toUpperCase()}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handlePickPicture}
+              disabled={uploadingPicture}
+              title={profile?.profilePicture ? 'Change profile picture' : 'Upload profile picture'}
+              aria-label={profile?.profilePicture ? 'Change profile picture' : 'Upload profile picture'}
+              style={{
+                position: 'absolute', right: -4, bottom: -4,
+                width: 28, height: 28, borderRadius: '50%',
+                background: 'var(--primary-color, var(--accent-color))',
+                color: '#fff', border: '2px solid var(--surface-color, #fff)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: uploadingPicture ? 'wait' : 'pointer',
+                opacity: uploadingPicture ? 0.7 : 1,
+                padding: 0,
+              }}
+            >
+              <Camera size={14} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              onChange={handlePictureSelected}
+              style={{ display: 'none' }}
+            />
           </div>
           <div>
             <h2 style={{ fontSize: '1.15rem', fontWeight: '600', color: 'var(--text-primary)', margin: 0 }}>
@@ -340,6 +444,21 @@ const Profile = () => {
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0.15rem 0 0' }}>
               {profile?.email}
             </p>
+            {profile?.profilePicture && (
+              <button
+                type="button"
+                onClick={handleRemovePicture}
+                disabled={uploadingPicture}
+                style={{
+                  background: 'transparent', border: 'none', padding: 0,
+                  color: '#ef4444', fontSize: '0.75rem', cursor: uploadingPicture ? 'wait' : 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  marginTop: '0.25rem', fontFamily: 'inherit',
+                }}
+              >
+                <Trash2 size={12} /> Remove picture
+              </button>
+            )}
             <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
               <span style={{
                 display: 'inline-block',

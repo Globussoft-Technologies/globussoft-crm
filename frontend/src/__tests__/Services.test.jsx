@@ -155,20 +155,24 @@ describe('<Services /> — header + tab navigation', () => {
     expect(screen.getByText(/Active Treatments/i)).toBeInTheDocument();
   });
 
-  it('switching to the Packages tab swaps the primary CTA to "Create Package"', async () => {
+  it('switching to the Packages tab hides the Catalog CTA and renders the package builder', async () => {
+    // Drift: the original "Create Package" button was removed when the
+    // Packages tab moved to compute-on-the-fly (no DB record per the
+    // SUT comment at Services.jsx:1097). The contract is now: switching
+    // tabs hides the Catalog "New service" CTA and the package-builder
+    // surface ("Build a package") appears.
     const user = userEvent.setup();
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    // Catalog tab default — "New service" CTA visible
     expect(screen.getByRole('button', { name: /New service/i })).toBeInTheDocument();
 
-    // Click Packages tab
     await user.click(screen.getByRole('button', { name: /^Packages$/i }));
 
-    // Catalog CTA gone; Packages CTA visible
     expect(screen.queryByRole('button', { name: /New service/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Create Package/i })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText(/Build a package/i)).toBeInTheDocument(),
+    );
   });
 
   it('switching to Active Treatments fetches /api/wellness/activetreatment', async () => {
@@ -215,8 +219,10 @@ describe('<Services /> — initial tab from URL search params', () => {
     // heading instead (it depends on the same load() that gates GFC Hair).
     await waitFor(() => expect(screen.getByText(/Build a package/i)).toBeInTheDocument());
 
-    // Packages CTA visible (Catalog CTA hidden)
-    expect(screen.getByRole('button', { name: /Create Package/i })).toBeInTheDocument();
+    // Drift: the original "Create Package" CTA was removed (packages
+    // are now computed on the fly per SUT line 1097). Pin only the
+    // Catalog CTA absence on this tab — the builder surface presence
+    // is already asserted by the waitFor above.
     expect(screen.queryByRole('button', { name: /New service/i })).not.toBeInTheDocument();
   });
 
@@ -844,24 +850,10 @@ describe('<Services /> — Packages CTA scroll anchor', () => {
     fetchApi.mockImplementation(defaultFetchRouter);
   });
 
-  it('"Create Package" button invokes scrollIntoView on the builder anchor', async () => {
-    const user = userEvent.setup();
-    render(<MemoryRouter><Services /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
-
-    await user.click(screen.getByRole('button', { name: /^Packages$/i }));
-    await waitFor(() => expect(screen.getByText(/Build a package/i)).toBeInTheDocument());
-
-    // Patch scrollIntoView on the anchor element. jsdom does not implement
-    // it natively — patching avoids the "not a function" error and lets us
-    // assert the call shape.
-    const anchor = document.getElementById('package-builder-anchor');
-    expect(anchor).toBeTruthy();
-    const scrollSpy = vi.fn();
-    anchor.scrollIntoView = scrollSpy;
-
-    await user.click(screen.getByRole('button', { name: /Create Package/i }));
-    expect(scrollSpy).toHaveBeenCalledTimes(1);
-    expect(scrollSpy.mock.calls[0][0]).toMatchObject({ behavior: 'smooth', block: 'start' });
-  });
+  // DRIFT: the "Create Package" CTA + its scroll-to-anchor handler were
+  // removed when packages moved to compute-on-the-fly (no DB record per
+  // Services.jsx:1097 comment). The builder is now rendered inline at
+  // the top of the Packages tab so scroll-down-to-builder UX is moot.
+  // Re-enable / rewrite this case if the CTA returns in a future redesign.
+  it.skip('"Create Package" button invokes scrollIntoView on the builder anchor (SUT no longer renders the CTA)', () => {});
 });

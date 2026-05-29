@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const prisma = require("./prisma");
 
 /**
@@ -67,6 +68,14 @@ async function deliverWebhooks(event, payload, tenantId) {
 /**
  * Fire a single outbound webhook HTTP POST.
  *
+ * [GP-CRM integration] Task 10 — Stripe-style HMAC signing. When
+ * WEBHOOK_HMAC_SECRET is set, the delivery includes:
+ *   X-Globussoft-Signature: t=<unix_epoch_sec>,v1=<hmac_sha256_hex>
+ * The signed string is "<t>.<bodyStr>" — bodyStr being the exact bytes of the
+ * POST body. Partners verify HMAC-SHA256(secret, "<t>.<body>") == v1. When the
+ * secret is absent, deliveries are sent unsigned — backwards-compatible with
+ * every pre-integration subscriber and with partners that don't yet verify.
+ *
  * @param {string} url       Target URL
  * @param {string} event     Event name
  * @param {object} payload   Event data
@@ -79,18 +88,38 @@ async function deliverSingle(url, event, payload, tenantId) {
   }
 
   try {
+    // Capture one instant and derive both values from it: the epoch-second
+    // used in the HMAC signature (t=) and the ISO body timestamp. The body
+    // keeps millisecond precision — receivers verify the signature over the
+    // raw body bytes + the header's t=, so the body timestamp itself doesn't
+    // need to be floored — while t= stays second-granular (Stripe-style).
+    const nowMs = Date.now();
+    const tSec = Math.floor(nowMs / 1000);
+    const bodyStr = JSON.stringify({
+      event,
+      timestamp: new Date(nowMs).toISOString(),
+      data: payload,
+    });
+
+    const headers = {
+      "Content-Type": "application/json",
+      "X-CRM-Event": event,
+      "X-CRM-Tenant": String(tenantId),
+    };
+
+    const hmacSecret = process.env.WEBHOOK_HMAC_SECRET || "";
+    if (hmacSecret) {
+      const sig = crypto
+        .createHmac("sha256", hmacSecret)
+        .update(`${tSec}.${bodyStr}`)
+        .digest("hex");
+      headers["X-Globussoft-Signature"] = `t=${tSec},v1=${sig}`;
+    }
+
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CRM-Event": event,
-        "X-CRM-Tenant": String(tenantId),
-      },
-      body: JSON.stringify({
-        event,
-        timestamp: new Date().toISOString(),
-        data: payload,
-      }),
+      headers,
+      body: bodyStr,
       signal: AbortSignal.timeout(10000),
     });
     console.log(`[Webhook] ${event} -> ${url}: ${response.status}`);

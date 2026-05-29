@@ -48,11 +48,17 @@ vi.mock('../../utils/api', () => ({
 
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
+// `confirm` is a vi.fn so individual tests can override the resolved value
+// (e.g., simulating a user clicking "Cancel" by returning false). The mock
+// object reference itself stays stable across renders so the useCallback
+// dependency identity doesn't change and trigger infinite re-renders —
+// see the 2026-05-XX RTL standing rule.
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyObj = {
   error: notifyError,
   info: vi.fn(),
   success: notifySuccess,
-  confirm: () => Promise.resolve(true),
+  confirm: (...args) => notifyConfirm(...args),
 };
 vi.mock('../../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -116,6 +122,8 @@ describe('<wellness/Patients /> — page surface', () => {
     fetchApiMock.mockImplementation(defaultFetchMock);
     notifyError.mockReset();
     notifySuccess.mockReset();
+    notifyConfirm.mockReset();
+    notifyConfirm.mockResolvedValue(true);
     // jsdom doesn't implement scrollIntoView; harmless stub so any code path
     // that uses it (legacy or future) doesn't blow up the render.
     if (!Element.prototype.scrollIntoView) {
@@ -266,6 +274,120 @@ describe('<wellness/Patients /> — page surface', () => {
     // No POST fired.
     const postCall = fetchApiMock.mock.calls.find(([, opts]) => opts?.method === 'POST');
     expect(postCall).toBeUndefined();
+  });
+
+  // ── Delete row action (DELETE /api/wellness/patients/:id) ──────────
+  // Soft-deletes a single patient. Backend is admin-only (403 for
+  // non-admins) + returns 409 on already-soft-deleted; both error paths
+  // are surfaced via notify.error. Happy path drops the row from any
+  // selection set, calls notify.success, and triggers a list refresh
+  // through the reloadTick effect.
+  describe('Delete row action', () => {
+    it('renders a Delete (trash) button on each patient row', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+      // One delete button per row, keyed by patient id via data-testid.
+      expect(screen.getByTestId('patient-delete-1')).toBeInTheDocument();
+      expect(screen.getByTestId('patient-delete-2')).toBeInTheDocument();
+      // aria-label includes the patient name for screen readers.
+      expect(screen.getByRole('button', { name: /Delete Anita Sharma/i })).toBeInTheDocument();
+    });
+
+    it('clicking Delete + confirming fires DELETE /api/wellness/patients/:id and refreshes', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      fetchApiMock.mockClear();
+      // Default mock keeps returning the list; the DELETE call is matched
+      // by url + method below.
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/wellness/patients/1' && opts?.method === 'DELETE') {
+          return Promise.resolve({ success: true, id: 1, deletedAt: '2026-05-29T00:00:00.000Z' });
+        }
+        return defaultFetchMock(url, opts);
+      });
+
+      fireEvent.click(screen.getByTestId('patient-delete-1'));
+
+      // Confirm dialog fires with the patient name in the prompt.
+      await waitFor(() => {
+        expect(notifyConfirm).toHaveBeenCalledWith(
+          expect.stringMatching(/Anita Sharma/i)
+        );
+      });
+
+      // DELETE round-trips and a success toast appears.
+      await waitFor(() => {
+        const deleteCall = fetchApiMock.mock.calls.find(
+          ([u, o]) => u === '/api/wellness/patients/1' && o?.method === 'DELETE'
+        );
+        expect(deleteCall).toBeTruthy();
+        expect(notifySuccess).toHaveBeenCalledWith(
+          expect.stringMatching(/Anita Sharma.*deleted/i)
+        );
+      });
+
+      // Refresh: after the success the list-fetch fires again (reloadTick
+      // bumps the dependency array on the load effect). Count GETs to
+      // /api/wellness/patients?... — at least one post-delete fetch.
+      await waitFor(() => {
+        const listCallsAfterDelete = fetchApiMock.mock.calls.filter(
+          ([u, o]) => isPatientListUrl(u) && (!o || !o.method || o.method === 'GET')
+        );
+        // 1 initial (after mockClear) + at least 1 reload triggered by
+        // setReloadTick. The exact count varies with timer/debounce, so
+        // we only assert "more than zero" — pinning >=1 here is enough
+        // to confirm the reload effect ran.
+        expect(listCallsAfterDelete.length).toBeGreaterThanOrEqual(1);
+      });
+    });
+
+    it('cancelling the confirm does NOT fire the DELETE', async () => {
+      notifyConfirm.mockResolvedValue(false);
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      fetchApiMock.mockClear();
+      fetchApiMock.mockImplementation(defaultFetchMock);
+
+      fireEvent.click(screen.getByTestId('patient-delete-1'));
+
+      // Confirm was shown, but the user cancelled.
+      await waitFor(() => expect(notifyConfirm).toHaveBeenCalled());
+
+      // No DELETE was issued, no success toast.
+      const deleteCall = fetchApiMock.mock.calls.find(
+        ([, opts]) => opts?.method === 'DELETE'
+      );
+      expect(deleteCall).toBeUndefined();
+      expect(notifySuccess).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a backend error (e.g., 403 / 409) via notify.error', async () => {
+      renderPatients();
+      await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+      // Make the DELETE reject. fetchApi shapes thrown errors as
+      // { message, data: { error } } — mirror that so the catch branch
+      // surfaces the right message.
+      const err = new Error('Forbidden');
+      err.data = { error: 'Admin role required' };
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/wellness/patients/1' && opts?.method === 'DELETE') {
+          return Promise.reject(err);
+        }
+        return defaultFetchMock(url, opts);
+      });
+
+      fireEvent.click(screen.getByTestId('patient-delete-1'));
+
+      await waitFor(() => {
+        expect(notifyError).toHaveBeenCalledWith(
+          expect.stringMatching(/Admin role required/i)
+        );
+      });
+      expect(notifySuccess).not.toHaveBeenCalled();
+    });
   });
 
   it('shows "Loading…" before the initial fetch resolves', async () => {

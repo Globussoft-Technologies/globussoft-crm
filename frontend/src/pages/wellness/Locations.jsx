@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MapPin, Plus, Phone, Mail, Building2, Pencil } from 'lucide-react';
+import { MapPin, Plus, Phone, Mail, Building2, Pencil, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 
@@ -63,6 +63,32 @@ export default function Locations() {
       notify.success(loc.isActive ? `Deactivated "${loc.name}"` : `Activated "${loc.name}"`);
       load();
     } catch (_err) { /* fetchApi already toasted */ }
+  };
+
+  const deleteLocation = async (loc) => {
+    // Use the styled in-app modal (notify.confirm) instead of the native
+    // window.confirm — the browser dialog reads "localhost says…" and
+    // looks unprofessional. `destructive: true` switches the primary
+    // button to the red-themed style so the irreversible action is
+    // visually distinct.
+    const ok = await notify.confirm({
+      title: `Delete "${loc.name}"?`,
+      message: 'This cannot be undone. If any patients or visits are linked to this location, the delete will fail — deactivate it instead.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await fetchApi(`/api/wellness/locations/${loc.id}`, { method: 'DELETE' });
+      notify.success(`Deleted "${loc.name}"`);
+      load();
+    } catch (_err) {
+      // fetchApi surfaces the server message verbatim, which for 409
+      // LOCATION_IN_USE includes the per-relation counts ("3 record(s)
+      // still reference it. Deactivate it instead.") — exactly what the
+      // operator needs to know.
+    }
   };
 
   return (
@@ -136,6 +162,14 @@ export default function Locations() {
                   style={{ background: loc.isActive ? 'rgba(16,185,129,0.1)' : 'rgba(100,100,100,0.1)', border: `1px solid ${loc.isActive ? 'rgba(16,185,129,0.3)' : 'rgba(100,100,100,0.3)'}`, color: loc.isActive ? 'var(--success-color)' : 'var(--text-secondary)', padding: '0.2rem 0.5rem', borderRadius: 6, fontSize: '0.7rem', cursor: 'pointer', textTransform: 'uppercase', fontWeight: 600 }}
                 >
                   {loc.isActive ? 'Active' : 'Inactive'}
+                </button>
+                <button
+                  onClick={() => deleteLocation(loc)}
+                  title="Delete location"
+                  aria-label={`Delete ${loc.name}`}
+                  style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', padding: '0.25rem 0.45rem', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                >
+                  <Trash2 size={12} />
                 </button>
               </div>
             </div>

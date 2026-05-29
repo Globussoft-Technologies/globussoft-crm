@@ -128,6 +128,14 @@ beforeEach(() => {
   prisma.revokedToken.upsert.mockReset().mockResolvedValue({});
   prisma.smsConfig.findFirst.mockReset().mockResolvedValue(null);
   delete process.env.NODE_ENV;
+
+  // Schema-drift compat shim: User.email is now composite-unique with
+  // tenantId (@@unique([email, tenantId])), so login + signup + register +
+  // duplicate-email checks use findFirst not findUnique. The existing
+  // tests in this file pre-date the migration and mock findUnique. Have
+  // findFirst delegate so every existing `prisma.user.findUnique.mockResolvedValue(...)`
+  // assertion keeps working without per-test edits.
+  prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
 });
 
 // ── POST /api/auth/login ─────────────────────────────────────────────
@@ -281,20 +289,13 @@ describe('POST /api/auth/signup', () => {
     expect(createArg.data.password).toMatch(/^\$2[ab]\$/); // bcrypt prefix
   });
 
-  test('duplicate email → 400 "User already exists"', async () => {
-    prisma.user.findUnique.mockResolvedValue({ id: 99, email: 'dup@user.com' });
-
-    const res = await request(makeApp())
-      .post('/api/auth/signup')
-      .send({ email: 'dup@user.com', password: 'password123', name: 'Dup' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/already exists/i);
-    // Critical: dup-check short-circuits BEFORE tenant create — otherwise
-    // every dup signup attempt would litter the Tenant table.
-    expect(prisma.tenant.create).not.toHaveBeenCalled();
-    expect(prisma.user.create).not.toHaveBeenCalled();
-  });
+  // DRIFT: User.email is now composite-unique with tenantId, so the
+  // signup route INTENTIONALLY no longer pre-checks for duplicate email
+  // (see routes/auth.js:217-220 comment — "same email is allowed to own
+  // multiple orgs"). The old "already exists" contract is gone. If a
+  // future migration restores a global email uniqueness the test below
+  // can be revived.
+  test.skip('duplicate email → 400 "User already exists" (SUT no longer dup-checks)', () => {});
 
   test('weak password (no digit) → 400 with complexity-error message', async () => {
     const res = await request(makeApp())
@@ -339,16 +340,10 @@ describe('POST /api/auth/register', () => {
     expect(res.body.tenant.slug).toBe('beta-inc');
   });
 
-  test('duplicate email → 400 "User already exists"', async () => {
-    prisma.user.findUnique.mockResolvedValue({ id: 99, email: 'dup@user.com' });
-
-    const res = await request(makeApp())
-      .post('/api/auth/register')
-      .send({ email: 'dup@user.com', password: 'password123', name: 'Dup' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/already exists/i);
-  });
+  // DRIFT: same as /signup — the register route no longer pre-checks
+  // duplicate email (see routes/auth.js:217-220). Composite-unique
+  // [email, tenantId] makes the same email valid across orgs.
+  test.skip('duplicate email → 400 "User already exists" (SUT no longer dup-checks)', () => {});
 });
 
 // ── GET /api/auth/me ─────────────────────────────────────────────────

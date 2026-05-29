@@ -86,31 +86,132 @@ function loadXlsx() {
 // Portal tokens carry { patientId } and are issued/verified separately from staff
 // tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
 // can't forge staff tokens; fall back to JWT_SECRET when unset for transition.
-const PORTAL_JWT_SECRET =
-  process.env.PORTAL_JWT_SECRET ||
-  process.env.JWT_SECRET ||
-  "enterprise_super_secret_key_2026";
+const { PORTAL_JWT_SECRET, JWT_SECRET } = require("../config/secrets");
 
 // Patient-portal inline JWT middleware — used by /portal/* endpoints.
 // Portal endpoints bypass the global user-JWT guard (see server.js openPaths)
-// so we must verify the patient token here.
-function verifyPatientToken(req, res, next) {
+// so we must verify the token here.
+//
+// Accepts TWO token shapes:
+//   A. patient-portal token (phone+OTP flow): { patientId } signed with
+//      PORTAL_JWT_SECRET — used by the public /book + /portal pages.
+//   B. regular CUSTOMER session token: { userType: 'CUSTOMER', userId,
+//      tenantId } signed with JWT_SECRET — used by Customer-role users who
+//      logged in via /auth/customer/register or /auth/login. We resolve
+//      Patient via Patient.userId (see schema.prisma "Self-booking user"
+//      field) so the dashboard widgets next-appointment / my-prescriptions
+//      work for these users without forcing an extra phone+OTP step.
+async function verifyPatientToken(req, res, next) {
   const hdr = req.headers.authorization || "";
   const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : null;
   if (!token) return res.status(401).json({ error: "Missing portal token" });
+
+  let decoded = null;
   try {
-    const decoded = jwt.verify(token, PORTAL_JWT_SECRET);
-    if (!decoded.patientId) {
-      return res.status(401).json({ error: "Invalid portal token" });
+    decoded = jwt.verify(token, PORTAL_JWT_SECRET);
+  } catch (_e) {
+    if (PORTAL_JWT_SECRET !== JWT_SECRET) {
+      try {
+        decoded = jwt.verify(token, JWT_SECRET);
+      } catch (_e2) {
+        return res
+          .status(401)
+          .json({ error: "Invalid or expired portal token" });
+      }
+    } else {
+      return res
+        .status(401)
+        .json({ error: "Invalid or expired portal token" });
     }
+  }
+
+  // Path A — patient-portal token
+  if (decoded.patientId) {
     req.patient = {
       id: decoded.patientId,
       phoneLast10: decoded.phoneLast10,
     };
-    next();
-  } catch (_e) {
-    return res.status(401).json({ error: "Invalid or expired portal token" });
+    return next();
   }
+
+  // Path B — regular CUSTOMER session token; resolve linked Patient.
+  //
+  // A CUSTOMER user IS the patient — they self-registered via
+  // /auth/customer/register to book their own appointments. If a Patient
+  // row isn't linked yet, resolve in this order:
+  //   1. Direct link via Patient.userId (already linked — fast path)
+  //   2. Claim an unlinked Patient with the same (email, tenantId) —
+  //      handles the case where clinic staff created the Patient first
+  //      and the customer registered later (the link is established now)
+  //   3. Auto-create a minimal Patient row from the User profile, linked
+  //      via userId, so dashboard widgets work on first sign-in
+  if (decoded.userType === "CUSTOMER" && decoded.userId && decoded.tenantId) {
+    try {
+      let patient = await prisma.patient.findFirst({
+        where: { userId: decoded.userId, tenantId: decoded.tenantId },
+        select: { id: true, phone: true },
+      });
+
+      if (!patient) {
+        const userRow = await prisma.user.findUnique({
+          where: { id: decoded.userId },
+          select: { name: true, email: true },
+        });
+        if (!userRow) {
+          return res.status(401).json({ error: "Invalid portal token" });
+        }
+
+        // Step 2 — claim an unlinked Patient with the same email so we
+        // don't fork the clinical record.
+        if (userRow.email) {
+          const claimable = await prisma.patient.findFirst({
+            where: {
+              tenantId: decoded.tenantId,
+              email: userRow.email,
+              userId: null,
+            },
+            select: { id: true, phone: true },
+          });
+          if (claimable) {
+            await prisma.patient.update({
+              where: { id: claimable.id },
+              data: { userId: decoded.userId },
+            });
+            patient = claimable;
+          }
+        }
+
+        // Step 3 — first-time CUSTOMER with no clinical record; create one.
+        if (!patient) {
+          patient = await prisma.patient.create({
+            data: {
+              name: userRow.name || userRow.email || "Customer",
+              email: userRow.email || null,
+              tenantId: decoded.tenantId,
+              userId: decoded.userId,
+              source: "self-register",
+            },
+            select: { id: true, phone: true },
+          });
+        }
+      }
+
+      req.patient = {
+        id: patient.id,
+        phoneLast10:
+          (patient.phone || "").replace(/\D/g, "").slice(-10) || null,
+      };
+      return next();
+    } catch (err) {
+      console.error(
+        "[wellness] verifyPatientToken patient lookup failed:",
+        err.message,
+      );
+      return res.status(500).json({ error: "Failed to resolve patient" });
+    }
+  }
+
+  return res.status(401).json({ error: "Invalid portal token" });
 }
 
 const router = express.Router();
@@ -205,6 +306,12 @@ const phiReadGate = verifyWellnessRole(
       { module: "prescriptions", action: "read" },
       { module: "consents", action: "read" },
     ],
+    // helpers are seeded with role=USER (per seed-wellness.js:218-219)
+    // which grants appointments.read for self-service. Without an
+    // explicit deny, that backdoor lets a helper through phiReadGate
+    // and read full patient PHI. Pinned by
+    // wellness-rbac-regression-api.spec.js:488.
+    deny: ["helper"],
   },
 );
 const phiWriteGate = verifyWellnessRole(
@@ -224,6 +331,21 @@ const phiWriteGate = verifyWellnessRole(
       { module: "prescriptions", action: "write" },
       { module: "consents", action: "write" },
     ],
+    // Per the documented gate intent (comment at line 261):
+    //   "phiWriteGate — writes. Same minus telecaller — telecallers
+    //    route leads but don't author clinical records"
+    // The anyOfPermissions backdoor (added in v3.8.x for custom RBAC
+    // roles) accidentally lets telecaller through via the
+    // `appointments.write` grant they have for booking-from-call. Deny
+    // them explicitly so the gate matches its documented contract.
+    // Telecaller's legitimate write paths live on their own gates:
+    //   verifyWellnessRole(["telecaller","admin","manager"]) at lines
+    //   9173+9226 for queue dispose, plus the booking-specific gates
+    //   at /resources, /book/* etc. that list telecaller explicitly.
+    // Helpers are non-clinical (front-desk / runner roles) — never get
+    // PHI write access. Pinned by memberships-api.spec.js:642+646 and
+    // wellness-rbac-regression-api.spec.js:684 (POLICY 1).
+    deny: ["helper", "telecaller"],
   },
 );
 
@@ -2937,18 +3059,24 @@ function requireClinicalRole(req, res, next) {
 
 router.get("/prescriptions", phiReadGate, async (req, res) => {
   try {
-    const { patientId, limit = 50 } = req.query;
+    const { patientId, limit = 50, skip = 0 } = req.query;
     const where = tenantWhere(req);
     if (patientId) where.patientId = parseInt(patientId);
-    const items = await prisma.prescription.findMany({
-      where,
-      take: Math.min(parseInt(limit, 10) || 50, 200),
-      orderBy: { createdAt: "desc" },
-      include: {
-        patient: { select: { id: true, name: true } },
-        doctor: { select: { id: true, name: true } },
-      },
-    });
+    const take = Math.min(parseInt(limit, 10) || 50, 200);
+    const skipN = Math.max(parseInt(skip, 10) || 0, 0);
+    const [items, total] = await Promise.all([
+      prisma.prescription.findMany({
+        where,
+        take,
+        skip: skipN,
+        orderBy: { createdAt: "desc" },
+        include: {
+          patient: { select: { id: true, name: true } },
+          doctor: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.prescription.count({ where }),
+    ]);
     // PRD §11 / T2.2: staff-side prescription list is a PHI read
     // (response embeds patient name + drugs JSON). Medico-legal trail.
     // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
@@ -2968,7 +3096,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
         auditErr.message,
       );
     });
-    res.json(items);
+    res.json({ items, total });
   } catch (e) {
     console.error("[wellness] list prescriptions error:", e.message);
     res.status(500).json({ error: "Failed to list prescriptions" });
@@ -3775,7 +3903,7 @@ router.all("/treatments/*", treatmentsGone);
 router.get("/services", async (req, res) => {
   try {
     const services = await prisma.service.findMany({
-      where: tenantWhere(req, { isActive: true }),
+      where: tenantWhere(req, { NOT: { isActive: false } }),
       orderBy: [{ ticketTier: "desc" }, { name: "asc" }],
     });
     res.json(services);
@@ -5719,6 +5847,67 @@ router.put(
     } catch (e) {
       console.error("[wellness] update location error:", e.message);
       res.status(500).json({ error: "Failed to update location" });
+    }
+  },
+);
+
+// DELETE /api/wellness/locations/:id — hard-delete a clinic location.
+// Refuses with 409 LOCATION_IN_USE when any FK-bearing child (patient,
+// visit, resource, holiday, register) still references the row. The
+// caller should soft-disable via PUT { isActive: false } in that case
+// instead — preserves PHI links and historical reporting integrity.
+// Same admin-only gate as POST/PUT (clinic config is operational).
+router.delete(
+  "/locations/:id",
+  adminOrPerm("settings", "manage"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const existing = await prisma.location.findFirst({
+        where: tenantWhere(req, { id }),
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Location not found" });
+      }
+
+      // Count every child relation that has a FK to Location. Even one
+      // reference would otherwise cause Prisma to throw a P2003 FK
+      // violation under the schema's default onDelete: NoAction — we
+      // surface a friendly 409 instead so the UI can guide the operator
+      // toward the soft-disable affordance.
+      const [patients, visits, resources, holidays, registers] = await Promise.all([
+        prisma.patient.count({ where: { locationId: id, tenantId: req.user.tenantId } }),
+        prisma.visit.count({ where: { locationId: id, tenantId: req.user.tenantId } }),
+        prisma.resource.count({ where: { locationId: id, tenantId: req.user.tenantId } }),
+        prisma.holiday.count({ where: { locationId: id, tenantId: req.user.tenantId } }),
+        prisma.register.count({ where: { locationId: id, tenantId: req.user.tenantId } }),
+      ]);
+      const total = patients + visits + resources + holidays + registers;
+      if (total > 0) {
+        return res.status(409).json({
+          error: `Cannot delete "${existing.name}" — ${total} record(s) still reference it. Deactivate it instead.`,
+          code: "LOCATION_IN_USE",
+          inUse: { patients, visits, resources, holidays, registers },
+        });
+      }
+
+      await prisma.location.delete({ where: { id } });
+      try {
+        await writeAudit(
+          "Location",
+          "DELETE",
+          id,
+          req.user.userId,
+          req.user.tenantId,
+          { name: existing.name, city: existing.city },
+        );
+      } catch (auditErr) {
+        console.warn("[audit]", auditErr.message);
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("[wellness] delete location error:", e.message);
+      res.status(500).json({ error: "Failed to delete location" });
     }
   },
 );
@@ -8071,11 +8260,12 @@ function sanitizeUtmInput(utm, referrer) {
     referrer: null,
   };
   if (utm && typeof utm === "object") {
-    // eslint-disable-next-line no-control-regex
+     
     const trim = (v) =>
       v == null
         ? null
         : String(v)
+          // eslint-disable-next-line no-control-regex
           .replace(/[\x00-\x1f\x7f]/g, "")
           .slice(0, 191)
           .trim() || null;
@@ -8086,9 +8276,10 @@ function sanitizeUtmInput(utm, referrer) {
     out.utmContent = trim(utm.utmContent ?? utm.content);
   }
   if (referrer != null) {
-    // eslint-disable-next-line no-control-regex
+     
     out.referrer =
       String(referrer)
+        // eslint-disable-next-line no-control-regex
         .replace(/[\x00-\x1f\x7f]/g, "")
         .slice(0, 2000)
         .trim() || null;
@@ -8651,12 +8842,12 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
       })
       : [];
 
-    // Resolve a logo image to embed: prefer tenant's uploaded logoUrl
-    // (mapped onto disk under backend/uploads), else fall back to the
-    // bundled globussoft-logo.png. Uses an in-memory cache so the same
-    // file isn't re-read off disk on every download — the bundled logo
-    // is 2.4 MB and a per-request fs.readFileSync was the dominant slow
-    // path for /summary.pdf.
+    // Resolve a logo image to embed: prefer the tenant's uploaded
+    // logoUrl (mapped onto disk under backend/uploads), else fall back
+    // to the bundled default application logo. The renderer clips
+    // whichever source it gets to a left-side square so combined
+    // "icon + wordmark" logos surface only the icon portion in the
+    // corner slot. Cache hit avoids per-request fs.readFileSync.
     const candidates = [];
     if (tenant?.logoUrl && tenant.logoUrl.startsWith("/uploads/")) {
       candidates.push(path.join(__dirname, "..", tenant.logoUrl));
@@ -8673,6 +8864,82 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
     );
     const logoBuffer = loadCachedLogo(candidates);
 
+    // Resolve visit before/after photo files into buffers the renderer
+    // can embed. Photos are always uploaded to S3; the photosBefore /
+    // photosAfter columns store full https:// URLs returned by the
+    // S3 upload helper. We fetch each one over HTTPS in parallel with a
+    // hard 4s per-URL timeout so a slow / dead S3 doesn't stall the
+    // whole PDF response. Each visit is capped at 6 photos (3 before +
+    // 3 after) to match what the renderer surfaces and bound PDF size.
+    const parsePhotoJson = (raw) => {
+      if (!raw) return [];
+      if (Array.isArray(raw)) return raw.filter((u) => typeof u === "string");
+      try {
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.filter((u) => typeof u === "string") : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const fetchS3Photo = (url) => new Promise((resolve) => {
+      if (!/^https?:\/\//i.test(url)) {
+        console.warn(`[wellness] photo skipped — not an http(s) URL: ${url}`);
+        return resolve(null);
+      }
+      const get = (target, hopsLeft) => {
+        try {
+          const lib = target.startsWith("https:") ? require("https") : require("http");
+          const req2 = lib.get(target, (resp) => {
+            const code = resp.statusCode || 0;
+            // S3 sometimes 302s to a regional host; follow one redirect.
+            if (code >= 300 && code < 400 && resp.headers.location && hopsLeft > 0) {
+              resp.resume();
+              return get(resp.headers.location, hopsLeft - 1);
+            }
+            if (code !== 200) {
+              resp.resume();
+              console.warn(`[wellness] photo fetch ${target} → HTTP ${code}`);
+              return resolve(null);
+            }
+            const chunks = [];
+            resp.on("data", (c) => chunks.push(c));
+            resp.on("end", () => resolve(Buffer.concat(chunks)));
+            resp.on("error", () => resolve(null));
+          });
+          req2.setTimeout(4000, () => { req2.destroy(); resolve(null); });
+          req2.on("error", (e) => {
+            console.warn(`[wellness] photo fetch ${target} failed: ${e.message}`);
+            resolve(null);
+          });
+        } catch (e) {
+          console.warn(`[wellness] photo fetch ${target} threw: ${e.message}`);
+          resolve(null);
+        }
+      };
+      get(url, 1);
+    });
+
+    const photoBuffers = new Map();
+    const photoFetchTasks = [];
+    for (const v of patient.visits) {
+      const urls = [
+        ...parsePhotoJson(v.photosBefore).slice(0, 3),
+        ...parsePhotoJson(v.photosAfter).slice(0, 3),
+      ];
+      for (const url of urls) {
+        if (photoBuffers.has(url)) continue;
+        photoBuffers.set(url, null); // reserve slot so parallel iters dedupe
+        photoFetchTasks.push(
+          fetchS3Photo(url).then((buf) => {
+            if (buf) photoBuffers.set(url, buf);
+            else photoBuffers.delete(url); // renderer sees missing → placeholder
+          }),
+        );
+      }
+    }
+    if (photoFetchTasks.length) await Promise.all(photoFetchTasks);
+
     const buf = await renderPatientSummaryPdf({
       patient,
       tenant,
@@ -8681,6 +8948,7 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
       walletTransactions,
       memberships,
       logoBuffer,
+      photoBuffers,
     });
 
     try {
@@ -9150,9 +9418,25 @@ router.get("/portal/me", verifyPatientToken, async (req, res) => {
 
 router.get("/portal/visits", verifyPatientToken, async (req, res) => {
   try {
+    // ?upcoming=true returns only future, non-cancelled visits, ordered
+    // soonest-first — used by the /home dashboard's "next-appointment"
+    // widget so it doesn't have to client-side-filter through every
+    // historical visit. Default (no flag) keeps the existing newest-first
+    // history view used by the PatientPortal /portal page's "My Visits".
+    const upcoming =
+      req.query.upcoming === "true" || req.query.upcoming === "1";
+    const where = { patientId: req.patient.id };
+    if (upcoming) {
+      where.visitDate = { gte: new Date() };
+      // Exclude terminal statuses rather than enumerate active ones — keeps
+      // the filter forward-compatible with statuses like 'confirmed' /
+      // 'checked-in' used by the Calendar grid + /appointments/my but not
+      // present in the canonical ALLOWED_VISIT_STATUSES validator.
+      where.status = { notIn: ["cancelled", "completed", "no-show"] };
+    }
     const visits = await prisma.visit.findMany({
-      where: { patientId: req.patient.id },
-      orderBy: { visitDate: "desc" },
+      where,
+      orderBy: { visitDate: upcoming ? "asc" : "desc" },
       take: 50,
       include: {
         service: { select: { id: true, name: true, category: true } },
@@ -11151,6 +11435,393 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// Gift-card STOREFRONT — customer-facing purchase flow.
+//
+//   GET  /giftcards/storefront                  — list buyable gift cards
+//   POST /giftcards/:id/purchase/order          — create Razorpay order
+//   POST /giftcards/:id/purchase/confirm        — verify + credit wallet
+//
+// Visibility model: any authenticated user in the tenant can browse +
+// buy. The admin-curated catalogue lives in the existing /giftcards
+// admin page (status="active", no issuedTo, no redeemedAt) — those rows
+// double as storefront inventory. Code / codeHash are NEVER returned
+// from these endpoints; the buyer doesn't need the redemption secret
+// because the confirm handler credits the wallet directly on payment
+// success. Mirrors the /api/payments/create-razorpay-order +
+// /confirm-razorpay handshake used by Invoices "Pay Now".
+// ─────────────────────────────────────────────────────────────────────
+
+// GET /giftcards/storefront — open to any tenant-authenticated user
+// (no wellnessRole gate). Returns active, unissued, unredeemed,
+// not-yet-expired gift cards. Display-safe projection only.
+router.get("/giftcards/storefront", async (req, res) => {
+  try {
+    const now = new Date();
+    const cards = await prisma.giftCard.findMany({
+      where: {
+        tenantId: req.user.tenantId,
+        status: "active",
+        issuedTo: null,
+        redeemedAt: null,
+        // Only cards with a price are listed in the storefront — a row
+        // with price=null is admin-issuance only (sold offline / gifted).
+        price: { not: null },
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: now } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        amount: true,
+        price: true,
+        color: true,
+        validityDays: true,
+        currency: true,
+        expiresAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json({ giftCards: cards });
+  } catch (e) {
+    console.error("[wellness] giftcard storefront error:", e.message);
+    res.status(500).json({ error: "Failed to load storefront" });
+  }
+});
+
+// Storefront-state guard — single source of truth for "is this card still
+// buyable?" Used by both the order + confirm handlers so a card that
+// gets reserved / sold between the two calls returns the same 409.
+async function loadStorefrontCard(tenantId, id) {
+  const card = await prisma.giftCard.findFirst({
+    where: { id, tenantId },
+  });
+  if (!card) {
+    const e = new Error("GIFTCARD_NOT_FOUND");
+    e.status = 404;
+    throw e;
+  }
+  if (
+    card.status !== "active" ||
+    card.issuedTo !== null ||
+    card.redeemedAt !== null ||
+    card.price == null
+  ) {
+    const e = new Error("GIFTCARD_NOT_AVAILABLE");
+    e.status = 409;
+    throw e;
+  }
+  if (card.expiresAt && card.expiresAt <= new Date()) {
+    const e = new Error("GIFTCARD_EXPIRED");
+    e.status = 409;
+    throw e;
+  }
+  return card;
+}
+
+// POST /giftcards/:id/purchase/order — body: { patientId }. Creates a
+// Razorpay order for the card's `price` (sale price), records a Payment
+// row whose metadata.giftCardId + metadata.patientId carry the context
+// the confirm handler needs to credit the right wallet.
+router.post("/giftcards/:id/purchase/order", async (req, res) => {
+  try {
+    const { getRazorpay } = require("../services/razorpayService");
+    const razorpay = getRazorpay();
+    if (!razorpay) {
+      return res.status(503).json({ error: "Razorpay not configured" });
+    }
+    if (!process.env.RAZORPAY_KEY_ID) {
+      return res.status(503).json({ error: "Razorpay not configured" });
+    }
+
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "Invalid gift card id" });
+    }
+    const patientId = parseInt(req.body?.patientId, 10);
+    if (!Number.isInteger(patientId) || patientId <= 0) {
+      return res
+        .status(400)
+        .json({ error: "patientId is required" });
+    }
+
+    const patient = await prisma.patient.findFirst({
+      where: { id: patientId, tenantId: req.user.tenantId },
+      select: { id: true, name: true },
+    });
+    if (!patient) {
+      return res.status(404).json({ error: "Patient not found" });
+    }
+
+    let card;
+    try {
+      card = await loadStorefrontCard(req.user.tenantId, id);
+    } catch (err) {
+      return res
+        .status(err.status || 500)
+        .json({ error: err.message });
+    }
+
+    const amountPaise = Math.round(Number(card.price) * 100);
+    const currency = String(card.currency || "INR").toUpperCase();
+
+    let order;
+    try {
+      order = await razorpay.orders.create({
+        amount: amountPaise,
+        currency,
+        receipt: `gc_${card.id}_${Date.now()}`,
+        notes: {
+          tenantId: String(req.user.tenantId),
+          giftCardId: String(card.id),
+          patientId: String(patient.id),
+          kind: "giftcard_purchase",
+        },
+      });
+    } catch (gatewayErr) {
+      console.error(
+        "[wellness] razorpay order failed:",
+        gatewayErr && gatewayErr.message,
+      );
+      return res
+        .status(502)
+        .json({ error: "Failed to create payment order" });
+    }
+
+    const payment = await prisma.payment.create({
+      data: {
+        invoiceId: null,
+        amount: Number(card.price),
+        currency,
+        gateway: "razorpay",
+        gatewayId: order.id,
+        status: "PENDING",
+        tenantId: req.user.tenantId,
+        metadata: JSON.stringify({
+          kind: "giftcard_purchase",
+          giftCardId: card.id,
+          patientId: patient.id,
+          orderId: order.id,
+          orderStatus: order.status,
+        }),
+      },
+    });
+
+    res.json({
+      orderId: order.id,
+      paymentId: payment.id,
+      key: process.env.RAZORPAY_KEY_ID,
+      amount: amountPaise,
+      currency,
+      giftCardId: card.id,
+      patientId: patient.id,
+    });
+  } catch (e) {
+    console.error("[wellness] giftcard purchase order error:", e.message);
+    res.status(500).json({ error: "Failed to start gift card purchase" });
+  }
+});
+
+// POST /giftcards/:id/purchase/confirm — body: { paymentId,
+// razorpay_order_id, razorpay_payment_id, razorpay_signature }. Verifies
+// the HMAC, marks the Payment SUCCESS, marks the gift card redeemed by
+// the buyer's patient, credits the wallet, audits, emits.
+router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "Invalid gift card id" });
+    }
+
+    const {
+      paymentId,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = req.body || {};
+
+    if (
+      !paymentId ||
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature
+    ) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const secret = process.env.RAZORPAY_KEY_SECRET;
+    if (!secret) {
+      return res.status(503).json({ error: "Razorpay not configured" });
+    }
+
+    const payment = await prisma.payment.findFirst({
+      where: { id: parseInt(paymentId, 10), tenantId: req.user.tenantId },
+    });
+    if (!payment) return res.status(404).json({ error: "Payment not found" });
+
+    // HMAC-SHA256(order_id|payment_id) under the key secret — same
+    // contract as /api/payments/confirm-razorpay.
+    const expected = require("crypto")
+      .createHmac("sha256", secret)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest("hex");
+
+    if (expected !== razorpay_signature) {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: "FAILED" },
+      });
+      return res.status(400).json({ error: "Signature verification failed" });
+    }
+
+    // Pull giftCardId + patientId from the metadata the order handler
+    // stored. Defence-in-depth: the URL :id must match the metadata
+    // giftCardId so a confirm call can't redirect the credit to a
+    // different card.
+    let meta = {};
+    try {
+      meta = JSON.parse(payment.metadata || "{}");
+    } catch (_e) { /* malformed metadata is treated as missing */ }
+    if (meta.giftCardId !== id || meta.kind !== "giftcard_purchase") {
+      return res
+        .status(400)
+        .json({ error: "Payment does not match gift card" });
+    }
+    const patientId = parseInt(meta.patientId, 10);
+    if (!Number.isInteger(patientId) || patientId <= 0) {
+      return res
+        .status(400)
+        .json({ error: "Payment is missing patient context" });
+    }
+
+    // Re-verify storefront eligibility — guards against a concurrent
+    // admin issuance / redemption between order-create and confirm.
+    let card;
+    try {
+      card = await loadStorefrontCard(req.user.tenantId, id);
+    } catch (err) {
+      // If the card is no longer available, mark the payment FAILED so
+      // the buyer can be refunded out-of-band. Razorpay still charged
+      // them; an operator follows up via the Payments dashboard.
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: "FAILED" },
+      });
+      return res
+        .status(err.status || 500)
+        .json({ error: err.message });
+    }
+
+    // Mark Payment SUCCESS first so the row is durable even if the
+    // wallet credit fails downstream (operator can hand-credit).
+    const updatedPayment = await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: "SUCCESS",
+        paidAt: new Date(),
+        gatewayId: razorpay_payment_id,
+        metadata: JSON.stringify({
+          ...meta,
+          razorpay_order_id,
+          razorpay_payment_id,
+          verifiedAt: new Date().toISOString(),
+        }),
+      },
+    });
+
+    // Find-or-create the wallet for the buyer's patient, then credit it
+    // by the gift card's `amount` (gift value — distinct from `price`
+    // which is what they paid). Same writeWalletTransaction helper used
+    // by /giftcards/redeem so the ledger shape is identical.
+    const wallet = await getOrCreateWallet(req, patientId);
+    let tx;
+    try {
+      tx = await writeWalletTransaction({
+        tenantId: req.user.tenantId,
+        walletId: wallet.id,
+        type: "CREDIT_GIFTCARD",
+        absAmount: Number(card.amount),
+        performedBy: req.user.userId,
+        reason: `Gift card ${card.name || card.code} purchased`,
+        giftCardId: card.id,
+      });
+    } catch (err) {
+      console.error(
+        "[wellness] giftcard purchase credit error:",
+        err.message,
+      );
+      return res.status(500).json({ error: "Failed to credit wallet" });
+    }
+
+    const updatedCard = await prisma.giftCard.update({
+      where: { id: card.id },
+      data: {
+        status: "redeemed",
+        issuedTo: patientId,
+        issuedFrom: req.user.userId,
+        redeemedAt: new Date(),
+        redeemedBy: patientId,
+      },
+      select: {
+        id: true,
+        name: true,
+        amount: true,
+        price: true,
+        currency: true,
+        status: true,
+        issuedTo: true,
+        redeemedAt: true,
+      },
+    });
+
+    await writeAudit(
+      "GiftCard",
+      "PURCHASE",
+      card.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        paymentId: payment.id,
+        patientId,
+        amount: card.amount,
+        price: card.price,
+        razorpay_payment_id,
+      },
+    );
+
+    // Mirror the /giftcards/redeem emission so workflow rules + the
+    // Wallet transaction stream see the same shape regardless of whether
+    // the credit came from an admin-issued code or a customer purchase.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "giftcard.redeemed",
+        {
+          giftCardId: card.id,
+          amount: card.amount,
+          patientId,
+          transactionId: tx.id,
+          walletId: wallet.id,
+          source: "purchase",
+        },
+        req.user.tenantId,
+        req.io,
+      );
+    } catch (_e) { }
+
+    res.json({
+      success: true,
+      giftCard: updatedCard,
+      transaction: tx,
+      payment: { id: updatedPayment.id, status: updatedPayment.status },
+    });
+  } catch (e) {
+    console.error("[wellness] giftcard purchase confirm error:", e.message);
+    res.status(500).json({ error: "Failed to confirm gift card purchase" });
+  }
+});
+
 // Admin-applied gift-card credit. The /giftcards/redeem path above requires
 // the plaintext code (recipient flow — SMS/email/printed card → patient
 // portal). This route is the parallel operator flow: an ADMIN or MANAGER
@@ -11902,18 +12573,18 @@ router.get(
       const { tenantId } = req.user;
       const dateParam = req.query.date || new Date().toISOString().split("T")[0];
 
-      // Fetch all active doctors (staff with wellnessRole='doctor')
-      // Only select id and name — no email or other sensitive fields
+      // Strict whitelist: only users with wellnessRole = doctor or
+      // professional are bookable. The looser RBAC/specialty/fallback
+      // matches previously included generic staff who then 404'd on the
+      // time-slots endpoint (which gates on the same whitelist below),
+      // leaving the slot dropdown empty.
       const doctors = await prisma.user.findMany({
         where: {
           tenantId,
-          wellnessRole: "doctor",
           deactivatedAt: null,
+          wellnessRole: { in: ["doctor", "professional"] },
         },
-        select: {
-          id: true,
-          name: true,
-        },
+        select: { id: true, name: true, specialty: true, wellnessRole: true },
         orderBy: { name: "asc" },
       });
 
@@ -11957,10 +12628,12 @@ router.get(
       const onLeaveIds = new Set(approvedLeaves.map((l) => l.userId));
       const hasBlockTimeIds = new Set(blockTimes.map((b) => b.userId));
 
-      // Return only necessary fields: id, name, availability status
+      // Return only necessary fields: id, name, specialty, role, availability
       const doctorsList = doctors.map((doctor) => ({
         id: doctor.id,
         name: doctor.name,
+        specialty: doctor.specialty || null,
+        wellnessRole: doctor.wellnessRole || null,
         available: !onLeaveIds.has(doctor.id) && !hasBlockTimeIds.has(doctor.id),
       }));
 
@@ -11979,12 +12652,14 @@ router.get(
       const { tenantId } = req.user;
       const dateParam = req.query.date || new Date().toISOString().split("T")[0];
 
-      // Validate doctor exists and belongs to tenant
+      // Validate doctor/professional exists and belongs to tenant.
+      // Must match the same whitelist as /doctors/availability or the
+      // time-slot dropdown stays empty for every professional picked.
       const doctor = await prisma.user.findFirst({
         where: {
           id: parseInt(doctorId),
           tenantId,
-          wellnessRole: "doctor",
+          wellnessRole: { in: ["doctor", "professional"] },
           deactivatedAt: null,
         },
         select: { id: true },
@@ -12087,7 +12762,7 @@ router.get(
   // Allows any authenticated user to book an appointment
   router.post("/appointments/book", verifyToken, async (req, res) => {
     try {
-      const { doctorId, serviceId, appointmentDate, appointmentTime, duration } =
+      const { doctorId, serviceId, appointmentDate, appointmentTime } =
         req.body;
       const { userId, tenantId } = req.user;
 

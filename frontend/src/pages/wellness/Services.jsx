@@ -168,22 +168,10 @@ export default function Services() {
             </button>
           </div>
         )}
-        {/* #365: Packages tab needs its own primary CTA. The package builder is
-            already rendered inline below, so this just scrolls to the form
-            anchor — no modal needed. */}
         {tab === 'packages' && (
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             {/* Issue #816: packages CSV. */}
             <CsvImportExportToolbar entity="packages" label="Packages" formats={['csv', 'xlsx']} />
-            <button
-              onClick={() => {
-                const el = document.getElementById('package-builder-anchor');
-                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
-            >
-              <Plus size={16} /> Create Package
-            </button>
           </div>
         )}
       </header>
@@ -279,6 +267,25 @@ function TabBtn({ active, onClick, icon: Icon, label }) {
 
 function CatalogTab({ services, loading, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
   const notify = useNotify();
+  // Sort selector — backend returns services in its default order (name
+  // alphabetical). Users asked for a "newest first" option so the most
+  // recently added service is easy to find without scrolling. Sorting
+  // happens client-side over the already-fetched list so the toggle is
+  // instant (no re-fetch).
+  const [sortBy, setSortBy] = useState('default');
+  const sortedServices = useMemo(() => {
+    if (!Array.isArray(services)) return [];
+    if (sortBy === 'default') return services;
+    const tsOf = (s) => {
+      const t = s?.createdAt ? new Date(s.createdAt).getTime() : 0;
+      return Number.isFinite(t) ? t : 0;
+    };
+    const copy = [...services];
+    if (sortBy === 'newest') copy.sort((a, b) => tsOf(b) - tsOf(a));
+    if (sortBy === 'oldest') copy.sort((a, b) => tsOf(a) - tsOf(b));
+    return copy;
+  }, [services, sortBy]);
+
   return (
     <>
       {/* Visually-hidden section heading so screen readers see h1 -> h2 hierarchy
@@ -373,8 +380,45 @@ function CatalogTab({ services, loading, categories, categoriesLoading, showAdd,
 
       {loading && <div>Loading…</div>}
 
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          gap: '0.5rem',
+          marginBottom: '0.75rem',
+        }}
+      >
+        <label
+          htmlFor="services-sort"
+          style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}
+        >
+          Sort by
+        </label>
+        <select
+          id="services-sort"
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value)}
+          aria-label="Sort services"
+          style={{
+            padding: '0.4rem 0.7rem',
+            background: 'var(--surface-color)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 8,
+            fontSize: '0.85rem',
+            cursor: 'pointer',
+            outline: 'none',
+          }}
+        >
+          <option value="default" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Default</option>
+          <option value="newest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Newest first</option>
+          <option value="oldest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Oldest first</option>
+        </select>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-        {services.map((s) => (
+        {sortedServices.map((s) => (
           <ServiceCard
             key={s.id}
             service={s}
@@ -511,7 +555,13 @@ function ServiceCard({ service, onChanged, onOpen, editRequested, onEditConsumed
       onKeyDown={(ev) => { if (onOpen && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); onOpen(service); } }}
       title="Click to view details"
     >
-      <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem', zIndex: 2 }} onClick={(e) => e.stopPropagation()}>
+      <div
+        style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem', zIndex: 3 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span style={{ background: tierColor[service.ticketTier], color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', textTransform: 'uppercase', fontWeight: 600, lineHeight: 1.4 }}>
+          {service.ticketTier}
+        </span>
         <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} aria-label={`Edit service ${service.name}`} title="Edit" style={iconBtn}><Pencil size={12} /></button>
         <button onClick={(e) => { e.stopPropagation(); remove(); }} aria-label={`Deactivate service ${service.name}`} title="Deactivate" style={{ ...iconBtn, color: 'var(--danger-color)' }}><Trash2 size={12} /></button>
       </div>
@@ -523,14 +573,9 @@ function ServiceCard({ service, onChanged, onOpen, editRequested, onEditConsumed
           onError={(e) => { e.currentTarget.style.display = 'none'; }}
         />
       )}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', paddingRight: '3rem' }}>
-        <div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{service.category}</div>
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '0.15rem' }}>{service.name}</h3>
-        </div>
-        <span style={{ background: tierColor[service.ticketTier], color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', textTransform: 'uppercase', fontWeight: 600 }}>
-          {service.ticketTier}
-        </span>
+      <div style={{ marginBottom: '0.5rem', paddingRight: '6.5rem' }}>
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{service.category}</div>
+        <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '0.15rem' }}>{service.name}</h3>
       </div>
       <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
         <span><IndianRupee size={12} style={{ verticalAlign: 'middle' }} /> {service.basePrice.toLocaleString('en-IN')}</span>
@@ -820,10 +865,23 @@ function DetailRow({ label, value }) {
   );
 }
 
-// Solid dark backdrop so the Edit / Delete icons stay legible when they
-// sit on top of a service image (transparent background made them
-// disappear against bright photos).
-const iconBtn = { background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.18)', color: '#fff', padding: '0.3rem', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' };
+// Theme-adaptive glass backdrop so the Edit / Delete icons stay legible
+// across BOTH dark and light themes, AND when they sit on top of a
+// service image. --surface-hover resolves to a near-opaque tile in each
+// theme (dark slate in dark mode, near-white in light mode) and
+// --text-primary contrasts naturally with it.
+const iconBtn = {
+  background: 'var(--surface-hover)',
+  border: '1px solid var(--border-color)',
+  color: 'var(--text-primary)',
+  padding: '0.3rem',
+  borderRadius: 6,
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  backdropFilter: 'blur(4px)',
+};
 
 // Shared upload control — preview + replace + remove. Used by the Create
 // form AND the inline edit form on each service card.

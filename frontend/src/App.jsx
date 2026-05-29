@@ -47,6 +47,13 @@ const UserSettings = lazy(() => import("./pages/UserSettings"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
 const TravelCustomerPortal = lazy(() => import("./pages/travel/TravelCustomerPortal"));
+const PublicTripMicrosite = lazy(() => import("./pages/travel/PublicTripMicrosite"));
+const TravelKycCallback = lazy(() => import("./pages/travel/TravelKycCallback"));
+// Cross-vertical staff attendance dashboard — visible to wellness + travel
+// tenants. Backend (/api/attendance/list + /summary) is role-gated to
+// ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
+const AttendanceDashboard = lazy(() => import("./pages/AttendanceDashboard"));
+const WellnessAttendanceCalendar = lazy(() => import("./pages/wellness/AttendanceCalendar"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
 const CPQ = lazy(() => import("./pages/CPQ"));
 const CustomObjects = lazy(() => import("./pages/CustomObjects"));
@@ -286,6 +293,7 @@ const WellnessDrugs = lazy(() => import("./pages/wellness/Drugs"));
 // (4 admin/manager-gated pages under /wellness/* — see RoleGuard wrap below).
 const WellnessWallet = lazy(() => import("./pages/wellness/Wallet"));
 const WellnessGiftCards = lazy(() => import("./pages/wellness/GiftCards"));
+const WellnessBuyGiftCards = lazy(() => import("./pages/wellness/BuyGiftCards"));
 const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
@@ -802,11 +810,20 @@ export default function App() {
                       + DigiLocker / Aadhaar verification (PRD §4.5 extended).
                       Distinct from /portal (Knowledge Base) + /wellness/portal
                       (wellness patient OTP). Travel-tenant scoped on the
-                      backend via requireTravelPortalTenant.
-                      Wildcard so subpaths (/login, /kyc, /bookings) all render
-                      the same component; without this they fall through to the
-                      /* catch-all and bounce unauthenticated users to /login. */}
+                      backend via requireTravelPortalTenant. */}
+                  {/* Wildcard: TravelCustomerPortal handles its own sub-paths
+                      (/login, /bookings, etc.) internally — must stay /* or
+                      those sub-routes 404. The more-specific kyc/callback route
+                      below still wins via React Router's specificity ranking. */}
                   <Route path="/travel/portal/*" element={<TravelCustomerPortal />} />
+                  {/* Public TMC trip microsite (parent/teacher, no login) +
+                      the DigiLocker/Aadhaar OAuth callback landing pages.
+                      All three are public — server openPath allowlist covers
+                      the backend. The two callback routes catch DigiLocker's
+                      ?code&state redirect and complete verification. */}
+                  <Route path="/p/tripmicrosite/:publicUuid" element={<PublicTripMicrosite />} />
+                  <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
+                  <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
                   <Route
                     path="/book/:slug"
                     element={<WellnessPublicBooking />}
@@ -1076,9 +1093,11 @@ export default function App() {
                     <Route
                       path="admin/brand-kits"
                       element={
-                        <RoleGuard allow={["ADMIN"]} message="Brand Kits requires admin access.">
-                          <BrandKits />
-                        </RoleGuard>
+                        <TravelOnly>
+                          <RoleGuard allow={["ADMIN"]} message="Brand Kits requires admin access.">
+                            <BrandKits />
+                          </RoleGuard>
+                        </TravelOnly>
                       }
                     />
                     {/* AdsGPT Reports admin UI. ADMIN + MANAGER (analytics —
@@ -1105,9 +1124,11 @@ export default function App() {
                     <Route
                       path="admin/ratehawk-search"
                       element={
-                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="RateHawk Search requires admin or manager access.">
-                          <RateHawkSearch />
-                        </RoleGuard>
+                        <TravelOnly>
+                          <RoleGuard allow={["ADMIN", "MANAGER"]} message="RateHawk Search requires admin or manager access.">
+                            <RateHawkSearch />
+                          </RoleGuard>
+                        </TravelOnly>
                       }
                     />
                     {/* Callified AI Calls admin UI. ADMIN + MANAGER (outbound
@@ -1143,9 +1164,11 @@ export default function App() {
                     <Route
                       path="admin/booking-expedia-search"
                       element={
-                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Booking/Expedia Search requires admin or manager access.">
-                          <BookingExpediaSearch />
-                        </RoleGuard>
+                        <TravelOnly>
+                          <RoleGuard allow={["ADMIN", "MANAGER"]} message="Booking/Expedia Search requires admin or manager access.">
+                            <BookingExpediaSearch />
+                          </RoleGuard>
+                        </TravelOnly>
                       }
                     />
                     {/* Wallet bonus rule CRUD admin UI. ADMIN-only mirrors the
@@ -1463,6 +1486,14 @@ export default function App() {
                   </RoleGuard>
                 </WellnessOnly>
               } />
+              {/* Customer-facing storefront — any authenticated user
+                  can browse + buy. Gift card value lands on the chosen
+                  patient's wallet on Razorpay payment success. */}
+              <Route path="wellness/buy-giftcards" element={
+                <WellnessOnly>
+                  <WellnessBuyGiftCards />
+                </WellnessOnly>
+              } />
               <Route path="wellness/coupons" element={
                 <WellnessOnly>
                   <RoleGuard
@@ -1620,6 +1651,14 @@ export default function App() {
               } />
               {/* Wave 2 Agent JJ — Staff Attendance + Leave Management. */}
               <Route path="wellness/attendance" element={<WellnessOnly><WellnessAttendance /></WellnessOnly>} />
+              {/* Admin/Manager attendance dashboard — KPI tiles + all-staff
+                  list + admin-only edit/delete. Mounted under both wellness
+                  and travel since both verticals have staff that punch in/out.
+                  Page itself reads tenant from AuthContext and uses the same
+                  /api/attendance/* routes; no per-vertical branching needed. */}
+              <Route path="wellness/attendance-dashboard" element={<WellnessOnly><AttendanceDashboard /></WellnessOnly>} />
+              <Route path="wellness/attendance/calendar" element={<WellnessOnly><WellnessAttendanceCalendar /></WellnessOnly>} />
+              <Route path="travel/attendance" element={<AttendanceDashboard />} />
               <Route path="wellness/leave" element={<WellnessOnly><WellnessLeave /></WellnessOnly>} />
               {/* Wave 2 Agent II — POS / Cash Register / Shift / Sale.
                   Backend is wellness-vertical-gated + role

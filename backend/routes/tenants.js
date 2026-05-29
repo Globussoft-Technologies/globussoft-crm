@@ -58,7 +58,8 @@ router.post("/users", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
     const { email, name, password, role } = req.body;
     if (!email || !password) return res.status(400).json({ error: "Email and password required" });
 
-    const existing = await prisma.user.findUnique({ where: { email } });
+    // Email is unique per-tenant — only block if it already exists in THIS org.
+    const existing = await prisma.user.findFirst({ where: { email, tenantId: req.user.tenantId } });
     if (existing) return res.status(400).json({ error: "User with this email already exists" });
 
     const hashed = await bcrypt.hash(password, 10);

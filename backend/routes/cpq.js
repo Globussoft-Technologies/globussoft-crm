@@ -31,6 +31,25 @@ router.post("/products", verifyToken, async (req, res) => {
   }
 });
 
+// List all Quotes for the tenant (used by the Signatures page dropdown).
+// Optional ?dealId= narrows the result to a single deal — useful for callers
+// that want filter-by-deal without hitting the /:dealId variant below.
+router.get("/quotes", verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+    if (req.query.dealId) where.dealId = parseInt(req.query.dealId);
+    const quotes = await prisma.quote.findMany({
+      where,
+      include: { lineItems: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const filtered = await filterReadFields(quotes, req.user.role, "Quote", req.user.tenantId);
+    res.json(filtered);
+  } catch(_err) {
+    res.status(500).json({ error: "Fetching CPQ arrays failed." });
+  }
+});
+
 // Fetch all Quotes for an individual Deal
 router.get("/quotes/:dealId", verifyToken, async (req, res) => {
   try {

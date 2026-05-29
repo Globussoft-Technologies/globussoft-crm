@@ -101,6 +101,18 @@ const ON_TIME_TOLERANCE_MIN = (() => {
   return Number.isFinite(v) && v >= 0 ? v : 15;
 })();
 
+// Shift-end policy — mirrors the start-side constants so /summary can compute
+// Early / On-Time / Late Departure KPIs from clockOutAt. Defaults to 18:00 UTC
+// (6 PM). Operators can tune via ATTENDANCE_SHIFT_END_HOUR / _MINUTE.
+const SHIFT_END_HOUR = (() => {
+  const v = parseInt(process.env.ATTENDANCE_SHIFT_END_HOUR, 10);
+  return Number.isFinite(v) && v >= 0 && v <= 23 ? v : 18;
+})();
+const SHIFT_END_MINUTE = (() => {
+  const v = parseInt(process.env.ATTENDANCE_SHIFT_END_MINUTE, 10);
+  return Number.isFinite(v) && v >= 0 && v <= 59 ? v : 0;
+})();
+
 // Returns "EARLY" | "ON_TIME" | "AFTER" | null. null means the row has no
 // clockInAt (ABSENT / HOLIDAY / un-punched-in).
 function classifyPunctuality(row) {
@@ -120,6 +132,30 @@ function classifyPunctuality(row) {
   if (deltaMin < -ON_TIME_TOLERANCE_MIN) return "EARLY";
   if (deltaMin <= ON_TIME_TOLERANCE_MIN) return "ON_TIME";
   return "AFTER";
+}
+
+// Mirror of classifyPunctuality for the clock-out side. Returns
+// "EARLY" | "ON_TIME" | "LATE" | null. null means no clockOutAt yet.
+//   EARLY    — left before (shiftEnd - tolerance) — left early
+//   ON_TIME  — within ±tolerance of shiftEnd
+//   LATE     — left after (shiftEnd + tolerance) — worked overtime / late departure
+function classifyDeparture(row) {
+  if (!row || !row.clockOutAt) return null;
+  const dayAnchor = row.date instanceof Date ? row.date : new Date(row.date);
+  const scheduled = new Date(Date.UTC(
+    dayAnchor.getUTCFullYear(),
+    dayAnchor.getUTCMonth(),
+    dayAnchor.getUTCDate(),
+    SHIFT_END_HOUR,
+    SHIFT_END_MINUTE,
+    0,
+    0
+  ));
+  const clockOut = row.clockOutAt instanceof Date ? row.clockOutAt : new Date(row.clockOutAt);
+  const deltaMin = (clockOut.getTime() - scheduled.getTime()) / 60000;
+  if (deltaMin < -ON_TIME_TOLERANCE_MIN) return "EARLY";
+  if (deltaMin <= ON_TIME_TOLERANCE_MIN) return "ON_TIME";
+  return "LATE";
 }
 
 // ==============================================================
@@ -408,16 +444,27 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
     // clockInAt) is classified as null and contributes to neither counter.
     let earlyCount = 0;
     let onTimeCount = 0;
-    const punctualityByUser = new Map(); // userId -> { early, onTime }
+    // Departure-side mirror: Early / On-Time / Late Departure (from clockOutAt).
+    let earlyDepartureCount = 0;
+    let onTimeDepartureCount = 0;
+    let lateDepartureCount = 0;
+    const punctualityByUser = new Map(); // userId -> { early, onTime, earlyDeparture, onTimeDeparture, lateDeparture }
     for (const r of rows) {
       const bucket = classifyPunctuality(r);
       if (bucket === "EARLY") earlyCount += 1;
       else if (bucket === "ON_TIME") onTimeCount += 1;
-      if (bucket === "EARLY" || bucket === "ON_TIME") {
+      const dep = classifyDeparture(r);
+      if (dep === "EARLY") earlyDepartureCount += 1;
+      else if (dep === "ON_TIME") onTimeDepartureCount += 1;
+      else if (dep === "LATE") lateDepartureCount += 1;
+      if (bucket || dep) {
         const k = r.userId;
-        const acc = punctualityByUser.get(k) || { early: 0, onTime: 0 };
+        const acc = punctualityByUser.get(k) || { early: 0, onTime: 0, earlyDeparture: 0, onTimeDeparture: 0, lateDeparture: 0 };
         if (bucket === "EARLY") acc.early += 1;
-        else acc.onTime += 1;
+        else if (bucket === "ON_TIME") acc.onTime += 1;
+        if (dep === "EARLY") acc.earlyDeparture += 1;
+        else if (dep === "ON_TIME") acc.onTimeDeparture += 1;
+        else if (dep === "LATE") acc.lateDeparture += 1;
         punctualityByUser.set(k, acc);
       }
     }
@@ -434,6 +481,11 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
       // env-tunable constants at the top of this file.
       early: earlyCount,
       onTime: onTimeCount,
+      // Departure-side KPIs (Early / On-Time / Late Departure). Mirror the
+      // arrival counters but derived from clockOutAt vs SHIFT_END_HOUR/_MINUTE.
+      earlyDeparture: earlyDepartureCount,
+      onTimeDeparture: onTimeDepartureCount,
+      lateDeparture: lateDepartureCount,
       totalMinutes: rows.reduce((acc, r) => acc + (r.totalMinutes || 0), 0),
       // #802 — surface the policy values used so a frontend tooltip can
       // explain why a particular row was bucketed the way it was. Cheap
@@ -441,6 +493,8 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
       policy: {
         shiftStartHour: SHIFT_START_HOUR,
         shiftStartMinute: SHIFT_START_MINUTE,
+        shiftEndHour: SHIFT_END_HOUR,
+        shiftEndMinute: SHIFT_END_MINUTE,
         onTimeToleranceMin: ON_TIME_TOLERANCE_MIN,
       },
       byUser: {},
@@ -501,6 +555,9 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
       };
       summary.byUser[k].early = p.early;
       summary.byUser[k].onTime = p.onTime;
+      summary.byUser[k].earlyDeparture = p.earlyDeparture;
+      summary.byUser[k].onTimeDeparture = p.onTimeDeparture;
+      summary.byUser[k].lateDeparture = p.lateDeparture;
     }
     res.json(summary);
   } catch (e) {
@@ -510,47 +567,71 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
 });
 
 // ==============================================================
-// GET /api/attendance/by-month — HRMS polish.
+// Admin / Manager: all-staff list + per-row edit/delete
+// ==============================================================
+
+// GET /api/attendance/list?from&to&userId — all-staff rows joined with the
+// employee name + arrival/departure punctuality labels (derived server-side
+// so the UI doesn't have to re-implement classifyPunctuality / classifyDeparture).
+// Used by the Attendance Dashboard table.
+router.get("/list", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const dv = validateDateRange({ from: req.query.from, to: req.query.to });
+    if (dv.error) return res.status(dv.error.status).json(dv.error);
+
+    const from = parseISO(req.query.from);
+    const to = parseISO(req.query.to);
+    const where = { tenantId: req.user.tenantId };
+    if (from && to) where.date = { gte: from, lte: to };
+    else if (from) where.date = { gte: from };
+    else if (to) where.date = { lte: to };
+    if (req.query.userId) {
+      const uid = parseInt(req.query.userId);
+      if (Number.isFinite(uid)) where.userId = uid;
+    }
+
+    const rows = await prisma.attendance.findMany({
+      where,
+      orderBy: [{ date: "desc" }, { clockInAt: "desc" }],
+      take: 500,
+      include: { user: { select: { id: true, name: true, email: true } } },
+    });
+
+    // Decorate each row with the punctuality + departure label + recorded-via
+    // channel so the table can render without re-deriving anything.
+    const items = rows.map((r) => ({
+      ...r,
+      arrivalStatus: classifyPunctuality(r),     // "EARLY" | "ON_TIME" | "AFTER" | null
+      departureStatus: classifyDeparture(r),     // "EARLY" | "ON_TIME" | "LATE" | null
+      // `source` on the row reflects the LAST write. We surface a coarse
+      // "recordedVia" for both legs based on which leg has a location ID
+      // attached — biometric punches carry locationId from the device, manual
+      // UI punches don't. Best-effort signal for the table column.
+      checkInRecordedVia: r.clockInLocationId ? "biometric" : "manual",
+      checkOutRecordedVia: r.clockOutLocationId ? "biometric" : "manual",
+    }));
+
+    res.json({ items, count: items.length });
+  } catch (e) {
+    console.error("[attendance] list error:", e.message);
+    res.status(500).json({ error: "Failed to list attendance rows" });
+  }
+});
+
+// ==============================================================
+// GET /api/attendance/by-month — HRMS polish (merged from staging_crm).
 //
 // Tenant-wide monthly rollup of Attendance entries. Sibling to /summary
 // (a single point-in-time aggregate over an ISO date window); /by-month
 // is the per-month time series that powers the HR dashboard's
 // attendance-trend chart without N round-trips per month.
 //
-// Mirrors the canonical /by-month posture established by
-// travel_suppliers.js's /suppliers/by-month (PRD §3 #903 slice 24): UTC
-// YYYY-MM bucketing, JS-side aggregation over a light findMany
+// UTC YYYY-MM bucketing, JS-side aggregation over a light findMany
 // projection, "unknown" bucket for null/invalid createdAt (excluded when
 // ?from / ?to is set, kept otherwise so count surface stays accurate),
 // pagination AFTER aggregation + sort + filter, NO audit row written.
 //
-// Auth: verifyToken + verifyRole(['ADMIN','MANAGER']) — matches /summary
-// exactly. Aggregate KPIs across all users in the tenant are NOT
-// USER-readable.
-//
-// Query params:
-//   - ?from / ?to    — optional inclusive YYYY-MM bounds; invalid →
-//                      400 INVALID_MONTH_FORMAT
-//   - ?orderBy       — default month:asc; accepts month:{asc|desc},
-//                      count:{asc|desc}; unknown tokens degrade silently
-//                      to the default
-//   - ?limit/?offset — default 12 / 0; limit caps at 60
-//   - ?userId        — optional filter to a single user (per-user trend)
-//
-// Per-bucket aggregates:
-//   - count             — total attendance rows for the month
-//   - byStatus          — breakdown by Attendance.status enum
-//                         (PRESENT / HALF_DAY / LATE / ABSENT / HOLIDAY)
-//   - totalHoursWorked  — sum of Attendance.totalMinutes / 60, half-up 2dp
-//                         (the schema stores minutes; we expose hours so
-//                         the dashboard's trend chart axis stays usable)
-//   - lateCount         — count of rows where status === 'LATE'. (The
-//                         schema has no lateMinutes column; LATE is the
-//                         derived enum value the /summary aggregator
-//                         already surfaces.)
-//
-// Express route ordering: literal-path /by-month declared BEFORE the
-// /staff/:userId / /devices/:id families so :id="by-month" cannot reach
+// Declared BEFORE the /:id family below so :id="by-month" cannot reach
 // them. Same convention as /summary.
 // ==============================================================
 router.get("/by-month", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
@@ -680,6 +761,80 @@ router.get("/by-month", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (re
   } catch (e) {
     console.error("[attendance] by-month error:", e.message);
     res.status(500).json({ error: "Failed to compute monthly attendance rollup" });
+  }
+});
+
+// PUT /api/attendance/:id — ADMIN-only edit. Whitelisted fields: clockInAt,
+// clockOutAt, status, notes. totalMinutes is recomputed if both timestamps
+// are present.
+router.put("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const existing = await prisma.attendance.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Attendance row not found" });
+
+    const data = {};
+    if (req.body.clockInAt !== undefined) {
+      data.clockInAt = req.body.clockInAt ? new Date(req.body.clockInAt) : null;
+    }
+    if (req.body.clockOutAt !== undefined) {
+      data.clockOutAt = req.body.clockOutAt ? new Date(req.body.clockOutAt) : null;
+    }
+    if (req.body.status !== undefined) {
+      const allowed = ["PRESENT", "HALF_DAY", "LATE", "ABSENT", "HOLIDAY"];
+      if (!allowed.includes(req.body.status)) {
+        return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+      }
+      data.status = req.body.status;
+    }
+    if (req.body.notes !== undefined) {
+      data.notes = req.body.notes ? String(req.body.notes).slice(0, 2000) : null;
+    }
+
+    // Recompute totalMinutes when both timestamps land.
+    const finalIn = data.clockInAt !== undefined ? data.clockInAt : existing.clockInAt;
+    const finalOut = data.clockOutAt !== undefined ? data.clockOutAt : existing.clockOutAt;
+    if (finalIn && finalOut) {
+      data.totalMinutes = Math.max(0, Math.round((finalOut.getTime() - finalIn.getTime()) / 60000));
+    } else if (data.clockOutAt === null) {
+      data.totalMinutes = null;
+    }
+
+    const row = await prisma.attendance.update({ where: { id }, data });
+    await writeAudit("Attendance", "ADMIN_EDIT", row.id, req.user.userId, req.user.tenantId, {
+      changedFields: Object.keys(data),
+    });
+    res.json(row);
+  } catch (e) {
+    console.error("[attendance] admin-edit error:", e.message);
+    res.status(500).json({ error: "Failed to update attendance row" });
+  }
+});
+
+// DELETE /api/attendance/:id — ADMIN-only hard delete. Audit-logged.
+router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const existing = await prisma.attendance.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Attendance row not found" });
+
+    await prisma.attendance.delete({ where: { id } });
+    await writeAudit("Attendance", "ADMIN_DELETE", id, req.user.userId, req.user.tenantId, {
+      userId: existing.userId,
+      date: existing.date,
+    });
+    res.json({ ok: true, deleted: id });
+  } catch (e) {
+    console.error("[attendance] admin-delete error:", e.message);
+    res.status(500).json({ error: "Failed to delete attendance row" });
   }
 });
 

@@ -659,6 +659,182 @@ test.describe('AutoConsumptionRule CRUD', () => {
       expect(rule.serviceId).toBe(serviceId);
     }
   });
+
+  // ── Unit field round-trip + validation ───────────────────────────
+  test('PUT accepts a valid unit + persists it on GET', async ({ request }) => {
+    const { token } = await getMgr(request);
+    test.skip(!token || !ruleId);
+    const r = await put(request, token, `/api/wellness/auto-consumption-rules/${ruleId}`, {
+      quantityPerVisit: 15,
+      unit: 'ml',
+      isActive: true,
+    });
+    expect(r.ok()).toBeTruthy();
+    expect((await r.json()).unit).toBe('ml');
+    const lr = await get(request, token, `/api/wellness/auto-consumption-rules?serviceId=${serviceId}`);
+    expect(lr.ok()).toBeTruthy();
+    const list = await lr.json();
+    const mine = list.find((x) => x.id === ruleId);
+    expect(mine?.unit).toBe('ml');
+  });
+
+  test('PUT rejects a nonsense unit with UNIT_INVALID', async ({ request }) => {
+    const { token } = await getMgr(request);
+    test.skip(!token || !ruleId);
+    const r = await put(request, token, `/api/wellness/auto-consumption-rules/${ruleId}`, {
+      unit: 'wibble',
+    });
+    expect(r.status()).toBe(400);
+    expect((await r.json()).code).toBe('UNIT_INVALID');
+  });
+
+  test('PUT accepts unit=null to clear', async ({ request }) => {
+    const { token } = await getMgr(request);
+    test.skip(!token || !ruleId);
+    const r = await put(request, token, `/api/wellness/auto-consumption-rules/${ruleId}`, {
+      unit: null,
+    });
+    expect(r.ok()).toBeTruthy();
+    expect((await r.json()).unit).toBeNull();
+  });
+});
+
+// ── Side effect: visit-completion deducts stock exactly once ──────
+//
+// Verifies the end-to-end auto-consumption flow:
+//   1. Create a visit with status=completed → stock decrements.
+//   2. PUT the same visit with status=completed (no transition) → eventBus
+//      MUST NOT re-fire (existing.status === "completed" gate). The
+//      applier's per-visit dedupe is a defence-in-depth layer that also
+//      kicks in if the event somehow fires twice.
+//   3. The ServiceConsumption ledger has exactly one row for this
+//      (visitId, productId) pair.
+//
+// Test runs in serial mode (top-level describe.configure) so ordering is
+// deterministic.
+
+test.describe('visit-completion auto-deducts stock exactly once (idempotency)', () => {
+  let serviceId = null;
+  let productId = null;
+  let patientId = null;
+  let doctorId = null;
+  let ruleId = null;
+  let visitId = null;
+  let stockBeforeCreate = null;
+
+  test('seed: pick service, product, patient, doctor', async ({ request }) => {
+    const { token } = await getMgr(request);
+    test.skip(!token);
+    const [sR, pR, ptR, drR] = await Promise.all([
+      get(request, token, `/api/wellness/services?limit=1`),
+      get(request, token, `/api/products?limit=10`),
+      get(request, token, `/api/wellness/patients?limit=1`),
+      get(request, token, `/api/wellness/staff?wellnessRole=doctor&limit=1`).catch(() => null),
+    ]);
+    if (!sR.ok() || !pR.ok() || !ptR.ok()) test.skip(true, 'seed endpoints unavailable');
+    const svcList = await sR.json();
+    const svcs = Array.isArray(svcList) ? svcList : (svcList.items || svcList.data || []);
+    if (!svcs.length) test.skip(true, 'no services');
+    serviceId = svcs[0].id;
+
+    const prodList = await pR.json();
+    const prods = Array.isArray(prodList) ? prodList : (prodList.items || prodList.data || []);
+    if (!prods.length) test.skip(true, 'no products');
+    // Prefer a product with no volume set (default volume=1 → whole-unit math).
+    const p = prods.find((x) => !x.volume) || prods[0];
+    productId = p.id;
+    stockBeforeCreate = Number(p.currentStock || 0);
+
+    const ptList = await ptR.json();
+    const patients = Array.isArray(ptList) ? ptList : (ptList.items || ptList.data || []);
+    if (!patients.length) test.skip(true, 'no patients');
+    patientId = patients[0].id;
+
+    if (drR && drR.ok()) {
+      const drList = await drR.json();
+      const drs = Array.isArray(drList) ? drList : (drList.items || drList.data || []);
+      doctorId = drs[0]?.id || null;
+    }
+    if (!doctorId) {
+      // Fallback: visit-create requires doctorId for status=completed. Use
+      // the manager's own userId — seed sometimes flags them as a doctor.
+      const me = await get(request, token, `/api/auth/me`).catch(() => null);
+      if (me && me.ok()) doctorId = (await me.json())?.user?.id;
+    }
+    test.skip(!doctorId, 'no doctor available');
+  });
+
+  test('create rule: 1 unit per visit (matches product unit)', async ({ request }) => {
+    const { token } = await getMgr(request);
+    test.skip(!token || !serviceId || !productId);
+    // Pre-clean any existing rule for this svc+product so the create lands fresh.
+    const existing = await get(request, token, `/api/wellness/auto-consumption-rules?serviceId=${serviceId}`);
+    if (existing.ok()) {
+      const list = await existing.json();
+      for (const rule of list) {
+        if (rule.productId === productId) {
+          await del(request, token, `/api/wellness/auto-consumption-rules/${rule.id}`).catch(() => {});
+        }
+      }
+    }
+    const r = await post(request, token, `/api/wellness/auto-consumption-rules`, {
+      serviceId, productId, quantityPerVisit: 1,
+    });
+    expect(r.status()).toBe(201);
+    ruleId = (await r.json()).id;
+    createdRuleIds.add(ruleId);
+  });
+
+  test('POST visit status=completed → stock decrements by 1', async ({ request }) => {
+    const { token } = await getMgr(request);
+    test.skip(!token || !ruleId || !patientId);
+    const r = await post(request, token, `/api/wellness/visits`, {
+      patientId,
+      serviceId,
+      doctorId,
+      status: 'completed',
+      amountCharged: 100,
+      notes: `${RUN_TAG} smoke`,
+    });
+    if (!r.ok()) {
+      const body = await r.json().catch(() => ({}));
+      test.skip(true, `visit-create unavailable: ${r.status()} ${JSON.stringify(body)}`);
+    }
+    visitId = (await r.json()).id;
+    // Event-bus path is async — give the listener a moment to fire.
+    await new Promise((res) => setTimeout(res, 800));
+    const pr = await get(request, token, `/api/products/${productId}`);
+    expect(pr.ok()).toBeTruthy();
+    const product = await pr.json();
+    expect(Number(product.currentStock)).toBe(stockBeforeCreate - 1);
+  });
+
+  test('PUT same visit (status unchanged) → NO double-deduction', async ({ request }) => {
+    const { token } = await getMgr(request);
+    test.skip(!token || !visitId);
+    const r = await put(request, token, `/api/wellness/visits/${visitId}`, {
+      status: 'completed',
+      notes: `${RUN_TAG} smoke updated`,
+    });
+    expect(r.ok()).toBeTruthy();
+    await new Promise((res) => setTimeout(res, 800));
+    const pr = await get(request, token, `/api/products/${productId}`);
+    expect(pr.ok()).toBeTruthy();
+    const product = await pr.json();
+    // Stock unchanged from the post-create state — no second deduction.
+    expect(Number(product.currentStock)).toBe(stockBeforeCreate - 1);
+  });
+
+  test('movements ledger shows exactly one CONSUMPTION row for this visit', async ({ request }) => {
+    const { token } = await getMgr(request);
+    test.skip(!token || !visitId || !productId);
+    const r = await get(request, token, `/api/wellness/inventory/movements?productId=${productId}`);
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    const movs = Array.isArray(body) ? body : (body.movements || []);
+    const ours = movs.filter((m) => m.kind === 'CONSUMPTION' && m.visitId === visitId);
+    expect(ours.length).toBe(1);
+  });
 });
 
 // ── Movements ledger ──────────────────────────────────────────────

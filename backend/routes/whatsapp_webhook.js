@@ -19,7 +19,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { decryptCredential } = require("../lib/credentialMasking");
-const { sendText, verifyWebhook } = require("../services/whatsappProvider");
+const { sendText } = require("../services/whatsappProvider");
 const {
   captureRawBody,
   verifySignature,
@@ -187,7 +187,7 @@ router.post(
   routeToTenant,
   ensureIdempotency,
   respondImmediately,
-  async (req, res) => {
+  async (req, _res) => {
     // Response was already sent by respondImmediately. We process async.
     try {
       whLog("✓ webhook accepted (signature + tenant routing passed)", {
@@ -315,6 +315,26 @@ async function handleMessagesEvent(value, tenantId, req) {
       }
       // Reactions don't create their own message row — move to next event.
       continue;
+    }
+
+    // ── Blocked-contact gate ────────────────────────────────────────────
+    // If the operator has blocked this number (a WhatsAppOptOut row exists),
+    // drop the inbound message entirely: no thread, no message row, no unread
+    // bump, no Socket.IO notification. Mirrors the consumer-app "Block"
+    // behaviour the operator expects — once blocked, they should not receive
+    // anything further from this contact. Meta's Cloud API has no server-side
+    // block, so it MUST be enforced here. Unblocking is operator-driven via
+    // the UI (DELETE /opt-outs/:id), which re-opens the channel.
+    const blockedFrom = normalizeToE164(from);
+    if (blockedFrom) {
+      const blocked = await prisma.whatsAppOptOut.findUnique({
+        where: { tenantId_contactPhone: { tenantId, contactPhone: blockedFrom } },
+        select: { id: true },
+      }).catch(() => null);
+      if (blocked) {
+        console.log(`[whatsapp-webhook] dropped inbound from blocked ${blockedFrom} (opt-out #${blocked.id})`);
+        continue;
+      }
     }
 
     // Tenant-scoped contact lookup. This is the second important multi-tenant

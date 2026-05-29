@@ -16,7 +16,7 @@ import { describe, test, expect } from 'vitest';
 import zlib from 'node:zlib';
 import pdfR from '../../services/pdfRenderer.js';
 
-const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, scrubZyluText, scrubZyluSource } = pdfR;
+const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, renderPatientSummaryPdf, scrubZyluText, scrubZyluSource, parsePhotoUrls } = pdfR;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -761,5 +761,219 @@ describe('scrubZyluSource', () => {
     expect(scrubZyluSource('walk-in')).toBe('walk-in');
     expect(scrubZyluSource('Instagram')).toBe('Instagram');
     expect(scrubZyluSource('referral')).toBe('referral');
+  });
+});
+
+// ── parsePhotoUrls ──────────────────────────────────────────────────
+//
+// Visit.photosBefore / photosAfter are `String? @db.Text` JSON arrays in
+// Prisma; the helper has to tolerate every shape that can show up in the
+// raw row (null, missing column, malformed JSON, non-array JSON, already-
+// decoded array) without throwing — a malformed value on one visit must
+// not blow up the whole patient summary PDF.
+
+describe('parsePhotoUrls', () => {
+  test('returns [] for null / undefined / empty inputs', () => {
+    expect(parsePhotoUrls(null)).toEqual([]);
+    expect(parsePhotoUrls(undefined)).toEqual([]);
+    expect(parsePhotoUrls('')).toEqual([]);
+  });
+  test('parses a JSON-stringified array of URLs', () => {
+    const raw = JSON.stringify([
+      '/api/wellness/visits/12/photos/before-1.jpg',
+      '/api/wellness/visits/12/photos/before-2.png',
+    ]);
+    expect(parsePhotoUrls(raw)).toEqual([
+      '/api/wellness/visits/12/photos/before-1.jpg',
+      '/api/wellness/visits/12/photos/before-2.png',
+    ]);
+  });
+  test('accepts an already-decoded array (defensive)', () => {
+    const arr = ['/api/wellness/visits/3/photos/a.png'];
+    expect(parsePhotoUrls(arr)).toEqual(arr);
+  });
+  test('drops non-string entries from a parsed JSON array', () => {
+    const raw = JSON.stringify([
+      '/api/wellness/visits/9/photos/ok.jpg',
+      null,
+      42,
+      { url: 'nope' },
+      '/api/wellness/visits/9/photos/also-ok.png',
+    ]);
+    expect(parsePhotoUrls(raw)).toEqual([
+      '/api/wellness/visits/9/photos/ok.jpg',
+      '/api/wellness/visits/9/photos/also-ok.png',
+    ]);
+  });
+  test('returns [] for malformed JSON without throwing', () => {
+    expect(parsePhotoUrls('not json')).toEqual([]);
+    expect(parsePhotoUrls('{')).toEqual([]);
+    expect(parsePhotoUrls('[unterminated')).toEqual([]);
+  });
+  test('returns [] for JSON that decodes to a non-array', () => {
+    expect(parsePhotoUrls('"a string"')).toEqual([]);
+    expect(parsePhotoUrls('42')).toEqual([]);
+    expect(parsePhotoUrls('{"url":"x"}')).toEqual([]);
+    expect(parsePhotoUrls('null')).toEqual([]);
+  });
+  test('drops empty string entries', () => {
+    const raw = JSON.stringify(['/api/wellness/visits/1/photos/x.jpg', '', '/api/wellness/visits/1/photos/y.jpg']);
+    expect(parsePhotoUrls(raw)).toEqual([
+      '/api/wellness/visits/1/photos/x.jpg',
+      '/api/wellness/visits/1/photos/y.jpg',
+    ]);
+  });
+});
+
+// ── renderPatientSummaryPdf — visit photo strip ─────────────────────
+//
+// The renderer is the only surface that decides what the customer-facing
+// PDF actually shows. The unit tests below pin the contract the route
+// relies on: (a) the visit-photo strip renders when buffers are supplied,
+// (b) it gracefully degrades when buffers are missing, (c) the section is
+// suppressed entirely when no photos are uploaded, (d) overflow surfaces
+// a "+N more" caption, and (e) malformed photosBefore / photosAfter JSON
+// does not crash the whole document.
+
+// A 1×1 transparent PNG — minimum valid PNG that pdfkit can embed
+// without an image library. Used so the embed path is real (no mock).
+const TINY_PNG_BUF = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
+  'base64',
+);
+
+function patientWithPhotos({ beforeUrls = [], afterUrls = [] } = {}) {
+  return {
+    id: 50,
+    name: 'Anita Gupta',
+    dob: '1979-11-23',
+    gender: 'F',
+    phone: '+919897241522',
+    email: 'patient48@example.in',
+    visits: [
+      {
+        id: 99,
+        visitDate: '2026-05-19T00:00:00Z',
+        service: { name: 'Carbon Peel (Laser)' },
+        doctor: { name: 'Dr Priyambada' },
+        status: 'booked',
+        amount: 5091,
+        photosBefore: beforeUrls.length ? JSON.stringify(beforeUrls) : null,
+        photosAfter: afterUrls.length ? JSON.stringify(afterUrls) : null,
+      },
+    ],
+    prescriptions: [],
+    consents: [],
+    treatmentPlans: [],
+  };
+}
+
+describe('renderPatientSummaryPdf — visit photos', () => {
+  test('returns a non-empty Buffer when no photos are present', async () => {
+    const buf = await renderPatientSummaryPdf({
+      patient: patientWithPhotos(),
+      tenant: { name: 'Enhanced Wellness' },
+      clinic: { name: 'Ranchi Clinic', addressLine: 'The Ikon, Tagore Hill Rd', city: 'Ranchi' },
+    });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(0);
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Patient Summary');
+    expect(txt).toContain('Anita Gupta');
+    // No photos uploaded → the BEFORE / AFTER strip headings must not appear.
+    expect(txt).not.toMatch(/BEFORE \(/);
+    expect(txt).not.toMatch(/AFTER \(/);
+  });
+
+  test('renders BEFORE / AFTER strip when buffers are supplied', async () => {
+    const beforeUrl = '/api/wellness/visits/99/photos/before-1.png';
+    const afterUrl = '/api/wellness/visits/99/photos/after-1.png';
+    const photoBuffers = new Map([
+      [beforeUrl, TINY_PNG_BUF],
+      [afterUrl, TINY_PNG_BUF],
+    ]);
+    const buf = await renderPatientSummaryPdf({
+      patient: patientWithPhotos({ beforeUrls: [beforeUrl], afterUrls: [afterUrl] }),
+      tenant: { name: 'Enhanced Wellness' },
+      clinic: { name: 'Ranchi Clinic' },
+      photoBuffers,
+    });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('BEFORE (1)');
+    expect(txt).toContain('AFTER (1)');
+  });
+
+  test('renders "+N more" caption when a side exceeds the per-side cap', async () => {
+    const beforeUrls = [
+      '/api/wellness/visits/99/photos/b1.png',
+      '/api/wellness/visits/99/photos/b2.png',
+      '/api/wellness/visits/99/photos/b3.png',
+      '/api/wellness/visits/99/photos/b4.png',
+      '/api/wellness/visits/99/photos/b5.png',
+    ];
+    const photoBuffers = new Map(beforeUrls.map((u) => [u, TINY_PNG_BUF]));
+    const buf = await renderPatientSummaryPdf({
+      patient: patientWithPhotos({ beforeUrls }),
+      tenant: { name: 'Enhanced Wellness' },
+      clinic: { name: 'Ranchi Clinic' },
+      photoBuffers,
+    });
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('BEFORE (5)');
+    // Renderer caps at 3 per side; 5 − 3 = 2 surplus surfaced as caption.
+    expect(txt).toContain('+2 more');
+  });
+
+  test('falls back to placeholder when a buffer is missing for an URL', async () => {
+    const beforeUrl = '/api/wellness/visits/99/photos/missing.webp';
+    // photoBuffers Map intentionally does NOT contain the URL — simulates
+    // an undecodable / not-on-disk photo. The renderer must still produce
+    // a valid PDF and surface the BEFORE label.
+    const buf = await renderPatientSummaryPdf({
+      patient: patientWithPhotos({ beforeUrls: [beforeUrl] }),
+      tenant: { name: 'Enhanced Wellness' },
+      clinic: { name: 'Ranchi Clinic' },
+      photoBuffers: new Map(),
+    });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('BEFORE (1)');
+    expect(txt).toContain('(image)'); // placeholder text-label
+  });
+
+  test('does not crash when photosBefore is malformed JSON', async () => {
+    const patient = patientWithPhotos();
+    // Hand-write a malformed string column value.
+    patient.visits[0].photosBefore = '[not-json';
+    patient.visits[0].photosAfter = 'totally garbage';
+    const buf = await renderPatientSummaryPdf({
+      patient,
+      tenant: { name: 'Enhanced Wellness' },
+      clinic: { name: 'Ranchi Clinic' },
+      photoBuffers: new Map(),
+    });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(0);
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Patient Summary');
+    // Malformed JSON → parsePhotoUrls returns [] → no strip rendered.
+    expect(txt).not.toMatch(/BEFORE \(/);
+  });
+
+  test('photos strip is skipped when photoBuffers is omitted entirely', async () => {
+    // Even if the visit row has photo URLs, the renderer must skip the
+    // strip when the caller didn't preload buffers (e.g. caller chose
+    // not to embed photos this run). No partial render, no crash.
+    const buf = await renderPatientSummaryPdf({
+      patient: patientWithPhotos({ beforeUrls: ['/api/wellness/visits/99/photos/x.png'] }),
+      tenant: { name: 'Enhanced Wellness' },
+      clinic: { name: 'Ranchi Clinic' },
+      // photoBuffers intentionally omitted.
+    });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    const txt = extractPdfText(buf);
+    expect(txt).not.toMatch(/BEFORE \(/);
+    expect(txt).not.toMatch(/AFTER \(/);
   });
 });

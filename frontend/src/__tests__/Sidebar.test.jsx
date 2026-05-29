@@ -54,7 +54,50 @@ vi.mock('../utils/adsgpt', () => ({
 vi.mock('../utils/callified', () => ({ launchCallifiedSSO: vi.fn() }));
 vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 vi.mock('socket.io-client', () => ({ io: () => socketObj }));
-vi.mock('../utils/api', () => ({ fetchApi: vi.fn(() => Promise.resolve([])) }));
+
+// fetchApi is URL-aware so tests that need /api/pages/me to return a
+// seeded page catalog can do so via renderSidebar({ accessiblePages: [...] }).
+// The wellness sidebar is entirely driven by accessiblePages now (per
+// the renderWellnessNav comment block in Sidebar.jsx) — without a
+// seeded catalog, nothing renders. vi.hoisted gets the mock fn into
+// scope before the vi.mock factory runs.
+//
+// The accessiblePages payload is captured via a closure variable rather
+// than via per-render mockImplementation. This lets tests that need to
+// override the FULL fetchApi mock (e.g. the Counter-badges block, which
+// installs its own URL-routing impl) do so without losing the catalog
+// behaviour the wellness tests depend on — they install their own
+// impl, which handles their specific URL and returns [] for everything
+// else, including /api/pages/me, which is exactly what those tests want.
+let currentAccessiblePages = [];
+const { fetchApiMock } = vi.hoisted(() => ({
+  fetchApiMock: vi.fn(),
+}));
+vi.mock('../utils/api', () => ({ fetchApi: fetchApiMock }));
+
+// Sample page catalog used by the wellness-vertical tests that exercise
+// renderWellnessNav. Every entry mirrors the server's shape
+// (category, path, label). Tests that need a narrower catalog pass an
+// explicit `accessiblePages` override into renderSidebar.
+// Categories MUST match WELLNESS_CATEGORY_ORDER in Sidebar.jsx — items
+// in categories outside that list get filtered out by the renderer.
+// The Products + Inventory Admin split mirrors the SUT's intentional
+// section grouping ("Products" = catalog config, "Inventory Admin" =
+// operational ledger).
+const SAMPLE_WELLNESS_PAGES = [
+  { category: 'Staff', path: '/staff', label: 'Staff' },
+  { category: 'Leads & Revenue', path: '/wellness/attendance', label: 'Attendance' },
+  { category: 'Leads & Revenue', path: '/inbox', label: 'Unified Inbox' },
+  { category: 'Leads & Revenue', path: '/tasks', label: 'Tasks' },
+  { category: 'Leads & Revenue', path: '/wellness/telecaller-queue', label: 'Telecaller Queue' },
+  { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
+  { category: 'Products', path: '/wellness/products', label: 'Products' },
+  { category: 'Products', path: '/wellness/product-categories', label: 'Categories' },
+  { category: 'Products', path: '/wellness/auto-consumption', label: 'Auto-consumption' },
+  { category: 'Inventory Admin', path: '/wellness/vendors', label: 'Vendors' },
+  { category: 'Inventory Admin', path: '/wellness/receipts', label: 'Receipts' },
+  { category: 'Inventory Admin', path: '/wellness/adjustments', label: 'Adjustments' },
+];
 
 function renderSidebar({
   path = '/dashboard',
@@ -65,7 +108,14 @@ function renderSidebar({
   logoUrl = null,
   brandColor = null,
   subBrandAccess = null,
+  accessiblePages = null, // null → empty catalog (back-compat default)
 } = {}) {
+  // Capture the catalog into a closure variable read by the default
+  // mock impl set in beforeEach. This lets per-test overrides (e.g.
+  // Counter badges) replace the impl entirely without losing the
+  // wellness catalog seeding mechanism.
+  currentAccessiblePages = accessiblePages || [];
+
   const user = {
     name: 'Maya Iyer',
     email: 'maya@acme.test',
@@ -97,6 +147,21 @@ beforeEach(() => {
   notifyObj.success.mockReset();
   notifyObj.info.mockReset();
   notifyObj.confirm.mockReset();
+  // Default fetchApi impl: /api/pages/me returns the per-render
+  // currentAccessiblePages closure value wrapped in the SUT's envelope
+  // shape (Sidebar.jsx:576 reads `res.pages`). All other URLs return [].
+  // Tests can override this impl wholesale (Counter-badges block does)
+  // and the wellness catalog tests still work because their explicit
+  // overrides return [] for /api/pages/me — which is fine since those
+  // tests don't depend on the catalog.
+  currentAccessiblePages = [];
+  fetchApiMock.mockReset();
+  fetchApiMock.mockImplementation((url) => {
+    if (url === '/api/pages/me') {
+      return Promise.resolve({ pages: currentAccessiblePages });
+    }
+    return Promise.resolve([]);
+  });
 });
 
 describe('Sidebar — load-bearing render surface', () => {
@@ -129,19 +194,23 @@ describe('Sidebar — load-bearing render surface', () => {
     // those items don't render in this smoke test. Pin the items that ARE
     // hardcoded in renderWellnessNav (Staff / Leads & Revenue / Finance
     // section headers + the static rows under them).
-    it('renders wellness section labels (Staff / Leads & Revenue / Finance)', () => {
+    it('renders wellness section labels (Staff / Leads & Revenue / Finance)', async () => {
       renderSidebar({
         vertical: 'wellness',
         role: 'ADMIN',
         wellnessRole: null,
         tenantName: 'Enhanced Wellness',
+        accessiblePages: SAMPLE_WELLNESS_PAGES,
       });
+      // Wait for the /api/pages/me fetch to resolve and the catalog to
+      // render — every wellness label below is catalog-driven.
+      await screen.findByText('Leads & Revenue');
       // "Staff" appears as both a section label AND a nav-link to /staff in
       // the admin block under wellness — accept ≥1 match.
       expect(screen.getAllByText('Staff').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Leads & Revenue')).toBeTruthy();
       expect(screen.getByText('Finance')).toBeTruthy();
-      // Hardcoded rows under those sections.
+      // Catalog rows under those sections.
       expect(screen.getByText('Attendance')).toBeTruthy();
       expect(screen.getByText('Unified Inbox')).toBeTruthy();
       expect(screen.getByText('Point of Sale')).toBeTruthy();
@@ -246,17 +315,19 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Waitlist')).toBeNull();
     });
 
-    it('shows the Telecaller Queue link for doctor wellnessRole-equivalent surfaces', () => {
+    it('shows the Telecaller Queue link for doctor wellnessRole-equivalent surfaces', async () => {
       // Drift: Patients / Waitlist now come from /api/pages/me (the mock
       // returns []), so the original "doctor sees Patients" assertion can't
       // be pinned without seeding accessiblePages. Substitute the closest
-      // hardcoded clinical-side affordance — the Tasks row is always present
-      // in the Leads & Revenue cluster for every wellness operator.
+      // catalog-driven affordance — the Tasks row is in the Leads & Revenue
+      // cluster for every wellness operator when the catalog includes it.
       renderSidebar({
         vertical: 'wellness',
         role: 'USER',
         wellnessRole: 'doctor',
+        accessiblePages: SAMPLE_WELLNESS_PAGES,
       });
+      await screen.findByText('Tasks');
       expect(screen.getByText('Tasks')).toBeTruthy();
     });
 
@@ -358,16 +429,18 @@ describe('Sidebar — load-bearing render surface', () => {
     // in sibling Sidebar.activeState.test.jsx. Cover wellness + travel verticals
     // here so a future regression in segmentMatches's three-renderer wiring is
     // pinned across all three branches.
-    it('highlights Wellness > Point of Sale link when on /wellness/pos/sales/123', () => {
+    it('highlights Wellness > Point of Sale link when on /wellness/pos/sales/123', async () => {
       // Drift: Patients comes from /api/pages/me (default mock returns []),
-      // so substitute a hardcoded wellness link (Point of Sale) for the
-      // segmentMatches active-state pin under the wellness renderer.
+      // so seed a sample catalog with Point of Sale to pin the
+      // segmentMatches active-state under the wellness renderer.
       renderSidebar({
         vertical: 'wellness',
         role: 'ADMIN',
         path: '/wellness/pos/sales/123',
+        accessiblePages: SAMPLE_WELLNESS_PAGES,
       });
-      const link = screen.getByText('Point of Sale').closest('a');
+      const posText = await screen.findByText('Point of Sale');
+      const link = posText.closest('a');
       expect(link).toBeTruthy();
       expect(link.className).toMatch(/\bactive\b/);
     });
@@ -595,17 +668,28 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('SMS / Email Blasts')).toBeNull();
     });
 
-    it('renders Admin section + Inventory cluster for ADMIN under wellness', () => {
+    it('renders Admin section + Inventory cluster for ADMIN under wellness', async () => {
       renderSidebar({
         vertical: 'wellness',
         role: 'ADMIN',
         tenantName: 'Enhanced Wellness',
+        accessiblePages: SAMPLE_WELLNESS_PAGES,
       });
-      // The Admin block contains the "Inventory" subsection label.
+      // Inventory cluster + Admin section header all come from the
+      // catalog now. The SUT splits the inventory surfaces into two
+      // WELLNESS_CATEGORY_ORDER buckets:
+      //   "Products"        — catalog config (Products, Categories, Auto-consumption)
+      //   "Inventory Admin" — operational ledger (Vendors, Receipts, Adjustments)
+      // The original test asserted a single "Inventory" header which
+      // never matched a real SUT label. Pin the actual two-section
+      // contract with the section names as they render.
+      await screen.findByText('Inventory Admin');
       expect(screen.getByText('Admin')).toBeTruthy();
-      expect(screen.getByText('Inventory')).toBeTruthy();
+      // The two inventory cluster headers render verbatim.
+      expect(screen.getAllByText('Products').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Inventory Admin')).toBeTruthy();
       // Inventory cluster items.
-      expect(screen.getByText('Products')).toBeTruthy();
+      expect(screen.getAllByText('Products').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Categories')).toBeTruthy();
       expect(screen.getByText('Vendors')).toBeTruthy();
       expect(screen.getByText('Receipts')).toBeTruthy();
@@ -613,12 +697,23 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Auto-consumption')).toBeTruthy();
     });
 
-    it('renders Telecaller Queue ONLY for telecaller wellnessRole (not doctor/professional)', () => {
+    it('renders Telecaller Queue ONLY for telecaller wellnessRole (not doctor/professional)', async () => {
+      // The role-filter is server-side (the catalog returned from
+      // /api/pages/me already excludes Telecaller Queue for doctor). We
+      // mirror that contract here by passing a catalog that omits
+      // Telecaller Queue for the doctor render.
+      const catalogWithoutQueue = SAMPLE_WELLNESS_PAGES.filter(
+        (p) => p.label !== 'Telecaller Queue',
+      );
       const { unmount } = renderSidebar({
         vertical: 'wellness',
         role: 'USER',
         wellnessRole: 'doctor',
+        accessiblePages: catalogWithoutQueue,
       });
+      // Wait for SOME catalog item to render so we know the fetch
+      // resolved, then assert Telecaller Queue is absent.
+      await screen.findByText('Tasks');
       expect(screen.queryByText('Telecaller Queue')).toBeNull();
       unmount();
 
@@ -626,7 +721,9 @@ describe('Sidebar — load-bearing render surface', () => {
         vertical: 'wellness',
         role: 'USER',
         wellnessRole: 'telecaller',
+        accessiblePages: SAMPLE_WELLNESS_PAGES,
       });
+      await screen.findByText('Telecaller Queue');
       const matches = screen.getAllByText('Telecaller Queue');
       expect(matches.length).toBeGreaterThanOrEqual(1);
     });

@@ -224,11 +224,17 @@ describe('<ProductCategories /> — create flow', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Add Category/i }));
 
-    // The "Category Name *" label has an input sibling — query by label text.
-    const nameInputs = document
-      .querySelectorAll('input[type="text"]');
-    // First text input in the modal is the name field.
-    fireEvent.change(nameInputs[0], {
+    // Two `input[type="text"]` elements now live on the page: the page-
+    // level search input (SUT line 213) and the modal's Category Name
+    // input (SUT line 378). Querying by `[type="text"]` and taking [0]
+    // would hit the SEARCH box (DOM order: search comes before modal),
+    // which would leave the name field empty and silently abort the
+    // submit via the "name is required" guard. Pick the LAST text input —
+    // the modal's Name field is always the most-recently-mounted text
+    // input on the page.
+    const nameInputs = document.querySelectorAll('input[type="text"]');
+    const nameInput = nameInputs[nameInputs.length - 1];
+    fireEvent.change(nameInput, {
       target: { value: 'Topical Anaesthetics' },
     });
 
@@ -278,10 +284,12 @@ describe('<ProductCategories /> — edit flow', () => {
       await screen.findByRole('heading', { name: /Edit Category/i }),
     ).toBeInTheDocument();
 
-    // Pre-fill: the name input now reads 'Syringes & Needles'.
-    const nameInput = document.querySelector(
-      'input[type="text"]',
-    );
+    // Pre-fill: the name input now reads 'Syringes & Needles'. Same
+    // search-input collision as the create test — the page-level search
+    // input is the FIRST text input in DOM order; the modal's Name field
+    // is the LAST. Take the last.
+    const allTextInputs = document.querySelectorAll('input[type="text"]');
+    const nameInput = allTextInputs[allTextInputs.length - 1];
     expect(nameInput.value).toBe('Syringes & Needles');
 
     fireEvent.change(nameInput, {

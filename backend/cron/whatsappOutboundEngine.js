@@ -46,11 +46,11 @@ const TICK_CRON = "*/30 * * * * *"; // every 30 seconds
 const BATCH_SIZE = 100;
 const STALE_LOCK_MS = 60 * 1000;
 const BACKOFF_STEPS_MS = [
-  60 * 1000,        // 1m
-  5  * 60 * 1000,   // 5m
-  15 * 60 * 1000,   // 15m
-  60 * 60 * 1000,   // 1h
-  6  * 60 * 60 * 1000, // 6h
+  60 * 1000, // 1m
+  5 * 60 * 1000, // 5m
+  15 * 60 * 1000, // 15m
+  60 * 60 * 1000, // 1h
+  6 * 60 * 60 * 1000, // 6h
 ];
 const MAX_ATTEMPTS = BACKOFF_STEPS_MS.length;
 const WORKER_ID = `pid-${process.pid}`;
@@ -59,12 +59,12 @@ const WORKER_ID = `pid-${process.pid}`;
 // quality rating in a burst. Real Meta limits are per-24h "unique customer"
 // conversations, but per-tick limiting is a cheap proxy.
 const TIER_BUDGETS = {
-  TIER_50:      5,
-  TIER_250:     10,
-  TIER_1K:      25,
-  TIER_10K:     50,
-  TIER_100K:    100,
-  UNLIMITED:    100,
+  TIER_50: 5,
+  TIER_250: 10,
+  TIER_1K: 25,
+  TIER_10K: 50,
+  TIER_100K: 100,
+  UNLIMITED: 100,
 };
 function tierBudget(tier) {
   return TIER_BUDGETS[tier] || 20; // unknown / null tier → 20 sends/tick
@@ -127,13 +127,26 @@ function classifyError(err) {
   // Provider returns { success: false, error: <string> }. The string is the
   // best signal we have without re-modelling Meta's full error surface.
   const text = String(err || "").toLowerCase();
-  if (text.includes("code\":190") || text.includes("error code 190") || text.includes("access token")) {
+  if (
+    text.includes('code":190') ||
+    text.includes("error code 190") ||
+    text.includes("access token")
+  ) {
     return { retryable: false, reason: "AUTH" };
   }
-  if (text.includes("rate") || text.includes("429") || text.includes("too many")) {
+  if (
+    text.includes("rate") ||
+    text.includes("429") ||
+    text.includes("too many")
+  ) {
     return { retryable: true, reason: "RATE_LIMIT" };
   }
-  if (text.includes("500") || text.includes("503") || text.includes("network") || text.includes("etimedout")) {
+  if (
+    text.includes("500") ||
+    text.includes("503") ||
+    text.includes("network") ||
+    text.includes("etimedout")
+  ) {
     return { retryable: true, reason: "TRANSIENT" };
   }
   return { retryable: false, reason: "PERMANENT" };
@@ -145,16 +158,32 @@ async function processJob(job, config) {
   // Pre-flight: config must exist, not be disconnected, not restricted,
   // and have an access token. Anything else = permanent failure.
   if (!config) {
-    return { ok: false, error: "No active WhatsAppConfig for tenant", retryable: false };
+    return {
+      ok: false,
+      error: "No active WhatsAppConfig for tenant",
+      retryable: false,
+    };
   }
   if (config.disconnectedAt) {
-    return { ok: false, error: `Tenant disconnected at ${config.disconnectedAt.toISOString()}`, retryable: false };
+    return {
+      ok: false,
+      error: `Tenant disconnected at ${config.disconnectedAt.toISOString()}`,
+      retryable: false,
+    };
   }
   if (config.businessRestricted) {
-    return { ok: false, error: "Tenant business restricted by Meta", retryable: false };
+    return {
+      ok: false,
+      error: "Tenant business restricted by Meta",
+      retryable: false,
+    };
   }
   if (!config.accessToken || !config.phoneNumberId) {
-    return { ok: false, error: "WhatsAppConfig missing accessToken or phoneNumberId", retryable: false };
+    return {
+      ok: false,
+      error: "WhatsAppConfig missing accessToken or phoneNumberId",
+      retryable: false,
+    };
   }
 
   const accessToken = decryptCredential(config.accessToken);
@@ -166,16 +195,26 @@ async function processJob(job, config) {
         where: { tenantId: job.tenantId, name: msg.templateName },
         select: { language: true },
       });
-      // Parameters aren't persisted on the message row in the current schema —
-      // for queued sends, the route handler is responsible for materialising
-      // parameters into the message body or storing them in `interactiveJson`.
-      // For P1 scaffolding we send templates with zero parameters; P3's
-      // /send refactor will populate this properly.
+      // Read the template parameters persisted by the /send route (and
+      // automations) in interactiveJson. Without this the cron sent
+      // parameters:[] → Meta #132000 "Number of parameters does not match"
+      // for any template with {{n}} placeholders (e.g. visit_complete_v1).
+      let parameters = [];
+      if (msg.interactiveJson) {
+        try {
+          const parsed = JSON.parse(msg.interactiveJson);
+          if (Array.isArray(parsed)) parameters = parsed;
+          else if (Array.isArray(parsed?.parameters))
+            parameters = parsed.parameters;
+        } catch (_e) {
+          /* malformed → send param-less; Meta surfaces the mismatch */
+        }
+      }
       result = await sendTemplate({
         to: msg.to,
         templateName: msg.templateName,
         language: tpl?.language || "en_US",
-        parameters: [],
+        parameters,
         phoneNumberId: config.phoneNumberId,
         accessToken,
       });
@@ -187,7 +226,11 @@ async function processJob(job, config) {
         accessToken,
       });
     } else {
-      return { ok: false, error: "Message has no body or templateName", retryable: false };
+      return {
+        ok: false,
+        error: "Message has no body or templateName",
+        retryable: false,
+      };
     }
   } catch (err) {
     return { ok: false, error: err.message || String(err), retryable: true };
@@ -197,7 +240,12 @@ async function processJob(job, config) {
     return { ok: true, providerMsgId: result.providerMsgId };
   }
   const c = classifyError(result.error);
-  return { ok: false, error: result.error, retryable: c.retryable, reason: c.reason };
+  return {
+    ok: false,
+    error: result.error,
+    retryable: c.retryable,
+    reason: c.reason,
+  };
 }
 
 async function finishJob(job, outcome) {
@@ -206,11 +254,21 @@ async function finishJob(job, outcome) {
     await prisma.$transaction([
       prisma.whatsAppMessage.update({
         where: { id: job.messageId },
-        data: { status: "SENT", providerMsgId: outcome.providerMsgId || null, errorMessage: null },
+        data: {
+          status: "SENT",
+          providerMsgId: outcome.providerMsgId || null,
+          errorMessage: null,
+        },
       }),
       prisma.waOutboundJob.update({
         where: { id: job.id },
-        data: { status: "DONE", lockedAt: null, lockedBy: null, lastError: null, updatedAt: now },
+        data: {
+          status: "DONE",
+          lockedAt: null,
+          lockedBy: null,
+          lastError: null,
+          updatedAt: now,
+        },
       }),
     ]);
     if (socketIo) {
@@ -230,11 +288,20 @@ async function finishJob(job, outcome) {
     await prisma.$transaction([
       prisma.whatsAppMessage.update({
         where: { id: job.messageId },
-        data: { status: "FAILED", errorMessage: outcome.error || "send failed" },
+        data: {
+          status: "FAILED",
+          errorMessage: outcome.error || "send failed",
+        },
       }),
       prisma.waOutboundJob.update({
         where: { id: job.id },
-        data: { status: finalStatus, attempts: newAttempts, lastError: outcome.error || null, lockedAt: null, lockedBy: null },
+        data: {
+          status: finalStatus,
+          attempts: newAttempts,
+          lastError: outcome.error || null,
+          lockedAt: null,
+          lockedBy: null,
+        },
       }),
     ]);
     if (socketIo) {
@@ -249,7 +316,8 @@ async function finishJob(job, outcome) {
   }
 
   // Schedule retry.
-  const backoff = BACKOFF_STEPS_MS[Math.min(newAttempts - 1, BACKOFF_STEPS_MS.length - 1)];
+  const backoff =
+    BACKOFF_STEPS_MS[Math.min(newAttempts - 1, BACKOFF_STEPS_MS.length - 1)];
   await prisma.waOutboundJob.update({
     where: { id: job.id },
     data: {
@@ -270,7 +338,9 @@ async function tick() {
     // Logged once at warn-level so the operator sees the path forward.
     if (!prisma.waOutboundJob?.findMany) {
       if (!tick._warnedMissingModel) {
-        console.warn("[whatsappOutboundEngine] prisma client missing waOutboundJob — run `prisma generate` then restart");
+        console.warn(
+          "[whatsappOutboundEngine] prisma client missing waOutboundJob — run `prisma generate` then restart",
+        );
         tick._warnedMissingModel = true;
       }
       return;
@@ -283,7 +353,7 @@ async function tick() {
     const tenantIds = new Set(jobs.map((j) => j.tenantId));
     const configsByTenant = await loadConfigsForTenants(tenantIds);
     const buckets = new Map(); // key: phoneNumberId  value: { budget, jobs[] }
-    const stalled = [];        // jobs without a usable config
+    const stalled = []; // jobs without a usable config
     for (const j of jobs) {
       const cfg = configsByTenant.get(j.tenantId);
       if (!cfg || !cfg.phoneNumberId) {
@@ -292,7 +362,11 @@ async function tick() {
       }
       const key = cfg.phoneNumberId;
       if (!buckets.has(key)) {
-        buckets.set(key, { budget: tierBudget(cfg.messagingLimitTier), jobs: [], cfg });
+        buckets.set(key, {
+          budget: tierBudget(cfg.messagingLimitTier),
+          jobs: [],
+          cfg,
+        });
       }
       buckets.get(key).jobs.push(j);
     }
@@ -300,7 +374,9 @@ async function tick() {
     // Process within budget.
     const processable = [];
     for (const [, b] of buckets) {
-      processable.push(...b.jobs.slice(0, b.budget).map((j) => ({ job: j, config: b.cfg })));
+      processable.push(
+        ...b.jobs.slice(0, b.budget).map((j) => ({ job: j, config: b.cfg })),
+      );
       // Anything beyond the budget gets requeued by un-locking — runAt isn't
       // bumped because we want it picked up on the next 30s tick.
       for (const j of b.jobs.slice(b.budget)) {
@@ -316,12 +392,18 @@ async function tick() {
         const outcome = await processJob(item.job, item.config);
         await finishJob(item.job, outcome);
       } catch (err) {
-        await finishJob(item.job, { ok: false, error: err.message || String(err), retryable: true });
+        await finishJob(item.job, {
+          ok: false,
+          error: err.message || String(err),
+          retryable: true,
+        });
       }
     }
 
     if (processable.length > 0) {
-      console.log(`[whatsappOutboundEngine] processed ${processable.length} job(s) across ${buckets.size} phone-number-id(s)`);
+      console.log(
+        `[whatsappOutboundEngine] processed ${processable.length} job(s) across ${buckets.size} phone-number-id(s)`,
+      );
     }
   } catch (err) {
     console.error("[whatsappOutboundEngine] tick error:", err);
@@ -330,7 +412,9 @@ async function tick() {
 
 function initWhatsappOutboundCron(io) {
   if (io) socketIo = io;
-  cron.schedule(TICK_CRON, () => { tick(); });
+  cron.schedule(TICK_CRON, () => {
+    tick();
+  });
   console.log(`[whatsappOutboundEngine] initialized (cron: ${TICK_CRON})`);
 }
 

@@ -25,7 +25,7 @@ function StatusBadge({ status }) {
 }
 
 const EMPTY_FORM = {
-  documentType: 'Contract',
+  documentType: 'Estimate',
   documentId: '',
   signerName: '',
   signerEmail: '',
@@ -33,9 +33,7 @@ const EMPTY_FORM = {
 };
 
 const ENDPOINT_FOR_TYPE = {
-  Contract: '/api/contracts',
   Estimate: '/api/estimates',
-  Quote: '/api/quotes',
 };
 
 export default function Signatures() {
@@ -67,11 +65,9 @@ export default function Signatures() {
     } catch (err) { setDocOptions([]); }
   };
 
-  const docLabel = (d, type) => {
+  const docLabel = (d) => {
     if (!d) return `#${d?.id ?? ''}`;
-    if (type === 'Quote')    return d.title || `Quote #${d.id}`;
-    if (type === 'Estimate') return d.title || d.estimateNum || `Estimate #${d.id}`;
-    return d.title || `Contract #${d.id}`;
+    return d.title || d.estimateNum || `Estimate #${d.id}`;
   };
 
   const submitCreate = async (e) => {
@@ -268,19 +264,6 @@ export default function Signatures() {
       {showCreate && (
         <Modal onClose={() => setShowCreate(false)} title="Request Signature" icon={<Plus size={20} color="var(--accent-color)" />}>
           <form onSubmit={submitCreate} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
-            <Field label="Document Type">
-              <select
-                className="input-field"
-                value={form.documentType}
-                onChange={e => setForm({ ...form, documentType: e.target.value, documentId: '' })}
-                style={{ background: 'var(--input-bg)' }}
-              >
-                <option value="Contract">Contract</option>
-                <option value="Estimate">Estimate</option>
-                <option value="Quote">Quote</option>
-              </select>
-            </Field>
-
             <Field label="Document">
               <select
                 required
@@ -289,9 +272,9 @@ export default function Signatures() {
                 onChange={e => setForm({ ...form, documentId: e.target.value })}
                 style={{ background: 'var(--input-bg)' }}
               >
-                <option value="">-- Select {form.documentType} --</option>
+                <option value="">-- Select Estimate --</option>
                 {docOptions.map(d => (
-                  <option key={d.id} value={d.id}>{docLabel(d, form.documentType)}</option>
+                  <option key={d.id} value={d.id}>{docLabel(d)}</option>
                 ))}
               </select>
             </Field>

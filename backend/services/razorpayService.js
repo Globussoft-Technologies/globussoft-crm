@@ -41,7 +41,7 @@ function verifySignature(orderId, paymentId, signature) {
         Buffer.from(signature, 'hex')
       );
       return isValid;
-    } catch (bufferErr) {
+    } catch (_bufferErr) {
       // timingSafeEqual throws if buffers are different lengths — signature is invalid
       return false;
     }

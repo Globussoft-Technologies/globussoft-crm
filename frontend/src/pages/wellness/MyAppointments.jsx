@@ -311,7 +311,7 @@ function Section({ title, rows, muted }) {
                   </Td>
                   <Td>
                     <Link
-                      to={`/wellness/calendar?focus=${v.id}`}
+                      to={`/wellness/calendar?focus=${v.id}${v.visitDate ? `&date=${isoLocalDate(v.visitDate)}` : ''}`}
                       style={{
                         fontSize: '0.8rem',
                         color: 'var(--primary-color, var(--accent-color))',
@@ -354,6 +354,17 @@ function localTzOffset() {
   const sign = off >= 0 ? '+' : '-';
   const abs = Math.abs(off);
   return `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+}
+
+// Local-calendar-day for a Date / ISO string. Lets the calendar deep-link
+// land on the right day even when the visit fires outside business hours.
+function isoLocalDate(input) {
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return '';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function StatusBadge({ status }) {

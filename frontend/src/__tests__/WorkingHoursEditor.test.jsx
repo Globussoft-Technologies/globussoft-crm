@@ -1,98 +1,31 @@
 /**
  * WorkingHoursEditor.test.jsx — vitest + RTL coverage for the wellness-vertical
- * per-practitioner weekly working-hours admin page
+ * per-staff weekly working-hours editor
  * (frontend/src/pages/wellness/WorkingHoursEditor.jsx).
  *
- * Scope: pins the page-surface invariants for the working-hours editor —
- * heading + sub-copy, loading state, GET /api/staff on mount + practitioner
- * selector population (filtered to wellnessRole=doctor/professional), GET
- * /api/wellness/working-hours?doctorId=... on doctor change + 7-day grid
- * render (Sun-Sat with default Sunday-off), per-day Active toggle disabling
- * time inputs, time-input edit, Save → PUT /api/wellness/working-hours/:id
- * with active-only payload + notify.success, practitioner switcher reloads
- * schedule for the new doctor, and the empty-state "No practitioners
- * configured" branch.
+ * UI shape (2026-05-29 redesign): two-pane layout.
+ *   - Left pane (admin only): search input + role-filter chips (with counts)
+ *     + scrollable staff list grouped by role. Hidden for non-admin viewers
+ *     since they only ever see their own row.
+ *   - Right pane: selected staff name + role + 7-day schedule grid + Save
+ *     button (admin only).
  *
- * Test cases (8):
- *   1. Heading "Working hours" + sub-copy ("Per-practitioner weekly schedule.
- *      Bookings outside these hours are blocked at create-time.") render.
- *   2. Loading state: "Loading…" renders while the initial GET /api/staff is
- *      in flight (per CLAUDE.md tick #108 cron-learning).
- *   3. GET /api/staff on mount; selector populated with only
- *      wellnessRole=doctor/professional entries; first such user
- *      auto-selected; GET /api/wellness/working-hours?doctorId=<first> fires.
- *   4. 7-day grid renders (Sun..Sat); Sunday defaults to inactive (checkbox
- *      unchecked + time inputs disabled); Mon-Sat default to active
- *      (checkbox checked + time inputs enabled with 09:00 / 19:00).
- *   5. Toggling Mon's Active checkbox to OFF disables Mon's start/end time
- *      inputs; toggling Sun ON enables Sun's time inputs.
- *   6. Editing Mon's start-time input updates state (input reflects new
- *      value).
- *   7. Save → PUT /api/wellness/working-hours/:id with body
- *      {schedule: [active-only rows]} + notify.success containing doctor
- *      name + active-day count. Inactive rows are dropped from payload
- *      (per SUT lines 72-77 — "Send only active days").
- *   8. Switching practitioner via the selector triggers a fresh GET
- *      /api/wellness/working-hours?doctorId=<new> (per useEffect dep).
- *   9. Empty practitioners list (GET /api/staff resolves to only ADMIN /
- *      USER / null wellnessRole users) → renders empty-state copy
- *      ("No practitioners configured. Add staff with wellnessRole=doctor or
- *      professional under Staff.").
+ * Role-based access:
+ *   - ADMIN / MANAGER → left pane lists every active staff row in the
+ *     tenant (any wellnessRole). Search narrows by name substring; chips
+ *     narrow by role. Save button rendered.
+ *   - Other roles (doctor / professional / telecaller / helper) → no left
+ *     pane; right pane shows ONLY their own schedule, read-only.
  *
  * Mocking discipline (per CLAUDE.md RTL standing rules):
- *   - fetchApi mocked at `../utils/api` (relative to flat __tests__/).
- *   - notifyObj is STABLE module-level (Wave 11 cfb5789 / Wave 12 f59e91d
- *     standing rule — fresh-per-call objects flap useCallback dep identity).
- *   - SUT does NOT consume AuthContext → no Provider wrapper needed.
- *     MemoryRouter is defensive in case any descendant pulls in router hooks.
- *   - vi.mock paths are `../utils/api` and `../utils/notify` relative to the
- *     flat top-level `__tests__/` directory.
- *
- * SHELL-vs-real verification:
- *   - SUT IS REAL (not placeholder) — 152 LOC, 2 useEffect hooks, GET /api/
- *     staff + GET /api/wellness/working-hours + PUT /api/wellness/working-
- *     hours/:id, 7-day grid with per-day Active toggle + time inputs, Save
- *     button with active-only payload filter.
- *
- * Drift pinned (prompt vs. actual SUT):
- *   - Prompt anticipated "fetch endpoints likely /api/wellness/locations/:id/
- *     working-hours OR /api/wellness/working-hours". REALITY: it's per-
- *     PRACTITIONER, NOT per-LOCATION. Endpoint is
- *     /api/wellness/working-hours?doctorId=<id> (GET) and
- *     /api/wellness/working-hours/<id> (PUT). The SUT picks staff filtered to
- *     wellnessRole=doctor|professional, not locations.
- *   - Prompt anticipated "weekly schedule per LOCATION". REALITY: weekly
- *     schedule PER PRACTITIONER. The booking-conflict gate at
- *     backend/lib/bookingAvailability.js raises OUTSIDE_WORKING_HOURS per-
- *     doctor, not per-location (per SUT header comment lines 6-12).
- *   - Prompt anticipated "lunch breaks, exception handling". REALITY: SUT
- *     has neither — just (startTime, endTime, isActive) per dayOfWeek. No
- *     break-windows, no per-date exceptions.
- *   - Prompt anticipated "time validation: open ≥ close rejected (or visual
- *     indication)". REALITY: SUT has NO in-JS time validation. The backend
- *     handler is the only validator. Omitted.
- *   - Prompt anticipated "Reset/cancel flow". REALITY: SUT has NO reset
- *     button — schedule state is reset only when the practitioner selector
- *     changes. Omitted.
- *   - Prompt anticipated "Location switcher". REALITY: there's no location
- *     switcher — only a practitioner switcher (replaced in case 8).
- *   - Prompt anticipated "RBAC: USER hides save CTA only if SUT enforces".
- *     CONFIRMED backend-only: SUT does NOT consume AuthContext; every client
- *     sees the Save button. Backend wellness.js route gates by role.
- *     Omitted in-page RBAC tests.
- *   - Prompt anticipated "Error handling: 500 → notify.error; 403 →
- *     access-restricted". CONFIRMED silent-degrade for GET (SUT lines 56-58
- *     `.catch(() => setSchedule(defaults))`); for PUT, fetchApi is expected
- *     to toast the error itself (per SUT line 84 comment "fetchApi already
- *     toasted"). No in-page error UI to test.
- *   - Prompt anticipated "Save CTA flow". CONFIRMED — payload filters to
- *     `isActive: true` only (case 7 asserts this).
- *
- * Path: flat __tests__/WorkingHoursEditor.test.jsx — matches sibling
- * Locations/Holidays flat-path convention.
+ *   - fetchApi mocked at `../utils/api`.
+ *   - notifyObj is STABLE module-level (Wave 11 cfb5789 / Wave 12 f59e91d).
+ *   - `../App` mocked to expose only AuthContext (mirrors BlockedNumbers /
+ *     CashRegisters / Settings test pattern). Default viewer is ADMIN;
+ *     non-admin tests wrap with their own Provider override.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -101,7 +34,6 @@ vi.mock('../utils/api', () => ({
   getAuthToken: () => 'test-token',
 }));
 
-// Stable notify object — RTL standing rule (Wave 11 cfb5789, Wave 12 f59e91d).
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
@@ -115,34 +47,37 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+vi.mock('../App', async () => {
+  const ReactMod = await import('react');
+  return {
+    AuthContext: ReactMod.createContext({
+      user: { userId: 1, id: 1, role: 'ADMIN' },
+    }),
+  };
+});
+
+import { AuthContext as MockAuthContext } from '../App';
 import WorkingHoursEditor from '../pages/wellness/WorkingHoursEditor';
 
-const DR_HARSH = {
-  id: 11,
-  name: 'Dr. Harsh',
-  wellnessRole: 'doctor',
-};
-const PRO_ANITA = {
-  id: 12,
-  name: 'Anita Sharma',
-  wellnessRole: 'professional',
-};
-const ADMIN_RISHU = {
-  id: 1,
-  name: 'Rishu',
-  wellnessRole: null,
-};
-const TELECALLER_RAJ = {
-  id: 13,
-  name: 'Raj Patel',
-  wellnessRole: 'telecaller',
-};
+const DR_HARSH = { id: 11, name: 'Dr. Harsh', role: 'USER', wellnessRole: 'doctor' };
+const DR_MOHIT = { id: 15, name: 'Dr. Mohit', role: 'USER', wellnessRole: 'doctor' };
+const PRO_ANITA = { id: 12, name: 'Anita Sharma', role: 'USER', wellnessRole: 'professional' };
+const PRO_SUNITA = { id: 16, name: 'Sunita Mishra', role: 'USER', wellnessRole: 'professional' };
+const ADMIN_RISHU = { id: 1, name: 'Rishu', role: 'ADMIN', wellnessRole: null };
+const TELECALLER_RAJ = { id: 13, name: 'Raj Patel', role: 'USER', wellnessRole: 'telecaller' };
+const HELPER_MEERA = { id: 14, name: 'Meera', role: 'USER', wellnessRole: 'helper' };
 
-const DEFAULT_STAFF = [ADMIN_RISHU, DR_HARSH, PRO_ANITA, TELECALLER_RAJ];
+const DEFAULT_STAFF = [
+  ADMIN_RISHU,
+  DR_HARSH,
+  DR_MOHIT,
+  PRO_ANITA,
+  PRO_SUNITA,
+  TELECALLER_RAJ,
+  HELPER_MEERA,
+];
 
 const DR_HARSH_SCHEDULE = [
-  // Doctor works Mon-Fri 10:00-18:00, off Sat/Sun. Server returns only the
-  // rows that exist; SUT fills missing days with defaults.
   { dayOfWeek: 1, startTime: '10:00', endTime: '18:00', isActive: true },
   { dayOfWeek: 2, startTime: '10:00', endTime: '18:00', isActive: true },
   { dayOfWeek: 3, startTime: '10:00', endTime: '18:00', isActive: true },
@@ -153,7 +88,7 @@ const DR_HARSH_SCHEDULE = [
 function installFetchMock({
   staff = DEFAULT_STAFF,
   staffPromise = null,
-  scheduleByDoctorId = { '11': DR_HARSH_SCHEDULE, '12': [] },
+  scheduleByDoctorId = { '11': DR_HARSH_SCHEDULE },
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -163,8 +98,7 @@ function installFetchMock({
     }
     const whMatch = url.match(/^\/api\/wellness\/working-hours\?doctorId=(\d+)$/);
     if (whMatch && method === 'GET') {
-      const id = whMatch[1];
-      return Promise.resolve(scheduleByDoctorId[id] || []);
+      return Promise.resolve(scheduleByDoctorId[whMatch[1]] || []);
     }
     if (/^\/api\/wellness\/working-hours\/\d+$/.test(url) && method === 'PUT') {
       return Promise.resolve({ ok: true });
@@ -173,10 +107,19 @@ function installFetchMock({
   });
 }
 
-function renderPage() {
+function renderPage(authValue = null) {
+  if (!authValue) {
+    return render(
+      <MemoryRouter>
+        <WorkingHoursEditor />
+      </MemoryRouter>,
+    );
+  }
   return render(
     <MemoryRouter>
-      <WorkingHoursEditor />
+      <MockAuthContext.Provider value={authValue}>
+        <WorkingHoursEditor />
+      </MockAuthContext.Provider>
     </MemoryRouter>,
   );
 }
@@ -188,17 +131,13 @@ beforeEach(() => {
   notifyInfo.mockReset();
 });
 
-describe('<WorkingHoursEditor /> — page chrome', () => {
-  it('renders heading "Working hours" + per-practitioner sub-copy', async () => {
+describe('<WorkingHoursEditor /> — page chrome (admin viewer)', () => {
+  it('renders heading + per-staff sub-copy', async () => {
     installFetchMock();
     renderPage();
+    expect(screen.getByRole('heading', { name: /Working hours/i })).toBeInTheDocument();
     expect(
-      screen.getByRole('heading', { name: /Working hours/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /Per-practitioner weekly schedule\. Bookings outside these hours are blocked at create-time\./,
-      ),
+      screen.getByText(/Per-staff weekly schedule\. Bookings outside these hours are blocked at create-time\./),
     ).toBeInTheDocument();
   });
 
@@ -209,153 +148,183 @@ describe('<WorkingHoursEditor /> — page chrome', () => {
   });
 });
 
-describe('<WorkingHoursEditor /> — mount fetch + practitioner selector', () => {
-  it('fires GET /api/staff on mount; selector lists only doctor/professional; first auto-selected', async () => {
+describe('<WorkingHoursEditor /> — left-pane staff list (admin)', () => {
+  it('lists every staff row grouped by role; first doctor auto-selected; schedule GET fires', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/staff');
     });
-    // Wait for the selector to populate (post-staff-fetch).
+    const listbox = await screen.findByRole('listbox', { name: /Staff to schedule/i });
+    const options = within(listbox).getAllByRole('option');
+    const labels = options.map((o) => o.textContent);
+    // All 7 staff present.
+    expect(labels.some((t) => /Dr\. Harsh/.test(t))).toBe(true);
+    expect(labels.some((t) => /Anita Sharma/.test(t))).toBe(true);
+    expect(labels.some((t) => /Raj Patel/.test(t))).toBe(true);
+    expect(labels.some((t) => /Meera/.test(t))).toBe(true);
+    expect(labels.some((t) => /Rishu/.test(t))).toBe(true);
+    // First doctor (Dr. Harsh id=11) auto-selected → schedule GET fires.
     await waitFor(() => {
-      expect(screen.getByText(/Practitioner:/)).toBeInTheDocument();
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/working-hours?doctorId=11');
     });
-    // The select should contain Dr. Harsh + Anita Sharma but NOT Rishu (null
-    // wellnessRole) or Raj (telecaller).
-    const select = screen.getByRole('combobox');
-    expect(select).toBeInTheDocument();
-    const optionTexts = Array.from(select.querySelectorAll('option')).map(
-      (o) => o.textContent,
-    );
-    expect(optionTexts.some((t) => /Dr\. Harsh.*doctor/.test(t))).toBe(true);
-    expect(
-      optionTexts.some((t) => /Anita Sharma.*professional/.test(t)),
-    ).toBe(true);
-    expect(optionTexts.some((t) => /Rishu/.test(t))).toBe(false);
-    expect(optionTexts.some((t) => /Raj Patel/.test(t))).toBe(false);
-    // First practitioner (Dr. Harsh id=11) auto-selected → schedule GET fires.
+    // Dr. Harsh's row carries aria-selected=true.
+    const selectedOpt = options.find((o) => /Dr\. Harsh/.test(o.textContent));
+    expect(selectedOpt).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('renders chip set with counts; "All" shows total visible-staff count', async () => {
+    installFetchMock();
+    renderPage();
+    await screen.findByRole('listbox', { name: /Staff to schedule/i });
+    // "All (7)" — 7 staff total.
+    expect(screen.getByRole('button', { name: /^All \(7\)$/ })).toBeInTheDocument();
+    // Per-role chips with the right counts. Helpers (1), Telecallers (1), etc.
+    expect(screen.getByRole('button', { name: /^Doctors \(2\)$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Professionals \(2\)$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Telecallers \(1\)$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Helpers \(1\)$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Admins \(1\)$/ })).toBeInTheDocument();
+  });
+
+  it('search input narrows the list by name substring (case-insensitive)', async () => {
+    installFetchMock();
+    renderPage();
+    const listbox = await screen.findByRole('listbox', { name: /Staff to schedule/i });
+    // Pre-filter: 7 rows.
+    expect(within(listbox).getAllByRole('option')).toHaveLength(7);
+    const searchInput = screen.getByLabelText(/Search staff/i);
+    fireEvent.change(searchInput, { target: { value: 'sunita' } });
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith(
-        '/api/wellness/working-hours?doctorId=11',
-      );
+      const opts = within(listbox).getAllByRole('option');
+      expect(opts).toHaveLength(1);
+      expect(opts[0]).toHaveTextContent(/Sunita Mishra/);
     });
+    // Clear via the X button restores full list.
+    fireEvent.click(screen.getByLabelText(/Clear search/i));
+    await waitFor(() => {
+      expect(within(listbox).getAllByRole('option')).toHaveLength(7);
+    });
+  });
+
+  it('clicking a role chip narrows the list to that role', async () => {
+    installFetchMock();
+    renderPage();
+    const listbox = await screen.findByRole('listbox', { name: /Staff to schedule/i });
+    fireEvent.click(screen.getByRole('button', { name: /^Telecallers \(1\)$/ }));
+    await waitFor(() => {
+      const opts = within(listbox).getAllByRole('option');
+      expect(opts).toHaveLength(1);
+      expect(opts[0]).toHaveTextContent(/Raj Patel/);
+    });
+    // Switch back to All.
+    fireEvent.click(screen.getByRole('button', { name: /^All \(7\)$/ }));
+    await waitFor(() => {
+      expect(within(listbox).getAllByRole('option')).toHaveLength(7);
+    });
+  });
+
+  it('search + chip combine (AND); no-match shows empty-filter hint', async () => {
+    installFetchMock();
+    renderPage();
+    const listbox = await screen.findByRole('listbox', { name: /Staff to schedule/i });
+    fireEvent.click(screen.getByRole('button', { name: /^Doctors \(2\)$/ }));
+    fireEvent.change(screen.getByLabelText(/Search staff/i), { target: { value: 'mohit' } });
+    await waitFor(() => {
+      const opts = within(listbox).getAllByRole('option');
+      expect(opts).toHaveLength(1);
+      expect(opts[0]).toHaveTextContent(/Dr\. Mohit/);
+    });
+    // Now search for a name that matches no doctor → empty-filter copy.
+    fireEvent.change(screen.getByLabelText(/Search staff/i), { target: { value: 'rishu' } });
+    await waitFor(() => {
+      expect(screen.getByText(/No staff match this filter\./)).toBeInTheDocument();
+    });
+  });
+
+  it('clicking a staff row selects them + triggers a fresh schedule GET', async () => {
+    installFetchMock();
+    renderPage();
+    const listbox = await screen.findByRole('listbox', { name: /Staff to schedule/i });
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/working-hours?doctorId=11');
+    });
+    // Click Raj Patel (telecaller, id=13).
+    const rajRow = within(listbox).getByRole('option', { name: /Raj Patel/ });
+    fireEvent.click(rajRow);
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/working-hours?doctorId=13');
+    });
+    expect(rajRow).toHaveAttribute('aria-selected', 'true');
   });
 });
 
-describe('<WorkingHoursEditor /> — 7-day grid render', () => {
-  it('renders 7 day rows (Sun-Sat); Sunday inactive by default, Mon-Sat active', async () => {
-    installFetchMock({ scheduleByDoctorId: { 11: [] } }); // no stored rows → all defaults
+describe('<WorkingHoursEditor /> — right-pane schedule grid (admin)', () => {
+  it('renders selected staff name + role above the grid; 7-day default grid', async () => {
+    installFetchMock({ scheduleByDoctorId: { 11: [] } });
     renderPage();
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith(
-        '/api/wellness/working-hours?doctorId=11',
-      );
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/working-hours?doctorId=11');
     });
-    // Wait for the grid to render after schedule load.
     await waitFor(() => {
       expect(screen.getByLabelText(/Mon active/i)).toBeInTheDocument();
     });
-    // All 7 day-active checkboxes present.
+    // Header shows the selected name. Use getAllByText since the name also
+    // appears as a list-row label in the left pane.
+    expect(screen.getAllByText(/Dr\. Harsh/).length).toBeGreaterThanOrEqual(1);
+    // 7 day rows, Sunday inactive by default.
     for (const day of ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']) {
-      expect(
-        screen.getByLabelText(new RegExp(`${day} active`, 'i')),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText(new RegExp(`${day} active`, 'i'))).toBeInTheDocument();
     }
-    // Sunday: unchecked (defaultRow says Sunday off).
     expect(screen.getByLabelText(/Sun active/i)).not.toBeChecked();
-    // Mon-Sat: checked.
     for (const day of ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']) {
       expect(screen.getByLabelText(new RegExp(`${day} active`, 'i'))).toBeChecked();
     }
-    // Time inputs: 14 total (7 days × start+end). Sunday's two should be
-    // disabled; Mon's should be enabled with default 09:00 / 19:00.
     const timeInputs = document.querySelectorAll('input[type="time"]');
     expect(timeInputs.length).toBe(14);
-    // Sunday is dayOfWeek=0 → first two time inputs.
     expect(timeInputs[0]).toBeDisabled();
     expect(timeInputs[1]).toBeDisabled();
-    // Monday is dayOfWeek=1 → next two.
     expect(timeInputs[2]).not.toBeDisabled();
-    expect(timeInputs[3]).not.toBeDisabled();
-    expect(timeInputs[2].value).toBe('09:00');
-    expect(timeInputs[3].value).toBe('19:00');
   });
-});
 
-describe('<WorkingHoursEditor /> — per-day Active toggle', () => {
-  it('toggling Mon OFF disables Mon time inputs; toggling Sun ON enables Sun time inputs', async () => {
+  it('toggling Mon OFF disables Mon time inputs; editing a time updates the input', async () => {
     installFetchMock({ scheduleByDoctorId: { 11: [] } });
     renderPage();
     await waitFor(() => {
       expect(screen.getByLabelText(/Mon active/i)).toBeInTheDocument();
     });
-    // Toggle Mon OFF.
     const monActive = screen.getByLabelText(/Mon active/i);
     fireEvent.click(monActive);
     expect(monActive).not.toBeChecked();
-    // Mon's time inputs (indices 2,3) should now be disabled.
     let timeInputs = document.querySelectorAll('input[type="time"]');
     expect(timeInputs[2]).toBeDisabled();
-    expect(timeInputs[3]).toBeDisabled();
-
-    // Toggle Sun ON.
-    const sunActive = screen.getByLabelText(/Sun active/i);
-    fireEvent.click(sunActive);
-    expect(sunActive).toBeChecked();
+    // Re-enable and edit.
+    fireEvent.click(monActive);
     timeInputs = document.querySelectorAll('input[type="time"]');
-    expect(timeInputs[0]).not.toBeDisabled();
-    expect(timeInputs[1]).not.toBeDisabled();
-  });
-});
-
-describe('<WorkingHoursEditor /> — time input edit', () => {
-  it('editing Mon start-time updates the input value', async () => {
-    installFetchMock({ scheduleByDoctorId: { 11: [] } });
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByLabelText(/Mon active/i)).toBeInTheDocument();
-    });
-    const timeInputs = document.querySelectorAll('input[type="time"]');
-    // Mon start = index 2.
     fireEvent.change(timeInputs[2], { target: { value: '08:30' } });
-    const after = document.querySelectorAll('input[type="time"]');
-    expect(after[2].value).toBe('08:30');
+    expect(document.querySelectorAll('input[type="time"]')[2].value).toBe('08:30');
   });
-});
 
-describe('<WorkingHoursEditor /> — save PUT', () => {
   it('Save → PUT /api/wellness/working-hours/:id with active-only payload + notify.success', async () => {
-    installFetchMock(); // Dr. Harsh schedule already populated
+    installFetchMock();
     renderPage();
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith(
-        '/api/wellness/working-hours?doctorId=11',
-      );
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/working-hours?doctorId=11');
     });
     await waitFor(() => {
       expect(screen.getByLabelText(/Mon active/i)).toBeInTheDocument();
     });
-    // Stored schedule has Mon-Fri active (5 days). Click Save.
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/i }));
-
     await waitFor(() => {
       const putCall = fetchApiMock.mock.calls.find(
-        ([u, opts]) =>
-          u === '/api/wellness/working-hours/11' && opts?.method === 'PUT',
+        ([u, opts]) => u === '/api/wellness/working-hours/11' && opts?.method === 'PUT',
       );
       expect(putCall).toBeTruthy();
       const body = JSON.parse(putCall[1].body);
-      expect(Array.isArray(body.schedule)).toBe(true);
-      // Active days: Mon(1)..Fri(5). Sat(6) defaulted active too per defaultRow,
-      // so we expect 6 entries (Mon-Sat) — Dr.Harsh's stored rows only cover
-      // Mon-Fri so Sat keeps its default isActive=true.
       expect(body.schedule.length).toBe(6);
       const days = body.schedule.map((r) => r.dayOfWeek).sort((a, b) => a - b);
       expect(days).toEqual([1, 2, 3, 4, 5, 6]);
-      // Every payload row carries the active-day shape.
       for (const row of body.schedule) {
-        expect(row).toHaveProperty('startTime');
-        expect(row).toHaveProperty('endTime');
         expect(row.isActive).toBe(true);
       }
     });
@@ -365,38 +334,75 @@ describe('<WorkingHoursEditor /> — save PUT', () => {
   });
 });
 
-describe('<WorkingHoursEditor /> — practitioner switcher', () => {
-  it('switching to a different practitioner triggers a fresh GET for the new doctor', async () => {
-    installFetchMock();
-    renderPage();
-    await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith(
-        '/api/wellness/working-hours?doctorId=11',
-      );
-    });
-    // Switch to Anita Sharma (id=12).
-    const select = screen.getByRole('combobox');
-    fireEvent.change(select, { target: { value: '12' } });
-    await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith(
-        '/api/wellness/working-hours?doctorId=12',
-      );
-    });
-  });
-});
-
-describe('<WorkingHoursEditor /> — empty practitioners list', () => {
-  it('renders the empty-state copy when no staff have wellnessRole=doctor/professional', async () => {
-    installFetchMock({ staff: [ADMIN_RISHU, TELECALLER_RAJ] });
+describe('<WorkingHoursEditor /> — empty staff list (admin)', () => {
+  it('renders the admin empty-state copy when GET /api/staff resolves to []', async () => {
+    installFetchMock({ staff: [] });
     renderPage();
     expect(
       await screen.findByText(
-        /No practitioners configured\. Add staff with wellnessRole=doctor or professional under Staff\./,
+        /No staff configured for this tenant\. Add staff under Staff to schedule working hours\./,
       ),
     ).toBeInTheDocument();
-    // No schedule GET should fire (no doctorId resolved).
     const wasScheduleFetched = fetchApiMock.mock.calls.some(([u]) =>
-      /\/api\/wellness\/working-hours/.test(u),
+      /\/api\/wellness\/working-hours\?doctorId=/.test(u),
+    );
+    expect(wasScheduleFetched).toBe(false);
+  });
+});
+
+describe('<WorkingHoursEditor /> — non-admin viewer (doctor / telecaller)', () => {
+  it('doctor viewer: NO left pane; right pane is read-only with their own schedule', async () => {
+    installFetchMock();
+    renderPage({ user: { userId: 11, id: 11, role: 'USER', wellnessRole: 'doctor' } });
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/staff');
+    });
+    expect(
+      await screen.findByText(/Your weekly schedule \(read-only\)\./),
+    ).toBeInTheDocument();
+    // No left pane → no listbox, no search input, no role chips.
+    expect(screen.queryByRole('listbox', { name: /Staff to schedule/i })).toBeNull();
+    expect(screen.queryByLabelText(/Search staff/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^All \(/ })).toBeNull();
+    // Schedule GET fires for self.
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/working-hours?doctorId=11');
+    });
+    // Save button is NOT rendered.
+    expect(screen.queryByRole('button', { name: /Save schedule/i })).toBeNull();
+    // Every active checkbox + every time input is disabled.
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Mon active/i)).toBeInTheDocument();
+    });
+    for (const day of ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']) {
+      expect(screen.getByLabelText(new RegExp(`${day} active`, 'i'))).toBeDisabled();
+    }
+    const timeInputs = document.querySelectorAll('input[type="time"]');
+    expect(timeInputs.length).toBe(14);
+    for (const input of timeInputs) {
+      expect(input).toBeDisabled();
+    }
+  });
+
+  it('telecaller viewer: view-only tip rendered; no Save button', async () => {
+    installFetchMock();
+    renderPage({ user: { userId: 13, id: 13, role: 'USER', wellnessRole: 'telecaller' } });
+    await waitFor(() => {
+      expect(screen.getByText(/View-only\. Contact an admin or manager/)).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /Save schedule/i })).toBeNull();
+  });
+
+  it('non-admin viewer with no matching self-row → no-record empty state', async () => {
+    installFetchMock();
+    renderPage({ user: { userId: 999, id: 999, role: 'USER', wellnessRole: 'helper' } });
+    expect(
+      await screen.findByText(
+        /No working-hours record found for your account\. Ask an admin to configure your schedule\./,
+      ),
+    ).toBeInTheDocument();
+    const wasScheduleFetched = fetchApiMock.mock.calls.some(([u]) =>
+      /\/api\/wellness\/working-hours\?doctorId=/.test(u),
     );
     expect(wasScheduleFetched).toBe(false);
   });

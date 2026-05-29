@@ -404,7 +404,13 @@ model Tenant {
 
 model User {
   id        Int      @id @default(autoincrement())
-  email     String   @unique
+  // Email is unique PER TENANT, not globally — the same person can hold a
+  // separate account in multiple organisations (e.g. a customer of both a
+  // travel agency and a wellness clinic). Composite uniqueness lives in
+  // @@unique([email, tenantId]) at the bottom of the model. Because email is
+  // no longer a standalone unique key, all lookups use findFirst (often
+  // scoped by tenantId) rather than findUnique({ where: { email } }).
+  email     String
   password  String
   role      String   @default("USER") // ADMIN, USER, MANAGER
   userType  String   @default("STAFF") // STAFF | OWNER | CUSTOMER
@@ -420,6 +426,7 @@ model User {
   emailSignature String? @db.Text
   language       String  @default("en")
   timezone       String  @default("UTC")
+  profilePicture String? // S3 URL — uploaded via POST /api/auth/me/profile-picture; old key deleted from S3 on replace
 
   // SSO
   googleId    String? @unique
@@ -534,6 +541,10 @@ model User {
   // Travel vertical — TMC curriculum-mapping advisor authorship
   // (PRD_TMC_CURRICULUM_MAPPING PC-1 RESOLVED 2026-05-24).
   curriculumMappingsCreated TravelCurriculumMapping[] @relation("CurriculumMappingCreator")
+
+  // Email is unique within a tenant, not globally — see the comment on the
+  // email field. Lets the same email register/log in across multiple orgs.
+  @@unique([email, tenantId])
 }
 
 model Contact {
@@ -649,6 +660,13 @@ model Contact {
   aadhaarLast4   String?
   kycTokenId     String?
 
+  // [GP-CRM integration] Opaque external ID set by partner systems (e.g.
+  // GlobusPhone lead ULID). Lets a partner push a stable ID at create time so
+  // outbox retries never create duplicate contacts within a tenant. Nullable;
+  // NULL != NULL in MySQL unique indexes, so un-linked contacts are unaffected
+  // by the @@unique([tenantId, externalId]) constraint below.
+  externalId String?
+
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
@@ -694,6 +712,10 @@ model Contact {
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
+  /// [GP-CRM integration] One Contact per externalId-per-tenant. NULL != NULL in
+  /// MySQL unique indexes, so the many contacts with no externalId never collide;
+  /// only partner-linked rows (e.g. GlobusPhone lead ULID) are deduplicated.
+  @@unique([tenantId, externalId])
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
   @@index([tenantId, assignedToId])
@@ -3955,6 +3977,10 @@ model AutoConsumptionRule {
   // Units of `product` consumed per `service` visit (e.g. 3.5 for 3.5 mL of
   // saline per facial). Float so fractional mL/g/cc are representable.
   quantityPerVisit Float
+  // Unit the admin entered the quantity in (ml, gm, kg, piece, unit, bottle,
+  // tube, pack, ltr). Nullable for back-compat — when null, the applier falls
+  // back to Product.unit. Validated against the allowed enum in the route.
+  unit             String?
   isActive         Boolean  @default(true)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -4494,6 +4520,12 @@ model Sale {
   // VALID_PAYMENT_METHODS in routes/pos.js is the source of truth.
   paymentMethod        String    @default("CASH")
   paymentBreakdownJson String?   @db.Text
+  // Persisted wallet portion of the sale (in cents) for fast reports
+  // without joining + summing WalletTransaction by reason. Default 0
+  // makes the column additive — pre-existing rows backfill to "no wallet
+  // tender" automatically. Pinned by pos-sale-finalize-api.spec.js:391
+  // (test expects body.walletDebitedCents on the create response).
+  walletDebitedCents   Int       @default(0)
   refundedAt           DateTime?
   refundReason         String?   @db.Text
   createdAt            DateTime  @default(now())

@@ -12,7 +12,6 @@ const { ensureEmail, ensureStringLength } = require("../lib/validators");
 // to non-admin viewers. Helpers gate the role check + mask the row shape.
 const {
   shouldMaskForViewer,
-  maskRows,
   maskUserId,
   auditDisclosureDetails,
 } = require("../lib/piiMask");
@@ -339,11 +338,13 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
       }
     }
 
-    // Email is globally unique (Prisma @unique). Pre-check inside the
-    // tenant so the admin gets a meaningful 409 instead of Prisma's raw
-    // P2002 unique-constraint error.
-    const existing = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
+    // Email is composite-unique with tenantId (@@unique([email, tenantId])
+    // on schema.prisma:546) — not a standalone @unique. The bare findUnique
+    // throws PrismaClientValidationError under the current schema. Scope
+    // the dup check to THIS admin's tenant via findFirst so the same email
+    // can legitimately exist in other tenants.
+    const existing = await prisma.user.findFirst({
+      where: { email: email.toLowerCase(), tenantId: req.user.tenantId },
     });
     if (existing) {
       return res

@@ -120,6 +120,16 @@ function verifyWellnessRole(allowed, opts = {}) {
   const anyOfPermissions = Array.isArray(opts.anyOfPermissions)
     ? opts.anyOfPermissions.filter((p) => p && p.module && p.action)
     : [];
+  // Explicit deny list — wellnessRoles that are blocked from this gate
+  // REGARDLESS of any permission grants their RBAC role might carry.
+  // Use for sensitive surfaces (PHI read/write) where a clerical role
+  // like "helper" must never gain access via the anyOfPermissions
+  // backdoor, even if their assigned RBAC role grants e.g.
+  // appointments.read for self-service. Bypass for ADMIN/MANAGER is
+  // intentional — owners + managers always override.
+  const denyWellnessRoles = Array.isArray(opts.deny)
+    ? opts.deny.filter((r) => typeof r === "string" && r)
+    : [];
   return async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ error: "Authentication required" });
@@ -142,6 +152,22 @@ function verifyWellnessRole(allowed, opts = {}) {
     if (allowed.includes("manager") && req.user.role === "MANAGER") return next();
     if (req.user.wellnessRole && allowed.includes(req.user.wellnessRole)) {
       return next();
+    }
+    // Explicit deny check runs BEFORE the anyOfPermissions backdoor so a
+    // helper with the seeded USER role (which carries appointments.read
+    // for self-service appointments) still gets 403 on PHI surfaces.
+    // Order matters: ADMIN/MANAGER bypass above is intentional, then
+    // wellnessRole allowlist, then deny gate, then permission fallback.
+    if (
+      denyWellnessRoles.length > 0 &&
+      req.user.wellnessRole &&
+      denyWellnessRoles.includes(req.user.wellnessRole)
+    ) {
+      return res.status(403).json({
+        error: RBAC_DENIED_MESSAGE,
+        code: "WELLNESS_ROLE_FORBIDDEN",
+        allowed,
+      });
     }
     // "clinical" meta-token: passes any wellnessRole the tenant's
     // WellnessRoleType catalog marks as `canTakeVisits = true`. This

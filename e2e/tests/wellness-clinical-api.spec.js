@@ -1193,13 +1193,21 @@ test.describe('Wellness API — Prescriptions', () => {
   test('GET /prescriptions returns array', async ({ request }) => {
     const res = await authGet(request, '/api/wellness/prescriptions?limit=5');
     expect(res.status()).toBe(200);
-    expect(Array.isArray(await res.json())).toBe(true);
+    // Drift: route returns a pagination envelope { items, total } now
+    // (wellness.js:3078) so frontend list pages can render counts. Accept
+    // both shapes so a future reversion to bare-array doesn't red-gate
+    // this assertion.
+    const body = await res.json();
+    const items = Array.isArray(body) ? body : body.items;
+    expect(Array.isArray(items)).toBe(true);
   });
 
   test('GET /prescriptions?patientId=… narrows', async ({ request }) => {
     const res = await authGet(request, `/api/wellness/prescriptions?patientId=${rxPatientId}`);
     expect(res.status()).toBe(200);
-    for (const r of await res.json()) {
+    const body = await res.json();
+    const items = Array.isArray(body) ? body : body.items;
+    for (const r of items) {
       expect(r.patientId).toBe(rxPatientId);
     }
   });
@@ -2754,7 +2762,11 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
     // GET via list filtered to this patient.
     const list = await authGet(request, `/api/wellness/prescriptions?patientId=${p.id}`);
     expect(list.status()).toBe(200);
-    const rxList = await list.json();
+    const listBody = await list.json();
+    // Drift: list now returns { items, total } envelope (wellness.js:3078)
+    // — keep tolerance for both shapes so a future reversion doesn't
+    // re-red this gate.
+    const rxList = Array.isArray(listBody) ? listBody : listBody.items;
     const row = rxList.find((r) => r.id === rxId);
     expect(row).toBeTruthy();
     expect(row.drugs, 'drugs must not be raw ENC:v1: ciphertext').not.toMatch(/^ENC:v1:/);

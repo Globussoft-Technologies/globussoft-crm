@@ -25,12 +25,11 @@ const { downloadMediaUrl, downloadMediaBytes } = require("../services/whatsappPr
 const TICK_CRON = "*/60 * * * * *"; // every 60 seconds
 const BATCH_SIZE = 20;
 const MAX_ATTEMPTS = 3;
-const BACKOFF_STEPS_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000];
 
 let s3Service = null;
 try {
   s3Service = require("../services/s3Service");
-} catch (err) {
+} catch (_err) {
   console.warn("[whatsappMediaEngine] s3Service unavailable — media downloads will fail until S3 is configured");
 }
 

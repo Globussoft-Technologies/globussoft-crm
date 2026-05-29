@@ -1193,13 +1193,21 @@ test.describe('Wellness API — Prescriptions', () => {
   test('GET /prescriptions returns array', async ({ request }) => {
     const res = await authGet(request, '/api/wellness/prescriptions?limit=5');
     expect(res.status()).toBe(200);
-    expect(Array.isArray(await res.json())).toBe(true);
+    // Drift: route returns a pagination envelope { items, total } now
+    // (wellness.js:3078) so frontend list pages can render counts. Accept
+    // both shapes so a future reversion to bare-array doesn't red-gate
+    // this assertion.
+    const body = await res.json();
+    const items = Array.isArray(body) ? body : body.items;
+    expect(Array.isArray(items)).toBe(true);
   });
 
   test('GET /prescriptions?patientId=… narrows', async ({ request }) => {
     const res = await authGet(request, `/api/wellness/prescriptions?patientId=${rxPatientId}`);
     expect(res.status()).toBe(200);
-    for (const r of await res.json()) {
+    const body = await res.json();
+    const items = Array.isArray(body) ? body : body.items;
+    for (const r of items) {
       expect(r.patientId).toBe(rxPatientId);
     }
   });

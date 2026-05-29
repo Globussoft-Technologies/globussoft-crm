@@ -12,13 +12,12 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          command_timeout: 2m
+          command_timeout: 3m
           script: |
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
             echo "=== .env DISABLE_CRONS value ==="
-            grep DISABLE_CRONS /home/empcloud-development/globussoft-crm/backend/.env || echo "NOT FOUND in empcloud path"
-            grep DISABLE_CRONS ~/globussoft-crm/backend/.env 2>/dev/null || echo "NOT FOUND in ~ path"
+            grep DISABLE_CRONS /home/empcloud-development/globussoft-crm/backend/.env || echo "NOT FOUND"
             echo "=== PM2 status ==="
             pm2 list | grep globussoft-crm-backend
-            echo "=== Last 60 lines filtered ==="
-            pm2 logs globussoft-crm-backend --lines 60 --nostream 2>&1 | grep -i "whatsappOutbound\|DISABLE_CRONS\|cron init\|initialized"
+            echo "=== PM2 logs (last 300 lines) ==="
+            pm2 logs globussoft-crm-backend --lines 300 --nostream 2>&1 | grep -i "whatsappOutbound\|DISABLE_CRONS\|cron init\|initialized\|skipping" || echo "NO CRON INIT LINES FOUND IN LAST 300 LINES"

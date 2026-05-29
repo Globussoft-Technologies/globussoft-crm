@@ -15,22 +15,5 @@ jobs:
           command_timeout: 10m
           script: |
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            cd /home/empcloud-development/globussoft-crm
-            git fetch origin
-            git checkout main
-            git reset --hard origin/main
-            echo "=== latest commit ==="
-            git log --oneline -3
-            echo "=== backend ==="
-            cd backend
-            npm ci --prefer-offline 2>&1 | tail -3
-            npx prisma generate 2>&1 | tail -3
-            npx prisma db push --accept-data-loss 2>&1 | tail -5
-            pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
-            echo "=== frontend ==="
-            cd ../frontend
-            npm ci --prefer-offline 2>&1 | tail -3
-            npx vite build --logLevel=error 2>&1 | tail -3
-            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S rsync -a --delete dist/ /var/www/crm-staging.globusdemos.com/ 2>&1 | tail -2
-            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S chown -R www-data:www-data /var/www/crm-staging.globusdemos.com/ 2>&1 | tail -1
-            echo "=== done ==="
+            echo "=== .env contents ==="
+            cat /home/empcloud-development/globussoft-crm/backend/.env

@@ -336,8 +336,12 @@ async function main() {
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
   const userMap = {};
   for (const s of staffSeed) {
+    // User.email is unique PER TENANT, not globally — the schema uses
+    // composite @@unique([email, tenantId]). The Prisma client generates
+    // the lookup helper as `email_tenantId`. Bare `where: { email }`
+    // throws PrismaClientValidationError and breaks the seed entirely.
     const u = await prisma.user.upsert({
-      where: { email: s.email },
+      where: { email_tenantId: { email: s.email, tenantId: tenant.id } },
       update: {
         name: s.name,
         role: s.role,

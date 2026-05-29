@@ -181,7 +181,12 @@ describe('GET /summary — empty period', () => {
     expect(res.body.late).toBe(0);
     expect(res.body.absent).toBe(0);
     expect(res.body.byUser).toEqual({});
-    expect(res.body.policy).toEqual({
+    // SUT now includes shiftEndHour + shiftEndMinute on the policy
+    // envelope (added when the summary view started rendering total-
+    // hours-vs-shift-duration). Pin a superset match instead of strict
+    // equality so we don't have to rev this assertion for every new
+    // policy field.
+    expect(res.body.policy).toMatchObject({
       shiftStartHour: 9,
       shiftStartMinute: 0,
       onTimeToleranceMin: 15,

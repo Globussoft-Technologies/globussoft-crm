@@ -316,7 +316,12 @@ describe('BuyGiftCards — Razorpay handshake', () => {
     // Pre-stub the Razorpay SDK so the SUT short-circuits the script
     // loader and we can observe new Razorpay() being invoked.
     const rzpOpen = vi.fn();
-    const rzpCtor = vi.fn(() => ({ open: rzpOpen }));
+    // The SUT calls `new Razorpay(opts)`. Arrow functions throw
+    // "is not a constructor" under `new`, so the inner mock body must
+    // be a regular `function` — when a constructor returns an object,
+    // that object replaces the `this` value, exactly the behaviour the
+    // SUT relies on for `const rzp = new Razorpay(opts)`.
+    const rzpCtor = vi.fn(function () { return { open: rzpOpen }; });
     window.Razorpay = rzpCtor;
 
     render(<BuyGiftCardsPage />);
@@ -391,7 +396,9 @@ describe('BuyGiftCards — Razorpay handshake', () => {
     // checkout without spinning up the real Razorpay modal.
     let capturedHandler = null;
     const rzpOpen = vi.fn();
-    window.Razorpay = vi.fn((opts) => {
+    // Regular function (not arrow) so `new Razorpay(opts)` in the SUT
+    // doesn't throw "is not a constructor".
+    window.Razorpay = vi.fn(function (opts) {
       capturedHandler = opts.handler;
       return { open: rzpOpen };
     });
@@ -448,7 +455,8 @@ describe('BuyGiftCards — Razorpay handshake', () => {
   it('Razorpay modal dismissed (ondismiss) clears the paying state', async () => {
     fetchApiMock.mockImplementation(defaultMock());
     let capturedOnDismiss = null;
-    window.Razorpay = vi.fn((opts) => {
+    // Regular function (not arrow) so `new Razorpay(opts)` works.
+    window.Razorpay = vi.fn(function (opts) {
       capturedOnDismiss = opts.modal && opts.modal.ondismiss;
       return { open: vi.fn() };
     });

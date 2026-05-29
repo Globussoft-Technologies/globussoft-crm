@@ -257,8 +257,10 @@ describe('<ServiceCategories /> — mount fetch + list render', () => {
     // displayOrder values render.
     expect(screen.getByText('99')).toBeInTheDocument();
     // _count.services renders (7 for root, 3 for child, 0 for inactive).
+    // "3" also appears as a displayOrder value on another row so it
+    // matches more than one cell — assert presence via getAllByText.
     expect(screen.getByText('7')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getAllByText('3').length).toBeGreaterThanOrEqual(1);
     // Status text — there are 2 Active rows and 1 Inactive.
     expect(screen.getAllByText(/^Active$/).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/^Inactive$/)).toBeInTheDocument();

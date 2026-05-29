@@ -2102,6 +2102,11 @@ router.post("/sales/finalize", cashierGate, async (req, res) => {
                 amountCents: p.amountCents,
               })),
             ).slice(0, 4000),
+            // Persist wallet portion so reports + void/refund flows don't
+            // have to recompute by summing the breakdown JSON. Mirrors
+            // the value already returned in the response envelope at
+            // line ~2228. Column added in schema.prisma model Sale.
+            walletDebitedCents: walletDebitCents,
             lineItems: {
               create: normalisedItems.map((it) => {
                 const unitPriceRupees = +(it.unitPriceCents / 100).toFixed(2);
@@ -2229,10 +2234,26 @@ router.post("/sales/finalize", cashierGate, async (req, res) => {
       status: txResult.sale.status,
     });
   } catch (e) {
-    console.error("[pos] sale finalize error:", e.message);
+    // Surface the actual error name + message in the diagnostic envelope so
+    // CI failures point at the real cause instead of generic "Failed to
+    // finalize sale". Pinned by pos-sale-finalize-api.spec.js:391 — when
+    // the spec failed in api_tests the response gave no useful clue.
+    // Prisma error codes (P2002, P2003, etc.) come through on e.code; the
+    // public `code` envelope stays SALE_FINALIZE_FAILED so existing 500
+    // assertions don't regress.
+    const safeMessage = (e && e.message) ? String(e.message).slice(0, 500) : "Unknown error";
+    const detailCode = e && e.code ? String(e.code) : null;
+    console.error(
+      "[pos] sale finalize error:",
+      safeMessage,
+      detailCode ? `(code: ${detailCode})` : "",
+      e && e.stack ? `\n${e.stack.split("\n").slice(0, 5).join("\n")}` : "",
+    );
     return res.status(500).json({
       error: "Failed to finalize sale",
       code: "SALE_FINALIZE_FAILED",
+      detail: safeMessage,
+      detailCode,
     });
   }
 });

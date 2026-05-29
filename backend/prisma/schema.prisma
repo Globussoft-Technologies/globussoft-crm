@@ -4520,6 +4520,12 @@ model Sale {
   // VALID_PAYMENT_METHODS in routes/pos.js is the source of truth.
   paymentMethod        String    @default("CASH")
   paymentBreakdownJson String?   @db.Text
+  // Persisted wallet portion of the sale (in cents) for fast reports
+  // without joining + summing WalletTransaction by reason. Default 0
+  // makes the column additive — pre-existing rows backfill to "no wallet
+  // tender" automatically. Pinned by pos-sale-finalize-api.spec.js:391
+  // (test expects body.walletDebitedCents on the create response).
+  walletDebitedCents   Int       @default(0)
   refundedAt           DateTime?
   refundReason         String?   @db.Text
   createdAt            DateTime  @default(now())

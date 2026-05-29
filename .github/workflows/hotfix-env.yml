@@ -5,7 +5,7 @@ jobs:
   patch-env:
     runs-on: ubuntu-latest
     steps:
-      - name: PM2 logs grep
+      - name: Query QUEUED WhatsApp messages
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -15,4 +15,19 @@ jobs:
           command_timeout: 3m
           script: |
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            pm2 logs globussoft-crm-backend --lines 300 --nostream 2>&1 | grep -iE "whatsapp|prisma|graph.facebook" || echo "NO MATCHES"
+            cd /home/empcloud-development/globussoft-crm/backend
+            node -e "
+            const p = new (require('@prisma/client').PrismaClient)();
+            p.\$queryRaw\`
+              SELECT m.id, m.status AS msgStatus, m.tenantId, m.createdAt,
+                     LEFT(m.errorMessage, 80) AS msgErr,
+                     j.id AS jobId, j.status AS jobStatus, j.attempts,
+                     LEFT(j.lastError, 120) AS jobErr,
+                     j.runAt, j.lockedAt
+              FROM WhatsAppMessage m
+              LEFT JOIN WaOutboundJob j ON j.messageId = m.id
+              WHERE m.direction = 'OUTBOUND' AND m.status = 'QUEUED'
+              ORDER BY m.id DESC LIMIT 10
+            \`.then(r => { console.log(JSON.stringify(r, null, 2)); process.exit(0); })
+             .catch(e => { console.error(e.message); process.exit(1); });
+            "

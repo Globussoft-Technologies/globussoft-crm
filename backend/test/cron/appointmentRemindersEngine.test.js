@@ -837,19 +837,20 @@ describe('cron/appointmentRemindersEngine — runNoShowRiskForTenant (PRD Gap §
 
   test('high-risk visit → notification fanned to doctor + ADMIN/MANAGER with /wellness/visits/:id link', async () => {
     const now = Date.now();
-    // Visit at hoursOut=2 (in T-24h..T-1h window, so +20 score), istHour=4 AM
-    // (off-hours +10). Patient has past no-show (+30) and was not previously
-    // visited (+15) → score ≈ 75, well above NOSHOW_THRESHOLD=60.
-    // Construct visitDate at 04:00 IST = 22:30 UTC the prior day. To keep
-    // it inside [now, now+48h] we anchor at now+2h and trust that as the
-    // window check; the scoring uses istHour and hoursOut.
-    const visitDate = new Date(now + 2 * 3600 * 1000);
-    // Force istHour to fall outside [10,18) — pick a date 2h out that maps
-    // to a wee-hour IST: we override with a fixed hour by setting visitDate
-    // directly.
-    visitDate.setUTCHours(22, 30, 0, 0); // 04:00 IST (UTC+5:30)
-    // If that pushed visitDate into the past, bump to tomorrow.
-    if (visitDate.getTime() < now) visitDate.setUTCDate(visitDate.getUTCDate() + 1);
+    // 12 hours out — deterministic across every UTC wall-clock time, and
+    // unambiguously inside the SUT's +20-reminder window check
+    // (`hoursOut <= 24 && hoursOut >= 1`).
+    //
+    // Drift note: the prior construction was `now + 2h` then
+    // `visitDate.setUTCHours(22, 30)` to land at 04:00 IST for the
+    // off-hours +10 signal. When the CI clock landed near 21:30 UTC, the
+    // forced 22:30 UTC put hoursOut at ~0.78h which is BELOW the +20
+    // gate's >= 1 threshold — score collapsed to 55 and the visit
+    // dropped under NOSHOW_THRESHOLD=60. We don't need the +10 anyway:
+    // past no-show (+30) + reminder-not-sent (+20) + first-visit (+15)
+    // = 65, comfortably above 60. The istHour-dependent signal is
+    // covered separately by the low-risk sibling test at :890.
+    const visitDate = new Date(now + 12 * 3600 * 1000);
 
     const upcoming = {
       id: 'visit-risk',

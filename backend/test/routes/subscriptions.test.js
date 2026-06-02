@@ -72,6 +72,10 @@ prisma.subscription.findFirst = vi.fn();
 prisma.subscription.findUnique = vi.fn();
 prisma.subscription.create = vi.fn();
 prisma.subscription.update = vi.fn();
+// reconcileSubscriptions() expires elapsed periods via updateMany — default to
+// a no-op (0 rows touched) so the lazy state machine is inert unless a test
+// opts into the stacking/promotion path.
+prisma.subscription.updateMany = vi.fn();
 prisma.subscriptionPlan = prisma.subscriptionPlan || {};
 prisma.subscriptionPlan.findMany = vi.fn();
 prisma.subscriptionPlan.findUnique = vi.fn();
@@ -98,6 +102,13 @@ eventBus.emitEvent = vi.fn().mockResolvedValue(undefined);
 if (eventBus.safeEmitEvent) {
   eventBus.safeEmitEvent = vi.fn().mockResolvedValue(undefined);
 }
+
+// ── posExpense stub (verify-payment logs the subscription spend to the POS
+// drawer best-effort). The route lazily `require('../lib/posExpense')` then
+// destructures recordSubscriptionExpense at call time, so patching the
+// exported property here is picked up. Default: not recorded (no open shift).
+const posExpense = requireCJS('../../lib/posExpense');
+posExpense.recordSubscriptionExpense = vi.fn().mockResolvedValue({ recorded: false, reason: 'NO_OPEN_SHIFT' });
 
 import express from 'express';
 import request from 'supertest';
@@ -139,10 +150,13 @@ beforeEach(() => {
   prisma.subscription.findUnique.mockReset();
   prisma.subscription.create.mockReset();
   prisma.subscription.update.mockReset();
+  prisma.subscription.updateMany.mockReset();
   prisma.subscriptionPlan.findMany.mockReset();
   prisma.subscriptionPlan.findUnique.mockReset();
   razorpayService.createOrder.mockReset();
   razorpayService.verifySignature.mockReset();
+  posExpense.recordSubscriptionExpense.mockReset();
+  posExpense.recordSubscriptionExpense.mockResolvedValue({ recorded: false, reason: 'NO_OPEN_SHIFT' });
 
   prisma.user.findUnique.mockResolvedValue({
     id: 7,
@@ -160,6 +174,7 @@ beforeEach(() => {
     endDate: new Date('2026-07-01'),
   });
   prisma.subscription.update.mockResolvedValue({ id: 1, status: 'CANCELLED' });
+  prisma.subscription.updateMany.mockResolvedValue({ count: 0 });
   prisma.subscriptionPlan.findMany.mockResolvedValue([]);
   prisma.subscriptionPlan.findUnique.mockResolvedValue(null);
 });
@@ -483,6 +498,146 @@ describe('POST /verify-payment — HMAC signature verify + subscription create',
       data: { subscriptionStatus: 'ACTIVE', trialEndsAt: null },
     });
   });
+
+  test('QUEUES a second purchase made while a period is still running (stacked dates, SCHEDULED)', async () => {
+    razorpayService.verifySignature.mockReturnValue(true);
+    prisma.subscription.findUnique.mockResolvedValue(null); // no dup for this order
+    prisma.subscriptionPlan.findUnique.mockResolvedValue({
+      id: 2, name: 'Pro', price: 1999, currency: 'INR', billingIntervalDays: 30, features: '[]',
+    });
+
+    // A period is still running and ends in the future. reconcile's probes see
+    // it as ACTIVE (no promotion); the stacking lookup returns it as the tail.
+    const activeEnd = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000); // ~20 days out
+    prisma.subscription.findFirst.mockImplementation(({ where }) => {
+      if (where && where.status === 'ACTIVE') {
+        return Promise.resolve({ id: 90, status: 'ACTIVE', endDate: activeEnd });
+      }
+      if (where && where.status && where.status.in) {
+        // stacking lookup (ACTIVE|SCHEDULED ordered by endDate desc)
+        return Promise.resolve({ id: 90, status: 'ACTIVE', endDate: activeEnd });
+      }
+      return Promise.resolve(null);
+    });
+
+    prisma.subscription.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 102, ...data }));
+
+    const res = await authedPost(makeApp(), '/api/subscriptions/verify-payment', {
+      razorpayOrderId: 'order_stack', razorpayPaymentId: 'pay_stack',
+      razorpaySignature: 'e'.repeat(64), planId: 2,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.scheduled).toBe(true);
+
+    const createArg = prisma.subscription.create.mock.calls[0][0].data;
+    // New period is queued, not active...
+    expect(createArg.status).toBe('SCHEDULED');
+    // ...and starts exactly when the running period ends (no overlap, no waste).
+    expect(new Date(createArg.startDate).getTime()).toBe(activeEnd.getTime());
+    // ...running a full billing interval (30 days) from that start.
+    const expectedEnd = activeEnd.getTime() + 30 * 24 * 60 * 60 * 1000;
+    expect(new Date(createArg.endDate).getTime()).toBe(expectedEnd);
+    // The admin still has live coverage, so the account stays ACTIVE.
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: { subscriptionStatus: 'ACTIVE', trialEndsAt: null },
+    });
+  });
+
+  test('activates immediately (ACTIVE, starts now) when no period is currently running', async () => {
+    razorpayService.verifySignature.mockReturnValue(true);
+    prisma.subscription.findUnique.mockResolvedValue(null);
+    prisma.subscriptionPlan.findUnique.mockResolvedValue({
+      id: 2, name: 'Pro', price: 1999, currency: 'INR', billingIntervalDays: 30, features: '[]',
+    });
+    // No existing coverage at all (default findFirst → null).
+    prisma.subscription.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 103, ...data }));
+
+    const res = await authedPost(makeApp(), '/api/subscriptions/verify-payment', {
+      razorpayOrderId: 'order_fresh', razorpayPaymentId: 'pay_fresh',
+      razorpaySignature: 'f'.repeat(64), planId: 2,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.scheduled).toBe(false);
+    const createArg = prisma.subscription.create.mock.calls[0][0].data;
+    expect(createArg.status).toBe('ACTIVE');
+    // startDate is "now" (within a couple seconds of the request).
+    expect(Date.now() - new Date(createArg.startDate).getTime()).toBeLessThan(5000);
+  });
+
+  test('logs the subscription spend to the POS drawer + surfaces posExpenseRecorded=true', async () => {
+    razorpayService.verifySignature.mockReturnValue(true);
+    prisma.subscription.findUnique.mockResolvedValue(null);
+    prisma.subscriptionPlan.findUnique.mockResolvedValue({
+      id: 2, name: 'Pro', price: 1999, currency: 'INR', billingIntervalDays: 30, features: '[]',
+    });
+    prisma.subscription.create.mockResolvedValue({
+      id: 101, planName: 'Pro', status: 'ACTIVE', endDate: new Date('2026-07-01'), amount: 1999,
+    });
+    posExpense.recordSubscriptionExpense.mockResolvedValue({ recorded: true, shiftId: 5 });
+
+    const res = await authedPost(makeApp(), '/api/subscriptions/verify-payment', {
+      razorpayOrderId: 'order_pos', razorpayPaymentId: 'pay_pos',
+      razorpaySignature: 'c'.repeat(64), planId: 2,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.posExpenseRecorded).toBe(true);
+    // Logged with the plan amount + a "Subscription: <plan>" reason, scoped to
+    // the JWT user + tenant.
+    expect(posExpense.recordSubscriptionExpense).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 1, userId: 7, amount: 1999, reason: 'Subscription: Pro',
+      }),
+    );
+  });
+
+  test('posExpenseRecorded=false when no shift is open (purchase still succeeds)', async () => {
+    razorpayService.verifySignature.mockReturnValue(true);
+    prisma.subscription.findUnique.mockResolvedValue(null);
+    prisma.subscriptionPlan.findUnique.mockResolvedValue({
+      id: 2, name: 'Pro', price: 1999, currency: 'INR', billingIntervalDays: 30, features: '[]',
+    });
+    prisma.subscription.create.mockResolvedValue({
+      id: 101, planName: 'Pro', status: 'ACTIVE', endDate: new Date('2026-07-01'), amount: 1999,
+    });
+    // default mock already returns { recorded: false }
+
+    const res = await authedPost(makeApp(), '/api/subscriptions/verify-payment', {
+      razorpayOrderId: 'order_noshift', razorpayPaymentId: 'pay_noshift',
+      razorpaySignature: 'd'.repeat(64), planId: 2,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.posExpenseRecorded).toBe(false);
+  });
+
+  test('a POS-expense failure never breaks the purchase (best-effort)', async () => {
+    razorpayService.verifySignature.mockReturnValue(true);
+    prisma.subscription.findUnique.mockResolvedValue(null);
+    prisma.subscriptionPlan.findUnique.mockResolvedValue({
+      id: 2, name: 'Pro', price: 1999, currency: 'INR', billingIntervalDays: 30, features: '[]',
+    });
+    prisma.subscription.create.mockResolvedValue({
+      id: 101, planName: 'Pro', status: 'ACTIVE', endDate: new Date('2026-07-01'), amount: 1999,
+    });
+    posExpense.recordSubscriptionExpense.mockRejectedValue(new Error('drawer exploded'));
+
+    const res = await authedPost(makeApp(), '/api/subscriptions/verify-payment', {
+      razorpayOrderId: 'order_err', razorpayPaymentId: 'pay_err',
+      razorpaySignature: 'e'.repeat(64), planId: 2,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.posExpenseRecorded).toBe(false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -506,12 +661,25 @@ describe('PATCH /:id/cancel — cancel + conditional user downgrade', () => {
     expect(prisma.subscription.update).not.toHaveBeenCalled();
   });
 
+  // The cancel handler issues several findFirst reads: (1) the target-sub
+  // lookup (where.id present); (2+) reconcileSubscriptions() settling the
+  // timeline; (3) the "any coverage left?" check (where.status.in). Key the
+  // mock on the where clause rather than call order so the tests don't bind to
+  // the internal sequence.
+  function mockCancelFindFirst({ target, coverage }) {
+    prisma.subscription.findFirst.mockImplementation(({ where }) => {
+      if (where && where.id !== undefined) return Promise.resolve(target);
+      // remaining-coverage check (status: { in: [...] }) or reconcile's
+      // ACTIVE/SCHEDULED probes — return whatever live coverage the test set.
+      return Promise.resolve(coverage);
+    });
+  }
+
   test('200 flips status to CANCELLED + downgrades user when no other ACTIVE subs remain', async () => {
-    // First findFirst — the lookup of the sub being cancelled (returns it).
-    // Second findFirst — the "any other ACTIVE sub?" check (returns null).
-    prisma.subscription.findFirst
-      .mockResolvedValueOnce({ id: 50, userId: 7, tenantId: 1, status: 'ACTIVE' })
-      .mockResolvedValueOnce(null);
+    mockCancelFindFirst({
+      target: { id: 50, userId: 7, tenantId: 1, status: 'ACTIVE' },
+      coverage: null, // nothing left after cancelling
+    });
     prisma.subscription.update.mockResolvedValue({ id: 50, status: 'CANCELLED' });
 
     const res = await authedPatch(makeApp(), '/api/subscriptions/50/cancel');
@@ -523,7 +691,7 @@ describe('PATCH /:id/cancel — cancel + conditional user downgrade', () => {
       where: { id: 50 },
       data: { status: 'CANCELLED' },
     });
-    // User downgraded because no other ACTIVE sub remains.
+    // User downgraded because no other ACTIVE/SCHEDULED sub remains.
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 7 },
       data: { subscriptionStatus: 'CANCELLED' },
@@ -531,9 +699,10 @@ describe('PATCH /:id/cancel — cancel + conditional user downgrade', () => {
   });
 
   test('200 cancels target sub but LEAVES user ACTIVE when another ACTIVE sub remains', async () => {
-    prisma.subscription.findFirst
-      .mockResolvedValueOnce({ id: 50, userId: 7, tenantId: 1, status: 'ACTIVE' })
-      .mockResolvedValueOnce({ id: 51, userId: 7, tenantId: 1, status: 'ACTIVE' });
+    mockCancelFindFirst({
+      target: { id: 50, userId: 7, tenantId: 1, status: 'ACTIVE' },
+      coverage: { id: 51, userId: 7, tenantId: 1, status: 'ACTIVE' },
+    });
     prisma.subscription.update.mockResolvedValue({ id: 50, status: 'CANCELLED' });
 
     const res = await authedPatch(makeApp(), '/api/subscriptions/50/cancel');

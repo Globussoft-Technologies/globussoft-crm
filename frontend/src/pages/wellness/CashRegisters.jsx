@@ -146,6 +146,11 @@ export default function CashRegisters({ embedded = false } = {}) {
   const [txTab, setTxTab] = useState('bookings');
   const [txDateFilter, setTxDateFilter] = useState(EMPTY_DATE_FILTER);
 
+  // Petty-cash ledger (Expenses tab) + the add-expense form.
+  const [pettyCash, setPettyCash] = useState([]);
+  const [expenseForm, setExpenseForm] = useState({ amount: '', reason: '', category: 'GENERAL' });
+  const [savingExpense, setSavingExpense] = useState(false);
+
   // ── Loaders ───────────────────────────────────────────────────────
   const loadRegisters = async () => {
     setLoading(true);
@@ -191,15 +196,26 @@ export default function CashRegisters({ embedded = false } = {}) {
   const loadShiftDetail = async (shiftId) => {
     if (!shiftId) {
       setSelectedShift(null);
+      setPettyCash([]);
       return;
     }
     setShiftLoading(true);
     try {
       const detail = await fetchApi(`/api/pos/shifts/${shiftId}`);
       setSelectedShift(detail);
+      // Petty-cash ledger powers the Expenses tab (deposits/withdrawals +
+      // auto-logged subscription expenses). Best-effort — a ledger fetch
+      // failure shouldn't blank the whole shift view.
+      try {
+        const ledger = await fetchApi(`/api/pos/shifts/${shiftId}/petty-cash`);
+        setPettyCash(Array.isArray(ledger) ? ledger : []);
+      } catch {
+        setPettyCash([]);
+      }
     } catch (e) {
       notify.error(e.message || 'Failed to load shift');
       setSelectedShift(null);
+      setPettyCash([]);
     }
     setShiftLoading(false);
   };
@@ -392,6 +408,7 @@ export default function CashRegisters({ embedded = false } = {}) {
         body: JSON.stringify({ amount, reason: reason.trim() }),
       });
       notify.success(`${verb} of ${amount} recorded`);
+      await loadShiftDetail(selectedShift.id);
       await loadRegisters();
     } catch (_err) {
       /* fetchApi already toasted */
@@ -400,6 +417,40 @@ export default function CashRegisters({ embedded = false } = {}) {
 
   const handleDeposit = () => handlePettyCashEntry('deposit');
   const handleWithdrawal = () => handlePettyCashEntry('withdraw');
+
+  // Add a categorised expense (e.g. a Subscription) straight into the Expenses
+  // tab — a WITHDRAWAL petty-cash row tagged with the chosen category.
+  const handleAddExpense = async (e) => {
+    e.preventDefault();
+    if (!selectedShift?.id) return;
+    const amount = parseFloat(expenseForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      notify.error('Amount must be a positive number');
+      return;
+    }
+    if (!expenseForm.reason.trim()) {
+      notify.error('Reason is required');
+      return;
+    }
+    setSavingExpense(true);
+    try {
+      await fetchApi(`/api/pos/shifts/${selectedShift.id}/withdraw`, {
+        method: 'POST',
+        body: JSON.stringify({
+          amount,
+          reason: expenseForm.reason.trim(),
+          category: expenseForm.category,
+        }),
+      });
+      notify.success('Expense recorded');
+      setExpenseForm({ amount: '', reason: '', category: 'GENERAL' });
+      await loadShiftDetail(selectedShift.id);
+      await loadRegisters();
+    } catch (_err) {
+      /* fetchApi already toasted */
+    }
+    setSavingExpense(false);
+  };
 
   // ── Computed views ────────────────────────────────────────────────
   const selectedRegister = useMemo(
@@ -434,8 +485,14 @@ export default function CashRegisters({ embedded = false } = {}) {
     const partial = sales.filter(
       (s) => s.paymentMethod === 'COMBINED' && s.status === 'COMPLETED',
     );
-    return { bookings, partial, expenses: [] };
-  }, [selectedShift, txDateFilter]);
+    // Expenses = cash OUTFLOWS from the drawer (WITHDRAWAL petty-cash rows),
+    // including the auto-logged SUBSCRIPTION expenses. Newest first.
+    const expenses = (Array.isArray(pettyCash) ? pettyCash : [])
+      .filter((e) => e.type === 'WITHDRAWAL')
+      .slice()
+      .reverse();
+    return { bookings, partial, expenses };
+  }, [selectedShift, pettyCash, txDateFilter]);
 
   const visibleTransactions = transactions[txTab] || [];
 
@@ -1023,6 +1080,65 @@ export default function CashRegisters({ embedded = false } = {}) {
               })}
             </div>
 
+            {/* Add-expense form — Expenses tab, open shift, admin/manager.
+                Records a categorised WITHDRAWAL (e.g. a Subscription) into the
+                drawer. Subscription purchases also auto-land here. */}
+            {txTab === 'expenses' &&
+              isAdminOrManager &&
+              selectedShift &&
+              selectedShift.status === 'OPEN' && (
+                <form
+                  onSubmit={handleAddExpense}
+                  style={{
+                    display: 'flex',
+                    gap: '0.5rem',
+                    flexWrap: 'wrap',
+                    marginBottom: '0.75rem',
+                    alignItems: 'center',
+                  }}
+                >
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Amount"
+                    value={expenseForm.amount}
+                    onChange={(e) =>
+                      setExpenseForm((f) => ({ ...f, amount: e.target.value }))
+                    }
+                    style={{ ...inputStyle, flex: '1 1 110px' }}
+                    aria-label="Expense amount"
+                  />
+                  <input
+                    placeholder="Reason — e.g. Pro plan"
+                    value={expenseForm.reason}
+                    onChange={(e) =>
+                      setExpenseForm((f) => ({ ...f, reason: e.target.value }))
+                    }
+                    style={{ ...inputStyle, flex: '2 1 200px' }}
+                    aria-label="Expense reason"
+                  />
+                  <select
+                    value={expenseForm.category}
+                    onChange={(e) =>
+                      setExpenseForm((f) => ({ ...f, category: e.target.value }))
+                    }
+                    style={{ ...inputStyle, flex: '1 1 140px' }}
+                    aria-label="Expense type"
+                  >
+                    <option value="GENERAL">General</option>
+                    <option value="SUBSCRIPTION">Subscription</option>
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={savingExpense}
+                    style={primaryButtonStyle}
+                  >
+                    <Plus size={14} /> {savingExpense ? 'Adding…' : 'Add expense'}
+                  </button>
+                </form>
+              )}
+
             {shiftLoading && <div>Loading transactions…</div>}
 
             {!shiftLoading && !selectedShift && (
@@ -1036,7 +1152,7 @@ export default function CashRegisters({ embedded = false } = {}) {
               visibleTransactions.length === 0 && (
                 <div style={emptyStateStyle}>
                   {txTab === 'expenses' ? (
-                    'No deposit/withdrawal entries yet. (Cash expense ledger ships with the #779 backend follow-up.)'
+                    'No expenses recorded on this shift yet. Add one below, or a subscription purchase will appear here automatically.'
                   ) : (
                     <>
                       No {txTab === 'bookings' ? 'cash bookings' : 'partial-cash sales'}{' '}
@@ -1059,67 +1175,133 @@ export default function CashRegisters({ embedded = false } = {}) {
                   gap: '0.4rem',
                 }}
               >
-                {visibleTransactions.map((sale) => (
-                  <li
-                    key={sale.id}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '0.6rem 0.75rem',
-                      background: 'rgba(255,255,255,0.03)',
-                      borderRadius: 8,
-                      fontSize: '0.85rem',
-                    }}
-                    data-testid={`tx-row-${sale.id}`}
-                  >
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                      }}
-                    >
-                      <CircleDollarSign
-                        size={14}
-                        color="var(--success-color)"
-                      />
-                      <div>
-                        <div style={{ fontWeight: 500 }}>
-                          {sale.invoiceNumber || `Sale #${sale.id}`}
-                        </div>
+                {txTab === 'expenses'
+                  ? visibleTransactions.map((exp) => (
+                      <li
+                        key={exp.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '0.6rem 0.75rem',
+                          background: 'rgba(255,255,255,0.03)',
+                          borderRadius: 8,
+                          fontSize: '0.85rem',
+                        }}
+                        data-testid={`expense-row-${exp.id}`}
+                      >
                         <div
                           style={{
-                            fontSize: '0.7rem',
-                            color: 'var(--text-secondary)',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '0.25rem',
+                            gap: '0.5rem',
                           }}
                         >
-                          {sale.patientId ? (
-                            <>
-                              <UserCircle2 size={10} />
-                              Patient #{sale.patientId}
-                            </>
-                          ) : (
-                            <>
-                              <UserX size={10} />
-                              Walk-in
-                            </>
-                          )}
-                          {sale.createdAt && (
-                            <span>· {formatDateTime(sale.createdAt)}</span>
-                          )}
-                          <span>· {sale.paymentMethod}</span>
+                          <ArrowUpFromLine size={14} color="var(--accent-color)" />
+                          <div>
+                            <div
+                              style={{
+                                fontWeight: 500,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.4rem',
+                              }}
+                            >
+                              {exp.reason || 'Expense'}
+                              {exp.category && exp.category !== 'GENERAL' && (
+                                <span
+                                  style={{
+                                    fontSize: '0.65rem',
+                                    fontWeight: 600,
+                                    textTransform: 'capitalize',
+                                    padding: '0.1rem 0.45rem',
+                                    borderRadius: 999,
+                                    background: 'rgba(124,196,180,0.18)',
+                                    color: 'var(--primary-color, var(--accent-color))',
+                                  }}
+                                >
+                                  {exp.category.toLowerCase()}
+                                </span>
+                              )}
+                            </div>
+                            {exp.createdAt && (
+                              <div
+                                style={{
+                                  fontSize: '0.7rem',
+                                  color: 'var(--text-secondary)',
+                                }}
+                              >
+                                {formatDateTime(exp.createdAt)}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                    <div style={{ fontWeight: 600 }}>
-                      {formatMoney(sale.total)}
-                    </div>
-                  </li>
-                ))}
+                        <div style={{ fontWeight: 600, color: 'var(--accent-color)' }}>
+                          −{formatMoney(exp.amount)}
+                        </div>
+                      </li>
+                    ))
+                  : visibleTransactions.map((sale) => (
+                      <li
+                        key={sale.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '0.6rem 0.75rem',
+                          background: 'rgba(255,255,255,0.03)',
+                          borderRadius: 8,
+                          fontSize: '0.85rem',
+                        }}
+                        data-testid={`tx-row-${sale.id}`}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                          }}
+                        >
+                          <CircleDollarSign
+                            size={14}
+                            color="var(--success-color)"
+                          />
+                          <div>
+                            <div style={{ fontWeight: 500 }}>
+                              {sale.invoiceNumber || `Sale #${sale.id}`}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: '0.7rem',
+                                color: 'var(--text-secondary)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                              }}
+                            >
+                              {sale.patientId ? (
+                                <>
+                                  <UserCircle2 size={10} />
+                                  Patient #{sale.patientId}
+                                </>
+                              ) : (
+                                <>
+                                  <UserX size={10} />
+                                  Walk-in
+                                </>
+                              )}
+                              {sale.createdAt && (
+                                <span>· {formatDateTime(sale.createdAt)}</span>
+                              )}
+                              <span>· {sale.paymentMethod}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ fontWeight: 600 }}>
+                          {formatMoney(sale.total)}
+                        </div>
+                      </li>
+                    ))}
               </ul>
             )}
           </div>

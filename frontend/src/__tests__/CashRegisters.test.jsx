@@ -39,7 +39,7 @@
  * test conventions in this same directory.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -146,7 +146,7 @@ const OPEN_SHIFT = {
 };
 
 // ── Mock builders ────────────────────────────────────────────────────
-function makeMock({ registers = [REGISTER_OPEN, REGISTER_CLOSED], openShiftFor = { 11: OPEN_SHIFT }, shiftDetail = OPEN_SHIFT } = {}) {
+function makeMock({ registers = [REGISTER_OPEN, REGISTER_CLOSED], openShiftFor = { 11: OPEN_SHIFT }, shiftDetail = OPEN_SHIFT, pettyCash = [] } = {}) {
   return (url, opts = {}) => {
     const method = opts.method || 'GET';
     if (url === '/api/pos/registers' && method === 'GET') {
@@ -160,6 +160,14 @@ function makeMock({ registers = [REGISTER_OPEN, REGISTER_CLOSED], openShiftFor =
       const regId = parseInt(shiftListMatch[1], 10);
       const s = openShiftFor[regId];
       return Promise.resolve(s ? [s] : []);
+    }
+    // Petty-cash ledger powers the Expenses tab — match BEFORE the bare
+    // /shifts/:id detail route (more specific path first).
+    if (/^\/api\/pos\/shifts\/\d+\/petty-cash$/.test(url) && method === 'GET') {
+      return Promise.resolve(pettyCash);
+    }
+    if (/^\/api\/pos\/shifts\/\d+\/withdraw$/.test(url) && method === 'POST') {
+      return Promise.resolve({ id: 555, type: 'WITHDRAWAL' });
     }
     const shiftDetailMatch = url.match(/^\/api\/pos\/shifts\/(\d+)$/);
     if (shiftDetailMatch && method === 'GET') {
@@ -434,6 +442,73 @@ describe('CashRegisters — #779 shift lifecycle', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+// Expenses tab — petty-cash WITHDRAWAL ledger + Subscription category
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — Expenses tab + subscription expense', () => {
+  const SUBSCRIPTION_EXPENSE = {
+    id: 9001,
+    type: 'WITHDRAWAL',
+    category: 'SUBSCRIPTION',
+    amount: 1999,
+    reason: 'Subscription: Pro',
+    createdAt: '2026-05-18T10:00:00.000Z',
+  };
+
+  it('renders WITHDRAWAL entries with a Subscription badge in the Expenses tab', async () => {
+    fetchApiMock.mockImplementation(makeMock({ pettyCash: [SUBSCRIPTION_EXPENSE] }));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    // Switch to the Expenses Cash tab.
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /Expenses Cash/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /Expenses Cash/i }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('expense-row-9001')).toBeInTheDocument(),
+    );
+    const row = screen.getByTestId('expense-row-9001');
+    expect(within(row).getByText('Subscription: Pro')).toBeInTheDocument(); // reason
+    expect(within(row).getByText('subscription')).toBeInTheDocument(); // category badge (lowercased)
+    expect(within(row).getByText(/^−/)).toBeInTheDocument(); // outflow amount (minus prefix)
+  });
+
+  it('Add-expense form POSTs /withdraw with the chosen SUBSCRIPTION category', async () => {
+    fetchApiMock.mockImplementation(makeMock({ pettyCash: [] }));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /Expenses Cash/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /Expenses Cash/i }));
+
+    // Fill the add-expense form: amount, reason, type=Subscription.
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Expense amount/i)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(/Expense amount/i), { target: { value: '1999' } });
+    fireEvent.change(screen.getByLabelText(/Expense reason/i), { target: { value: 'Pro plan' } });
+    fireEvent.change(screen.getByLabelText(/Expense type/i), { target: { value: 'SUBSCRIPTION' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add expense/i }));
+
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => /\/withdraw$/.test(url) && opts?.method === 'POST',
+      );
+      expect(calls.length).toBe(1);
+      const body = JSON.parse(calls[0][1].body);
+      expect(body).toEqual({ amount: 1999, reason: 'Pro plan', category: 'SUBSCRIPTION' });
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
 // #781 — recent transactions split into 3 buckets
 // ─────────────────────────────────────────────────────────────────────
 describe('CashRegisters — #781 transactions tabs', () => {
@@ -493,8 +568,8 @@ describe('CashRegisters — #781 transactions tabs', () => {
     expect(screen.queryByTestId('tx-row-7002')).not.toBeInTheDocument();
   });
 
-  it('Expenses Cash tab is empty + surfaces the "backend pending" copy', async () => {
-    fetchApiMock.mockImplementation(makeMock());
+  it('Expenses Cash tab shows the empty-state copy when there are no ledger entries', async () => {
+    fetchApiMock.mockImplementation(makeMock({ pettyCash: [] }));
     renderPage();
 
     await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
@@ -507,7 +582,7 @@ describe('CashRegisters — #781 transactions tabs', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText(/Cash expense ledger ships with the #779 backend follow-up/i),
+        screen.getByText(/No expenses recorded on this shift yet/i),
       ).toBeInTheDocument(),
     );
   });

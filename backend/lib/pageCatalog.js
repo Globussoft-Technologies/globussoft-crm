@@ -39,6 +39,14 @@
  *                         sidebar-only UX rule for de-cluttering admin nav
  *                         from clinical / operational day-to-day pages they
  *                         don't typically use. Strictly UX; no access change.
+ *   customerOnly        — (optional, default false) if true, the wellness
+ *                         sidebar surfaces this page ONLY to customer-tier
+ *                         roles (role === 'USER' || role === 'CUSTOMER').
+ *                         Admin / manager / staff (any other role) don't see
+ *                         it in their nav. Used for customer-facing storefront
+ *                         surfaces (e.g. Buy Gift Cards). Strictly a sidebar-
+ *                         only UX rule — the page stays accessible by direct
+ *                         URL and the backend route's own auth is unchanged.
  *
  * Adding a new page = add one row here + one entry to PAGE_ICON_BY_PATH
  * in Sidebar.jsx. No other code change anywhere. Removing a page row is
@@ -417,6 +425,24 @@ const PAGE_CATALOG = [
     // + buy. Backend route is auth-only too. Mirrors the open-to-all-users
     // shape used by /home + other low-privilege storefront surfaces.
     requiredPermissions: [],
+    // This is a CUSTOMER-facing storefront, so the sidebar entry is only
+    // surfaced to customer-tier roles (USER / CUSTOMER). Admin / manager /
+    // staff roles don't see it in their nav. Strictly a sidebar-only UX
+    // rule — the page stays reachable by direct URL and the backend route
+    // remains auth-only (so any logged-in user can still buy). See the
+    // customerOnly flag doc in the catalog header above.
+    customerOnly: true,
+  },
+  {
+    path: '/wellness/my-transactions',
+    label: 'My Transactions',
+    description: 'Your own payment history — purchases, treatments, gift cards, wallet + subscriptions',
+    category: 'Finance',
+    // Open to any authenticated user; the backend endpoint scopes the data
+    // to the caller's own Patient. customerOnly keeps the sidebar entry to
+    // customer-tier roles (USER / CUSTOMER) so staff / admin don't see it.
+    requiredPermissions: [],
+    customerOnly: true,
   },
   {
     path: '/wellness/coupons',

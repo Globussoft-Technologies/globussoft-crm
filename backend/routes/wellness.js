@@ -9751,6 +9751,237 @@ router.get("/portal/prescriptions", verifyPatientToken, requirePortalPermission(
   }
 });
 
+// GET /my-transactions — the signed-in user/customer's own financial history.
+//
+// Aggregates every money-touching record tied to the caller's own Patient into
+// ONE normalised, date-sorted timeline so the user can see, in one place,
+// everything they paid for — POS purchases (services / products / memberships
+// / gift cards), online gateway payments, wallet top-ups + spends, membership
+// purchases, treatment-plan packages, gift cards, and platform subscriptions.
+//
+// Auth: the normal app JWT via the global guard (verifyToken populates
+// req.user). NOT mounted under /portal so it works for BOTH a customer-tier
+// USER and a self-registered CUSTOMER — whoever is signed in. We resolve the
+// caller's OWN Patient via Patient.userId and filter every query on that
+// patient's id, so one user can never read another's history. A signed-in
+// user with no linked Patient simply gets an empty history (not an error).
+//
+// Summary math (de-dup reasoning, documented so future edits don't double
+// count): `totalPaid` = value of purchases the customer made =
+//   Σ COMPLETED Sale.total − Σ REFUNDED Sale.total   (POS, any tender)
+//   + Σ SUCCESS Payment.amount                        (online gateway)
+//   + Σ non-cancelled Subscription.amount             (recurring plans)
+// Wallet TOP_UPs are a FUNDING mechanism (money loaded, later spent at POS
+// which is already in Sale.total) so they are reported SEPARATELY under the
+// wallet block rather than added into totalPaid — adding both would count the
+// same rupee twice (once on top-up, once on the wallet-tendered sale).
+router.get("/my-transactions", verifyToken, async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    const tenantId = req.user.tenantId;
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { defaultCurrency: true },
+    });
+    const currency = tenant?.defaultCurrency || "INR";
+
+    // Resolve the caller's own Patient. CUSTOMER self-registered users link
+    // via Patient.userId; staff/USER who are also a patient resolve the same
+    // way. No linked Patient ⇒ empty history (a 200, not a 404) so the page
+    // renders a clean empty state rather than an error toast.
+    const patient = await prisma.patient.findFirst({
+      where: { userId: req.user.userId, tenantId },
+      select: { id: true, tenantId: true, userId: true },
+    });
+    if (!patient) {
+      return res.json({
+        currency,
+        summary: {
+          totalPaid: 0,
+          posTotal: 0,
+          onlineTotal: 0,
+          subscriptionsTotal: 0,
+          walletBalance: 0,
+          walletTopUps: 0,
+          transactionCount: 0,
+        },
+        transactions: [],
+      });
+    }
+
+    // Optional ?from / ?to ISO date filtering. Invalid values are ignored
+    // (the page only ever sends well-formed ISO strings or nothing).
+    const fromDate = req.query.from ? new Date(req.query.from) : null;
+    const toDate = req.query.to ? new Date(req.query.to) : null;
+    const range = {};
+    if (fromDate && !Number.isNaN(fromDate.getTime())) range.gte = fromDate;
+    if (toDate && !Number.isNaN(toDate.getTime())) range.lte = toDate;
+    const hasRange = Object.keys(range).length > 0;
+    const onCreated = hasRange ? { createdAt: range } : {};
+
+    // 1. POS sales (services / products / memberships / gift cards rung up
+    //    at the till) + their line-item breakdown.
+    const sales = await prisma.sale.findMany({
+      where: { patientId: patient.id, ...onCreated },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      include: {
+        lineItems: {
+          select: {
+            id: true,
+            lineType: true,
+            name: true,
+            quantity: true,
+            unitPrice: true,
+            lineTotal: true,
+          },
+        },
+      },
+    });
+
+    // 2. Wallet ledger (top-ups, redemptions, cashback, gift-card moves).
+    const wallet = await prisma.wallet.findFirst({
+      where: { patientId: patient.id },
+      select: { id: true, balance: true, currency: true },
+    });
+    let walletTxns = [];
+    if (wallet) {
+      walletTxns = await prisma.walletTransaction.findMany({
+        where: { walletId: wallet.id, ...onCreated },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+      });
+    }
+
+    // 3. Membership purchases.
+    const memberships = await prisma.membership.findMany({
+      where: { patientId: patient.id, ...onCreated },
+      orderBy: { createdAt: "desc" },
+      include: { plan: { select: { name: true, price: true, currency: true } } },
+    });
+
+    // 4. Treatment-plan packages (startedAt is the purchase moment).
+    const plans = await prisma.treatmentPlan.findMany({
+      where: {
+        patientId: patient.id,
+        ...(hasRange ? { startedAt: range } : {}),
+      },
+      orderBy: { startedAt: "desc" },
+      include: { service: { select: { name: true } } },
+    });
+
+    // 5. Gift cards received or redeemed by this patient (informational —
+    //    NOT added to totalPaid; the purchase itself already shows up as a
+    //    POS sale line / wallet move).
+    const giftCards = await prisma.giftCard.findMany({
+      where: {
+        OR: [{ issuedTo: patient.id }, { redeemedBy: patient.id }],
+        ...onCreated,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    // 6. Online gateway payments tied to this patient's visit invoices.
+    const visits = await prisma.visit.findMany({
+      where: { patientId: patient.id },
+      select: { id: true },
+    });
+    const visitIds = visits.map((v) => v.id);
+    let invoicePayments = [];
+    if (visitIds.length) {
+      const invoices = await prisma.invoice.findMany({
+        where: { visitId: { in: visitIds } },
+        select: { id: true, invoiceNum: true },
+      });
+      const invoiceById = new Map(invoices.map((i) => [i.id, i]));
+      const invoiceIds = invoices.map((i) => i.id);
+      if (invoiceIds.length) {
+        const rows = await prisma.payment.findMany({
+          where: { invoiceId: { in: invoiceIds }, ...onCreated },
+          orderBy: { createdAt: "desc" },
+          take: 200,
+        });
+        invoicePayments = rows.map((p) => ({
+          ...p,
+          invoiceNum: p.invoiceId
+            ? invoiceById.get(p.invoiceId)?.invoiceNum || null
+            : null,
+          kind: "invoice",
+        }));
+      }
+    }
+
+    // 6b. Gift-card-purchase gateway payments. These have invoiceId = null
+    //     (the buyer's id lives in Payment.metadata), so the invoice join
+    //     above misses them. This is the ACTUAL money the customer spent
+    //     buying a gift card — the matching EXPENSE for the wallet credit
+    //     that shows separately as a WalletTransaction. Fetch the tenant's
+    //     invoice-less payments raw; buildTransactionTimeline() filters them
+    //     down to this caller's confirmed gift-card buys via the metadata.
+    const giftCardPaymentRows = await prisma.payment.findMany({
+      where: { tenantId, invoiceId: null, ...onCreated },
+      orderBy: { createdAt: "desc" },
+      take: 500,
+    });
+
+    // 7. Platform / recurring subscriptions (User-level, not Patient).
+    let subscriptions = [];
+    if (patient.userId) {
+      subscriptions = await prisma.subscription.findMany({
+        where: {
+          userId: patient.userId,
+          tenantId,
+          ...(hasRange ? { startDate: range } : {}),
+        },
+        orderBy: { startDate: "desc" },
+      });
+    }
+
+    // ── Normalise + summarise (pure helper, unit-tested separately) ──────
+    const { buildTransactionTimeline } = require("../lib/transactionTimeline");
+    const { transactions: txns, summary } = buildTransactionTimeline({
+      patient,
+      sales,
+      walletTxns,
+      memberships,
+      plans,
+      giftCards,
+      invoicePayments,
+      giftCardPaymentRows,
+      subscriptions,
+      walletBalance: wallet?.balance || 0,
+    });
+
+    // Best-effort PHI-read audit, mirroring the sibling portal list routes.
+    try {
+      await writeAudit(
+        "Payment",
+        "PATIENT_LIST_READ",
+        null,
+        null,
+        tenantId,
+        {
+          count: txns.length,
+          source: "portal/transactions",
+          patientId: patient.id,
+        },
+        { actorType: "patient", patientId: patient.id },
+      );
+    } catch (auditErr) {
+      console.warn(
+        "[wellness] audit portal/transactions failed:",
+        auditErr.message,
+      );
+    }
+
+    res.json({ currency, summary, transactions: txns });
+  } catch (e) {
+    console.error("[wellness] portal transactions error:", e.message);
+    res.status(500).json({ error: "Failed to load transactions" });
+  }
+});
+
 // GET /portal/prescriptions/:id/pdf — patient self-download of an Rx PDF.
 //
 // Staff use the sibling `/prescriptions/:id/pdf` endpoint which runs under
@@ -10011,30 +10242,19 @@ router.get("/invoices/:id/branded-pdf", async (req, res) => {
 
 // ── Agent C: White-label branding (logo + brand color) ─────────────
 //
-// Logos stored under uploads/branding/tenant-<id>/logo.<ext>.
-// Limit: 2 MB, common image types only. ADMIN only for mutations; GET is
+// Logo storage mirrors the visit-photo contract: S3-primary, local-FS
+// fallback. When AWS creds are configured (S3_BUCKET_NAME set) the logo is
+// uploaded to S3 under branding/tenant-<id>/ and we store the S3 URL;
+// otherwise it persists to uploads/branding/tenant-<id>/ and we store the
+// /api/uploads/... path served statically by server.js. Replacing the logo
+// deletes the previous asset (S3 object or local file) so nothing orphans.
+// Limit: 20 MB, common image types only. ADMIN only for mutations; GET is
 // readable by any authenticated tenant user (sidebar + login flows).
 
+// memoryStorage so the buffer is available to hand to S3 (uploadImage) or to
+// write to disk in the fallback path.
 const brandingLogoUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, _file, cb) => {
-      const dir = path.join(
-        __dirname,
-        "..",
-        "uploads",
-        "branding",
-        `tenant-${req.user.tenantId}`,
-      );
-      fs.mkdirSync(dir, { recursive: true });
-      cb(null, dir);
-    },
-    filename: (_req, file, cb) => {
-      const ext = (path.extname(file.originalname) || ".png")
-        .toLowerCase()
-        .replace(/[^.a-z0-9]/g, "");
-      cb(null, `logo${ext || ".png"}`);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
   fileFilter: (_req, file, cb) => {
     const ok = /^image\/(png|jpe?g|gif|webp|svg\+xml)$/i.test(
@@ -10045,6 +10265,31 @@ const brandingLogoUpload = multer({
     cb(null, true);
   },
 });
+
+// Best-effort delete of a previously-saved logo so replacing the image never
+// leaves an orphan behind. Handles both S3 URLs (http/https → deleteFile) and
+// local paths (/uploads/... or /api/uploads/... → fs.unlink). Never throws —
+// a failed cleanup must not block the new logo from being saved.
+async function deleteOldBrandingLogo(oldLogoUrl) {
+  if (!oldLogoUrl) return;
+  try {
+    if (/^https?:\/\//i.test(oldLogoUrl)) {
+      // Remote URL — remove the object if it lives in our S3 bucket.
+      const fileKey = extractKeyFromUrl(oldLogoUrl);
+      if (fileKey) await deleteFile(fileKey);
+    } else {
+      // Local path — map /uploads/<rest> or /api/uploads/<rest> back to disk.
+      const m = oldLogoUrl.match(/\/(?:api\/)?uploads\/(.+)$/);
+      if (m) {
+        const rel = m[1].split("?")[0];
+        const abs = path.join(__dirname, "..", "uploads", rel);
+        if (fs.existsSync(abs)) fs.unlinkSync(abs);
+      }
+    }
+  } catch (e) {
+    console.warn("[wellness] old logo cleanup warning:", e.message);
+  }
+}
 
 function requireTenantAdmin(req, res, next) {
   if (!req.user || req.user.role !== "ADMIN") {
@@ -10065,7 +10310,7 @@ router.post(
       if (err) {
         const msg =
           err.code === "LIMIT_FILE_SIZE"
-            ? "Logo file too large (max 2 MB)"
+            ? "Logo file too large (max 20 MB)"
             : err.message || "Logo upload failed";
         return res.status(400).json({ error: msg });
       }
@@ -10078,11 +10323,55 @@ router.post(
         return res
           .status(400)
           .json({ error: "No logo file provided (field 'logo')" });
-      const logoUrl = `/uploads/branding/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
+
+      // Capture the currently-saved logo BEFORE we overwrite the column, so we
+      // can delete the old asset once the new one is safely in place.
+      const current = await prisma.tenant.findUnique({
+        where: { id: req.user.tenantId },
+        select: { logoUrl: true },
+      });
+      const oldLogoUrl = current ? current.logoUrl : null;
+
+      // S3-primary, local-FS fallback (same contract as visit photos).
+      let logoUrl;
+      if (S3_BUCKET_NAME) {
+        logoUrl = await uploadImage(
+          req.file.buffer,
+          req.file.originalname || "logo.png",
+          req.file.mimetype,
+          `branding/tenant-${req.user.tenantId}`,
+        );
+      } else {
+        const dir = path.join(
+          __dirname,
+          "..",
+          "uploads",
+          "branding",
+          `tenant-${req.user.tenantId}`,
+        );
+        fs.mkdirSync(dir, { recursive: true });
+        const ext =
+          (path.extname(req.file.originalname || "") || ".png")
+            .toLowerCase()
+            .replace(/[^.a-z0-9]/g, "") || ".png";
+        // Timestamped name so each replacement is a distinct file — the old one
+        // is then explicitly deleted below, and cached URLs never serve stale art.
+        const filename = `logo-${Date.now()}${ext}`;
+        fs.writeFileSync(path.join(dir, filename), req.file.buffer);
+        logoUrl = `/api/uploads/branding/tenant-${req.user.tenantId}/${filename}`;
+      }
+
       await prisma.tenant.update({
         where: { id: req.user.tenantId },
         data: { logoUrl },
       });
+
+      // Replace = delete the previous asset. Best-effort, after the new URL is
+      // persisted, and skipped when the path is unchanged.
+      if (oldLogoUrl && oldLogoUrl !== logoUrl) {
+        await deleteOldBrandingLogo(oldLogoUrl);
+      }
+
       res.json({ logoUrl });
     } catch (e) {
       console.error("[wellness] branding logo error:", e.message);
@@ -11758,7 +12047,65 @@ async function loadStorefrontCard(tenantId, id) {
   return card;
 }
 
-// POST /giftcards/:id/purchase/order — body: { patientId }. Creates a
+// Resolve (or lazily create) the Patient that represents the signed-in user
+// THEMSELVES. Used by the customer storefront's "buy for myself" path so a
+// customer doesn't have to search the patient directory to credit their own
+// wallet. Mirrors verifyPatientToken's Patient.userId resolve-or-create
+// ladder: (1) existing link, (2) claim an unlinked same-email patient,
+// (3) create a minimal patient linked by userId. Returns { id, name }.
+async function resolveSelfPatient(user) {
+  const tenantId = user.tenantId;
+  const userId = user.userId;
+  let patient = await prisma.patient.findFirst({
+    where: { userId, tenantId },
+    select: { id: true, name: true },
+  });
+  if (patient) return patient;
+
+  const userRow = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { name: true, email: true },
+  });
+  if (!userRow) {
+    const e = new Error("User not found");
+    e.status = 401;
+    throw e;
+  }
+
+  // Claim an unlinked patient with the same email so we don't fork a
+  // clinical record that staff may have created first.
+  if (userRow.email) {
+    const claimable = await prisma.patient.findFirst({
+      where: { tenantId, email: userRow.email, userId: null },
+      select: { id: true, name: true },
+    });
+    if (claimable) {
+      await prisma.patient.update({
+        where: { id: claimable.id },
+        data: { userId },
+      });
+      return claimable;
+    }
+  }
+
+  patient = await prisma.patient.create({
+    data: {
+      name: userRow.name || userRow.email || "Customer",
+      email: userRow.email || null,
+      tenantId,
+      userId,
+      source: "self-register",
+    },
+    select: { id: true, name: true },
+  });
+  return patient;
+}
+
+// POST /giftcards/:id/purchase/order — body: { patientId? }. Omit patientId
+// to buy for YOURSELF (the storefront default — the credit lands on the
+// signed-in user's own wallet); supply patientId to GIFT the card to another
+// patient. Creates a Razorpay order for the card's `price` (sale price),
+// records a Payment
 // Razorpay order for the card's `price` (sale price), records a Payment
 // row whose metadata.giftCardId + metadata.patientId carry the context
 // the confirm handler needs to credit the right wallet.
@@ -11777,19 +12124,39 @@ router.post("/giftcards/:id/purchase/order", async (req, res) => {
     if (!Number.isInteger(id)) {
       return res.status(400).json({ error: "Invalid gift card id" });
     }
-    const patientId = parseInt(req.body?.patientId, 10);
-    if (!Number.isInteger(patientId) || patientId <= 0) {
-      return res
-        .status(400)
-        .json({ error: "patientId is required" });
-    }
 
-    const patient = await prisma.patient.findFirst({
-      where: { id: patientId, tenantId: req.user.tenantId },
-      select: { id: true, name: true },
-    });
-    if (!patient) {
-      return res.status(404).json({ error: "Patient not found" });
+    // Recipient resolution. A supplied patientId means "gift this card to
+    // that patient" (staff / gift flow). No patientId means "buy for
+    // myself" — resolve (or lazily create) the Patient linked to the
+    // signed-in user so the wallet credit has a home. This makes the
+    // customer storefront default to self without exposing the whole
+    // patient directory in a typeahead.
+    const rawPatientId = req.body?.patientId;
+    const gifting =
+      rawPatientId !== undefined &&
+      rawPatientId !== null &&
+      String(rawPatientId).trim() !== "";
+    let patient;
+    if (gifting) {
+      const patientId = parseInt(rawPatientId, 10);
+      if (!Number.isInteger(patientId) || patientId <= 0) {
+        return res.status(400).json({ error: "Invalid patientId" });
+      }
+      patient = await prisma.patient.findFirst({
+        where: { id: patientId, tenantId: req.user.tenantId },
+        select: { id: true, name: true },
+      });
+      if (!patient) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+    } else {
+      try {
+        patient = await resolveSelfPatient(req.user);
+      } catch (err) {
+        return res
+          .status(err.status || 500)
+          .json({ error: err.message || "Failed to resolve your account" });
+      }
     }
 
     let card;
@@ -11839,7 +12206,12 @@ router.post("/giftcards/:id/purchase/order", async (req, res) => {
         metadata: JSON.stringify({
           kind: "giftcard_purchase",
           giftCardId: card.id,
+          // patientId = recipient whose wallet gets credited. buyerUserId =
+          // who actually paid (== recipient for "buy for myself"). Recording
+          // the buyer lets the My Transactions history attribute the EXPENSE
+          // to the payer even when they gifted the card to someone else.
           patientId: patient.id,
+          buyerUserId: req.user.userId,
           orderId: order.id,
           orderStatus: order.status,
         }),
@@ -11854,6 +12226,7 @@ router.post("/giftcards/:id/purchase/order", async (req, res) => {
       currency,
       giftCardId: card.id,
       patientId: patient.id,
+      patientName: patient.name,
     });
   } catch (e) {
     console.error("[wellness] giftcard purchase order error:", e.message);

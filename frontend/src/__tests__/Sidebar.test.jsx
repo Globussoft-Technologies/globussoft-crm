@@ -1252,4 +1252,63 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(label.textContent).toMatch(/Sub-brand/i);
     });
   });
+
+  // ── customerOnly catalog-flag gating ───────────────────────────────
+  // Buy Gift Cards + My Transactions carry `customerOnly: true` in the page
+  // catalog. The wellness sidebar surfaces customerOnly pages ONLY to
+  // customer-tier roles (USER / CUSTOMER) and hides them from ADMIN /
+  // MANAGER / staff. Pin both directions so a refactor of the byCategory
+  // filter in renderWellnessNav can't silently widen or drop the gate.
+  describe('Wellness vertical — customerOnly storefront gating', () => {
+    const CUSTOMER_PAGES = [
+      { category: 'Finance', path: '/wellness/my-transactions', label: 'My Transactions', customerOnly: true },
+      // A non-customerOnly Finance sibling so the section header still
+      // renders for staff (lets us assert the customerOnly item is the
+      // ONLY thing hidden, not the whole section).
+      { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
+    ];
+
+    it('shows customerOnly pages for a customer-tier USER', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'USER',
+        accessiblePages: CUSTOMER_PAGES,
+      });
+      await screen.findByText('My Transactions');
+      expect(screen.getByText('My Transactions')).toBeTruthy();
+      expect(screen.getByText('Point of Sale')).toBeTruthy();
+    });
+
+    it('shows customerOnly pages for a CUSTOMER role', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'CUSTOMER',
+        accessiblePages: CUSTOMER_PAGES,
+      });
+      await screen.findByText('My Transactions');
+      expect(screen.getByText('My Transactions')).toBeTruthy();
+    });
+
+    it('hides customerOnly pages for ADMIN (but keeps the rest of the section)', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: CUSTOMER_PAGES,
+      });
+      // The non-customerOnly sibling still renders, so the catalog fetch
+      // resolved — then assert the customerOnly entry is absent.
+      await screen.findByText('Point of Sale');
+      expect(screen.queryByText('My Transactions')).toBeNull();
+    });
+
+    it('hides customerOnly pages for MANAGER', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'MANAGER',
+        accessiblePages: CUSTOMER_PAGES,
+      });
+      await screen.findByText('Point of Sale');
+      expect(screen.queryByText('My Transactions')).toBeNull();
+    });
+  });
 });

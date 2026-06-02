@@ -716,6 +716,11 @@ router.get("/shifts/:id", cashierGate, async (req, res) => {
 // at close, not silently rejected (the cashier may need to record an IOU
 // that pays back tomorrow).
 
+// Allowed WITHDRAWAL categories for the Expenses tab. GENERAL is the default;
+// SUBSCRIPTION tags drawer cash spent on a platform subscription (auto-logged
+// on purchase + manually addable). Extend here as new expense types appear.
+const PETTY_CASH_CATEGORIES = ["GENERAL", "SUBSCRIPTION"];
+
 async function recordPettyCashEntry(req, res, type) {
   try {
     const id = parseInt(req.params.id);
@@ -734,7 +739,7 @@ async function recordPettyCashEntry(req, res, type) {
         code: "SHIFT_CLOSED",
       });
     }
-    const { amount, reason } = req.body || {};
+    const { amount, reason, category } = req.body || {};
     const amt = parseFloat(amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       return res.status(400).json({
@@ -748,11 +753,26 @@ async function recordPettyCashEntry(req, res, type) {
         code: "REASON_REQUIRED",
       });
     }
+    // Category labels the expense for the Expenses tab. Only meaningful for
+    // WITHDRAWALs; deposits stay GENERAL. Validate against the allowed set so
+    // the UI's filters/badges stay stable.
+    let cat = "GENERAL";
+    if (type === "WITHDRAWAL" && category != null) {
+      const c = String(category).trim().toUpperCase();
+      if (!PETTY_CASH_CATEGORIES.includes(c)) {
+        return res.status(400).json({
+          error: `category must be one of ${PETTY_CASH_CATEGORIES.join(", ")}`,
+          code: "INVALID_CATEGORY",
+        });
+      }
+      cat = c;
+    }
     const entry = await prisma.pettyCashLedger.create({
       data: {
         tenantId: req.user.tenantId,
         shiftId: shift.id,
         type,
+        category: cat,
         amount: amt,
         reason: reason.trim().slice(0, 1000),
         userId: req.user.userId,
@@ -767,6 +787,7 @@ async function recordPettyCashEntry(req, res, type) {
       {
         ledgerId: entry.id,
         type,
+        category: cat,
         amount: amt,
         reason: entry.reason,
       },

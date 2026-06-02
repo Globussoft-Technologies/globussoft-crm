@@ -332,6 +332,68 @@ describe('POST /shifts/:id/withdraw', () => {
   });
 });
 
+// ── Expense category on WITHDRAWAL (Subscription tagging) ─────────────
+
+describe('POST /shifts/:id/withdraw — category', () => {
+  function openShift() {
+    prisma.shift.findFirst.mockResolvedValue({
+      id: 42, tenantId: 1, status: 'OPEN', userId: 7,
+    });
+    prisma.pettyCashLedger.create.mockImplementation(async ({ data }) => ({ id: 200, ...data }));
+  }
+
+  test('SUBSCRIPTION category is persisted on the ledger row', async () => {
+    openShift();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/withdraw')
+      .send({ amount: 499, reason: 'Pro plan', category: 'SUBSCRIPTION' });
+    expect(res.status).toBe(201);
+    expect(res.body.category).toBe('SUBSCRIPTION');
+    expect(prisma.pettyCashLedger.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'WITHDRAWAL', category: 'SUBSCRIPTION' }),
+      }),
+    );
+  });
+
+  test('lowercase category is normalised to upper-case', async () => {
+    openShift();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/withdraw')
+      .send({ amount: 10, reason: 'x', category: 'subscription' });
+    expect(res.status).toBe(201);
+    expect(res.body.category).toBe('SUBSCRIPTION');
+  });
+
+  test('omitted category defaults to GENERAL', async () => {
+    openShift();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/withdraw')
+      .send({ amount: 10, reason: 'x' });
+    expect(res.status).toBe(201);
+    expect(res.body.category).toBe('GENERAL');
+  });
+
+  test('unknown category is rejected with 400 INVALID_CATEGORY', async () => {
+    openShift();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/withdraw')
+      .send({ amount: 10, reason: 'x', category: 'BOGUS' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_CATEGORY');
+    expect(prisma.pettyCashLedger.create).not.toHaveBeenCalled();
+  });
+
+  test('DEPOSIT ignores category and stays GENERAL', async () => {
+    openShift();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/deposit')
+      .send({ amount: 10, reason: 'x', category: 'SUBSCRIPTION' });
+    expect(res.status).toBe(201);
+    expect(res.body.category).toBe('GENERAL');
+  });
+});
+
 // ── GET /shifts/:id/petty-cash ───────────────────────────────────────
 
 describe('GET /shifts/:id/petty-cash', () => {

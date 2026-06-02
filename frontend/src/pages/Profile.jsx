@@ -64,11 +64,9 @@ const Profile = () => {
     setDownloadingId(subId);
     try {
       const token = getAuthToken();
-      // Relative path keeps the request same-origin and goes through Vite's
-      // /api proxy (same as fetchApi). Prefixing with VITE_API_URL turns this
-      // into a cross-origin call → triggers a CORS preflight → backend's
-      // global auth guard 401s the unauthenticated OPTIONS → browser blocks
-      // the GET as a CORS error.
+      // Relative path → same-origin via Vite's /api proxy. A VITE_API_URL
+      // prefix would make this cross-origin (CORS preflight 401 + mixed-content
+      // over HTTPS). See Invoices.jsx downloadPdf for the canonical note.
       const url = `/api/subscriptions/${subId}/invoice.pdf`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error(`Download failed (${res.status})`);

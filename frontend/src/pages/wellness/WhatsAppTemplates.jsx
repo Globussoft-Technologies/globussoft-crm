@@ -157,7 +157,13 @@ export default function WhatsAppTemplates() {
   };
 
   const deleteTemplate = async (tpl) => {
-    if (!window.confirm(`Delete "${tpl.name}"? This removes it from your CRM but does NOT unsubmit from Meta.`)) return;
+    const ok = await notify.confirm({
+      title: 'Delete template',
+      message: `Delete "${tpl.name}"? This removes it from your CRM but does NOT unsubmit from Meta.`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/whatsapp/templates/${tpl.id}`, { method: 'DELETE' });
       notify.info('Template deleted.');

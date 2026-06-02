@@ -19,11 +19,12 @@
  *       paid).
  */
 
-import { useEffect, useState } from 'react';
-import { ShoppingBag, Gift, CreditCard, Search, X } from 'lucide-react';
+import { useContext, useEffect, useState } from 'react';
+import { ShoppingBag, Gift, CreditCard, Search, X, User } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
+import { AuthContext } from '../../App';
 
 const RAZORPAY_SDK_URL = 'https://checkout.razorpay.com/v1/checkout.js';
 
@@ -48,13 +49,19 @@ function loadRazorpaySdk() {
 
 export default function BuyGiftCardsPage() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const myName = user?.name || user?.email || 'me';
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null); // gift card chosen for purchase
+  // Recipient mode: false = buy for myself (default — credit lands on the
+  // signed-in user's own wallet, no patient picker shown); true = gift the
+  // card to another patient (reveals the directory typeahead).
+  const [giftMode, setGiftMode] = useState(false);
   const [patientQuery, setPatientQuery] = useState('');
   const [patientResults, setPatientResults] = useState([]);
   const [patientSearching, setPatientSearching] = useState(false);
-  const [recipient, setRecipient] = useState(null); // resolved patient
+  const [recipient, setRecipient] = useState(null); // resolved patient (gift mode)
   const [paying, setPaying] = useState(false);
   const [successCard, setSuccessCard] = useState(null);
 
@@ -76,7 +83,7 @@ export default function BuyGiftCardsPage() {
   // typeahead pattern PatientPicker uses elsewhere; kept inline so this
   // page has zero extra imports beyond the shared utilities.
   useEffect(() => {
-    if (!selected) return undefined;
+    if (!selected || !giftMode) return undefined;
     const q = patientQuery.trim();
     if (q.length < 2) {
       setPatientResults([]);
@@ -97,10 +104,11 @@ export default function BuyGiftCardsPage() {
       }
     }, 250);
     return () => { alive = false; clearTimeout(handle); };
-  }, [patientQuery, selected]);
+  }, [patientQuery, selected, giftMode]);
 
   const openPurchase = (card) => {
     setSelected(card);
+    setGiftMode(false);
     setRecipient(null);
     setPatientQuery('');
     setPatientResults([]);
@@ -109,19 +117,33 @@ export default function BuyGiftCardsPage() {
   const closePurchase = () => {
     if (paying) return;
     setSelected(null);
+    setGiftMode(false);
     setRecipient(null);
     setPatientQuery('');
     setPatientResults([]);
   };
 
   const startPayment = async () => {
-    if (!selected || !recipient || paying) return;
+    // In gift mode a recipient must be chosen; in self mode the backend
+    // resolves the signed-in user's own patient, so no recipient is needed.
+    if (!selected || paying || (giftMode && !recipient)) return;
     setPaying(true);
     try {
       const order = await fetchApi(
         `/api/wellness/giftcards/${selected.id}/purchase/order`,
-        { method: 'POST', body: JSON.stringify({ patientId: recipient.id }) },
+        {
+          method: 'POST',
+          // Omit patientId when buying for myself — the server credits my
+          // own wallet. Send it only when gifting to another patient.
+          body: JSON.stringify(giftMode ? { patientId: recipient.id } : {}),
+        },
       );
+      // Who the credit lands on, for the prefill + success copy. Self mode
+      // uses the server-resolved patientName (falls back to my display name).
+      const recipientName = giftMode
+        ? recipient.name
+        : order?.patientName || myName;
+      const recipientPhone = giftMode ? recipient.phone || '' : user?.phone || '';
       if (!order?.orderId || !order?.paymentId || !order?.key) {
         throw new Error(order?.error || 'Failed to create payment order');
       }
@@ -142,8 +164,8 @@ export default function BuyGiftCardsPage() {
           name: 'Gift Card Purchase',
           description: selected.name || `Gift card #${selected.id}`,
           prefill: {
-            name: recipient.name || '',
-            contact: recipient.phone || '',
+            name: recipientName || '',
+            contact: recipientPhone || '',
           },
           theme: { color: selected.color || '#6366f1' },
           handler: async (response) => {
@@ -161,11 +183,13 @@ export default function BuyGiftCardsPage() {
                 },
               );
               if (confirm?.success) {
+                const where = giftMode ? `${recipientName}'s wallet` : 'your wallet';
                 notify.success(
-                  `Payment successful! ${formatMoney(selected.amount, { currency: selected.currency })} credited to ${recipient.name}'s wallet.`,
+                  `Payment successful! ${formatMoney(selected.amount, { currency: selected.currency })} credited to ${where}.`,
                 );
-                setSuccessCard({ card: selected, recipient });
+                setSuccessCard({ card: selected, recipientName, forSelf: !giftMode });
                 setSelected(null);
+                setGiftMode(false);
                 setRecipient(null);
                 setPatientQuery('');
                 setPatientResults([]);
@@ -226,7 +250,7 @@ export default function BuyGiftCardsPage() {
         >
           <strong>Payment received.</strong>
           <span>
-            {formatMoney(successCard.card.amount, { currency: successCard.card.currency })} credited to {successCard.recipient.name}'s wallet.
+            {formatMoney(successCard.card.amount, { currency: successCard.card.currency })} credited to {successCard.forSelf ? 'your wallet' : `${successCard.recipientName}'s wallet`}.
           </span>
           <button
             type="button"
@@ -398,9 +422,97 @@ export default function BuyGiftCardsPage() {
               <strong style={{ color: 'var(--text-primary)' }}>
                 {formatMoney(selected.amount, { currency: selected.currency })}
               </strong>{' '}
-              lands on the patient you choose below.
+              {giftMode
+                ? 'lands on the patient you choose below.'
+                : 'will be added to your wallet.'}
             </div>
 
+            {/* Recipient mode — buy for myself (default) or gift to someone
+                else. Choosing "gift" reveals the patient directory picker. */}
+            <div
+              role="radiogroup"
+              aria-label="Who is this gift card for?"
+              style={{ display: 'flex', gap: '0.5rem' }}
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!giftMode}
+                data-testid="buy-giftcard-recipient-self"
+                disabled={paying}
+                onClick={() => {
+                  setGiftMode(false);
+                  setRecipient(null);
+                  setPatientQuery('');
+                  setPatientResults([]);
+                }}
+                style={{
+                  flex: 1,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.4rem',
+                  padding: '0.5rem 0.6rem',
+                  borderRadius: 8,
+                  fontWeight: 600,
+                  fontSize: '0.85rem',
+                  cursor: paying ? 'not-allowed' : 'pointer',
+                  border: `1px solid ${!giftMode ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)'}`,
+                  background: !giftMode ? 'var(--primary-color, var(--accent-color))' : 'transparent',
+                  color: !giftMode ? '#fff' : 'var(--text-secondary)',
+                }}
+              >
+                <User size={14} /> For myself
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={giftMode}
+                data-testid="buy-giftcard-recipient-gift"
+                disabled={paying}
+                onClick={() => setGiftMode(true)}
+                style={{
+                  flex: 1,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.4rem',
+                  padding: '0.5rem 0.6rem',
+                  borderRadius: 8,
+                  fontWeight: 600,
+                  fontSize: '0.85rem',
+                  cursor: paying ? 'not-allowed' : 'pointer',
+                  border: `1px solid ${giftMode ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)'}`,
+                  background: giftMode ? 'var(--primary-color, var(--accent-color))' : 'transparent',
+                  color: giftMode ? '#fff' : 'var(--text-secondary)',
+                }}
+              >
+                <Gift size={14} /> Gift to someone else
+              </button>
+            </div>
+
+            {!giftMode && (
+              <div
+                data-testid="buy-giftcard-self-chip"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.5rem 0.75rem',
+                  borderRadius: 8,
+                  border: '1px solid var(--border-color)',
+                  background: 'rgba(16,185,129,0.10)',
+                }}
+              >
+                <User size={14} aria-hidden="true" />
+                <span>
+                  Credit goes to <strong>{myName}</strong> (you).
+                </span>
+              </div>
+            )}
+
+            {giftMode && (
+            <>
             <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
               <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>Patient (phone or name)</span>
               <div style={{ position: 'relative' }}>
@@ -523,18 +635,20 @@ export default function BuyGiftCardsPage() {
                 )}
               </div>
             ) : null}
+            </>
+            )}
 
             <button
               type="button"
               onClick={startPayment}
-              disabled={!recipient || paying}
+              disabled={paying || (giftMode && !recipient)}
               data-testid="buy-giftcard-pay-now"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '0.5rem',
-                background: !recipient || paying
+                background: paying || (giftMode && !recipient)
                   ? 'rgba(99,102,241,0.4)'
                   : 'var(--primary-color, var(--accent-color))',
                 color: '#fff',
@@ -542,7 +656,7 @@ export default function BuyGiftCardsPage() {
                 borderRadius: 8,
                 padding: '0.7rem 1rem',
                 fontWeight: 600,
-                cursor: !recipient || paying ? 'not-allowed' : 'pointer',
+                cursor: paying || (giftMode && !recipient) ? 'not-allowed' : 'pointer',
               }}
             >
               <CreditCard size={14} />

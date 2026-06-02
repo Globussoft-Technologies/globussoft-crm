@@ -21,6 +21,73 @@ const requireOwner = (req, res, next) => {
   next();
 };
 
+// Subscription lifecycle states stored in Subscription.status:
+//   ACTIVE    — the period currently being consumed (startDate <= now < endDate)
+//   SCHEDULED — bought while another period was still running; queued to begin
+//               when the prior period ends (startDate is in the future)
+//   EXPIRED   — period fully elapsed
+//   CANCELLED — cancelled by the admin
+//
+// Stacking model: when a user buys again while a paid period is still running
+// (intentionally or by mistake), we DON'T overwrite or run two periods at once.
+// The new period is queued to start the instant the current one ends, so two
+// back-to-back one-month buys give two consecutive months, never overlapping.
+//
+// reconcileSubscriptions is a lazy, read-time state machine (no cron needed):
+// it expires periods whose endDate has passed and promotes the next queued
+// (SCHEDULED) period to ACTIVE once its startDate arrives. Call it before
+// reading a user's subscription state. Returns the resolved user-level status.
+async function reconcileSubscriptions(userId, tenantId) {
+  const now = new Date();
+
+  // Walk forward through the user's timeline: expire elapsed periods, then
+  // promote the earliest queued period that has reached its start. Loop so a
+  // chain of short back-to-back periods all settle in one pass.
+  let resolvedStatus = null;
+  // Bounded: each iteration either settles (breaks) or promotes exactly one
+  // queued period. The cap is a safety backstop against an unexpected cycle.
+  for (let guard = 0; guard < 100; guard++) {
+    // Expire any ACTIVE period whose window has fully elapsed.
+    await prisma.subscription.updateMany({
+      where: { userId, tenantId, status: 'ACTIVE', endDate: { lte: now } },
+      data: { status: 'EXPIRED' },
+    });
+
+    // Is a period currently active (window covers now)?
+    const active = await prisma.subscription.findFirst({
+      where: { userId, tenantId, status: 'ACTIVE' },
+      orderBy: { startDate: 'asc' },
+    });
+    if (active) {
+      resolvedStatus = 'ACTIVE';
+      break;
+    }
+
+    // No active period — promote the earliest queued period that has started.
+    const due = await prisma.subscription.findFirst({
+      where: { userId, tenantId, status: 'SCHEDULED', startDate: { lte: now } },
+      orderBy: { startDate: 'asc' },
+    });
+    if (!due) {
+      // Nothing active and nothing due to start yet. If a future-dated queued
+      // period exists the user is still effectively ACTIVE (their current paid
+      // period just hasn't been created as a separate row) — but in practice
+      // the prior period would still be ACTIVE in that case, so falling here
+      // means the user has no live coverage.
+      resolvedStatus = null;
+      break;
+    }
+
+    await prisma.subscription.update({
+      where: { id: due.id },
+      data: { status: 'ACTIVE' },
+    });
+    // Loop again: the just-promoted period might itself already be elapsed.
+  }
+
+  return resolvedStatus;
+}
+
 // Get current user's subscription status. ADMIN-only — the tenant admin is
 // the one who buys + manages the subscription. Managers/staff don't see
 // billing state.
@@ -46,6 +113,12 @@ router.get('/status', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // Settle the timeline on read: expire elapsed periods and promote the next
+    // queued (SCHEDULED) period once its start arrives. This is what makes a
+    // queued purchase "automatically apply" when the current period ends, with
+    // no cron job required.
+    await reconcileSubscriptions(userId, tenantId);
+
     // Get active subscription if exists
     const subscription = await prisma.subscription.findFirst({
       where: {
@@ -53,6 +126,17 @@ router.get('/status', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
         tenantId,
         status: 'ACTIVE'
       }
+    });
+
+    // Surface the next queued period (if the admin bought ahead) so the UI can
+    // show "next plan starts on <startDate>".
+    const upcoming = await prisma.subscription.findFirst({
+      where: {
+        userId,
+        tenantId,
+        status: 'SCHEDULED'
+      },
+      orderBy: { startDate: 'asc' }
     });
 
     const daysRemaining = user.trialEndsAt
@@ -75,6 +159,19 @@ router.get('/status', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
         amount: subscription.amount,
         currency: subscription.currency,
         billingIntervalDays: subscription.billingIntervalDays
+      } : null,
+      // The queued period waiting behind the active one (null if none). Begins
+      // automatically the instant the active period's endDate passes.
+      upcomingSubscription: upcoming ? {
+        id: upcoming.id,
+        planName: upcoming.planName,
+        status: upcoming.status,
+        startDate: upcoming.startDate,
+        endDate: upcoming.endDate,
+        renewalDate: upcoming.renewalDate,
+        amount: upcoming.amount,
+        currency: upcoming.currency,
+        billingIntervalDays: upcoming.billingIntervalDays
       } : null
     });
   } catch (err) {
@@ -354,7 +451,24 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
 
     const now = new Date();
     const billingDays = plan.billingIntervalDays || 30;
-    const endDate = new Date(now.getTime() + billingDays * 24 * 60 * 60 * 1000);
+
+    // Settle any elapsed/queued periods first so we stack onto the true tail.
+    await reconcileSubscriptions(userId, tenantId);
+
+    // Find the latest period the user still has coverage for (ACTIVE or already
+    // SCHEDULED). If its end is in the future, this purchase is QUEUED to begin
+    // the instant that period ends — so buying again mid-cycle (intentionally
+    // or by mistake) never overlaps or wastes time; it appends a full period to
+    // the tail. e.g. active 1st→1st, buy on the 6th → new runs 1st→next-1st.
+    const latest = await prisma.subscription.findFirst({
+      where: { userId, tenantId, status: { in: ['ACTIVE', 'SCHEDULED'] } },
+      orderBy: { endDate: 'desc' },
+    });
+
+    const hasFutureCoverage = latest && latest.endDate && new Date(latest.endDate) > now;
+    const startDate = hasFutureCoverage ? new Date(latest.endDate) : now;
+    const endDate = new Date(startDate.getTime() + billingDays * 24 * 60 * 60 * 1000);
+    const newStatus = hasFutureCoverage ? 'SCHEDULED' : 'ACTIVE';
 
     // Create subscription
     const subscription = await prisma.subscription.create({
@@ -362,11 +476,11 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
         userId,
         planId: parseInt(planId),
         planName: plan.name,
-        status: 'ACTIVE',
+        status: newStatus,
         amount: plan.price,
         currency: plan.currency,
         billingIntervalDays: plan.billingIntervalDays,
-        startDate: now,
+        startDate: startDate,
         endDate: endDate,
         renewalDate: endDate,
         razorpayOrderId,
@@ -376,7 +490,9 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
       }
     });
 
-    // Update user subscription status
+    // The admin always has live coverage after a successful purchase — either
+    // the new period started now, or an existing period is still running with
+    // this one queued behind it.
     await prisma.user.update({
       where: { id: userId },
       data: {
@@ -385,14 +501,38 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
       }
     });
 
+    // Log the subscription spend as a cash-drawer expense (POS Cash Register
+    // → Expenses tab) so it's visible + deducted from the drawer. Best-effort:
+    // only lands if a shift is open, and never blocks the purchase.
+    let posExpenseRecorded = false;
+    try {
+      const { recordSubscriptionExpense } = require('../lib/posExpense');
+      const r = await recordSubscriptionExpense({
+        tenantId,
+        userId,
+        amount: subscription.amount,
+        reason: `Subscription: ${subscription.planName}`,
+      });
+      posExpenseRecorded = !!r.recorded;
+    } catch (e) {
+      console.error('[subscriptions.verify-payment] POS expense log failed:', e.message);
+    }
+
     res.json({
       success: true,
       subscription: {
         id: subscription.id,
         planName: subscription.planName,
         status: subscription.status,
+        startDate: subscription.startDate,
         endDate: subscription.endDate
-      }
+      },
+      // True when the purchase was queued behind a still-running period rather
+      // than activated immediately — lets the UI say "starts on <startDate>".
+      scheduled: subscription.status === 'SCHEDULED',
+      // Surfaced so the UI can hint "open a shift to record this expense" when
+      // the spend couldn't be logged to the drawer (no open shift).
+      posExpenseRecorded,
     });
   } catch (err) {
     console.error('[subscriptions.post/verify-payment] Error:', err.message, err.stack);
@@ -423,16 +563,21 @@ router.patch('/:id/cancel', verifyToken, verifyRole(['ADMIN']), async (req, res)
       data: { status: 'CANCELLED' }
     });
 
-    // Update user status
-    const hasActiveSubscription = await prisma.subscription.findFirst({
+    // Settle the timeline: if the cancelled period was the live one and a queued
+    // period is already due to start, promote it. Then decide the user's status
+    // from what coverage remains — a still-running period OR a queued one the
+    // admin already paid for both keep the account ACTIVE.
+    await reconcileSubscriptions(userId, tenantId);
+
+    const remainingCoverage = await prisma.subscription.findFirst({
       where: {
         userId,
         tenantId,
-        status: 'ACTIVE'
+        status: { in: ['ACTIVE', 'SCHEDULED'] }
       }
     });
 
-    if (!hasActiveSubscription) {
+    if (!remainingCoverage) {
       await prisma.user.update({
         where: { id: userId },
         data: { subscriptionStatus: 'CANCELLED' }

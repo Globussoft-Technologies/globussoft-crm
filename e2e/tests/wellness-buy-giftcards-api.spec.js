@@ -258,17 +258,36 @@ test.describe('POST /api/wellness/giftcards/:id/purchase/order', () => {
     expect([401, 403]).toContain(r.status());
   });
 
-  test('400 when patientId is missing', async ({ request }) => {
+  test('omitting patientId buys for SELF (200 with Razorpay, 503 without)', async ({ request }) => {
     test.skip(!storefrontCardId, 'no card to target');
+    // No patientId means "buy for myself" — the server resolves (or lazily
+    // creates) the caller's own Patient and credits that wallet. The
+    // Razorpay config check runs FIRST, so without it the route 503s before
+    // ever touching patient resolution.
     const r = await post(
       request,
       wellnessToken,
       `/api/wellness/giftcards/${storefrontCardId}/purchase/order`,
       {},
     );
-    // 400 from our validator, OR 503 if Razorpay isn't configured. The
-    // Razorpay config check runs FIRST, so accept either ordering.
-    expect([400, 503]).toContain(r.status());
+    expect([200, 503]).toContain(r.status());
+    if (r.status() === 200) {
+      const body = await r.json();
+      // Self-resolved recipient comes back on the order response.
+      expect(typeof body.patientId).toBe('number');
+      expect(body.giftCardId).toBe(storefrontCardId);
+    }
+  });
+
+  test('400 on a malformed patientId when gifting (Razorpay configured)', async ({ request }) => {
+    test.skip(!storefrontCardId || !HAS_RAZORPAY, 'requires Razorpay configured for this branch');
+    const r = await post(
+      request,
+      wellnessToken,
+      `/api/wellness/giftcards/${storefrontCardId}/purchase/order`,
+      { patientId: -5 },
+    );
+    expect(r.status()).toBe(400);
   });
 
   test('404 when the patient does not exist in this tenant', async ({ request }) => {

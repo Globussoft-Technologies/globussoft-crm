@@ -145,6 +145,12 @@ const Sidebar = ({
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "MANAGER";
+  // Customer-tier = the low-privilege end-customer roles. Drives the
+  // `customerOnly` page-catalog flag (e.g. Buy Gift Cards) so admin /
+  // manager / staff roles don't see customer-facing storefront entries
+  // in their nav. CUSTOMER is the self-service-registered role; USER is
+  // the default low-privilege end-user role.
+  const isCustomerTier = role === "USER" || role === "CUSTOMER";
   const wellnessRole = user?.wellnessRole || null;
   const subBrandAccess = (() => {
     if (isAdmin) return null;
@@ -823,6 +829,7 @@ const Sidebar = ({
                 CallifiedLink,
                 isAdmin,
                 isManager,
+                isCustomerTier,
                 hasPermission,
                 permissionsReady,
                 sectionLabelStyle,
@@ -918,6 +925,7 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/wallet": WalletIcon,
   "/wellness/giftcards": Gift,
   "/wellness/buy-giftcards": ShoppingBag,
+  "/wellness/my-transactions": Receipt,
   "/wellness/coupons": TicketPercent,
   "/wellness/cashback-rules": Coins,
   // Marketing
@@ -1019,6 +1027,7 @@ function renderWellnessNav({
   CallifiedLink,
   isAdmin,
   isManager,
+  isCustomerTier = false,
   hasPermission = () => false,
   permissionsReady = false,
   sectionLabelStyle,
@@ -1048,6 +1057,11 @@ function renderWellnessNav({
   for (const page of accessiblePages) {
     if (!page || !page.category || !page.path) continue;
     if (page.hideForAdminTier && isAdmin) continue;
+    // customerOnly pages (e.g. Buy Gift Cards storefront) only surface to
+    // customer-tier roles (USER / CUSTOMER). Admin / manager / staff don't
+    // see them in their nav. Sidebar-only UX rule; direct-URL access and
+    // the backend route's own auth are unchanged.
+    if (page.customerOnly && !isCustomerTier) continue;
     if (!byCategory[page.category]) byCategory[page.category] = [];
     byCategory[page.category].push(page);
   }

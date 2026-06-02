@@ -2321,13 +2321,36 @@ async function _legacyPostWebhookDeadCode(req, res) {
 
           const newStatus = statusMap[status.status];
           if (newStatus && status.id) {
+            // For FAILED, build a richer error string than just the title.
+            // Meta's `failed` status carries errors[0] = { code, title,
+            // message, error_data: { details }, href }. The title alone
+            // (e.g. "Business eligibility payment issue") is cryptic; the
+            // numeric `code` (e.g. 131042) + `details` are what's actually
+            // searchable in Meta's error docs. We log the full object and
+            // persist code + title + details so the operator inbox shows
+            // something actionable.
+            let failureMessage;
+            if (newStatus === "FAILED") {
+              const e = status.errors?.[0] || {};
+              const parts = [];
+              if (e.code != null) parts.push(`[${e.code}]`);
+              parts.push(e.title || e.message || "Delivery failed");
+              const details = e.error_data?.details;
+              if (details && details !== e.title) parts.push(`— ${details}`);
+              failureMessage = parts.join(" ");
+              console.error(
+                `[whatsapp webhook] message FAILED providerMsgId=${status.id} ` +
+                  `recipient=${status.recipient_id}:`,
+                JSON.stringify(status.errors || status),
+              );
+            }
             await prisma.whatsAppMessage.updateMany({
               where: { providerMsgId: status.id },
               data: {
                 status: newStatus,
                 ...(newStatus === "READ" && { read: true }),
                 ...(newStatus === "FAILED" && {
-                  errorMessage: status.errors?.[0]?.title || "Delivery failed",
+                  errorMessage: failureMessage,
                 }),
               },
             });

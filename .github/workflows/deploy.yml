@@ -476,6 +476,8 @@ jobs:
             tests/approvals-api.spec.js \
             tests/sso-api.spec.js \
             tests/auth-profile-picture-api.spec.js \
+            tests/wellness-my-transactions-api.spec.js \
+            tests/staff-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

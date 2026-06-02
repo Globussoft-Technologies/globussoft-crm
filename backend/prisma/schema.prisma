@@ -4492,6 +4492,10 @@ model PettyCashLedger {
   // DEPOSIT | WITHDRAWAL. Free-text would be a footgun for the balance
   // computation; route-layer validates against this 2-value enum.
   type      String
+  // Expense category for WITHDRAWAL rows so the Expenses tab can group/label
+  // them (GENERAL | SUBSCRIPTION | …). DEPOSITs stay GENERAL. Route-layer
+  // validates; default keeps existing rows + uncategorised entries valid.
+  category  String   @default("GENERAL")
   amount    Float
   reason    String   @db.Text
   // Cashier id of who recorded the row — kept as a raw int (not an FK)
@@ -4832,7 +4836,7 @@ model Subscription {
   planId              Int
   plan                SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
   planName            String
-  status              String // ACTIVE | EXPIRED | CANCELLED
+  status              String // ACTIVE | SCHEDULED (queued behind a running period) | EXPIRED | CANCELLED
   amount              Decimal          @db.Decimal(12, 2)
   currency            String           @default("INR")
   billingIntervalDays Int?

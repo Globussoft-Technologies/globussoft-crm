@@ -294,6 +294,9 @@ const WellnessDrugs = lazy(() => import("./pages/wellness/Drugs"));
 const WellnessWallet = lazy(() => import("./pages/wellness/Wallet"));
 const WellnessGiftCards = lazy(() => import("./pages/wellness/GiftCards"));
 const WellnessBuyGiftCards = lazy(() => import("./pages/wellness/BuyGiftCards"));
+// Customer-facing transaction history — surfaced in the sidebar only for
+// customer-tier roles (USER / CUSTOMER) via the `customerOnly` catalog flag.
+const WellnessMyTransactions = lazy(() => import("./pages/wellness/MyTransactions"));
 const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
@@ -358,6 +361,9 @@ const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
 // Renders the survey form (legacy NPS/CSAT or new multi-question types)
 // and posts answers back to the matching /respond endpoint.
 const SurveyRespond = lazy(() => import("./pages/SurveyRespond"));
+// Public signer-facing e-signature landing page (the email link target).
+// Token-protected, no admin chrome — renders a PDF preview + signature pad.
+const SignDocument = lazy(() => import("./pages/SignDocument"));
 // Public customer-facing knowledge-base article view (no auth, no admin chrome).
 // Replaces the raw-JSON backend response that the KB "View" button used to open.
 const KbArticleView = lazy(() => import("./pages/KbArticleView"));
@@ -855,6 +861,7 @@ export default function App() {
                   {/* v3.7.17 — token-based respondent landing page. The
                       Send-Survey email link points here. */}
                   <Route path="/surveys/respond/:token" element={<SurveyRespond />} />
+                  <Route path="/sign/:token" element={<SignDocument />} />
                   {/* Public knowledge-base article view (no auth). Replaces the raw
                       backend JSON URL that the KB "View" button used to open. */}
                   <Route
@@ -1514,6 +1521,16 @@ export default function App() {
               <Route path="wellness/buy-giftcards" element={
                 <WellnessOnly>
                   <WellnessBuyGiftCards />
+                </WellnessOnly>
+              } />
+              {/* Customer-facing transaction history. Like Buy Gift Cards,
+                  any authenticated wellness user can open it; the data is
+                  scoped server-side to the caller's own Patient. The sidebar
+                  entry is gated to customer-tier roles via the customerOnly
+                  page-catalog flag. */}
+              <Route path="wellness/my-transactions" element={
+                <WellnessOnly>
+                  <WellnessMyTransactions />
                 </WellnessOnly>
               } />
               <Route path="wellness/coupons" element={

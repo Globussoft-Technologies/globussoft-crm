@@ -333,6 +333,34 @@ router.post(
             });
           }
         }
+      } else if (eventName === "payment_link.paid") {
+        // Hosted Payment Link (e.g. the auto-generated link a customer pays
+        // after signing an estimate). We store the payment-link id (plink_…)
+        // as gatewayId at creation, so reconcile on that. Razorpay also fires
+        // a sibling payment.captured, but its order_id won't match a link, so
+        // this branch owns payment-link reconciliation.
+        const plink = event.payload && event.payload.payment_link;
+        const plinkEnt = plink && (plink.entity || plink);
+        const plinkId = plinkEnt && plinkEnt.id;
+        const paymentEnt = event.payload && event.payload.payment &&
+          (event.payload.payment.entity || event.payload.payment);
+        if (plinkId) {
+          const payment = await prisma.payment.findFirst({
+            where: { gateway: "razorpay", gatewayId: plinkId },
+          });
+          if (payment && payment.status !== "SUCCESS") {
+            const updated = await prisma.payment.update({
+              where: { id: payment.id },
+              data: {
+                status: "SUCCESS",
+                paidAt: new Date(),
+                gatewayId: (paymentEnt && paymentEnt.id) || plinkId,
+              },
+            });
+            await markInvoicePaid(payment.invoiceId, payment.tenantId);
+            emitPaymentCollected(updated);
+          }
+        }
       }
       return res.json({ received: true });
     } catch (err) {

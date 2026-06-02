@@ -153,11 +153,9 @@ export default function Reports() {
 
   const exportFile = (format) => {
     const token = getAuthToken();
-    // Relative path keeps the request same-origin and goes through Vite's
-    // /api proxy (same as fetchApi). Prefixing with VITE_API_URL turns this
-    // into a cross-origin call → triggers a CORS preflight → backend's
-    // global auth guard 401s the unauthenticated OPTIONS → browser blocks
-    // the GET as a CORS error.
+    // Relative path → same-origin via Vite's /api proxy. A VITE_API_URL
+    // prefix would make this cross-origin (CORS preflight 401 + mixed-content
+    // over HTTPS). See Invoices.jsx downloadPdf for the canonical note.
     const endpoint = format === 'pdf' ? 'export-pdf' : 'export-csv';
     const params = viewMode === 'table'
       ? `type=${detailType}${dateParams()}`

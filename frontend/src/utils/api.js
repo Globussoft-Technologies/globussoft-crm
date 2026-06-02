@@ -181,8 +181,13 @@ export function setActiveTenantId(id) {
 // bother the user.
 export const fetchApi = async (url, options = {}) => {
   const token = getAuthToken();
+  // FormData carries its own multipart boundary in the Content-Type header,
+  // which the browser sets on send. Forcing application/json here would clobber
+  // that boundary and the backend would parse zero fields. Detect FormData
+  // and let the browser pick the header.
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(options.headers || {}),
   };
 
@@ -241,7 +246,16 @@ export const fetchApi = async (url, options = {}) => {
     const serverMsg = errData.error || errData.message;
     let userMsg;
     if (response.status === 403) {
-      userMsg = serverMsg || 'You don’t have permission to do that.';
+      // RBAC errors return a technical "requires module.action" string that's
+      // not meaningful to end users. Detect the canonical RBAC codes and
+      // surface a friendly fixed message instead. The raw err.message stays
+      // on the thrown Error for any caller that wants the technical detail
+      // (logging, dev consoles); only the user-facing toast is rewritten.
+      if (errData.code === 'RBAC_DENIED' || errData.code === 'CUSTOMER_ACCESS_DENIED' || errData.code === 'PERMISSION_CHECK_FAILED') {
+        userMsg = "You don't have permission to do this. Please contact your administrator if you need access.";
+      } else {
+        userMsg = serverMsg || 'You don’t have permission to do that.';
+      }
     } else if (response.status === 404) {
       userMsg = serverMsg || 'Not found.';
     } else if (response.status >= 500) {

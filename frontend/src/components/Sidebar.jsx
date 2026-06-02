@@ -48,6 +48,7 @@ import {
   TrendingUp,
   BookOpen,
   PenTool,
+  Pill,
   ClipboardList,
   MessageSquare,
   Eye,
@@ -79,10 +80,6 @@ import {
   Calculator,
   // Used by the dynamic page-catalog → sidebar icon lookup for /portal
   UserCircle,
-  // Zylu-Gap #770/#779/#780/#781 — Cash Register admin
-  Banknote,
-  // Zylu-Gap #800 (WA-005) — Blocked WhatsApp numbers admin entry
-  Ban,
   // Cron PRD Priority A #1 — LLM Spend admin dashboard
   Activity,
   // #898 — Campaigns sidebar surfacing (Email / SMS / Push)
@@ -881,6 +878,7 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/patients": HeartPulse,
   "/wellness/waitlist": Clock,
   "/wellness/prescriptions": PenTool,
+  "/wellness/my-prescriptions": Pill,
   "/wellness/visits": HeartPulse,
   "/signatures": FileSignature,
   "/wellness/inventory": Package,
@@ -1112,31 +1110,12 @@ function renderWellnessNav({
   // entries here can drop out. `isManager` here is shorthand: literal-
   // ADMIN passes isManager too.
   const categoryExtras = {
-    "Leads & Revenue": (
-      <Link
-        key="/wellness/whatsapp/blocked-numbers"
-        to="/wellness/whatsapp/blocked-numbers"
-        icon={Ban}
-        label="Blocked Numbers"
-        managerOnly
-      />
-    ),
-    // Cash Registers is an admin/manager surface (shift open/close,
-    // float reconciliation, petty-cash ledger). Regular users (doctors,
-    // nurses, telecallers, customers) don't operate the till and were
-    // previously seeing a sidebar link that routed nowhere — the page
-    // exists at pages/wellness/CashRegisters.jsx but isn't wired into
-    // App.jsx yet, so clicking it 404s. Gating to manager/admin closes
-    // both gaps until the route lands.
-    Finance: isManager ? (
-      <Link
-        key="/wellness/cash-registers"
-        to="/wellness/cash-registers"
-        icon={Banknote}
-        label="Cash Registers"
-        managerOnly
-      />
-    ) : null,
+    // Cash Registers used to live here as its own sidebar entry, but
+    // `/wellness/cash-registers` has no route mounted in App.jsx and the
+    // dedicated page 404'd on every click. The CashRegisters component
+    // is now embedded inside Point of Sale as an admin/manager
+    // "Manage registers" panel, so this slot intentionally has no
+    // Finance extras.
     Marketing: isManager ? (
       <Link
         key="/campaigns"
@@ -1665,7 +1644,7 @@ function renderGenericNav({
         to="/invoices"
         icon={Receipt}
         label="Invoices"
-        requiredPermission={{ module: "billing", action: "read" }}
+        requiredPermission={{ module: "invoices", action: "read" }}
       />
       <Link
         to="/estimates"

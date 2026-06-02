@@ -3,9 +3,47 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 
 const crypto = require("crypto");
+const multer = require("multer");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+
+// Compose-mail attachments: memory storage so the buffer can be base64'd
+// straight into the SendGrid payload without a disk round-trip. multer is a
+// no-op for non-multipart requests, so the legacy JSON path (no attachments)
+// keeps working unchanged.
+const ATTACHMENT_ALLOWED_MIMES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+  "text/plain",
+  "application/zip",
+]);
+const composeAttachmentMulter = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 5 }, // 10 MB per file, 5 files max
+  fileFilter: (req, file, cb) => {
+    if (ATTACHMENT_ALLOWED_MIMES.has(file.mimetype)) cb(null, true);
+    else cb(new Error(`Attachment type not allowed: ${file.mimetype}`));
+  },
+}).array("attachments", 5);
+
+// Convert multer errors (size/type/count) to JSON 400 so the SPA can surface
+// a useful message instead of the default Express HTML stack trace.
+function composeAttachmentUpload(req, res, next) {
+  composeAttachmentMulter(req, res, (err) => {
+    if (!err) return next();
+    const code = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+    return res.status(code).json({ error: err.message || "Attachment upload failed" });
+  });
+}
 
 // SendGrid email sending via their REST API
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
@@ -57,6 +95,13 @@ async function sendSendGrid(to, subject, body, opts = {}) {
       { type: "text/html", value: htmlBody }
     ]
   };
+
+  // Inline attachments → SendGrid's v3 `attachments` field. Caller passes
+  // already-shaped `{ content, filename, type, disposition }` objects so this
+  // helper stays a thin SendGrid wrapper.
+  if (Array.isArray(opts.attachments) && opts.attachments.length > 0) {
+    payload.attachments = opts.attachments;
+  }
 
   try {
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
@@ -152,11 +197,23 @@ function parseRecipients(toField) {
 // Multi-recipient calls expose the full per-recipient breakdown via `results` /
 // `failures`. Mailgun is called once per valid recipient (no BCC fan-out — keeps
 // per-recipient tracking pixels distinct).
-router.post("/send-email", async (req, res) => {
+router.post("/send-email", composeAttachmentUpload, async (req, res) => {
   try {
     const { to, cc, bcc, subject, body, contactId } = req.body;
     if (!to || !subject) return res.status(400).json({ error: "Recipient and subject required" });
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
+
+    // Build SendGrid-shaped attachments from multer-parsed buffers. Empty
+    // when the client posts plain JSON (no multipart files), so the legacy
+    // JSON path is unaffected.
+    const sendgridAttachments = Array.isArray(req.files)
+      ? req.files.map((f) => ({
+          content: f.buffer.toString("base64"),
+          filename: f.originalname,
+          type: f.mimetype,
+          disposition: "attachment",
+        }))
+      : [];
 
     const recipients = parseRecipients(to);
     if (recipients.length === 0) {
@@ -265,6 +322,7 @@ router.post("/send-email", async (req, res) => {
       const mailResult = await sendSendGrid(recipient, subject, trackedBody, {
         cc: ccDeliverable,
         bcc: bccDeliverable,
+        attachments: sendgridAttachments,
       });
 
       // Per-recipient Activity on the linked contact (if any). Same pattern as

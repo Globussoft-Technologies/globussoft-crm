@@ -984,7 +984,12 @@ async function main() {
     'reports.read', 'reports.export',
     'dashboards.read',
     'analytics.read', 'analytics.export',
-    'billing.read',
+    // Finance modules — `billing` was decomposed in v3.8.x into invoices,
+    // gift_cards, and patient_wallets. MANAGER inherits read across all
+    // three so the Finance section of the sidebar stays visible.
+    'invoices.read',
+    'gift_cards.read',
+    'patient_wallets.read',
     'staff.read',
     'communications.read', 'communications.write',
     'email.read', 'email.write',
@@ -1025,13 +1030,18 @@ async function main() {
     },
   });
 
-  // Grant CUSTOMER limited permissions (customer-facing features only)
+  // Grant CUSTOMER limited permissions (customer-facing features only).
+  // `my_prescriptions.read` is the patient-portal-only counterpart to
+  // staff-wide `prescriptions.read`; CUSTOMER users get the scoped view
+  // (own Rx list + own PDF download) instead of the tenant-wide list.
   const customerPermissions = [
     'appointments.read',
     'services.read',
-    'billing.read',
+    // `billing.read` was split per-surface in v3.8.x; CUSTOMER gets
+    // invoices.read so they can still see their own invoice list.
+    'invoices.read',
     'documents.read',
-    'prescriptions.read',
+    'my_prescriptions.read',
     'consents.read',
   ];
 

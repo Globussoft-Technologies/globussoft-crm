@@ -121,6 +121,27 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+// Default to a fully-permissioned viewer so existing assertions on the
+// New-adjustment CTA + form keep passing. The SUT now hides these when the
+// viewer lacks inventory.write.
+const FULL_PERMS = {
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['inventory.read', 'inventory.write'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+};
+const usePermissionsMock = vi.fn(() => FULL_PERMS);
+vi.mock('../hooks/usePermissions', () => ({
+  usePermissions: (...args) => usePermissionsMock(...args),
+}));
+
 import InventoryAdjustments from '../pages/wellness/InventoryAdjustments';
 
 // Fixed-date adjustments — per CLAUDE.md tick 2026-05-07 wave-9 cron-learning

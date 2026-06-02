@@ -966,319 +966,6 @@ export default function Settings() {
             <WellnessRoleTypesCard notify={notify} />
           )}
 
-          {/* Branding Card */}
-          <div
-            className="card"
-            style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
-          >
-            <h3
-              style={{
-                fontSize: "1.25rem",
-                fontWeight: "600",
-                marginBottom: "1.5rem",
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-              }}
-            >
-              <Palette size={20} color="var(--accent-color)" /> Branding
-            </h3>
-            <p
-              style={{
-                color: "var(--text-secondary)",
-                fontSize: "0.875rem",
-                marginBottom: "1.25rem",
-              }}
-            >
-              Upload your clinic logo and pick a brand color. These appear in
-              the sidebar and on branded PDFs.
-            </p>
-
-            {/* #479: Branding two-column (Logo | Brand color) collapses to
-              single-column under ~360px-each via auto-fit + minmax, fixing
-              the "B colo..." label clip + "Save c..." button-text clip on
-              ~425px viewports. */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
-                gap: "2rem",
-                alignItems: "start",
-              }}
-            >
-              {/* Logo */}
-              <div style={{ minWidth: 0 }}>
-                <label
-                  style={{
-                    display: "block",
-                    marginBottom: "0.5rem",
-                    fontSize: "0.875rem",
-                    color: "var(--text-secondary)",
-                    fontWeight: 500,
-                  }}
-                >
-                  <ImageIcon
-                    size={14}
-                    style={{ verticalAlign: "middle", marginRight: "0.35rem" }}
-                  />{" "}
-                  Logo
-                </label>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "1rem",
-                    marginBottom: "0.75rem",
-                    flexWrap: "wrap",
-                  }}
-                >
-                  {/* Preview tile — staged file wins over saved logo so the
-                    user can see what they're about to commit. Broken
-                    logoUrl falls back to a dashed placeholder instead of
-                    leaving the classic broken-image icon in place. */}
-                  {stagedPreviewUrl ? (
-                    <div style={{ position: "relative" }}>
-                      <img
-                        src={stagedPreviewUrl}
-                        alt="New logo preview"
-                        style={{
-                          width: 80,
-                          height: 80,
-                          borderRadius: 8,
-                          objectFit: "cover",
-                          border: "2px solid var(--accent-color)",
-                        }}
-                      />
-                      <span
-                        style={{
-                          position: "absolute",
-                          bottom: -8,
-                          left: "50%",
-                          transform: "translateX(-50%)",
-                          background: "var(--accent-color)",
-                          color: "#fff",
-                          fontSize: "0.65rem",
-                          padding: "0.1rem 0.45rem",
-                          borderRadius: 999,
-                          whiteSpace: "nowrap",
-                          fontWeight: 600,
-                        }}
-                      >
-                        Pending
-                      </span>
-                    </div>
-                  ) : branding.logoUrl && !logoBroken ? (
-                    <img
-                      src={branding.logoUrl}
-                      alt="Current logo"
-                      onError={() => setLogoBroken(true)}
-                      style={{
-                        width: 80,
-                        height: 80,
-                        borderRadius: 8,
-                        objectFit: "cover",
-                        border: "1px solid var(--border-color)",
-                      }}
-                    />
-                  ) : (
-                    <div
-                      style={{
-                        width: 80,
-                        height: 80,
-                        borderRadius: 8,
-                        border: "1px dashed var(--border-color)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "var(--text-secondary)",
-                        fontSize: "0.7rem",
-                        textAlign: "center",
-                        flexDirection: "column",
-                        gap: "0.2rem",
-                      }}
-                    >
-                      <ImageIcon size={22} />
-                      <span>{logoBroken ? "Image broken" : "No logo"}</span>
-                    </div>
-                  )}
-
-                  {/* Hidden native input; visible buttons trigger it. */}
-                  <input
-                    ref={logoInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
-                    onChange={handlePickLogo}
-                    style={{ display: "none" }}
-                  />
-
-                  <div
-                    style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}
-                  >
-                    {stagedLogo ? (
-                      <>
-                        <button
-                          type="button"
-                          className="btn-primary"
-                          onClick={handleSaveLogo}
-                          disabled={logoUploading}
-                          style={{ whiteSpace: "nowrap" }}
-                        >
-                          {logoUploading ? "Uploading…" : "Save logo"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => logoInputRef.current?.click()}
-                          disabled={logoUploading}
-                          style={{
-                            padding: "0.5rem 0.9rem",
-                            background: "transparent",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: 6,
-                            color: "var(--text-primary)",
-                            cursor: "pointer",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          Pick another
-                        </button>
-                        <button
-                          type="button"
-                          onClick={cancelStagedLogo}
-                          disabled={logoUploading}
-                          style={{
-                            padding: "0.5rem 0.9rem",
-                            background: "transparent",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: 6,
-                            color: "var(--danger-color, #ef4444)",
-                            cursor: "pointer",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={() => logoInputRef.current?.click()}
-                        disabled={logoUploading}
-                        style={{ whiteSpace: "nowrap" }}
-                      >
-                        {branding.logoUrl && !logoBroken
-                          ? "Replace logo"
-                          : "Upload logo"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <p
-                  style={{
-                    color: "var(--text-secondary)",
-                    fontSize: "0.75rem",
-                  }}
-                >
-                  PNG, JPG, GIF, WEBP or SVG. Max 20 MB. Square works best.
-                </p>
-              </div>
-
-              {/* Brand color */}
-              <div style={{ minWidth: 0 }}>
-                <label
-                  style={{
-                    display: "block",
-                    marginBottom: "0.5rem",
-                    fontSize: "0.875rem",
-                    color: "var(--text-secondary)",
-                    fontWeight: 500,
-                  }}
-                >
-                  <Palette
-                    size={14}
-                    style={{ verticalAlign: "middle", marginRight: "0.35rem" }}
-                  />{" "}
-                  Brand color
-                </label>
-                {/* #479: flexWrap + whiteSpace:nowrap on the Save button so the
-                  button stays as one piece ("Save c..." → "Save color") even
-                  when wrapped to its own line. min-width:0 on the hex input
-                  lets it shrink instead of pushing the button off-screen. */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.75rem",
-                    marginBottom: "0.75rem",
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <input
-                    type="color"
-                    value={
-                      /^#[0-9a-fA-F]{6}$/.test(branding.brandColor || "")
-                        ? branding.brandColor
-                        : DEFAULT_BRAND_COLOR
-                    }
-                    onChange={(e) =>
-                      setBranding({ ...branding, brandColor: e.target.value })
-                    }
-                    style={{
-                      width: 48,
-                      height: 40,
-                      border: "1px solid var(--border-color)",
-                      borderRadius: 8,
-                      cursor: "pointer",
-                      padding: 2,
-                      background: "var(--input-bg)",
-                    }}
-                  />
-                  <input
-                    type="text"
-                    className="input-field"
-                    placeholder={DEFAULT_BRAND_COLOR}
-                    value={branding.brandColor || ""}
-                    onChange={(e) =>
-                      setBranding({ ...branding, brandColor: e.target.value })
-                    }
-                    style={{ flex: "1 1 120px", minWidth: 0 }}
-                  />
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    disabled={brandingSaving}
-                    onClick={handleSaveBrandColor}
-                    style={{ whiteSpace: "nowrap" }}
-                  >
-                    {brandingSaving ? "Saving..." : "Save color"}
-                  </button>
-                </div>
-                <p
-                  style={{
-                    color: "var(--text-secondary)",
-                    fontSize: "0.75rem",
-                  }}
-                >
-                  6-digit hex. Leave blank to fall back to the default theme
-                  accent.
-                </p>
-              </div>
-            </div>
-
-            {brandingMsg && (
-              <p
-                style={{
-                  marginTop: "1rem",
-                  fontSize: "0.85rem",
-                  color: "var(--accent-color)",
-                }}
-              >
-                {brandingMsg}
-              </p>
-            )}
-          </div>
-
           {/* Pipeline Stages Card */}
           <div
             className="card"
@@ -1983,6 +1670,319 @@ export default function Settings() {
 
           {/* Notification Preferences Card */}
           <NotificationPreferencesCard notify={notify} />
+
+          {/* Branding Card */}
+          <div
+            className="card"
+            style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
+          >
+            <h3
+              style={{
+                fontSize: "1.25rem",
+                fontWeight: "600",
+                marginBottom: "1.5rem",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+              }}
+            >
+              <Palette size={20} color="var(--accent-color)" /> Branding
+            </h3>
+            <p
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: "0.875rem",
+                marginBottom: "1.25rem",
+              }}
+            >
+              Upload your clinic logo and pick a brand color. These appear in
+              the sidebar and on branded PDFs.
+            </p>
+
+            {/* #479: Branding two-column (Logo | Brand color) collapses to
+              single-column under ~360px-each via auto-fit + minmax, fixing
+              the "B colo..." label clip + "Save c..." button-text clip on
+              ~425px viewports. */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
+                gap: "2rem",
+                alignItems: "start",
+              }}
+            >
+              {/* Logo */}
+              <div style={{ minWidth: 0 }}>
+                <label
+                  style={{
+                    display: "block",
+                    marginBottom: "0.5rem",
+                    fontSize: "0.875rem",
+                    color: "var(--text-secondary)",
+                    fontWeight: 500,
+                  }}
+                >
+                  <ImageIcon
+                    size={14}
+                    style={{ verticalAlign: "middle", marginRight: "0.35rem" }}
+                  />{" "}
+                  Logo
+                </label>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "1rem",
+                    marginBottom: "0.75rem",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  {/* Preview tile — staged file wins over saved logo so the
+                    user can see what they're about to commit. Broken
+                    logoUrl falls back to a dashed placeholder instead of
+                    leaving the classic broken-image icon in place. */}
+                  {stagedPreviewUrl ? (
+                    <div style={{ position: "relative" }}>
+                      <img
+                        src={stagedPreviewUrl}
+                        alt="New logo preview"
+                        style={{
+                          width: 80,
+                          height: 80,
+                          borderRadius: 8,
+                          objectFit: "cover",
+                          border: "2px solid var(--accent-color)",
+                        }}
+                      />
+                      <span
+                        style={{
+                          position: "absolute",
+                          bottom: -8,
+                          left: "50%",
+                          transform: "translateX(-50%)",
+                          background: "var(--accent-color)",
+                          color: "#fff",
+                          fontSize: "0.65rem",
+                          padding: "0.1rem 0.45rem",
+                          borderRadius: 999,
+                          whiteSpace: "nowrap",
+                          fontWeight: 600,
+                        }}
+                      >
+                        Pending
+                      </span>
+                    </div>
+                  ) : branding.logoUrl && !logoBroken ? (
+                    <img
+                      src={branding.logoUrl}
+                      alt="Current logo"
+                      onError={() => setLogoBroken(true)}
+                      style={{
+                        width: 80,
+                        height: 80,
+                        borderRadius: 8,
+                        objectFit: "cover",
+                        border: "1px solid var(--border-color)",
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: 80,
+                        height: 80,
+                        borderRadius: 8,
+                        border: "1px dashed var(--border-color)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "var(--text-secondary)",
+                        fontSize: "0.7rem",
+                        textAlign: "center",
+                        flexDirection: "column",
+                        gap: "0.2rem",
+                      }}
+                    >
+                      <ImageIcon size={22} />
+                      <span>{logoBroken ? "Image broken" : "No logo"}</span>
+                    </div>
+                  )}
+
+                  {/* Hidden native input; visible buttons trigger it. */}
+                  <input
+                    ref={logoInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+                    onChange={handlePickLogo}
+                    style={{ display: "none" }}
+                  />
+
+                  <div
+                    style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}
+                  >
+                    {stagedLogo ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={handleSaveLogo}
+                          disabled={logoUploading}
+                          style={{ whiteSpace: "nowrap" }}
+                        >
+                          {logoUploading ? "Uploading…" : "Save logo"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => logoInputRef.current?.click()}
+                          disabled={logoUploading}
+                          style={{
+                            padding: "0.5rem 0.9rem",
+                            background: "transparent",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: 6,
+                            color: "var(--text-primary)",
+                            cursor: "pointer",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Pick another
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelStagedLogo}
+                          disabled={logoUploading}
+                          style={{
+                            padding: "0.5rem 0.9rem",
+                            background: "transparent",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: 6,
+                            color: "var(--danger-color, #ef4444)",
+                            cursor: "pointer",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => logoInputRef.current?.click()}
+                        disabled={logoUploading}
+                        style={{ whiteSpace: "nowrap" }}
+                      >
+                        {branding.logoUrl && !logoBroken
+                          ? "Replace logo"
+                          : "Upload logo"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <p
+                  style={{
+                    color: "var(--text-secondary)",
+                    fontSize: "0.75rem",
+                  }}
+                >
+                  PNG, JPG, GIF, WEBP or SVG. Max 20 MB. Square works best.
+                </p>
+              </div>
+
+              {/* Brand color */}
+              <div style={{ minWidth: 0 }}>
+                <label
+                  style={{
+                    display: "block",
+                    marginBottom: "0.5rem",
+                    fontSize: "0.875rem",
+                    color: "var(--text-secondary)",
+                    fontWeight: 500,
+                  }}
+                >
+                  <Palette
+                    size={14}
+                    style={{ verticalAlign: "middle", marginRight: "0.35rem" }}
+                  />{" "}
+                  Brand color
+                </label>
+                {/* #479: flexWrap + whiteSpace:nowrap on the Save button so the
+                  button stays as one piece ("Save c..." → "Save color") even
+                  when wrapped to its own line. min-width:0 on the hex input
+                  lets it shrink instead of pushing the button off-screen. */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    marginBottom: "0.75rem",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <input
+                    type="color"
+                    value={
+                      /^#[0-9a-fA-F]{6}$/.test(branding.brandColor || "")
+                        ? branding.brandColor
+                        : DEFAULT_BRAND_COLOR
+                    }
+                    onChange={(e) =>
+                      setBranding({ ...branding, brandColor: e.target.value })
+                    }
+                    style={{
+                      width: 48,
+                      height: 40,
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      padding: 2,
+                      background: "var(--input-bg)",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    className="input-field"
+                    placeholder={DEFAULT_BRAND_COLOR}
+                    value={branding.brandColor || ""}
+                    onChange={(e) =>
+                      setBranding({ ...branding, brandColor: e.target.value })
+                    }
+                    style={{ flex: "1 1 120px", minWidth: 0 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={brandingSaving}
+                    onClick={handleSaveBrandColor}
+                    style={{ whiteSpace: "nowrap" }}
+                  >
+                    {brandingSaving ? "Saving..." : "Save color"}
+                  </button>
+                </div>
+                <p
+                  style={{
+                    color: "var(--text-secondary)",
+                    fontSize: "0.75rem",
+                  }}
+                >
+                  6-digit hex. Leave blank to fall back to the default theme
+                  accent.
+                </p>
+              </div>
+            </div>
+
+            {brandingMsg && (
+              <p
+                style={{
+                  marginTop: "1rem",
+                  fontSize: "0.85rem",
+                  color: "var(--accent-color)",
+                }}
+              >
+                {brandingMsg}
+              </p>
+            )}
+          </div>
         </div>
       </div>
     </div>

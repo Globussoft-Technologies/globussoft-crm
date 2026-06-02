@@ -305,6 +305,12 @@ const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
 const WellnessPrescriptions = lazy(
   () => import("./pages/wellness/Prescriptions"),
 );
+// Staff-authed self-view of own Rx — granted via `my_prescriptions.read`.
+// Companion to the patient portal's prescriptions tab for staff users who
+// are ALSO patients at this clinic.
+const WellnessMyPrescriptions = lazy(
+  () => import("./pages/wellness/MyPrescriptions"),
+);
 const WellnessPublicBooking = lazy(
   () => import("./pages/wellness/PublicBooking"),
 );
@@ -1450,6 +1456,22 @@ export default function App() {
                   </RoleGuard>
                 </WellnessOnly>
               } />
+              {/* Staff-authed self-view of own Rx. Sidebar surfacing comes
+                  from the page catalog entry (gated on my_prescriptions.read).
+                  Backend `/api/wellness/my-prescriptions[/:id/pdf]` is gated
+                  on the same permission + scoped to req.user.userId's linked
+                  Patient row. */}
+              <Route path="wellness/my-prescriptions" element={
+                <WellnessOnly>
+                  <RoleGuard
+                    requiredPermission={{ module: 'my_prescriptions', action: 'read' }}
+                    feature="My Prescriptions"
+                    lockedInPlace
+                  >
+                    <WellnessMyPrescriptions />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
               <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
               {/* Wave 11 Agent EE: Memberships catalog */}
               <Route path="wellness/memberships" element={
@@ -1467,7 +1489,7 @@ export default function App() {
               <Route path="wellness/wallet" element={
                 <WellnessOnly>
                   <RoleGuard
-                    requiredPermission={{ module: 'billing', action: 'read' }}
+                    requiredPermission={{ module: 'patient_wallets', action: 'read' }}
                     feature="Wallet ledger"
                     lockedInPlace
                   >
@@ -1478,7 +1500,7 @@ export default function App() {
               <Route path="wellness/giftcards" element={
                 <WellnessOnly>
                   <RoleGuard
-                    requiredPermission={{ module: 'billing', action: 'read' }}
+                    requiredPermission={{ module: 'gift_cards', action: 'read' }}
                     feature="Gift Cards"
                     lockedInPlace
                   >

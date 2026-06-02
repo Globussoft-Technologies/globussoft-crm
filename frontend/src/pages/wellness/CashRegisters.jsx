@@ -84,6 +84,15 @@ import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { formatDateTime } from '../../utils/date';
 import { AuthContext } from '../../App';
+// Shared date-range filter (Today / Yesterday / This Week / This Month /
+// Last 7 / Last 30 / Custom …) — reused from PatientDetail's Case
+// History tab and the Wallet ledger so behaviour stays consistent
+// across the wellness surface.
+import {
+  DateRangeFilter,
+  resolveDateRange,
+  EMPTY_DATE_FILTER,
+} from '../../components/wellness/DateRangeFilter';
 
 const EMPTY_REGISTER_FORM = { name: '', locationId: '', openingFloat: '0' };
 const TX_TABS = [
@@ -92,7 +101,15 @@ const TX_TABS = [
   { key: 'expenses', label: 'Expenses Cash' },
 ];
 
-export default function CashRegisters() {
+/**
+ * Props:
+ *   embedded — when true, renders without the outer page padding +
+ *              hides the "Cash Registers" page heading so the component
+ *              can be slotted into another page (e.g. PointOfSale as a
+ *              collapsible "Manage registers" section). The host page
+ *              provides its own framing. Default false = standalone page.
+ */
+export default function CashRegisters({ embedded = false } = {}) {
   const { user } = useContext(AuthContext) || {};
   const isAdminOrManager =
     user && (user.role === 'ADMIN' || user.role === 'MANAGER');
@@ -123,8 +140,11 @@ export default function CashRegisters() {
   const [closingNotes, setClosingNotes] = useState('');
   const [closingShift, setClosingShift] = useState(false);
 
-  // Transactions tab
+  // Transactions tab + date window. The window applies BEFORE the
+  // payment-method bucketing so the tab counts (Bookings / Partial /
+  // Expenses) reflect only rows in the active range.
   const [txTab, setTxTab] = useState('bookings');
+  const [txDateFilter, setTxDateFilter] = useState(EMPTY_DATE_FILTER);
 
   // ── Loaders ───────────────────────────────────────────────────────
   const loadRegisters = async () => {
@@ -395,7 +415,19 @@ export default function CashRegisters() {
   // Expenses: cash outflows from the drawer — empty until #779 backend
   // ships the deposit/withdraw ledger.
   const transactions = useMemo(() => {
-    const sales = Array.isArray(selectedShift?.sales) ? selectedShift.sales : [];
+    const allSales = Array.isArray(selectedShift?.sales) ? selectedShift.sales : [];
+    // Apply the shared date-range filter first so the per-payment-method
+    // tab counts below reflect only the active window. `[null, null]` ==
+    // "All time" preset — short-circuit and keep every row.
+    const [rangeStart, rangeEnd] = resolveDateRange(txDateFilter);
+    const sales = (rangeStart && rangeEnd)
+      ? allSales.filter((s) => {
+          if (!s.createdAt) return false;
+          const t = new Date(s.createdAt).getTime();
+          if (Number.isNaN(t)) return false;
+          return t >= rangeStart.getTime() && t <= rangeEnd.getTime();
+        })
+      : allSales;
     const bookings = sales.filter(
       (s) => s.paymentMethod === 'CASH' && s.status === 'COMPLETED',
     );
@@ -403,7 +435,7 @@ export default function CashRegisters() {
       (s) => s.paymentMethod === 'COMBINED' && s.status === 'COMPLETED',
     );
     return { bookings, partial, expenses: [] };
-  }, [selectedShift]);
+  }, [selectedShift, txDateFilter]);
 
   const visibleTransactions = transactions[txTab] || [];
 
@@ -420,34 +452,49 @@ export default function CashRegisters() {
 
   // ── Render ────────────────────────────────────────────────────────
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+    <div
+      style={
+        embedded
+          ? { animation: 'fadeIn 0.3s ease-out' }
+          : { padding: '2rem', animation: 'fadeIn 0.5s ease-out' }
+      }
+    >
       <header
         style={{
           marginBottom: '1.5rem',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center',
+          alignItems: embedded ? 'center' : 'flex-start',
           flexWrap: 'wrap',
           gap: '1rem',
         }}
       >
-        <div>
-          <h1
-            style={{
-              fontSize: '1.75rem',
-              fontWeight: 600,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-            }}
-          >
-            <Banknote size={24} /> Cash Registers
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            {registers.length} register{registers.length !== 1 ? 's' : ''} —
-            open a shift to start ringing up cash sales.
-          </p>
-        </div>
+        {/* When embedded, the host page (e.g. POS) supplies the page
+            title — render only the count + "New register" affordance so
+            the panel doesn't duplicate the parent's H1. */}
+        {!embedded ? (
+          <div>
+            <h1
+              style={{
+                fontSize: '1.75rem',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+              }}
+            >
+              <Banknote size={24} /> Cash Registers
+            </h1>
+            <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+              {registers.length} register{registers.length !== 1 ? 's' : ''} —
+              open a shift to start ringing up cash sales.
+            </p>
+          </div>
+        ) : (
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            {registers.length} register{registers.length !== 1 ? 's' : ''} configured
+          </div>
+        )}
         {isAdminOrManager && (
           <button
             onClick={() => (showForm ? resetForm() : startCreate())}
@@ -510,8 +557,8 @@ export default function CashRegisters() {
             disabled={saving}
             style={{
               ...primaryButtonStyle,
-              background: 'var(--success-color)',
               gridColumn: '1 / -1',
+              justifyContent: 'center',
             }}
           >
             {saving
@@ -548,9 +595,13 @@ export default function CashRegisters() {
                 padding: '1.25rem',
                 cursor: 'pointer',
                 opacity: reg.isActive ? 1 : 0.55,
+                // Unselected: visible 1px border so cards stay distinct
+                // against the cream wellness light-mode background where
+                // .glass alone provides almost no contrast. Selected:
+                // 2px teal accent that visually overrides the 1px line.
                 border: isSelected
                   ? '2px solid var(--primary-color, var(--accent-color))'
-                  : '1px solid transparent',
+                  : '1px solid var(--border-color)',
               }}
               data-testid={`register-card-${reg.id}`}
             >
@@ -873,10 +924,7 @@ export default function CashRegisters() {
                 <button
                   type="submit"
                   disabled={closingShift}
-                  style={{
-                    ...primaryButtonStyle,
-                    background: 'var(--accent-color)',
-                  }}
+                  style={primaryButtonStyle}
                 >
                   <Lock size={14} />
                   {closingShift ? 'Closing…' : 'Close shift'}
@@ -887,18 +935,47 @@ export default function CashRegisters() {
 
           {/* #781 — Recent Transactions split into 3 buckets */}
           <div>
-            <h3
+            <div
               style={{
-                fontSize: '1rem',
-                fontWeight: 600,
-                marginBottom: '0.5rem',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '0.4rem',
+                justifyContent: 'space-between',
+                gap: '0.75rem',
+                flexWrap: 'wrap',
+                marginBottom: '0.5rem',
               }}
             >
-              <Receipt size={16} /> Recent transactions
-            </h3>
+              <h3
+                style={{
+                  fontSize: '1rem',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  margin: 0,
+                }}
+              >
+                <Receipt size={16} /> Recent transactions
+              </h3>
+              {/* Shared DateRangeFilter — same control used on Case
+                  History + Wallet ledger. Defaults to "All time"; selecting
+                  a preset narrows the per-tab counts below + the visible
+                  list. "Custom" opens the two-month range picker. */}
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <DateRangeFilter
+                  value={txDateFilter}
+                  onChange={setTxDateFilter}
+                  label={null}
+                />
+              </div>
+            </div>
             <div
               role="tablist"
               style={{
@@ -958,9 +1035,16 @@ export default function CashRegisters() {
               selectedShift &&
               visibleTransactions.length === 0 && (
                 <div style={emptyStateStyle}>
-                  {txTab === 'expenses'
-                    ? 'No deposit/withdrawal entries yet. (Cash expense ledger ships with the #779 backend follow-up.)'
-                    : `No ${txTab === 'bookings' ? 'cash bookings' : 'partial-cash sales'} yet on this shift.`}
+                  {txTab === 'expenses' ? (
+                    'No deposit/withdrawal entries yet. (Cash expense ledger ships with the #779 backend follow-up.)'
+                  ) : (
+                    <>
+                      No {txTab === 'bookings' ? 'cash bookings' : 'partial-cash sales'}{' '}
+                      {txDateFilter && txDateFilter.preset !== 'all'
+                        ? 'in the selected date range.'
+                        : 'yet on this shift.'}
+                    </>
+                  )}
                 </div>
               )}
 

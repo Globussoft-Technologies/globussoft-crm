@@ -36,6 +36,27 @@ vi.mock('../utils/api', () => ({
   getAuthToken: vi.fn(() => 'test-token'),
 }));
 
+// Default to a fully-permissioned viewer so existing assertions on New
+// service / per-card Edit / Deactivate keep passing. The SUT now hides
+// these when the viewer lacks services.write.
+const FULL_PERMS = {
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['services.read', 'services.write'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+};
+const usePermissionsMock = vi.fn(() => FULL_PERMS);
+vi.mock('../hooks/usePermissions', () => ({
+  usePermissions: (...args) => usePermissionsMock(...args),
+}));
+
 import { fetchApi } from '../utils/api';
 import Services from '../pages/wellness/Services';
 

@@ -36,7 +36,11 @@ const MANAGER_PERMISSIONS = [
   'reports.read', 'reports.export',
   'dashboards.read',
   'analytics.read', 'analytics.export',
-  'billing.read',
+  // `billing` was decomposed in v3.8.x → invoices / gift_cards /
+  // patient_wallets. MANAGER inherits read across all three.
+  'invoices.read',
+  'gift_cards.read',
+  'patient_wallets.read',
   'staff.read',
   // Roles read-only — Manager can SEE the role matrix (audit trail / who
   // has what) but cannot grant or revoke (manage stays with Admin).
@@ -75,13 +79,17 @@ const CUSTOMER_PERMISSIONS = [
   // customer can view their own enquiry record. VISITS + PAYMENTS read so
   // they can see prior visits and what they've paid. CONSENTS write is the
   // sign-on-canvas action — needed for the patient-portal consent flow.
+  // `my_prescriptions.read` is the patient-scoped counterpart to staff-
+  // wide `prescriptions.read`; CUSTOMER never gets the tenant-wide grant.
   'leads.read',
   'appointments.read',
   'services.read',
-  'billing.read',
+  // `billing` decomposed in v3.8.x; CUSTOMER gets invoices.read so they
+  // can still see their own invoice list.
+  'invoices.read',
   'payments.read',
   'documents.read',
-  'prescriptions.read',
+  'my_prescriptions.read',
   'consents.read', 'consents.write',
   'visits.read',
 ];
@@ -213,7 +221,14 @@ const RECEPTIONIST_PERMISSIONS = [
   // Receptionist views the product catalog to look up items for POS
   // sales but doesn't edit it; no stock-ledger access.
   'products.read',
-  'billing.read', 'billing.write',
+  // `billing` decomposed in v3.8.x. Receptionist needs read+write on
+  // invoices (they raise + collect them at the front desk). Gift cards
+  // + patient wallets stay read-only by default — the front-desk POS
+  // flow handles top-ups through the dedicated POS surface, not direct
+  // ledger writes.
+  'invoices.read', 'invoices.write',
+  'gift_cards.read',
+  'patient_wallets.read',
   // Spec §2 RECEPTIONIST row — payments visibility for "pending payments
   // at POS" widget + reconciliation. Payments catalog only has read +
   // export (no .write), so .read is the full grant available.

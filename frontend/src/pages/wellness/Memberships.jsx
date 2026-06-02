@@ -4,12 +4,37 @@ import { useContext } from 'react';
 import {
   Crown, Plus, Pencil, Trash2, X, Save, Search, Check, Monitor,
   MoreVertical, Power, HelpCircle, Users, Package, Calendar, IndianRupee,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, CreditCard,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { usePermissions } from '../../hooks/usePermissions';
 import { formatMoney } from '../../utils/money';
 import { AuthContext } from '../../App';
+
+// Razorpay checkout SDK loader — same pattern as BuyGiftCards.jsx.
+// Lazy-loaded on first purchase attempt so the script isn't fetched
+// for catalog browsing.
+const RAZORPAY_SDK_URL = 'https://checkout.razorpay.com/v1/checkout.js';
+function loadRazorpaySdk() {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined') return reject(new Error('No window'));
+    if (window.Razorpay) return resolve(window.Razorpay);
+    const existing = document.querySelector(`script[src="${RAZORPAY_SDK_URL}"]`);
+    if (existing) {
+      existing.addEventListener('load', () => resolve(window.Razorpay));
+      existing.addEventListener('error', () => reject(new Error('Razorpay SDK failed to load')));
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = RAZORPAY_SDK_URL;
+    script.async = true;
+    script.onload = () => resolve(window.Razorpay);
+    script.onerror = () => reject(new Error('Razorpay SDK failed to load'));
+    document.body.appendChild(script);
+  });
+}
 
 // Empty form. The entitlements field is a non-trivial nested shape:
 // an array of { serviceId, quantity } rows. The UI keeps it as a
@@ -68,31 +93,147 @@ function durationLabel(days) {
 
 export default function Memberships() {
   const notify = useNotify();
+  const navigate = useNavigate();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  // "View Members" routes to /wellness/patients (since members ARE patients
+  // until a dedicated members list ships). Backend gates the /patients
+  // endpoints on patients.read via phiReadGate, so showing the button when
+  // the user can't reach the destination would just dump them on a page that
+  // 403s every API call. Hide it when they don't have read access.
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canViewPatients = permsReady && hasPermission('patients', 'read');
 
   const [plans, setPlans] = useState([]);
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('Active'); // All / Active / Expired / Inactive
+  // Filter set differs by role — admins see catalog-management filters;
+  // users see their own selection state. Default tab is "Active" for both,
+  // since that's the most useful first view in either role.
+  const [filter, setFilter] = useState('Active');
   const [query, setQuery] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
   const [editingPlan, setEditingPlan] = useState(null); // null = closed, {} = new, plan = edit
   const [detailPlan, setDetailPlan] = useState(null);
 
+  // User-side "owned" plans — backed by real Membership rows in the DB
+  // now that purchase goes through Razorpay. Was previously a
+  // localStorage wishlist; the localStorage path is gone since the
+  // payment modal creates a real Membership on successful confirm.
+  // Admins don't read this; they use the catalog filters.
+  const [myMemberships, setMyMemberships] = useState([]);
+  const ownedPlanIds = useMemo(
+    () => new Set(myMemberships.map((m) => m.planId).filter(Boolean)),
+    [myMemberships],
+  );
+
+  // Plan currently in the payment modal (null = closed).
+  const [purchasePlan, setPurchasePlan] = useState(null);
+  const [paying, setPaying] = useState(false);
+
   const load = () => {
     setLoading(true);
+    // The membership listing call below is admin-only (phiReadGate via
+    // /patients/:id/memberships) — for non-admin viewers we fall back to
+    // /appointments/my-memberships which is scoped to the caller's own
+    // patient row. Admins don't render the "Selected" tab anyway so the
+    // null fetch is fine for them.
+    const memberCall = isAdmin
+      ? Promise.resolve([])
+      : fetchApi('/api/wellness/appointments/my-memberships').catch(() => []);
     Promise.all([
       fetchApi('/api/wellness/membership-plans?includeInactive=1').catch(() => []),
       fetchApi('/api/wellness/services').catch(() => []),
+      memberCall,
     ])
-      .then(([p, s]) => {
+      .then(([p, s, m]) => {
         setPlans(Array.isArray(p) ? p : []);
         setServices(Array.isArray(s) ? s : []);
+        setMyMemberships(Array.isArray(m) ? m : []);
       })
       .finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(load, [isAdmin]);
+
+  // Razorpay handshake. Opens an order, launches the checkout modal, and
+  // on success POSTs the signature back so the backend creates the
+  // Membership row. Closing the Razorpay modal without paying just
+  // resets state — no Membership is created.
+  const startPurchase = async (plan) => {
+    if (!plan || paying) return;
+    setPaying(true);
+    try {
+      const order = await fetchApi(
+        `/api/wellness/membership-plans/${plan.id}/purchase/order`,
+        { method: 'POST' },
+      );
+      if (!order?.orderId || !order?.paymentId || !order?.key) {
+        throw new Error(order?.error || 'Failed to create payment order');
+      }
+
+      let Razorpay;
+      try {
+        Razorpay = await loadRazorpaySdk();
+      } catch (sdkErr) {
+        throw new Error(sdkErr.message || 'Razorpay SDK failed to load');
+      }
+
+      await new Promise((resolve) => {
+        const options = {
+          key: order.key,
+          order_id: order.orderId,
+          amount: order.amount,
+          currency: order.currency,
+          name: 'Membership Purchase',
+          description: plan.name,
+          prefill: {
+            name: user?.name || '',
+            email: user?.email || '',
+          },
+          theme: { color: '#265855' },
+          handler: async (response) => {
+            try {
+              const confirm = await fetchApi(
+                `/api/wellness/membership-plans/${plan.id}/purchase/confirm`,
+                {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    paymentId: order.paymentId,
+                    razorpay_order_id: response.razorpay_order_id,
+                    razorpay_payment_id: response.razorpay_payment_id,
+                    razorpay_signature: response.razorpay_signature,
+                  }),
+                },
+              );
+              if (confirm?.success) {
+                notify.success(`${plan.name} activated. You can apply it when booking an appointment.`);
+                setPurchasePlan(null);
+                await load();
+              } else {
+                notify.error(confirm?.error || 'Payment verification failed');
+              }
+            } catch (err) {
+              notify.error(err?.message || 'Payment verification failed');
+            } finally {
+              setPaying(false);
+              resolve();
+            }
+          },
+          modal: {
+            ondismiss: () => {
+              setPaying(false);
+              resolve();
+            },
+          },
+        };
+        const rzp = new Razorpay(options);
+        rzp.open();
+      });
+    } catch (err) {
+      notify.error(err?.message || 'Failed to start payment');
+      setPaying(false);
+    }
+  };
 
   // Close the per-card three-dot menu when the user clicks outside it.
   useEffect(() => {
@@ -102,23 +243,60 @@ export default function Memberships() {
     return () => document.removeEventListener('click', onDoc);
   }, [openMenuId]);
 
+  // Filter tabs differ by role:
+  //   Admin   → All / Active / Expired / Inactive (catalog-management view)
+  //   User    → Active / My memberships ("Active" only surfaces plans the
+  //             user doesn't already own, so the tab stays actionable
+  //             instead of duplicating the owned tab)
+  // The Expired tab on the admin side still always reads 0 because the
+  // MembershipPlan model has no expiry — only individual Memberships do. It
+  // stays for visual parity with the design.
+  const filterTabs = isAdmin
+    ? ['All', 'Active', 'Expired', 'Inactive']
+    : ['Active', 'My memberships'];
+
   const counts = useMemo(() => {
-    return {
-      All: plans.length,
-      Active: plans.filter((p) => p.isActive).length,
-      Inactive: plans.filter((p) => !p.isActive).length,
-      // MembershipPlan has no expiry concept — only individual Memberships do.
-      // The Expired filter exists for visual parity with the design; on a
-      // pure-plans page it always reads 0 unless we extend the data model.
-      Expired: 0,
-    };
-  }, [plans]);
+    if (isAdmin) {
+      return {
+        All: plans.length,
+        Active: plans.filter((p) => p.isActive).length,
+        Inactive: plans.filter((p) => !p.isActive).length,
+        Expired: 0,
+      };
+    }
+    // User-side counts: Active = active plans the user doesn't already own;
+    // My memberships = plans the user has bought. Inactive / expired plans
+    // are hidden from users.
+    const activeForUser = plans.filter((p) => p.isActive && !ownedPlanIds.has(p.id));
+    const owned = plans.filter((p) => ownedPlanIds.has(p.id));
+    return { Active: activeForUser.length, 'My memberships': owned.length };
+  }, [plans, isAdmin, ownedPlanIds]);
+
+  // Reset to a valid filter if the user role changes mid-session (e.g. an
+  // admin demotes themselves) or the current filter doesn't exist for the
+  // current role. Without this, a stale "Inactive" filter on a non-admin
+  // viewer would render zero rows with no way to recover.
+  useEffect(() => {
+    if (!filterTabs.includes(filter)) setFilter(filterTabs[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
 
   const visiblePlans = useMemo(() => {
     let rows = plans;
-    if (filter === 'Active') rows = rows.filter((p) => p.isActive);
-    else if (filter === 'Inactive') rows = rows.filter((p) => !p.isActive);
-    else if (filter === 'Expired') rows = []; // see counts comment above
+    if (isAdmin) {
+      if (filter === 'Active') rows = rows.filter((p) => p.isActive);
+      else if (filter === 'Inactive') rows = rows.filter((p) => !p.isActive);
+      else if (filter === 'Expired') rows = []; // see counts comment above
+    } else {
+      // User view: hide inactive plans entirely, then split by ownership.
+      const activeOnly = rows.filter((p) => p.isActive);
+      if (filter === 'My memberships') {
+        rows = activeOnly.filter((p) => ownedPlanIds.has(p.id));
+      } else {
+        // Active tab = available-to-buy (i.e. active AND not yet owned).
+        rows = activeOnly.filter((p) => !ownedPlanIds.has(p.id));
+      }
+    }
     if (query.trim()) {
       const q = query.trim().toLowerCase();
       rows = rows.filter((p) =>
@@ -127,7 +305,7 @@ export default function Memberships() {
       );
     }
     return rows;
-  }, [plans, filter, query]);
+  }, [plans, filter, query, isAdmin, ownedPlanIds]);
 
   const softDeletePlan = async (plan, label = 'Deactivated') => {
     try {
@@ -198,7 +376,7 @@ export default function Memberships() {
           />
         </div>
         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-          {['All', 'Active', 'Expired', 'Inactive'].map((f) => {
+          {filterTabs.map((f) => {
             const active = filter === f;
             return (
               <button
@@ -208,9 +386,9 @@ export default function Memberships() {
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
                   padding: '0.45rem 0.95rem',
-                  background: active ? '#111' : 'transparent',
+                  background: active ? 'var(--primary-color, var(--accent-color))' : 'transparent',
                   color: active ? '#fff' : 'var(--text-primary)',
-                  border: active ? '1px solid #111' : '1px solid var(--border-color, rgba(255,255,255,0.18))',
+                  border: active ? '1px solid transparent' : '1px solid var(--border-color, rgba(255,255,255,0.18))',
                   borderRadius: 999, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 500,
                 }}
               >
@@ -220,27 +398,46 @@ export default function Memberships() {
             );
           })}
         </div>
-        <button
-          type="button"
-          onClick={() => notify.info('Member-level view is coming soon — for now, see /wellness/patients to drill into a member.')}
-          style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1rem', background: 'transparent', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', borderRadius: 8, color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.85rem' }}
-        >
-          <Users size={14} /> View Members
-        </button>
+        {canViewPatients && (
+          <button
+            type="button"
+            // A dedicated members list isn't built yet, but members are
+            // patients — taking the user to the Patients page is the most
+            // useful version of "view members" we can ship today. Only
+            // surfaced when the viewer has patients.read; otherwise the
+            // destination would just 403 on every API call.
+            onClick={() => {
+              notify.info("Opening Patients — each member's plan and visits are on their patient page.");
+              navigate('/wellness/patients');
+            }}
+            style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1rem', background: 'transparent', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', borderRadius: 8, color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.85rem' }}
+          >
+            <Users size={14} /> View Members
+          </button>
+        )}
       </div>
 
       {loading ? (
         <p style={{ color: 'var(--text-secondary)' }}>Loading membership plans…</p>
       ) : visiblePlans.length === 0 ? (
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          {query.trim() || filter !== 'Active'
-            ? 'No plans match the current filter.'
-            : (
-              <>
-                No active membership plans yet.
-                {isAdmin && <> Tap the <strong>+</strong> button below to create one.</>}
-              </>
-            )}
+          {/* Empty-state copy is filter-aware so users get a useful next-step
+              instead of the generic "no matches" line — especially on the
+              user-side "Selected" tab when they haven't picked anything yet. */}
+          {query.trim()
+            ? 'No plans match your search.'
+            : !isAdmin && filter === 'My memberships'
+              ? "You don't have a membership yet. Open the Active tab to browse what's available."
+              : !isAdmin && filter === 'Active'
+                ? 'No membership plans are available right now. Please check back later.'
+                : filter !== 'Active'
+                  ? 'No plans match the current filter.'
+                  : (
+                      <>
+                        No active membership plans yet.
+                        {isAdmin && <> Tap the <strong>+</strong> button below to create one.</>}
+                      </>
+                    )}
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1.25rem' }}>
@@ -249,6 +446,7 @@ export default function Memberships() {
               key={p.id}
               plan={p}
               isAdmin={isAdmin}
+              isOwned={ownedPlanIds.has(p.id)}
               menuOpen={openMenuId === p.id}
               onToggleMenu={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === p.id ? null : p.id); }}
               onCloseMenu={() => setOpenMenuId(null)}
@@ -256,6 +454,7 @@ export default function Memberships() {
               onEdit={() => { setOpenMenuId(null); setEditingPlan(p); }}
               onDelete={() => { setOpenMenuId(null); handleDelete(p); }}
               onDeactivate={() => { setOpenMenuId(null); handleDeactivate(p); }}
+              onBuy={() => setPurchasePlan(p)}
             />
           ))}
         </div>
@@ -294,8 +493,23 @@ export default function Memberships() {
         <PlanDetailModal
           plan={detailPlan}
           services={services}
+          isAdmin={isAdmin}
+          isOwned={ownedPlanIds.has(detailPlan.id)}
           onClose={() => setDetailPlan(null)}
           onEdit={() => { setDetailPlan(null); setEditingPlan(detailPlan); }}
+          onBuy={() => {
+            setPurchasePlan(detailPlan);
+            setDetailPlan(null);
+          }}
+        />
+      )}
+
+      {purchasePlan && (
+        <PurchaseModal
+          plan={purchasePlan}
+          paying={paying}
+          onClose={() => { if (!paying) setPurchasePlan(null); }}
+          onPay={() => startPurchase(purchasePlan)}
         />
       )}
     </div>
@@ -304,7 +518,7 @@ export default function Memberships() {
 
 // ── Card ──────────────────────────────────────────────────────────
 
-function PlanCard({ plan, isAdmin, menuOpen, onToggleMenu, onCloseMenu, onView, onEdit, onDelete, onDeactivate }) {
+function PlanCard({ plan, isAdmin, isOwned, menuOpen, onToggleMenu, onCloseMenu, onView, onEdit, onDelete, onDeactivate, onBuy }) {
   const gradient = planGradient(plan);
   const isActive = plan.isActive !== false;
   return (
@@ -323,9 +537,11 @@ function PlanCard({ plan, isAdmin, menuOpen, onToggleMenu, onCloseMenu, onView, 
       }}
       onClick={onView}
     >
-      {/* "Active" diagonal ribbon — top-left. Only renders on active rows
-          (matches the design where inactive cards just look dimmed). */}
-      {isActive && (
+      {/* Diagonal ribbon — top-left. For non-admin viewers who've already
+          bought the plan it flips to "Active" (accent color) so the
+          owned state is visible at a glance. Admin views ignore ownership —
+          they only see catalog Active state. */}
+      {(isActive || (isOwned && !isAdmin)) && (
         <div
           style={{
             position: 'absolute', top: 0, left: 0, width: 90, height: 90,
@@ -335,12 +551,13 @@ function PlanCard({ plan, isAdmin, menuOpen, onToggleMenu, onCloseMenu, onView, 
           <div style={{
             position: 'absolute', top: 12, left: -28, width: 110,
             transform: 'rotate(-45deg)', transformOrigin: 'center',
-            background: '#16a34a', color: '#fff', fontSize: '0.65rem',
+            background: (!isAdmin && isOwned) ? 'var(--primary-color, var(--accent-color))' : '#16a34a',
+            color: '#fff', fontSize: '0.65rem',
             fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
             padding: '3px 0', textAlign: 'center',
             boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
           }}>
-            Active
+            {(!isAdmin && isOwned) ? 'Owned' : 'Active'}
           </div>
         </div>
       )}
@@ -390,10 +607,58 @@ function PlanCard({ plan, isAdmin, menuOpen, onToggleMenu, onCloseMenu, onView, 
         <div style={{ fontSize: '0.95rem', fontWeight: 500 }}>{formatMoney(plan.price, plan.currency || 'INR')}</div>
       </div>
 
-      <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end' }}>
-        <span style={{ fontSize: '0.85rem', textDecoration: 'underline', textUnderlineOffset: '3px' }}>
+      {/* Footer action row. Admins only see "View Details" since picking a
+          plan isn't meaningful for them. Non-admin viewers see an inline
+          Select / Selected button so they can act on the plan directly
+          without opening the detail modal — the modal stays available for
+          plan information but is no longer the only path. */}
+      <div
+        style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.75rem' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onView}
+          style={{
+            background: 'transparent', border: 'none', color: '#fff',
+            fontSize: '0.85rem', cursor: 'pointer',
+            textDecoration: 'underline', textUnderlineOffset: '3px', padding: 0,
+          }}
+        >
           View Details
-        </span>
+        </button>
+        {!isAdmin && (
+          isOwned ? (
+            <span
+              title="You own this plan"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                padding: '0.4rem 0.85rem',
+                background: 'rgba(255,255,255,0.92)',
+                color: '#111', borderRadius: 8,
+                fontSize: '0.8rem', fontWeight: 600,
+              }}
+            >
+              <Check size={13} /> Owned
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={onBuy}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                padding: '0.4rem 0.85rem',
+                background: 'rgba(0,0,0,0.35)',
+                color: '#fff',
+                border: '1px solid rgba(255,255,255,0.35)',
+                borderRadius: 8,
+                cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+              }}
+            >
+              <CreditCard size={13} /> Buy
+            </button>
+          )
+        )}
       </div>
     </div>
   );
@@ -422,7 +687,7 @@ function MenuItem({ icon, label, onClick, danger }) {
 
 // ── Detail modal ──────────────────────────────────────────────────
 
-function PlanDetailModal({ plan, services, onClose, onEdit }) {
+function PlanDetailModal({ plan, services, isAdmin, isOwned, onClose, onEdit, onBuy }) {
   const entitlements = useMemo(() => {
     try {
       const parsed = JSON.parse(plan.entitlements || '[]');
@@ -472,29 +737,34 @@ function PlanDetailModal({ plan, services, onClose, onEdit }) {
 
   return createPortal((
     <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
+      style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg, rgba(0,0,0,0.45))', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
       onClick={onClose}
     >
       <div style={{
         maxWidth: 540, width: '100%', maxHeight: '92vh', overflow: 'auto',
         borderRadius: 14, position: 'relative',
-        background: '#fff', color: '#111',
+        // Theme-aware surface: --tooltip-bg is the canonical near-solid popover
+        // surface (dark navy in dark mode, near-white in light mode), so the
+        // modal stays legible against the page underneath in both themes.
+        background: 'var(--tooltip-bg, #fff)',
+        color: 'var(--text-primary, #111)',
+        border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
         boxShadow: '0 25px 50px rgba(0,0,0,0.35)',
       }} onClick={(e) => e.stopPropagation()}>
-        <button onClick={onClose} aria-label="Close" style={{ position: 'absolute', top: 14, right: 14, background: 'transparent', border: 'none', color: '#444', cursor: 'pointer', display: 'flex', zIndex: 2 }}>
+        <button onClick={onClose} aria-label="Close" style={{ position: 'absolute', top: 14, right: 14, background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', zIndex: 2 }}>
           <X size={20} />
         </button>
 
         <div style={{ padding: '1.5rem 1.5rem 1rem' }}>
           {/* Plan header — monitor pill, name, price */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#444', fontSize: '0.95rem', marginTop: '0.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--text-secondary)', fontSize: '0.95rem', marginTop: '0.25rem' }}>
             <Monitor size={18} /> {durationLabel(plan.durationDays)}
           </div>
           <h2 style={{ fontSize: '1.45rem', fontWeight: 600, marginTop: '0.75rem', textTransform: 'capitalize' }}>{plan.name}</h2>
           <div style={{ fontSize: '1.25rem', fontWeight: 600, marginTop: '0.35rem' }}>{formatMoney(plan.price, plan.currency || 'INR')}</div>
         </div>
 
-        <div style={{ height: 1, background: '#e5e7eb', margin: '0 1.5rem' }} />
+        <div style={{ height: 1, background: 'var(--border-color)', margin: '0 1.5rem' }} />
 
         {/* Prepaid Card section. Fields the schema doesn't have yet are
             derived sensibly — Promotional Money = price, Credit Amount
@@ -563,10 +833,81 @@ function PlanDetailModal({ plan, services, onClose, onEdit }) {
         </Accordion>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', padding: '0 1.5rem 1.25rem' }}>
-          <button onClick={onClose} style={{ padding: '0.5rem 1rem', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff', color: '#111', cursor: 'pointer', fontSize: '0.85rem' }}>Close</button>
-          <button onClick={onEdit} style={{ padding: '0.5rem 1rem', borderRadius: 8, border: 'none', background: '#111', color: '#fff', cursor: 'pointer', fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600 }}>
-            <Pencil size={14} /> Edit plan
+          <button
+            onClick={onClose}
+            style={{
+              padding: '0.5rem 1rem',
+              borderRadius: 8,
+              border: '1px solid var(--border-color)',
+              background: 'transparent',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              fontSize: '0.85rem',
+            }}
+          >
+            Close
           </button>
+          {/* Role-aware primary CTA — admins/managers edit the plan; users
+              buy it (Razorpay handshake). The primary button uses theme
+              accent colors instead of hardcoded #111/#fff so it renders
+              correctly in both light + dark mode. */}
+          {isAdmin ? (
+            <button
+              onClick={onEdit}
+              style={{
+                padding: '0.5rem 1rem',
+                borderRadius: 8,
+                border: 'none',
+                background: 'var(--primary-color, var(--accent-color))',
+                color: '#fff',
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                fontWeight: 600,
+              }}
+            >
+              <Pencil size={14} /> Edit plan
+            </button>
+          ) : isOwned ? (
+            <span
+              title="You own this plan"
+              style={{
+                padding: '0.5rem 1rem',
+                borderRadius: 8,
+                border: '1px solid var(--border-color)',
+                background: 'var(--subtle-bg)',
+                color: 'var(--text-primary)',
+                fontSize: '0.85rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                fontWeight: 600,
+              }}
+            >
+              <Check size={14} /> Owned
+            </span>
+          ) : (
+            <button
+              onClick={onBuy}
+              style={{
+                padding: '0.5rem 1rem',
+                borderRadius: 8,
+                border: 'none',
+                background: 'var(--primary-color, var(--accent-color))',
+                color: '#fff',
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                fontWeight: 600,
+              }}
+            >
+              <CreditCard size={14} /> Buy plan
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -576,19 +917,19 @@ function PlanDetailModal({ plan, services, onClose, onEdit }) {
 function CardRow({ label, value }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
-      <span style={{ color: '#555' }}>{label} :</span>
-      <strong style={{ color: '#111' }}>{value}</strong>
+      <span style={{ color: 'var(--text-secondary)' }}>{label} :</span>
+      <strong style={{ color: 'var(--text-primary)' }}>{value}</strong>
     </div>
   );
 }
 
 function Accordion({ label, open, onToggle, children }) {
   return (
-    <div style={{ borderTop: '1px solid #e5e7eb' }}>
+    <div style={{ borderTop: '1px solid var(--border-color)' }}>
       <button
         type="button"
         onClick={onToggle}
-        style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.85rem 1.5rem', background: 'transparent', border: 'none', color: '#111', cursor: 'pointer', fontSize: '0.95rem', fontWeight: 600 }}
+        style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.85rem 1.5rem', background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.95rem', fontWeight: 600 }}
       >
         <span>{label}</span>
         {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -604,18 +945,121 @@ function Accordion({ label, open, onToggle, children }) {
 
 function PlanRow({ title, trailingLabel, trailingValue }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 0.85rem', borderRadius: 10, background: '#f3f4f6', marginBottom: '0.5rem' }}>
-      <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#111' }}>{title}</div>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 0.85rem', borderRadius: 10, background: 'var(--subtle-bg)', marginBottom: '0.5rem' }}>
+      <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
-        <span style={{ fontSize: '0.85rem', color: '#555' }}>{trailingLabel}</span>
-        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#111' }}>{trailingValue}</span>
+        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{trailingLabel}</span>
+        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>{trailingValue}</span>
       </div>
     </div>
   );
 }
 
 function RowEmpty({ children }) {
-  return <div style={{ padding: '0.6rem 0.85rem', color: '#555', fontSize: '0.85rem', fontStyle: 'italic' }}>{children}</div>;
+  return <div style={{ padding: '0.6rem 0.85rem', color: 'var(--text-secondary)', fontSize: '0.85rem', fontStyle: 'italic' }}>{children}</div>;
+}
+
+// ── Payment modal ─────────────────────────────────────────────────
+// Confirmation step that fronts the Razorpay checkout. The actual
+// gateway handshake (order create, SDK load, checkout open, confirm
+// POST) lives on the parent so this stays a thin, dismissable surface.
+
+function PurchaseModal({ plan, paying, onClose, onPay }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !paying) onClose(); };
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
+  }, [onClose, paying]);
+
+  return createPortal((
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Buy membership plan"
+      data-testid="membership-purchase-modal"
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
+      onClick={(e) => { if (e.target === e.currentTarget && !paying) onClose(); }}
+    >
+      <div
+        className="glass"
+        style={{
+          background: 'var(--tooltip-bg, var(--surface-color, #fff))',
+          color: 'var(--text-primary, #111)',
+          borderRadius: 12,
+          border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
+          padding: '1.5rem',
+          maxWidth: 460,
+          width: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1rem',
+        }}
+      >
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ fontSize: '1.15rem', fontWeight: 600, margin: 0, display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+            <Crown size={18} /> Buy {plan.name}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            disabled={paying}
+            style={{
+              background: 'transparent', border: 'none',
+              cursor: paying ? 'not-allowed' : 'pointer',
+              color: 'var(--text-secondary)',
+              padding: 4,
+            }}
+          >
+            <X size={18} />
+          </button>
+        </header>
+
+        <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          You'll pay <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(plan.price, plan.currency || 'INR')}</strong> via Razorpay. The membership activates immediately on payment success and can be applied at appointment booking.
+        </div>
+
+        <div style={{
+          padding: '0.85rem 1rem',
+          borderRadius: 8,
+          background: 'var(--subtle-bg, rgba(0,0,0,0.04))',
+          border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
+          fontSize: '0.85rem',
+          display: 'grid',
+          gap: '0.35rem',
+        }}>
+          <div><strong>{plan.name}</strong> <span style={{ color: 'var(--text-secondary)' }}>· {durationLabel(plan.durationDays)}</span></div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 600 }}>{formatMoney(plan.price, plan.currency || 'INR')}</div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onPay}
+          disabled={paying}
+          data-testid="membership-pay-now"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '0.5rem',
+            background: paying ? 'rgba(99,102,241,0.4)' : 'var(--primary-color, var(--accent-color))',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            padding: '0.7rem 1rem',
+            fontWeight: 600,
+            cursor: paying ? 'not-allowed' : 'pointer',
+            fontSize: '0.9rem',
+          }}
+        >
+          <CreditCard size={14} />
+          {paying ? 'Opening Razorpay…' : `Pay ${formatMoney(plan.price, plan.currency || 'INR')} with Razorpay`}
+        </button>
+      </div>
+    </div>
+  ), document.body);
 }
 
 // ── Create / edit modal ───────────────────────────────────────────

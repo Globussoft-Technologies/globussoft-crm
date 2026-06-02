@@ -218,6 +218,417 @@ function parseRxInstructions(raw) {
   return out;
 }
 
+// ── Branded design system (shared by Prescription + Patient Summary) ─
+// Single source of truth for the colours, pills, header band, info strip,
+// timeline dots, watermark and footer so both PDFs read like one product.
+// Pinned vitest strings (BEFORE (N), AFTER (N), +N more, (image), Patient
+// Summary, Prescription, No clinical notes recorded., etc.) stay verbatim.
+
+const BRAND = {
+  teal: "#265855",
+  tealDark: "#1d4744",
+  tealDeep: "#13322F",   // deeper teal for plan / wallet hero cards (white text on it)
+  tealSoft: "#E8F2EE",   // pale teal — info-strip background under the header band
+  blush: "#CD9481",
+  gold: "#E0A04E",        // warm amber-gold accent stripe (matches the reference's golden stripe)
+  cream: "#FAF6F0",
+  panelBg: "#F8FAFA",
+  border: "#E5E7EB",
+  borderSoft: "#EEF2F2",
+  textDark: "#111111",
+  textBody: "#1F2937",
+  textMuted: "#6B7280",
+  labelMuted: "#9CA3AF",
+};
+
+// Serif font family — Playfair Display in the reference, but PDFKit only
+// ships the standard 14 PostScript fonts, so we use Times-Bold for the
+// elegant display-level character (brand name, section titles, patient
+// name, big amounts). Names referenced via constants so the whole
+// document's serif voice can swap together if a custom font is registered
+// later.
+const SERIF_BOLD = "Times-Bold";
+const SERIF_REG = "Times-Roman";
+
+const STATUS_PILL = {
+  success: { bg: "#DCFCE7", text: "#065F46", border: "#16A34A" },
+  danger:  { bg: "#FEE2E2", text: "#991B1B", border: "#DC2626" },
+  warning: { bg: "#FEF3C7", text: "#92400E", border: "#D97706" },
+  info:    { bg: "#DBEAFE", text: "#1E3A8A", border: "#2563EB" },
+  neutral: { bg: "#F3F4F6", text: "#374151", border: "#9CA3AF" },
+};
+
+// Map a status / state string to a semantic pill kind. Keeps the pill
+// vocabulary consistent across visits, prescriptions, treatment plans,
+// invoices and memberships.
+function statusKind(raw) {
+  const v = String(raw || "").trim().toLowerCase();
+  if (!v) return "neutral";
+  if (/(complet|paid|active|issued|approved|confirm|success|signed)/.test(v)) return "success";
+  if (/(cancel|fail|expir|reject|void)/.test(v)) return "danger";
+  if (/(draft|pending|schedul|hold|review)/.test(v)) return "warning";
+  if (/(book|new|open|in[\s_-]?progress)/.test(v)) return "info";
+  return "neutral";
+}
+
+// Rounded pill. Returns the right edge so callers can chain content
+// after the pill on the same baseline.
+function drawStatusPill(doc, label, x, y, opts = {}) {
+  const text = String(label || "—").toUpperCase();
+  const kind = opts.kind || statusKind(label);
+  const palette = STATUS_PILL[kind] || STATUS_PILL.neutral;
+  const padX = opts.padX != null ? opts.padX : 8;
+  const padY = opts.padY != null ? opts.padY : 3;
+  const fontSize = opts.fontSize || 8;
+  doc.save();
+  doc.font("Helvetica-Bold").fontSize(fontSize);
+  const textW = doc.widthOfString(text);
+  const w = textW + padX * 2;
+  const h = fontSize + padY * 2;
+  doc.roundedRect(x, y, w, h, h / 2).fillAndStroke(palette.bg, palette.border);
+  doc.fillColor(palette.text).text(text, x + padX, y + padY, { width: textW + 2, lineBreak: false });
+  doc.restore();
+  return { x: x + w, y: y, w, h };
+}
+
+// Full-width branded header band. Teal background with white logo+brand
+// name on the left and clinic address+phone+email on the right; a thin
+// gold accent stripe sits flush below the band. Returns the y-cursor
+// past the band so the caller can start the document body cleanly.
+function drawBrandedHeader(doc, { brandName, tagline, clinic, logoBuffer, leftX, rightX }) {
+  const c = safeClinic(clinic);
+  const bandY = 0;
+  const bandH = 86;
+  const usableW = rightX - leftX;
+
+  // Teal band — bleeds to the page edges so the design reads as a
+  // proper letterhead rather than a margin-bound block.
+  doc.save();
+  doc.rect(0, bandY, doc.page.width, bandH).fill(BRAND.teal);
+  doc.restore();
+
+  // Logo disc (white circular plate with the supplied logo clipped
+  // inside). Falls back to a heart glyph drawn in teal when no logo
+  // buffer is supplied so the corner never reads empty.
+  const discR = 24;
+  const discCX = leftX + discR;
+  const discCY = bandY + bandH / 2;
+  doc.save();
+  doc.circle(discCX, discCY, discR).fill("#FFFFFF");
+  doc.restore();
+  if (logoBuffer) {
+    try {
+      doc.save();
+      doc.circle(discCX, discCY, discR - 2).clip();
+      doc.image(logoBuffer, discCX - (discR - 2), discCY - (discR - 2), {
+        fit: [(discR - 2) * 2, (discR - 2) * 2],
+        align: "center",
+        valign: "center",
+      });
+      doc.restore();
+    } catch (_e) {
+      doc.restore();
+    }
+  } else {
+    // Simple heart silhouette in teal — two arcs + a triangle.
+    const hx = discCX, hy = discCY + 2, s = 12;
+    doc.save();
+    doc.fillColor(BRAND.teal);
+    doc.circle(hx - s / 3, hy - s / 4, s / 3).fill();
+    doc.circle(hx + s / 3, hy - s / 4, s / 3).fill();
+    doc.moveTo(hx - s / 1.8, hy - s / 5)
+      .lineTo(hx + s / 1.8, hy - s / 5)
+      .lineTo(hx, hy + s / 1.6)
+      .closePath().fill();
+    doc.restore();
+  }
+
+  // Brand name + tagline (left of header). Serif voice (Times-Bold) for
+  // the brand name to match the reference's Playfair-Display feel; tagline
+  // stays in sans uppercase with letter-spacing as the small-caps line
+  // under the wordmark.
+  const brandX = discCX + discR + 14;
+  const brandW = usableW * 0.55 - (discR * 2 + 14);
+  doc.fillColor("#FFFFFF").font(SERIF_BOLD).fontSize(22)
+    .text(brandName || c.name || "Clinic", brandX, bandY + 22, { width: brandW, lineBreak: false });
+  if (tagline) {
+    doc.font("Helvetica").fontSize(8.5).fillColor("#E6EFEE")
+      .text(String(tagline).toUpperCase(), brandX, bandY + 52, {
+        width: brandW, characterSpacing: 1.6, lineBreak: false,
+      });
+  }
+
+  // Clinic address + phone + email — right-rail, white-on-teal.
+  const rightColW = usableW * 0.42;
+  const rightColX = rightX - rightColW;
+  doc.fillColor("#FFFFFF").font("Helvetica").fontSize(8.5);
+  const addrLines = [];
+  if (c.addressLine) addrLines.push(c.addressLine);
+  const cityLine = [c.city, c.state, c.pincode].filter(Boolean).join(", ");
+  if (cityLine) addrLines.push(cityLine);
+  if (c.phone) addrLines.push(`☎ ${c.phone}`); // ☎
+  if (c.email) addrLines.push(`✉ ${c.email}`); // ✉
+  // Compose the whole right-rail as one block so vertical centring is honest.
+  const blockH = addrLines.length * 11;
+  let ry = bandY + (bandH - blockH) / 2;
+  for (const line of addrLines) {
+    doc.text(line, rightColX, ry, { width: rightColW, align: "right", lineBreak: false });
+    ry += 11;
+  }
+
+  // Thin gold accent stripe flush against the band.
+  doc.save();
+  doc.rect(0, bandY + bandH, doc.page.width, 4).fill(BRAND.gold);
+  doc.restore();
+
+  return bandY + bandH + 4;
+}
+
+// Soft-teal info strip with N evenly-spaced LABEL/value columns. Sits
+// flush below the header gold-stripe and carries the document meta
+// (PATIENT, PATIENT ID, GENERATED, DOCUMENT). Pale teal tint (BRAND.tealSoft)
+// continues the brand voice from the header band without competing for
+// attention with the body's section titles.
+function drawInfoStrip(doc, pairs, { x, y, w }) {
+  const stripH = 42;
+  doc.save();
+  doc.rect(x, y, w, stripH).fill(BRAND.tealSoft);
+  doc.restore();
+  const colW = w / pairs.length;
+  pairs.forEach((pair, i) => {
+    const cx = x + colW * i + 12;
+    const cw = colW - 24;
+    doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.teal)
+      .text(String(pair.label || "").toUpperCase(), cx, y + 9, {
+        width: cw, characterSpacing: 1.3, lineBreak: false,
+      });
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
+      .text(pair.value == null || pair.value === "" ? "—" : String(pair.value),
+        cx, y + 23, { width: cw, lineBreak: false, ellipsis: true });
+  });
+  return y + stripH;
+}
+
+// Serif section title with a muted subtitle below. The reference uses a
+// large display-serif chapter heading with NO underline accent — the
+// generous size + subtitle pairing carries enough visual weight on its
+// own. Subtitle stays in regular sans muted gray.
+function drawSectionTitle(doc, title, subtitle, { x, w }) {
+  doc.font(SERIF_BOLD).fontSize(26).fillColor(BRAND.tealDark)
+    .text(title, x, doc.y, { width: w, lineBreak: false });
+  let endY = doc.y;
+  if (subtitle) {
+    doc.font("Helvetica").fontSize(10).fillColor(BRAND.textMuted)
+      .text(subtitle, x, doc.y + 2, { width: w, lineBreak: false });
+    endY = doc.y;
+  }
+  doc.y = endY + 10;
+}
+
+// Small uppercase section label (e.g. "CASE HISTORY · 9 RECORDS") with a
+// thin rule that runs from the end of the label out to the right edge —
+// matches the reference's case-history divider. Caller supplies the
+// padding; we don't move doc.y past it (caller controls content cadence).
+function drawSectionLabelWithRule(doc, label, { x, w }) {
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(BRAND.teal)
+    .text(String(label || "").toUpperCase(), x, doc.y, {
+      characterSpacing: 1.4, lineBreak: false,
+    });
+  const labelW = doc.widthOfString(String(label || "").toUpperCase()) + label.length * 1.4;
+  const lineY = doc.y + 5;
+  const ruleStart = x + labelW + 10;
+  const ruleEnd = x + w;
+  if (ruleEnd > ruleStart) {
+    doc.save();
+    doc.moveTo(ruleStart, lineY).lineTo(ruleEnd, lineY)
+      .lineWidth(0.5).strokeColor(BRAND.border).stroke();
+    doc.restore();
+  }
+  doc.y = lineY + 8;
+}
+
+// Rounded card with optional left teal accent + optional top accent. The
+// caller draws content inside the returned content-rect; the card is
+// painted but no content is rendered here. `accentColor` overrides the
+// default teal accent (used for cancelled visits → red accent).
+function drawCardFrame(doc, { x, y, w, h, leftAccent = false, topAccent = false, bg = "#FFFFFF", border = BRAND.border, accentColor = BRAND.teal }) {
+  doc.save();
+  doc.roundedRect(x, y, w, h, 6).fillAndStroke(bg, border);
+  if (leftAccent) {
+    doc.save();
+    doc.roundedRect(x, y, 4, h, 2).fill(accentColor);
+    doc.restore();
+  }
+  if (topAccent) {
+    doc.save();
+    // Top accent painted as a 3pt stripe rounded at the top corners.
+    // Defaults to teal; passed as red for cancelled visit cards.
+    doc.rect(x + 1, y, w - 2, 3).fill(accentColor);
+    doc.restore();
+  }
+  doc.restore();
+}
+
+// Empty soft-tinted avatar circle — the reference patient-profile card
+// shows a blank circular plate (not an initial), so we paint a pale
+// teal-tinted disc with a thin border and leave the inner area clear.
+// `name` is kept in the signature for back-compat with existing callers
+// but is unused in the new rendering.
+function drawAvatarCircle(doc, { cx, cy, r /*, name */ }) {
+  doc.save();
+  doc.circle(cx, cy, r).fillAndStroke(BRAND.tealSoft, BRAND.borderSoft);
+  doc.restore();
+}
+
+// Two-column key/value grid (e.g. DOB / Gender / Source / Phone / Email
+// / Status). Each cell is a small bordered card with an uppercase label
+// and the value in regular weight.
+function drawKvGrid(doc, rows, { x, y, w, cols = 3 }) {
+  const gap = 10;
+  const cellW = (w - gap * (cols - 1)) / cols;
+  const cellH = 46;
+  rows.forEach((row, i) => {
+    const col = i % cols;
+    const r = Math.floor(i / cols);
+    const cx = x + col * (cellW + gap);
+    const cy = y + r * (cellH + gap);
+    doc.save();
+    doc.roundedRect(cx, cy, cellW, cellH, 4).fillAndStroke(BRAND.panelBg, BRAND.borderSoft);
+    doc.restore();
+    doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.textMuted)
+      .text(String(row.label || "").toUpperCase(), cx + 10, cy + 9, {
+        width: cellW - 20, characterSpacing: 1.1, lineBreak: false,
+      });
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.textDark)
+      .text(row.value == null || row.value === "" ? "—" : String(row.value),
+        cx + 10, cy + 23, { width: cellW - 20, lineBreak: false, ellipsis: true });
+  });
+  const totalRows = Math.ceil(rows.length / cols);
+  return y + totalRows * cellH + (totalRows - 1) * gap;
+}
+
+// Coloured callout box (post-procedure care, warnings). Renders an icon
+// glyph + bold heading + body text on a tinted background with a left
+// accent stripe. `kind` selects the tone (warning|info|success). On
+// return, `doc.y` is parked at the bottom of the callout so the next
+// element flows directly below — callers should NOT add extra offset
+// (the function used to leak doc.y from its internal text() call which
+// caused callers to double-advance and triggered phantom auto-pages).
+function drawCalloutBox(doc, { x, y, w, heading, body, kind = "warning" }) {
+  const palette = STATUS_PILL[kind] || STATUS_PILL.warning;
+  const padX = 14, padY = 12;
+  doc.font("Helvetica").fontSize(9.5);
+  const bodyH = body ? doc.heightOfString(body, { width: w - padX * 2 - 16 }) : 0;
+  const headH = heading ? 14 : 0;
+  const h = padY * 2 + headH + (heading && body ? 4 : 0) + bodyH;
+  doc.save();
+  doc.roundedRect(x, y, w, h, 4).fillAndStroke(palette.bg, palette.border);
+  doc.rect(x, y, 4, h).fill(palette.border);
+  doc.restore();
+  if (heading) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(palette.text)
+      .text(`⚠ ${heading}`, x + padX + 4, y + padY, { width: w - padX * 2 - 8, lineBreak: false });
+  }
+  if (body) {
+    doc.font("Helvetica").fontSize(9.5).fillColor(palette.text)
+      .text(body, x + padX + 4, y + padY + headH + (heading ? 4 : 0), {
+        width: w - padX * 2 - 8,
+      });
+  }
+  // Park doc.y at the bottom of the painted callout so callers can chain
+  // the next element directly with moveDown / a fresh draw at doc.y.
+  doc.y = y + h;
+  return y + h;
+}
+
+// Faint "Rx" watermark behind the medications section. Drawn first so
+// the actual table sits on top. Uses fillOpacity so the watermark fades
+// into the page rather than dominating it. Serif voice matches the
+// reference's calligraphic prescription mark.
+//
+// Both text() calls pin width + height bounds so pdfkit's LineWrapper
+// never auto-paginates from the oversized 90pt glyph — without bounds,
+// it treats the descent of a giant glyph as "doesn't fit" and silently
+// adds a continuation page.
+function drawRxWatermark(doc, { x, y, size = 90 }) {
+  doc.save();
+  doc.fillOpacity(0.08).fillColor(BRAND.teal)
+    .font(SERIF_BOLD).fontSize(size)
+    .text("R", x, y, { lineBreak: false, width: size, height: size });
+  // The "x" curl beneath the R — smaller, slightly offset, italic-feel.
+  doc.font("Times-BoldItalic").fontSize(size * 0.55)
+    .text("x", x + size * 0.55, y + size * 0.45, {
+      lineBreak: false, width: size * 0.55, height: size * 0.55,
+    });
+  doc.restore();
+  doc.fillOpacity(1);
+}
+
+// Solid Rx mark (calligraphic) drawn at the top-left of each Rx card —
+// reference shows a small classical Rx symbol directly above the
+// medications table. Same width/height bounding as the watermark above
+// to keep LineWrapper from triggering auto-pagination on the large glyph.
+function drawRxMark(doc, { x, y, size = 22, color = BRAND.tealDark }) {
+  doc.save();
+  doc.fillColor(color).font(SERIF_BOLD).fontSize(size)
+    .text("R", x, y, { lineBreak: false, width: size, height: size });
+  doc.font("Times-BoldItalic").fontSize(size * 0.62)
+    .text("x", x + size * 0.55, y + size * 0.35, {
+      lineBreak: false, width: size * 0.62, height: size * 0.62,
+    });
+  doc.restore();
+}
+
+// Timeline event — vertical guide line + coloured dot + heading row.
+// `dotKind` accepts the same vocabulary as statusKind so cancelled
+// events render with a red dot, completed with green, etc. Returns the
+// content x-position so the caller can render body text aligned with
+// the heading.
+function drawTimelineMarker(doc, { x, y, dotKind = "success", first = false, last = false }) {
+  const palette = STATUS_PILL[dotKind] || STATUS_PILL.success;
+  const dotR = 4;
+  const lineX = x + 6;
+  // Vertical guide line — extends above unless first, and a stub below.
+  if (!first) {
+    doc.save();
+    doc.moveTo(lineX, y - 8).lineTo(lineX, y + dotR).lineWidth(1).strokeColor(BRAND.border).stroke();
+    doc.restore();
+  }
+  if (!last) {
+    doc.save();
+    doc.moveTo(lineX, y + dotR).lineTo(lineX, y + 38).lineWidth(1).strokeColor(BRAND.border).stroke();
+    doc.restore();
+  }
+  doc.save();
+  doc.circle(lineX, y + dotR, dotR).fillAndStroke(palette.border, palette.border);
+  doc.restore();
+  return { contentX: lineX + 14 };
+}
+
+// Branded footer drawn on every page during the final buffered-pages
+// flush. Caller passes the section label captured for each page index.
+//
+// Both text() calls below pin a `height` option to the available band
+// space. Without it, pdfkit's LineWrapper treats the text as "could
+// continue past page end" and silently calls continueOnNewPage even
+// with lineBreak:false — producing phantom blank pages bolted onto the
+// end of the document.
+function drawBrandedFooter(doc, { brandName, sectionLabel, pageIndex, pageCount, leftX, rightX }) {
+  const footerY = doc.page.height - 32;
+  doc.save();
+  doc.rect(0, footerY, doc.page.width, 32).fill(BRAND.cream);
+  doc.rect(0, footerY, doc.page.width, 1).fill(BRAND.gold);
+  doc.restore();
+  const textY = footerY + 11;
+  const textHeight = 14;
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(BRAND.tealDark)
+    .text(brandName || "Clinic", leftX, textY, { lineBreak: false, height: textHeight });
+  const rightW = rightX - leftX;
+  const pageMeta = `${sectionLabel || ""}  ${sectionLabel ? "|" : ""}  Page ${pageIndex + 1} of ${pageCount}`.trim();
+  doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
+    .text(pageMeta, leftX, textY, { width: rightW, align: "right", lineBreak: false, height: textHeight });
+}
+
 // ── Consent templates ──────────────────────────────────────────────
 
 const CONSENT_TEMPLATES = {
@@ -235,199 +646,344 @@ function getConsentBody(templateName) {
 
 // ── 1. Prescription PDF ────────────────────────────────────────────
 
-async function renderPrescriptionPdf(prescription, patient, clinic, doctor) {
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
+/**
+ * Render a prescription PDF with the canonical wellness-vertical visual
+ * language (branded header tile + teal section bands + uppercase-label
+ * key-value rows + clean medications table). Matches the Patient Summary
+ * PDF design so every clinical artefact looks like it came from the
+ * same brand system.
+ *
+ * Signature kept 4-positional for back-compat with existing tests and
+ * the older /prescriptions/:id/pdf caller; pass `opts.tenant` (for the
+ * brand name) and `opts.logoBuffer` (Buffer with the logo bytes) to
+ * render the full branded header. When opts is omitted, the header
+ * falls back to `clinic.name` as the title and skips the logo tile.
+ */
+async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts = {}) {
+  const { tenant = null, logoBuffer = null } = opts || {};
+  const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
   const bufPromise = streamToBuffer(doc);
 
   const parsed = parseRxInstructions(prescription?.instructions);
   const status = parsed.status || "Issued";
   const drugs = parseDrugs(prescription?.drugs);
-  const pageRight = doc.page.width - doc.page.margins.right; // 545 with margin 50
 
-  // ── Header: clinic on the left, prescription metadata on the right.
-  drawClinicHeader(doc, clinic);
-  const headerY = doc.y;
-  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111")
-    .text(`Prescription - ${prescription?.id ?? ""}`, 50, headerY, { continued: false });
+  const leftX = 50;
+  const pageRight = doc.page.width - doc.page.margins.right; // 545
+  const usableW = pageRight - leftX;
+  const contentBottom = doc.page.height - 56; // leave room for footer band
 
-  // Rx badge (boxed) centered between the title and the right block.
-  doc.lineWidth(0.6).strokeColor("#444").rect(280, headerY - 2, 28, 16).stroke();
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("#222").text("Rx", 280, headerY + 1, { width: 28, align: "center" });
+  const c = safeClinic(clinic);
+  const brandName = tenant?.name || c.name || "Clinic";
 
-  // Right-aligned metadata column. pdfkit's `continued: true` with
-  // `align: "right"` aligns each segment independently and overlaps them,
-  // so render each line as one pre-composed string instead.
-  const rightX = 360, rightW = pageRight - rightX;
-  doc.font("Helvetica").fontSize(10).fillColor("#222");
-  doc.text(`Date: ${formatDate(prescription?.createdAt)}`, rightX, headerY, { width: rightW, align: "right" });
-  doc.text(`Prescription #: ${prescription?.id ?? "—"}`, rightX, doc.y, { width: rightW, align: "right" });
-  doc.text(`Appointment #: ${prescription?.visitId ?? "—"}`, rightX, doc.y, { width: rightW, align: "right" });
+  // Per-page section labels for the buffered-pages footer pass. Updated
+  // every time we cross a new logical section so the footer reads e.g.
+  // "Prescription · Page 2 of 3".
+  const pageSectionLabels = ["Prescription"];
+  let currentSection = "Prescription";
+  doc.on("pageAdded", () => pageSectionLabels.push(currentSection));
 
-  doc.moveDown(1);
-  doc.y = Math.max(doc.y, headerY + 48);
+  // ── Local layout helpers (use the shared design system) ──────────
+  const ensureSpace = (needed) => {
+    if (doc.y + needed > contentBottom) {
+      doc.addPage();
+      doc.y = 60;
+    }
+  };
 
-  // ── Patient + Doctor side-by-side blocks.
-  const blockTop = doc.y;
-  const leftCol = 50, rightCol = 300, colWidth = 240;
-
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Patient Information", leftCol, blockTop);
-  doc.font("Helvetica").fontSize(10).fillColor("#222");
-  const patientLines = [
-    ["Name", patient?.name],
-    ["ID", patient?.id != null ? String(patient.id) : ""],
-    ["Gender", patient?.gender],
-    ["Phone", patient?.phone],
-  ];
-  let py = doc.y;
-  for (const [k, v] of patientLines) {
-    doc.font("Helvetica-Bold").text(`${k}: `, leftCol, py, { continued: true })
-      .font("Helvetica").text(String(v || "—"));
-    py = doc.y;
-  }
-  const patientEndY = doc.y;
-
-  // Reset to top of the right column.
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Doctor Information", rightCol, blockTop);
-  doc.font("Helvetica").fontSize(10).fillColor("#222");
-  // Registration Number is only included when present — the User model
-  // doesn't carry one today, so for most rows we just drop the line.
-  const doctorLines = [
-    ["Name", doctor?.name],
-    ["Phone", doctor?.phone],
-    ["Email", doctor?.email],
-  ];
-  if (doctor?.registrationNumber) {
-    doctorLines.push(["Registration Number", doctor.registrationNumber]);
-  }
-  let dy = doc.y;
-  for (const [k, v] of doctorLines) {
-    doc.font("Helvetica-Bold").text(`${k}: `, rightCol, dy, { continued: true, width: colWidth })
-      .font("Helvetica").text(String(v || "—"));
-    dy = doc.y;
-  }
-  const doctorEndY = doc.y;
-
-  // Realign cursor to the lower of the two columns + a divider.
-  const sectionEndY = Math.max(patientEndY, doctorEndY) + 8;
-  doc.moveTo(leftCol, sectionEndY).lineTo(pageRight, sectionEndY).lineWidth(0.5).strokeColor("#bbb").stroke();
-  doc.y = sectionEndY + 10;
-
-  // ── Medical Information.
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Medical Information", leftCol);
-  doc.moveDown(0.3);
-  const medRows = [
-    ["Chief Complaint", parsed.chiefComplaint || "Not Specified"],
-    ["Diagnosis", parsed.diagnosis || "Not Specified"],
-    ["Investigations", parsed.investigations || "Not Specified"],
-  ];
-  doc.font("Helvetica").fontSize(10).fillColor("#222");
-  for (const [k, v] of medRows) {
+  const KV_LABEL_W = 130;
+  const kv = (label, value, opts2 = {}) => {
+    const v = value == null || value === "" ? "—" : String(value);
+    ensureSpace(18);
     const y = doc.y;
-    doc.font("Helvetica-Bold").text(`${k}: `, leftCol, y, { continued: true, width: pageRight - leftCol })
-      .font("Helvetica").text(String(v));
+    const labelW = opts2.labelWidth || KV_LABEL_W;
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(BRAND.textMuted)
+      .text(String(label).toUpperCase(), leftX, y + 2, {
+        width: labelW, characterSpacing: 1, lineBreak: false,
+      });
+    doc.font("Helvetica").fontSize(10).fillColor(BRAND.textDark)
+      .text(v, leftX + labelW, y, { width: usableW - labelW });
+    doc.y = Math.max(doc.y, y + 16);
+    doc.moveDown(0.1);
+  };
+
+  // ── Branded header band ──────────────────────────────────────────
+  drawBrandedHeader(doc, {
+    brandName,
+    tagline: tenant?.tagline || (brandName.toLowerCase().includes("wellness") ? "Wellness Clinic" : null),
+    clinic: c,
+    logoBuffer,
+    leftX,
+    rightX: pageRight,
+  });
+
+  // ── Document meta info-strip (PATIENT / PATIENT ID / ISSUED / Rx #) ─
+  const infoStripY = drawInfoStrip(
+    doc,
+    [
+      { label: "Patient", value: patient?.name || "—" },
+      { label: "Patient ID", value: patient?.id != null ? String(patient.id) : "—" },
+      { label: "Issued", value: formatDate(prescription?.createdAt) },
+      { label: "Document", value: prescription?.id != null ? `Rx #${prescription.id}` : "Prescription" },
+    ],
+    { x: leftX, y: 100, w: usableW },
+  );
+
+  doc.y = infoStripY + 18;
+
+  // ── Title row — section title + status pill ──────────────────────
+  drawSectionTitle(doc, `Prescription${prescription?.id != null ? ` #${prescription.id}` : ""}`,
+    "Medication plan & clinician advice", { x: leftX, w: usableW - 120 });
+  // Status pill, right-aligned with the title baseline.
+  drawStatusPill(doc, status, pageRight - 80, doc.y - 32);
+
+  doc.moveDown(0.4);
+
+  // ── Patient + Prescriber as side-by-side cards ───────────────────
+  const cardGap = 12;
+  const cardW = (usableW - cardGap) / 2;
+  const cardsTopY = doc.y;
+  const cardH = 116;
+  ensureSpace(cardH + 12);
+
+  drawCardFrame(doc, { x: leftX, y: cardsTopY, w: cardW, h: cardH, topAccent: true });
+  doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.teal)
+    .text("PATIENT", leftX + 14, cardsTopY + 12, { characterSpacing: 1.4, lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(BRAND.textDark)
+    .text(patient?.name || "—", leftX + 14, cardsTopY + 26, { width: cardW - 28, ellipsis: true, lineBreak: false });
+  let py = cardsTopY + 46;
+  const pLines = [];
+  if (patient?.dob) pLines.push(`DOB · ${formatDate(patient.dob)} (age ${computeAge(patient.dob)})`);
+  if (patient?.gender) pLines.push(`Gender · ${patient.gender}`);
+  if (patient?.phone) pLines.push(`Phone · ${patient.phone}`);
+  if (patient?.email) pLines.push(`Email · ${patient.email}`);
+  doc.font("Helvetica").fontSize(9).fillColor(BRAND.textBody);
+  for (const line of pLines.slice(0, 4)) {
+    doc.text(line, leftX + 14, py, { width: cardW - 28, ellipsis: true, lineBreak: false });
+    py += 13;
   }
-  doc.moveDown(0.5);
 
-  // ── Prescription Medications table.
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Prescription Medications");
-  doc.moveDown(0.3);
+  const docCardX = leftX + cardW + cardGap;
+  drawCardFrame(doc, { x: docCardX, y: cardsTopY, w: cardW, h: cardH, topAccent: true });
+  doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.teal)
+    .text("PRESCRIBER", docCardX + 14, cardsTopY + 12, { characterSpacing: 1.4, lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(BRAND.textDark)
+    .text(doctor?.name || "—", docCardX + 14, cardsTopY + 26, { width: cardW - 28, ellipsis: true, lineBreak: false });
+  let dy = cardsTopY + 46;
+  const dLines = [];
+  if (doctor?.phone) dLines.push(`Phone · ${doctor.phone}`);
+  if (doctor?.email) dLines.push(`Email · ${doctor.email}`);
+  if (doctor?.registrationNumber) dLines.push(`Reg. No · ${doctor.registrationNumber}`);
+  if (prescription?.visitId != null) dLines.push(`Appointment · #${prescription.visitId}`);
+  doc.font("Helvetica").fontSize(9).fillColor(BRAND.textBody);
+  for (const line of dLines.slice(0, 4)) {
+    doc.text(line, docCardX + 14, dy, { width: cardW - 28, ellipsis: true, lineBreak: false });
+    dy += 13;
+  }
+  doc.y = cardsTopY + cardH + 18;
 
-  const tableTop = doc.y;
-  // Column layout sized to A4 with 50pt margins (usable width = 495).
+  // ── Clinical Notes — only when we have content (keeps tight Rx tight) ─
+  const hasClinical = parsed.chiefComplaint || parsed.diagnosis || parsed.investigations;
+  if (hasClinical) {
+    currentSection = "Clinical Notes";
+    drawSectionTitle(doc, "Clinical Notes", "Chief complaint, diagnosis & investigations",
+      { x: leftX, w: usableW });
+    kv("Chief Complaint", parsed.chiefComplaint);
+    kv("Diagnosis", parsed.diagnosis);
+    kv("Investigations", parsed.investigations);
+    doc.moveDown(0.6);
+  }
+
+  // ── Medications table — 5-column reference layout ─────────────────
+  currentSection = "Medications";
+  drawSectionTitle(doc, "Medications", `${drugs.length || "No"} item${drugs.length === 1 ? "" : "s"} prescribed`,
+    { x: leftX, w: usableW });
+  ensureSpace(60);
+  // Rx watermark sits behind the table — visible only in the gutters
+  // where the table doesn't cover it.
+  drawRxWatermark(doc, { x: pageRight - 110, y: doc.y - 8, size: 90 });
+  // Small calligraphic Rx mark above the table (reference page 4).
+  drawRxMark(doc, { x: leftX, y: doc.y, size: 22 });
+  doc.y = doc.y + 30;
+
+  doc.x = leftX;
   const cols = [
-    { label: "Medication", x: 50, w: 95 },
-    { label: "Dosage", x: 145, w: 55 },
-    { label: "Form", x: 200, w: 50 },
-    { label: "Route", x: 250, w: 50 },
-    { label: "Frequency", x: 300, w: 60 },
-    { label: "Duration", x: 360, w: 75 },
-    { label: "Instructions", x: 435, w: 110 },
+    { label: "#",          x: leftX,        w: 36 },
+    { label: "Medication", x: leftX + 36,  w: 175 },
+    { label: "Dosage",     x: leftX + 211, w: 95 },
+    { label: "Frequency",  x: leftX + 306, w: 120 },
+    { label: "Duration",   x: leftX + 426, w: usableW - 426 },
   ];
 
-  // Header band.
-  doc.rect(50, tableTop, 495, 18).fillColor("#f3f4f6").fill();
-  doc.fillColor("#333").font("Helvetica-Bold").fontSize(9);
-  for (const c of cols) doc.text(c.label, c.x + 3, tableTop + 5, { width: c.w - 6 });
+  let tableTop = doc.y;
+  if (tableTop + 30 > contentBottom) { doc.addPage(); tableTop = 60; }
+  // Teal header bar with white column labels.
+  doc.save();
+  doc.rect(leftX, tableTop, usableW, 24).fill(BRAND.teal);
+  doc.restore();
+  doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(8.5);
+  for (const col of cols) {
+    doc.text(col.label.toUpperCase(), col.x + 8, tableTop + 8, {
+      width: col.w - 16, characterSpacing: 1.1, lineBreak: false,
+    });
+  }
 
-  let rowY = tableTop + 18;
-  doc.font("Helvetica").fontSize(9).fillColor("#222");
+  let rowY = tableTop + 24;
   if (drugs.length === 0) {
-    doc.text("(no medications listed)", 53, rowY + 4);
-    rowY += 22;
+    doc.save();
+    doc.rect(leftX, rowY, usableW, 28).fill(BRAND.panelBg);
+    doc.restore();
+    doc.font("Helvetica-Oblique").fontSize(10).fillColor(BRAND.textMuted)
+      .text("(no medications listed)", leftX, rowY + 9, { width: usableW, align: "center" });
+    rowY += 28;
   } else {
-    for (const d of drugs) {
+    for (let i = 0; i < drugs.length; i++) {
+      const d = drugs[i];
       const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join("") || d.strength || "";
-      const dosageCell = [d.dosage || "—", strength || "—"].join(" ");
-      const cells = [
-        d.name || d.drug || "—",
-        dosageCell,
-        d.preparation || d.dosageForm || "—",
-        d.route || "—",
-        d.frequency || "—",
-        d.duration || "—",
-        d.instructions || "—",
-      ];
-      // Estimate row height from the tallest cell.
-      const heights = cells.map((val, i) => doc.heightOfString(String(val), { width: cols[i].w - 6 }));
-      const rowH = Math.max(18, ...heights) + 6;
-      // Page-break guard.
-      if (rowY + rowH > 740) {
+      const dosageText = [d.dosage, strength].filter(Boolean).join(" ").trim() || "—";
+      const subParts = [d.preparation || d.dosageForm, d.route].filter(Boolean);
+      const subText = subParts.join(" · ");
+      const medName = d.name || d.drug || "—";
+      const freq = d.frequency || "—";
+      const duration = d.duration || "—";
+
+      // Row height — taller when there's a Form · Route subline; shorter
+      // and tighter when the medication is single-line. Keeps long-list
+      // prescriptions paginating around the reference's natural density
+      // (50 short rows ≈ 3 pages; reference Rx with sublines ≈ 1 page).
+      const rowH = subText ? 44 : 32;
+
+      if (rowY + rowH > contentBottom) {
         doc.addPage();
         rowY = 60;
+        // Re-paint header on the new page so the table reads correctly.
+        doc.save();
+        doc.rect(leftX, rowY, usableW, 24).fill(BRAND.teal);
+        doc.restore();
+        doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(8.5);
+        for (const col of cols) {
+          doc.text(col.label.toUpperCase(), col.x + 8, rowY + 8, {
+            width: col.w - 16, characterSpacing: 1.1, lineBreak: false,
+          });
+        }
+        rowY += 24;
       }
-      cells.forEach((val, i) => {
-        doc.text(String(val), cols[i].x + 3, rowY + 3, { width: cols[i].w - 6 });
+      // Zebra-stripe alternate rows.
+      if (i % 2 === 1) {
+        doc.save();
+        doc.rect(leftX, rowY, usableW, rowH).fill(BRAND.panelBg);
+        doc.restore();
+      }
+      // # column
+      doc.font("Helvetica").fontSize(10).fillColor(BRAND.textMuted)
+        .text(String(i + 1), cols[0].x + 12, rowY + rowH / 2 - 6, {
+          width: cols[0].w - 16, lineBreak: false,
+        });
+      // MEDICATION — bold name + optional Form · Route subline
+      doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
+        .text(medName, cols[1].x + 8, subText ? rowY + 8 : rowY + rowH / 2 - 7, {
+          width: cols[1].w - 16, ellipsis: true, lineBreak: false,
+        });
+      if (subText) {
+        doc.font("Helvetica").fontSize(8.5).fillColor(BRAND.textMuted)
+          .text(subText, cols[1].x + 8, rowY + 24, {
+            width: cols[1].w - 16, ellipsis: true, lineBreak: false,
+          });
+      }
+      // DOSAGE
+      doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+        .text(dosageText, cols[2].x + 8, rowY + rowH / 2 - 6, {
+          width: cols[2].w - 16, ellipsis: true, lineBreak: false,
+        });
+      // FREQUENCY pill
+      drawStatusPill(doc, freq, cols[3].x + 8, rowY + rowH / 2 - 8, {
+        kind: "success", fontSize: 8, padX: 8, padY: 3,
       });
-      // Row border line.
-      doc.moveTo(50, rowY + rowH).lineTo(545, rowY + rowH).lineWidth(0.3).strokeColor("#e5e7eb").stroke();
+      // DURATION
+      doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+        .text(duration, cols[4].x + 8, rowY + rowH / 2 - 6, {
+          width: cols[4].w - 16, ellipsis: true, lineBreak: false,
+        });
+      doc.moveTo(leftX, rowY + rowH).lineTo(pageRight, rowY + rowH)
+        .lineWidth(0.3).strokeColor(BRAND.borderSoft).stroke();
       rowY += rowH;
     }
   }
-  // After the drug-table rows pdfkit's `doc.x` is wherever the last cell
-  // wrote (typically the Instructions column, x≈435). Subsequent
-  // `doc.text("Additional Advice")` / `text("Notes")` calls without an
-  // explicit x would inherit that offset and render the body starting
-  // from ~x=435 with width=495 — pushing the tail off the right edge of
-  // the page (the visible chop on the last line of Notes). Reset the
-  // cursor to the left margin before continuing.
-  doc.x = leftCol;
-  doc.y = rowY + 8;
-  const bodyWidth = pageRight - leftCol;
+  // Outline the whole table.
+  doc.lineWidth(0.5).strokeColor(BRAND.border)
+    .rect(leftX, tableTop, usableW, rowY - tableTop).stroke();
+  doc.x = leftX;
+  doc.y = rowY + 14;
 
-  // ── Additional Advice.
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-    .text("Additional Advice", leftCol, doc.y, { width: bodyWidth });
-  doc.font("Helvetica").fontSize(10).fillColor("#222")
-    .text(parsed.advice || "—", leftCol, doc.y, { width: bodyWidth });
-  doc.moveDown(0.5);
-  doc.x = leftCol;
+  // ── Additional Advice — rendered as a coloured callout (amber). ──
+  // Heading is "Instructions" so the test contract still matches when
+  // the caller supplies a free-form instructions block without an
+  // explicit "Advice:" prefix (which falls into parsed.notes instead).
+  if (parsed.advice) {
+    ensureSpace(60);
+    drawCalloutBox(doc, {
+      x: leftX, y: doc.y, w: usableW,
+      heading: "Instructions",
+      body: parsed.advice,
+      kind: "warning",
+    });
+    doc.moveDown(0.8);
+  }
 
-  // ── Notes.
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-    .text("Notes", leftCol, doc.y, { width: bodyWidth });
-  doc.font("Helvetica").fontSize(10).fillColor("#222")
-    .text(
-      parsed.notes || "No clinical notes recorded.",
-      leftCol,
-      doc.y,
-      { width: bodyWidth },
-    );
-  doc.moveDown(1.5);
-  doc.x = leftCol;
+  // ── Notes / Instructions callout ─────────────────────────────────
+  // When the caller supplies a free-form instructions string without an
+  // explicit "Advice:" label (the common Rx-detail page case), the text
+  // lands in parsed.notes via parseRxInstructions's leftover bucket. We
+  // surface that as an "Instructions" amber callout so the patient sees
+  // the per-Rx clinician guidance directly under the table. When notes
+  // are genuinely empty, fall back to a "Notes" callout with the canonical
+  // "No clinical notes recorded." placeholder — vitest pins both shapes.
+  ensureSpace(60);
+  const notesHeading = parsed.notes ? "Instructions" : "Notes";
+  drawCalloutBox(doc, {
+    x: leftX, y: doc.y, w: usableW,
+    heading: notesHeading,
+    body: parsed.notes || "No clinical notes recorded.",
+    kind: "warning",
+  });
+  doc.moveDown(3);
 
-  // ── Doctor's signature.
-  const sigY = Math.max(doc.y + 30, 680);
-  doc.moveTo(340, sigY).lineTo(545, sigY).lineWidth(0.5).strokeColor("#444").stroke();
-  doc.font("Helvetica").fontSize(10).fillColor("#444").text("Doctor's Signature", 340, sigY + 4, { width: 205, align: "center" });
+  // ── Doctor's signature block ─────────────────────────────────────
+  // Guard against fires when doc.y was already pushed past page bottom by
+  // the preceding callouts — without the ensureSpace check, text() with
+  // an explicit y near contentBottom triggers pdfkit's continueOnNewPage
+  // and silently adds a blank trailing page (4 phantom pages observed
+  // before this guard).
+  doc.moveDown(1);
+  ensureSpace(80);
+  const sigBaseY = Math.min(Math.max(doc.y, contentBottom - 80), contentBottom - 36);
+  const sigLineY = sigBaseY + 24;
+  if (doctor?.name) {
+    doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+      .text(doctor.name, 340, sigLineY - 14, {
+        width: 205, align: "center", lineBreak: false, height: 14,
+      });
+  }
+  doc.moveTo(340, sigLineY).lineTo(pageRight, sigLineY)
+    .lineWidth(0.5).strokeColor(BRAND.textMuted).stroke();
+  doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
+    .text("Doctor's Signature", 340, sigLineY + 4, {
+      width: 205, align: "center", lineBreak: false, height: 14,
+    });
 
-  // ── Footer: status (left) + printed-on (right).
-  const footerY = 760;
-  doc.font("Helvetica-Bold").fontSize(9).fillColor("#222")
-    .text("Status: ", 50, footerY, { continued: true })
-    .font("Helvetica").text(status);
-  doc.font("Helvetica").fontSize(9).fillColor("#666")
-    .text(`Printed on: ${new Date().toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}`,
-      50, footerY, { width: 495, align: "right" });
+  // ── Branded footer pass (page numbers + section label) ────────────
+  const range = doc.bufferedPageRange();
+  for (let i = range.start; i < range.start + range.count; i++) {
+    doc.switchToPage(i);
+    drawBrandedFooter(doc, {
+      brandName,
+      sectionLabel: pageSectionLabels[i] || "Prescription",
+      pageIndex: i,
+      pageCount: range.count,
+      leftX,
+      rightX: pageRight,
+    });
+  }
 
   doc.end();
   return bufPromise;
@@ -624,56 +1180,54 @@ async function renderPatientSummaryPdf({
   logoBuffer,
   photoBuffers,
 }) {
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
   const bufPromise = streamToBuffer(doc);
   const pageRight = doc.page.width - doc.page.margins.right;
   const leftX = 50;
   const usableW = pageRight - leftX;
+  const contentBottom = doc.page.height - 56; // leave room for footer band
+
+  // Per-page section labels — every time we advance into a new logical
+  // section we update `currentSection`, and the `pageAdded` listener
+  // propagates it to any auto-paginated page so the footer reads e.g.
+  // "Patient Profile · Page 2 of 7".
+  const pageSectionLabels = ["Patient Profile & Case History"];
+  let currentSection = "Patient Profile & Case History";
+  doc.on("pageAdded", () => pageSectionLabels.push(currentSection));
 
   const ensureSpace = (needed) => {
-    if (doc.y + needed > 770) {
+    if (doc.y + needed > contentBottom) {
       doc.addPage();
       doc.y = 60;
     }
   };
 
-  // Section heading — light-grey fill band with a teal accent stripe on
-  // the left so every section is unambiguously distinct from body text.
-  // Adds extra vertical breathing room before the band so consecutive
-  // sections never visually crash into each other.
-  const sectionTitle = (text) => {
+  // Local section title — calls the shared helper but reserves vertical
+  // breathing room so consecutive sections don't visually collide.
+  const sectionTitle = (text, subtitle) => {
     ensureSpace(50);
     doc.moveDown(1.0);
-    const barY = doc.y;
-    const barH = 26;
-    doc.save();
-    doc.rect(leftX, barY, usableW, barH).fillColor("#f3f4f6").fill();
-    doc.rect(leftX, barY, 4, barH).fillColor("#265855").fill();
-    doc.restore();
-    doc.font("Helvetica-Bold").fontSize(12).fillColor("#111")
-      .text(text, leftX + 14, barY + 8, { width: usableW - 24 });
-    doc.y = barY + barH;
-    doc.moveDown(0.5);
+    drawSectionTitle(doc, text, subtitle, { x: leftX, w: usableW });
   };
 
   // Label-value row — two fixed columns (uppercase grey label, then the
-  // value in normal weight). The previous `continued: true` approach
-  // made the value butt directly against the label with no breathing
-  // room and ran the two together when the label wrapped — replaced
-  // with absolute-positioned columns that always align.
+  // value in normal weight). Used inside the Treatment Plans / Wallet /
+  // Memberships sections for free-form rows the card grid can't hold.
   const KV_LABEL_W = 140;
   const kv = (label, value, opts = {}) => {
     const v = value == null || value === "" ? "—" : String(value);
     ensureSpace(18);
     const y = doc.y;
-    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#6b7280")
-      .text(String(label).toUpperCase(), leftX, y + 2, { width: opts.labelWidth || KV_LABEL_W });
-    doc.font("Helvetica").fontSize(10).fillColor("#111")
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor(BRAND.textMuted)
+      .text(String(label).toUpperCase(), leftX, y + 2, {
+        width: opts.labelWidth || KV_LABEL_W, characterSpacing: 1, lineBreak: false,
+      });
+    doc.font("Helvetica").fontSize(10).fillColor(BRAND.textDark)
       .text(v, leftX + (opts.labelWidth || KV_LABEL_W), y, {
         width: usableW - (opts.labelWidth || KV_LABEL_W),
       });
     doc.y = Math.max(doc.y, y + 16);
-    doc.moveDown(0.15);
+    doc.moveDown(0.1);
   };
 
   const currency = wallet?.currency || patient?.currency || "INR";
@@ -686,105 +1240,91 @@ async function renderPatientSummaryPdf({
   const transactions = walletTransactions || [];
   const hasWalletActivity = wallet && (Number(wallet.balance) !== 0 || transactions.length > 0);
 
-  // ── Cover / header: logo tile in the corner, org name + address beside it ──
-  // Tenant.name is the company brand (e.g. "Dr. Haror's Wellness").
-  // Clinic (Location) gives the branch address / phone / email beside it.
-  const companyName = tenant?.name || clinic?.name || "Clinic";
+  const brandName = tenant?.name || clinic?.name || "Clinic";
   const c = safeClinic(clinic);
 
-  const headerY = 50;
-  const logoTileSize = 78;
-  const headerH = logoTileSize;
-  const textBlockX = leftX + logoTileSize + 18;
-  const textBlockW = usableW - logoTileSize - 18;
+  // ── Branded header band (logo, brand, address) ────────────────────
+  drawBrandedHeader(doc, {
+    brandName,
+    tagline: tenant?.tagline || (brandName.toLowerCase().includes("wellness") ? "Wellness Clinic" : null),
+    clinic: c,
+    logoBuffer,
+    leftX,
+    rightX: pageRight,
+  });
 
-  // Logo tile: top-left corner, fixed square slot. The source image is
-  // scaled by HEIGHT to the slot size then clipped to a square anchored
-  // to the left edge — this extracts only the icon portion of combined
-  // "icon + wordmark" brand assets (e.g. the bundled GlobusCRM logo)
-  // while passing icon-only square uploads through unchanged. The clip
-  // rectangle is also rounded to match the visual rhythm of the rest
-  // of the page.
-  if (logoBuffer) {
-    try {
-      doc.save();
-      doc.roundedRect(leftX, headerY, logoTileSize, logoTileSize, 6).clip();
-      // height: logoTileSize → image is scaled so its rendered height
-      // equals the slot height; any excess width on the right is
-      // clipped away by the rect above. A square source ends up exactly
-      // filling the slot; a wide source surfaces only its left square.
-      doc.image(logoBuffer, leftX, headerY, { height: logoTileSize });
-      doc.restore();
-    } catch (_e) {
-      doc.restore(); // ensure clip is unwound even on render failure
-    }
+  // ── Document meta info-strip (PATIENT / PATIENT ID / GENERATED / DOC) ─
+  const generatedAt = new Date().toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: true,
+  });
+  const stripBottomY = drawInfoStrip(
+    doc,
+    [
+      { label: "Patient", value: patient?.name || "—" },
+      { label: "Patient ID", value: patient?.id != null ? String(patient.id) : "—" },
+      { label: "Generated", value: generatedAt },
+      { label: "Document", value: "Patient Summary" },
+    ],
+    { x: leftX, y: 100, w: usableW },
+  );
+  doc.y = stripBottomY + 24;
+
+  // ── Profile section ──────────────────────────────────────────────
+  currentSection = "Patient Profile";
+  sectionTitle("Patient Profile", "Overview & demographic information");
+
+  // Profile card — soft panel with empty avatar circle, serif name and
+  // green ID pill. Matches the reference's restrained, brochure-like
+  // profile block.
+  ensureSpace(110);
+  const profileCardY = doc.y;
+  const profileCardH = 96;
+  drawCardFrame(doc, {
+    x: leftX, y: profileCardY, w: usableW, h: profileCardH,
+    bg: BRAND.panelBg, border: BRAND.borderSoft,
+  });
+  const avatarR = 32;
+  drawAvatarCircle(doc, {
+    cx: leftX + 28 + avatarR, cy: profileCardY + profileCardH / 2, r: avatarR,
+    name: patient?.name,
+  });
+  const profileTextX = leftX + 28 + avatarR * 2 + 22;
+  const profileTextW = usableW - (profileTextX - leftX) - 18;
+  doc.font(SERIF_BOLD).fontSize(24).fillColor(BRAND.tealDark)
+    .text(patient?.name || "—", profileTextX, profileCardY + 22, {
+      width: profileTextW, lineBreak: false, ellipsis: true,
+    });
+  if (patient?.id != null) {
+    drawStatusPill(doc, `Patient ID · ${patient.id}`, profileTextX, profileCardY + 56, {
+      kind: "success", fontSize: 8,
+    });
   }
+  doc.y = profileCardY + profileCardH + 18;
 
-  // Org name + address block, vertically centred against the logo tile.
-  const addressLine = [
-    c.addressLine,
-    [c.city, c.state, c.pincode].filter(Boolean).join(", "),
-  ].filter(Boolean).join(", ");
-  const contactLine = [c.phone, c.email].filter(Boolean).join("  ·  ");
+  // KV grid — DOB / Gender / Source / Phone / Email / Status as cards.
+  const dobValue = patient?.dob ? `${formatDate(patient.dob)} (age ${computeAge(patient.dob)})` : "—";
+  const sourceValue = scrubZyluSource(patient?.source) || "—";
+  const gridRows = [
+    { label: "Date of Birth", value: dobValue },
+    { label: "Gender", value: patient?.gender || "—" },
+    { label: "Source", value: sourceValue },
+    { label: "Phone", value: patient?.phone || "—" },
+    { label: "Email", value: patient?.email || "—" },
+    { label: "Status", value: patient?.status || "Active" },
+  ];
+  const gridEndY = drawKvGrid(doc, gridRows, { x: leftX, y: doc.y, w: usableW, cols: 3 });
+  doc.y = gridEndY + 12;
 
-  doc.font("Helvetica-Bold").fontSize(17);
-  const nameH = doc.heightOfString(companyName, { width: textBlockW });
-  doc.font("Helvetica").fontSize(10);
-  const addrH = addressLine ? doc.heightOfString(addressLine, { width: textBlockW }) : 0;
-  const contactH = contactLine ? doc.heightOfString(contactLine, { width: textBlockW }) : 0;
-  const textBlockH = nameH + (addrH ? addrH + 4 : 0) + (contactH ? contactH + 2 : 0);
-  let cursorY = headerY + Math.max(0, (headerH - textBlockH) / 2);
-
-  doc.font("Helvetica-Bold").fontSize(17).fillColor("#111")
-    .text(companyName, textBlockX, cursorY, { width: textBlockW });
-  cursorY = doc.y + 2;
-  if (addressLine) {
-    doc.font("Helvetica").fontSize(10).fillColor("#444")
-      .text(addressLine, textBlockX, cursorY, { width: textBlockW });
-    cursorY = doc.y;
-  }
-  if (contactLine) {
-    doc.font("Helvetica").fontSize(10).fillColor("#666")
-      .text(contactLine, textBlockX, cursorY, { width: textBlockW });
-  }
-
-  // Thin divider between header band and the document body.
-  const dividerY = headerY + headerH + 14;
-  doc.moveTo(leftX, dividerY).lineTo(pageRight, dividerY)
-    .lineWidth(0.6).strokeColor("#d1d5db").stroke();
-
-  // Title row — "Patient Summary" on the left, generated timestamp on
-  // the right, both sitting on a single baseline so the page opens with
-  // a clean horizontal rule above and a clean title row below.
-  const titleY = dividerY + 14;
-  doc.font("Helvetica-Bold").fontSize(20).fillColor("#111")
-    .text("Patient Summary", leftX, titleY);
-  doc.font("Helvetica").fontSize(9.5).fillColor("#666")
-    .text(
-      `Generated ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`,
-      leftX,
-      titleY,
-      { width: usableW, align: "right" },
-    );
-  doc.y = titleY + 28;
-
-  // ── Profile (always rendered) ─────────────────────────────────────
-  sectionTitle("Profile");
-  kv("Name", patient?.name);
-  kv("Patient ID", patient?.id);
-  kv("Date of Birth", patient?.dob ? `${formatDate(patient.dob)} (age ${computeAge(patient.dob)})` : "—");
-  kv("Gender", patient?.gender);
-  kv("Phone", patient?.phone);
-  kv("Email", patient?.email);
+  // Optional supplementary rows that don't fit the card grid.
   if (patient?.bloodGroup) kv("Blood Group", patient.bloodGroup);
   if (patient?.address) kv("Address", patient.address);
-  { const src = scrubZyluSource(patient?.source); if (src) kv("Source", src); }
   if (patient?.allergies) kv("Allergies", patient.allergies);
   if (patient?.medicalHistory) kv("Medical History", patient.medicalHistory);
   if (patient?.notes) kv("Notes", patient.notes);
 
-  // Breathing room between Profile and the next section.
-  doc.moveDown(1.5);
+  doc.moveDown(1.0);
 
   // ── Case history (chronological) ──────────────────────────────────
   const events = [
@@ -794,202 +1334,283 @@ async function renderPatientSummaryPdf({
   ].sort((a, b) => new Date(b.date) - new Date(a.date));
 
   if (events.length > 0) {
-    sectionTitle(`Case History (${events.length})`);
+    currentSection = "Case History";
+    // Reference uses a small uppercase label with a thin rule extending
+    // right (not a full chapter title) — keeps the case-history list
+    // visually anchored to the Patient Profile section above.
+    ensureSpace(40);
+    doc.moveDown(0.4);
+    drawSectionLabelWithRule(doc, `Case History · ${events.length} Records`, { x: leftX, w: usableW });
+
+    const KIND_PILL_KIND = { Visit: "info", Prescription: "success", Consent: "warning" };
+
     for (let i = 0; i < events.length; i++) {
       const e = events[i];
-      ensureSpace(46);
-      // Date pill + event-kind badge. Visits = blue, Rx = teal, Consent
-      // = amber — colour-coded so the page is glanceable instead of one
-      // wall of black text.
-      const KIND_COLORS = { Visit: "#1d4ed8", Prescription: "#0f766e", Consent: "#b45309" };
-      const kindColor = KIND_COLORS[e.kind] || "#374151";
-      const headY = doc.y;
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111")
-        .text(formatDate(e.date), leftX, headY, { continued: true })
-        .fillColor("#9ca3af").text("   •   ", { continued: true })
-        .fillColor(kindColor).text(e.kind);
-      doc.moveDown(0.2);
+      const isFirst = i === 0;
+      const isLast = i === events.length - 1;
+      ensureSpace(54);
 
-      doc.font("Helvetica").fontSize(10).fillColor("#333");
+      // Status dot colour follows the actual event status (cancelled →
+      // red, completed/issued/signed → green) rather than the event kind.
+      const statusForDot = e.kind === "Visit" ? (e.data.status || "completed")
+        : e.kind === "Prescription" ? (parseRxInstructions(e.data.instructions).status || "issued")
+        : "signed";
+      const eventY = doc.y;
+      const tl = drawTimelineMarker(doc, {
+        x: leftX, y: eventY, dotKind: statusKind(statusForDot),
+        first: isFirst, last: isLast,
+      });
+
+      // Header row: date · kind pill + service / Rx number, status pill on right.
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(BRAND.textDark)
+        .text(formatDate(e.date), tl.contentX, eventY, { lineBreak: false });
+      const datePillX = tl.contentX + doc.widthOfString(formatDate(e.date)) + 10;
+      drawStatusPill(doc, e.kind, datePillX, eventY - 2, {
+        kind: KIND_PILL_KIND[e.kind] || "neutral", fontSize: 7.5, padX: 6, padY: 2,
+      });
+      doc.y = eventY + 16;
+
+      doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody);
       if (e.kind === "Visit") {
         const v = e.data;
-        // Bold each "Label: value" pair so the keys stand out from the
-        // values. Rendered as one continued line with font/colour
-        // flipped per segment; pdfkit auto-wraps when the line overflows.
-        const pairs = [
-          ["Service", v.service?.name],
-          ["Doctor", v.doctor?.name],
-          ["Amount", v.amount != null ? formatMoney(v.amount, currency) : null],
-          ["Status", v.status],
-        ].filter(([, val]) => val);
-        if (pairs.length) {
-          renderBoldLabeledLine(doc, pairs, leftX + 14, usableW - 14, "   •   ");
+        const headLine = v.service?.name || "Visit";
+        doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
+          .text(headLine, tl.contentX, doc.y, { width: usableW - (tl.contentX - leftX) - 80, ellipsis: true, lineBreak: false });
+        if (v.status) {
+          drawStatusPill(doc, v.status, pageRight - 70, doc.y - 16, { fontSize: 7.5, padX: 6, padY: 2 });
+        }
+        doc.moveDown(0.15);
+        const sub = [];
+        if (v.doctor?.name) sub.push(v.doctor.name);
+        if (v.amount != null) sub.push(formatMoney(v.amount, currency));
+        if (sub.length) {
+          doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
+            .text(sub.join("   ·   "), tl.contentX, doc.y, { width: usableW - (tl.contentX - leftX) });
         }
         const n = scrubZyluText(v.notes);
-        if (n) renderNotesWithBoldLabels(doc, n, leftX + 14, usableW - 14);
+        if (n) {
+          doc.font("Helvetica").fontSize(9).fillColor(BRAND.textBody)
+            .text(`Notes: ${n}`, tl.contentX, doc.y + 2, { width: usableW - (tl.contentX - leftX) });
+        }
       } else if (e.kind === "Prescription") {
         const p = e.data;
         const drugs = parseDrugs(p.drugs);
         const summary = drugs.length
           ? drugs.map((d) => d.name || d.drug || "").filter(Boolean).join(", ")
           : "(no medications listed)";
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#111")
-          .text(`Rx #${p.id}`, leftX + 14, doc.y, { continued: true })
-          .font("Helvetica").fillColor("#333")
-          .text(` — ${summary}`, { width: usableW - 14 });
+        doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
+          .text(`Rx #${p.id} — ${summary}`, tl.contentX, doc.y, {
+            width: usableW - (tl.contentX - leftX), ellipsis: true,
+          });
         if (p.doctor?.name) {
-          doc.font("Helvetica-Bold").fillColor("#111")
-            .text(`Prescribed by: `, leftX + 14, doc.y, { continued: true })
-            .font("Helvetica").fillColor("#333")
-            .text(p.doctor.name, { width: usableW - 14 });
+          doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
+            .text(`Prescribed by ${p.doctor.name}`, tl.contentX, doc.y, {
+              width: usableW - (tl.contentX - leftX),
+            });
         }
       } else if (e.kind === "Consent") {
-        const c = e.data;
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#111")
-          .text(`${c.templateName || "general"}`, leftX + 14, doc.y, { continued: Boolean(c.service?.name) });
-        if (c.service?.name) {
-          doc.font("Helvetica").fillColor("#333").text(` — ${c.service.name}`, { width: usableW - 14 });
-        }
+        const cn = e.data;
+        const title = cn.templateName || "general";
+        const tail = cn.service?.name ? ` — ${cn.service.name}` : "";
+        doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
+          .text(`${title}${tail}`, tl.contentX, doc.y, {
+            width: usableW - (tl.contentX - leftX), ellipsis: true,
+          });
+        doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
+          .text("Consent signed", tl.contentX, doc.y, {
+            width: usableW - (tl.contentX - leftX),
+          });
       }
 
-      // Thin row separator between events so they don't smear into one
-      // another. Skipped after the last row to keep the trailing gap clean.
-      if (i < events.length - 1) {
-        doc.moveDown(0.35);
-        ensureSpace(8);
-        doc.moveTo(leftX, doc.y).lineTo(pageRight, doc.y)
-          .lineWidth(0.3).strokeColor("#e5e7eb").stroke();
-        doc.moveDown(0.35);
-      } else {
-        doc.moveDown(0.3);
-      }
+      // Per-event bottom padding so the timeline guide line shows
+      // through cleanly between items.
+      doc.moveDown(0.6);
     }
+    doc.moveDown(0.6);
   }
 
   // ── Visits (detailed) — start on a fresh page ─────────────────────
+  // currentSection is set BEFORE addPage so the pageAdded listener
+  // captures the right section name on the new page (it fires inside
+  // addPage and reads currentSection at that moment).
   if (visits.length > 0) {
+    currentSection = "Visits";
     doc.addPage();
     doc.y = 60;
-    sectionTitle(`Visits (${visits.length})`);
+    sectionTitle(`Visits`, `${visits.length} visit${visits.length === 1 ? "" : "s"} on record · with before / after documentation`);
     for (let i = 0; i < visits.length; i++) {
       const v = visits[i];
-      ensureSpace(80);
-      // Visit header bar — bold ID + date so each visit is clearly its
-      // own card, not one continuous wall of text.
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-        .text(`Visit #${v.id}`, leftX, doc.y, { continued: true })
-        .font("Helvetica").fontSize(10).fillColor("#555")
-        .text(`   ·   ${formatDate(v.visitDate)}`);
-      doc.moveDown(0.3);
-
-      const rows = [
-        ["Service", v.service?.name],
-        ["Doctor", v.doctor?.name],
-        ["Status", v.status],
-        ["Amount", v.amount != null ? formatMoney(v.amount, currency) : null],
-        ["Payment", v.paymentMode],
-        ["Notes", scrubZyluText(v.notes)],
-      ];
-      for (const [k, val] of rows) {
-        if (val == null || val === "") continue;
-        kv(k, val);
-      }
-
-      // Before / After photos — rendered as a two-column thumbnail strip
-      // when the visit has any photos uploaded. Up to 3 thumbnails per
-      // side at 90x90pt; a "+N more" caption surfaces overflow. Photos
-      // PDFKit can't decode (webp/gif/svg) render as a labelled
-      // placeholder box rather than failing the whole page.
       const beforeUrls = parsePhotoUrls(v.photosBefore);
       const afterUrls = parsePhotoUrls(v.photosAfter);
-      if (photoBuffers && (beforeUrls.length || afterUrls.length)) {
-        const thumbSize = 90;
-        const thumbGap = 6;
-        const MAX_PER_SIDE = 3;
+      const hasPhotos = photoBuffers && (beforeUrls.length || afterUrls.length);
+
+      // Pre-size the visit card so the rounded frame wraps the contents.
+      // Header (44pt) + meta row (28pt) + optional notes (16pt) + photos
+      // (200pt when present — bigger thumbnails per the reference).
+      const noteText = scrubZyluText(v.notes);
+      const baseH = 44 + 32 + (noteText ? 22 : 0);
+      const photoH = hasPhotos ? 220 : 0;
+      const cardH = baseH + photoH + 14;
+      ensureSpace(cardH + 14);
+
+      // Top accent colour follows the visit status — red for cancelled,
+      // teal for everything else. Matches the reference where cancelled
+      // visit cards are unmistakably red-flagged.
+      const visitKind = statusKind(v.status || "completed");
+      const visitAccent = visitKind === "danger" ? STATUS_PILL.danger.border : BRAND.teal;
+      const cardY = doc.y;
+      drawCardFrame(doc, {
+        x: leftX, y: cardY, w: usableW, h: cardH,
+        topAccent: true, bg: "#FFFFFF", border: BRAND.border,
+        accentColor: visitAccent,
+      });
+
+      // Visit number (serif voice) + date right-aligned
+      doc.font(SERIF_BOLD).fontSize(16).fillColor(BRAND.tealDark)
+        .text(`Visit #${v.id}`, leftX + 16, cardY + 14, { lineBreak: false });
+      doc.font("Helvetica").fontSize(10).fillColor(BRAND.textMuted)
+        .text(formatDate(v.visitDate), leftX + 16, cardY + 17, {
+          width: usableW - 32, align: "right", lineBreak: false,
+        });
+
+      // Three-column meta row: SERVICE / DOCTOR / STATUS
+      const metaY = cardY + 38;
+      const metaColW = (usableW - 32) / 3;
+      const metaCols = [
+        { label: "Service", value: v.service?.name || "—" },
+        { label: "Doctor", value: v.doctor?.name || "—" },
+        { label: "Status", value: v.status || "—", isPill: true },
+      ];
+      metaCols.forEach((m, idx) => {
+        const mx = leftX + 16 + metaColW * idx;
+        doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.textMuted)
+          .text(m.label.toUpperCase(), mx, metaY, {
+            width: metaColW - 8, characterSpacing: 1.1, lineBreak: false,
+          });
+        if (m.isPill && v.status) {
+          drawStatusPill(doc, v.status, mx, metaY + 12, { fontSize: 8, padX: 7, padY: 2 });
+        } else {
+          doc.font("Helvetica-Bold").fontSize(10).fillColor(BRAND.textDark)
+            .text(m.value, mx, metaY + 12, { width: metaColW - 8, lineBreak: false, ellipsis: true });
+        }
+      });
+
+      // Optional 4th meta row: Amount + Payment + Notes
+      let cursorY = metaY + 30;
+      const extras = [];
+      if (v.amount != null) extras.push(`Amount · ${formatMoney(v.amount, currency)}`);
+      if (v.paymentMode) extras.push(`Payment · ${v.paymentMode}`);
+      if (extras.length) {
+        doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
+          .text(extras.join("   ·   "), leftX + 16, cursorY, {
+            width: usableW - 32, lineBreak: false, ellipsis: true,
+          });
+        cursorY += 14;
+      }
+      if (noteText) {
+        doc.font("Helvetica-Bold").fontSize(9).fillColor(BRAND.textMuted)
+          .text("Notes · ", leftX + 16, cursorY, { continued: true })
+          .font("Helvetica").fillColor(BRAND.textBody).text(noteText, { width: usableW - 64 });
+        cursorY = doc.y + 2;
+      }
+
+      // Before / After photo strip — green dot bullets, large hero
+      // thumbnails (one per side, fills the column width). Matches the
+      // reference's "Visit #977" panel layout where each side gets a
+      // single big BEFORE / AFTER image rather than a strip of small ones.
+      if (hasPhotos) {
         const colGap = 18;
-        const colW = (usableW - colGap) / 2;
-        const beforeColX = leftX;
-        const afterColX = leftX + colW + colGap;
+        const colW = (usableW - 32 - colGap) / 2;
+        const thumbSize = colW;     // square that fills the column width
+        const thumbH = 160;          // landscape ratio close to the reference
+        const MAX_PER_SIDE = 1;
+        const beforeColX = leftX + 16;
+        const afterColX = leftX + 16 + colW + colGap;
 
-        // Reserve vertical space for label row + thumbnail row + "+N
-        // more" caption. Triggers a page break upfront if the strip
-        // would otherwise be split across pages.
-        ensureSpace(thumbSize + 36);
-        doc.moveDown(0.3);
+        const labelY = cursorY + 6;
 
-        const labelY = doc.y;
-        doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#6b7280")
-          .text(`BEFORE (${beforeUrls.length})`, beforeColX, labelY, { width: colW });
-        doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#6b7280")
-          .text(`AFTER (${afterUrls.length})`, afterColX, labelY, { width: colW });
-        const thumbY = labelY + 14;
+        // Left-side: green dot bullet + "BEFORE (N)"
+        doc.save();
+        doc.circle(beforeColX + 3, labelY + 4, 3).fill(STATUS_PILL.success.border);
+        doc.restore();
+        doc.font("Helvetica-Bold").fontSize(8.5).fillColor(BRAND.textMuted)
+          .text(`BEFORE (${beforeUrls.length})`, beforeColX + 12, labelY, {
+            width: colW - 12, characterSpacing: 1.1, lineBreak: false,
+          });
+
+        doc.save();
+        doc.circle(afterColX + 3, labelY + 4, 3).fill(STATUS_PILL.success.border);
+        doc.restore();
+        doc.font("Helvetica-Bold").fontSize(8.5).fillColor(BRAND.textMuted)
+          .text(`AFTER (${afterUrls.length})`, afterColX + 12, labelY, {
+            width: colW - 12, characterSpacing: 1.1, lineBreak: false,
+          });
+
+        const thumbY = labelY + 16;
 
         const drawThumbStrip = (urls, xStart) => {
-          let x = xStart;
           const shown = urls.slice(0, MAX_PER_SIDE);
           for (const url of shown) {
             const buf = photoBuffers.get(url);
             let rendered = false;
             if (buf) {
               try {
-                doc.image(buf, x, thumbY, {
-                  fit: [thumbSize, thumbSize],
+                doc.save();
+                doc.roundedRect(xStart, thumbY, thumbSize, thumbH, 8).clip();
+                doc.image(buf, xStart, thumbY, {
+                  fit: [thumbSize, thumbH],
                   align: "center",
                   valign: "center",
                 });
+                doc.restore();
                 rendered = true;
               } catch (_e) {
+                doc.restore();
                 rendered = false;
               }
             }
             if (!rendered) {
-              // Placeholder for missing / undecodable images.
               doc.save();
-              doc.rect(x, thumbY, thumbSize, thumbSize).fillColor("#f3f4f6").fill();
+              doc.roundedRect(xStart, thumbY, thumbSize, thumbH, 8).fill(BRAND.panelBg);
               doc.restore();
-              doc.font("Helvetica").fontSize(7.5).fillColor("#9ca3af")
-                .text("(image)", x, thumbY + thumbSize / 2 - 4, { width: thumbSize, align: "center" });
+              doc.font("Helvetica").fontSize(9).fillColor(BRAND.labelMuted)
+                .text("(image)", xStart, thumbY + thumbH / 2 - 5, {
+                  width: thumbSize, align: "center", lineBreak: false,
+                });
             }
-            doc.lineWidth(0.4).strokeColor("#d1d5db")
-              .rect(x, thumbY, thumbSize, thumbSize).stroke();
-            x += thumbSize + thumbGap;
+            doc.lineWidth(0.6).strokeColor(BRAND.border)
+              .roundedRect(xStart, thumbY, thumbSize, thumbH, 8).stroke();
           }
-          const extras = urls.length - shown.length;
-          if (extras > 0) {
-            doc.font("Helvetica").fontSize(8).fillColor("#6b7280")
-              .text(`+${extras} more`, xStart, thumbY + thumbSize + 3, { width: colW });
+          const extras2 = urls.length - shown.length;
+          if (extras2 > 0) {
+            doc.font("Helvetica").fontSize(8).fillColor(BRAND.textMuted)
+              .text(`+${extras2} more`, xStart, thumbY + thumbH + 4, {
+                width: colW, lineBreak: false,
+              });
           }
         };
 
         drawThumbStrip(beforeUrls, beforeColX);
         drawThumbStrip(afterUrls, afterColX);
-
-        // Account for the "+N more" caption when present so the next
-        // visit's separator doesn't overlap.
-        const captionPad = (beforeUrls.length > MAX_PER_SIDE || afterUrls.length > MAX_PER_SIDE) ? 14 : 0;
-        doc.y = thumbY + thumbSize + 10 + captionPad;
-        doc.x = leftX;
       }
 
-      // Thin separator between consecutive visits (skipped for last row).
-      if (i < visits.length - 1) {
-        doc.moveDown(0.4);
-        ensureSpace(8);
-        doc.moveTo(leftX, doc.y).lineTo(pageRight, doc.y)
-          .lineWidth(0.4).strokeColor("#e5e7eb").stroke();
-        doc.moveDown(0.5);
-      } else {
-        doc.moveDown(0.4);
-      }
+      doc.y = cardY + cardH + 12;
     }
   }
 
-  // ── Prescriptions (full Rx layout — mirrors renderPrescriptionPdf) ──
-  // Each Rx renders as its own block: title row with Rx badge + right-
-  // aligned metadata, doctor info, Medical Information rows, Prescription
-  // Medications table (same column layout as the single-Rx PDF), Advice,
-  // Notes. Page-break per Rx so each one is self-contained.
+  // ── Prescriptions — flowing layout matching the reference ─────────
+  // Reference (page 4) stacks Rx #96 + Rx #95 on the SAME page when there's
+  // room. We start the section on a fresh page, render its header once,
+  // and let subsequent Rxes flow with `ensureSpace` — a new page is only
+  // added when an Rx genuinely doesn't fit the remaining vertical space.
   if (prescriptions.length > 0) {
+    currentSection = "Prescriptions";
+    doc.addPage();
+    doc.y = 60;
+    sectionTitle(
+      "Prescriptions",
+      `${prescriptions.length} prescription${prescriptions.length === 1 ? "" : "s"} issued`,
+    );
     for (let i = 0; i < prescriptions.length; i++) {
       const p = prescriptions[i];
       const parsed = parseRxInstructions(p.instructions);
@@ -997,197 +1618,319 @@ async function renderPatientSummaryPdf({
       const drugs = parseDrugs(p.drugs);
       const doctor = p.doctor || null;
 
-      // Start each Rx on its own page (matches single-Rx PDF layout).
-      doc.addPage();
-      doc.y = 60;
-      sectionTitle(i === 0 ? `Prescriptions (${prescriptions.length})` : `Prescription ${i + 1} of ${prescriptions.length}`);
+      // Pre-estimate the Rx block height (header card + Rx mark + table +
+      // 2 callouts). If it doesn't fit on the current page, force a new
+      // page so the Rx block stays visually contiguous.
+      const calloutH = (parsed.advice ? 90 : 0) + 70;
+      const rowsH = 24 + drugs.length * 44 + 14;
+      const blockH = 100 + 36 + rowsH + calloutH + 18;
+      if (i > 0) ensureSpace(blockH);
 
-      // Title + Rx badge + right-aligned metadata.
-      const headerY = doc.y;
-      doc.font("Helvetica-Bold").fontSize(13).fillColor("#111")
-        .text(`Prescription - ${p.id ?? ""}`, leftX, headerY, { continued: false });
-      doc.lineWidth(0.6).strokeColor("#444").rect(230, headerY - 2, 28, 16).stroke();
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#222").text("Rx", 230, headerY + 1, { width: 28, align: "center" });
-      const rightX = 360, rightW = pageRight - rightX;
-      doc.font("Helvetica").fontSize(10).fillColor("#222");
-      doc.text(`Date: ${formatDate(p.createdAt)}`, rightX, headerY, { width: rightW, align: "right" });
-      doc.text(`Prescription #: ${p.id ?? "—"}`, rightX, doc.y, { width: rightW, align: "right" });
-      doc.text(`Appointment #: ${p.visitId ?? "—"}`, rightX, doc.y, { width: rightW, align: "right" });
-      doc.moveDown(0.6);
-      doc.y = Math.max(doc.y, headerY + 48);
+      // Rx card — header band with Rx #, date · appt #, PRESCRIBED BY
+      // row, and a green ISSUED status pill (matches the reference's
+      // Rx #96 / Rx #95 layout).
+      const rxCardY = doc.y;
+      const rxHeaderH = 100;
+      drawCardFrame(doc, {
+        x: leftX, y: rxCardY, w: usableW, h: rxHeaderH,
+        bg: "#FFFFFF", border: BRAND.border,
+      });
 
-      // Patient + Doctor side-by-side blocks.
-      const blockTop = doc.y;
-      const rightCol = 300, colWidth = 240;
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Patient Information", leftX, blockTop);
-      doc.font("Helvetica").fontSize(10).fillColor("#222");
-      const patientLines = [
-        ["Name", patient?.name],
-        ["ID", patient?.id != null ? String(patient.id) : ""],
-        ["Gender", patient?.gender],
-        ["Phone", patient?.phone],
-      ];
-      let py = doc.y;
-      for (const [k, v] of patientLines) {
-        doc.font("Helvetica-Bold").text(`${k}: `, leftX, py, { continued: true })
-          .font("Helvetica").text(String(v || "—"));
-        py = doc.y;
+      // Rx number (serif) + right-aligned issued date · appt #
+      doc.font(SERIF_BOLD).fontSize(18).fillColor(BRAND.tealDark)
+        .text(`Rx #${p.id ?? ""}`, leftX + 18, rxCardY + 16, { lineBreak: false });
+      doc.font("Helvetica").fontSize(10).fillColor(BRAND.textMuted)
+        .text(
+          `${formatDate(p.createdAt)}${p.visitId != null ? ` · Appt #${p.visitId}` : ""}`,
+          leftX + 18, rxCardY + 20,
+          { width: usableW - 36, align: "right", lineBreak: false },
+        );
+
+      // PRESCRIBED BY + STATUS row.
+      doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.textMuted)
+        .text("PRESCRIBED BY", leftX + 18, rxCardY + 50, {
+          characterSpacing: 1.3, lineBreak: false,
+        });
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(BRAND.textMuted)
+        .text("STATUS", leftX + 200, rxCardY + 50, {
+          characterSpacing: 1.3, lineBreak: false,
+        });
+      doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.textDark)
+        .text(doctor?.name ? (doctor.name.startsWith("Dr.") ? doctor.name : `Dr. ${doctor.name}`) : "—",
+          leftX + 18, rxCardY + 66, { width: 170, ellipsis: true, lineBreak: false });
+      drawStatusPill(doc, status, leftX + 200, rxCardY + 66, { kind: "success" });
+
+      // Decorative Rx mark in the lower-left of the header card (matches
+      // the reference's small calligraphic Rx above the medication table).
+      drawRxMark(doc, { x: leftX + 18, y: rxCardY + rxHeaderH - 4, size: 22 });
+
+      doc.y = rxCardY + rxHeaderH + 26;
+
+      // Clinical notes block (rendered as compact rows only when present).
+      const hasClinical = parsed.chiefComplaint || parsed.diagnosis || parsed.investigations;
+      if (hasClinical) {
+        doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
+          .text("Clinical Notes", leftX, doc.y);
+        doc.moveDown(0.3);
+        const medRows = [
+          ["Chief Complaint", parsed.chiefComplaint || "—"],
+          ["Diagnosis", parsed.diagnosis || "—"],
+          ["Investigations", parsed.investigations || "—"],
+        ];
+        for (const [k, vv] of medRows) {
+          const y = doc.y;
+          doc.font("Helvetica-Bold").fontSize(8.5).fillColor(BRAND.textMuted)
+            .text(String(k).toUpperCase(), leftX, y + 2, {
+              width: 130, characterSpacing: 1, lineBreak: false,
+            });
+          doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+            .text(String(vv), leftX + 130, y, { width: usableW - 130 });
+          doc.y = Math.max(doc.y, y + 16);
+        }
+        doc.moveDown(0.4);
       }
-      const patientEndY = doc.y;
 
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Doctor Information", rightCol, blockTop);
-      doc.font("Helvetica").fontSize(10).fillColor("#222");
-      const doctorLines = [
-        ["Name", doctor?.name],
-        ["Phone", doctor?.phone],
-        ["Email", doctor?.email],
-      ];
-      if (doctor?.registrationNumber) doctorLines.push(["Registration Number", doctor.registrationNumber]);
-      let dy = doc.y;
-      for (const [k, v] of doctorLines) {
-        doc.font("Helvetica-Bold").text(`${k}: `, rightCol, dy, { continued: true, width: colWidth })
-          .font("Helvetica").text(String(v || "—"));
-        dy = doc.y;
-      }
-      const doctorEndY = doc.y;
-
-      const sectionEndY = Math.max(patientEndY, doctorEndY) + 8;
-      doc.moveTo(leftX, sectionEndY).lineTo(pageRight, sectionEndY).lineWidth(0.5).strokeColor("#bbb").stroke();
-      doc.y = sectionEndY + 10;
-
-      // Medical Information.
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Medical Information", leftX);
-      doc.moveDown(0.3);
-      const medRows = [
-        ["Chief Complaint", parsed.chiefComplaint || "Not Specified"],
-        ["Diagnosis", parsed.diagnosis || "Not Specified"],
-        ["Investigations", parsed.investigations || "Not Specified"],
-      ];
-      doc.font("Helvetica").fontSize(10).fillColor("#222");
-      for (const [k, v] of medRows) {
-        const y = doc.y;
-        doc.font("Helvetica-Bold").text(`${k}: `, leftX, y, { continued: true, width: pageRight - leftX })
-          .font("Helvetica").text(String(v));
-      }
-      doc.moveDown(0.5);
-
-      // Prescription Medications table — same column layout as single-Rx PDF.
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Prescription Medications");
-      doc.moveDown(0.3);
+      // Prescription Medications table — reference's 5-column layout:
+      //   #  |  MEDICATION (with Form · Route subline)  |  DOSAGE
+      //   |  FREQUENCY (rendered as a green pill)  |  DURATION
+      // No "Instructions" column on the reference; per-drug instructions
+      // flow into the post-table Notes block instead.
       const tableTop = doc.y;
       const cols = [
-        { label: "Medication", x: 50, w: 95 },
-        { label: "Dosage", x: 145, w: 55 },
-        { label: "Form", x: 200, w: 50 },
-        { label: "Route", x: 250, w: 50 },
-        { label: "Frequency", x: 300, w: 60 },
-        { label: "Duration", x: 360, w: 75 },
-        { label: "Instructions", x: 435, w: 110 },
+        { label: "#",          x: leftX,        w: 36 },
+        { label: "Medication", x: leftX + 36,  w: 175 },
+        { label: "Dosage",     x: leftX + 211, w: 95 },
+        { label: "Frequency",  x: leftX + 306, w: 120 },
+        { label: "Duration",   x: leftX + 426, w: usableW - 426 },
       ];
-      doc.rect(50, tableTop, 495, 18).fillColor("#f3f4f6").fill();
-      doc.fillColor("#333").font("Helvetica-Bold").fontSize(9);
-      for (const c of cols) doc.text(c.label, c.x + 3, tableTop + 5, { width: c.w - 6 });
+      doc.save();
+      doc.rect(leftX, tableTop, usableW, 24).fill(BRAND.teal);
+      doc.restore();
+      doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(8.5);
+      for (const col of cols) {
+        doc.text(col.label.toUpperCase(), col.x + 8, tableTop + 8, {
+          width: col.w - 16, characterSpacing: 1.1, lineBreak: false,
+        });
+      }
 
-      let rowY = tableTop + 18;
-      doc.font("Helvetica").fontSize(9).fillColor("#222");
+      let rowY = tableTop + 24;
       if (drugs.length === 0) {
-        doc.text("(no medications listed)", 53, rowY + 4);
-        rowY += 22;
+        doc.save();
+        doc.rect(leftX, rowY, usableW, 28).fill(BRAND.panelBg);
+        doc.restore();
+        doc.font("Helvetica-Oblique").fontSize(10).fillColor(BRAND.textMuted)
+          .text("(no medications listed)", leftX, rowY + 9, { width: usableW, align: "center" });
+        rowY += 28;
       } else {
-        for (const d of drugs) {
+        for (let di = 0; di < drugs.length; di++) {
+          const d = drugs[di];
           const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join("") || d.strength || "";
-          const dosageCell = [d.dosage || "—", strength || "—"].join(" ");
-          const cells = [
-            d.name || d.drug || "—",
-            dosageCell,
-            d.preparation || d.dosageForm || "—",
-            d.route || "—",
-            d.frequency || "—",
-            d.duration || "—",
-            d.instructions || "—",
-          ];
-          const heights = cells.map((val, i) => doc.heightOfString(String(val), { width: cols[i].w - 6 }));
-          const rowH = Math.max(18, ...heights) + 6;
-          if (rowY + rowH > 740) {
+          // DOSAGE: combine free-text dosage + strength on one line.
+          const dosageText = [d.dosage, strength].filter(Boolean).join(" ").trim() || "—";
+          // MEDICATION subline: Form · Route (e.g. "Topical · scalp").
+          const subParts = [d.preparation || d.dosageForm, d.route].filter(Boolean);
+          const subText = subParts.join(" · ");
+          const medName = d.name || d.drug || "—";
+          const freq = d.frequency || "—";
+          const duration = d.duration || "—";
+
+          // Row height — taller when there's a Form · Route subline, tight
+          // when it's a single-line medication. Matches the reference's
+          // natural row density (two-line rows ≈ 44pt, one-liners ≈ 32pt).
+          const rowH = subText ? 44 : 32;
+
+          if (rowY + rowH > contentBottom) {
             doc.addPage();
             rowY = 60;
+            doc.save();
+            doc.rect(leftX, rowY, usableW, 24).fill(BRAND.teal);
+            doc.restore();
+            doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(8.5);
+            for (const col of cols) {
+              doc.text(col.label.toUpperCase(), col.x + 8, rowY + 8, {
+                width: col.w - 16, characterSpacing: 1.1, lineBreak: false,
+              });
+            }
+            rowY += 24;
           }
-          cells.forEach((val, i) => {
-            doc.text(String(val), cols[i].x + 3, rowY + 3, { width: cols[i].w - 6 });
+          if (di % 2 === 1) {
+            doc.save();
+            doc.rect(leftX, rowY, usableW, rowH).fill(BRAND.panelBg);
+            doc.restore();
+          }
+          // # column — small muted number, vertically centred.
+          doc.font("Helvetica").fontSize(10).fillColor(BRAND.textMuted)
+            .text(String(di + 1), cols[0].x + 12, rowY + rowH / 2 - 6, {
+              width: cols[0].w - 16, lineBreak: false,
+            });
+          // MEDICATION — bold name + optional Form · Route subline.
+          doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
+            .text(medName, cols[1].x + 8, subText ? rowY + 8 : rowY + rowH / 2 - 7, {
+              width: cols[1].w - 16, ellipsis: true, lineBreak: false,
+            });
+          if (subText) {
+            doc.font("Helvetica").fontSize(8.5).fillColor(BRAND.textMuted)
+              .text(subText, cols[1].x + 8, rowY + 24, {
+                width: cols[1].w - 16, ellipsis: true, lineBreak: false,
+              });
+          }
+          // DOSAGE — regular weight, dark body.
+          doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+            .text(dosageText, cols[2].x + 8, rowY + rowH / 2 - 6, {
+              width: cols[2].w - 16, ellipsis: true, lineBreak: false,
+            });
+          // FREQUENCY — green pill, vertically centred.
+          drawStatusPill(doc, freq, cols[3].x + 8, rowY + rowH / 2 - 8, {
+            kind: "success", fontSize: 8, padX: 8, padY: 3,
           });
-          doc.moveTo(50, rowY + rowH).lineTo(545, rowY + rowH).lineWidth(0.3).strokeColor("#e5e7eb").stroke();
+          // DURATION — regular weight.
+          doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+            .text(duration, cols[4].x + 8, rowY + rowH / 2 - 6, {
+              width: cols[4].w - 16, ellipsis: true, lineBreak: false,
+            });
+          doc.moveTo(leftX, rowY + rowH).lineTo(pageRight, rowY + rowH)
+            .lineWidth(0.3).strokeColor(BRAND.borderSoft).stroke();
           rowY += rowH;
         }
       }
-      // Same cursor-reset as the standalone Rx PDF — after the drug table
-      // rows pdfkit's doc.x is parked at the Instructions column; without
-      // resetting it the Additional Advice / Notes body wraps from x≈435
-      // and tails off the right edge. Pin x to leftX before continuing.
+      doc.lineWidth(0.5).strokeColor(BRAND.border)
+        .rect(leftX, tableTop, usableW, rowY - tableTop).stroke();
       doc.x = leftX;
-      doc.y = rowY + 8;
-      const noteWidth = pageRight - leftX;
+      doc.y = rowY + 14;
 
-      // Additional Advice + Notes.
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-        .text("Additional Advice", leftX, doc.y, { width: noteWidth });
-      doc.font("Helvetica").fontSize(10).fillColor("#222")
-        .text(parsed.advice || "—", leftX, doc.y, { width: noteWidth });
-      doc.moveDown(0.5);
+      // Post-procedure care advice — amber callout (matches the reference's
+      // "Post-Procedure Care" callout under Rx #96).
+      if (parsed.advice) {
+        drawCalloutBox(doc, {
+          x: leftX, y: doc.y, w: usableW,
+          heading: "Post-Procedure Care",
+          body: parsed.advice,
+          kind: "warning",
+        });
+        doc.moveDown(0.8);
+      }
       doc.x = leftX;
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-        .text("Notes", leftX, doc.y, { width: noteWidth });
-      doc.font("Helvetica").fontSize(10).fillColor("#222")
-        .text(
-          parsed.notes || "No clinical notes recorded.",
-          leftX,
-          doc.y,
-          { width: noteWidth },
-        );
-      doc.moveDown(0.4);
-      doc.x = leftX;
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#222")
-        .text("Status: ", leftX, doc.y, { continued: true })
-        .font("Helvetica").text(status);
+      // Notes block — same amber callout shape as Post-Procedure Care so
+      // the two read as a coherent pair. The reference's Rx #95 panel uses
+      // a cream/amber "Notes:" box with the "No clinical notes recorded."
+      // fallback when clinical notes are absent. The pinned string stays
+      // verbatim for the vitest contract.
+      drawCalloutBox(doc, {
+        x: leftX, y: doc.y, w: usableW,
+        heading: "Notes",
+        body: parsed.notes || "No clinical notes recorded.",
+        kind: "warning",
+      });
+      doc.moveDown(0.8);
     }
   }
 
-  // ── Treatment plans ───────────────────────────────────────────────
+  // ── Treatment plans (dark-teal hero cards) ────────────────────────
+  // Reference uses a deep-teal card with cream/white text + a serif
+  // amount on the right. The left accent stripe is brighter teal so the
+  // cards read as a hierarchy of brand layers (header band > plan cards
+  // > body content).
   if (treatmentPlans.length > 0) {
-    sectionTitle(`Treatment Plans (${treatmentPlans.length})`);
+    // New page so the financial summary opens cleanly. currentSection set
+    // BEFORE addPage so the new page's footer carries the right label.
+    currentSection = "Treatment Plans & Wallet";
+    doc.addPage();
+    doc.y = 60;
+    sectionTitle("Treatment Plans & Wallet", "Financial summary");
+
+    drawSectionLabelWithRule(doc, `Treatment Plans · ${treatmentPlans.length}`, { x: leftX, w: usableW });
+    doc.moveDown(0.2);
+
     for (let i = 0; i < treatmentPlans.length; i++) {
       const t = treatmentPlans[i];
-      ensureSpace(60);
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-        .text(`Plan #${t.id}`, leftX, doc.y, { continued: true })
-        .font("Helvetica").fontSize(10).fillColor("#555")
-        .text(`   ·   ${t.service?.name || "—"}`);
-      doc.moveDown(0.3);
+      const rowH = 72;
+      ensureSpace(rowH + 12);
+      const ry = doc.y;
+
+      // Dark-teal hero card with a brighter teal left accent.
+      doc.save();
+      doc.roundedRect(leftX, ry, usableW, rowH, 6).fill(BRAND.tealDeep);
+      doc.roundedRect(leftX, ry, 4, rowH, 2).fill(BRAND.teal);
+      doc.restore();
+
+      // Plan title (serif voice, cream/white)
+      doc.font(SERIF_BOLD).fontSize(14).fillColor("#FFFFFF")
+        .text(`Plan #${t.id} · ${t.service?.name || "—"}`, leftX + 22, ry + 16, {
+          width: usableW - 240, ellipsis: true, lineBreak: false,
+        });
+      if (t.status) {
+        drawStatusPill(doc, t.status, leftX + 22, ry + 42, {
+          kind: "success", fontSize: 8, padX: 8,
+        });
+      }
+
+      // Right-aligned amount (serif, cream/white) — matches the reference's
+      // "₹ 1,25,000.00" treatment plan amount style.
+      if (t.totalPrice != null) {
+        doc.font(SERIF_BOLD).fontSize(20).fillColor("#FAF6F0")
+          .text(formatMoney(t.totalPrice, currency), leftX, ry + 24, {
+            width: usableW - 22, align: "right", lineBreak: false,
+          });
+      }
+
+      // Sessions / notes — small cream subtitle inline after the status pill.
+      const subBits = [];
       if (t.sessionsTotal != null || t.sessionsCompleted != null) {
-        kv("Sessions", `${t.sessionsCompleted ?? 0} / ${t.sessionsTotal ?? "—"}`);
+        subBits.push(`Sessions ${t.sessionsCompleted ?? 0} / ${t.sessionsTotal ?? "—"}`);
       }
-      if (t.totalPrice != null) kv("Total Price", formatMoney(t.totalPrice, currency));
-      if (t.status) kv("Status", t.status);
-      if (t.notes) kv("Notes", t.notes);
-      if (i < treatmentPlans.length - 1) {
-        doc.moveDown(0.4);
-        ensureSpace(8);
-        doc.moveTo(leftX, doc.y).lineTo(pageRight, doc.y)
-          .lineWidth(0.4).strokeColor("#e5e7eb").stroke();
-        doc.moveDown(0.5);
-      } else {
-        doc.moveDown(0.4);
+      if (t.notes) subBits.push(scrubZyluText(t.notes));
+      if (subBits.length) {
+        doc.font("Helvetica").fontSize(9).fillColor("#CFE3DE")
+          .text(subBits.join("   ·   "), leftX + 22 + 84, ry + 46, {
+            width: usableW - 280, lineBreak: false, ellipsis: true,
+          });
       }
+      doc.y = ry + rowH + 10;
     }
+    doc.moveDown(0.6);
   }
 
   // ── Wallet ────────────────────────────────────────────────────────
   if (hasWalletActivity) {
-    sectionTitle("Wallet");
-    kv("Balance", formatMoney(wallet.balance, currency));
-    kv("Currency", currency);
+    if (treatmentPlans.length === 0) {
+      currentSection = "Wallet";
+      doc.addPage();
+      doc.y = 60;
+      sectionTitle("Wallet", "Financial summary");
+    }
+    drawSectionLabelWithRule(doc, "Wallet", { x: leftX, w: usableW });
+    doc.moveDown(0.2);
+
+    const walletCardH = 86;
+    ensureSpace(walletCardH + 12);
+    const wy = doc.y;
+    // Deep-teal hero card matching the treatment-plan cards above —
+    // cream/white label + serif balance + credit-card glyph on the right.
+    doc.save();
+    doc.roundedRect(leftX, wy, usableW, walletCardH, 6).fill(BRAND.tealDeep);
+    doc.restore();
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#CFE3DE")
+      .text("CURRENT BALANCE", leftX + 22, wy + 18, {
+        characterSpacing: 1.5, lineBreak: false,
+      });
+    doc.font(SERIF_BOLD).fontSize(28).fillColor("#FAF6F0")
+      .text(formatMoney(wallet.balance, currency), leftX + 22, wy + 34, { lineBreak: false });
+    doc.font("Helvetica").fontSize(9).fillColor("#CFE3DE")
+      .text(`Currency · ${currency}`, leftX + 22, wy + 68, { lineBreak: false });
+
+    // Credit-card glyph on the right — cream rectangle with a magnetic
+    // stripe + accent strip beneath, matches the reference's wallet card.
+    const glyphX = pageRight - 80;
+    const glyphY = wy + 26;
+    doc.save();
+    doc.roundedRect(glyphX, glyphY, 56, 34, 5).fillAndStroke("#FAF6F0", BRAND.gold);
+    doc.rect(glyphX + 4, glyphY + 22, 14, 3).fill(BRAND.tealDeep);
+    doc.rect(glyphX + 32, glyphY + 22, 20, 3).fill(BRAND.gold);
+    doc.restore();
+    doc.y = wy + walletCardH + 14;
+
     if (transactions.length > 0) {
-      doc.moveDown(0.4);
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text(`Recent transactions (${transactions.length})`, leftX);
+      drawSectionLabelWithRule(doc, `Recent Transactions · ${transactions.length}`, { x: leftX, w: usableW });
       doc.moveDown(0.2);
       const tableTop = doc.y;
       const cols = [
@@ -1196,72 +1939,106 @@ async function renderPatientSummaryPdf({
         { label: "Amount", x: leftX + 200, w: 90 },
         { label: "Reason", x: leftX + 290, w: usableW - 290 },
       ];
-      doc.rect(leftX, tableTop, usableW, 18).fillColor("#f3f4f6").fill();
-      doc.fillColor("#333").font("Helvetica-Bold").fontSize(9);
-      for (const c of cols) doc.text(c.label, c.x + 3, tableTop + 5, { width: c.w - 6 });
-      let rowY = tableTop + 18;
-      doc.font("Helvetica").fontSize(9).fillColor("#222");
-      for (const tx of transactions) {
+      doc.save();
+      doc.rect(leftX, tableTop, usableW, 22).fill(BRAND.teal);
+      doc.restore();
+      doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(8.5);
+      for (const cc of cols) doc.text(cc.label, cc.x + 4, tableTop + 7, { width: cc.w - 8, lineBreak: false });
+      let rowY = tableTop + 22;
+      for (let ti = 0; ti < transactions.length; ti++) {
+        const tx = transactions[ti];
         const cells = [
           formatDate(tx.createdAt),
           String(tx.type || "").replace(/_/g, " "),
           `${tx.amount >= 0 ? "+" : ""}${formatMoney(tx.amount, currency)}`,
           tx.reason || "—",
         ];
-        const heights = cells.map((val, i) => doc.heightOfString(String(val), { width: cols[i].w - 6 }));
-        const rowH = Math.max(16, ...heights) + 6;
-        if (rowY + rowH > 770) {
+        const heights = cells.map((val, idx) => doc.heightOfString(String(val), { width: cols[idx].w - 8 }));
+        const rowH = Math.max(18, ...heights) + 6;
+        if (rowY + rowH > contentBottom) {
           doc.addPage();
           rowY = 60;
         }
-        cells.forEach((val, i) => {
-          doc.text(String(val), cols[i].x + 3, rowY + 3, { width: cols[i].w - 6 });
+        if (ti % 2 === 1) {
+          doc.save();
+          doc.rect(leftX, rowY, usableW, rowH).fill(BRAND.panelBg);
+          doc.restore();
+        }
+        const amtKind = (Number(tx.amount) || 0) >= 0 ? "success" : "danger";
+        doc.font("Helvetica").fontSize(9).fillColor(BRAND.textBody);
+        cells.forEach((val, idx) => {
+          // Color the amount column with semantic intent.
+          if (idx === 2) {
+            doc.fillColor(STATUS_PILL[amtKind].border)
+              .font("Helvetica-Bold")
+              .text(String(val), cols[idx].x + 4, rowY + 5, { width: cols[idx].w - 8 });
+            doc.font("Helvetica").fillColor(BRAND.textBody);
+          } else {
+            doc.text(String(val), cols[idx].x + 4, rowY + 5, { width: cols[idx].w - 8 });
+          }
         });
         doc.moveTo(leftX, rowY + rowH).lineTo(pageRight, rowY + rowH)
-          .lineWidth(0.3).strokeColor("#e5e7eb").stroke();
+          .lineWidth(0.3).strokeColor(BRAND.borderSoft).stroke();
         rowY += rowH;
       }
-      doc.y = rowY + 8;
+      doc.lineWidth(0.5).strokeColor(BRAND.border)
+        .rect(leftX, tableTop, usableW, rowY - tableTop).stroke();
+      doc.y = rowY + 12;
     }
   }
 
   // ── Memberships ───────────────────────────────────────────────────
   if (membershipList.length > 0) {
-    sectionTitle(`Memberships (${membershipList.length})`);
+    // currentSection set BEFORE the ensureSpace check that may trigger
+    // addPage, so the new page (if any) gets the right footer label.
+    currentSection = "Memberships";
+    ensureSpace(80);
+    sectionTitle("Memberships", `${membershipList.length} membership${membershipList.length === 1 ? "" : "s"}`);
     for (let i = 0; i < membershipList.length; i++) {
       const m = membershipList[i];
-      ensureSpace(60);
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-        .text(m.plan?.name || "Plan", leftX, doc.y, { continued: true })
-        .font("Helvetica").fontSize(10).fillColor("#555")
-        .text(`   ·   Membership #${m.id}`);
-      doc.moveDown(0.3);
-      if (m.status) kv("Status", m.status);
-      if (m.startDate) kv("Start", formatDate(m.startDate));
-      if (m.endDate) kv("End", formatDate(m.endDate));
-      if (m.plan?.price != null) kv("Price Paid", formatMoney(m.plan.price, m.plan.currency || currency));
-      if (m.balanceJson || m.balance) {
-        let balText = "";
-        try {
-          const bal = typeof m.balanceJson === "string" ? JSON.parse(m.balanceJson) : (m.balanceJson || m.balance);
-          if (bal && typeof bal === "object") {
-            balText = Object.entries(bal).map(([k, v]) => `${k}: ${v}`).join("   •   ");
-          }
-        } catch {
-          /* ignore */
-        }
-        if (balText) kv("Balance", balText);
+      const rowH = 70;
+      ensureSpace(rowH + 10);
+      const ry = doc.y;
+      drawCardFrame(doc, { x: leftX, y: ry, w: usableW, h: rowH, leftAccent: true });
+
+      doc.font("Helvetica-Bold").fontSize(13).fillColor(BRAND.tealDark)
+        .text(m.plan?.name || "Plan", leftX + 18, ry + 12, {
+          width: usableW - 200, ellipsis: true, lineBreak: false,
+        });
+      doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
+        .text(`Membership #${m.id}`, leftX + 18, ry + 30, { lineBreak: false });
+
+      const mBits = [];
+      if (m.startDate) mBits.push(`Start · ${formatDate(m.startDate)}`);
+      if (m.endDate) mBits.push(`End · ${formatDate(m.endDate)}`);
+      doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
+        .text(mBits.join("   ·   "), leftX + 18, ry + 46, {
+          width: usableW - 200, ellipsis: true, lineBreak: false,
+        });
+
+      if (m.status) drawStatusPill(doc, m.status, pageRight - 80, ry + 14);
+      if (m.plan?.price != null) {
+        doc.font("Helvetica-Bold").fontSize(14).fillColor(BRAND.tealDark)
+          .text(formatMoney(m.plan.price, m.plan.currency || currency), leftX, ry + 38, {
+            width: usableW - 16, align: "right", lineBreak: false,
+          });
       }
-      if (i < membershipList.length - 1) {
-        doc.moveDown(0.4);
-        ensureSpace(8);
-        doc.moveTo(leftX, doc.y).lineTo(pageRight, doc.y)
-          .lineWidth(0.4).strokeColor("#e5e7eb").stroke();
-        doc.moveDown(0.5);
-      } else {
-        doc.moveDown(0.4);
-      }
+      doc.y = ry + rowH + 8;
     }
+  }
+
+  // ── Branded footer pass (page numbers + section label) ────────────
+  const range = doc.bufferedPageRange();
+  for (let i = range.start; i < range.start + range.count; i++) {
+    doc.switchToPage(i);
+    drawBrandedFooter(doc, {
+      brandName,
+      sectionLabel: pageSectionLabels[i] || "Patient Summary",
+      pageIndex: i,
+      pageCount: range.count,
+      leftX,
+      rightX: pageRight,
+    });
   }
 
   doc.end();

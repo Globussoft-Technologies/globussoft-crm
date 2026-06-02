@@ -221,8 +221,12 @@ export default function Estimates() {
   // user had to navigate into the row to reach the PDF action.
   const downloadPdf = (id, estimateNum) => {
     const token = getAuthToken();
-    const baseUrl = import.meta.env.VITE_API_URL || '';
-    fetch(`${baseUrl}/api/estimates/${id}/pdf`, {
+    // Relative path keeps the request same-origin and goes through Vite's
+    // /api proxy (same as fetchApi). Prefixing with VITE_API_URL turns this
+    // into a cross-origin call → triggers a CORS preflight → backend's
+    // global auth guard 401s the unauthenticated OPTIONS → browser blocks
+    // the GET as a CORS error.
+    fetch(`/api/estimates/${id}/pdf`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then((res) => {

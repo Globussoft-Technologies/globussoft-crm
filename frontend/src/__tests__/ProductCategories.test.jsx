@@ -46,6 +46,27 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+// Default the test environment to a fully-permissioned viewer so existing
+// assertions on edit/delete row buttons keep passing. The SUT now hides
+// those buttons for viewers without products.manage; the no-permission
+// case has its own focused test further down.
+const usePermissionsMock = vi.fn(() => ({
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['products.read', 'products.manage'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+}));
+vi.mock('../hooks/usePermissions', () => ({
+  usePermissions: (...args) => usePermissionsMock(...args),
+}));
+
 import ProductCategories from '../pages/wellness/ProductCategories';
 
 const ROOT_CATEGORY = {
@@ -104,6 +125,20 @@ function renderPage() {
   );
 }
 
+const FULL_PERMS = {
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['products.read', 'products.manage'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+};
+
 beforeEach(() => {
   fetchApiMock.mockReset();
   notifyError.mockReset();
@@ -111,6 +146,10 @@ beforeEach(() => {
   notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockImplementation(() => Promise.resolve(true));
+  // Default to fully-permissioned for existing tests; the read-only test
+  // overrides this with mockReturnValue locally.
+  usePermissionsMock.mockReset();
+  usePermissionsMock.mockReturnValue(FULL_PERMS);
 });
 afterEach(() => {});
 
@@ -364,5 +403,39 @@ describe('<ProductCategories /> — delete (notify.confirm)', () => {
     );
     expect(delCall).toBeUndefined();
     expect(notifySuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('<ProductCategories /> — read-only mode (no products.manage)', () => {
+  it('hides Add Category + Edit + Delete buttons and shows "View only" badge', async () => {
+    usePermissionsMock.mockReturnValue({
+      isReady: true,
+      hasPermission: (m, a) => m === 'products' && a === 'read',
+      permissions: ['products.read'],
+      roles: [],
+      isOwner: false,
+      userType: null,
+      isLoading: false,
+      error: null,
+      refresh: () => Promise.resolve(),
+      hasAllPermissions: () => false,
+      hasAnyPermission: () => false,
+    });
+    installFetchMock();
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Consumables')).toBeInTheDocument();
+    });
+
+    // Add Category CTA is hidden for viewers.
+    expect(screen.queryByRole('button', { name: /Add Category/i })).toBeNull();
+    // "View only" badge surfaces so the read-only mode is explicit.
+    expect(screen.getByText(/View only/i)).toBeInTheDocument();
+    // Row-level Edit / Delete buttons are hidden — the only buttons on the
+    // page should be the (non-row) header / search affordances. Concretely:
+    // a row with no buttons under it.
+    const row = screen.getByText('Consumables').closest('.glass');
+    expect(row.querySelectorAll('button').length).toBe(0);
   });
 });

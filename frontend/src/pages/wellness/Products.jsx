@@ -2,10 +2,20 @@
 import { Package, Plus, Edit2, Trash2, AlertCircle, Search, Upload } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { usePermissions } from '../../hooks/usePermissions';
 
 export default function Products() {
   const notify = useNotify();
   const fileInputRef = useRef(null);
+  // Backend routes inventory.js gate POST=products.write,
+  // PUT=products.update, DELETE=products.delete. We default to fail-closed
+  // (canX=false until perms resolve) so buttons don't flash visible during
+  // the initial permission fetch.
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canWriteProducts  = permsReady && hasPermission('products', 'write');
+  const canUpdateProducts = permsReady && hasPermission('products', 'update');
+  const canDeleteProducts = permsReady && hasPermission('products', 'delete');
+  const canMutateProducts = canWriteProducts || canUpdateProducts || canDeleteProducts;
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -235,27 +245,45 @@ export default function Products() {
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', padding: '2rem 1rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <Package size={28} color="var(--accent-color)" />
           <h1 style={{ fontSize: '1.5rem', fontWeight: 600, margin: 0 }}>Products</h1>
+          {permsReady && !canMutateProducts && (
+            <span
+              title="You can view products but can't make changes."
+              style={{
+                fontSize: '0.7rem',
+                padding: '0.2rem 0.55rem',
+                borderRadius: 999,
+                background: 'var(--subtle-bg)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border-color)',
+                fontWeight: 500,
+              }}
+            >
+              View only
+            </span>
+          )}
         </div>
-        <button
-          onClick={() => handleOpenModal()}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.6rem 1.25rem',
-            background: 'var(--accent-color)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 8,
-            fontWeight: 500,
-            cursor: 'pointer',
-          }}
-        >
-          <Plus size={16} /> Add Product
-        </button>
+        {canWriteProducts && (
+          <button
+            onClick={() => handleOpenModal()}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.6rem 1.25rem',
+              background: 'var(--accent-color)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            <Plus size={16} /> Add Product
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
@@ -313,7 +341,9 @@ export default function Products() {
                 <th style={{ textAlign: 'right', padding: '1rem', fontWeight: 600 }}>Price</th>
                 <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Stock</th>
                 <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Type</th>
-                <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Actions</th>
+                {(canUpdateProducts || canDeleteProducts) && (
+                  <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Actions</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -358,36 +388,44 @@ export default function Products() {
                     </span>
                   </td>
                   <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{product.productType || '-'}</td>
-                  <td style={{ padding: '1rem', textAlign: 'center' }}>
-                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-                      <button
-                        onClick={() => handleOpenModal(product)}
-                        style={{
-                          padding: '0.4rem 0.6rem',
-                          background: 'rgba(168, 85, 247, 0.1)',
-                          border: 'none',
-                          borderRadius: 6,
-                          cursor: 'pointer',
-                          color: 'var(--accent-color)',
-                        }}
-                      >
-                        <Edit2 size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(product.id)}
-                        style={{
-                          padding: '0.4rem 0.6rem',
-                          background: 'rgba(239, 68, 68, 0.1)',
-                          border: 'none',
-                          borderRadius: 6,
-                          cursor: 'pointer',
-                          color: '#ef4444',
-                        }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
+                  {(canUpdateProducts || canDeleteProducts) && (
+                    <td style={{ padding: '1rem', textAlign: 'center' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+                        {canUpdateProducts && (
+                          <button
+                            onClick={() => handleOpenModal(product)}
+                            aria-label={`Edit ${product.name}`}
+                            style={{
+                              padding: '0.4rem 0.6rem',
+                              background: 'rgba(168, 85, 247, 0.1)',
+                              border: 'none',
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                              color: 'var(--accent-color)',
+                            }}
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                        )}
+                        {canDeleteProducts && (
+                          <button
+                            onClick={() => handleDelete(product.id)}
+                            aria-label={`Delete ${product.name}`}
+                            style={{
+                              padding: '0.4rem 0.6rem',
+                              background: 'rgba(239, 68, 68, 0.1)',
+                              border: 'none',
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                              color: '#ef4444',
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

@@ -3215,6 +3215,10 @@ model Visit {
   status        String   @default("completed") // booked, arrived, in-treatment, completed, no-show, cancelled
   vitals        String?  @db.Text // JSON: bp, pulse, weight, etc.
   notes         String?  @db.Text
+  // Patient-supplied chief complaint / reason for the appointment. Required at
+  // the self-booking form (BookAppointment.jsx) but nullable in DB so legacy
+  // staff-side creates (Calendar drag, public-widget) still validate.
+  reason        String?  @db.Text
   photosBefore  String?  @db.Text // JSON array of URLs
   photosAfter   String?  @db.Text // JSON array of URLs
   amountCharged Float?
@@ -3274,6 +3278,13 @@ model Visit {
 
   treatmentPlanId Int?
   treatmentPlan   TreatmentPlan? @relation(fields: [treatmentPlanId], references: [id], onDelete: SetNull)
+
+  // Optional membership applied to this booking. The patient picks an active
+  // membership at booking time; the redemption is recorded on visit completion
+  // (not at booking) so cancellations don't drain balance. SetNull on
+  // membership deletion so the visit row survives membership purges.
+  membershipId Int?
+  membership   Membership? @relation(fields: [membershipId], references: [id], onDelete: SetNull)
 
   // #413 — Restrict (not Cascade) on Tenant deletion. Visit is PHI
   // (medical encounters, vitals, before/after photos, charged amounts).
@@ -3830,6 +3841,7 @@ model Membership {
   updatedAt        DateTime       @updatedAt
 
   redemptions MembershipRedemption[]
+  visits      Visit[]
 
   @@index([tenantId, patientId, status])
   @@index([tenantId, endDate])

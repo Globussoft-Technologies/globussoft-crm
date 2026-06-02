@@ -61,8 +61,12 @@ export default function AgentReports() {
 
   const handleExportCSV = () => {
     const token = getAuthToken();
-    const baseUrl = import.meta.env.VITE_API_URL || '';
-    fetch(`${baseUrl}/api/reports/export-csv?type=agent-performance${dateParams()}`, { headers: { Authorization: `Bearer ${token}` } })
+    // Relative path keeps the request same-origin and goes through Vite's
+    // /api proxy (same as fetchApi). Prefixing with VITE_API_URL turns this
+    // into a cross-origin call → triggers a CORS preflight → backend's
+    // global auth guard 401s the unauthenticated OPTIONS → browser blocks
+    // the GET as a CORS error.
+    fetch(`/api/reports/export-csv?type=agent-performance${dateParams()}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => res.blob())
       .then(blob => {
         const link = document.createElement('a');
@@ -75,8 +79,8 @@ export default function AgentReports() {
 
   const handleExportPDF = () => {
     const token = getAuthToken();
-    const baseUrl = import.meta.env.VITE_API_URL || '';
-    fetch(`${baseUrl}/api/reports/export-pdf?type=agent-performance${dateParams()}`, { headers: { Authorization: `Bearer ${token}` } })
+    // Relative path — see handleExportCSV above for rationale.
+    fetch(`/api/reports/export-pdf?type=agent-performance${dateParams()}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => res.blob())
       .then(blob => {
         const link = document.createElement('a');

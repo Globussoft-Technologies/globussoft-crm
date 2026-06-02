@@ -802,9 +802,9 @@ const invoices = {
     recurFrequency: "",
   },
   readGate: ["admin", "manager"],
-  readPermissions: [{ module: "billing", action: "read" }],
+  readPermissions: [{ module: "invoices", action: "read" }],
   writeGate: ["admin", "manager"],
-  writePermissions: [{ module: "billing", action: "write" }],
+  writePermissions: [{ module: "invoices", action: "write" }],
   buildWhere: (req) => {
     const where = { tenantId: req.user.tenantId };
     const { status, q } = req.query;

@@ -44,11 +44,21 @@ import {
   Tag,
   ShieldAlert,
   MapPin,
+  Banknote,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { AuthContext } from '../../App';
+// Embedded admin-only "Manage registers" panel. Renders without its
+// outer page chrome when given `embedded`. Previously lived at its own
+// /wellness/cash-registers route but that route was never mounted in
+// App.jsx — sidebar 404'd, surface was unreachable. Folded into POS so
+// register CRUD, shift open/close, petty cash, and recent transactions
+// are accessible from the same surface where sales are rung up.
+import CashRegisters from './CashRegisters';
 
 const LINE_TYPES = [
   { value: 'SERVICE', label: 'Service' },
@@ -101,6 +111,11 @@ export default function PointOfSale() {
   const [busy, setBusy] = useState(false);
   const [lastReceipt, setLastReceipt] = useState(null);
   const notify = useNotify();
+
+  // Admin/manager-only "Manage registers" panel toggle. Renders the
+  // CashRegisters component embedded (no page chrome) when expanded.
+  // Default collapsed so the cashier-focused sale flow stays primary.
+  const [showRegistersPanel, setShowRegistersPanel] = useState(false);
 
   // Wave 7C extras (PRD Gap §2 items 2 + 10)
   const [guestCheckout, setGuestCheckout] = useState(false);
@@ -520,14 +535,84 @@ export default function PointOfSale() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.4s ease-out' }}>
-      <header style={{ marginBottom: '1.25rem' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Calculator size={24} /> Point of Sale
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Cash-and-carry checkout. Open a shift, ring up sales, close the shift to reconcile the cash drawer.
-        </p>
+      <header
+        style={{
+          marginBottom: '1.25rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+          gap: '1rem',
+        }}
+      >
+        <div>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Calculator size={24} /> Point of Sale
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Cash-and-carry checkout. Open a shift, ring up sales, close the shift to reconcile the cash drawer.
+          </p>
+        </div>
+        {/* Admin/manager-only "Manage registers" disclosure. Folds the
+            former /wellness/cash-registers page into this surface.
+            Collapsing the panel refreshes shift + register state so any
+            register CRUD / shift open-close performed inside the panel
+            reflects in the POS sale flow below without a manual reload. */}
+        {isAdminOrManager && (
+          <button
+            type="button"
+            onClick={() => {
+              setShowRegistersPanel((prev) => {
+                const next = !prev;
+                if (prev && !next) {
+                  // panel just closed — refresh POS-tracked state
+                  loadRegisters();
+                  loadCurrentShift();
+                }
+                return next;
+              });
+            }}
+            aria-expanded={showRegistersPanel}
+            aria-controls="pos-registers-panel"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.55rem 0.9rem',
+              background: showRegistersPanel
+                ? 'var(--primary-color, var(--accent-color))'
+                : 'rgba(255,255,255,0.05)',
+              color: showRegistersPanel ? '#fff' : 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 8,
+              cursor: 'pointer',
+              fontSize: '0.9rem',
+              fontWeight: 500,
+            }}
+          >
+            <Banknote size={16} /> Manage registers
+            {showRegistersPanel ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+        )}
       </header>
+
+      {/* Embedded register management panel — admin/manager only.
+          Renders the full CashRegisters surface (CRUD + shift open/close
+          + petty cash deposit/withdraw + transactions list) inline so
+          the operator never has to leave the POS page. */}
+      {isAdminOrManager && showRegistersPanel && (
+        <section
+          id="pos-registers-panel"
+          className="glass"
+          style={{
+            padding: '1.25rem',
+            marginBottom: '1.5rem',
+            borderLeft: '3px solid var(--primary-color, var(--accent-color))',
+          }}
+        >
+          <CashRegisters embedded />
+        </section>
+      )}
 
       {/* Shift status banner */}
       {currentShift ? (

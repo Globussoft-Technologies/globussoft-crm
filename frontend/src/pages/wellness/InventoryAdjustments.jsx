@@ -12,12 +12,17 @@ import { useEffect, useState } from 'react';
 import { ScaleIcon, Plus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { usePermissions } from '../../hooks/usePermissions';
 
 const REASONS = ['SHRINKAGE', 'DAMAGE', 'EXPIRY', 'RECOUNT', 'TRANSFER_OUT', 'TRANSFER_IN', 'MANUAL'];
 const EMPTY = { productId: '', quantityDelta: '', reason: 'RECOUNT', notes: '' };
 
 export default function InventoryAdjustments() {
   const notify = useNotify();
+  // Backend gates POST /inventory/adjustments on inventory.write.
+  // The page is otherwise read-only (no edit/delete affordances exist).
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canWriteInventory = permsReady && hasPermission('inventory', 'write');
   const [adjustments, setAdjustments] = useState([]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -84,16 +89,26 @@ export default function InventoryAdjustments() {
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
             <ScaleIcon size={24} /> Inventory adjustments
+            {permsReady && !canWriteInventory && (
+              <span
+                title="You can view adjustments but can't make changes."
+                style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
+              >
+                View only
+              </span>
+            )}
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
             Signed deltas — positive credits stock, negative debits. Use this for shrinkage, damage, recounts, transfers.
           </p>
         </div>
-        <button onClick={() => setShowForm((v) => !v)} style={primaryBtnStyle}>
-          <Plus size={16} /> {showForm ? 'Cancel' : 'New adjustment'}
-        </button>
+        {canWriteInventory && (
+          <button onClick={() => setShowForm((v) => !v)} style={primaryBtnStyle}>
+            <Plus size={16} /> {showForm ? 'Cancel' : 'New adjustment'}
+          </button>
+        )}
       </header>
 
       <div className="glass" style={{ padding: '0.85rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
@@ -106,7 +121,7 @@ export default function InventoryAdjustments() {
         <button onClick={load} style={secondaryBtnStyle}>Apply</button>
       </div>
 
-      {showForm && (
+      {showForm && canWriteInventory && (
         <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>
           <select required value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })} style={inputStyle}>
             <option value="">Select product…</option>

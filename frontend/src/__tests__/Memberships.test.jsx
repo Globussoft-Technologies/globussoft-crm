@@ -263,7 +263,9 @@ describe('<Memberships /> — plan list', () => {
     fireEvent.change(search, { target: { value: 'nothing-matches' } });
     await waitFor(() => {
       expect(screen.queryByText('Gold Facial Pack 10x')).toBeNull();
-      expect(screen.getByText(/No plans match the current filter/i)).toBeInTheDocument();
+      // Empty-state copy is now filter-aware. A query that matches nothing
+      // surfaces the search-specific message.
+      expect(screen.getByText(/No plans match your search/i)).toBeInTheDocument();
     });
   });
 });

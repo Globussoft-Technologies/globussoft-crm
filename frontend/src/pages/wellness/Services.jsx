@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { usePermissions } from '../../hooks/usePermissions';
 
 // Parse Service.imageUrls (Prisma stores a JSON-stringified array of URLs).
 // `allImagesOf` returns the full array; `firstImageOf` is a convenience
@@ -79,6 +80,10 @@ const statusColor = { active: '#10b981', completed: '#6366f1', paused: '#f59e0b'
 
 export default function Services() {
   const notify = useNotify();
+  // Backend gates POST/PUT/DELETE on adminOrPerm('services', 'write').
+  // One flag for everything since this route doesn't split write/update/delete.
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canManageServices = permsReady && hasPermission('services', 'write');
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'catalog';
   const [tab, setTab] = useState(initialTab); // catalog | packages | activetreatments
@@ -152,23 +157,33 @@ export default function Services() {
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
             <Sparkles size={24} /> Service catalog
+            {permsReady && !canManageServices && (
+              <span
+                title="You can view services but can't make changes."
+                style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
+              >
+                View only
+              </span>
+            )}
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Each service has a price, duration, and target marketing radius.</p>
         </div>
-        {tab === 'catalog' && (
+        {tab === 'catalog' && canManageServices && (
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             {/* Issue #816: services CSV. No active filter, so we pass an empty
                 filters object — the export reflects the same all-active view
-                as the catalog tab. */}
+                as the catalog tab. CsvImportExportToolbar wraps Import POST
+                and the destructive backend hits services.write too, so it is
+                gated alongside New service. */}
             <CsvImportExportToolbar entity="services" label="Services" formats={['csv', 'xlsx']} onImported={load} />
             <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
               <Plus size={16} /> {showAdd ? 'Cancel' : 'New service'}
             </button>
           </div>
         )}
-        {tab === 'packages' && (
+        {tab === 'packages' && canManageServices && (
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             {/* Issue #816: packages CSV. */}
             <CsvImportExportToolbar entity="packages" label="Packages" formats={['csv', 'xlsx']} />
@@ -266,6 +281,8 @@ function TabBtn({ active, onClick, icon: Icon, label }) {
 }
 
 function CatalogTab({ services, loading, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canManageServices = permsReady && hasPermission('services', 'write');
   const notify = useNotify();
   // Sort selector — backend returns services in its default order (name
   // alphabetical). Users asked for a "newest first" option so the most
@@ -291,7 +308,7 @@ function CatalogTab({ services, loading, categories, categoriesLoading, showAdd,
       {/* Visually-hidden section heading so screen readers see h1 -> h2 hierarchy
           before the per-service h3 cards (a11y: heading-order). */}
       <h2 style={srOnly}>Available services</h2>
-      {showAdd && (() => {
+      {showAdd && canManageServices && (() => {
         // #115: visible labels for every field; basePrice must be > 0 before save.
         const fieldLabel = { display: 'block', fontSize: '0.7rem', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' };
         // #115: ₹1 minimum is sensible for a clinic; reject 0/blank/negative
@@ -435,6 +452,8 @@ function CatalogTab({ services, loading, categories, categoriesLoading, showAdd,
 
 function ServiceCard({ service, onChanged, onOpen, editRequested, onEditConsumed }) {
   const notify = useNotify();
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canManageServices = permsReady && hasPermission('services', 'write');
   const [editing, setEditing] = useState(false);
   // Hydrate the draft with a flat `imageUrl` (first of the JSON array) so
   // the inline ImageUploadField stays controlled.
@@ -562,8 +581,12 @@ function ServiceCard({ service, onChanged, onOpen, editRequested, onEditConsumed
         <span style={{ background: tierColor[service.ticketTier], color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', textTransform: 'uppercase', fontWeight: 600, lineHeight: 1.4 }}>
           {service.ticketTier}
         </span>
-        <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} aria-label={`Edit service ${service.name}`} title="Edit" style={iconBtn}><Pencil size={12} /></button>
-        <button onClick={(e) => { e.stopPropagation(); remove(); }} aria-label={`Deactivate service ${service.name}`} title="Deactivate" style={{ ...iconBtn, color: 'var(--danger-color)' }}><Trash2 size={12} /></button>
+        {canManageServices && (
+          <>
+            <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} aria-label={`Edit service ${service.name}`} title="Edit" style={iconBtn}><Pencil size={12} /></button>
+            <button onClick={(e) => { e.stopPropagation(); remove(); }} aria-label={`Deactivate service ${service.name}`} title="Deactivate" style={{ ...iconBtn, color: 'var(--danger-color)' }}><Trash2 size={12} /></button>
+          </>
+        )}
       </div>
       {imageSrc && (
         <img
@@ -589,6 +612,8 @@ function ServiceCard({ service, onChanged, onOpen, editRequested, onEditConsumed
 
 function ServiceDetailModal({ service, categories, onClose, onChanged, onEdit }) {
   const notify = useNotify();
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canManageServices = permsReady && hasPermission('services', 'write');
   const images = allImagesOf(service);
   const [activeIdx, setActiveIdx] = useState(0);
   const [deleting, setDeleting] = useState(false);
@@ -708,24 +733,26 @@ function ServiceDetailModal({ service, categories, onClose, onChanged, onEdit })
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-          <button
-            type="button"
-            onClick={() => onEdit && onEdit(service)}
-            disabled={!onEdit}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.55rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: onEdit ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: '0.85rem' }}
-          >
-            <Pencil size={14} /> Edit
-          </button>
-          <button
-            type="button"
-            onClick={handleDelete}
-            disabled={deleting}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.55rem 1rem', background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 8, cursor: deleting ? 'wait' : 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
-          >
-            <Trash2 size={14} /> {deleting ? 'Deactivating…' : 'Deactivate'}
-          </button>
-        </div>
+        {canManageServices && (
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+            <button
+              type="button"
+              onClick={() => onEdit && onEdit(service)}
+              disabled={!onEdit}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.55rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: onEdit ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: '0.85rem' }}
+            >
+              <Pencil size={14} /> Edit
+            </button>
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.55rem 1rem', background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 8, cursor: deleting ? 'wait' : 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+            >
+              <Trash2 size={14} /> {deleting ? 'Deactivating…' : 'Deactivate'}
+            </button>
+          </div>
+        )}
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
           Service ID: {service.id} {service.createdAt && <> · Added {formatDate(service.createdAt)}</>}

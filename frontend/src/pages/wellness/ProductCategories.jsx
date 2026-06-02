@@ -10,10 +10,17 @@ import {
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { usePermissions } from "../../hooks/usePermissions";
 
 export default function ProductCategories() {
   const notify = useNotify();
   const fileInputRef = useRef(null);
+  // Hide create/edit/delete affordances when the viewer can read but not
+  // manage products. Showing a button that 403s on click is hostile UX;
+  // hiding it (vs. disabling) keeps the page clean and signals read-only
+  // intent. A small "View only" badge in the header makes the mode explicit.
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canManage = permsReady ? hasPermission("products", "manage") : false;
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -173,29 +180,48 @@ export default function ProductCategories() {
           marginBottom: "2rem",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
           <Layers size={28} color="var(--accent-color)" />
           <h1 style={{ fontSize: "1.5rem", fontWeight: 600, margin: 0 }}>
             Product Categories
           </h1>
+          {permsReady && !canManage && (
+            <span
+              title="You can view categories but can't make changes."
+              style={{
+                fontSize: "0.7rem",
+                padding: "0.2rem 0.55rem",
+                borderRadius: 999,
+                background: "var(--subtle-bg)",
+                color: "var(--text-secondary)",
+                border: "1px solid var(--border-color)",
+                letterSpacing: "0.02em",
+                fontWeight: 500,
+              }}
+            >
+              View only
+            </span>
+          )}
         </div>
-        <button
-          onClick={() => handleOpenModal()}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-            padding: "0.6rem 1.25rem",
-            background: "var(--primary-color, var(--accent-color))",
-            color: "#fff",
-            border: "none",
-            borderRadius: 8,
-            fontWeight: 500,
-            cursor: "pointer",
-          }}
-        >
-          <Plus size={16} /> Add Category
-        </button>
+        {canManage && (
+          <button
+            onClick={() => handleOpenModal()}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              padding: "0.6rem 1.25rem",
+              background: "var(--primary-color, var(--accent-color))",
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            <Plus size={16} /> Add Category
+          </button>
+        )}
       </div>
 
       <div style={{ position: "relative", marginBottom: "1rem", maxWidth: 400 }}>
@@ -302,34 +328,38 @@ export default function ProductCategories() {
                   {cat._count?.children || 0} subcategories
                 </div>
               </div>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                  onClick={() => handleOpenModal(cat)}
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    background: "rgba(168, 85, 247, 0.1)",
-                    border: "none",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    color: "var(--accent-color)",
-                  }}
-                >
-                  <Edit2 size={16} />
-                </button>
-                <button
-                  onClick={() => handleDelete(cat.id)}
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    background: "rgba(239, 68, 68, 0.1)",
-                    border: "none",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    color: "#ef4444",
-                  }}
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
+              {canManage && (
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <button
+                    onClick={() => handleOpenModal(cat)}
+                    aria-label={`Edit ${cat.name}`}
+                    style={{
+                      padding: "0.5rem 0.75rem",
+                      background: "rgba(168, 85, 247, 0.1)",
+                      border: "none",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      color: "var(--accent-color)",
+                    }}
+                  >
+                    <Edit2 size={16} />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(cat.id)}
+                    aria-label={`Delete ${cat.name}`}
+                    style={{
+                      padding: "0.5rem 0.75rem",
+                      background: "rgba(239, 68, 68, 0.1)",
+                      border: "none",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      color: "#ef4444",
+                    }}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>

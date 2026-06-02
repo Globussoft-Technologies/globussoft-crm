@@ -1,24 +1,41 @@
 import { useEffect, useState, useContext } from 'react';
-import { Calendar, Clock, User, Stethoscope } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Calendar, Clock, Stethoscope, Info, Sparkles } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 
+// Half-hour slots from 09:00 to 19:00 — used when the patient hasn't picked a
+// preferred doctor. Once a doctor IS chosen we use that doctor's actual
+// availability via /doctors/:id/time-slots. The static set keeps the
+// "any-doctor, admin will assign" path usable without a doctor lookup.
+const GENERIC_SLOTS = (() => {
+  const out = [];
+  for (let h = 9; h <= 19; h++) {
+    out.push(`${String(h).padStart(2, '0')}:00`);
+    if (h < 19) out.push(`${String(h).padStart(2, '0')}:30`);
+  }
+  return out;
+})();
+
 export default function BookAppointment() {
   const notify = useNotify();
-  const { user } = useContext(AuthContext);
+  const { user } = useContext(AuthContext); // eslint-disable-line no-unused-vars
 
   const [doctors, setDoctors] = useState([]);
   const [services, setServices] = useState([]);
+  const [memberships, setMemberships] = useState([]);
   const [myAppointments, setMyAppointments] = useState([]);
-  const [availableSlots, setAvailableSlots] = useState([]);
+  const [availableSlots, setAvailableSlots] = useState(GENERIC_SLOTS);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [slotsLoading, setSlotsLoading] = useState(false);
 
   const [formData, setFormData] = useState({
+    reason: '',
     doctorId: '',
     serviceId: '',
+    membershipId: '',
     appointmentDate: new Date().toISOString().split('T')[0],
     appointmentTime: ''
   });
@@ -30,15 +47,17 @@ export default function BookAppointment() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [doctorsData, servicesData, appointmentsData] = await Promise.all([
+      const [doctorsData, servicesData, appointmentsData, membershipsData] = await Promise.all([
         fetchApi('/api/wellness/doctors/availability?date=' + formData.appointmentDate).catch(() => []),
         fetchApi('/api/wellness/services').catch(() => []),
-        fetchApi('/api/wellness/appointments/my').catch(() => [])
+        fetchApi('/api/wellness/appointments/my').catch(() => []),
+        fetchApi('/api/wellness/appointments/my-memberships').catch(() => [])
       ]);
 
       setDoctors(Array.isArray(doctorsData) ? doctorsData : []);
       setServices(Array.isArray(servicesData) ? servicesData.filter(s => s.isActive !== false) : []);
       setMyAppointments(Array.isArray(appointmentsData) ? appointmentsData : []);
+      setMemberships(Array.isArray(membershipsData) ? membershipsData : []);
     } catch (err) {
       console.error('Failed to load data:', err);
       notify.error('Failed to load appointment data');
@@ -55,9 +74,12 @@ export default function BookAppointment() {
     } catch (err) {
       console.error('Failed to load doctors:', err);
     }
-    // Reload slots if doctor is already selected
+    // Reload slots if doctor is already selected; otherwise fall back to the
+    // generic preset (admin assigns the doctor at triage time).
     if (formData.doctorId) {
       loadTimeSlots(formData.doctorId, date);
+    } else {
+      setAvailableSlots(GENERIC_SLOTS);
     }
   };
 
@@ -87,14 +109,20 @@ export default function BookAppointment() {
     if (doctorId) {
       await loadTimeSlots(doctorId, formData.appointmentDate);
     } else {
-      setAvailableSlots([]);
+      // Patient cleared the doctor → revert to generic slots so they can still
+      // pick a preferred time. Admin will reconcile against an actual doctor.
+      setAvailableSlots(GENERIC_SLOTS);
     }
   };
 
   const handleBookAppointment = async (e) => {
     e.preventDefault();
-    if (!formData.doctorId) {
-      notify.error('Please select a doctor');
+    if (!formData.reason.trim()) {
+      notify.error('Please describe the reason for your appointment');
+      return;
+    }
+    if (!formData.appointmentTime) {
+      notify.error('Please pick a time');
       return;
     }
 
@@ -103,21 +131,31 @@ export default function BookAppointment() {
       const result = await fetchApi('/api/wellness/appointments/book', {
         method: 'POST',
         body: JSON.stringify({
-          doctorId: parseInt(formData.doctorId),
+          reason: formData.reason.trim(),
+          doctorId: formData.doctorId ? parseInt(formData.doctorId) : null,
           serviceId: formData.serviceId ? parseInt(formData.serviceId) : null,
+          membershipId: formData.membershipId ? parseInt(formData.membershipId) : null,
           appointmentDate: formData.appointmentDate,
           appointmentTime: formData.appointmentTime
         })
       });
 
       if (result.success) {
-        notify.success(`Appointment booked with Dr. ${result.appointment.doctorName}`);
+        const apt = result.appointment;
+        notify.success(
+          apt.doctorAssigned
+            ? `Appointment booked with Dr. ${apt.doctorName}`
+            : 'Appointment requested — our team will assign a doctor and confirm shortly.'
+        );
         setFormData({
+          reason: '',
           doctorId: '',
           serviceId: '',
+          membershipId: '',
           appointmentDate: new Date().toISOString().split('T')[0],
-          appointmentTime: '10:00'
+          appointmentTime: ''
         });
+        setAvailableSlots(GENERIC_SLOTS);
         loadData();
       }
     } catch (err) {
@@ -176,10 +214,38 @@ export default function BookAppointment() {
           </h2>
 
           <form onSubmit={handleBookAppointment} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {/* Doctor Selection */}
+            {/* Reason — required. Triage-critical when doctor is left blank. */}
             <div>
               <label style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-primary)', display: 'block', marginBottom: '0.5rem' }}>
-                Select Doctor *
+                Reason for Appointment *
+              </label>
+              <textarea
+                value={formData.reason}
+                onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
+                placeholder="Briefly describe the issue or reason for your visit"
+                rows={3}
+                maxLength={1000}
+                required
+                style={{
+                  width: '100%',
+                  padding: '0.7rem',
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 8,
+                  color: 'var(--text-primary)',
+                  fontSize: '0.9rem',
+                  resize: 'vertical',
+                  fontFamily: 'inherit',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            {/* Doctor Selection — optional. Empty value means "any doctor"; admin will
+                assign based on the reason + specialty + availability. */}
+            <div>
+              <label style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-primary)', display: 'block', marginBottom: '0.5rem' }}>
+                Preferred Doctor (Optional)
               </label>
               <select
                 value={formData.doctorId}
@@ -195,7 +261,7 @@ export default function BookAppointment() {
                   cursor: 'pointer'
                 }}
               >
-                <option value="">— Select a Doctor —</option>
+                <option value="">— No preference (admin will assign) —</option>
                 {doctors.map(doc => {
                   const name = (doc.name || '').trim();
                   const isDoctor = (doc.wellnessRole || '').toLowerCase() === 'doctor';
@@ -210,6 +276,23 @@ export default function BookAppointment() {
                   );
                 })}
               </select>
+              {!formData.doctorId && (
+                <div style={{
+                  marginTop: '0.5rem',
+                  padding: '0.5rem 0.7rem',
+                  background: 'rgba(59,130,246,0.08)',
+                  border: '1px solid rgba(59,130,246,0.2)',
+                  borderRadius: 6,
+                  fontSize: '0.78rem',
+                  color: 'var(--text-secondary)',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '0.4rem'
+                }}>
+                  <Info size={13} style={{ marginTop: 2, flexShrink: 0 }} />
+                  <span>Our team will assign a doctor based on the reason you described and specialist availability.</span>
+                </div>
+              )}
             </div>
 
             {/* Service Selection */}
@@ -235,6 +318,53 @@ export default function BookAppointment() {
                 {services.map(svc => (
                   <option key={svc.id} value={svc.id}>
                     {svc.name} {svc.basePrice ? `(₹${svc.basePrice})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Membership — optional. Loaded from /appointments/my-memberships, which
+                returns only active+unexpired rows for the current patient. */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-primary)' }}>
+                  Membership (Optional)
+                </label>
+                <Link
+                  to="/wellness/memberships"
+                  style={{
+                    fontSize: '0.78rem',
+                    color: 'var(--primary-color, var(--accent-color, #6366f1))',
+                    textDecoration: 'none',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.25rem'
+                  }}
+                >
+                  <Sparkles size={12} /> Manage memberships
+                </Link>
+              </div>
+              <select
+                value={formData.membershipId}
+                onChange={(e) => setFormData({ ...formData, membershipId: e.target.value })}
+                disabled={memberships.length === 0}
+                style={{
+                  width: '100%',
+                  padding: '0.7rem',
+                  background: memberships.length === 0 ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 8,
+                  color: 'var(--text-primary)',
+                  fontSize: '0.9rem',
+                  cursor: memberships.length === 0 ? 'not-allowed' : 'pointer'
+                }}
+              >
+                <option value="">
+                  {memberships.length === 0 ? '— No active memberships —' : '— None —'}
+                </option>
+                {memberships.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {m.planName} (valid until {new Date(m.endDate).toLocaleDateString()})
                   </option>
                 ))}
               </select>
@@ -269,24 +399,20 @@ export default function BookAppointment() {
                 <select
                   value={formData.appointmentTime}
                   onChange={(e) => setFormData({ ...formData, appointmentTime: e.target.value })}
-                  disabled={!formData.doctorId || availableSlots.length === 0}
+                  disabled={availableSlots.length === 0}
                   style={{
                     width: '100%',
                     padding: '0.7rem',
-                    background: !formData.doctorId || availableSlots.length === 0 ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.05)',
+                    background: availableSlots.length === 0 ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.05)',
                     border: '1px solid rgba(255,255,255,0.1)',
                     borderRadius: 8,
                     color: 'var(--text-primary)',
                     fontSize: '0.9rem',
-                    cursor: !formData.doctorId || availableSlots.length === 0 ? 'not-allowed' : 'pointer'
+                    cursor: availableSlots.length === 0 ? 'not-allowed' : 'pointer'
                   }}
                 >
                   <option value="">
-                    {!formData.doctorId
-                      ? '— Select a doctor first —'
-                      : availableSlots.length === 0
-                      ? '— No available slots —'
-                      : '— Select a time —'}
+                    {availableSlots.length === 0 ? '— No available slots —' : '— Select a time —'}
                   </option>
                   {availableSlots.map(slot => (
                     <option key={slot} value={slot}>
@@ -297,24 +423,30 @@ export default function BookAppointment() {
               </div>
             </div>
 
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={submitting || !formData.doctorId}
-              style={{
-                padding: '0.85rem 1.5rem',
-                background: submitting || !formData.doctorId ? '#999' : 'var(--primary-color, var(--accent-color, #6366f1))',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 8,
-                cursor: submitting || !formData.doctorId ? 'not-allowed' : 'pointer',
-                fontWeight: 600,
-                fontSize: '0.95rem',
-                transition: 'all 0.2s'
-              }}
-            >
-              {submitting ? 'Booking...' : 'Confirm Appointment'}
-            </button>
+            {/* Submit Button. Required: reason + time. Doctor + service +
+                membership are all optional. */}
+            {(() => {
+              const canSubmit = !submitting && formData.reason.trim() && formData.appointmentTime;
+              return (
+                <button
+                  type="submit"
+                  disabled={!canSubmit}
+                  style={{
+                    padding: '0.85rem 1.5rem',
+                    background: canSubmit ? 'var(--primary-color, var(--accent-color, #6366f1))' : '#999',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 8,
+                    cursor: canSubmit ? 'pointer' : 'not-allowed',
+                    fontWeight: 600,
+                    fontSize: '0.95rem',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {submitting ? 'Booking...' : 'Confirm Appointment'}
+                </button>
+              );
+            })()}
           </form>
         </div>
 
@@ -361,11 +493,16 @@ export default function BookAppointment() {
                 >
                   <div>
                     <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.5rem' }}>
-                      Dr. {apt.doctorName}
+                      {apt.doctorAssigned === false ? apt.doctorName : `Dr. ${apt.doctorName}`}
                     </div>
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
                       📋 {apt.serviceName}
                     </div>
+                    {apt.reason && (
+                      <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontStyle: 'italic' }}>
+                        💬 {apt.reason}
+                      </div>
+                    )}
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
                       📅 {new Date(apt.appointmentDate).toLocaleDateString()} at{' '}
                       {new Date(apt.appointmentDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

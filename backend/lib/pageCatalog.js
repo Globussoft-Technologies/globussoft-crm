@@ -136,13 +136,18 @@ const PAGE_CATALOG = [
     description: 'Rx review + finalisation',
     category: 'Clinical',
     requiredPermissions: [{ module: 'prescriptions', action: 'read' }],
-    // Sidebar UX: clinical day-to-day surface. Admin/owner-tier users
-    // technically have prescriptions.read but they don't use the Rx list
-    // in their primary nav — they reach it via patient charts or audit
-    // trails. Hiding it keeps admin's sidebar focused on management
-    // surfaces. Page stays accessible at /wellness/prescriptions for
-    // anyone with the permission.
-    hideForAdminTier: true,
+  },
+  {
+    path: '/wellness/my-prescriptions',
+    label: 'My Prescriptions',
+    description: 'Your own prescriptions (linked Patient profile)',
+    category: 'Clinical',
+    // Separate `my_prescriptions` module — granted to roles whose users
+    // may also be patients at this clinic (CUSTOMER, and optionally USER
+    // when staff-as-patient flows are in play). Backend scopes to
+    // req.user.userId's linked Patient row; cross-patient access is
+    // structurally impossible regardless of role grants.
+    requiredPermissions: [{ module: 'my_prescriptions', action: 'read' }],
   },
   {
     path: '/wellness/visits',
@@ -366,7 +371,7 @@ const PAGE_CATALOG = [
     label: 'Invoices',
     description: 'Patient + customer invoices',
     category: 'Finance',
-    requiredPermissions: [{ module: 'billing', action: 'read' }],
+    requiredPermissions: [{ module: 'invoices', action: 'read' }],
   },
   {
     path: '/estimates',
@@ -394,14 +399,14 @@ const PAGE_CATALOG = [
     label: 'Patient Wallets',
     description: 'Patient pre-paid wallet balances + history',
     category: 'Finance',
-    requiredPermissions: [{ module: 'billing', action: 'read' }],
+    requiredPermissions: [{ module: 'patient_wallets', action: 'read' }],
   },
   {
     path: '/wellness/giftcards',
     label: 'Gift Cards',
     description: 'Gift card issuance + redemption ledger',
     category: 'Finance',
-    requiredPermissions: [{ module: 'billing', action: 'read' }],
+    requiredPermissions: [{ module: 'gift_cards', action: 'read' }],
   },
   {
     path: '/wellness/buy-giftcards',

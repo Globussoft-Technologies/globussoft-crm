@@ -41,6 +41,27 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+// Default to a fully-permissioned viewer so existing assertions on Record
+// receipt / Edit / Delete buttons keep passing. The SUT now hides these
+// when the viewer lacks inventory.{write,update,delete}.
+const FULL_PERMS = {
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['inventory.read', 'inventory.write', 'inventory.update', 'inventory.delete', 'inventory.manage'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+};
+const usePermissionsMock = vi.fn(() => FULL_PERMS);
+vi.mock('../hooks/usePermissions', () => ({
+  usePermissions: (...args) => usePermissionsMock(...args),
+}));
+
 import InventoryReceipts from '../pages/wellness/InventoryReceipts';
 
 const RECEIPT_DERMA = {

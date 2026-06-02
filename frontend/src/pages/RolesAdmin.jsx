@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { LayoutGrid, Pencil, Plus, Shield, Trash2, Users, X, UserMinus, UserPlus, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -23,13 +24,16 @@ const PERMISSION_MODULES_FALLBACK = [
   { module: 'tickets',       actions: ['read', 'write', 'update', 'delete'] },
   { module: 'marketing',     actions: ['read', 'write', 'update', 'delete', 'manage'] },
   { module: 'reports',       actions: ['read', 'write', 'delete', 'export'] },
-  { module: 'billing',       actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
+  { module: 'invoices',         actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
+  { module: 'gift_cards',       actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
+  { module: 'patient_wallets',  actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
   { module: 'patients',      actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
   { module: 'appointments',     actions: ['read', 'write', 'update', 'delete', 'export'] },
   { module: 'my_appointments',  actions: ['read'] },
   { module: 'book_appointment', actions: ['write'] },
   { module: 'waitlist',         actions: ['read', 'write'] },
   { module: 'prescriptions', actions: ['read', 'write', 'update', 'delete'] },
+  { module: 'my_prescriptions', actions: ['read'] },
   { module: 'visits',        actions: ['read', 'write', 'update', 'delete'] },
   { module: 'products',      actions: ['read', 'write', 'update', 'delete', 'manage'] },
   { module: 'inventory',     actions: ['read', 'write', 'update', 'delete', 'manage'] },
@@ -53,11 +57,11 @@ const PERMISSION_DOMAINS_FALLBACK = [
   { domain: 'Communications',     modules: ['communications', 'email', 'sms', 'whatsapp'] },
   { domain: 'Marketing',          modules: ['marketing'] },
   { domain: 'Service & Support',  modules: ['tickets', 'knowledge_base', 'surveys', 'chatbots'] },
-  { domain: 'Financial',          modules: ['billing', 'accounting', 'payments', 'expenses'] },
+  { domain: 'Financial',          modules: ['invoices', 'gift_cards', 'patient_wallets', 'accounting', 'payments', 'expenses'] },
   { domain: 'Analytics',          modules: ['reports', 'dashboards', 'analytics'] },
   { domain: 'Automation',         modules: ['workflows', 'sequences'] },
   { domain: 'Documents',          modules: ['documents', 'contracts', 'signatures', 'estimates'] },
-  { domain: 'Wellness Clinical',  modules: ['patients', 'appointments', 'my_appointments', 'book_appointment', 'waitlist', 'services', 'prescriptions', 'consents', 'visits'] },
+  { domain: 'Wellness Clinical',  modules: ['patients', 'appointments', 'my_appointments', 'book_appointment', 'waitlist', 'services', 'prescriptions', 'my_prescriptions', 'consents', 'visits'] },
   { domain: 'Wellness Inventory', modules: ['products', 'inventory', 'pos'] },
   { domain: 'Admin & Platform',   modules: ['staff', 'roles', 'settings', 'audit', 'integrations', 'developer'] },
 ];
@@ -92,7 +96,9 @@ const MODULE_DESCRIPTIONS = {
   surveys:        'CSAT / NPS / custom surveys and responses.',
   chatbots:       'Live-chat bots, conversation flows, and handoff rules.',
   // Financial
-  billing:        'Invoices, recurring billing, credit notes.',
+  invoices:         'Patient + customer invoice records and the Invoices page.',
+  gift_cards:       'Gift card issuance ledger and the Gift Cards page.',
+  patient_wallets:  'Patient pre-paid wallet balances, top-ups, and ledger.',
   accounting:     'Ledger sync and accounting integrations (Tally / QuickBooks / Xero).',
   payments:       'Payment records and transaction history.',
   expenses:       'Employee expenses, approvals, and reimbursements.',
@@ -117,6 +123,7 @@ const MODULE_DESCRIPTIONS = {
   calendar:       'Day-grid calendar view (slot-click to book, drag to reschedule).',
   services:       'Service catalog, packages, and pricing.',
   prescriptions:  'Rx records, prescription PDFs, and dispense flow.',
+  my_prescriptions: 'Patient-portal "My Prescriptions" tab — patients see only their own Rx list and can download their own PDFs.',
   consents:       'Signed consent forms and consent canvas signature capture.',
   visits:         'Visit logs, clinical notes, treatment plans, and photo timeline.',
   // Wellness Inventory
@@ -149,8 +156,13 @@ const SENSITIVE_PERMISSIONS_CLIENT = new Set([
   'settings.manage',
   'developer.manage',
   'integrations.write', 'integrations.update', 'integrations.delete', 'integrations.manage',
-  // BILLING / ACCOUNTING mutate-tier — financial exposure
-  'billing.write', 'billing.update', 'billing.delete', 'billing.manage',
+  // INVOICES / GIFT_CARDS / PATIENT_WALLETS / ACCOUNTING mutate-tier —
+  // financial exposure. (`billing` was decomposed into the three
+  // surface-specific modules in v3.8.x; all three carry the same
+  // sensitive write-tier surface.)
+  'invoices.write', 'invoices.update', 'invoices.delete', 'invoices.manage',
+  'gift_cards.write', 'gift_cards.update', 'gift_cards.delete', 'gift_cards.manage',
+  'patient_wallets.write', 'patient_wallets.update', 'patient_wallets.delete', 'patient_wallets.manage',
   'accounting.write',
   // Clinical PII destruction
   'patients.delete',
@@ -175,10 +187,18 @@ const SENSITIVE_PERMISSION_REASONS = {
   'integrations.update': 'Can edit existing integration configurations.',
   'integrations.delete': 'Can disconnect third-party integrations.',
   'integrations.manage': 'Full integration administration.',
-  'billing.write': 'Can create invoices and billing records.',
-  'billing.update': 'Can modify invoices and billing records.',
-  'billing.delete': 'Can void or remove invoices.',
-  'billing.manage': 'Full billing administration.',
+  'invoices.write': 'Can create patient and customer invoices.',
+  'invoices.update': 'Can modify existing invoices (line items, totals, status).',
+  'invoices.delete': 'Can void or remove invoice records.',
+  'invoices.manage': 'Full invoice administration including write-offs and recurring billing.',
+  'gift_cards.write': 'Can issue new gift cards.',
+  'gift_cards.update': 'Can modify gift card balances, expiry, and assignment.',
+  'gift_cards.delete': 'Can void gift card records.',
+  'gift_cards.manage': 'Full gift card program administration.',
+  'patient_wallets.write': 'Can top up or debit patient wallet balances.',
+  'patient_wallets.update': 'Can adjust patient wallet entries and refund disputed transactions.',
+  'patient_wallets.delete': 'Can remove patient wallet ledger entries.',
+  'patient_wallets.manage': 'Full patient wallet administration.',
   'accounting.write': 'Can post to the accounting ledger / sync.',
   'patients.delete': 'Can permanently remove patient records (clinical PHI destruction).',
   'prescriptions.delete': 'Can permanently remove prescription records.',
@@ -929,21 +949,61 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
     Array.isArray(domains) && domains.length
       ? domains
       : PERMISSION_DOMAINS_FALLBACK;
-  // Hydrate from role.permissions (the list endpoint already includes them).
-  // We keep a Set of "module.action" strings for O(1) lookup + toggle.
+  // Build the set of currently-catalogued "module.action" strings so we
+  // can filter the role's stored grants through it. A grant whose module
+  // is no longer in the catalog (e.g. `billing.delete` after the v3.8.x
+  // split into invoices / gift_cards / patient_wallets) has no checkbox
+  // in the matrix, so the admin can't uncheck it — but if we leave it
+  // in `selected`, save serialises it and the bulk-update endpoint 400s
+  // with "Invalid permission: <legacy>.<action>". Filtering on hydrate
+  // means the UI's state matches what's actually renderable, and the
+  // next save cleanly drops the dead grants via the endpoint's atomic
+  // replace.
+  const catalogKeys = useMemo(() => {
+    const s = new Set();
+    for (const m of matrix) {
+      for (const a of m.actions || []) s.add(`${m.module}.${a}`);
+    }
+    return s;
+  }, [matrix]);
+
+  // Hydrate from role.permissions (the list endpoint already includes
+  // them), filtered through the catalogue so legacy grants don't leak
+  // into the save payload. We keep a Set of "module.action" strings
+  // for O(1) lookup + toggle.
   const initial = useMemo(() => {
     const s = new Set();
+    let droppedLegacy = 0;
     (role.permissions || []).forEach((p) => {
       const m = p?.module;
       const a = p?.action;
-      if (m && a) s.add(`${m}.${a}`);
+      if (!m || !a) return;
+      const key = `${m}.${a}`;
+      if (catalogKeys.has(key)) {
+        s.add(key);
+      } else {
+        droppedLegacy++;
+      }
     });
+    if (droppedLegacy > 0) {
+      console.warn(
+        `[RolesAdmin] role "${role.key || role.name}" had ${droppedLegacy} ` +
+          `legacy permission grant(s) for modules no longer in the catalog; ` +
+          `they'll be cleaned up on the next save.`,
+      );
+    }
     return s;
-  }, [role]);
+  }, [role, catalogKeys]);
 
   const [selected, setSelected] = useState(initial);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  // Search query filters the matrix on module name, description,
+  // page-catalog labels (the "Unlocks: …" line), and action names.
+  // Case-insensitive, substring match. Empty query renders everything.
+  // Filters DON'T touch `selected` — toggles on a search hit preserve
+  // grants on filtered-out modules unchanged.
+  const [searchQuery, setSearchQuery] = useState('');
   // SPEC §6a — when the admin clicks Save and the selection adds NET-
   // NEW sensitive grants, we stash them here and surface a confirmation
   // modal. Save only fires when the admin clicks Confirm. Cancel returns
@@ -987,6 +1047,31 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
     }
     return map;
   }, [pageCatalog]);
+
+  // Per-module search corpus: concatenated string of everything the
+  // search input matches against. Built once per matrix/page-catalog
+  // change so the filter pass is O(n) on every keystroke without
+  // re-deriving descriptions and page labels each time.
+  const searchCorpusByModule = useMemo(() => {
+    const map = new Map();
+    for (const { module, actions } of matrix) {
+      const parts = [
+        module,
+        MODULE_DESCRIPTIONS[module] || '',
+        Array.from(pagesByModule.get(module) || []).join(' '),
+        (actions || []).join(' '),
+      ];
+      map.set(module, parts.join(' ').toLowerCase());
+    }
+    return map;
+  }, [matrix, pagesByModule]);
+
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const matchesQuery = (module) => {
+    if (!normalizedQuery) return true;
+    const corpus = searchCorpusByModule.get(module);
+    return Boolean(corpus && corpus.includes(normalizedQuery));
+  };
 
   const notify = useNotify();
 
@@ -1065,10 +1150,77 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
       onClose={onClose}
       width={760}
     >
+      {/* Sticky search bar — pins to the top of the modal's scroll
+          container so it stays in reach while the admin scrolls
+          through 40+ modules. Filters by module name, description,
+          page-catalog "Unlocks" labels, and action names. */}
       <div
         style={{
-          maxHeight: '60vh',
-          overflowY: 'auto',
+          position: 'sticky',
+          top: 0,
+          zIndex: 2,
+          marginBottom: '0.75rem',
+          background: 'var(--surface-color)',
+          paddingBottom: '0.5rem',
+          // Negative margin + matching padding pulls the sticky band out
+          // to the ModalShell's left/right edges so the row visually
+          // anchors to the modal's chrome instead of looking like a
+          // floating widget inside the content padding.
+          marginLeft: '-1.25rem',
+          marginRight: '-1.25rem',
+          paddingLeft: '1.25rem',
+          paddingRight: '1.25rem',
+          paddingTop: '0.25rem',
+          borderBottom: '1px solid var(--border-color)',
+        }}
+      >
+        <div style={{ position: 'relative' }}>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search permissions (module, page, action)…"
+            aria-label="Search permissions"
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              padding: '0.55rem 2.2rem 0.55rem 0.85rem',
+              fontSize: '0.9rem',
+              borderRadius: 8,
+              border: '1px solid var(--border-color)',
+              background: 'var(--subtle-bg-2)',
+              color: 'var(--text-primary)',
+              outline: 'none',
+            }}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+              title="Clear search"
+              style={{
+                position: 'absolute',
+                top: '50%',
+                right: '0.5rem',
+                transform: 'translateY(-50%)',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontSize: '1.1rem',
+                lineHeight: 1,
+                padding: '0.2rem 0.35rem',
+              }}
+            >
+              ×
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div
+        style={{
           padding: '0.25rem',
           marginBottom: '0.75rem',
         }}
@@ -1084,13 +1236,46 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
             .map(({ domain, modules: moduleNames }) => {
               const items = (moduleNames || [])
                 .map((name) => byName.get(name))
-                .filter(Boolean);
+                .filter(Boolean)
+                // Search filter — drop modules that don't match the
+                // current query. Empty query → matchesQuery returns
+                // true for all, so this no-ops.
+                .filter((m) => matchesQuery(m.module));
               items.forEach((m) => seen.add(m.module));
               return { domain, items };
             })
             .filter((s) => s.items.length > 0);
-          const orphans = matrix.filter((m) => !seen.has(m.module));
+          const orphans = matrix
+            .filter((m) => !seen.has(m.module))
+            .filter((m) => matchesQuery(m.module));
           if (orphans.length > 0) sections.push({ domain: 'Other', items: orphans });
+
+          // Empty state — search returned zero hits across every domain.
+          if (sections.length === 0) {
+            return (
+              <div
+                style={{
+                  padding: '2rem 1rem',
+                  textAlign: 'center',
+                  color: 'var(--text-secondary)',
+                  fontSize: '0.85rem',
+                }}
+              >
+                No permissions match <strong>“{searchQuery}”</strong>.
+                <div style={{ marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="btn-secondary"
+                    style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }}
+                  >
+                    Clear search
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
           return sections.map(({ domain, items }) => (
             <div key={domain} style={{ marginBottom: '1.25rem' }}>
               <div
@@ -1289,6 +1474,11 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
       <ModalActions>
         <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           {selected.size} permission{selected.size === 1 ? '' : 's'} selected
+          {normalizedQuery && (
+            <span style={{ marginLeft: '0.5rem', opacity: 0.8 }}>
+              · filtered by “{searchQuery.trim()}”
+            </span>
+          )}
         </span>
         <button type="button" onClick={onClose} className="btn-secondary" disabled={isLoading}>
           {readOnly ? 'Close' : 'Cancel'}
@@ -1975,7 +2165,13 @@ function ModalShell({ title, subtitle, onClose, width = 480, children }) {
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  return (
+  // Portal to document.body so a modal opened from inside another modal's
+  // scrollable body (e.g. SensitiveGrantsConfirmModal launched from
+  // PermissionsModal) becomes a DOM sibling of its parent, not a nested
+  // descendant. Without this, wheel events on the child's backdrop bubble
+  // up to the parent modal's `.glass` overflow:auto container and scroll
+  // the underlying matrix while the confirm dialog is open.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -2054,7 +2250,8 @@ function ModalShell({ title, subtitle, onClose, width = 480, children }) {
         {subtitle && <div style={{ marginBottom: '0.75rem' }} />}
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

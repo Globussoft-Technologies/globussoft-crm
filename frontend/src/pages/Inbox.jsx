@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Mail, Phone, ArrowRight, User, Send, Clock, Play, Calendar, MessageSquare, MessageCircle, X, PhoneCall } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Mail, Phone, ArrowRight, User, Send, Clock, Play, Calendar, MessageSquare, MessageCircle, X, PhoneCall, Paperclip, Sparkles, Lightbulb } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -21,6 +21,17 @@ export default function Inbox() {
   // rather than always-visible chrome.
   const [composeData, setComposeData] = useState({ to: '', cc: '', bcc: '', subject: '', body: '' });
   const [showCcBcc, setShowCcBcc] = useState(false);
+  // Custom themed autocomplete for the To: field. The native <datalist> dropdown
+  // can't be styled (renders browser-default white in dark mode) and escaped
+  // the modal's stacking context, hanging off the right edge of the viewport.
+  const [showToDropdown, setShowToDropdown] = useState(false);
+  // Compose attachments: File objects collected from the paperclip picker.
+  // Posted as multipart "attachments[]" when present; the backend caps at
+  // 5 files / 10 MB each (see communications.js composeAttachmentUpload).
+  const [composeAttachments, setComposeAttachments] = useState([]);
+  const composeFileInputRef = useRef(null);
+  const MAX_ATTACHMENTS = 5;
+  const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
   // #624 — Sent folder UI: a sub-tab on the Emails tab toggles the
   // backend folder filter (?folder=sent | ?folder=inbox | omitted=all).
@@ -103,16 +114,108 @@ export default function Inbox() {
 
   const handleSendEmail = async (e) => {
     e.preventDefault();
-    await fetchApi('/api/communications/send-email', { method: 'POST', body: JSON.stringify(composeData) });
+
+    // Switch to multipart when attachments are present so the file buffers
+    // round-trip cleanly. fetchApi detects FormData and drops the JSON
+    // Content-Type so the browser can set the multipart boundary itself.
+    let requestBody;
+    if (composeAttachments.length > 0) {
+      const fd = new FormData();
+      fd.append('to', composeData.to);
+      if (composeData.cc) fd.append('cc', composeData.cc);
+      if (composeData.bcc) fd.append('bcc', composeData.bcc);
+      fd.append('subject', composeData.subject);
+      fd.append('body', composeData.body);
+      for (const file of composeAttachments) fd.append('attachments', file, file.name);
+      requestBody = fd;
+    } else {
+      requestBody = JSON.stringify(composeData);
+    }
+    await fetchApi('/api/communications/send-email', { method: 'POST', body: requestBody });
 
     notify.success(`Email Sent Successfully!\n\n[Epic #104] Tracking Pixel Active: You will be notified the instant ${composeData.to} opens or clicks links in this message.`);
 
-    setShowCompose(false);
-    setComposeData({ to: '', cc: '', bcc: '', subject: '', body: '' });
-    setShowCcBcc(false);
+    closeCompose();
     // Refresh
     const data = await fetchApi(inboxPath);
     setEmails(Array.isArray(data) ? data : []);
+  };
+
+  const handlePickAttachments = (e) => {
+    const incoming = Array.from(e.target.files || []);
+    if (incoming.length === 0) return;
+
+    const accepted = [];
+    const rejected = [];
+    let nextCount = composeAttachments.length;
+    for (const f of incoming) {
+      if (nextCount >= MAX_ATTACHMENTS) {
+        rejected.push(`${f.name} (max ${MAX_ATTACHMENTS} files)`);
+        continue;
+      }
+      if (f.size > MAX_ATTACHMENT_BYTES) {
+        rejected.push(`${f.name} (over 10 MB)`);
+        continue;
+      }
+      accepted.push(f);
+      nextCount += 1;
+    }
+    if (accepted.length > 0) setComposeAttachments(prev => [...prev, ...accepted]);
+    if (rejected.length > 0) notify.error(`Some files were skipped:\n${rejected.join('\n')}`);
+    // Reset the input value so picking the same file again still fires onChange.
+    e.target.value = '';
+  };
+
+  const handleRemoveAttachment = (idx) => {
+    setComposeAttachments(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  // To: field is comma-separated for multi-recipient. The dropdown filters on
+  // (and replaces) only the LAST comma-separated token so the user can pick
+  // recipients one at a time without nuking what they've already typed.
+  const composeToTokens = composeData.to.split(',');
+  const composeToFilter = (composeToTokens[composeToTokens.length - 1] || '').trim().toLowerCase();
+  const filteredToContacts = contacts
+    .filter(c => c.email)
+    .filter(c => {
+      if (!composeToFilter) return true;
+      const email = (c.email || '').toLowerCase();
+      const name = (c.name || '').toLowerCase();
+      return email.includes(composeToFilter) || name.includes(composeToFilter);
+    })
+    .slice(0, 50);
+
+  const handleSelectToContact = (email) => {
+    setComposeData(prev => {
+      const parts = prev.to.split(',').map(s => s.trim()).filter(Boolean);
+      // Replace the last (in-progress) token with the picked email if the user
+      // was mid-typing; otherwise append.
+      if (parts.length === 0 || !prev.to.endsWith(',')) {
+        if (parts.length > 0) parts[parts.length - 1] = email;
+        else parts.push(email);
+      } else {
+        parts.push(email);
+      }
+      return { ...prev, to: parts.join(', ') };
+    });
+    setShowToDropdown(false);
+  };
+
+  // Single close path for the composer — header X, backdrop click, post-send.
+  // Keeps the state-reset list in one place so we can't drift between callers.
+  const closeCompose = () => {
+    setShowCompose(false);
+    setShowCcBcc(false);
+    setComposeData({ to: '', cc: '', bcc: '', subject: '', body: '' });
+    setComposeAttachments([]);
+    setAiSubjects([]);
+    setShowToDropdown(false);
+  };
+
+  const formatAttachmentSize = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const handleSendSms = async (e) => {
@@ -547,10 +650,37 @@ export default function Inbox() {
       </div>
 
       {showCompose && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease-out' }}>
-          <div className="card" style={{ padding: '2.5rem', width: '600px', border: '1px solid rgba(59, 130, 246, 0.3)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }}>
-            <h3 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Mail size={24} color="var(--accent-color)" /> New Message
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) closeCompose(); }}
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease-out' }}
+        >
+          <div className="card" style={{ padding: '2rem 2.25rem', width: '600px', border: '1px solid var(--border-color)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)', position: 'relative' }}>
+            <button
+              type="button"
+              onClick={closeCompose}
+              aria-label="Close"
+              style={{
+                position: 'absolute',
+                top: '1rem',
+                right: '1rem',
+                width: 32,
+                height: 32,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'transparent',
+                border: 'none',
+                borderRadius: 6,
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-color)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            >
+              <X size={18} />
+            </button>
+            <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.55rem', paddingRight: '2rem' }}>
+              <Mail size={20} color="var(--accent-color)" /> New Message
             </h3>
             <form onSubmit={handleSendEmail} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
@@ -569,10 +699,80 @@ export default function Inbox() {
                     </button>
                   )}
                 </div>
-                <input type="text" list="contacts-list" required className="input-field" value={composeData.to} onChange={e => setComposeData({...composeData, to: e.target.value})} placeholder="client@company.com (comma-separated for multiple)" />
-                <datalist id="contacts-list">
-                  {contacts.map(c => <option key={c.id} value={c.email}>{c.name}</option>)}
-                </datalist>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="text"
+                    required
+                    className="input-field"
+                    value={composeData.to}
+                    onChange={e => { setComposeData({ ...composeData, to: e.target.value }); setShowToDropdown(true); }}
+                    onFocus={() => setShowToDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowToDropdown(false), 120)}
+                    onKeyDown={(e) => { if (e.key === 'Escape') setShowToDropdown(false); }}
+                    placeholder="client@company.com (comma-separated for multiple)"
+                    autoComplete="off"
+                    aria-autocomplete="list"
+                    aria-expanded={showToDropdown && filteredToContacts.length > 0}
+                  />
+                  {showToDropdown && filteredToContacts.length > 0 && (
+                    <ul
+                      role="listbox"
+                      style={{
+                        position: 'absolute',
+                        top: 'calc(100% + 4px)',
+                        left: 0,
+                        right: 0,
+                        margin: 0,
+                        padding: '0.25rem 0',
+                        listStyle: 'none',
+                        // --tooltip-bg is the canonical near-solid popover
+                        // surface in this app (dark navy in dark mode, near-white
+                        // in light mode) so the dropdown stays legible against
+                        // the semi-transparent modal underneath.
+                        background: 'var(--tooltip-bg)',
+                        backdropFilter: 'blur(8px)',
+                        WebkitBackdropFilter: 'blur(8px)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: 6,
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+                        maxHeight: 260,
+                        overflowY: 'auto',
+                        zIndex: 10,
+                      }}
+                    >
+                      {filteredToContacts.map((c) => (
+                        <li
+                          key={c.id}
+                          role="option"
+                          // onMouseDown + preventDefault stops the input from
+                          // blurring before the click registers — without this
+                          // the dropdown closes before onClick fires.
+                          onMouseDown={(e) => { e.preventDefault(); handleSelectToContact(c.email); }}
+                          style={{
+                            padding: '0.5rem 0.75rem',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 2,
+                            borderRadius: 4,
+                            margin: '0 0.25rem',
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-color)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          <span style={{ color: 'var(--text-primary)', fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {c.email}
+                          </span>
+                          {c.name && (
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {c.name}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
               {showCcBcc && (
                 <>
@@ -594,7 +794,83 @@ export default function Inbox() {
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Message:</label>
                 <textarea required className="input-field" value={composeData.body} onChange={e => setComposeData({...composeData, body: e.target.value})} placeholder="Write your email here..." rows={6} style={{ resize: 'vertical' }} />
               </div>
-              
+
+              {/* Attachments — paperclip opens the native file picker; selected
+                  files render as removable chips. Sent as multipart
+                  `attachments[]` in handleSendEmail; max 5 files / 10 MB each. */}
+              <div>
+                <input
+                  ref={composeFileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain,application/zip,.jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"
+                  onChange={handlePickAttachments}
+                  style={{ display: 'none' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => composeFileInputRef.current?.click()}
+                  disabled={composeAttachments.length >= MAX_ATTACHMENTS}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    padding: '0.4rem 0.75rem',
+                    background: 'transparent',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px',
+                    color: 'var(--text-secondary)',
+                    fontSize: '0.8rem',
+                    cursor: composeAttachments.length >= MAX_ATTACHMENTS ? 'not-allowed' : 'pointer',
+                    opacity: composeAttachments.length >= MAX_ATTACHMENTS ? 0.6 : 1,
+                  }}
+                >
+                  <Paperclip size={14} /> Attach files
+                  {composeAttachments.length > 0 && (
+                    <span style={{ color: 'var(--accent-color)', fontWeight: 600 }}>
+                      ({composeAttachments.length}/{MAX_ATTACHMENTS})
+                    </span>
+                  )}
+                </button>
+                {composeAttachments.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.6rem' }}>
+                    {composeAttachments.map((f, i) => (
+                      <div
+                        key={`${f.name}-${i}`}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                          padding: '0.3rem 0.6rem',
+                          background: 'rgba(59, 130, 246, 0.08)',
+                          border: '1px solid rgba(59, 130, 246, 0.3)',
+                          borderRadius: '14px',
+                          fontSize: '0.75rem',
+                          color: 'var(--text-primary)',
+                          maxWidth: '100%',
+                        }}
+                      >
+                        <Paperclip size={12} color="var(--accent-color)" />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px' }}>
+                          {f.name}
+                        </span>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>
+                          {formatAttachmentSize(f.size)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveAttachment(i)}
+                          aria-label={`Remove ${f.name}`}
+                          style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center' }}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* AI Subject Suggestions */}
               {aiSubjects.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
@@ -607,9 +883,26 @@ export default function Inbox() {
                 </div>
               )}
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem', alignItems: 'center' }}>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <select value={aiTone} onChange={e => setAiTone(e.target.value)} className="input-field" style={{ padding: '0.4rem 0.5rem', fontSize: '0.8rem', width: 'auto' }}>
+              {/* Action row — refined for a professional feel: muted ghost
+                  buttons for the secondary tools, single accent-filled primary
+                  on the right. Discard removed; the header X owns dismissal. */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.75rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <select
+                    value={aiTone}
+                    onChange={e => setAiTone(e.target.value)}
+                    aria-label="AI tone"
+                    style={{
+                      padding: '0.45rem 0.6rem',
+                      fontSize: '0.8rem',
+                      width: 'auto',
+                      background: 'var(--input-bg)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                    }}
+                  >
                     <option value="professional">Professional</option>
                     <option value="friendly">Friendly</option>
                     <option value="formal">Formal</option>
@@ -617,19 +910,52 @@ export default function Inbox() {
                     <option value="persuasive">Persuasive</option>
                     <option value="concise">Concise</option>
                   </select>
-                  <button type="button" onClick={handleAIGenerate} disabled={aiLoading} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(59, 130, 246, 0.2)', border: '1px solid var(--accent-color)', color: 'var(--accent-color)', padding: '0.5rem 1rem' }}>
-                    {aiLoading ? <span style={{ animation: 'pulse 1s infinite' }}>Generating...</span> : <>✨ AI Draft</>}
+                  <button
+                    type="button"
+                    onClick={handleAIGenerate}
+                    disabled={aiLoading}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      padding: '0.45rem 0.85rem',
+                      fontSize: '0.8rem',
+                      fontWeight: 500,
+                      background: 'transparent',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 6,
+                      color: 'var(--text-primary)',
+                      cursor: aiLoading ? 'wait' : 'pointer',
+                      opacity: aiLoading ? 0.7 : 1,
+                    }}
+                  >
+                    <Sparkles size={14} color="var(--accent-color)" />
+                    {aiLoading ? 'Generating…' : 'AI Draft'}
                   </button>
-                  <button type="button" onClick={handleAISubjects} className="btn-secondary" style={{ padding: '0.5rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-                    💡 Subjects
+                  <button
+                    type="button"
+                    onClick={handleAISubjects}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      padding: '0.45rem 0.85rem',
+                      fontSize: '0.8rem',
+                      fontWeight: 500,
+                      background: 'transparent',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 6,
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Lightbulb size={14} color="var(--text-secondary)" />
+                    Subjects
                   </button>
                 </div>
-                <div style={{ display: 'flex', gap: '1rem' }}>
-                  <button type="button" onClick={() => { setShowCompose(false); setShowCcBcc(false); setComposeData({ to: '', cc: '', bcc: '', subject: '', body: '' }); }} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
-                  <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <Send size={16} /> Send Email
-                  </button>
-                </div>
+                <button type="submit" className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.55rem 1.1rem', fontWeight: 500 }}>
+                  <Send size={16} /> Send Email
+                </button>
               </div>
             </form>
           </div>

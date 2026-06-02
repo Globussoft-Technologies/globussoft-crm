@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 /**
  * frontend/src/components/Avatar.jsx
@@ -84,6 +84,7 @@ const Avatar = ({
   color,
   roleBadge,
   title,
+  imageUrl,
 }) => {
   const safeName = (name || '').toString();
   const initials = getInitials(safeName);
@@ -94,6 +95,14 @@ const Avatar = ({
   const roleKey = (roleBadge || '').toString().toUpperCase();
   const pipColor = ROLE_COLORS[roleKey] || ROLE_COLORS.USER;
   const pipLetter = roleKey ? roleKey.charAt(0) : '';
+
+  // If the upstream image 404s, expires, or the bucket key is stale, fall
+  // back to initials rather than rendering a broken-image icon. Reset the
+  // error flag when the URL itself changes so a freshly-uploaded picture
+  // gets a fair retry.
+  const [imageErrored, setImageErrored] = useState(false);
+  useEffect(() => { setImageErrored(false); }, [imageUrl]);
+  const showImage = !!imageUrl && !imageErrored;
 
   return (
     <span
@@ -116,10 +125,25 @@ const Avatar = ({
         lineHeight: 1,
         userSelect: 'none',
         flexShrink: 0,
+        overflow: 'hidden',
       }}
     >
-      <span aria-hidden="true">{initials}</span>
-      {roleBadge ? (
+      {showImage ? (
+        <img
+          src={imageUrl}
+          alt={safeName ? `${safeName} profile picture` : 'Profile picture'}
+          onError={() => setImageErrored(true)}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            display: 'block',
+          }}
+        />
+      ) : (
+        <span aria-hidden="true">{initials}</span>
+      )}
+      {roleBadge && !showImage ? (
         <span
           data-testid="avatar-role-badge"
           aria-label={`Role: ${roleBadge}`}

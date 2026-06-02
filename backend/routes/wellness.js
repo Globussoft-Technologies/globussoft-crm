@@ -66,6 +66,11 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 // axis). Used by DELETE /patients/:id and other admin-only operations
 // added to this file.
 const { verifyRole } = require("../middleware/auth");
+// RBAC permission gate for the staff-authed "My Prescriptions" page —
+// see GET /api/wellness/my-prescriptions below. Lets any role granted
+// `my_prescriptions.read` view their OWN linked Patient's Rx without
+// needing the tenant-wide `prescriptions.read`.
+const { requirePermission } = require("../middleware/requirePermission");
 const {
   uploadImage,
   deleteFile,
@@ -127,11 +132,32 @@ async function verifyPatientToken(req, res, next) {
 
   // Path A — patient-portal token
   if (decoded.patientId) {
-    req.patient = {
-      id: decoded.patientId,
-      phoneLast10: decoded.phoneLast10,
-    };
-    return next();
+    // Look up the patient row to attach tenantId. The phone+OTP JWT only
+    // carries { patientId, phoneLast10 } so tenantId is unavailable from
+    // the claim alone. Downstream RBAC gates (requirePortalPermission)
+    // and audit writes both need tenantId, so resolve it once here and
+    // memoize on req.patient.
+    try {
+      const patientRow = await prisma.patient.findUnique({
+        where: { id: decoded.patientId },
+        select: { id: true, tenantId: true },
+      });
+      if (!patientRow) {
+        return res.status(401).json({ error: "Invalid portal token" });
+      }
+      req.patient = {
+        id: patientRow.id,
+        tenantId: patientRow.tenantId,
+        phoneLast10: decoded.phoneLast10,
+      };
+      return next();
+    } catch (err) {
+      console.error(
+        "[wellness] verifyPatientToken Path A patient lookup failed:",
+        err.message,
+      );
+      return res.status(500).json({ error: "Failed to resolve patient" });
+    }
   }
 
   // Path B — regular CUSTOMER session token; resolve linked Patient.
@@ -149,7 +175,7 @@ async function verifyPatientToken(req, res, next) {
     try {
       let patient = await prisma.patient.findFirst({
         where: { userId: decoded.userId, tenantId: decoded.tenantId },
-        select: { id: true, phone: true },
+        select: { id: true, phone: true, tenantId: true },
       });
 
       if (!patient) {
@@ -170,7 +196,7 @@ async function verifyPatientToken(req, res, next) {
               email: userRow.email,
               userId: null,
             },
-            select: { id: true, phone: true },
+            select: { id: true, phone: true, tenantId: true },
           });
           if (claimable) {
             await prisma.patient.update({
@@ -191,13 +217,14 @@ async function verifyPatientToken(req, res, next) {
               userId: decoded.userId,
               source: "self-register",
             },
-            select: { id: true, phone: true },
+            select: { id: true, phone: true, tenantId: true },
           });
         }
       }
 
       req.patient = {
         id: patient.id,
+        tenantId: patient.tenantId,
         phoneLast10:
           (patient.phone || "").replace(/\D/g, "").slice(-10) || null,
       };
@@ -213,6 +240,16 @@ async function verifyPatientToken(req, res, next) {
 
   return res.status(401).json({ error: "Invalid portal token" });
 }
+
+// Patient-portal RBAC resolver — see lib/portalPermissions.js for the full
+// rationale. In short: patient is a Patient row, not a User row, so they
+// can't have UserRole assignments. Every patient on a tenant implicitly
+// inherits that tenant's CUSTOMER role permissions, and the handler still
+// scopes data by `patientId: req.patient.id` as defence in depth.
+const {
+  requirePortalPermission,
+  getCustomerRolePermissions,
+} = require("../lib/portalPermissions");
 
 const router = express.Router();
 
@@ -8704,7 +8741,11 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
     const clinic = await primaryClinic(req.user.tenantId);
     const doctor =
       rx.doctor || (req.user?.name ? { name: req.user.name } : null);
-    const buf = await renderPrescriptionPdf(rx, rx.patient, clinic, doctor);
+    const { tenant, logoBuffer } = await loadTenantBrandAssets(req.user.tenantId);
+    const buf = await renderPrescriptionPdf(rx, rx.patient, clinic, doctor, {
+      tenant,
+      logoBuffer,
+    });
     // PRD §11: PDF export of an Rx is a downloadable PHI artefact; the audit
     // row is what proves "who pulled this drug list and when". IDs only —
     // never the drug names (those live in the Prescription row itself).
@@ -8740,6 +8781,145 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
   }
 });
 
+// ── /my-prescriptions — staff-authed self-view of own Rx ───────────
+//
+// Companion to the patient-portal /portal/prescriptions endpoint but
+// for staff JWTs. Resolves the logged-in user's linked Patient record
+// (Patient.userId === req.user.userId, same tenant) and returns ONLY
+// that Patient's prescriptions. Gated on `my_prescriptions.read` so
+// admins can grant Rx self-view to any staff role (USER, MANAGER,
+// DOCTOR, …) without exposing the tenant-wide `prescriptions.read`.
+//
+// Cross-patient access is structurally impossible: the WHERE clause
+// hardcodes `patientId: linkedPatient.id`. If the staff user has no
+// linked Patient row, returns an empty list with a 200 — the frontend
+// renders an explanatory empty state ("Your patient profile isn't
+// linked yet — ask your clinic to link it") rather than treating
+// missing-link as an error.
+router.get(
+  "/my-prescriptions",
+  requirePermission("my_prescriptions", "read"),
+  async (req, res) => {
+    try {
+      const patient = await prisma.patient.findFirst({
+        where: { userId: req.user.userId, tenantId: req.user.tenantId },
+        select: { id: true, name: true },
+      });
+      if (!patient) {
+        return res.json({ patient: null, prescriptions: [] });
+      }
+      const prescriptions = await prisma.prescription.findMany({
+        where: { patientId: patient.id, tenantId: req.user.tenantId },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+        include: {
+          visit: {
+            select: {
+              id: true,
+              visitDate: true,
+              service: { select: { name: true } },
+            },
+          },
+          doctor: { select: { id: true, name: true } },
+        },
+      });
+      // PRD §11: staff self-access of own Rx list is still a PHI read —
+      // log it. ONE row per request; actorType stays 'user' so the staff-
+      // side audit viewer can distinguish self-view from clinician pulls.
+      try {
+        await writeAudit(
+          "Prescription",
+          "USER_LIST_READ",
+          null,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            count: prescriptions.length,
+            source: "my-prescriptions",
+            patientId: patient.id,
+          },
+        );
+      } catch (auditErr) {
+        console.warn(
+          "[wellness] audit my-prescriptions list failed:",
+          auditErr.message,
+        );
+      }
+      res.json({ patient: { id: patient.id, name: patient.name }, prescriptions });
+    } catch (e) {
+      console.error("[wellness] my-prescriptions list error:", e.message);
+      res.status(500).json({ error: "Failed to load prescriptions" });
+    }
+  },
+);
+
+router.get(
+  "/my-prescriptions/:id/pdf",
+  requirePermission("my_prescriptions", "read"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "Invalid prescription id" });
+      }
+      const patient = await prisma.patient.findFirst({
+        where: { userId: req.user.userId, tenantId: req.user.tenantId },
+        select: { id: true },
+      });
+      if (!patient) {
+        return res.status(404).json({ error: "Prescription not found" });
+      }
+      const rx = await prisma.prescription.findFirst({
+        where: { id, patientId: patient.id, tenantId: req.user.tenantId },
+        include: {
+          patient: true,
+          doctor: { select: { id: true, name: true, email: true } },
+        },
+      });
+      if (!rx) return res.status(404).json({ error: "Prescription not found" });
+      const clinic = await primaryClinic(rx.tenantId);
+      const { tenant, logoBuffer } = await loadTenantBrandAssets(rx.tenantId);
+      const buf = await renderPrescriptionPdf(
+        rx,
+        rx.patient,
+        clinic,
+        rx.doctor || null,
+        { tenant, logoBuffer },
+      );
+      try {
+        await writeAudit(
+          "Prescription",
+          "PRESCRIPTION_PDF_DOWNLOAD",
+          rx.id,
+          req.user.userId,
+          rx.tenantId,
+          {
+            prescriptionId: rx.id,
+            visitId: rx.visitId,
+            patientId: rx.patientId,
+            source: "my-prescriptions",
+          },
+        );
+      } catch (auditErr) {
+        console.warn(
+          "[wellness] audit my-prescriptions PDF failed:",
+          auditErr.message,
+        );
+      }
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="rx-${id}.pdf"`);
+      res.setHeader("Content-Length", buf.length);
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      res.send(buf);
+    } catch (e) {
+      console.error("[wellness] my-prescriptions pdf error:", e.message);
+      res.status(500).json({ error: "Failed to render prescription PDF" });
+    }
+  },
+);
+
 // Module-level cache for logo bytes — keyed by absolute file path. The
 // bundled globussoft-logo.png is 2.4 MB; without the cache, every PDF
 // download did a fresh fs.readFileSync, which dominated /summary.pdf
@@ -8747,6 +8927,42 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
 // up any new logo file. A sentinel of `null` records "we already
 // checked this path and it doesn't exist" so we don't re-stat per call.
 const __logoCache = new Map();
+/**
+ * Resolve the {tenant, logoBuffer} pair every clinical PDF needs to
+ * render the canonical wellness branded header. Both fields are
+ * optional from the renderer's perspective — tenant.name lifts the
+ * H1 from the location/clinic name to the company brand, and
+ * logoBuffer turns on the square logo tile in the header.
+ *
+ * Path resolution mirrors the patient-summary caller: prefer a tenant-
+ * uploaded logo under /uploads, fall back to the bundled
+ * frontend/public/globussoft-logo.png. loadCachedLogo memoises both
+ * the hit and the "this path doesn't exist" miss so repeated calls
+ * are free.
+ */
+async function loadTenantBrandAssets(tenantId) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { id: true, name: true, logoUrl: true },
+  });
+  const candidates = [];
+  if (tenant?.logoUrl && tenant.logoUrl.startsWith("/uploads/")) {
+    candidates.push(path.join(__dirname, "..", tenant.logoUrl));
+  }
+  candidates.push(
+    path.join(
+      __dirname,
+      "..",
+      "..",
+      "frontend",
+      "public",
+      "globussoft-logo.png",
+    ),
+  );
+  const logoBuffer = loadCachedLogo(candidates);
+  return { tenant, logoBuffer };
+}
+
 function loadCachedLogo(candidatePaths) {
   for (const p of candidatePaths) {
     if (__logoCache.has(p)) {
@@ -9416,6 +9632,22 @@ router.get("/portal/me", verifyPatientToken, async (req, res) => {
   }
 });
 
+// GET /portal/me/permissions — the resolved permission set for the
+// logged-in patient. Patients inherit the tenant's CUSTOMER system role
+// (see lib/portalPermissions.js), so this returns the union of grants on
+// that role. The frontend uses this to hide tabs the patient lacks
+// permission for (e.g. the Prescriptions tab when `my_prescriptions.read`
+// is revoked) — purely cosmetic; the backend gate is the security boundary.
+router.get("/portal/me/permissions", verifyPatientToken, async (req, res) => {
+  try {
+    const perms = await getCustomerRolePermissions(req.patient.tenantId);
+    res.json({ permissions: Array.from(perms).sort() });
+  } catch (e) {
+    console.error("[wellness] portal/me/permissions error:", e.message);
+    res.status(500).json({ error: "Failed to load permissions" });
+  }
+});
+
 router.get("/portal/visits", verifyPatientToken, async (req, res) => {
   try {
     // ?upcoming=true returns only future, non-cancelled visits, ordered
@@ -9471,7 +9703,7 @@ router.get("/portal/visits", verifyPatientToken, async (req, res) => {
   }
 });
 
-router.get("/portal/prescriptions", verifyPatientToken, async (req, res) => {
+router.get("/portal/prescriptions", verifyPatientToken, requirePortalPermission("my_prescriptions", "read"), async (req, res) => {
   try {
     const prescriptions = await prisma.prescription.findMany({
       where: { patientId: req.patient.id },
@@ -9535,6 +9767,7 @@ router.get("/portal/prescriptions", verifyPatientToken, async (req, res) => {
 router.get(
   "/portal/prescriptions/:id/pdf",
   verifyPatientToken,
+  requirePortalPermission("my_prescriptions", "read"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -9551,7 +9784,11 @@ router.get(
       if (!rx) return res.status(404).json({ error: "Prescription not found" });
       const clinic = await primaryClinic(rx.tenantId);
       const doctor = rx.doctor || null;
-      const buf = await renderPrescriptionPdf(rx, rx.patient, clinic, doctor);
+      const { tenant, logoBuffer } = await loadTenantBrandAssets(rx.tenantId);
+      const buf = await renderPrescriptionPdf(rx, rx.patient, clinic, doctor, {
+        tenant,
+        logoBuffer,
+      });
       // PRD §11: PDF downloads of PHI go to the audit ledger. ONE row per
       // request; actorType='patient' so the staff-side audit viewer can
       // distinguish self-downloads from clinician-pulled copies.
@@ -11822,6 +12059,361 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────
+// Self-service membership purchase — mirrors the gift-card storefront flow
+// above. A patient-portal / wellness user browses /wellness/memberships,
+// clicks "Buy", goes through the Razorpay handshake, and ends up with an
+// active Membership row in their own account (no admin involvement).
+//
+//   POST /membership-plans/:id/purchase/order   — create Razorpay order
+//   POST /membership-plans/:id/purchase/confirm — verify + create Membership
+//
+// Authenticated against the regular JWT (any tenant user can buy a plan for
+// themself). The Patient row is get-or-created from req.user — same pattern
+// /appointments/book uses so a user who's never been to the clinic can still
+// purchase + immediately apply the membership at booking time.
+// ─────────────────────────────────────────────────────────────────
+
+router.post(
+  "/membership-plans/:id/purchase/order",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { getRazorpay } = require("../services/razorpayService");
+      const razorpay = getRazorpay();
+      if (!razorpay) {
+        return res.status(503).json({ error: "Razorpay not configured" });
+      }
+      if (!process.env.RAZORPAY_KEY_ID) {
+        return res.status(503).json({ error: "Razorpay not configured" });
+      }
+
+      const planIdInt = parseInt(req.params.id, 10);
+      if (!Number.isFinite(planIdInt) || planIdInt < 1) {
+        return res.status(400).json({ error: "Invalid plan id" });
+      }
+
+      const plan = await prisma.membershipPlan.findFirst({
+        where: { id: planIdInt, tenantId: req.user.tenantId },
+      });
+      if (!plan) {
+        return res.status(404).json({ error: "Membership plan not found" });
+      }
+      if (/^_teardown_|^_test_/.test(plan.name || "")) {
+        return res.status(410).json({
+          error: "This plan is a test fixture and cannot be purchased",
+          code: "PLAN_ARCHIVED_OR_TEST",
+        });
+      }
+      if (!plan.isActive) {
+        return res
+          .status(409)
+          .json({ error: "Membership plan is inactive", code: "PLAN_INACTIVE" });
+      }
+
+      // Get-or-create the buyer's patient record (same pattern as
+      // /appointments/book). Lets first-time users buy without a prior
+      // clinic visit; staff can merge / annotate the row later.
+      const { userId, tenantId } = req.user;
+      let patient = await prisma.patient.findFirst({
+        where: { tenant: { id: tenantId }, user: { id: userId } },
+      });
+      if (!patient) {
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { name: true, email: true },
+        });
+        patient = await prisma.patient.create({
+          data: {
+            name: user?.name || user?.email || "Patient",
+            email: user?.email,
+            source: "self-purchase",
+            tenant: { connect: { id: tenantId } },
+            user: { connect: { id: userId } },
+          },
+        });
+      }
+
+      const amountPaise = Math.round(Number(plan.price) * 100);
+      const currency = String(plan.currency || "INR").toUpperCase();
+
+      let order;
+      try {
+        order = await razorpay.orders.create({
+          amount: amountPaise,
+          currency,
+          receipt: `mp_${plan.id}_${Date.now()}`,
+          notes: {
+            tenantId: String(tenantId),
+            planId: String(plan.id),
+            patientId: String(patient.id),
+            kind: "membership_purchase",
+          },
+        });
+      } catch (gatewayErr) {
+        console.error(
+          "[wellness] razorpay order failed (membership):",
+          gatewayErr && gatewayErr.message,
+        );
+        return res
+          .status(502)
+          .json({ error: "Failed to create payment order" });
+      }
+
+      const payment = await prisma.payment.create({
+        data: {
+          invoiceId: null,
+          amount: Number(plan.price),
+          currency,
+          gateway: "razorpay",
+          gatewayId: order.id,
+          status: "PENDING",
+          tenantId,
+          metadata: JSON.stringify({
+            kind: "membership_purchase",
+            planId: plan.id,
+            patientId: patient.id,
+            orderId: order.id,
+            orderStatus: order.status,
+          }),
+        },
+      });
+
+      res.json({
+        orderId: order.id,
+        paymentId: payment.id,
+        key: process.env.RAZORPAY_KEY_ID,
+        amount: amountPaise,
+        currency,
+        planId: plan.id,
+        patientId: patient.id,
+      });
+    } catch (e) {
+      console.error("[wellness] membership purchase order error:", e.message);
+      res
+        .status(500)
+        .json({ error: "Failed to start membership purchase" });
+    }
+  },
+);
+
+// Verifies the Razorpay signature, marks the Payment SUCCESS, and creates
+// the Membership row (matching the staff-side /patients/:id/memberships
+// purchase semantics — endDate from durationDays, balance stamped from
+// plan.entitlements). Defence-in-depth: metadata.planId must match URL :id.
+router.post(
+  "/membership-plans/:id/purchase/confirm",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const planIdInt = parseInt(req.params.id, 10);
+      if (!Number.isFinite(planIdInt) || planIdInt < 1) {
+        return res.status(400).json({ error: "Invalid plan id" });
+      }
+
+      const {
+        paymentId,
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+      } = req.body || {};
+
+      if (
+        !paymentId ||
+        !razorpay_order_id ||
+        !razorpay_payment_id ||
+        !razorpay_signature
+      ) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      if (!secret) {
+        return res.status(503).json({ error: "Razorpay not configured" });
+      }
+
+      const payment = await prisma.payment.findFirst({
+        where: {
+          id: parseInt(paymentId, 10),
+          tenantId: req.user.tenantId,
+        },
+      });
+      if (!payment) {
+        return res.status(404).json({ error: "Payment not found" });
+      }
+
+      const expected = require("crypto")
+        .createHmac("sha256", secret)
+        .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+        .digest("hex");
+
+      if (expected !== razorpay_signature) {
+        await prisma.payment.update({
+          where: { id: payment.id },
+          data: { status: "FAILED" },
+        });
+        return res
+          .status(400)
+          .json({ error: "Signature verification failed" });
+      }
+
+      // Pull plan + patient out of the metadata the order handler stored.
+      // The URL :id must match metadata.planId so a confirm call can't
+      // redirect the purchase to a different plan.
+      let meta = {};
+      try {
+        meta = JSON.parse(payment.metadata || "{}");
+      } catch (_e) { /* malformed metadata is treated as missing */ }
+      if (
+        meta.planId !== planIdInt ||
+        meta.kind !== "membership_purchase"
+      ) {
+        return res
+          .status(400)
+          .json({ error: "Payment does not match membership plan" });
+      }
+      const patientId = parseInt(meta.patientId, 10);
+      if (!Number.isInteger(patientId) || patientId <= 0) {
+        return res
+          .status(400)
+          .json({ error: "Payment is missing patient context" });
+      }
+
+      // Re-verify plan eligibility (in case an admin deactivated between
+      // order-create and confirm — Razorpay still charged the user; we
+      // fail the Payment so an operator refunds out-of-band).
+      const plan = await prisma.membershipPlan.findFirst({
+        where: { id: planIdInt, tenantId: req.user.tenantId },
+      });
+      if (!plan || !plan.isActive) {
+        await prisma.payment.update({
+          where: { id: payment.id },
+          data: { status: "FAILED" },
+        });
+        return res
+          .status(410)
+          .json({ error: "Membership plan is no longer available" });
+      }
+
+      const updatedPayment = await prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: "SUCCESS",
+          paidAt: new Date(),
+          gatewayId: razorpay_payment_id,
+          metadata: JSON.stringify({
+            ...meta,
+            razorpay_order_id,
+            razorpay_payment_id,
+            verifiedAt: new Date().toISOString(),
+          }),
+        },
+      });
+
+      // Stamp initial balance from plan.entitlements — same shape the
+      // staff-side /patients/:id/memberships POST writes so redemption,
+      // expiry-notification, and balance reads work identically.
+      let entitlements;
+      try {
+        entitlements = JSON.parse(plan.entitlements);
+      } catch {
+        return res.status(500).json({
+          error: "Plan entitlements are corrupt",
+          code: "PLAN_ENTITLEMENTS_CORRUPT",
+        });
+      }
+      const initialBalance = (Array.isArray(entitlements) ? entitlements : []).map(
+        (e) => ({ serviceId: e.serviceId, remaining: e.quantity }),
+      );
+
+      const start = new Date();
+      const end = new Date(start.getTime() + plan.durationDays * 86400000);
+
+      let isRenewal = false;
+      try {
+        const priorCount = await prisma.membership.count({
+          where: {
+            tenantId: req.user.tenantId,
+            patientId,
+            planId: plan.id,
+          },
+        });
+        isRenewal = priorCount > 0;
+      } catch (_e) { /* best-effort */ }
+
+      const membership = await prisma.membership.create({
+        data: {
+          tenantId: req.user.tenantId,
+          patientId,
+          planId: plan.id,
+          startDate: start,
+          endDate: end,
+          balance: JSON.stringify(initialBalance),
+          status: "active",
+        },
+      });
+
+      try {
+        await writeAudit(
+          "Membership",
+          "PURCHASE",
+          membership.id,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            patientId,
+            planId: plan.id,
+            planName: plan.name,
+            price: plan.price,
+            paymentId: payment.id,
+            razorpay_payment_id,
+            source: "self-purchase",
+          },
+        );
+      } catch (auditErr) {
+        console.warn("[audit]", auditErr.message);
+      }
+
+      try {
+        require("../lib/eventBus").emitEvent(
+          isRenewal ? "membership.renewed" : "membership.enrolled",
+          {
+            membershipId: membership.id,
+            patientId,
+            planId: plan.id,
+            planName: plan.name,
+            price: plan.price,
+            startDate: start,
+            endDate: end,
+            isRenewal,
+            source: "self-purchase",
+          },
+          req.user.tenantId,
+          req.io,
+        );
+      } catch (_e) { }
+
+      res.json({
+        success: true,
+        membership: {
+          id: membership.id,
+          planId: plan.id,
+          planName: plan.name,
+          startDate: start,
+          endDate: end,
+          status: membership.status,
+        },
+        payment: { id: updatedPayment.id, status: updatedPayment.status },
+      });
+    } catch (e) {
+      console.error("[wellness] membership purchase confirm error:", e.message);
+      res
+        .status(500)
+        .json({ error: "Failed to confirm membership purchase" });
+    }
+  },
+);
+
 // Admin-applied gift-card credit. The /giftcards/redeem path above requires
 // the plaintext code (recipient flow — SMS/email/printed card → patient
 // portal). This route is the parallel operator flow: an ADMIN or MANAGER
@@ -12762,16 +13354,30 @@ router.get(
   // Allows any authenticated user to book an appointment
   router.post("/appointments/book", verifyToken, async (req, res) => {
     try {
-      const { doctorId, serviceId, appointmentDate, appointmentTime } =
-        req.body;
+      const {
+        doctorId,
+        serviceId,
+        appointmentDate,
+        appointmentTime,
+        reason,
+        membershipId,
+      } = req.body;
       const { userId, tenantId } = req.user;
 
-      // Validate required fields
-      if (!doctorId || !appointmentDate || !appointmentTime) {
+      // Validate required fields. doctorId is OPTIONAL — when omitted the
+      // visit is created with doctor=null and the admin assigns one based on
+      // the patient's reason + available specialists. reason is REQUIRED so
+      // admins have something to triage against when no doctor is preselected.
+      if (!appointmentDate || !appointmentTime) {
         return res.status(400).json({
-          error:
-            "Missing required fields: doctorId, appointmentDate, appointmentTime",
+          error: "Missing required fields: appointmentDate, appointmentTime",
         });
+      }
+      const trimmedReason = typeof reason === "string" ? reason.trim() : "";
+      if (!trimmedReason) {
+        return res
+          .status(400)
+          .json({ error: "Reason for appointment is required" });
       }
 
       // Parse date and time
@@ -12780,22 +13386,26 @@ router.get(
         return res.status(400).json({ error: "Invalid appointment date" });
       }
 
-      // Check if doctor is available (approved leave check)
-      const leaveReq = await prisma.leaveRequest.findFirst({
-        where: {
-          tenantId,
-          userId: parseInt(doctorId),
-          status: "APPROVED",
-          startDate: { lte: apptDate },
-          endDate: { gte: apptDate },
-        },
-      });
-
-      if (leaveReq) {
-        return res.status(409).json({
-          error: "Doctor is not available on this date",
-          code: "DOCTOR_UNAVAILABLE",
+      // Check if doctor is available (approved leave check). Only when a
+      // doctor was preselected — for admin-assigned bookings the staff
+      // dispatcher does this check at assignment time.
+      if (doctorId) {
+        const leaveReq = await prisma.leaveRequest.findFirst({
+          where: {
+            tenantId,
+            userId: parseInt(doctorId),
+            status: "APPROVED",
+            startDate: { lte: apptDate },
+            endDate: { gte: apptDate },
+          },
         });
+
+        if (leaveReq) {
+          return res.status(409).json({
+            error: "Doctor is not available on this date",
+            code: "DOCTOR_UNAVAILABLE",
+          });
+        }
       }
 
       // Get or create patient for current user
@@ -12828,6 +13438,29 @@ router.get(
         });
       }
 
+      // Validate optional membership: must belong to this patient and be
+      // active + within its validity window. Wrong tenant / cancelled /
+      // expired memberships → 400 so the frontend can surface a clear
+      // message rather than silently dropping the selection.
+      let resolvedMembershipId = null;
+      if (membershipId != null && membershipId !== "") {
+        const mId = parseInt(membershipId);
+        if (Number.isNaN(mId)) {
+          return res.status(400).json({ error: "Invalid membership" });
+        }
+        const m = await prisma.membership.findFirst({
+          where: { id: mId, tenantId, patientId: patient.id },
+        });
+        const now = new Date();
+        if (!m || m.status !== "active" || m.endDate < now) {
+          return res.status(400).json({
+            error: "Selected membership is not active",
+            code: "MEMBERSHIP_INACTIVE",
+          });
+        }
+        resolvedMembershipId = mId;
+      }
+
       // Create visit/appointment with IST timezone
       const [hours, mins] = appointmentTime.split(":").map((x) => parseInt(x));
       const visitDate = new Date(
@@ -12839,11 +13472,13 @@ router.get(
         data: {
           tenantId,
           patientId: patient.id,
-          doctorId: parseInt(doctorId),
+          doctorId: doctorId ? parseInt(doctorId) : null,
           serviceId: serviceId ? parseInt(serviceId) : null,
+          membershipId: resolvedMembershipId,
           visitDate,
           status: "booked",
           bookingType: "CLINIC_VISIT",
+          reason: trimmedReason,
           createdAt: new Date(),
         },
         include: {
@@ -12866,10 +13501,13 @@ router.get(
         appointment: {
           id: visit.id,
           patientName: visit.patient.name,
-          doctorName: visit.doctor?.name || "N/A",
+          doctorName: visit.doctor?.name || "Pending assignment",
           serviceName: visit.service?.name || "General",
           appointmentDate: visit.visitDate,
           status: visit.status,
+          reason: visit.reason,
+          membershipId: visit.membershipId,
+          doctorAssigned: !!visit.doctorId,
         },
       });
     } catch (err) {
@@ -12914,16 +13552,58 @@ router.get(
 
       const appointments = visits.map((v) => ({
         id: v.id,
-        doctorName: v.doctor?.name || "N/A",
+        doctorName: v.doctor?.name || "Pending assignment",
         serviceName: v.service?.name || "General",
         appointmentDate: v.visitDate,
         status: v.status,
+        reason: v.reason || null,
+        doctorAssigned: !!v.doctorId,
       }));
 
       res.json(appointments);
     } catch (err) {
       console.error("[wellness] get appointments failed:", err.message);
       res.status(500).json({ error: "Failed to fetch appointments" });
+    }
+  });
+
+  // List active memberships the current user can apply to a booking. The
+  // staff-side `/patients/:id/memberships` endpoint is phiReadGate-protected,
+  // so the self-booking page can't reach it from the patient's own session.
+  // This endpoint mirrors that read but scopes by req.user → patient and
+  // filters to active, non-expired rows.
+  router.get("/appointments/my-memberships", verifyToken, async (req, res) => {
+    try {
+      const { userId, tenantId } = req.user;
+      const patient = await prisma.patient.findFirst({
+        where: { tenant: { id: tenantId }, user: { id: userId } },
+      });
+      if (!patient) return res.json([]);
+
+      const now = new Date();
+      const rows = await prisma.membership.findMany({
+        where: {
+          tenantId,
+          patientId: patient.id,
+          status: "active",
+          endDate: { gte: now },
+        },
+        include: {
+          plan: { select: { id: true, name: true, durationDays: true } },
+        },
+        orderBy: { endDate: "asc" },
+      });
+      res.json(
+        rows.map((m) => ({
+          id: m.id,
+          planName: m.plan?.name || "Membership",
+          endDate: m.endDate,
+          status: m.status,
+        })),
+      );
+    } catch (err) {
+      console.error("[wellness] my memberships failed:", err.message);
+      res.status(500).json({ error: "Failed to fetch memberships" });
     }
   });
 

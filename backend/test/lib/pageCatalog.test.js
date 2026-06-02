@@ -182,7 +182,7 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/wellness/book-appointment', nursePerms)).toBe(false);
     expect(canAccessPath('/wellness/my-appointments', nursePerms)).toBe(false);
     // Pages that need permissions Nurse simply doesn't have stay barred.
-    expect(canAccessPath('/invoices', nursePerms)).toBe(false); // billing.read
+    expect(canAccessPath('/invoices', nursePerms)).toBe(false); // invoices.read
     expect(canAccessPath('/wellness/pos', nursePerms)).toBe(false); // pos.read
   });
 });
@@ -205,7 +205,7 @@ describe('getAccessiblePages', () => {
     expect(paths).toContain('/wellness/patients');
     expect(paths).toContain('/wellness/calendar');
     expect(paths).toContain('/wellness/prescriptions');
-    expect(paths).not.toContain('/invoices'); // needs billing.read
+    expect(paths).not.toContain('/invoices'); // needs invoices.read
     expect(paths).not.toContain('/wellness/pos'); // needs pos.read
   });
 

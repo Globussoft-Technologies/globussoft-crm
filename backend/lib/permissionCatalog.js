@@ -52,10 +52,17 @@ const PERMISSION_CATALOG = {
   chatbots: ['read', 'write', 'delete', 'manage'],
 
   // ─────────────────────────────────────────────────────────────────────
-  // Financial (4 modules)
+  // Financial (6 modules)
   // ─────────────────────────────────────────────────────────────────────
 
-  billing: ['read', 'write', 'update', 'delete', 'export', 'manage'],
+  // `billing` was split into three per-surface modules in v3.8.x so admins
+  // can grant Invoices access without also granting Gift Cards or Patient
+  // Wallets (and vice-versa). All three carry the same six-action surface
+  // (`read`/`write`/`update`/`delete`/`export`/`manage`) the parent had —
+  // identical mutate granularity, finer-grained scope.
+  invoices: ['read', 'write', 'update', 'delete', 'export', 'manage'],
+  gift_cards: ['read', 'write', 'update', 'delete', 'export', 'manage'],
+  patient_wallets: ['read', 'write', 'update', 'delete', 'export', 'manage'],
   accounting: ['read', 'write', 'export'],
   payments: ['read', 'export'],
   expenses: ['read', 'write', 'update', 'delete', 'manage'],
@@ -125,6 +132,16 @@ const PERMISSION_CATALOG = {
   calendar: ['read', 'write'],
   services: ['read', 'write', 'update', 'delete'],
   prescriptions: ['read', 'write', 'update', 'delete', 'export'],
+  // `my_prescriptions` gates the patient-portal Prescriptions tab — the
+  // per-patient view that lists ONLY the logged-in patient's own Rx and
+  // lets them download their own PDFs. Distinct from `prescriptions.read`
+  // (which is the staff-wide tenant view) so the patient-facing surface
+  // can be granted / revoked independently. `.read` covers both list and
+  // PDF download — no separate export action. Granted to the CUSTOMER
+  // system role by default; backend enforcement at the portal handler
+  // ALSO scopes by `patientId: req.patient.id` so cross-patient access
+  // is structurally impossible even if RBAC misconfigures the grant.
+  my_prescriptions: ['read'],
   consents: ['read', 'write', 'update', 'delete'],
   visits: ['read', 'write', 'update', 'delete'],
   // `products` and `inventory` are deliberately separate modules. `products`
@@ -193,7 +210,7 @@ const PERMISSION_DOMAINS = [
   },
   {
     domain: 'Financial',
-    modules: ['billing', 'accounting', 'payments', 'expenses'],
+    modules: ['invoices', 'gift_cards', 'patient_wallets', 'accounting', 'payments', 'expenses'],
   },
   {
     domain: 'Analytics',
@@ -218,6 +235,7 @@ const PERMISSION_DOMAINS = [
       'calendar',
       'services',
       'prescriptions',
+      'my_prescriptions',
       'consents',
       'visits',
     ],

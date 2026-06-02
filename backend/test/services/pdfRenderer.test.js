@@ -188,8 +188,12 @@ describe('renderPrescriptionPdf', () => {
     const txt = extractPdfText(buf);
     expect(txt).toContain('Finasteride 1mg');
     expect(txt).toContain('Biotin 5mg');
-    expect(txt).toContain('Medication');
-    expect(txt).toContain('Frequency');
+    // Reference-aligned table uses uppercase column headers — "Medications"
+    // appears as the section title (substring matches both), "FREQUENCY"
+    // as the column header. Case-insensitive checks intentionally so the
+    // contract pins the labels' presence, not their exact casing.
+    expect(txt.toUpperCase()).toContain('MEDICATION');
+    expect(txt.toUpperCase()).toContain('FREQUENCY');
   });
 
   test('"no medications listed" placeholder when drugs list is empty', async () => {
@@ -921,8 +925,10 @@ describe('renderPatientSummaryPdf — visit photos', () => {
     });
     const txt = extractPdfText(buf);
     expect(txt).toContain('BEFORE (5)');
-    // Renderer caps at 3 per side; 5 − 3 = 2 surplus surfaced as caption.
-    expect(txt).toContain('+2 more');
+    // Renderer caps at 1 hero thumbnail per side (matches the reference
+    // Dr. Haror's visit-card design where each BEFORE / AFTER side gets
+    // ONE large image, not a strip); 5 − 1 = 4 surplus surfaced as caption.
+    expect(txt).toContain('+4 more');
   });
 
   test('falls back to placeholder when a buffer is missing for an URL', async () => {

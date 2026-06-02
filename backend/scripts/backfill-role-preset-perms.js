@@ -68,7 +68,10 @@ const MANAGER_PERMISSIONS = [
   'reports.read', 'reports.export',
   'dashboards.read',
   'analytics.read', 'analytics.export',
-  'billing.read',
+  // `billing` decomposed in v3.8.x → invoices / gift_cards / patient_wallets.
+  'invoices.read',
+  'gift_cards.read',
+  'patient_wallets.read',
   'staff.read',
   'roles.read',
   'communications.read', 'communications.write',
@@ -95,10 +98,12 @@ const CUSTOMER_PERMISSIONS = [
   'leads.read',
   'appointments.read',
   'services.read',
-  'billing.read',
+  // `billing` decomposed in v3.8.x; CUSTOMER gets invoices.read.
+  'invoices.read',
   'payments.read',
   'documents.read',
-  'prescriptions.read',
+  // Patient-portal-scoped Rx view — never the tenant-wide `prescriptions.read`.
+  'my_prescriptions.read',
   'consents.read', 'consents.write',
   'visits.read',
 ];
@@ -171,7 +176,12 @@ const RECEPTIONIST_PERMISSIONS = [
   'calendar.read', 'calendar.write',
   'services.read',
   'products.read',
-  'billing.read', 'billing.write',
+  // `billing` decomposed in v3.8.x. Receptionist gets read+write on
+  // invoices (front-desk raise + collect); gift_cards + patient_wallets
+  // stay read-only (top-ups go through POS, not direct ledger writes).
+  'invoices.read', 'invoices.write',
+  'gift_cards.read',
+  'patient_wallets.read',
   'payments.read',
   'pos.read', 'pos.write', 'pos.manage',
   'contacts.read', 'contacts.write',
@@ -227,6 +237,45 @@ const ROLE_GRANTS = {
   TELECALLER: TELECALLER_PERMISSIONS,
 };
 
+// Permissions that should be EXPLICITLY removed from system roles during
+// backfill. The default backfill pass is purely additive (preserves admin
+// customisations) but a small set of renamed/replaced permissions need
+// to be cleared on existing tenants. Each entry below is paired with a
+// matching ADD in the role's PERMISSIONS list, so the net effect on a
+// backfilled tenant is a rename, not a removal of capability.
+//
+//   CUSTOMER: prescriptions.read → my_prescriptions.read
+//     The tenant-wide `prescriptions.read` was always a no-op for
+//     CUSTOMER (their JWT can't reach the staff routes that check it).
+//     Replaced by the patient-portal-scoped `my_prescriptions.read`
+//     which gates the /portal/prescriptions endpoints.
+//
+//   * billing.* → invoices.* + gift_cards.* + patient_wallets.*
+//     The `billing` module was removed from the catalogue in v3.8.x
+//     and split per surface. Strip every legacy `billing.*` grant from
+//     the system roles on existing tenants — the ADD pass above
+//     re-grants the equivalent per-surface permissions in the right
+//     shape for each role.
+const BILLING_LEGACY = [
+  'billing.read',
+  'billing.write',
+  'billing.update',
+  'billing.delete',
+  'billing.export',
+  'billing.manage',
+];
+
+const ROLE_REMOVALS = {
+  ADMIN: BILLING_LEGACY,
+  MANAGER: BILLING_LEGACY,
+  USER: BILLING_LEGACY,
+  CUSTOMER: ['prescriptions.read', ...BILLING_LEGACY],
+  DOCTOR: BILLING_LEGACY,
+  NURSE: BILLING_LEGACY,
+  RECEPTIONIST: BILLING_LEGACY,
+  TELECALLER: BILLING_LEGACY,
+};
+
 async function main() {
   console.log(`[backfill-role-preset] mode: ${APPLY ? 'APPLY' : 'DRY-RUN (use --apply to persist)'}`);
   if (tenantFilter) console.log(`[backfill-role-preset] tenant filter: ${tenantFilter}`);
@@ -246,6 +295,7 @@ async function main() {
   let totalRolesUntouched = 0;
   let totalGrantsAdded = 0;
   let totalGrantsAlready = 0;
+  let totalGrantsRemoved = 0;
   const perRoleKeySummary = {};
 
   const roleKeys = roleFilter
@@ -309,6 +359,32 @@ async function main() {
       }
       totalGrantsAdded += missing.length;
       perRoleKeySummary[role.key] = (perRoleKeySummary[role.key] || 0) + missing.length;
+
+      // Targeted removals for renamed permissions. Only touches the exact
+      // (roleKey, module, action) tuples in ROLE_REMOVALS — never blanket-
+      // wipes a role.
+      const removalList = ROLE_REMOVALS[role.key] || [];
+      const removable = removalList.filter((perm) => existingSet.has(perm));
+      if (removable.length > 0) {
+        console.log(
+          `  - tenant ${tenant.id} (${tenant.name}) — role ${role.key} (${role.name}): ` +
+            `removing ${removable.length} obsolete grant(s) → ${removable.join(', ')}`,
+        );
+        if (APPLY) {
+          for (const perm of removable) {
+            const [module, action] = perm.split('.');
+            if (!module || !action) continue;
+            try {
+              await prisma.rolePermission.deleteMany({
+                where: { roleId: role.id, module, action },
+              });
+            } catch (err) {
+              console.warn(`    (skip remove ${perm}: ${err.message})`);
+            }
+          }
+        }
+        totalGrantsRemoved += removable.length;
+      }
     }
   }
 
@@ -319,6 +395,7 @@ async function main() {
   console.log(`  roles already up-to-date: ${totalRolesUntouched}`);
   console.log(`  grants already present:   ${totalGrantsAlready}`);
   console.log(`  grants ${APPLY ? 'added' : 'would-add'}:        ${totalGrantsAdded}`);
+  console.log(`  grants ${APPLY ? 'removed' : 'would-remove'}:      ${totalGrantsRemoved}`);
   if (Object.keys(perRoleKeySummary).length > 0) {
     console.log('  per-role-key breakdown:');
     for (const [key, n] of Object.entries(perRoleKeySummary)) {

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   HeartPulse,
   Phone,
@@ -277,19 +277,52 @@ function Dashboard({ token, onLogout }) {
   const [me, setMe] = useState(null);
   const [visits, setVisits] = useState([]);
   const [prescriptions, setPrescriptions] = useState([]);
+  // Patient permission set resolved from /portal/me/permissions. Driven by
+  // the tenant's CUSTOMER role permissions (see backend/lib/portalPermissions.js).
+  // Tabs that require a permission render only when that permission is in
+  // this set — the backend still enforces the same gate, this is just
+  // sidebar/tab visibility.
+  const [permissions, setPermissions] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const hasPerm = useCallback(
+    (key) => Array.isArray(permissions) && permissions.includes(key),
+    [permissions],
+  );
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [m, v, p] = await Promise.all([
+      // Always-permitted fetches first (profile + permissions). Without
+      // permissions resolved we can't decide whether to attempt the Rx
+      // fetch, so this MUST resolve before the gated calls below.
+      const [m, perms] = await Promise.all([
         portalFetch('/api/wellness/portal/me', token),
-        portalFetch('/api/wellness/portal/visits', token),
-        portalFetch('/api/wellness/portal/prescriptions', token),
+        portalFetch('/api/wellness/portal/me/permissions', token),
       ]);
+      const permList = Array.isArray(perms?.permissions) ? perms.permissions : [];
       setMe(m);
+      setPermissions(permList);
+
+      // Visits is always shown for now (no per-tab gate yet); Rx is
+      // gated on `my_prescriptions.read`. Skip the gated fetches when
+      // the permission is missing so we don't surface a 403 toast.
+      const v = await portalFetch('/api/wellness/portal/visits', token);
       setVisits(v || []);
-      setPrescriptions(p || []);
+
+      if (permList.includes('my_prescriptions.read')) {
+        try {
+          const p = await portalFetch('/api/wellness/portal/prescriptions', token);
+          setPrescriptions(p || []);
+        } catch (rxEx) {
+          // 403 here means the permission was revoked between the perms
+          // fetch and the Rx fetch (rare race). Treat as "no access" and
+          // leave the list empty; the tab is already hidden by hasPerm.
+          if (!/forbidden|denied/i.test(rxEx.message || '')) throw rxEx;
+        }
+      } else {
+        setPrescriptions([]);
+      }
     } catch (ex) {
       if (/token/i.test(ex.message)) onLogout();
     } finally {
@@ -326,12 +359,38 @@ function Dashboard({ token, onLogout }) {
     }
   };
 
-  const tabs = [
-    { key: 'visits', label: 'My Visits', icon: CalendarIcon },
-    { key: 'prescriptions', label: 'Prescriptions', icon: Pill },
-    { key: 'plan', label: 'Treatment Plan', icon: ClipboardList },
-    { key: 'consent', label: 'Consent Forms', icon: ShieldCheck },
-  ];
+  // Tab list — each entry can declare a `permission` it depends on.
+  // Filter out tabs the patient lacks permission for so the nav doesn't
+  // show a link the backend will 403 on. `permissions === null` (still
+  // loading) hides gated tabs to avoid a flash of unavailable UI.
+  // useMemo'd so the array reference stays stable across renders — the
+  // useEffect below depends on `tabs` and would re-run every render
+  // otherwise.
+  const tabs = useMemo(() => {
+    const allTabs = [
+      { key: 'visits', label: 'My Visits', icon: CalendarIcon },
+      {
+        key: 'prescriptions',
+        label: 'Prescriptions',
+        icon: Pill,
+        permission: 'my_prescriptions.read',
+      },
+      { key: 'plan', label: 'Treatment Plan', icon: ClipboardList },
+      { key: 'consent', label: 'Consent Forms', icon: ShieldCheck },
+    ];
+    return allTabs.filter((t) => !t.permission || hasPerm(t.permission));
+  }, [hasPerm]);
+
+  // If the currently-selected tab got filtered out (permission revoked
+  // mid-session, or initial load resolved without the grant), fall back
+  // to the first visible tab so the main panel never tries to render a
+  // hidden tab's content.
+  useEffect(() => {
+    if (permissions === null) return;
+    if (!tabs.find((t) => t.key === tab)) {
+      setTab(tabs[0]?.key || 'visits');
+    }
+  }, [permissions, tab, tabs]);
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-color, #0b1220)' }}>

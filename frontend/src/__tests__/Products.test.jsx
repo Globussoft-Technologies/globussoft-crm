@@ -47,6 +47,27 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+// Default to a fully-permissioned viewer so existing assertions on Add /
+// Edit / Delete buttons keep passing. The SUT now hides these buttons for
+// users without products.{write,update,delete}.
+const FULL_PERMS = {
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['products.read', 'products.write', 'products.update', 'products.delete', 'products.manage'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+};
+const usePermissionsMock = vi.fn(() => FULL_PERMS);
+vi.mock('../hooks/usePermissions', () => ({
+  usePermissions: (...args) => usePermissionsMock(...args),
+}));
+
 import Products from '../pages/wellness/Products';
 
 const CATEGORIES = [

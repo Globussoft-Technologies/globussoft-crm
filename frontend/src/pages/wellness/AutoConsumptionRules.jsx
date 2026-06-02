@@ -6,12 +6,16 @@ import { useEffect, useState } from 'react';
 import { Recycle, Plus, Pencil, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { usePermissions } from '../../hooks/usePermissions';
 
 const UNIT_OPTIONS = ['ml', 'gm', 'kg', 'piece', 'unit', 'bottle', 'tube', 'pack', 'ltr'];
 const EMPTY = { serviceId: '', productId: '', quantityPerVisit: '', unit: '', isActive: true };
 
 export default function AutoConsumptionRules() {
   const notify = useNotify();
+  // Backend gates POST/PUT/DELETE /auto-consumption-rules on products.manage.
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canManage = permsReady && hasPermission('products', 'manage');
   const [rules, setRules] = useState([]);
   const [services, setServices] = useState([]);
   const [products, setProducts] = useState([]);
@@ -103,19 +107,29 @@ export default function AutoConsumptionRules() {
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
             <Recycle size={24} /> Auto-consumption rules
+            {permsReady && !canManage && (
+              <span
+                title="You can view rules but can't make changes."
+                style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
+              >
+                View only
+              </span>
+            )}
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
             When a visit completes for the matching service, the listed product is automatically consumed in the configured quantity.
           </p>
         </div>
-        <button onClick={() => (showForm ? reset() : setShowForm(true))} style={primaryBtnStyle}>
-          <Plus size={16} /> {showForm ? 'Cancel' : 'New rule'}
-        </button>
+        {canManage && (
+          <button onClick={() => (showForm ? reset() : setShowForm(true))} style={primaryBtnStyle}>
+            <Plus size={16} /> {showForm ? 'Cancel' : 'New rule'}
+          </button>
+        )}
       </header>
 
-      {showForm && (
+      {showForm && canManage && (
         <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>
           <select required disabled={!!editingId} value={form.serviceId} onChange={(e) => setForm({ ...form, serviceId: e.target.value })} style={inputStyle}>
             <option value="">Service…</option>
@@ -165,7 +179,7 @@ export default function AutoConsumptionRules() {
                 <th style={cellStyle}>Unit</th>
                 <th style={cellStyle}>Stock</th>
                 <th style={cellStyle}>Status</th>
-                <th style={cellStyle}></th>
+                {canManage && <th style={cellStyle}></th>}
               </tr>
             </thead>
             <tbody>
@@ -177,10 +191,12 @@ export default function AutoConsumptionRules() {
                   <td style={cellStyle}>{r.unit || r.product?.unit || '—'}</td>
                   <td style={cellStyle}>{r.product?.currentStock ?? '—'}</td>
                   <td style={cellStyle}>{r.isActive ? 'Active' : 'Inactive'}</td>
-                  <td style={{ ...cellStyle, textAlign: 'right' }}>
-                    <button onClick={() => startEdit(r)} style={iconBtnStyle} aria-label="Edit rule"><Pencil size={14} /></button>
-                    <button onClick={() => remove(r)} style={iconBtnStyle} aria-label="Delete rule"><Trash2 size={14} /></button>
-                  </td>
+                  {canManage && (
+                    <td style={{ ...cellStyle, textAlign: 'right' }}>
+                      <button onClick={() => startEdit(r)} style={iconBtnStyle} aria-label="Edit rule"><Pencil size={14} /></button>
+                      <button onClick={() => remove(r)} style={iconBtnStyle} aria-label="Delete rule"><Trash2 size={14} /></button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

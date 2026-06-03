@@ -7,6 +7,7 @@ const multer = require("multer");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { verifyRole } = require("../middleware/auth");
 
 // Compose-mail attachments: memory storage so the buffer can be base64'd
 // straight into the SendGrid payload without a disk round-trip. multer is a
@@ -151,7 +152,7 @@ if (SENDGRID_API_KEY) {
 // Pre-this-change the Sent folder UI had nothing to query against — the
 // only filtering surface was GET /api/email?folder=sent which returns a
 // `{total}` count for the sidebar, not the row list.
-router.get("/inbox", async (req, res) => {
+router.get("/inbox", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
     if (req.query.folder === 'sent') where.direction = 'OUTBOUND';
@@ -204,7 +205,7 @@ function parseRecipients(toField) {
 // Multi-recipient calls expose the full per-recipient breakdown via `results` /
 // `failures`. Mailgun is called once per valid recipient (no BCC fan-out — keeps
 // per-recipient tracking pixels distinct).
-router.post("/send-email", composeAttachmentUpload, async (req, res) => {
+router.post("/send-email", verifyRole(["ADMIN", "MANAGER"]), composeAttachmentUpload, async (req, res) => {
   try {
     const { to, cc, bcc, subject, body, contactId } = req.body;
     if (!to || !subject) return res.status(400).json({ error: "Recipient and subject required" });
@@ -222,9 +223,25 @@ router.post("/send-email", composeAttachmentUpload, async (req, res) => {
         }))
       : [];
 
+    // Anti-DoS caps: prevent a malformed `to` string with thousands of
+    // addresses from creating N EmailMessage + EmailTracking rows.
+    const MAX_RECIPIENTS = 50;
+    const MAX_SUBJECT_LENGTH = 500;
+    const MAX_BODY_LENGTH = 100_000; // 100 KB
+
+    if (subject && subject.length > MAX_SUBJECT_LENGTH) {
+      return res.status(400).json({ error: `Subject exceeds ${MAX_SUBJECT_LENGTH} characters` });
+    }
+    if (body && body.length > MAX_BODY_LENGTH) {
+      return res.status(400).json({ error: `Body exceeds ${MAX_BODY_LENGTH} characters` });
+    }
+
     const recipients = parseRecipients(to);
     if (recipients.length === 0) {
       return res.status(400).json({ error: "No valid recipient parsed from 'to'" });
+    }
+    if (recipients.length > MAX_RECIPIENTS) {
+      return res.status(400).json({ error: `Too many recipients in 'to' (max ${MAX_RECIPIENTS})` });
     }
 
     // Pre-flight validation: split into deliverable + invalid before touching DB.
@@ -261,6 +278,11 @@ router.post("/send-email", composeAttachmentUpload, async (req, res) => {
     }
     const ccPersist = ccDeliverable.length > 0 ? ccDeliverable.join(', ') : null;
     const bccPersist = bccDeliverable.length > 0 ? bccDeliverable.join(', ') : null;
+
+    const totalRecipients = deliverable.length + ccDeliverable.length + bccDeliverable.length;
+    if (totalRecipients > MAX_RECIPIENTS) {
+      return res.status(400).json({ error: `Too many total recipients (max ${MAX_RECIPIENTS}, got ${totalRecipients})` });
+    }
 
     const results = [];
 
@@ -391,12 +413,13 @@ router.post("/send-email", composeAttachmentUpload, async (req, res) => {
 });
 
 // GET all call logs — scoped to tenant
-router.get("/calls", async (req, res) => {
+router.get("/calls", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     const calls = await prisma.callLog.findMany({
       where: { tenantId: req.user.tenantId },
       include: { contact: true },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      take: 200,
     });
     res.json(calls);
   } catch (_err) {
@@ -405,7 +428,7 @@ router.get("/calls", async (req, res) => {
 });
 
 // POST to log a call
-router.post("/log-call", async (req, res) => {
+router.post("/log-call", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     const { duration, notes, contactId, direction, recordingUrl } = req.body;
     const callLog = await prisma.callLog.create({
@@ -464,9 +487,12 @@ router.get("/track/:trackingId/click", async (req, res) => {
 });
 
 // Get tracking stats for an email
-router.get("/tracking/:emailId", async (req, res) => {
+router.get("/tracking/:emailId", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tracks = await prisma.emailTracking.findMany({ where: { emailId: parseInt(req.params.emailId), tenantId: req.user.tenantId } });
+    const tracks = await prisma.emailTracking.findMany({
+      where: { emailId: parseInt(req.params.emailId), tenantId: req.user.tenantId },
+      take: 200,
+    });
     const opens = tracks.filter(t => t.openedAt).length;
     const clicks = tracks.filter(t => t.clickedAt).length;
     res.json({ emailId: parseInt(req.params.emailId), opens, clicks, events: tracks });

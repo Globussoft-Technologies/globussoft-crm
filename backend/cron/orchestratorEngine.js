@@ -253,21 +253,22 @@ const DEFAULT_LEAD_SLA_MINUTES = parseInt(process.env.WELLNESS_LEAD_SLA_MINUTES 
 
 // Default working-hour window for the occupancy gap heuristic when a
 // Location row has no `hours` JSON. 09:00–20:00 IST = 11h × 60min = 660m.
-const DEFAULT_WORKING_MINUTES = 11 * 60;
+// Overridable per-tenant via TenantSetting.
+const DEFAULT_WORKING_MINUTES_FALLBACK = 11 * 60;
 
 // Parse Location.hours JSON shape `{ mon: ["09:00","20:00"], ... }` into
-// the day's open-minute count. Falls back to DEFAULT_WORKING_MINUTES.
-function workingMinutesForLocation(loc, dayDate = new Date()) {
-  if (!loc || !loc.hours) return DEFAULT_WORKING_MINUTES;
+// the day's open-minute count. Falls back to `fallbackMinutes`.
+function workingMinutesForLocation(loc, dayDate = new Date(), fallbackMinutes = DEFAULT_WORKING_MINUTES_FALLBACK) {
+  if (!loc || !loc.hours) return fallbackMinutes;
   let parsed;
-  try { parsed = typeof loc.hours === "string" ? JSON.parse(loc.hours) : loc.hours; } catch { return DEFAULT_WORKING_MINUTES; }
+  try { parsed = typeof loc.hours === "string" ? JSON.parse(loc.hours) : loc.hours; } catch { return fallbackMinutes; }
   const dayKey = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][dayDate.getDay()];
   const slot = parsed && parsed[dayKey];
-  if (!slot || !Array.isArray(slot) || slot.length < 2) return DEFAULT_WORKING_MINUTES;
+  if (!slot || !Array.isArray(slot) || slot.length < 2) return fallbackMinutes;
   const [openStr, closeStr] = slot;
   const toMin = (s) => { const [h, m] = String(s).split(":").map(Number); return (h || 0) * 60 + (m || 0); };
   const diff = toMin(closeStr) - toMin(openStr);
-  return diff > 0 ? diff : DEFAULT_WORKING_MINUTES;
+  return diff > 0 ? diff : fallbackMinutes;
 }
 
 async function readContext(tenantId) {
@@ -344,7 +345,8 @@ async function readContext(tenantId) {
   // Booked-minute usage = sum(service.durationMin) over today's visits
   // not in cancelled/no-show. Utilisation = used / capacity.
   const today = new Date();
-  const capacityMinutes = locationsList.reduce((s, loc) => s + workingMinutesForLocation(loc, today), 0);
+  const defaultWorkingMinutes = await getSetting(tenantId, KEYS.ORCHESTRATOR_DEFAULT_WORKING_MINUTES, { fallback: DEFAULT_WORKING_MINUTES_FALLBACK, coerce: Number });
+  const capacityMinutes = locationsList.reduce((s, loc) => s + workingMinutesForLocation(loc, today, defaultWorkingMinutes), 0);
   const usedMinutes = todayVisits
     .filter((v) => v.status !== "cancelled" && v.status !== "no-show")
     .reduce((s, v) => s + (v.service?.durationMin || 30), 0);

@@ -10,6 +10,7 @@
  */
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 
 const crypto = require("crypto");
 
@@ -24,7 +25,8 @@ const CONSENT_RETENTION_YEARS = 7;  // DPDP: hard-delete consent forms older tha
 const CALLLOG_RETENTION_MONTHS = 12; // hard-delete OUTBOUND CallLogs >12 months old with no notes
 
 async function runNpsForTenant(tenantId) {
-  const cutoff = new Date(Date.now() - NPS_DELAY_HOURS * 3600000);
+  const npsDelayHours = await getSetting(tenantId, KEYS.WELLNESS_NPS_DELAY_HOURS, { fallback: NPS_DELAY_HOURS_DEFAULT, coerce: Number });
+  const cutoff = new Date(Date.now() - npsDelayHours * 3600000);
   const visits = await prisma.visit.findMany({
     where: {
       tenantId,
@@ -45,11 +47,10 @@ async function runNpsForTenant(tenantId) {
     if (!v.patient?.phone) continue;
     // Have we already created a survey for this visit? We tag the survey title.
     const tag = `nps-visit-${v.id}`;
-    const existing = await prisma.survey.findFirst({ where: { tenantId, name: tag } });
-    if (existing) continue;
-
-    const survey = await prisma.survey.create({
-      data: {
+    const survey = await prisma.survey.upsert({
+      where: { tenantId_name: { tenantId, name: tag } },
+      update: {},
+      create: {
         name: tag,
         type: "NPS",
         question: `How was your ${v.service?.name || "visit"} with us? Reply 0-10 (10 = loved it).`,
@@ -74,7 +75,8 @@ async function runNpsForTenant(tenantId) {
 }
 
 async function runRetentionForTenant(tenantId) {
-  const cutoff = new Date(Date.now() - JUNK_RETENTION_DAYS * 86400000);
+  const junkRetentionDays = await getSetting(tenantId, KEYS.WELLNESS_JUNK_RETENTION_DAYS, { fallback: JUNK_RETENTION_DAYS_DEFAULT, coerce: Number });
+  const cutoff = new Date(Date.now() - junkRetentionDays * 86400000);
   const result = await prisma.contact.deleteMany({
     where: { tenantId, status: "Junk", createdAt: { lt: cutoff } },
   });
@@ -105,7 +107,8 @@ function hashFor(prefix, idOrValue) {
 // out on subsequent ticks.
 async function runMembershipExpiryForTenant(tenantId) {
   const now = new Date();
-  const windowEnd = new Date(now.getTime() + MEMBERSHIP_EXPIRY_WINDOW_DAYS * 86400000);
+  const membershipExpiryWindowDays = await getSetting(tenantId, KEYS.WELLNESS_MEMBERSHIP_EXPIRY_WINDOW_DAYS, { fallback: MEMBERSHIP_EXPIRY_WINDOW_DAYS_DEFAULT, coerce: Number });
+  const windowEnd = new Date(now.getTime() + membershipExpiryWindowDays * 86400000);
 
   const expiring = await prisma.membership.findMany({
     where: {

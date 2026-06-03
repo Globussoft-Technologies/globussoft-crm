@@ -258,7 +258,7 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
 router.post("/sync/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { syncMarketplace } = require("../cron/marketplaceEngine");
-    const result = await syncMarketplace(req.params.provider, req.io);
+    const result = await syncMarketplace(req.user.tenantId, req.params.provider, req.io);
     res.json(result);
   } catch (err) {
     console.error("[MarketplaceLeads] Manual sync error:", err);

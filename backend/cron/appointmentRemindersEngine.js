@@ -25,38 +25,34 @@
 
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 
-// Phrases unique to this engine's body templates. Used as dedup signal.
-const DEDUP_PHRASE_24H = "tomorrow at";
-const DEDUP_PHRASE_1H = "in 1 hour";
-
-function formatTime(date) {
+function formatTime(date, timezone = "Asia/Kolkata") {
   try {
     return new Date(date).toLocaleString("en-IN", {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
-      timeZone: "Asia/Kolkata",
+      timeZone: timezone,
     });
   } catch {
     return new Date(date).toISOString();
   }
 }
 
-function composeBody({ kind, patientName, serviceName, visitDate, clinicName }) {
-  const time = formatTime(visitDate);
-  // #182: avoid "appointment appointment" double-word when no serviceName.
-  // With serviceName present → "your <Service> appointment".
-  // Without              → "your appointment".
+function composeBody({ kind, patientName, serviceName, visitDate, clinicName, dedupPhrase24h, dedupPhrase1h, timezone }) {
+  const time = formatTime(visitDate, timezone);
   const svcPhrase = serviceName ? `${serviceName} appointment` : "appointment";
   const clinic = clinicName || "Enhanced Wellness";
-  const when = kind === "24h" ? `tomorrow at ${time}` : "in 1 hour";
+  const when = kind === "24h"
+    ? `${dedupPhrase24h || "tomorrow at"} ${time}`
+    : (dedupPhrase1h || "in 1 hour");
   return `Hi ${patientName}, this is a reminder — your ${svcPhrase} at ${clinic} is ${when}. Reply STOP to opt out.`;
 }
 
-async function alreadySent({ kind, contactId, phone }) {
+async function alreadySent({ kind, contactId, phone, dedupPhrase24h, dedupPhrase1h }) {
   const since = new Date(Date.now() - 48 * 3600 * 1000);
-  const phrase = kind === "24h" ? DEDUP_PHRASE_24H : DEDUP_PHRASE_1H;
+  const phrase = kind === "24h" ? (dedupPhrase24h || "tomorrow at") : (dedupPhrase1h || "in 1 hour");
   const or = [];
   if (contactId) or.push({ contactId });
   if (phone) or.push({ to: phone });
@@ -82,6 +78,7 @@ async function findDueVisits(tenantId, windowStart, windowEnd) {
     include: {
       patient: true,
       service: { select: { id: true, name: true } },
+      location: { select: { timezone: true } },
     },
   });
 }
@@ -119,13 +116,6 @@ async function processTenant(tenant) {
           if (c && c.status === "Junk") { skipped++; continue; }
         }
 
-        const dup = await alreadySent({
-          kind,
-          contactId: patient.contactId || null,
-          phone: patient.phone,
-        });
-        if (dup) { skipped++; continue; }
-
         const body = composeBody({
           kind,
           patientName: patient.name || "there",
@@ -134,17 +124,35 @@ async function processTenant(tenant) {
           clinicName: tenant.name,
         });
 
-        await prisma.smsMessage.create({
-          data: {
-            to: patient.phone,
-            body,
-            direction: "OUTBOUND",
-            status: "QUEUED",
-            tenantId: tenant.id,
-            contactId: patient.contactId || null,
-          },
+        await prisma.$transaction(async (tx) => {
+          const since = new Date(Date.now() - 48 * 3600 * 1000);
+          const phrase = kind === "24h" ? DEDUP_PHRASE_24H : DEDUP_PHRASE_1H;
+          const or = [];
+          if (patient.contactId) or.push({ contactId: patient.contactId });
+          if (patient.phone) or.push({ to: patient.phone });
+          if (or.length > 0) {
+            const count = await tx.smsMessage.count({
+              where: {
+                createdAt: { gte: since },
+                body: { contains: phrase },
+                OR: or,
+              },
+            });
+            if (count > 0) { skipped++; return; }
+          }
+
+          await tx.smsMessage.create({
+            data: {
+              to: patient.phone,
+              body,
+              direction: "OUTBOUND",
+              status: "QUEUED",
+              tenantId: tenant.id,
+              contactId: patient.contactId || null,
+            },
+          });
+          q++;
         });
-        q++;
       } catch (err) {
         console.error(
           `[AppointmentReminders] visit ${v.id} (${kind}) failed:`,
@@ -272,6 +280,7 @@ async function runNoShowRiskForTenant(tenantId) {
     include: {
       patient: { select: { id: true, name: true, phone: true } },
       doctor: { select: { id: true } },
+      location: { select: { timezone: true } },
     },
     take: 200,
   });
@@ -354,7 +363,8 @@ async function runNoShowRiskForTenant(tenantId) {
     for (const u of owners) recipients.add(u.id);
 
     const title = `High no-show risk: ${v.patient?.name || `Patient #${v.patientId}`}`;
-    const message = `Booked ${v.visitDate.toLocaleString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" })} — risk score ${score}/100. Consider a confirmation call.`;
+    const timezone = v.location?.timezone || "Asia/Kolkata";
+    const message = `Booked ${v.visitDate.toLocaleString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: timezone })} — risk score ${score}/100. Consider a confirmation call.`;
     const link = `/wellness/visits/${v.id}`;
 
     for (const userId of recipients) {
@@ -412,7 +422,7 @@ function initNoShowRiskCron() {
         console.error("[NoShowRisk] cron fail:", e.message),
       );
     },
-    { timezone: "Asia/Kolkata" },
+    { timezone: process.env.CRON_TIMEZONE || "Asia/Kolkata" },
   );
   console.log("[NoShowRisk] cron initialized (daily 08:30 IST)");
 }

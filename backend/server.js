@@ -70,6 +70,34 @@ const app = express();
 app.set('trust proxy', 1); // trust first proxy (Nginx)
 const server = http.createServer(app);
 
+// ── Express 4 Async Error Patch ─────────────────────────────────────
+// Express 4 does not catch rejected promises in async route handlers.
+// This patch wraps every route handler so that `throw` or a rejected
+// promise inside an async handler is forwarded to `next(err)` and
+// reaches the global error handler at the bottom of this file.
+// Covers app.* methods and Router.prototype.* methods so sub-routers
+// (routes/*.js) are protected too.
+function patchAsyncErrorHandling(target, methods) {
+  for (const method of methods) {
+    const original = target[method].bind(target);
+    target[method] = function (path, ...handlers) {
+      const wrapped = handlers.map((handler) => {
+        if (typeof handler !== "function") return handler;
+        return function (req, res, next) {
+          const result = handler(req, res, next);
+          if (result && typeof result.catch === "function") {
+            result.catch(next);
+          }
+        };
+      });
+      return original(path, ...wrapped);
+    };
+  }
+}
+const HTTP_METHODS = ["get", "post", "put", "patch", "delete"];
+patchAsyncErrorHandling(app, HTTP_METHODS);
+patchAsyncErrorHandling(express.Router.prototype, HTTP_METHODS);
+
 // Initialize Sentry early for full request capture (no-op if SENTRY_DSN not set)
 initSentry(app);
 

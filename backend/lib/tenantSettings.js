@@ -94,6 +94,21 @@ const KEYS = {
   RATEHAWK_MONTHLY_CAP_USD_CENTS:        "budgetCap_ratehawk_monthly_usd_cents",
   LLM_MONTHLY_CAP_USD_CENTS:             "budgetCap_llm_monthly_usd_cents",
   BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS: "budgetCap_booking_expedia_monthly_usd_cents",
+  // Cron / operational settings (§4.5 hardcoded-value fixes)
+  ORCHESTRATOR_DEFAULT_WORKING_MINUTES:  "orchestrator.defaultWorkingMinutes",
+  SMS_DEDUP_PHRASE_24H:                  "sms.dedupPhrase24h",
+  SMS_DEDUP_PHRASE_1H:                   "sms.dedupPhrase1h",
+  WELLNESS_NPS_DELAY_HOURS:              "wellness.npsDelayHours",
+  WELLNESS_JUNK_RETENTION_DAYS:          "wellness.junkRetentionDays",
+  WELLNESS_MEMBERSHIP_EXPIRY_WINDOW_DAYS:"wellness.membershipExpiryWindowDays",
+  SLA_TERMINAL_STATUSES:                 "sla.terminalStatuses",
+  EMAIL_FROM_ADDRESS:                    "email.fromAddress",
+  INVENTORY_ALERT_ROLES:                 "inventory.alertRoles",
+  REPORT_SMTP_HOST:                      "report.smtpHost",
+  REPORT_SMTP_PORT:                      "report.smtpPort",
+  REPORT_SMTP_SECURE:                    "report.smtpSecure",
+  REPORT_SMTP_USER:                      "report.smtpUser",
+  REPORT_SMTP_PASS:                      "report.smtpPass",
 };
 
 // Env-var defaults (overridable per-tenant via TenantSetting row).
@@ -112,6 +127,22 @@ const DEFAULTS = {
     Number(process.env.LLM_MONTHLY_CAP_USD_CENTS ?? 10000),
   [KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS]:
     Number(process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS ?? 10000),
+  // Cron / operational defaults (§4.5 hardcoded-value fixes)
+  [KEYS.ORCHESTRATOR_DEFAULT_WORKING_MINUTES]: 660,
+  [KEYS.SMS_DEDUP_PHRASE_24H]: "tomorrow at",
+  [KEYS.SMS_DEDUP_PHRASE_1H]: "in 1 hour",
+  [KEYS.WELLNESS_NPS_DELAY_HOURS]: 72,
+  [KEYS.WELLNESS_JUNK_RETENTION_DAYS]: 90,
+  [KEYS.WELLNESS_MEMBERSHIP_EXPIRY_WINDOW_DAYS]: 7,
+  [KEYS.SLA_TERMINAL_STATUSES]: JSON.stringify(["Resolved", "Closed", "Cancelled"]),
+  [KEYS.EMAIL_FROM_ADDRESS]:
+    process.env.SENDGRID_FROM_EMAIL || process.env.MAILGUN_FROM || "noreply@crm.globusdemos.com",
+  [KEYS.INVENTORY_ALERT_ROLES]: JSON.stringify(["MANAGER", "ADMIN"]),
+  [KEYS.REPORT_SMTP_HOST]: process.env.SMTP_HOST || "",
+  [KEYS.REPORT_SMTP_PORT]: process.env.SMTP_PORT || "587",
+  [KEYS.REPORT_SMTP_SECURE]: process.env.SMTP_SECURE || "false",
+  [KEYS.REPORT_SMTP_USER]: process.env.SMTP_USER || "",
+  [KEYS.REPORT_SMTP_PASS]: process.env.SMTP_PASS || "",
 };
 
 /**

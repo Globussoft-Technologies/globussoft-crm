@@ -38,54 +38,56 @@ const requireOwner = (req, res, next) => {
 // (SCHEDULED) period to ACTIVE once its startDate arrives. Call it before
 // reading a user's subscription state. Returns the resolved user-level status.
 async function reconcileSubscriptions(userId, tenantId) {
-  const now = new Date();
+  return await prisma.$transaction(async (tx) => {
+    const now = new Date();
 
-  // Walk forward through the user's timeline: expire elapsed periods, then
-  // promote the earliest queued period that has reached its start. Loop so a
-  // chain of short back-to-back periods all settle in one pass.
-  let resolvedStatus = null;
-  // Bounded: each iteration either settles (breaks) or promotes exactly one
-  // queued period. The cap is a safety backstop against an unexpected cycle.
-  for (let guard = 0; guard < 100; guard++) {
-    // Expire any ACTIVE period whose window has fully elapsed.
-    await prisma.subscription.updateMany({
-      where: { userId, tenantId, status: 'ACTIVE', endDate: { lte: now } },
-      data: { status: 'EXPIRED' },
-    });
+    // Walk forward through the user's timeline: expire elapsed periods, then
+    // promote the earliest queued period that has reached its start. Loop so a
+    // chain of short back-to-back periods all settle in one pass.
+    let resolvedStatus = null;
+    // Bounded: each iteration either settles (breaks) or promotes exactly one
+    // queued period. The cap is a safety backstop against an unexpected cycle.
+    for (let guard = 0; guard < 100; guard++) {
+      // Expire any ACTIVE period whose window has fully elapsed.
+      await tx.subscription.updateMany({
+        where: { userId, tenantId, status: 'ACTIVE', endDate: { lte: now } },
+        data: { status: 'EXPIRED' },
+      });
 
-    // Is a period currently active (window covers now)?
-    const active = await prisma.subscription.findFirst({
-      where: { userId, tenantId, status: 'ACTIVE' },
-      orderBy: { startDate: 'asc' },
-    });
-    if (active) {
-      resolvedStatus = 'ACTIVE';
-      break;
+      // Is a period currently active (window covers now)?
+      const active = await tx.subscription.findFirst({
+        where: { userId, tenantId, status: 'ACTIVE' },
+        orderBy: { startDate: 'asc' },
+      });
+      if (active) {
+        resolvedStatus = 'ACTIVE';
+        break;
+      }
+
+      // No active period — promote the earliest queued period that has started.
+      const due = await tx.subscription.findFirst({
+        where: { userId, tenantId, status: 'SCHEDULED', startDate: { lte: now } },
+        orderBy: { startDate: 'asc' },
+      });
+      if (!due) {
+        // Nothing active and nothing due to start yet. If a future-dated queued
+        // period exists the user is still effectively ACTIVE (their current paid
+        // period just hasn't been created as a separate row) — but in practice
+        // the prior period would still be ACTIVE in that case, so falling here
+        // means the user has no live coverage.
+        resolvedStatus = null;
+        break;
+      }
+
+      await tx.subscription.update({
+        where: { id: due.id },
+        data: { status: 'ACTIVE' },
+      });
+      // Loop again: the just-promoted period might itself already be elapsed.
     }
 
-    // No active period — promote the earliest queued period that has started.
-    const due = await prisma.subscription.findFirst({
-      where: { userId, tenantId, status: 'SCHEDULED', startDate: { lte: now } },
-      orderBy: { startDate: 'asc' },
-    });
-    if (!due) {
-      // Nothing active and nothing due to start yet. If a future-dated queued
-      // period exists the user is still effectively ACTIVE (their current paid
-      // period just hasn't been created as a separate row) — but in practice
-      // the prior period would still be ACTIVE in that case, so falling here
-      // means the user has no live coverage.
-      resolvedStatus = null;
-      break;
-    }
-
-    await prisma.subscription.update({
-      where: { id: due.id },
-      data: { status: 'ACTIVE' },
-    });
-    // Loop again: the just-promoted period might itself already be elapsed.
-  }
-
-  return resolvedStatus;
+    return resolvedStatus;
+  });
 }
 
 // Get current user's subscription status. ADMIN-only — the tenant admin is
@@ -217,7 +219,8 @@ router.get('/plans', async (req, res) => {
   try {
     const plans = await prisma.subscriptionPlan.findMany({
       where: { isActive: true },
-      orderBy: [{ displayOrder: 'asc' }, { price: 'asc' }]
+      orderBy: [{ displayOrder: 'asc' }, { price: 'asc' }],
+      take: 200,
     });
     res.json(plans.map(formatPlan));
   } catch (err) {
@@ -230,7 +233,8 @@ router.get('/plans', async (req, res) => {
 router.get('/plans/admin', verifyToken, requireOwner, async (req, res) => {
   try {
     const plans = await prisma.subscriptionPlan.findMany({
-      orderBy: [{ displayOrder: 'asc' }, { price: 'asc' }]
+      orderBy: [{ displayOrder: 'asc' }, { price: 'asc' }],
+      take: 200,
     });
     res.json(plans.map(formatPlan));
   } catch (err) {
@@ -621,6 +625,7 @@ router.get('/invoices', verifyToken, verifyRole(['ADMIN']), async (req, res) => 
     const subs = await prisma.subscription.findMany({
       where: { userId, tenantId },
       orderBy: { startDate: 'desc' },
+      take: 200,
       select: {
         id: true, planName: true, status: true, amount: true, currency: true,
         billingIntervalDays: true, startDate: true, endDate: true,

@@ -1,5 +1,5 @@
 const cron = require("node-cron");
-const { findDuplicateMarketplaceLead } = require("../utils/deduplication");
+
 
 const prisma = require("../lib/prisma");
 
@@ -7,10 +7,10 @@ const prisma = require("../lib/prisma");
  * Sync leads from a specific marketplace provider API.
  * Called by the cron job or manually via the sync endpoint.
  */
-async function syncMarketplace(provider, io) {
-  const config = await prisma.marketplaceConfig.findUnique({ where: { provider } });
+async function syncMarketplace(tenantId, provider, io) {
+  const config = await prisma.marketplaceConfig.findUnique({ where: { tenantId_provider: { tenantId, provider } } });
   if (!config || !config.isActive) {
-    return { provider, skipped: true, reason: "Not configured or inactive" };
+    return { provider, tenantId, skipped: true, reason: "Not configured or inactive" };
   }
 
   let fetched = 0;
@@ -19,16 +19,16 @@ async function syncMarketplace(provider, io) {
 
   try {
     if (provider === "indiamart") {
-      fetched = await syncIndiaMART(config, (count) => { created += count; }, (count) => { duplicates += count; });
+      fetched = await syncIndiaMART(tenantId, config, (count) => { created += count; }, (count) => { duplicates += count; });
     } else if (provider === "justdial") {
-      fetched = await syncJustDial(config, (count) => { created += count; }, (count) => { duplicates += count; });
+      fetched = await syncJustDial(tenantId, config, (count) => { created += count; }, (count) => { duplicates += count; });
     } else if (provider === "tradeindia") {
-      fetched = await syncTradeIndia(config, (count) => { created += count; }, (count) => { duplicates += count; });
+      fetched = await syncTradeIndia(tenantId, config, (count) => { created += count; }, (count) => { duplicates += count; });
     }
 
     // Update last sync timestamp
     await prisma.marketplaceConfig.update({
-      where: { provider },
+      where: { tenantId_provider: { tenantId, provider } },
       data: { lastSyncAt: new Date() },
     });
 
@@ -48,7 +48,7 @@ async function syncMarketplace(provider, io) {
  * IndiaMART CRM Listing API
  * Docs: https://developer.indiamart.com/
  */
-async function syncIndiaMART(config, onCreated, onDuplicate) {
+async function syncIndiaMART(tenantId, config, onCreated, onDuplicate) {
   const key = config.glueCrmKey || config.apiKey;
   if (!key) return 0;
 
@@ -71,26 +71,32 @@ async function syncIndiaMART(config, onCreated, onDuplicate) {
     const externalId = String(raw.UNIQUE_QUERY_ID || raw.QUERY_ID || "");
     if (!externalId) continue;
 
-    const existing = await findDuplicateMarketplaceLead("indiamart", externalId);
-    if (existing) { onDuplicate(1); continue; }
-
-    await prisma.marketplaceLead.create({
-      data: {
-        provider: "indiamart",
-        externalLeadId: externalId,
-        rawPayload: JSON.stringify(raw),
-        name: raw.SENDER_NAME || null,
-        email: raw.SENDER_EMAIL || null,
-        phone: raw.SENDER_MOBILE || raw.SENDER_PHONE || null,
-        company: raw.SENDER_COMPANY || null,
-        product: raw.QUERY_PRODUCT_NAME || null,
-        message: raw.QUERY_MESSAGE || null,
-        city: raw.SENDER_CITY || null,
-        status: "New",
-      },
-    });
-    onCreated(1);
-    _count++;
+    try {
+      await prisma.marketplaceLead.create({
+        data: {
+          provider: "indiamart",
+          externalLeadId: externalId,
+          rawPayload: JSON.stringify(raw),
+          name: raw.SENDER_NAME || null,
+          email: raw.SENDER_EMAIL || null,
+          phone: raw.SENDER_MOBILE || raw.SENDER_PHONE || null,
+          company: raw.SENDER_COMPANY || null,
+          product: raw.QUERY_PRODUCT_NAME || null,
+          message: raw.QUERY_MESSAGE || null,
+          city: raw.SENDER_CITY || null,
+          status: "New",
+          tenantId,
+        },
+      });
+      onCreated(1);
+      _count++;
+    } catch (err) {
+      if (err.code === "P2002") {
+        onDuplicate(1);
+        continue;
+      }
+      throw err;
+    }
   }
 
   return leads.length;
@@ -99,7 +105,7 @@ async function syncIndiaMART(config, onCreated, onDuplicate) {
 /**
  * JustDial Leads API (pull-based)
  */
-async function syncJustDial(config, onCreated, onDuplicate) {
+async function syncJustDial(tenantId, config, onCreated, onDuplicate) {
   const key = config.apiKey;
   if (!key) return 0;
 
@@ -121,26 +127,32 @@ async function syncJustDial(config, onCreated, onDuplicate) {
       const externalId = String(raw.leadid || raw.lead_id || raw.id || "");
       if (!externalId) continue;
 
-      const existing = await findDuplicateMarketplaceLead("justdial", externalId);
-      if (existing) { onDuplicate(1); continue; }
-
-      await prisma.marketplaceLead.create({
-        data: {
-          provider: "justdial",
-          externalLeadId: externalId,
-          rawPayload: JSON.stringify(raw),
-          name: raw.name || null,
-          email: raw.email || null,
-          phone: raw.phone || raw.mobile || null,
-          company: raw.company || null,
-          product: raw.category || null,
-          message: raw.description || null,
-          city: raw.city || null,
-          status: "New",
-        },
-      });
-      onCreated(1);
-      _count++;
+      try {
+        await prisma.marketplaceLead.create({
+          data: {
+            provider: "justdial",
+            externalLeadId: externalId,
+            rawPayload: JSON.stringify(raw),
+            name: raw.name || null,
+            email: raw.email || null,
+            phone: raw.phone || raw.mobile || null,
+            company: raw.company || null,
+            product: raw.category || null,
+            message: raw.description || null,
+            city: raw.city || null,
+            status: "New",
+            tenantId,
+          },
+        });
+        onCreated(1);
+        _count++;
+      } catch (err) {
+        if (err.code === "P2002") {
+          onDuplicate(1);
+          continue;
+        }
+        throw err;
+      }
     }
 
     return leads.length;
@@ -153,7 +165,7 @@ async function syncJustDial(config, onCreated, onDuplicate) {
 /**
  * TradeIndia Leads API (pull-based)
  */
-async function syncTradeIndia(config, onCreated, onDuplicate) {
+async function syncTradeIndia(tenantId, config, onCreated, onDuplicate) {
   const key = config.apiKey;
   if (!key) return 0;
 
@@ -174,26 +186,32 @@ async function syncTradeIndia(config, onCreated, onDuplicate) {
       const externalId = String(raw.inquiry_id || raw.rfi_id || "");
       if (!externalId) continue;
 
-      const existing = await findDuplicateMarketplaceLead("tradeindia", externalId);
-      if (existing) { onDuplicate(1); continue; }
-
-      await prisma.marketplaceLead.create({
-        data: {
-          provider: "tradeindia",
-          externalLeadId: externalId,
-          rawPayload: JSON.stringify(raw),
-          name: raw.sender_name || raw.contact_person || null,
-          email: raw.sender_email || null,
-          phone: raw.sender_mobile || null,
-          company: raw.sender_company || null,
-          product: raw.product_name || null,
-          message: raw.message || null,
-          city: raw.sender_city || null,
-          status: "New",
-        },
-      });
-      onCreated(1);
-      _count++;
+      try {
+        await prisma.marketplaceLead.create({
+          data: {
+            provider: "tradeindia",
+            externalLeadId: externalId,
+            rawPayload: JSON.stringify(raw),
+            name: raw.sender_name || raw.contact_person || null,
+            email: raw.sender_email || null,
+            phone: raw.sender_mobile || null,
+            company: raw.sender_company || null,
+            product: raw.product_name || null,
+            message: raw.message || null,
+            city: raw.sender_city || null,
+            status: "New",
+            tenantId,
+          },
+        });
+        onCreated(1);
+        _count++;
+      } catch (err) {
+        if (err.code === "P2002") {
+          onDuplicate(1);
+          continue;
+        }
+        throw err;
+      }
     }
 
     return leads.length;
@@ -230,9 +248,9 @@ function initMarketplaceCron(io) {
       const configs = await prisma.marketplaceConfig.findMany({ where: { isActive: true } });
       for (const config of configs) {
         try {
-          await syncMarketplace(config.provider, io);
+          await syncMarketplace(config.tenantId, config.provider, io);
         } catch (perProviderErr) {
-          console.error(`[MarketplaceEngine] provider=${config.provider} sync error:`, perProviderErr && perProviderErr.message);
+          console.error(`[MarketplaceEngine] tenantId=${config.tenantId} provider=${config.provider} sync error:`, perProviderErr && perProviderErr.message);
         }
       }
     } catch (tickErr) {

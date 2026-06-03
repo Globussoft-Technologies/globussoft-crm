@@ -158,18 +158,15 @@ function parseInvoiceNumber(s) {
 
 async function generateInvoiceNumber(tx, tenantId, now = new Date()) {
   const year = now.getUTCFullYear();
-  const prefix = `POS-${year}-`;
-  const latest = await tx.sale.findFirst({
-    where: { tenantId, invoiceNumber: { startsWith: prefix } },
-    orderBy: { invoiceNumber: "desc" },
-    select: { invoiceNumber: true },
+  // Atomic counter table (replaces the racy findFirst+1 pattern).
+  // nextSeq is the value AFTER increment; invoice = nextSeq - 1.
+  // For a fresh tenant+year, create sets nextSeq=2 → invoice 1.
+  const counter = await tx.invoiceCounter.upsert({
+    where: { tenantId_year: { tenantId, year } },
+    update: { nextSeq: { increment: 1 } },
+    create: { tenantId, year, nextSeq: 2 },
   });
-  let nextSeq = 1;
-  if (latest) {
-    const parsed = parseInvoiceNumber(latest.invoiceNumber);
-    if (parsed && parsed.year === year) nextSeq = parsed.seq + 1;
-  }
-  return formatInvoiceNumber(year, nextSeq);
+  return formatInvoiceNumber(year, counter.nextSeq - 1);
 }
 
 // ── Register CRUD ────────────────────────────────────────────────────
@@ -183,6 +180,7 @@ router.get("/registers", cashierGate, async (req, res) => {
     const items = await prisma.register.findMany({
       where,
       orderBy: [{ name: "asc" }],
+      take: 200,
       include: { location: { select: { id: true, name: true, city: true } } },
     });
     res.json(items);
@@ -1227,13 +1225,11 @@ router.post("/sales", cashierGate, async (req, res) => {
 
     // Transactional create — invoiceNumber + Sale + SaleLineItem rows +
     // Product.currentStock decrements (PRODUCT lines only).
-    // invoiceNumber is sequential (generateInvoiceNumber reads the current
-    // max + 1), so two concurrent sales in the SAME tenant can compute the
-    // same value → P2002 unique-violation on the invoiceNumber column → 500.
-    // Retry the whole transaction (which recomputes the number against the
-    // now-committed sibling sale) up to 5 attempts. Prod-relevant: concurrent
-    // POS lanes in one tenant otherwise intermittently 500 on a colliding
-    // invoice number (surfaced as flaky CI under 2 parallel test workers).
+    // invoiceNumber is sequential via InvoiceCounter atomic upsert
+    // (increment: 1 inside the transaction). The retry loop is a safety
+    // net for the rare case where two concurrent sales both hit the
+    // create branch of upsert for a brand-new (tenant, year) pair.
+    // Under normal operation the loop never iterates more than once.
     let sale = null;
     for (let _attempt = 0; sale === null; _attempt++) {
       try {
@@ -1466,6 +1462,8 @@ router.get("/sales/stats", adminGate, async (req, res) => {
     const sales = await prisma.sale.findMany({
       where,
       select: { total: true, status: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 5000,
     });
 
     // Empty short-circuit — return zeroed shape.
@@ -1617,6 +1615,8 @@ router.get("/sales/by-month", adminGate, async (req, res) => {
     const sales = await prisma.sale.findMany({
       where: { tenantId },
       select: { total: true, status: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 5000,
     });
 
     // Aggregate per-UTC-month. Map "YYYY-MM" → bucket. Null/invalid

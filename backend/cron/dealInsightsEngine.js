@@ -31,6 +31,7 @@ async function tickDealInsightsEngine(io) {
             tenantId,
             stage: { notIn: ["won", "lost"] },
           },
+          take: 200,
           include: {
             contact: {
               include: {

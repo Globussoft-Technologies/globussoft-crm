@@ -189,12 +189,16 @@ async function generateUniqueSlug(base) {
     .slice(0, 40) || "org";
   let slug = root;
   let i = 1;
-  // Try until unused
-  while (await prisma.tenant.findUnique({ where: { slug } })) {
+  const MAX_ATTEMPTS = 100;
+  while (i <= MAX_ATTEMPTS) {
+    const existing = await prisma.tenant.findUnique({ where: { slug } });
+    if (!existing) return slug;
     i += 1;
     slug = `${root}-${i}`;
   }
-  return slug;
+  // Fallback: UUID suffix guarantees uniqueness under collision storms.
+  const suffix = require("crypto").randomUUID().slice(0, 8);
+  return `${root}-${suffix}`;
 }
 
 // Password complexity: minimum 8 chars, must contain at least one letter AND one number

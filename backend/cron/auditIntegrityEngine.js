@@ -26,48 +26,57 @@ async function runAuditIntegritySweep() {
     });
 
     for (const { tenantId } of tenants) {
-      const rows = await prisma.auditLog.findMany({
-        where: { tenantId },
-        // Tie-break on id so the cron's chain walk matches the /api/audit/verify
-        // walker (and the verify-audit-chain CLI) in the rare case where two
-        // writeAudit calls landed within the same millisecond. Without this,
-        // a sweep + an interactive verify could disagree on brokenAt.
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        select: {
-          id: true, action: true, entity: true, entityId: true, userId: true,
-          details: true, createdAt: true, prevHash: true, hash: true,
-        },
-      });
-
+      // Cursor-based pagination — process the audit chain in batches so
+      // high-activity tenants don't OOM. lastHash is carried across batches.
       let chainLength = 0;
       let brokenAt = null;
       let reason = null;
       let lastHash = null;
+      let cursor = null;
+      const BATCH_SIZE = 5000;
 
-      for (const row of rows) {
-        chainLength += 1;
-        if (row.hash == null) {
-          brokenAt = row.id;
-          reason = 'null hash — row was never chained (run backfill)';
-          break;
-        }
-        const expectedPrev = lastHash == null ? genesisFor(tenantId) : lastHash;
-        if (row.prevHash !== expectedPrev) {
-          brokenAt = row.id;
-          reason = `prevHash mismatch (expected ${expectedPrev}, got ${row.prevHash || 'null'})`;
-          break;
-        }
-        const recomputed = computeHash(row.prevHash, {
-          tenantId, entity: row.entity, action: row.action,
-          entityId: row.entityId, userId: row.userId,
-          details: row.details, createdAt: row.createdAt.toISOString(),
+      while (brokenAt == null) {
+        const rows = await prisma.auditLog.findMany({
+          where: { tenantId },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          take: BATCH_SIZE,
+          skip: cursor ? 1 : 0,
+          cursor: cursor ? { id: cursor } : undefined,
+          select: {
+            id: true, action: true, entity: true, entityId: true, userId: true,
+            details: true, createdAt: true, prevHash: true, hash: true,
+          },
         });
-        if (recomputed !== row.hash) {
-          brokenAt = row.id;
-          reason = 'hash mismatch (row content tampered)';
-          break;
+
+        if (rows.length === 0) break;
+
+        for (const row of rows) {
+          chainLength += 1;
+          if (row.hash == null) {
+            brokenAt = row.id;
+            reason = 'null hash — row was never chained (run backfill)';
+            break;
+          }
+          const expectedPrev = lastHash == null ? genesisFor(tenantId) : lastHash;
+          if (row.prevHash !== expectedPrev) {
+            brokenAt = row.id;
+            reason = `prevHash mismatch (expected ${expectedPrev}, got ${row.prevHash || 'null'})`;
+            break;
+          }
+          const recomputed = computeHash(row.prevHash, {
+            tenantId, entity: row.entity, action: row.action,
+            entityId: row.entityId, userId: row.userId,
+            details: row.details, createdAt: row.createdAt.toISOString(),
+          });
+          if (recomputed !== row.hash) {
+            brokenAt = row.id;
+            reason = 'hash mismatch (row content tampered)';
+            break;
+          }
+          lastHash = row.hash;
         }
-        lastHash = row.hash;
+
+        cursor = rows[rows.length - 1].id;
       }
 
       // Emit AUDIT_INTEGRITY row via prisma directly (NOT writeAudit) — we

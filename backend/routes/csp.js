@@ -77,7 +77,7 @@ const cspJsonParser = express.json({
  * exception — the body-parser threw before we could fire-and-forget.
  */
 router.post("/report", (req, res, _next) => {
-  cspJsonParser(req, res, (err) => {
+  cspJsonParser(req, res, async (err) => {
     if (err) {
       // express.json's PayloadTooLargeError carries `.status === 413`
       if (err.status === 413 || err.statusCode === 413 || err.type === "entity.too.large") {
@@ -96,7 +96,7 @@ router.post("/report", (req, res, _next) => {
     //   (a) browsers don't wait for or retry on the response anyway,
     //   (b) latency on a security-telemetry write must not back-pressure
     //       the originating page request.
-    // tenantId hardcoded to 1 in slice 2; slice 3 derives from Host.
+    // Derive tenant from Host header (replaces hardcoded tenantId: 1).
     const reportPayload = req.body || {};
     const detailsStr = (() => {
       try {
@@ -106,10 +106,19 @@ router.post("/report", (req, res, _next) => {
       }
     })();
 
+    const host = req.headers.host || "";
+    const subdomain = host.split(":")[0].split(".")[0];
+    const tenant = await prisma.tenant.findUnique({ where: { slug: subdomain } });
+    if (!tenant) {
+      // Fail closed: don't attribute the report to the wrong tenant.
+      console.warn("[CSP][report] No tenant for host:", host);
+      return res.status(204).end();
+    }
+
     prisma.auditLog
       .create({
         data: {
-          tenantId: 1,
+          tenantId: tenant.id,
           entity: "CSPViolation",
           action: "REPORT",
           details: detailsStr,

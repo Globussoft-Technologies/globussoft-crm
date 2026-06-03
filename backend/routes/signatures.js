@@ -3,6 +3,7 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 const crypto = require("crypto");
 const PDFDocument = require("pdfkit");
+const nodemailer = require("nodemailer");
 const prisma = require("../lib/prisma");
 const { notify } = require("../lib/notificationService");
 const { fulfillSignedEstimate } = require("../lib/signatureFulfillment");
@@ -48,17 +49,56 @@ function fmtMoney(v, currency, locale) {
   }
 }
 
+// SMTP fallback transport (lazy-initialised) — used when SendGrid rejects
+// with 403 unverified-sender or any other 4xx/5xx.
+let smtpTransporter = null;
+function getSmtpTransporter() {
+  if (smtpTransporter) return smtpTransporter;
+  const host = process.env.SMTP_HOST;
+  if (!host) return null;
+  smtpTransporter = nodemailer.createTransport({
+    host,
+    port: Number(process.env.SMTP_PORT) || 587,
+    secure: (process.env.SMTP_SECURE || "false") === "true",
+    auth: {
+      user: process.env.SMTP_USER || "",
+      pass: process.env.SMTP_PASS || "",
+    },
+  });
+  return smtpTransporter;
+}
+
+async function sendViaSmtp(to, subject, text, html) {
+  const transporter = getSmtpTransporter();
+  if (!transporter) return { sent: false, reason: "smtp_not_configured" };
+  try {
+    const info = await transporter.sendMail({
+      from: `"Globussoft CRM" <${FROM_EMAIL}>`,
+      to,
+      subject,
+      text,
+      html,
+    });
+    return { sent: true, id: info.messageId || "smtp" };
+  } catch (err) {
+    console.error("[Signatures] SMTP fallback error:", err.message);
+    return { sent: false, reason: `smtp_error: ${err.message}` };
+  }
+}
+
 // `content` is either a plain string or a { text, html } pair. A string is
 // sent as-is with a naive <br> html fallback; the { text, html } shape lets
 // callers ship a proper html body (e.g. a clickable signing link).
 async function sendSignatureEmail(to, subject, content) {
   const key = process.env.SENDGRID_API_KEY;
-  if (!key) {
-    console.log(`[Signatures] SendGrid not configured — email to ${to} logged but not sent`);
-    return { sent: false, reason: "no_api_key" };
-  }
   const text = typeof content === "string" ? content : content.text;
   const html = typeof content === "string" ? content.replace(/\n/g, "<br>") : content.html;
+
+  if (!key) {
+    console.log(`[Signatures] SendGrid not configured — falling back to SMTP for ${to}`);
+    return sendViaSmtp(to, subject, text, html);
+  }
+
   const payload = {
     personalizations: [{ to: [{ email: to }] }],
     from: { email: FROM_EMAIL },
@@ -83,10 +123,17 @@ async function sendSignatureEmail(to, subject, content) {
     }
     const errText = await response.text().catch(() => "");
     console.error(`[Signatures] SendGrid error (${response.status}):`, errText);
+    // Fallback to SMTP on 403 (unverified sender/domain) or any other failure
+    // so staging environments with unverified domains still deliver.
+    if (response.status === 403 || response.status >= 400) {
+      console.log(`[Signatures] SendGrid ${response.status} — attempting SMTP fallback for ${to}`);
+      return sendViaSmtp(to, subject, text, html);
+    }
     return { sent: false, reason: `sendgrid ${response.status}: ${errText}` };
   } catch (err) {
     console.error("[Signatures] SendGrid send error:", err.message);
-    return { sent: false, reason: err.message };
+    console.log(`[Signatures] SendGrid network error — attempting SMTP fallback for ${to}`);
+    return sendViaSmtp(to, subject, text, html);
   }
 }
 

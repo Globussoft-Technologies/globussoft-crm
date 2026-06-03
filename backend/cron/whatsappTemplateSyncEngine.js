@@ -113,7 +113,11 @@ async function tick() {
 }
 
 function initWhatsappTemplateSyncCron() {
-  cron.schedule(TICK_CRON, () => { tick(); });
+  cron.schedule(TICK_CRON, () => {
+    tick().catch((err) => {
+      console.error("[whatsappTemplateSyncEngine] unhandled tick error:", err);
+    });
+  });
   console.log(`[whatsappTemplateSyncEngine] initialized (cron: ${TICK_CRON})`);
 }
 

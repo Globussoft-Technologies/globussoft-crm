@@ -125,6 +125,7 @@ router.get("/product-categories", canReadProducts, async (req, res) => {
         ? { ...tenantWhere(req), isActive: true }
         : tenantWhere(req),
       orderBy: [{ parentId: "asc" }, { name: "asc" }],
+      take: 200,
       ...(isCustomer
         ? {
             select: {
@@ -370,6 +371,7 @@ router.get("/products", canReadProducts, async (req, res) => {
           }
         : tenantWhere(req),
       orderBy: { name: "asc" },
+      take: 200,
       ...(isCustomer
         ? {
             select: {
@@ -626,6 +628,7 @@ router.get("/vendors", canReadInventory, async (req, res) => {
     const items = await prisma.vendor.findMany({
       where,
       orderBy: { name: "asc" },
+      take: 200,
     });
     res.json(items);
   } catch (e) {
@@ -1312,6 +1315,7 @@ router.get("/auto-consumption-rules", canReadProducts, async (req, res) => {
     const items = await prisma.autoConsumptionRule.findMany({
       where,
       orderBy: [{ serviceId: "asc" }, { productId: "asc" }],
+      take: 200,
       include: {
         service: { select: { id: true, name: true } },
         product: { select: { id: true, name: true, sku: true, currentStock: true, unit: true } },

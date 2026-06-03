@@ -644,9 +644,9 @@ router.get(
 );
 router.put("/treatment-plans/:id", requireClinicalRole, updateTreatmentPlan);
 
-// visited patitents
-router.get("/reports/visit", getPatientsSummary);
-router.get("/reports/visit/:id", getPatientDetails);
+// visited patients — PHI read; gate required (was ungated prior to audit).
+router.get("/reports/visit", phiReadGate, getPatientsSummary);
+router.get("/reports/visit/:id", phiReadGate, getPatientDetails);
 
 // ── Patients ───────────────────────────────────────────────────────
 
@@ -800,6 +800,10 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
   try {
     const { q, locationId } = req.query;
     const wantMasked = req.query.masked === "1" || req.query.masked === "true";
+    // Anti-DoS: cap export size so large tenants can't buffer unlimited
+    // rows in memory. Default 1000, hard max 5000.
+    const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
+    const offset = parseInt(req.query.offset, 10) || 0;
     const where = tenantWhere(req);
     if (q) {
       where.OR = [
@@ -818,7 +822,8 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
     const patients = await prisma.patient.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      take: 5000,
+      take: limit,
+      skip: offset,
     });
     // Decide mask: query flag wins; otherwise role-based.
     const mustMask = wantMasked || shouldMaskForViewer(req);
@@ -834,20 +839,33 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
       "Gender",
       "Created",
     ];
-    const csvRows = rows.map((p) => [
-      p.id,
-      p.name || "",
-      p.phone || "",
-      p.email || "",
-      p.dob
-        ? typeof p.dob === "string"
-          ? p.dob.slice(0, 10)
-          : new Date(p.dob).toISOString().slice(0, 10)
-        : "",
-      p.gender || "",
-      p.createdAt ? new Date(p.createdAt).toISOString() : "",
-    ]);
-    const csv = rowsToCsv(headers, csvRows);
+
+    // Stream the CSV row-by-row to avoid buffering the full payload.
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="patients${mustMask ? "-masked" : ""}-${new Date().toISOString().slice(0, 10)}.csv"`,
+    );
+    // BOM so Excel auto-detects UTF-8.
+    res.write("﻿");
+    res.write(headers.map(csvEscape).join(",") + "\r\n");
+    for (const p of rows) {
+      const row = [
+        p.id,
+        p.name || "",
+        p.phone || "",
+        p.email || "",
+        p.dob
+          ? typeof p.dob === "string"
+            ? p.dob.slice(0, 10)
+            : new Date(p.dob).toISOString().slice(0, 10)
+          : "",
+        p.gender || "",
+        p.createdAt ? new Date(p.createdAt).toISOString() : "",
+      ];
+      res.write(row.map(csvEscape).join(",") + "\r\n");
+    }
+    res.end();
 
     // Audit. Always emit so the export is traceable; flag mask-state in the
     // details payload.
@@ -864,19 +882,12 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
         masked: mustMask,
         query: q || null,
         locationId: locationId ? parseInt(locationId) : null,
+        limit,
+        offset,
       },
     ).catch((e) =>
       console.warn("[wellness] audit Patient export failed:", e.message),
     );
-
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="patients${mustMask ? "-masked" : ""}-${new Date().toISOString().slice(0, 10)}.csv"`,
-    );
-    // BOM so Excel auto-detects UTF-8.
-    res.write("﻿");
-    res.end(csv);
   } catch (e) {
     console.error("[wellness] patients.csv export error:", e.message);
     res.status(500).json({ error: "Failed to export patients" });
@@ -4169,6 +4180,7 @@ router.get("/services", async (req, res) => {
     const services = await prisma.service.findMany({
       where: tenantWhere(req, { NOT: { isActive: false } }),
       orderBy: [{ ticketTier: "desc" }, { name: "asc" }],
+      take: 200,
     });
     res.json(services);
   } catch (e) {
@@ -4889,6 +4901,7 @@ router.get("/membership-plans", async (req, res) => {
     const plans = await prisma.membershipPlan.findMany({
       where: tenantWhere(req, includeInactive ? {} : { isActive: true }),
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
+      take: 200,
     });
     // #747 — hide test-fixture plans (_teardown_* / _test_*) from default lists
     // so staff can't accidentally sell a real membership against a test row.
@@ -6173,6 +6186,7 @@ router.get("/locations", async (req, res) => {
     const locations = await prisma.location.findMany({
       where: tenantWhere(req),
       orderBy: { name: "asc" },
+      take: 200,
     });
     // #679: Locations carry clinic-staff phone + email + address. ADMIN /
     // MANAGER / clinical staff see full contact info (they need it to call

@@ -52,8 +52,9 @@ router.get('/:id', verifyToken, async (req, res) => {
 
 router.post('/', verifyToken, async (req, res) => {
   try {
+    const { subject, description, priority, assigneeId } = req.body;
     const ticket = await prisma.ticket.create({
-      data: { ...req.body, tenantId: req.user.tenantId },
+      data: { subject, description, priority, assigneeId: assigneeId ? parseInt(assigneeId) : null, tenantId: req.user.tenantId },
     });
 
     // Auto-apply SLA if policy exists for this priority

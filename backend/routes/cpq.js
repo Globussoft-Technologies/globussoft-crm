@@ -24,7 +24,18 @@ router.get("/products", verifyToken, async (req, res) => {
 // Push new SKUs to Product Catalog
 router.post("/products", verifyToken, async (req, res) => {
   try {
-    const product = await prisma.product.create({ data: { ...req.body, tenantId: req.user.tenantId } });
+    const allowlist = [
+      'name', 'sku', 'description', 'price', 'isRecurring', 'threshold',
+      'currentStock', 'partialMlUsed', 'brandName', 'productType', 'productCode',
+      'hsnCode', 'volume', 'unit', 'discountedPrice', 'dealerPrice',
+      'purchasePrice', 'manufacturer', 'tax', 'isTaxIncluded', 'barcode',
+      'imageUrl', 'isActive', 'categoryId'
+    ];
+    const data = {};
+    for (const key of allowlist) {
+      if (req.body[key] !== undefined) data[key] = req.body[key];
+    }
+    const product = await prisma.product.create({ data: { ...data, tenantId: req.user.tenantId } });
     res.status(201).json(product);
   } catch(_err) {
     res.status(500).json({ error: "Product matrix mutation failed structurally." });

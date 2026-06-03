@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useScrollLock } from '../hooks/useScrollLock';
 import { createPortal } from 'react-dom';
 import { LayoutGrid, Pencil, Plus, Shield, Trash2, Users, X, UserMinus, UserPlus, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
 import { fetchApi } from '../utils/api';
@@ -2148,14 +2149,7 @@ const errBoxStyle = {
 };
 
 function ModalShell({ title, subtitle, onClose, width = 480, children }) {
-  // Lock body scroll while the modal is open.
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, []);
+  useScrollLock(true);
 
   useEffect(() => {
     const handler = (e) => {

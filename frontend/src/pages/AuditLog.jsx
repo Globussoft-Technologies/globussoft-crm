@@ -571,32 +571,6 @@ export default function AuditLog() {
 
   useEffect(() => { verifyChain(); }, [verifyChain]);
 
-  const queryString = useMemo(() => {
-    const params = new URLSearchParams();
-    params.set('page', page);
-    params.set('limit', limit);
-    if (entity) params.set('entity', entity);
-    if (action) params.set('action', action);
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    return params.toString();
-  }, [page, entity, action, from, to]);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await fetchApi(`/api/audit-viewer?${queryString}`);
-      setLogs(Array.isArray(data?.logs) ? data.logs : []);
-      setPages(data?.pages || 1);
-      setTotal(data?.total || 0);
-    } catch (err) {
-      console.error('[AuditLog] load failed', err);
-      setLogs([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [queryString]);
-
   const loadStats = useCallback(async () => {
     try {
       const s = await fetchApi('/api/audit-viewer/stats');
@@ -606,11 +580,42 @@ export default function AuditLog() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
   useEffect(() => { loadStats(); }, [loadStats]);
 
   // Reset to page 1 whenever filters change
   useEffect(() => { setPage(1); }, [entity, action, from, to]);
+
+  // Flattened fetch effect — builds the query string inline and fetches
+  // whenever page or any filter changes. Replaces the previous cascade of
+  // useMemo(queryString) → useCallback(load) → useEffect(load).
+  useEffect(() => {
+    let cancelled = false;
+    const doLoad = async () => {
+      setLoading(true);
+      const params = new URLSearchParams();
+      params.set('page', page);
+      params.set('limit', limit);
+      if (entity) params.set('entity', entity);
+      if (action) params.set('action', action);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      try {
+        const data = await fetchApi(`/api/audit-viewer?${params.toString()}`);
+        if (cancelled) return;
+        setLogs(Array.isArray(data?.logs) ? data.logs : []);
+        setPages(data?.pages || 1);
+        setTotal(data?.total || 0);
+      } catch (err) {
+        if (cancelled) return;
+        console.error('[AuditLog] load failed', err);
+        setLogs([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    doLoad();
+    return () => { cancelled = true; };
+  }, [page, entity, action, from, to, limit]);
 
   const handleExport = () => {
     const params = new URLSearchParams();

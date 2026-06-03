@@ -1,178 +1,35 @@
 import { useEffect, useMemo, useState, useContext, useRef } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { Calendar as CalendarIcon, User as UserIcon, Stethoscope, Plus, X, Building2, Home, Video, Phone, Car, ChevronLeft, ChevronRight } from 'lucide-react';
-import React from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { tenantLocale } from '../../utils/date';
-// Issue #816: Reusable CSV import/export toolbar — bookings entity.
-import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
-import PageHeader from '../../components/PageHeader';
 import { AuthContext } from '../../App';
 
-// #615: default visible window is 9 AM → 7 PM, but visits scheduled outside
-// that window (early/late shifts, walk-ins booked for 8 AM) are NOT clamped
-// to the boundary hours — that's the bug that made every off-hours visit
-// stack at the top (or bottom) of the day. computeHours() expands the
-// visible range to include any actual visit hour on the loaded day so the
-// vertical position reflects the booked time. See `hoursForVisits()`.
-const DEFAULT_HOURS = Array.from({ length: 11 }, (_, i) => 9 + i); // 9 AM → 7 PM
-const STATUS_COLOR = {
-  // 'pending' is a presentational status — surfaced for visits whose
-  // doctorId is null (portal self-bookings with "No preference — admin
-  // will assign"). Storage stays as 'booked'; the UI flips the label
-  // and styling so admins can spot pending-assignment work at a glance.
-  pending:       'rgba(245,158,11,0.18)',
-  booked:        'rgba(59,130,246,0.18)',
-  confirmed:     'rgba(99,102,241,0.20)',
-  arrived:       'rgba(168,85,247,0.20)',
-  'in-treatment':'rgba(245,158,11,0.25)',
-  completed:     'rgba(16,185,129,0.20)',
-  'no-show':     'rgba(239,68,68,0.20)',
-  cancelled:     'rgba(100,116,139,0.20)',
-};
-const STATUS_BORDER = {
-  pending: '#f59e0b',
-  booked: '#3b82f6', confirmed: 'var(--primary-color, var(--accent-color, #6366f1))', arrived: '#a855f7',
-  'in-treatment': '#f59e0b', completed: '#10b981',
-  'no-show': '#ef4444', cancelled: '#64748b',
-};
+import {
+  displayStatus,
+  hoursForVisits,
+  isHolidayForColumn,
+  FALLBACK_PRACTITIONER_KEYS,
+  ALL_ROLES_KEY,
+  effectiveWellnessRole,
+  isoDay,
+  isoLocalDate,
+  parseLocalDate,
+  todayLocalDate,
+  UNASSIGNED_KEY,
+} from './calendar/constants';
 
-// Visits with no assigned doctor are stored as status='booked' so the
-// patient's portal flow stays consistent, but the staff UI surfaces them
-// as 'pending' for clarity. Single helper used by every render path so
-// the rule can't drift between Calendar / Appointments.
-export const displayStatus = (visit) =>
-  !visit?.doctorId && visit?.status === 'booked' ? 'pending' : visit?.status;
+import CalendarHeader from './calendar/CalendarHeader';
+import HolidayBanner from './calendar/HolidayBanner';
+import CalendarDayGrid from './calendar/CalendarDayGrid';
+import CalendarLegends from './calendar/CalendarLegends';
+import NewVisitModal from './calendar/NewVisitModal';
+import AssignDoctorModal from './calendar/AssignDoctorModal';
+import UserBookingPanel from './calendar/UserBookingPanel';
 
-// #262 / Option B: practitioner roles are now sourced from the per-tenant
-// WellnessRoleType catalog (admins maintain the list from Settings →
-// Wellness Role Types). The hard-coded fallback below is used when the
-// catalog hasn't been fetched yet (or the API errors out) — it matches
-// the original whitelist so behaviour is unchanged in the degenerate case.
-// The catalog gives roles a canTakeVisits flag + label; the role dropdown
-// reads from the live list.
-const FALLBACK_PRACTITIONER_KEYS = new Set(['doctor', 'professional']);
-const ALL_ROLES_KEY = '__all__';
-
-// Bridge between the two parallel role systems in this codebase:
-//   1. User.wellnessRole         — lowercase string, edited from Staff page
-//   2. UserRole → Role.key       — uppercase RBAC role assigned from
-//                                  Settings → Roles & Permissions (returned
-//                                  by /api/staff as `primaryRole.key`).
-// A user is treated as belonging to a wellness role if EITHER is set;
-// wellnessRole wins when both are present so explicit assignments aren't
-// overridden by a coincidentally-named RBAC role. The lowercase
-// normalisation lets RBAC "NURSE" match catalog "nurse" without forcing
-// admins to maintain both lists separately.
-function effectiveWellnessRole(u) {
-  if (u?.wellnessRole) return u.wellnessRole;
-  const rbacKey = u?.primaryRole?.key;
-  if (rbacKey && typeof rbacKey === 'string') return rbacKey.toLowerCase();
-  return null;
-}
-
-// Wave 7D — PRD Gap §11 item 4 — booking-type meta. Mirrors
-// PublicBooking.jsx so the calendar's per-event badge + legend uses the
-// same icons the patient saw at booking time. Default falls back to
-// CLINIC_VISIT for legacy rows where bookingType is null.
-const BOOKING_TYPE_META = {
-  CLINIC_VISIT: { label: 'Clinic visit',  icon: Building2, color: '#0ea5e9' },
-  IN_HOME:      { label: 'At home',       icon: Home,      color: '#10b981' },
-  VIDEO:        { label: 'Video consult', icon: Video,     color: '#a855f7' },
-  PHONE:        { label: 'Phone consult', icon: Phone,     color: '#f59e0b' },
-};
-const BOOKING_TYPE_ORDER = ['CLINIC_VISIT', 'IN_HOME', 'VIDEO', 'PHONE'];
-
-// #263: render the IST calendar day, not the UTC day. toISOString() returns
-// UTC, so any IST clock time before 05:30 (e.g. 1 AM IST = 19:30 prev-day UTC)
-// previously yielded the wrong date string and the calendar fetched a
-// different day than the Owner Dashboard's IST-aware startOfDay()/endOfDay()
-// helpers in backend/routes/wellness.js — producing different "today" counts.
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-const isoDay = (d) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
-const fmtHour = (h) => `${String(h).padStart(2, '0')}:00`;
-const UNASSIGNED_KEY = '__unassigned__';
-
-// Local-calendar helpers shared with the From/To inputs. `<input type="date">`
-// reads/writes YYYY-MM-DD in the user's local TZ; the existing isoDay() helper
-// is IST-anchored (so the visit fetch window aligns with the backend's IST
-// startOfDay/endOfDay). Keep both: yyyy-mm-dd for the inputs, Date for the
-// grid + the IST-aware visit fetch.
-function todayLocalDate() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-function parseLocalDate(yyyymmdd) {
-  if (!yyyymmdd || typeof yyyymmdd !== 'string') return new Date();
-  const [y, m, d] = yyyymmdd.split('-').map(Number);
-  if (!y || !m || !d) return new Date();
-  return new Date(y, m - 1, d, 12, 0, 0, 0);
-}
-function isoLocalDate(input) {
-  const d = input instanceof Date ? input : new Date(input);
-  if (Number.isNaN(d.getTime())) return '';
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-// #615: dynamic hour range — start with the default 9..19, then expand to
-// include the earliest and latest actual visit on the loaded day. Without
-// this every visit at 7 AM clamped to 9 AM and every visit at 8 PM clamped
-// to 7 PM, so off-hours visits stacked at the boundary cells with no way to
-// distinguish them from on-hours visits. Returns a contiguous integer
-// range so the grid stays readable (no gappy hour columns).
-export function hoursForVisits(visits) {
-  let lo = DEFAULT_HOURS[0];
-  let hi = DEFAULT_HOURS[DEFAULT_HOURS.length - 1];
-  for (const v of visits || []) {
-    if (!v?.visitDate) continue;
-    const h = new Date(v.visitDate).getHours();
-    if (Number.isFinite(h)) {
-      if (h < lo) lo = h;
-      if (h > hi) hi = h;
-    }
-  }
-  // Clamp to a sane 0..23 floor/ceiling — getHours() can't return outside
-  // that anyway but defensive in case a malformed string slips in.
-  lo = Math.max(0, Math.min(23, lo));
-  hi = Math.max(0, Math.min(23, hi));
-  if (hi < lo) hi = lo;
-  return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
-}
-
-// #807 — per-column holiday matcher. Used by Calendar's column headers
-// to decide whether a practitioner column should render the "Holiday — <name>"
-// tag + greyed-out style for the selected day. Contract pinned by
-// Calendar.test.jsx 'isHolidayForColumn() — #807 per-column holiday matcher'.
-//
-// Rules (in order):
-//   1. Empty/null holidays → null
-//   2. Practitioner-specific (h.doctorId set) → matches only column.id === h.doctorId
-//   3. Location-scoped (h.locationId set, no doctorId) → matches every NON-Unassigned column
-//      (Unassigned synthetic column is spared until per-column-location ships)
-//   4. Tenant-wide (no location, no doctor) → matches EVERY column (incl. Unassigned)
-// Returns the matching holiday row (truthy) or null.
-export function isHolidayForColumn(holidays, column) {
-  if (!holidays || !Array.isArray(holidays) || holidays.length === 0) return null;
-  for (const h of holidays) {
-    if (h.doctorId != null) {
-      if (h.doctorId === column.id) return h;
-      continue;
-    }
-    if (h.locationId != null) {
-      if (column.isUnassigned) continue;
-      return h;
-    }
-    return h;
-  }
-  return null;
-}
+// Re-export for backward compatibility (Appointments.jsx, tests).
+// eslint-disable-next-line react-refresh/only-export-components
+export { displayStatus, hoursForVisits, isHolidayForColumn, AssignDoctorModal };
 
 export default function CalendarGrid() {
   const notify = useNotify();
@@ -242,7 +99,7 @@ export default function CalendarGrid() {
     duration: '30'
   });
   const [bookingSubmitting, setBookingSubmitting] = useState(false);
-  const [availLoading, setAvailLoading] = useState(false);
+  const [_availLoading, setAvailLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -290,6 +147,7 @@ export default function CalendarGrid() {
     } catch (_e) { setVisits([]); setAllStaff([]); setWaitlist([]); setResources([]); setHolidays([]); setRoleTypes([]); }
     setLoading(false);
   };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [date]);
 
   // Refresh the calendar grid when the tab regains focus so visits booked
@@ -317,6 +175,7 @@ export default function CalendarGrid() {
       loadAvailability();
       loadMyAppointments();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showBooking, bookingForm.appointmentDate]);
 
   const loadAvailability = async () => {
@@ -595,137 +454,31 @@ export default function CalendarGrid() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <PageHeader
-        icon={CalendarIcon}
-        title="Calendar"
-        description={`Day view by practitioner — ${dayLabel}`}
-      >
-        {/* Option B: role-filter dropdown. Reads the per-tenant catalog
-            (Settings → Wellness Role Types). "All staff" is the default
-            and shows every catalog role with canTakeVisits=true. Hidden
-            when the catalog is empty (catalog not seeded, generic tenant,
-            or API error). */}
-        {practitionerRoleOptions.length > 0 && (
-          <select
-            value={selectedRoleKey}
-            onChange={(e) => setSelectedRoleKey(e.target.value)}
-            aria-label="Filter by staff role"
-            className="glass"
-            style={{
-              padding: '0.4rem 0.65rem', fontSize: '0.8rem',
-              borderRadius: 8, cursor: 'pointer',
-              border: '1px solid rgba(255,255,255,0.1)',
-              background: 'transparent',
-              color: 'var(--text-primary)',
-            }}
-          >
-            <option value={ALL_ROLES_KEY}>All staff</option>
-            {practitionerRoleOptions.map((r) => (
-              <option key={r.key} value={r.key}>{r.label}</option>
-            ))}
-          </select>
-        )}
-        {totalPractitionerCount > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowAll((v) => !v)}
-            className="glass"
-            style={{
-              padding: '0.4rem 0.8rem', fontSize: '0.8rem',
-              borderRadius: 8, cursor: 'pointer',
-              border: `1px solid ${showAll ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.1)'}`,
-              background: showAll ? 'rgba(99,102,241,0.15)' : 'transparent',
-              color: 'var(--text-primary)',
-            }}
-            title={showAll ? `Showing all ${totalPractitionerCount} ${selectedRoleLabel}` : `Showing ${visiblePractitionerCount} with visits today (click to show all)`}
-          >
-            {/* #307: pre-fix copy was "1 of 16" with no unit, which sat right
-                next to the date chevrons and was widely misread as
-                "day 1 of 16" — i.e. the chevrons advanced practitioners.
-                Add the explicit noun (practitioners / nurses / stylists)
-                so the chip is unambiguously about the column filter,
-                not navigation. The noun comes from the dropdown's
-                selected label (Option B). */}
-            {showAll
-              ? `All ${selectedRoleLabel} (${totalPractitionerCount})`
-              : `${visiblePractitionerCount} of ${totalPractitionerCount} ${selectedRoleLabel}`}
-          </button>
-        )}
-        {/* Single Day picker — the grid renders THIS day only. Prev/Next
-            arrows for quick day-by-day navigation; the native <input
-            type="date"> opens the system calendar popover for jumping
-            further. CSV export filters to the same day. */}
-        <div style={dateField}>
-          <button
-            type="button"
-            onClick={() => stepDay(-1)}
-            aria-label="Previous day"
-            className="glass"
-            style={{ padding: '0.3rem 0.4rem', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) return;
-              setFrom(v);
-              setTo(v);
-              clearFocus();
-            }}
-            aria-label="Day shown on grid"
-            className="glass"
-            style={dateInput}
-            data-testid="calendar-day-picker"
-          />
-          <button
-            type="button"
-            onClick={() => stepDay(1)}
-            aria-label="Next day"
-            className="glass"
-            style={{ padding: '0.3rem 0.4rem', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
-          >
-            <ChevronRight size={16} />
-          </button>
-        </div>
-        {/* Issue #816: CSV Import / Export of bookings. Export window is
-            scoped to the selected day — wider-range exports live on the
-            staff Appointments page (which has explicit range controls). */}
-        <CsvImportExportToolbar
-          entity="bookings"
-          label="Bookings"
-          filters={{
-            from: `${from}T00:00:00+05:30`,
-            to: `${from}T23:59:59+05:30`,
-          }}
-          formats={['csv', 'xlsx']}
-          onImported={load}
-        />
-      </PageHeader>
+      <CalendarHeader
+        practitionerRoleOptions={practitionerRoleOptions}
+        selectedRoleKey={selectedRoleKey}
+        onRoleChange={setSelectedRoleKey}
+        totalPractitionerCount={totalPractitionerCount}
+        visiblePractitionerCount={visiblePractitionerCount}
+        selectedRoleLabel={selectedRoleLabel}
+        showAll={showAll}
+        onToggleShowAll={() => setShowAll((v) => !v)}
+        from={from}
+        onDateChange={(v) => { setFrom(v); setTo(v); clearFocus(); }}
+        onPrevDay={() => stepDay(-1)}
+        onNextDay={() => stepDay(1)}
+        csvFilters={{
+          from: `${from}T00:00:00+05:30`,
+          to: `${from}T23:59:59+05:30`,
+        }}
+        onCsvImported={load}
+        dayLabel={dayLabel}
+      />
 
       {loading && <div data-testid="calendar-loading">Loading…</div>}
 
       {/* Wave 11 Agent GG: red banner when the selected day has any holidays. */}
-      {!loading && holidays.length > 0 && (
-        <div
-          data-testid="holiday-banner"
-          className="glass"
-          style={{
-            padding: '0.85rem 1rem',
-            marginBottom: '1rem',
-            borderLeft: '4px solid #ef4444',
-            background: 'rgba(239,68,68,0.08)',
-            color: 'var(--text-primary)',
-            fontSize: '0.85rem',
-          }}
-          role="alert"
-        >
-          <strong style={{ color: '#ef4444' }}>Holiday today:</strong>{' '}
-          {holidays.map((h) => h.name).join(', ')}
-        </div>
-      )}
+      {!loading && <HolidayBanner holidays={holidays} />}
 
       {!loading && columns.length === 0 && (
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
@@ -734,244 +487,18 @@ export default function CalendarGrid() {
       )}
 
       {!loading && columns.length > 0 && (
-        <div
-          className="glass calendar-scroll"
-          style={{
-            padding: '1rem',
-            // Clamp width to the viewport so the inner grid's minWidth
-            // (~120px per practitioner × N columns) triggers horizontal
-            // scroll inside this wrapper instead of pushing the page wider.
-            // scrollbar-color forces the thumb to be visible on Windows
-            // overlay-scrollbar setups where the default is invisible.
-            maxWidth: '100%',
-            overflowX: 'auto',
-            overflowY: 'auto',
-            scrollbarWidth: 'thin',
-            scrollbarColor: 'rgba(255,255,255,0.3) transparent',
-          }}
-        >
-          {/* #615: use minmax(0, 1fr) per the CLAUDE.md ellipsis-on-grid-children
-              standing rule. Hard 120px floor at the minmax min would have
-              prevented columns from collapsing past 120px and forced the
-              whole grid to overflow horizontally instead of letting the
-              ellipsis chain on each cell clip — see line 199 column header
-              and line 230 hour cell, both have minWidth:0. */}
-          <div className="calendar-grid" style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(0, 1fr))`, gap: '4px', minWidth: `${80 + columns.length * 120}px` }}>
-            <div style={{ ...colHead, background: 'transparent' }}></div>
-            {columns.map((c) => (
-              <div key={c.id} style={{ ...colHead, opacity: c.isUnassigned ? 0.7 : 1, minWidth: 0, overflow: 'hidden' }} title={c.role ? `${c.name} · ${c.role}` : c.name}>
-                {c.isUnassigned ? (
-                  <UserIcon size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7, flexShrink: 0 }} />
-                ) : (
-                  <Stethoscope size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7, flexShrink: 0 }} />
-                )}
-                {/* #486: name + role row needs explicit overflow:hidden + ellipsis,
-                    otherwise "Sandeep Bose" (12 chars) + " DOCTOR" suffix overflows
-                    the 120px min column width and clips into the next column. */}
-                <span style={{ display: 'inline-block', verticalAlign: 'middle', maxWidth: 'calc(100% - 22px)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {c.name}
-                  {c.role && (
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginLeft: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      {c.role}
-                    </span>
-                  )}
-                </span>
-              </div>
-            ))}
-
-            {HOURS.map((h) => (
-              <React.Fragment key={h}>
-                <div style={hourLabel}>{fmtHour(h)}</div>
-                {columns.map((c) => {
-                  const cell = grid[c.id]?.[h] || [];
-                  // #270: empty slots are clickable when the column belongs to a
-                  // real practitioner (not the synthetic Unassigned column —
-                  // a fresh booking should always be assigned to someone).
-                  const isCreatable = !c.isUnassigned && cell.length === 0;
-                  return (
-                    <div
-                      key={`${c.id}-${h}`}
-                      style={{
-                        ...hourCell,
-                        cursor: isCreatable ? 'pointer' : 'default',
-                        position: 'relative',
-                        minWidth: 0,
-                        overflow: 'hidden',
-                      }}
-                      onClick={isCreatable ? () => setNewVisit({ columnId: c.id, hour: h }) : undefined}
-                      title={isCreatable ? `Book ${fmtHour(h)} with ${c.name}` : undefined}
-                      onMouseEnter={isCreatable ? (e) => { e.currentTarget.querySelector('[data-empty-affordance]')?.style.setProperty('opacity', '0.8'); } : undefined}
-                      onMouseLeave={isCreatable ? (e) => { e.currentTarget.querySelector('[data-empty-affordance]')?.style.setProperty('opacity', '0'); } : undefined}
-                    >
-                      {cell.map((v) => {
-                        const isFocused = focusId && String(v.id) === String(focusId);
-                        const vStatus = displayStatus(v);
-                        const isPending = vStatus === 'pending';
-                        return (
-                        <Link
-                          to={`/wellness/patients/${v.patient?.id || v.patientId}`}
-                          key={v.id}
-                          ref={isFocused ? focusedRef : undefined}
-                          data-testid={isFocused ? 'focused-visit' : `visit-chip-${v.id}`}
-                          style={{
-                            textDecoration: 'none', color: 'var(--text-primary)',
-                            background: STATUS_COLOR[vStatus] || 'rgba(255,255,255,0.05)',
-                            borderLeft: `3px solid ${STATUS_BORDER[vStatus] || '#64748b'}`,
-                            padding: '0.4rem 0.5rem', borderRadius: '6px',
-                            fontSize: '0.75rem', display: 'block',
-                            // #486: keep the event chip clamped to its grid-cell width
-                            // so long patient names + service titles ellipsis-truncate
-                            // instead of overflowing into the next practitioner column.
-                            minWidth: 0, maxWidth: '100%', overflow: 'hidden',
-                            // Focus halo: the chip the user opened from the
-                            // Appointments page gets a pulsing outline + raised
-                            // shadow so they don't lose it in a busy grid.
-                            outline: isFocused ? '2px solid var(--primary-color, var(--accent-color, #6366f1))' : undefined,
-                            outlineOffset: isFocused ? '2px' : undefined,
-                            boxShadow: isFocused ? '0 0 0 4px rgba(99,102,241,0.18), 0 6px 18px rgba(0,0,0,0.25)' : undefined,
-                          }}
-                          title={`${new Date(v.visitDate).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })} IST · ${v.patient?.name || `#${v.patientId}`}${v.service?.name ? ` — ${v.service.name}` : ''}`}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {/* #361: explicit IST suffix — the wall time on the chip is
-                                already IST-localised (toLocaleTimeString w/ en-IN +
-                                +05:30 fetch window upstream), but receptionists in
-                                shared workspaces couldn't tell at a glance. */}
-                            {new Date(v.visitDate).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })} IST · {v.patient?.name || `#${v.patientId}`}
-                          </div>
-                          <div style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {v.service?.name || '—'}
-                          </div>
-                          {/* Wave 7D — booking-type badge + travel-time
-                              annotation. Both fields land on Visit per
-                              Wave 2D; pre-Wave-2D rows have null bookingType,
-                              so we treat that as CLINIC_VISIT for the badge
-                              icon (matches the column default). Travel time
-                              is only surfaced for IN_HOME visits where the
-                              field is meaningful — staff dispatch needs to
-                              know the buffer to allocate. */}
-                          {(() => {
-                            const bt = v.bookingType || 'CLINIC_VISIT';
-                            const meta = BOOKING_TYPE_META[bt] || BOOKING_TYPE_META.CLINIC_VISIT;
-                            const Icon = meta.icon;
-                            return (
-                              <div style={{
-                                display: 'flex', alignItems: 'center', gap: 4,
-                                marginTop: 3, fontSize: '0.65rem',
-                                color: meta.color,
-                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                              }}>
-                                <Icon size={11} aria-hidden="true" />
-                                <span data-testid={`booking-type-${bt}`}>{meta.label}</span>
-                                {bt === 'IN_HOME' && Number.isFinite(v.travelTimeMinutes) && v.travelTimeMinutes > 0 && (
-                                  <span data-testid="travel-time" style={{ color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-                                    <Car size={10} aria-hidden="true" /> Travel: {v.travelTimeMinutes} min
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })()}
-                          {isPending && (
-                            <div style={{ marginTop: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                              <span
-                                data-testid={`pending-badge-${v.id}`}
-                                style={{
-                                  padding: '0.1rem 0.4rem',
-                                  borderRadius: 999,
-                                  fontSize: '0.6rem',
-                                  fontWeight: 600,
-                                  textTransform: 'uppercase',
-                                  letterSpacing: '0.04em',
-                                  background: 'rgba(245,158,11,0.18)',
-                                  color: '#f59e0b',
-                                  border: '1px solid rgba(245,158,11,0.4)',
-                                }}
-                              >
-                                Pending
-                              </span>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  // Stop the Link nav so the modal can mount.
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  setAssignTarget(v);
-                                }}
-                                data-testid={`assign-doctor-${v.id}`}
-                                style={{
-                                  padding: '0.15rem 0.5rem',
-                                  borderRadius: 6,
-                                  fontSize: '0.65rem',
-                                  fontWeight: 500,
-                                  background: 'var(--primary-color, var(--accent-color, #6366f1))',
-                                  color: '#fff',
-                                  border: 'none',
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                Assign doctor
-                              </button>
-                            </div>
-                          )}
-                        </Link>
-                        );
-                      })}
-                      {isCreatable && (
-                        <span
-                          data-empty-affordance
-                          style={{
-                            position: 'absolute', inset: 0,
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            color: 'var(--accent-color)', opacity: 0,
-                            transition: 'opacity 0.12s',
-                            pointerEvents: 'none',
-                            fontSize: '0.7rem', fontWeight: 500, gap: '0.25rem',
-                          }}
-                        >
-                          <Plus size={12} /> Book
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </React.Fragment>
-            ))}
-          </div>
-        </div>
+        <CalendarDayGrid
+          columns={columns}
+          HOURS={HOURS}
+          grid={grid}
+          focusId={focusId}
+          focusedRef={focusedRef}
+          onEmptyCellClick={(columnId, hour) => setNewVisit({ columnId, hour })}
+          onAssignClick={(visit) => setAssignTarget(visit)}
+        />
       )}
 
-      <div style={{ marginTop: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.75rem' }}>
-        {Object.entries(STATUS_BORDER).map(([s, color]) => (
-          <span key={s} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)' }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: color }} />{s}
-          </span>
-        ))}
-      </div>
-
-      {/* Wave 7D — booking-type legend chip. Same icons used on the
-          PublicBooking.jsx widget + on each event card above, so the
-          receptionist can match an at-home Home icon to "AT HOME" at a
-          glance. Rendered as a separate row below the status legend. */}
-      <div
-        data-testid="booking-type-legend"
-        style={{
-          marginTop: '0.5rem',
-          display: 'flex', flexWrap: 'wrap', gap: '0.75rem',
-          fontSize: '0.75rem',
-        }}
-      >
-        <span style={{ color: 'var(--text-secondary)', fontWeight: 600, marginRight: '0.25rem' }}>Booking type:</span>
-        {BOOKING_TYPE_ORDER.map((bt) => {
-          const meta = BOOKING_TYPE_META[bt];
-          const Icon = meta.icon;
-          return (
-            <span key={bt} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: meta.color }}>
-              <Icon size={12} aria-hidden="true" /> {meta.label}
-            </span>
-          );
-        })}
-      </div>
+      {!loading && <CalendarLegends />}
 
       {newVisit && (
         <NewVisitModal
@@ -1000,610 +527,19 @@ export default function CalendarGrid() {
 
       {/* User Appointment Booking Section - Only for regular users */}
       {canBookAppointment && (
-        <div style={{ marginTop: '2rem', padding: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-          <button
-            onClick={() => setShowBooking(!showBooking)}
-            style={{
-              padding: '0.6rem 1.5rem',
-              background: showBooking ? 'var(--primary-color, var(--accent-color, #6366f1))' : 'transparent',
-              color: showBooking ? '#fff' : 'var(--text-primary)',
-              border: `1px solid ${showBooking ? 'transparent' : 'var(--border-color, rgba(0,0,0,0.15))'}`,
-              borderRadius: 8,
-              cursor: 'pointer',
-              fontWeight: 600,
-              fontSize: '0.9rem',
-              transition: 'all 0.2s'
-            }}
-          >
-            {showBooking ? '✓ Book Appointment' : '+ Book Appointment'}
-          </button>
-
-        {showBooking && (
-          <div style={{ marginTop: '1.5rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-            {/* Left: Booking Form */}
-            <div style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)' }}>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem' }}>Book an Appointment</h3>
-              <form onSubmit={handleBookAppointment} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div>
-                  <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>Doctor</label>
-                  <select
-                    value={bookingForm.doctorId}
-                    onChange={(e) => setBookingForm({...bookingForm, doctorId: e.target.value})}
-                    required
-                    style={{...modalInput, width: '100%'}}
-                  >
-                    <option value="">— Select Doctor —</option>
-                    {availability.map(doc => (
-                      <option key={doc.id} value={doc.id} disabled={!doc.available}>
-                        {doc.name} {!doc.available ? '(On Leave)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>Service</label>
-                  <select
-                    value={bookingForm.serviceId}
-                    onChange={(e) => setBookingForm({...bookingForm, serviceId: e.target.value})}
-                    style={{...modalInput, width: '100%'}}
-                  >
-                    <option value="">— Select Service —</option>
-                    {services.map(svc => (
-                      <option key={svc.id} value={svc.id}>{svc.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                  <div>
-                    <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>Date</label>
-                    <input
-                      type="date"
-                      value={bookingForm.appointmentDate}
-                      onChange={(e) => setBookingForm({...bookingForm, appointmentDate: e.target.value})}
-                      required
-                      style={{...modalInput, width: '100%'}}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>Time</label>
-                    <input
-                      type="time"
-                      value={bookingForm.appointmentTime}
-                      onChange={(e) => setBookingForm({...bookingForm, appointmentTime: e.target.value})}
-                      required
-                      style={{...modalInput, width: '100%'}}
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={bookingSubmitting || !bookingForm.doctorId}
-                  style={{
-                    padding: '0.6rem 1.2rem',
-                    background: bookingSubmitting || !bookingForm.doctorId ? '#ccc' : 'var(--primary-color, var(--accent-color, #6366f1))',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: 8,
-                    cursor: bookingSubmitting || !bookingForm.doctorId ? 'not-allowed' : 'pointer',
-                    fontWeight: 600,
-                    fontSize: '0.9rem'
-                  }}
-                >
-                  {bookingSubmitting ? 'Booking...' : 'Book Now'}
-                </button>
-              </form>
-            </div>
-
-            {/* Right: My Appointments */}
-            <div style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)' }}>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem' }}>My Appointments</h3>
-              {myAppointments.length === 0 ? (
-                <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem 0' }}>No appointments booked yet</p>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  {myAppointments.map(apt => (
-                    <div key={apt.id} style={{ padding: '0.75rem', background: 'rgba(99,102,241,0.1)', borderRadius: 8, border: '1px solid rgba(99,102,241,0.2)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.25rem' }}>
-                            Dr. {apt.doctorName}
-                          </div>
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                            {apt.serviceName} • {new Date(apt.appointmentDate).toLocaleDateString()} at {new Date(apt.appointmentDate).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                            Status: <span style={{ textTransform: 'capitalize', fontWeight: 500 }}>{apt.status}</span>
-                          </div>
-                        </div>
-                        {apt.status === 'booked' && (
-                          <button
-                            onClick={() => handleCancelAppointment(apt.id)}
-                            style={{
-                              padding: '0.3rem 0.7rem',
-                              background: 'rgba(239,68,68,0.1)',
-                              color: '#ef4444',
-                              border: '1px solid rgba(239,68,68,0.3)',
-                              borderRadius: 6,
-                              cursor: 'pointer',
-                              fontSize: '0.75rem',
-                              fontWeight: 500
-                            }}
-                          >
-                            Cancel
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        </div>
+        <UserBookingPanel
+          showBooking={showBooking}
+          onToggleBooking={() => setShowBooking(!showBooking)}
+          bookingForm={bookingForm}
+          setBookingForm={setBookingForm}
+          bookingSubmitting={bookingSubmitting}
+          onBookAppointment={handleBookAppointment}
+          availability={availability}
+          services={services}
+          myAppointments={myAppointments}
+          onCancelAppointment={handleCancelAppointment}
+        />
       )}
-    </div>
-  );
-}
-
-// #270: lightweight modal for booking a visit from the calendar grid.
-// Only required field is patientId (per the visit POST validator at
-// routes/wellness.js:472). status defaults to 'booked' so the receptionist
-// doesn't trip the "completed visits need serviceId + doctorId" gate.
-function NewVisitModal({ column, hour, date, patients, services, waitlist, resources = [], notify, onClose, onCreated }) {
-  const [patientId, setPatientId] = useState('');
-  const [serviceId, setServiceId] = useState('');
-  const [notes, setNotes] = useState('');
-  // Wave 11 Agent GG: optional resource selection. Filtered by service compatibility.
-  const [resourceId, setResourceId] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  // #629: source flag tracks whether this booking is a fresh visit (default)
-  // or a promotion from a waitlist entry. When 'waitlist', we PUT
-  // /api/wellness/waitlist/:id with status='booked' + visitDate (the backend
-  // materialises a Visit row at that slot — see routes/wellness.js:4298+).
-  const [source, setSource] = useState('new'); // 'new' | 'waitlist'
-  const [waitlistId, setWaitlistId] = useState('');
-
-  const localDate = new Date(date);
-  localDate.setHours(hour, 0, 0, 0);
-
-  // #629: only show waitlist entries with status='waiting' (the parent
-  // already filters by status, but defensive in case the prop changes).
-  // The list is empty array fallback so the dropdown still renders even
-  // with no waitlist entries — see test "renders waitlist dropdown options".
-  const waitingEntries = Array.isArray(waitlist) ? waitlist.filter((w) => w.status === 'waiting') : [];
-
-  const submit = async (e) => {
-    e.preventDefault();
-    if (submitting) return;
-
-    // #629: visitDate built as IST wall time; backend stores as UTC, dashboard
-    // applies the same +05:30 offset on read so the slot lands at the
-    // intended hour for the receptionist's column.
-    const istIso = `${date.toISOString().slice(0, 10)}T${String(hour).padStart(2, '0')}:00:00+05:30`;
-
-    if (source === 'waitlist') {
-      if (!waitlistId) return;
-      setSubmitting(true);
-      try {
-        // PUT status='booked' triggers Visit creation in the backend handler
-        // (see routes/wellness.js:4298) tied to the waitlist entry's
-        // patient + service. The visitDate ensures the slot lands where the
-        // receptionist clicked, not the +24h fallback.
-        await fetchApi(`/api/wellness/waitlist/${parseInt(waitlistId, 10)}`, {
-          method: 'PUT',
-          body: JSON.stringify({ status: 'booked', visitDate: istIso }),
-        });
-        const entry = waitingEntries.find((w) => w.id === parseInt(waitlistId, 10));
-        const name = entry?.patient?.name || 'patient';
-        notify.success(`Promoted ${name} from waitlist to ${String(hour).padStart(2, '0')}:00`);
-        onCreated();
-      } catch (_err) { /* fetchApi already toasted */ }
-      setSubmitting(false);
-      return;
-    }
-
-    if (!patientId) return;
-    setSubmitting(true);
-    try {
-      await fetchApi('/api/wellness/visits', {
-        method: 'POST',
-        body: JSON.stringify({
-          patientId: parseInt(patientId, 10),
-          serviceId: serviceId ? parseInt(serviceId, 10) : null,
-          doctorId: column.id,
-          // Wave 11 Agent GG: pin resource if selected (gate raises 409 RESOURCE_DOUBLE_BOOKED on overlap).
-          resourceId: resourceId ? parseInt(resourceId, 10) : null,
-          visitDate: istIso,
-          status: 'booked',
-          notes: notes || null,
-        }),
-      });
-      const patientName = patients.find((p) => p.id === parseInt(patientId, 10))?.name;
-      notify.success(`Booked ${patientName || 'visit'} at ${String(hour).padStart(2, '0')}:00 with ${column.name}`);
-      onCreated();
-    } catch (_err) { /* fetchApi already toasted */ }
-    setSubmitting(false);
-  };
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="new-visit-title"
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 9000,
-        background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '1rem',
-      }}
-    >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={submit}
-        className="glass"
-        style={{
-          background: 'var(--surface-color, #ffffff)', color: 'var(--text-primary)',
-          padding: '1.5rem', borderRadius: 12, width: '100%', maxWidth: 480,
-          border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
-          display: 'flex', flexDirection: 'column', gap: '0.75rem',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 id="new-visit-title" style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>
-            New visit
-          </h3>
-          <button type="button" onClick={onClose} aria-label="Close" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-            <X size={18} />
-          </button>
-        </div>
-        <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-          {column.name} • {localDate.toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })}
-        </p>
-
-        {/* #629: source toggle — pick "Promote from waitlist" when there are
-            waiting entries, otherwise stays on the default new-visit path. */}
-        {waitingEntries.length > 0 && (
-          <div role="radiogroup" aria-label="Booking source" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={source === 'new'}
-              onClick={() => setSource('new')}
-              style={sourceBtn(source === 'new')}
-            >
-              New patient
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={source === 'waitlist'}
-              onClick={() => setSource('waitlist')}
-              style={sourceBtn(source === 'waitlist')}
-            >
-              Promote from waitlist ({waitingEntries.length})
-            </button>
-          </div>
-        )}
-
-        {source === 'waitlist' ? (
-          <>
-            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Waitlisted patient *</label>
-            <select
-              required
-              value={waitlistId}
-              onChange={(e) => setWaitlistId(e.target.value)}
-              style={modalInput}
-              aria-label="Waitlisted patient"
-            >
-              <option value="">— select from waitlist —</option>
-              {waitingEntries.map((w) => {
-                const svcName = w.serviceId
-                  ? (services.find((s) => s.id === w.serviceId)?.name || `service #${w.serviceId}`)
-                  : 'any service';
-                const phone = w.patient?.phone ? ` · ${w.patient.phone}` : '';
-                return (
-                  <option key={w.id} value={w.id}>
-                    {w.patient?.name || `#${w.patientId}`}{phone} — {svcName}
-                  </option>
-                );
-              })}
-            </select>
-            <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-              Promoting will create a booked visit at this slot and remove the patient from the waiting list.
-            </p>
-          </>
-        ) : (
-          <>
-            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Patient *</label>
-            <select required value={patientId} onChange={(e) => setPatientId(e.target.value)} style={modalInput}>
-              <option value="">— select patient —</option>
-              {patients.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}{p.phone ? ` · ${p.phone}` : ''}</option>
-              ))}
-            </select>
-
-            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Service (optional)</label>
-            <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={modalInput}>
-              <option value="">— pick later —</option>
-              {services.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-
-            {/* Wave 11 Agent GG: optional resource selection (room/machine). */}
-            {resources.length > 0 && (
-              <>
-                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Resource (optional)</label>
-                <select value={resourceId} onChange={(e) => setResourceId(e.target.value)} style={modalInput}>
-                  <option value="">— no resource pinned —</option>
-                  {resources
-                    .filter((r) => {
-                      if (!serviceId) return true;
-                      if (!r.serviceIds) return true;
-                      try {
-                        const allowed = JSON.parse(r.serviceIds);
-                        return Array.isArray(allowed) && allowed.includes(parseInt(serviceId, 10));
-                      } catch (_e) { return true; }
-                    })
-                    .map((r) => (
-                      <option key={r.id} value={r.id}>{r.name} · {r.type}</option>
-                    ))}
-                </select>
-              </>
-            )}
-
-            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Notes (optional)</label>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={2}
-              style={{ ...modalInput, resize: 'vertical', fontFamily: 'inherit' }}
-              placeholder="Walk-in confirmed, follow-up consult, etc."
-            />
-          </>
-        )}
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
-          <button type="button" onClick={onClose} style={{ padding: '0.5rem 1rem', background: 'transparent', border: '1px solid var(--border-color, rgba(0,0,0,0.15))', borderRadius: 8, cursor: 'pointer', color: 'var(--text-primary)' }}>
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={(source === 'waitlist' ? !waitlistId : !patientId) || submitting}
-            style={{
-              padding: '0.5rem 1.25rem',
-              background: 'var(--primary-color, var(--accent-color, #6366f1))',
-              opacity: ((source === 'waitlist' ? !waitlistId : !patientId) || submitting) ? 0.4 : 1,
-              border: 'none', color: '#fff', borderRadius: 8,
-              cursor: ((source === 'waitlist' ? !waitlistId : !patientId) || submitting) ? 'not-allowed' : 'pointer',
-              fontWeight: 600,
-            }}
-          >
-            {submitting ? 'Booking…' : source === 'waitlist' ? 'Promote from waitlist' : 'Book visit'}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-// Inline label+input pill — matches the height of the All-staff dropdown +
-// All-practitioners pill so the header row sits on one baseline.
-const dateField = { display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.35rem 0.65rem', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent' };
-const dateInput = { padding: 0, fontSize: '0.8rem', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', colorScheme: 'inherit', outline: 'none', font: 'inherit' };
-const colHead = { padding: '0.5rem 0.75rem', fontWeight: 600, fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)', color: 'var(--text-primary)' };
-const hourLabel = { padding: '0.5rem', fontSize: '0.7rem', color: 'var(--text-secondary)', textAlign: 'right', borderRight: '1px solid rgba(255,255,255,0.05)' };
-const hourCell = { padding: '0.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', minHeight: '60px', borderBottom: '1px solid rgba(255,255,255,0.04)' };
-const modalInput = { padding: '0.5rem 0.7rem', borderRadius: 8, border: '1px solid var(--border-color, rgba(0,0,0,0.15))', background: 'var(--input-bg, rgba(0,0,0,0.03))', color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' };
-// #629: source-toggle pill — primary brand color when active so it reads
-// the same on wellness teal (#265855) as on generic blue.
-const sourceBtn = (active) => ({
-  padding: '0.4rem 0.85rem',
-  background: active ? 'var(--primary-color, var(--accent-color, #6366f1))' : 'transparent',
-  color: active ? '#fff' : 'var(--text-primary)',
-  border: `1px solid ${active ? 'transparent' : 'var(--border-color, rgba(0,0,0,0.15))'}`,
-  borderRadius: 999,
-  cursor: 'pointer',
-  fontSize: '0.8rem',
-  fontWeight: active ? 600 : 400,
-});
-
-// AssignDoctorModal — staff-side picker for assigning a doctor to a
-// pending appointment (a portal self-booking with no doctor selected).
-// Loads the same /doctors/availability list the booking form uses so
-// admins on leave + doctors with block-times can't be picked. Hits
-// PATCH /visits/:id/assign-doctor which runs the slot-conflict +
-// leave guards server-side as the authoritative check.
-export function AssignDoctorModal({ visit, notify, onClose, onAssigned }) {
-  const [doctors, setDoctors] = useState([]);
-  const [loadingDocs, setLoadingDocs] = useState(true);
-  const [selectedDoctorId, setSelectedDoctorId] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const visitDay = useMemo(() => {
-    const d = new Date(visit.visitDate);
-    if (Number.isNaN(d.getTime())) return null;
-    return isoLocalDate(d);
-  }, [visit?.visitDate]);
-
-  useEffect(() => {
-    if (!visitDay) return;
-    let cancelled = false;
-    setLoadingDocs(true);
-    fetchApi(`/api/wellness/doctors/availability?date=${visitDay}`)
-      .then((data) => {
-        if (cancelled) return;
-        setDoctors(Array.isArray(data) ? data : []);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        notify?.error?.(err?.message || 'Failed to load doctor availability');
-        setDoctors([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingDocs(false);
-      });
-    return () => { cancelled = true; };
-  }, [visitDay, notify]);
-
-  const submit = async () => {
-    if (!selectedDoctorId || submitting) return;
-    setSubmitting(true);
-    try {
-      await fetchApi(`/api/wellness/visits/${visit.id}/assign-doctor`, {
-        method: 'PATCH',
-        body: JSON.stringify({ doctorId: parseInt(selectedDoctorId, 10) }),
-      });
-      notify?.success?.('Doctor assigned');
-      onAssigned?.();
-    } catch (err) {
-      notify?.error?.(err?.message || 'Failed to assign doctor');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const visitTimeIst = visit?.visitDate
-    ? new Date(visit.visitDate).toLocaleString('en-IN', {
-        weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit', hour12: false,
-      })
-    : '—';
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Assign doctor to appointment"
-      onClick={onClose}
-      data-testid="assign-doctor-modal"
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1001,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
-      }}
-    >
-      <div
-        className="glass"
-        onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: '480px', width: '100%', padding: '1.5rem', borderRadius: 12 }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-          <div>
-            <h3 style={{ margin: 0 }}>Assign doctor</h3>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-              {visit.patient?.name || 'Patient'} · {visit.service?.name || 'General'} · {visitTimeIst} IST
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            data-testid="assign-doctor-close"
-            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        {loadingDocs ? (
-          <div style={{ padding: '1rem 0', color: 'var(--text-secondary)' }}>Loading available doctors…</div>
-        ) : doctors.length === 0 ? (
-          <div style={{ padding: '1rem 0', color: 'var(--text-secondary)' }}>
-            No practitioners configured for this tenant.
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gap: '0.4rem', maxHeight: '320px', overflowY: 'auto', marginBottom: '0.75rem' }}>
-            {doctors.map((d) => {
-              const checked = String(selectedDoctorId) === String(d.id);
-              return (
-                <label
-                  key={d.id}
-                  data-testid={`assign-doctor-option-${d.id}`}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '0.6rem',
-                    padding: '0.55rem 0.7rem',
-                    borderRadius: 8,
-                    border: `1px solid ${checked ? 'var(--primary-color, var(--accent-color, #6366f1))' : 'rgba(255,255,255,0.1)'}`,
-                    background: checked ? 'rgba(99,102,241,0.1)' : 'transparent',
-                    cursor: d.available === false ? 'not-allowed' : 'pointer',
-                    opacity: d.available === false ? 0.5 : 1,
-                  }}
-                >
-                  <input
-                    type="radio"
-                    name="assign-doctor-radio"
-                    value={d.id}
-                    checked={checked}
-                    disabled={d.available === false}
-                    onChange={(e) => setSelectedDoctorId(e.target.value)}
-                  />
-                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-                    <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {d.name}
-                      {d.specialty && (
-                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 400, marginLeft: '0.4rem' }}>
-                          · {d.specialty}
-                        </span>
-                      )}
-                    </div>
-                    {d.wellnessRole && (
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        {d.wellnessRole}
-                      </span>
-                    )}
-                  </div>
-                  {d.available === false && (
-                    <span
-                      style={{
-                        fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: 999,
-                        background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 600,
-                      }}
-                    >
-                      Unavailable
-                    </span>
-                  )}
-                </label>
-              );
-            })}
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              padding: '0.5rem 1rem', borderRadius: 6,
-              background: 'rgba(255,255,255,0.06)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              color: 'var(--text-primary)', cursor: 'pointer',
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!selectedDoctorId || submitting}
-            data-testid="assign-doctor-submit"
-            style={{
-              padding: '0.5rem 1rem', borderRadius: 6,
-              background: 'var(--primary-color, var(--accent-color, #6366f1))',
-              color: '#fff', border: 'none',
-              cursor: !selectedDoctorId || submitting ? 'not-allowed' : 'pointer',
-              opacity: !selectedDoctorId || submitting ? 0.5 : 1,
-            }}
-          >
-            {submitting ? 'Assigning…' : 'Assign doctor'}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

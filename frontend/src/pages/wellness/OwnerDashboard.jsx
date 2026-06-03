@@ -85,27 +85,35 @@ export default function OwnerDashboard() {
   };
 
   useEffect(() => {
-    fetchApi('/api/wellness/locations').then(setLocations).catch(() => setLocations([]));
+    let cancelled = false;
+    fetchApi('/api/wellness/locations')
+      .then((res) => { if (!cancelled) setLocations(res); })
+      .catch(() => { if (!cancelled) setLocations([]); });
     // Fetch AdsGPT login configuration
     fetchApi('/api/integrations/adsgpt/config')
-      .then((res) => setAdsgptLogin(res.adsgptLogin || ''))
-      .catch(() => setAdsgptLogin(''));
+      .then((res) => { if (!cancelled) setAdsgptLogin(res.adsgptLogin || ''); })
+      .catch(() => { if (!cancelled) setAdsgptLogin(''); });
 
     // Listen for config updates from Settings page
     const handleConfigUpdate = (event) => {
       setAdsgptLogin(event.detail?.adsgptLogin || '');
     };
     window.addEventListener('adsgpt:config-updated', handleConfigUpdate);
-    return () => window.removeEventListener('adsgpt:config-updated', handleConfigUpdate);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('adsgpt:config-updated', handleConfigUpdate);
+    };
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     const url = locationId ? `/api/wellness/dashboard?locationId=${locationId}` : '/api/wellness/dashboard';
     fetchApi(url)
-      .then(setData)
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
+      .then((res) => { if (!cancelled) setData(res); })
+      .catch(() => { if (!cancelled) setData(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [locationId]);
 
   // #565: fetch the canonical P&L total for "this month so far" so the
@@ -114,6 +122,7 @@ export default function OwnerDashboard() {
   // — the route's reportRange helper widens DATE_ONLY values to the full
   // day so we get realised revenue through end-of-today.
   useEffect(() => {
+    let cancelled = false;
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -123,8 +132,9 @@ export default function OwnerDashboard() {
     const qs = new URLSearchParams({ from, to });
     if (locationId) qs.set('locationId', String(locationId));
     fetchApi(`/api/wellness/reports/pnl-by-service?${qs.toString()}`, { silent: true })
-      .then(setPnl)
-      .catch(() => setPnl(null));
+      .then((res) => { if (!cancelled) setPnl(res); })
+      .catch(() => { if (!cancelled) setPnl(null); });
+    return () => { cancelled = true; };
   }, [locationId]);
 
   if (loading) return <div style={{ padding: '2rem' }}>Loading owner dashboard…</div>;
@@ -157,7 +167,7 @@ export default function OwnerDashboard() {
 
       {/* KPI grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
-        <StatCard icon={Calendar} label="Today's appointments" value={data.today.visits} sub={`${data.today.completed} completed so far`} color="var(--accent-color)" onClick={() => navigate('/wellness/calendar')} />
+        <StatCard icon={Calendar} label="Today's appointments" value={data.today?.visits ?? 0} sub={`${data.today?.completed ?? 0} completed so far`} color="var(--accent-color)" onClick={() => navigate('/wellness/calendar')} />
         {/* #565: month-to-date realised revenue from the canonical P&L
             endpoint, matching the figure on /wellness/reports. */}
         <StatCard
@@ -192,15 +202,15 @@ export default function OwnerDashboard() {
           <div className="wellness-stat-row-3up" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
             <div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Visits</div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 600 }}>{data.yesterday.visits}</div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 600 }}>{data.yesterday?.visits ?? 0}</div>
             </div>
             <div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Completed</div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 600 }}>{data.yesterday.completed}</div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 600 }}>{data.yesterday?.completed ?? 0}</div>
             </div>
             <div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Revenue</div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 600 }}>{formatRupees(data.yesterday.revenue)}</div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 600 }}>{formatRupees(data.yesterday?.revenue)}</div>
             </div>
           </div>
         </div>
@@ -209,14 +219,14 @@ export default function OwnerDashboard() {
           <h3 style={{ marginBottom: '0.75rem', fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Sparkles size={16} color="#a855f7" /> Top recommendation
           </h3>
-          {data.pendingRecommendations.length > 0 ? (
+          {(data.pendingRecommendations || []).length > 0 ? (
             <>
-              <div style={{ fontSize: '0.95rem', fontWeight: 500 }}>{data.pendingRecommendations[0].title}</div>
+              <div style={{ fontSize: '0.95rem', fontWeight: 500 }}>{(data.pendingRecommendations || [])[0]?.title}</div>
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.4rem', lineHeight: 1.4 }}>
-                {data.pendingRecommendations[0].body}
+                {(data.pendingRecommendations || [])[0]?.body}
               </div>
               <Link to="/wellness/recommendations" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--accent-color)' }}>
-                Review all {data.pendingApprovals} <ArrowRight size={14} />
+                Review all {data.pendingApprovals ?? 0} <ArrowRight size={14} />
               </Link>
             </>
           ) : (

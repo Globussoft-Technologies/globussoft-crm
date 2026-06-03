@@ -294,7 +294,7 @@ function Dashboard({ token, onLogout }) {
     [permissions],
   );
 
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async ({ signal } = {}) => {
     setLoading(true);
     try {
       // Always-permitted fetches first (profile + permissions). Without
@@ -304,6 +304,7 @@ function Dashboard({ token, onLogout }) {
         portalFetch('/api/wellness/portal/me', token),
         portalFetch('/api/wellness/portal/me/permissions', token),
       ]);
+      if (signal?.aborted) return;
       const permList = Array.isArray(perms?.permissions) ? perms.permissions : [];
       setMe(m);
       setPermissions(permList);
@@ -316,14 +317,15 @@ function Dashboard({ token, onLogout }) {
       if (permList.includes('my_prescriptions.read')) {
         try {
           const p = await portalFetch('/api/wellness/portal/prescriptions', token);
-          setPrescriptions(p || []);
+          if (!signal?.aborted) setPrescriptions(p || []);
         } catch (rxEx) {
+          if (signal?.aborted) return;
           // 403 here means the permission was revoked between the perms
           // fetch and the Rx fetch (rare race). Treat as "no access" and
           // leave the list empty; the tab is already hidden by hasPerm.
           if (!/forbidden|denied/i.test(rxEx.message || '')) throw rxEx;
         }
-      } else {
+      } else if (!signal?.aborted) {
         setPrescriptions([]);
       }
 
@@ -337,24 +339,29 @@ function Dashboard({ token, onLogout }) {
             portalFetch('/api/wellness/portal/products', token),
             portalFetch('/api/wellness/portal/product-categories', token),
           ]);
-          setProducts(Array.isArray(shop) ? shop : []);
-          setProductCategories(Array.isArray(cats) ? cats : []);
+          if (!signal?.aborted) {
+            setProducts(Array.isArray(shop) ? shop : []);
+            setProductCategories(Array.isArray(cats) ? cats : []);
+          }
         } catch (shopEx) {
+          if (signal?.aborted) return;
           if (!/forbidden|denied/i.test(shopEx.message || '')) throw shopEx;
         }
-      } else {
+      } else if (!signal?.aborted) {
         setProducts([]);
         setProductCategories([]);
       }
     } catch (ex) {
-      if (/token/i.test(ex.message)) onLogout();
+      if (!signal?.aborted && /token/i.test(ex.message)) onLogout();
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [token, onLogout]);
 
   useEffect(() => {
-    loadAll();
+    const ctrl = new AbortController();
+    loadAll({ signal: ctrl.signal });
+    return () => ctrl.abort();
   }, [loadAll]);
 
   const downloadRx = async (rxId) => {

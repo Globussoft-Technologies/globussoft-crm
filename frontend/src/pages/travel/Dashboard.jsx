@@ -138,7 +138,7 @@ export default function TravelDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.recentTrips.map((t) => (
+                  {(data.recentTrips || []).map((t) => (
                     <tr key={t.id} style={trStyle}>
                       <td style={td}>
                         <Link to={`/travel/trips/${t.id}`} style={tripLink}>

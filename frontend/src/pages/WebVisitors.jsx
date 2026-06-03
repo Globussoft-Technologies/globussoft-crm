@@ -87,14 +87,12 @@ export default function WebVisitors() {
 
   const copySnippet = async () => {
     try {
-      await navigator.clipboard.writeText(snippet);
+      const { copyToClipboard } = await import('../utils/clipboard');
+      await copyToClipboard(snippet);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      const ta = document.createElement('textarea');
-      ta.value = snippet; document.body.appendChild(ta); ta.select();
-      try { document.execCommand('copy'); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
-      document.body.removeChild(ta);
+      /* ignore — user will see no feedback, which is acceptable for a best-effort copy */
     }
   };
 

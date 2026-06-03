@@ -61,45 +61,22 @@
  */
 
 import { useEffect, useMemo, useState, useContext } from 'react';
-import {
-  Banknote,
-  Plus,
-  Pencil,
-  Power,
-  PowerOff,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Lock,
-  Unlock,
-  Receipt,
-  CheckCircle2,
-  XCircle,
-  MapPin,
-  CircleDollarSign,
-  UserCircle2,
-  UserX,
-} from 'lucide-react';
+import { Banknote, Plus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
-import { formatDateTime } from '../../utils/date';
 import { AuthContext } from '../../App';
-// Shared date-range filter (Today / Yesterday / This Week / This Month /
-// Last 7 / Last 30 / Custom …) — reused from PatientDetail's Case
-// History tab and the Wallet ledger so behaviour stays consistent
-// across the wellness surface.
 import {
-  DateRangeFilter,
   resolveDateRange,
   EMPTY_DATE_FILTER,
 } from '../../components/wellness/DateRangeFilter';
 
-const EMPTY_REGISTER_FORM = { name: '', locationId: '', openingFloat: '0' };
-const TX_TABS = [
-  { key: 'bookings', label: 'Bookings Cash' },
-  { key: 'partial', label: 'Partial Cash' },
-  { key: 'expenses', label: 'Expenses Cash' },
-];
+import RegisterForm from './cashRegisters/RegisterForm';
+import { EMPTY_REGISTER_FORM } from './cashRegisters/constants';
+import RegisterGrid from './cashRegisters/RegisterGrid';
+import ShiftPanel from './cashRegisters/ShiftPanel';
+import TransactionList from './cashRegisters/TransactionList';
+import { primaryButtonStyle } from './cashRegisters/sharedStyles';
 
 /**
  * Props:
@@ -223,6 +200,7 @@ export default function CashRegisters({ embedded = false } = {}) {
   useEffect(() => {
     loadRegisters();
     loadLocations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // When the user picks a register, fetch its open shift + transactions.
@@ -579,826 +557,68 @@ export default function CashRegisters({ embedded = false } = {}) {
         )}
       </header>
 
-      {showForm && isAdminOrManager && (
-        <form onSubmit={submitRegister} className="glass" style={formStyle}>
-          {editingId && (
-            <div
-              style={{
-                gridColumn: '1 / -1',
-                fontSize: '0.85rem',
-                color: 'var(--text-secondary)',
-                marginBottom: '0.25rem',
-              }}
-            >
-              Editing <strong>{form.name}</strong>
-            </div>
-          )}
-          <input
-            placeholder="Register name — e.g. Front Desk"
-            required
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            style={inputStyle}
-            aria-label="Register name"
-          />
-          <select
-            required
-            value={form.locationId}
-            onChange={(e) => setForm({ ...form, locationId: e.target.value })}
-            style={inputStyle}
-            aria-label="Location"
-          >
-            <option value="">Pick a location…</option>
-            {locations.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-                {l.city ? ` — ${l.city}` : ''}
-              </option>
-            ))}
-          </select>
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            placeholder="Opening float — e.g. 500"
-            value={form.openingFloat}
-            onChange={(e) => setForm({ ...form, openingFloat: e.target.value })}
-            style={inputStyle}
-            aria-label="Opening float"
-          />
-          <button
-            type="submit"
-            disabled={saving}
-            style={{
-              ...primaryButtonStyle,
-              gridColumn: '1 / -1',
-              justifyContent: 'center',
-            }}
-          >
-            {saving
-              ? 'Saving…'
-              : editingId
-              ? 'Save changes'
-              : 'Create register'}
-          </button>
-        </form>
-      )}
+      <RegisterForm
+        show={showForm}
+        isAdminOrManager={isAdminOrManager}
+        editingId={editingId}
+        form={form}
+        saving={saving}
+        locations={locations}
+        onSubmit={submitRegister}
+        setForm={setForm}
+      />
 
-      {loading && <div>Loading…</div>}
+      <RegisterGrid
+        registers={registers}
+        openShifts={openShifts}
+        loading={loading}
+        selectedRegisterId={selectedRegisterId}
+        isAdminOrManager={isAdminOrManager}
+        onSelectRegister={setSelectedRegisterId}
+        onEdit={startEdit}
+        onToggleActive={toggleActive}
+      />
 
-      {/* Register grid — each card is clickable to drill in */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns:
-            'repeat(auto-fit, minmax(min(100%, 280px), 1fr))',
-          gap: '1rem',
-          marginBottom: '1.5rem',
-        }}
-      >
-        {registers.map((reg) => {
-          const openShift = openShifts[reg.id];
-          const isOpen = !!openShift;
-          const isSelected = selectedRegisterId === reg.id;
-          return (
-            <div
-              key={reg.id}
-              className="glass"
-              onClick={() => setSelectedRegisterId(reg.id)}
-              style={{
-                padding: '1.25rem',
-                cursor: 'pointer',
-                opacity: reg.isActive ? 1 : 0.55,
-                // Unselected: visible 1px border so cards stay distinct
-                // against the cream wellness light-mode background where
-                // .glass alone provides almost no contrast. Selected:
-                // 2px teal accent that visually overrides the 1px line.
-                border: isSelected
-                  ? '2px solid var(--primary-color, var(--accent-color))'
-                  : '1px solid var(--border-color)',
-              }}
-              data-testid={`register-card-${reg.id}`}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'flex-start',
-                  marginBottom: '0.5rem',
-                }}
-              >
-                <div>
-                  <h3
-                    style={{
-                      fontSize: '1.05rem',
-                      fontWeight: 600,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.4rem',
-                    }}
-                  >
-                    <Banknote
-                      size={16}
-                      color="var(--primary-color, var(--accent-color))"
-                    />
-                    {reg.name}
-                  </h3>
-                  {reg.location && (
-                    <div
-                      style={{
-                        fontSize: '0.75rem',
-                        color: 'var(--text-secondary)',
-                        marginTop: '0.15rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.25rem',
-                      }}
-                    >
-                      <MapPin size={11} />
-                      {reg.location.name}
-                      {reg.location.city ? `, ${reg.location.city}` : ''}
-                    </div>
-                  )}
-                </div>
-                {isAdminOrManager && (
-                  <div
-                    style={{ display: 'flex', gap: '0.3rem' }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      onClick={() => startEdit(reg)}
-                      title="Edit register"
-                      style={iconButtonStyle}
-                      aria-label={`Edit ${reg.name}`}
-                    >
-                      <Pencil size={12} />
-                    </button>
-                    <button
-                      onClick={() => toggleActive(reg)}
-                      title={reg.isActive ? 'Deactivate' : 'Activate'}
-                      style={{
-                        ...iconButtonStyle,
-                        color: reg.isActive
-                          ? 'var(--success-color)'
-                          : 'var(--text-secondary)',
-                      }}
-                      aria-label={
-                        reg.isActive
-                          ? `Deactivate ${reg.name}`
-                          : `Activate ${reg.name}`
-                      }
-                    >
-                      {reg.isActive ? (
-                        <Power size={12} />
-                      ) : (
-                        <PowerOff size={12} />
-                      )}
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* #780 — status pill on every card */}
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.35rem',
-                  padding: '0.25rem 0.6rem',
-                  borderRadius: 999,
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  background: isOpen
-                    ? 'rgba(16,185,129,0.12)'
-                    : 'rgba(100,100,100,0.12)',
-                  color: isOpen
-                    ? 'var(--success-color)'
-                    : 'var(--text-secondary)',
-                }}
-                data-testid={`register-status-${reg.id}`}
-              >
-                {isOpen ? <Unlock size={11} /> : <Lock size={11} />}
-                {isOpen ? 'REGISTER OPEN' : 'REGISTER CLOSED'}
-                {isOpen && (
-                  <span style={{ marginLeft: '0.35rem', opacity: 0.85 }}>
-                    · float {formatMoney(openShift.openingFloat)}
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {!loading && registers.length === 0 && (
-          <div
-            className="glass"
-            style={{
-              padding: '2rem',
-              textAlign: 'center',
-              color: 'var(--text-secondary)',
-              gridColumn: '1 / -1',
-            }}
-          >
-            No cash registers yet.{' '}
-            {isAdminOrManager
-              ? 'Create one to start ringing up sales at the POS.'
-              : 'Ask an admin to create the first one.'}
-          </div>
-        )}
-      </div>
-
-      {/* Per-register detail panel */}
       {selectedRegister && (
         <section
           className="glass"
           style={{ padding: '1.5rem' }}
           data-testid="selected-register-panel"
         >
-          {/* #780 — REGISTER OPEN / CLOSED status header with total balance */}
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: '1rem',
-              marginBottom: '1rem',
-              paddingBottom: '0.75rem',
-              borderBottom: '1px solid rgba(255,255,255,0.08)',
-            }}
-          >
-            <div>
-              <div
-                style={{
-                  fontSize: '0.85rem',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                Selected register
-              </div>
-              <h2
-                style={{
-                  fontSize: '1.3rem',
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  marginTop: '0.2rem',
-                }}
-              >
-                <Banknote size={18} /> {selectedRegister.name}
-              </h2>
-            </div>
-            <div style={{ textAlign: 'right' }}>
-              {selectedShift ? (
-                <>
-                  <div
-                    style={{
-                      fontSize: '0.95rem',
-                      fontWeight: 700,
-                      color: 'var(--success-color)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.4rem',
-                      justifyContent: 'flex-end',
-                    }}
-                    data-testid="status-header"
-                  >
-                    <CheckCircle2 size={16} /> REGISTER OPEN
-                  </div>
-                  <div
-                    style={{
-                      fontSize: '1.5rem',
-                      fontWeight: 700,
-                      marginTop: '0.25rem',
-                    }}
-                    data-testid="current-balance"
-                  >
-                    {formatMoney(currentBalance)}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: '0.75rem',
-                      color: 'var(--text-secondary)',
-                    }}
-                  >
-                    drawer balance · opened{' '}
-                    {selectedShift.openedAt
-                      ? formatDateTime(selectedShift.openedAt)
-                      : '—'}
-                  </div>
-                </>
-              ) : (
-                <div
-                  style={{
-                    fontSize: '0.95rem',
-                    fontWeight: 700,
-                    color: 'var(--text-secondary)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.4rem',
-                  }}
-                  data-testid="status-header"
-                >
-                  <XCircle size={16} /> REGISTER CLOSED
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* #779 — Action bar: Open / Close / Deposit / Withdraw */}
-          {!selectedShift ? (
-            <form
-              onSubmit={submitOpenShift}
-              style={{
-                display: 'flex',
-                gap: '0.5rem',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                marginBottom: '1rem',
-              }}
-            >
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="Opening float — e.g. 500"
-                value={openingFloat}
-                onChange={(e) => setOpeningFloat(e.target.value)}
-                style={{ ...inputStyle, flex: '1 1 220px' }}
-                aria-label="Opening float for new shift"
-              />
-              <button
-                type="submit"
-                disabled={openingShift}
-                style={{
-                  ...primaryButtonStyle,
-                  background: 'var(--success-color)',
-                }}
-              >
-                <Unlock size={14} />
-                {openingShift ? 'Opening…' : 'Open shift'}
-              </button>
-            </form>
-          ) : (
-            <div
-              style={{
-                display: 'flex',
-                gap: '0.5rem',
-                flexWrap: 'wrap',
-                marginBottom: '1rem',
-              }}
-            >
-              <button
-                onClick={handleDeposit}
-                style={secondaryButtonStyle}
-                aria-label="Deposit cash"
-                title="Deposit cash into the drawer"
-              >
-                <ArrowDownToLine size={14} /> Deposit
-              </button>
-              <button
-                onClick={handleWithdrawal}
-                style={secondaryButtonStyle}
-                aria-label="Withdraw cash"
-                title="Withdraw cash from the drawer"
-              >
-                <ArrowUpFromLine size={14} /> Withdrawal
-              </button>
-              <form
-                onSubmit={submitCloseShift}
-                style={{
-                  display: 'flex',
-                  gap: '0.5rem',
-                  flexWrap: 'wrap',
-                  flex: '1 1 100%',
-                  marginTop: '0.5rem',
-                  padding: '0.75rem',
-                  background: 'rgba(255,255,255,0.03)',
-                  borderRadius: 8,
-                  alignItems: 'center',
-                }}
-              >
-                {/* Auto-calculated expected drawer cash. The cashier can close
-                    straight away at this figure, or type a counted amount to
-                    record a variance. */}
-                <div style={{ flex: '1 1 100%', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                  Expected cash in drawer:{' '}
-                  <strong style={{ color: 'var(--text-primary)' }}>
-                    {formatMoney(currentBalance)}
-                  </strong>{' '}
-                  — leave the count blank to close at this amount.
-                </div>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="Counted cash (optional)"
-                  value={closingTotal}
-                  onChange={(e) => setClosingTotal(e.target.value)}
-                  style={{ ...inputStyle, flex: '1 1 180px' }}
-                  aria-label="Counted cash"
-                />
-                <input
-                  placeholder="Notes (optional)"
-                  value={closingNotes}
-                  onChange={(e) => setClosingNotes(e.target.value)}
-                  style={{ ...inputStyle, flex: '2 1 220px' }}
-                  aria-label="Closing notes"
-                />
-                <button
-                  type="submit"
-                  disabled={closingShift}
-                  style={primaryButtonStyle}
-                >
-                  <Lock size={14} />
-                  {closingShift ? 'Closing…' : 'Close register'}
-                </button>
-              </form>
-            </div>
-          )}
-
-          {/* #781 — Recent Transactions split into 3 buckets */}
-          <div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '0.75rem',
-                flexWrap: 'wrap',
-                marginBottom: '0.5rem',
-              }}
-            >
-              <h3
-                style={{
-                  fontSize: '1rem',
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  margin: 0,
-                }}
-              >
-                <Receipt size={16} /> Recent transactions
-              </h3>
-              {/* Shared DateRangeFilter — same control used on Case
-                  History + Wallet ledger. Defaults to "All time"; selecting
-                  a preset narrows the per-tab counts below + the visible
-                  list. "Custom" opens the two-month range picker. */}
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  flexWrap: 'wrap',
-                }}
-              >
-                <DateRangeFilter
-                  value={txDateFilter}
-                  onChange={setTxDateFilter}
-                  label={null}
-                />
-              </div>
-            </div>
-            <div
-              role="tablist"
-              style={{
-                display: 'flex',
-                gap: '0.3rem',
-                borderBottom: '1px solid rgba(255,255,255,0.08)',
-                marginBottom: '0.75rem',
-              }}
-            >
-              {TX_TABS.map((t) => {
-                const active = txTab === t.key;
-                const count = transactions[t.key]?.length ?? 0;
-                return (
-                  <button
-                    key={t.key}
-                    role="tab"
-                    aria-selected={active}
-                    onClick={() => setTxTab(t.key)}
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      padding: '0.5rem 0.85rem',
-                      cursor: 'pointer',
-                      color: active
-                        ? 'var(--primary-color, var(--accent-color))'
-                        : 'var(--text-secondary)',
-                      borderBottom: active
-                        ? '2px solid var(--primary-color, var(--accent-color))'
-                        : '2px solid transparent',
-                      fontSize: '0.85rem',
-                      fontWeight: active ? 600 : 500,
-                    }}
-                  >
-                    {t.label}{' '}
-                    <span
-                      style={{
-                        opacity: 0.7,
-                        marginLeft: '0.25rem',
-                      }}
-                    >
-                      ({count})
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Add-expense form — Expenses tab, open shift, admin/manager.
-                Records a categorised WITHDRAWAL (e.g. a Subscription) into the
-                drawer. Subscription purchases also auto-land here. */}
-            {txTab === 'expenses' &&
-              isAdminOrManager &&
-              selectedShift &&
-              selectedShift.status === 'OPEN' && (
-                <form
-                  onSubmit={handleAddExpense}
-                  style={{
-                    display: 'flex',
-                    gap: '0.5rem',
-                    flexWrap: 'wrap',
-                    marginBottom: '0.75rem',
-                    alignItems: 'center',
-                  }}
-                >
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="Amount"
-                    value={expenseForm.amount}
-                    onChange={(e) =>
-                      setExpenseForm((f) => ({ ...f, amount: e.target.value }))
-                    }
-                    style={{ ...inputStyle, flex: '1 1 110px' }}
-                    aria-label="Expense amount"
-                  />
-                  <input
-                    placeholder="Reason — e.g. Pro plan"
-                    value={expenseForm.reason}
-                    onChange={(e) =>
-                      setExpenseForm((f) => ({ ...f, reason: e.target.value }))
-                    }
-                    style={{ ...inputStyle, flex: '2 1 200px' }}
-                    aria-label="Expense reason"
-                  />
-                  <select
-                    value={expenseForm.category}
-                    onChange={(e) =>
-                      setExpenseForm((f) => ({ ...f, category: e.target.value }))
-                    }
-                    style={{ ...inputStyle, flex: '1 1 140px' }}
-                    aria-label="Expense type"
-                  >
-                    <option value="GENERAL">General</option>
-                    <option value="SUBSCRIPTION">Subscription</option>
-                  </select>
-                  <button
-                    type="submit"
-                    disabled={savingExpense}
-                    style={primaryButtonStyle}
-                  >
-                    <Plus size={14} /> {savingExpense ? 'Adding…' : 'Add expense'}
-                  </button>
-                </form>
-              )}
-
-            {shiftLoading && <div>Loading transactions…</div>}
-
-            {!shiftLoading && !selectedShift && (
-              <div style={emptyStateStyle}>
-                Open a shift to start recording transactions.
-              </div>
-            )}
-
-            {!shiftLoading &&
-              selectedShift &&
-              visibleTransactions.length === 0 && (
-                <div style={emptyStateStyle}>
-                  {txTab === 'expenses' ? (
-                    'No expenses recorded on this shift yet. Add one below, or a subscription purchase will appear here automatically.'
-                  ) : (
-                    <>
-                      No {txTab === 'bookings' ? 'cash bookings' : 'partial-cash sales'}{' '}
-                      {txDateFilter && txDateFilter.preset !== 'all'
-                        ? 'in the selected date range.'
-                        : 'yet on this shift.'}
-                    </>
-                  )}
-                </div>
-              )}
-
-            {!shiftLoading && visibleTransactions.length > 0 && (
-              <ul
-                style={{
-                  listStyle: 'none',
-                  padding: 0,
-                  margin: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.4rem',
-                }}
-              >
-                {txTab === 'expenses'
-                  ? visibleTransactions.map((exp) => (
-                      <li
-                        key={exp.id}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          padding: '0.6rem 0.75rem',
-                          background: 'rgba(255,255,255,0.03)',
-                          borderRadius: 8,
-                          fontSize: '0.85rem',
-                        }}
-                        data-testid={`expense-row-${exp.id}`}
-                      >
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                          }}
-                        >
-                          <ArrowUpFromLine size={14} color="var(--accent-color)" />
-                          <div>
-                            <div
-                              style={{
-                                fontWeight: 500,
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.4rem',
-                              }}
-                            >
-                              {exp.reason || 'Expense'}
-                              {exp.category && exp.category !== 'GENERAL' && (
-                                <span
-                                  style={{
-                                    fontSize: '0.65rem',
-                                    fontWeight: 600,
-                                    textTransform: 'capitalize',
-                                    padding: '0.1rem 0.45rem',
-                                    borderRadius: 999,
-                                    background: 'rgba(124,196,180,0.18)',
-                                    color: 'var(--primary-color, var(--accent-color))',
-                                  }}
-                                >
-                                  {exp.category.toLowerCase()}
-                                </span>
-                              )}
-                            </div>
-                            {exp.createdAt && (
-                              <div
-                                style={{
-                                  fontSize: '0.7rem',
-                                  color: 'var(--text-secondary)',
-                                }}
-                              >
-                                {formatDateTime(exp.createdAt)}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <div style={{ fontWeight: 600, color: 'var(--accent-color)' }}>
-                          −{formatMoney(exp.amount)}
-                        </div>
-                      </li>
-                    ))
-                  : visibleTransactions.map((sale) => (
-                      <li
-                        key={sale.id}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          padding: '0.6rem 0.75rem',
-                          background: 'rgba(255,255,255,0.03)',
-                          borderRadius: 8,
-                          fontSize: '0.85rem',
-                        }}
-                        data-testid={`tx-row-${sale.id}`}
-                      >
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                          }}
-                        >
-                          <CircleDollarSign
-                            size={14}
-                            color="var(--success-color)"
-                          />
-                          <div>
-                            <div style={{ fontWeight: 500 }}>
-                              {sale.invoiceNumber || `Sale #${sale.id}`}
-                            </div>
-                            <div
-                              style={{
-                                fontSize: '0.7rem',
-                                color: 'var(--text-secondary)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.25rem',
-                              }}
-                            >
-                              {sale.patientId ? (
-                                <>
-                                  <UserCircle2 size={10} />
-                                  Patient #{sale.patientId}
-                                </>
-                              ) : (
-                                <>
-                                  <UserX size={10} />
-                                  Walk-in
-                                </>
-                              )}
-                              {sale.createdAt && (
-                                <span>· {formatDateTime(sale.createdAt)}</span>
-                              )}
-                              <span>· {sale.paymentMethod}</span>
-                            </div>
-                          </div>
-                        </div>
-                        <div style={{ fontWeight: 600 }}>
-                          {formatMoney(sale.total)}
-                        </div>
-                      </li>
-                    ))}
-              </ul>
-            )}
-          </div>
+          <ShiftPanel
+            selectedRegister={selectedRegister}
+            selectedShift={selectedShift}
+            currentBalance={currentBalance}
+            openingFloat={openingFloat}
+            openingShift={openingShift}
+            closingTotal={closingTotal}
+            closingNotes={closingNotes}
+            closingShift={closingShift}
+            onOpeningFloatChange={setOpeningFloat}
+            onOpenShift={submitOpenShift}
+            onClosingTotalChange={setClosingTotal}
+            onClosingNotesChange={setClosingNotes}
+            onCloseShift={submitCloseShift}
+            onDeposit={handleDeposit}
+            onWithdrawal={handleWithdrawal}
+          />
+          <TransactionList
+            txTab={txTab}
+            txDateFilter={txDateFilter}
+            transactions={transactions}
+            visibleTransactions={visibleTransactions}
+            shiftLoading={shiftLoading}
+            selectedShift={selectedShift}
+            isAdminOrManager={isAdminOrManager}
+            expenseForm={expenseForm}
+            savingExpense={savingExpense}
+            onTabChange={setTxTab}
+            onDateFilterChange={setTxDateFilter}
+            onAddExpense={handleAddExpense}
+            onExpenseFormChange={setExpenseForm}
+          />
         </section>
       )}
     </div>
   );
 }
-
-// ── Shared inline styles ────────────────────────────────────────────
-const inputStyle = {
-  padding: '0.55rem 0.75rem',
-  background: 'rgba(255,255,255,0.05)',
-  border: '1px solid rgba(255,255,255,0.08)',
-  borderRadius: 8,
-  color: 'var(--text-primary)',
-  fontSize: '0.9rem',
-  outline: 'none',
-};
-
-const primaryButtonStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.3rem',
-  padding: '0.5rem 1rem',
-  background: 'var(--primary-color, var(--accent-color))',
-  color: '#fff',
-  border: 'none',
-  borderRadius: 8,
-  cursor: 'pointer',
-  fontSize: '0.9rem',
-  fontWeight: 500,
-};
-
-const secondaryButtonStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.3rem',
-  padding: '0.5rem 0.85rem',
-  background: 'rgba(255,255,255,0.05)',
-  border: '1px solid rgba(255,255,255,0.1)',
-  borderRadius: 8,
-  color: 'var(--text-primary)',
-  cursor: 'pointer',
-  fontSize: '0.85rem',
-};
-
-const iconButtonStyle = {
-  background: 'rgba(99,102,241,0.1)',
-  border: '1px solid rgba(99,102,241,0.3)',
-  color: 'var(--primary-color, var(--accent-color))',
-  padding: '0.25rem 0.45rem',
-  borderRadius: 6,
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
-};
-
-const formStyle = {
-  padding: '1.25rem',
-  marginBottom: '1rem',
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
-  gap: '0.5rem',
-};
-
-const emptyStateStyle = {
-  padding: '1.5rem',
-  textAlign: 'center',
-  color: 'var(--text-secondary)',
-  fontSize: '0.85rem',
-};

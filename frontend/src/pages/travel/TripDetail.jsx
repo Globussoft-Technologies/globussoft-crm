@@ -32,6 +32,20 @@ function fmt(d) {
 
 // Convert an ISO date string / Date / YYYY-MM-DD into the YYYY-MM-DD shape
 // that <input type="date"> binds to. Returns '' for missing / unparseable.
+/** Lightweight client-side HTML sanitiser — strips scripts, event handlers,
+ *  and javascript: URLs as defence-in-depth even though the server already
+ *  runs sanitizeBody on storage. */
+function sanitizeHtml(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  let s = raw;
+  s = s.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
+  s = s.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "");
+  s = s.replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/gi, "");
+  s = s.replace(/(href|src|action)\s*=\s*("javascript:[^"]*"|'javascript:[^']*'|javascript:[^\s>]*)/gi, '$1="#"');
+  s = s.replace(/(href|src|action)\s*=\s*("data:[^"]*"|'data:[^']*'|data:[^\s>]*)/gi, '$1="#"');
+  return s;
+}
+
 function toDateInput(d) {
   if (!d) return "";
   const dt = new Date(d);
@@ -1032,7 +1046,7 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
           }}
           // itineraryHtml is admin-authored; sanitization happens at the route's
           // sanitizeBody middleware on write. Preview renders the in-edit state.
-          dangerouslySetInnerHTML={{ __html: itineraryHtml }}
+          dangerouslySetInnerHTML={{ __html: sanitizeHtml(itineraryHtml) }}
         />
       ) : (
         <>
@@ -1114,15 +1128,20 @@ function RichTextEditor({ value, onChange, tripId, notify }) {
   const fileRef = useRef(null);
   const [uploading, setUploading] = useState(false);
 
-  // Inject value into the contenteditable div once on mount. After that,
-  // the DOM is the source of truth; controlled-input style would fight
-  // the browser's caret state and lose selection on every keystroke.
+  // Inject value into the contenteditable div when the prop changes.
+  // The innerHTML guard prevents fighting the browser's caret state
+  // on every keystroke — `value` only changes from the parent, not
+  // during local typing. We also skip the sync when the editor has
+  // focus so the parent re-rendering doesn't clobber the caret.
   useEffect(() => {
-    if (editorRef.current && editorRef.current.innerHTML !== value) {
+    if (
+      editorRef.current &&
+      editorRef.current.innerHTML !== value &&
+      document.activeElement !== editorRef.current
+    ) {
       editorRef.current.innerHTML = value || "";
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [value]);
 
   const handleInput = () => {
     if (editorRef.current) onChange(editorRef.current.innerHTML);

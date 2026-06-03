@@ -1,5 +1,5 @@
 import { useEffect, useState, useContext } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Calendar, Clock, Stethoscope, Info, Sparkles } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -21,6 +21,10 @@ const GENERIC_SLOTS = (() => {
 export default function BookAppointment() {
   const notify = useNotify();
   const { user } = useContext(AuthContext); // eslint-disable-line no-unused-vars
+  // #service-catalog "Book service" deep-link: ?serviceId=<id> pre-selects the
+  // service the user tapped in the catalog. They fill in the rest (date/time/
+  // doctor) as usual.
+  const [searchParams] = useSearchParams();
 
   const [doctors, setDoctors] = useState([]);
   const [services, setServices] = useState([]);
@@ -43,6 +47,16 @@ export default function BookAppointment() {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Pre-select the service from ?serviceId once the catalog has loaded (and
+  // only if it's a real, active service the user can actually book).
+  useEffect(() => {
+    const sid = searchParams.get('serviceId');
+    if (!sid) return;
+    if (services.some((s) => String(s.id) === String(sid))) {
+      setFormData((prev) => (prev.serviceId ? prev : { ...prev, serviceId: sid }));
+    }
+  }, [services, searchParams]);
 
   const loadData = async () => {
     try {

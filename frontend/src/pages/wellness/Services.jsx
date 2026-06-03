@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef, useContext } from 'react';
 import { createPortal } from 'react-dom';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Sparkles,
   Plus,
@@ -17,10 +17,12 @@ import {
   Activity,
   ChevronDown,
   Upload,
+  CalendarPlus,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
+import { AuthContext } from '../../App';
 
 // Parse Service.imageUrls (Prisma stores a JSON-stringified array of URLs).
 // `allImagesOf` returns the full array; `firstImageOf` is a convenience
@@ -83,8 +85,12 @@ export default function Services() {
   const notify = useNotify();
   // Backend gates POST/PUT/DELETE on adminOrPerm('services', 'write').
   // One flag for everything since this route doesn't split write/update/delete.
-  const { hasPermission, isReady: permsReady } = usePermissions();
+  const { hasPermission, isReady: permsReady, userType } = usePermissions();
+  const { user } = useContext(AuthContext) || {};
   const canManageServices = permsReady && hasPermission('services', 'write');
+  // USER / CUSTOMER get a customer-facing catalog: Packages + Active Treatments
+  // (internal/clinical surfaces) are hidden. Admin / Manager are untouched.
+  const isUserOrCustomer = userType === 'CUSTOMER' || user?.role === 'USER';
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'catalog';
   const [tab, setTab] = useState(initialTab); // catalog | packages | activetreatments
@@ -133,6 +139,13 @@ export default function Services() {
       loadTreatments();
     }
   }, [tab]);
+  // A USER/CUSTOMER deep-linking to ?tab=packages|activetreatments has those
+  // tabs hidden — fall back to the catalog so they never see a blank page.
+  useEffect(() => {
+    if (isUserOrCustomer && (tab === 'packages' || tab === 'activetreatments')) {
+      setTab('catalog');
+    }
+  }, [isUserOrCustomer, tab]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -198,8 +211,13 @@ export default function Services() {
         }}
       >
         <TabBtn active={tab === 'catalog'} onClick={() => setTab('catalog')} icon={Sparkles} label="Catalog" />
-        <TabBtn active={tab === 'packages'} onClick={() => setTab('packages')} icon={Package} label="Packages" />
-        <TabBtn active={tab === 'activetreatments'} onClick={() => setTab('activetreatments')} icon={Activity} label="Active Treatments" />
+        {/* Packages + Active Treatments are internal/clinical surfaces — hidden for USER/CUSTOMER. */}
+        {!isUserOrCustomer && (
+          <TabBtn active={tab === 'packages'} onClick={() => setTab('packages')} icon={Package} label="Packages" />
+        )}
+        {!isUserOrCustomer && (
+          <TabBtn active={tab === 'activetreatments'} onClick={() => setTab('activetreatments')} icon={Activity} label="Active Treatments" />
+        )}
       </div>
 
       {tab === 'catalog' && (
@@ -219,9 +237,9 @@ export default function Services() {
         />
       )}
 
-      {tab === 'packages' && <PackageBuilder services={services} />}
+      {tab === 'packages' && !isUserOrCustomer && <PackageBuilder services={services} />}
 
-      {tab === 'activetreatments' && (
+      {tab === 'activetreatments' && !isUserOrCustomer && (
         <ActiveTreatmentsTab
           treatments={treatments}
           loading={treatmentsLoading}
@@ -609,8 +627,19 @@ function ServiceCard({ service, onChanged, onOpen, editRequested, onEditConsumed
 
 function ServiceDetailModal({ service, categories, onClose, onChanged, onEdit }) {
   const notify = useNotify();
-  const { hasPermission, isReady: permsReady } = usePermissions();
+  const navigate = useNavigate();
+  const { user } = useContext(AuthContext) || {};
+  const { hasPermission, isReady: permsReady, userType } = usePermissions();
   const canManageServices = permsReady && hasPermission('services', 'write');
+  // USER / CUSTOMER roles get a customer-facing view: the internal "marketing
+  // radius" metric is hidden and a "Book service" CTA is shown instead. Admin
+  // / Manager keep the full management view untouched.
+  const isUserOrCustomer = userType === 'CUSTOMER' || user?.role === 'USER';
+
+  const bookService = () => {
+    onClose && onClose();
+    navigate(`/wellness/book-appointment?serviceId=${service.id}`);
+  };
   const images = allImagesOf(service);
   const [activeIdx, setActiveIdx] = useState(0);
   const [deleting, setDeleting] = useState(false);
@@ -719,7 +748,10 @@ function ServiceDetailModal({ service, categories, onClose, onChanged, onEdit })
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
           <DetailStat icon={<IndianRupee size={14} />} label="Base price" value={service.basePrice != null ? formatMoney(service.basePrice, { maximumFractionDigits: 0 }) : '—'} />
           <DetailStat icon={<Clock size={14} />} label="Duration" value={service.durationMin ? `${service.durationMin} min` : '—'} />
-          <DetailStat icon={<MapPin size={14} />} label="Marketing radius" value={service.targetRadiusKm ? `${service.targetRadiusKm} km` : 'Unlimited'} />
+          {/* Marketing radius is an internal metric — hidden for USER/CUSTOMER. */}
+          {!isUserOrCustomer && (
+            <DetailStat icon={<MapPin size={14} />} label="Marketing radius" value={service.targetRadiusKm ? `${service.targetRadiusKm} km` : 'Unlimited'} />
+          )}
           <DetailStat icon={<Activity size={14} />} label="Status" value={service.isActive !== false ? 'Active' : 'Inactive'} />
         </div>
 
@@ -727,6 +759,18 @@ function ServiceDetailModal({ service, categories, onClose, onChanged, onEdit })
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.3rem' }}>Description</div>
             <p style={{ fontSize: '0.9rem', lineHeight: 1.5, color: 'var(--text-primary)', margin: 0 }}>{service.description}</p>
+          </div>
+        )}
+
+        {isUserOrCustomer && service.isActive !== false && (
+          <div style={{ marginBottom: '0.75rem' }}>
+            <button
+              type="button"
+              onClick={bookService}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.65rem 1.25rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}
+            >
+              <CalendarPlus size={16} /> Book service
+            </button>
           </div>
         )}
 
